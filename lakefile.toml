@@ -1,0 +1,10 @@
+name = "Lynx"
+version = "0.1.0"
+defaultTargets = ["lynx"]
+
+[[lean_lib]]
+name = "Lynx"
+
+[[lean_exe]]
+name = "lynx"
+root = "Main"
