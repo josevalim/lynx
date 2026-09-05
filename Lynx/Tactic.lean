@@ -52,10 +52,10 @@ and local hypotheses. It follows definitions whose result is `Outcome _`, then
 builds one local simplification context from those executable bodies. This is
 why ordinary translated functions need no registration attribute or separate
 semantics file. Library-level, kernel-proved `@[simp]` rules supplement the
-executable bodies, including `Outcome` reductions and the `andalso` acceptance
-shortcut; translated functions themselves remain annotation-free. The library
-uses the `_spec` suffix for these theorems. Their statements and `@[simp]`
-attributes drive rewriting; that naming convention is not a discovery rule.
+executable bodies, including generic `Outcome` reductions; translated functions
+themselves remain annotation-free. The library uses the `_spec` suffix for these
+theorems. Their statements and `@[simp]` attributes drive rewriting; that naming
+convention is not a discovery rule.
 
 Normalization makes one ordered pass over non-quantified hypotheses, starting
 with expectation-derived constraints, and then simplifies the target. Each
@@ -68,41 +68,38 @@ results are explored.
 
 ## Propagating acceptance requirements
 
-An expectation is accepted only when its final outcome is `.value Term.true`.
-The solver can propagate this requirement inward through an expression using
-proved equivalences, instead of first enumerating every operational outcome.
-For `andalso`, the logical view is:
+An expectation is accepted only when its final outcome is
+`.value (Term.atom "true")`. The solver uses Lean's built-in case splitting and
+simplification to propagate the required result backward through executable
+matches. For example:
 
 ```lean
-Accepted (Modules.Erlang.andalso left right) ↔
-  Accepted left ∧ Accepted (right ())
+(match input with
+ | .nil => Outcome.value (Term.atom "true")
+ | _ => .value (Term.atom "false")) = .value (Term.atom "true")
 ```
 
-`Modules.Erlang.andalso_spec` proves this fact directly from the executable
-definition. Its statement uses the unfolded equality with
-`.value (.atom "true")`, so simp can match it after `Accepted`, `Term.true`,
-and executable wrappers have unfolded. In a hypothesis, the resulting
-conjunction supplies facts about both operands; in a target, it expresses the
-requirements for acceptance. Nested conjunctions can be exposed the same way.
-This is an equivalence, not an assumption that either operand succeeds.
+forces `input = Term.nil`: simplification closes the rejected branch. Multiple
+accepting branches remain separate proof obligations, retaining constructor
+fields, wildcard exclusions, and named discriminant equations. Search splits
+match-bearing hypotheses and simplifies the resulting constraints, eliminating
+impossible outcomes before exploring more implementation results. Immediately
+after constructor cases, it simplifies the affected hypothesis so rejected
+branches need not enter another full normalization/search round.
 
-The tactic deliberately adds `andalso`'s executable equations to the simp
-context instead of unfolding its body eagerly. Known outcomes still reduce,
-including short-circuiting and exceptions, while an unknown computation stays
-recognizable by the acceptance shortcut. Eager expansion into a match hides
-that opportunity; the benchmarks showed slower verification with that strategy.
+The order matters for recursive proofs. Early splitting protects a recorded
+input when the discriminant is that variable itself, preserving it for
+induction. A compound computation depending on the input may still be split:
+Lean's splitter retains the connection to that computation while leaving the
+input available for induction. Later search can split the input if induction
+is not applicable.
 
-This optimization currently happens in the solver's simplification passes. `lynx_vcgen`
-still emits conditions about the original executable expressions; it does not
-compile expectations into a separate logical representation. The same rewrite
-can apply wherever an acceptance condition occurs, including coverage,
-guarantees, properties, and recursive-call premises.
+`lynx_vcgen` emits conditions about the original executable expressions.
+Coverage and call-premise proofs use the same built-in splitting/simplification
+machinery. Implementation binds remain shared until their outcomes are needed.
 
 Only the final accepted outcome is restricted to `true`. Intermediate false,
-non-boolean, and exceptional outcomes retain their executable meaning. Further
-acceptance shortcuts need proved equivalences: an `orelse` acceptance rule, for
-example, would have to distinguish a left operand returning `false` from one
-raising an exception. There is no `orelse` implementation or shortcut here yet.
+non-boolean, and exceptional outcomes retain their executable meaning.
 Coverage still requires an actual input satisfying the executable expectation.
 
 ## Bounded search
@@ -119,9 +116,9 @@ goals:
    none succeeds, fall back to the guard prover. A candidate is accepted only
    after proving the real executable expectation; the candidate list is not
    treated as a model of the domain.
-2. Destructure conjunctions, existentials, and products in hypotheses. If none
-   is available, normalize hypotheses and the target, then try destructuring
-   again.
+2. Destructure conjunctions, disjunctions, existentials, and products in
+   hypotheses. If none is available, normalize hypotheses and the target, then
+   try destructuring again.
 3. Split eligible hypothesis matches before exploring returned values,
    protecting recorded input variables so they remain available for induction.
 4. Specialize a synthesized summary when applicable, or apply a hypothesis with
@@ -247,12 +244,7 @@ private def mkSolver : TacticM Solver := withMainContext do
     let executable ← forallTelescopeReducing info.type fun _ result =>
       pure (result.isAppOf ``Outcome)
     unless executable do continue
-    if name != ``Modules.Erlang.andalso then
-      definitions := definitions.push (mkIdent name)
-    else if let some equations ← getEqnsFor? name then
-      -- Unfolding the body here would hide `andalso` from its logical rule.
-      -- Equations still handle short-circuiting, exceptions, and bad booleans.
-      definitions := definitions ++ equations.map mkIdent
+    definitions := definitions.push (mkIdent name)
     if ← isRecursiveDefinition name then
       recursive := recursive.push name
       if let some index ← getStructuralRecArgPos? name then
@@ -316,15 +308,16 @@ private def destructFacts : TacticM Bool := withMainContext do
   for decl in ← getLCtx do
     unless decl.isImplementationDetail do
       let type ← whnf decl.type
-      if type.isAppOf ``Exists || type.isAppOf ``And || type.isAppOf ``Prod then
+      if type.isAppOf ``Exists || type.isAppOf ``And || type.isAppOf ``Or || type.isAppOf ``Prod then
         let branches ← goal.cases decl.fvarId
         replaceBranches (branches.toList.map (·.mvarId))
         return true
   return false
 
-/-- Split match-bearing hypotheses, including compound computations. Early calls
-protect prospective induction inputs; later calls prioritize recursive results. -/
-private def splitHypothesis (protectedInputs : Array FVarId := #[])
+/-- Built-in splitting and simplification, including compound computations.
+Early calls protect bare induction inputs, not computations containing them;
+later calls prioritize recursive results. -/
+private def splitHypothesis (solver : Solver) (protectedInputs : Array FVarId := #[])
     (constraintsOnly : Bool := false) : TacticM Bool := withMainContext do
   let goal ← getMainGoal
   let mut declarations := #[]
@@ -343,11 +336,24 @@ private def splitHypothesis (protectedInputs : Array FVarId := #[])
               discriminants.modify (·.push discr.fvarId!)
       for discr in ← discriminants.get do
         let branches ← goal.cases discr
-        replaceBranches (branches.toList.map (·.mvarId))
+        let mut remaining := []
+        for branch in branches do
+          -- Reject impossible constructor branches using only the affected fact.
+          -- Full normalization would also revisit every other fact and the target.
+          let hypothesis := branch.subst.apply decl.toExpr
+          if hypothesis.isFVar then
+            let (result, _) ← simpLocalDecl branch.mvarId hypothesis.fvarId!
+              solver.context solver.simprocs
+            if let some (_, next) := result then remaining := remaining ++ [next]
+          else
+            remaining := remaining ++ [branch.mvarId]
+        replaceBranches remaining
         return true
       if let some candidate ← findSplit? decl.type then
         if let some matcher ← matchMatcherApp? candidate then
-          if matcher.discrs.any (fun d => protectedInputs.any d.containsFVar) then
+          -- A compound discriminant can be generalized without choosing the
+          -- constructor of the recursive input it depends on.
+          if matcher.discrs.any (fun d => d.isFVar && protectedInputs.contains d.fvarId!) then
             continue
       if let some branches ← splitLocalDecl? goal decl.fvarId then
         replaceBranches branches
@@ -437,7 +443,7 @@ private partial def proveGuard (solver : Solver) (fuel : Nat) : TacticM Unit := 
     allGoals (proveGuard solver (fuel - 1))
   else if ← splitComputation then
     allGoals (proveGuard solver (fuel - 1))
-  else if ← splitHypothesis then
+  else if ← splitHypothesis solver then
     allGoals (proveGuard solver (fuel - 1))
 
 /-- Slice premise assumptions by shared free-variable dependencies. Attempt to
@@ -632,7 +638,7 @@ private partial def search (solver : Solver) (fuel : Nat) : TacticM Unit := do
   if ← destructFacts then
     allGoals (search solver (fuel - 1))
     return
-  if ← splitHypothesis solver.inputs true then
+  if ← splitHypothesis solver solver.inputs true then
     allGoals (search solver (fuel - 1))
     return
   if ← applySummary solver then
@@ -648,7 +654,7 @@ private partial def search (solver : Solver) (fuel : Nat) : TacticM Unit := do
   if ← splitComputation then
     allGoals (search solver (fuel - 1))
     return
-  if ← splitHypothesis then
+  if ← splitHypothesis solver then
     allGoals (search solver (fuel - 1))
     return
   if let some branches ← splitTarget? (← getMainGoal) then

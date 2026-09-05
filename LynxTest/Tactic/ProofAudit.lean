@@ -17,6 +17,8 @@ run_cmd do
     ``LynxTest.Tactic.Contracts.andalso_short_circuit,
     ``LynxTest.Tactic.Contracts.andalso_raises,
     ``LynxTest.Tactic.Contracts.andalso_non_boolean,
+    ``LynxTest.Tactic.Contracts.nil_spec,
+    ``LynxTest.Tactic.Contracts.compound_spec,
     ``LynxTest.Tactic.Recursive.duplicate_contract,
     ``LynxTest.Tactic.Recursive.leaves_contract]
   for name in theorems do

@@ -37,24 +37,4 @@ def andalso
   | .value _ => .raised (.error (.atom "badarg"))
   | .raised exception => .raised exception
 
-/-- A logical shortcut proved directly from the executable definition.
-State it in the unfolded `Accepted`/`Term.true` form so simp can still match it
-after unfolding executable wrappers. -/
-@[simp] theorem andalso_spec (left : Outcome Term) (right : Unit → Outcome Term) :
-    andalso left right = .value (.atom "true") ↔
-      left = .value (.atom "true") ∧ right () = .value (.atom "true") := by
-  cases left with
-  | raised exception => simp [andalso]
-  | value value =>
-    cases value with
-    | atom name =>
-      by_cases ht : name = "true"
-      · subst name; simp [andalso]
-      · by_cases hf : name = "false"
-        · subst name; simp [andalso, Term.false]
-        · simp [andalso, ht, hf]
-    | integer n => simp [andalso]
-    | nil => simp [andalso]
-    | cons head tail => simp [andalso]
-
 end Lynx.Modules.Erlang

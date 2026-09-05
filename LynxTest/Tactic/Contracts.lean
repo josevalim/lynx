@@ -68,7 +68,7 @@ theorem assumed_coverage (expects : Term → Outcome Term)
     (accepted : Accepted (expects (.integer 0))) : Covered expects := by
   lynx_solve
 
-/-- The logical shortcut also retains the executable short-circuit rules. -/
+/-- Match reasoning retains the executable short-circuit rules. -/
 theorem andalso_short_circuit (right : Unit → Outcome Term) :
     Erlang.andalso (.value Term.false) right = .value Term.false := by
   lynx_solve
@@ -80,6 +80,21 @@ theorem andalso_raises (right : Unit → Outcome Term) (exception : Exception) :
 theorem andalso_non_boolean (right : Unit → Outcome Term) (value : Int) :
     Erlang.andalso (.value (.integer value)) right =
       .raised (.error (.atom "badarg")) := by
+  lynx_solve
+
+/-- Acceptance eliminates the non-nil branch. -/
+theorem nil_spec (input : Term)
+    (accepted : Accepted (match input with
+      | .nil => Outcome.value (Term.atom "true")
+      | _ => .value (.atom "false"))) : input = .nil := by
+  lynx_solve
+
+/-- Splitting a computation preserves its connection to its input. -/
+theorem compound_spec (input : Term) (probe : Term → Outcome Term)
+    (accepted : Accepted (match probe input with
+      | .value (.atom "true") => Outcome.value (Term.atom "true")
+      | _ => .value (.atom "false"))) :
+    probe input = .value (.atom "true") := by
   lynx_solve
 
 end LynxTest.Tactic.Contracts
