@@ -53,4 +53,33 @@ theorem sibling_goal : Satisfies identity always unchanged ∧ True := by
   · lynx_verify
   · trivial
 
+/-- Normalizing duplicate facts must retain a usable proof of the constraint. -/
+theorem duplicate_constraints (input : Term)
+    (_first _second : Accepted (Erlang.is_integer input)) :
+    Accepted (Erlang.is_integer input) := by
+  lynx_solve
+
+/-- Quantified facts are applied after proving their premises. -/
+theorem local_implication (p q : Prop) (step : p → q) (premise : p) : q := by
+  lynx_solve
+
+/-- Coverage still uses hypotheses when direct evaluation cannot decide it. -/
+theorem assumed_coverage (expects : Term → Outcome Term)
+    (accepted : Accepted (expects (.integer 0))) : Covered expects := by
+  lynx_solve
+
+/-- The logical shortcut also retains the executable short-circuit rules. -/
+theorem andalso_short_circuit (right : Unit → Outcome Term) :
+    Erlang.andalso (.value Term.false) right = .value Term.false := by
+  lynx_solve
+
+theorem andalso_raises (right : Unit → Outcome Term) (exception : Exception) :
+    Erlang.andalso (.raised exception) right = .raised exception := by
+  lynx_solve
+
+theorem andalso_non_boolean (right : Unit → Outcome Term) (value : Int) :
+    Erlang.andalso (.value (.integer value)) right =
+      .raised (.error (.atom "badarg")) := by
+  lynx_solve
+
 end LynxTest.Tactic.Contracts

@@ -37,22 +37,24 @@ def andalso
   | .value _ => .raised (.error (.atom "badarg"))
   | .raised exception => .raised exception
 
-/-- A direct logical view of `andalso`, proved from its executable definition
-and used by the verifier to avoid repeatedly unfolding its runtime cases. -/
-theorem accepted_andalso (left : Outcome Term) (right : Unit → Outcome Term) :
-    Accepted (andalso left right) ↔ Accepted left ∧ Accepted (right ()) := by
+/-- A logical shortcut proved directly from the executable definition.
+State it in the unfolded `Accepted`/`Term.true` form so simp can still match it
+after unfolding executable wrappers. -/
+@[simp] theorem andalso_spec (left : Outcome Term) (right : Unit → Outcome Term) :
+    andalso left right = .value (.atom "true") ↔
+      left = .value (.atom "true") ∧ right () = .value (.atom "true") := by
   cases left with
-  | raised exception => simp [Accepted, andalso]
+  | raised exception => simp [andalso]
   | value value =>
     cases value with
     | atom name =>
       by_cases ht : name = "true"
-      · subst name; simp [Accepted, andalso, Term.true]
+      · subst name; simp [andalso]
       · by_cases hf : name = "false"
-        · subst name; simp [Accepted, andalso, Term.true, Term.false]
-        · simp [Accepted, andalso, Term.true, ht, hf]
-    | integer n => simp [Accepted, andalso, Term.true]
-    | nil => simp [Accepted, andalso, Term.true]
-    | cons head tail => simp [Accepted, andalso, Term.true]
+        · subst name; simp [andalso, Term.false]
+        · simp [andalso, ht, hf]
+    | integer n => simp [andalso]
+    | nil => simp [andalso]
+    | cons head tail => simp [andalso]
 
 end Lynx.Modules.Erlang

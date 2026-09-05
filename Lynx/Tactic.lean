@@ -24,10 +24,15 @@ proof can never succeed merely because the expectation accepts no inputs.
 `Accepted outcome` means exactly `outcome = .value Term.true`; false, non-boolean
 values, and exceptions are not accepted.
 
-`lynx_vcgen` unfolds these definitions, preserves a reducible literal
-`SourceLabel`, and emits two verification conditions: `coverage` and `ensures`
-(or `property`). It does not solve them. `lynx_verify` generates the same
-conditions and invokes the solver on each.
+For a single contract or property, `lynx_vcgen` separates coverage from behavior,
+using the goal tags `coverage` and `ensures` (or `property`). It unfolds the
+contract wrappers, introduces behavioral inputs and assumptions, and unpacks
+structure arguments, including tuples. A `WithSourceLabel` whose file and line
+reduce to literals supplies source information for the goal tags.
+`EnsuresClauses` shares one coverage condition across its labeled guarantees.
+Generation may close trivial wrapper goals such as `True`, but it does not run
+the solver or normalize executable expectations. `lynx_verify` generates the
+same conditions and invokes the solver on each.
 
 If automatic witness search cannot establish coverage, `lynx_verify` reports:
 
@@ -39,49 +44,112 @@ Failed bounded witness search does not prove that the expectation is empty: an
 accepted value may lie outside the candidate set. No separate emptiness search
 is needed for soundness because the required `Covered` proof remains unsolved.
 An interactive proof may use `lynx_vcgen` and provide the witness directly.
-Multiple named `ensures` clauses share one coverage condition.
 
 ## Definition discovery and normalization
 
-For each verification condition, the solver gathers constants used by the goal
+For symbolic proof search, the solver gathers constants used by the goal
 and local hypotheses. It follows definitions whose result is `Outcome _`, then
 builds one local simplification context from those executable bodies. This is
 why ordinary translated functions need no registration attribute or separate
-semantics file. A small fixed set of generic, kernel-proved rules may supplement
-the executable bodies when benchmarks demonstrate a benefit; translated
-functions themselves remain annotation-free.
+semantics file. Library-level, kernel-proved `@[simp]` rules supplement the
+executable bodies, including `Outcome` reductions and the `andalso` acceptance
+shortcut; translated functions themselves remain annotation-free. The library
+uses the `_spec` suffix for these theorems. Their statements and `@[simp]`
+attributes drive rewriting; that naming convention is not a discovery rule.
 
-Normalization first simplifies expectation-derived hypotheses. Rejected input
-branches usually become contradictions and close before the implementation's
-possible results are explored. This ordering is important for partial Elixir
-operations such as arithmetic and list append.
+Normalization makes one ordered pass over non-quantified hypotheses, starting
+with expectation-derived constraints, and then simplifies the target. Each
+updated fact immediately replaces its old rewrite rule, so duplicate facts
+cannot both disappear by simplifying each other to `True`. This normalization
+pass neither rewrites quantified hypotheses nor adds them as local simp rules;
+separate guarded application handles induction hypotheses and summaries.
+Rejected input branches usually close before the implementation's possible
+results are explored.
+
+## Propagating acceptance requirements
+
+An expectation is accepted only when its final outcome is `.value Term.true`.
+The solver can propagate this requirement inward through an expression using
+proved equivalences, instead of first enumerating every operational outcome.
+For `andalso`, the logical view is:
+
+```lean
+Accepted (Modules.Erlang.andalso left right) ↔
+  Accepted left ∧ Accepted (right ())
+```
+
+`Modules.Erlang.andalso_spec` proves this fact directly from the executable
+definition. Its statement uses the unfolded equality with
+`.value (.atom "true")`, so simp can match it after `Accepted`, `Term.true`,
+and executable wrappers have unfolded. In a hypothesis, the resulting
+conjunction supplies facts about both operands; in a target, it expresses the
+requirements for acceptance. Nested conjunctions can be exposed the same way.
+This is an equivalence, not an assumption that either operand succeeds.
+
+The tactic deliberately adds `andalso`'s executable equations to the simp
+context instead of unfolding its body eagerly. Known outcomes still reduce,
+including short-circuiting and exceptions, while an unknown computation stays
+recognizable by the acceptance shortcut. Eager expansion into a match hides
+that opportunity; the benchmarks showed slower verification with that strategy.
+
+This optimization currently happens in the solver's simplification passes. `lynx_vcgen`
+still emits conditions about the original executable expressions; it does not
+compile expectations into a separate logical representation. The same rewrite
+can apply wherever an acceptance condition occurs, including coverage,
+guarantees, properties, and recursive-call premises.
+
+Only the final accepted outcome is restricted to `true`. Intermediate false,
+non-boolean, and exceptional outcomes retain their executable meaning. Further
+acceptance shortcuts need proved equivalences: an `orelse` acceptance rule, for
+example, would have to distinguish a left operand returning `false` from one
+raising an exception. There is no `orelse` implementation or shortcut here yet.
+Coverage still requires an actual input satisfying the executable expectation.
 
 ## Bounded search
 
-The recursive search performs the following operations, restarting after each
-one that changes the goal:
+`solveGoal` first attempts coverage, then builds a solver context if needed.
+For a non-existential target it attempts summary synthesis before the main
+search. Each main search call follows this order; structural changes and
+successful hypothesis applications recurse with less fuel on the resulting
+goals:
 
 1. Introduce binders and solve a `Covered` goal by testing a small set of
-   concrete `Term`, tuple, unit, or structure values. A candidate is accepted
-   only after proving the real executable expectation; the candidate list is
-   not treated as a model of the domain.
-2. Destructure conjunctions, existentials, products, and expectation-driven
-   matches.
-3. Normalize relevant hypotheses and then the target with the discovered
-   executable definitions.
-4. Apply a recursive hypothesis only after separately proving its expectation
-   from the current branch. Unrelated assumptions are removed from that premise
-   proof to prevent circular reasoning.
-5. Induct on an input used as the structural argument of a discovered recursive
-   definition. More than one independent input may be inducted.
-6. Generalize and split one shared monadic computation. This avoids duplicating
-   nested bind continuations before its `Outcome.value`/`Outcome.raised` result
-   is known.
-7. Close leaves with assumptions, reflexivity, arithmetic, or congruence.
+   concrete `Term`, tuple, unit, or structure values. First try reflexivity on
+   every candidate, using definitional evaluation without a simp context; if
+   none succeeds, fall back to the guard prover. A candidate is accepted only
+   after proving the real executable expectation; the candidate list is not
+   treated as a model of the domain.
+2. Destructure conjunctions, existentials, and products in hypotheses. If none
+   is available, normalize hypotheses and the target, then try destructuring
+   again.
+3. Split eligible hypothesis matches before exploring returned values,
+   protecting recorded input variables so they remain available for induction.
+4. Specialize a synthesized summary when applicable, or apply a hypothesis with
+   a propositional premise. Each application must first prove its premise in a
+   separate goal. Premise preparation attempts to clear quantified hypotheses
+   and unrelated assumptions, retaining any required by local dependencies.
+5. Try assumptions, reflexivity, `omega`, and `grind` with case splitting
+   disabled.
+6. Induct on a recorded `Term` input used as the structural argument of a
+   discovered recursive definition. Simplify branch targets and try to remove
+   induction hypotheses irrelevant to remaining recursive calls. More than one
+   independent input may be inducted.
+7. Generalize and split one shared monadic computation, retaining an equation
+   for its outcome. This avoids duplicating nested bind continuations before
+   its `Outcome.value`/`Outcome.raised` result is known.
+8. Try remaining hypothesis matches, then split a target match or conditional.
 
-The search has finite fuel. Failure to close a goal is not interpreted as a
-counterexample; `lynx_solve` leaves the residual Lean goal available for an
-explicit invariant or ordinary tactic.
+The main search and independent summary proofs start with fuel 24. The smaller
+guard prover uses simplification, leaf solvers, destructuring, and splitting;
+it does not perform induction or synthesize summaries. Coverage fallback uses
+guard fuel 12, and hypothesis applications use 8. Coverage candidates have a
+construction depth limit of 3: products combine candidates, while structures
+use the first available candidate for each field.
+
+These searches are bounded and incomplete. Failure to close a goal is not
+interpreted as a counterexample; `lynx_solve` leaves residual goals available
+for an explicit invariant or ordinary tactic. `set_option trace.lynx true`
+shows search goals and fuel, coverage failures, summary attempts, and timings.
 
 ## Relational properties
 
@@ -89,25 +157,39 @@ Properties such as `sum(l) + sum(r) == sum(l ++ r)` need information about
 recursive calls on values other than a direct structural child. The solver
 therefore attempts a narrow summary synthesis step:
 
-1. Find candidate unary recursive functions in executable bodies.
-2. Find candidate input domains already present in expectation hypotheses.
-3. Infer a uniform constructor of successful results from the function body.
+1. Find discovered recursive functions of type `Term → Outcome Term`.
+2. Find candidate input domains inside existing `Accepted` hypotheses, looking
+   through executable wrappers with bounded traversal.
+3. Look for a single candidate `Term` constructor in normal returns from the
+   function body and the executable callees it follows.
 4. Construct a normal-return proposition and prove it in a fresh context using
    the same bounded search.
 5. Add the summary only if that independent proof closed completely.
 
-The summary is a proved local theorem, never an assumption and never a reuse of
-another application contract. Current synthesis is intentionally incomplete:
-it handles unary structural recursion and uniform result constructors, not
+The summary is a proved local theorem, never an assumption or a reuse of
+another application contract. After induction, the solver may specialize it
+for a unary recursive call in the target when an existing hypothesis contains
+the corresponding domain constraint. It still proves that constraint before
+using the summary; it does not invent a domain for arbitrary intermediate
+results. Current synthesis handles unary functions with a uniform candidate
+result constructor when bounded search can prove the conjecture. It is not
 general invariant discovery.
 
 ## Trust boundary
 
-The tactic is metaprogramming that constructs Lean proof terms. Successful
-results are checked by Lean's kernel. Heuristic definition discovery, witness
-selection, branch ordering, and summary conjecture affect completeness and
-speed, but cannot make an invalid theorem pass. The proof-audit tests also reject
-`sorryAx` and unexpected axioms.
+The tactic constructs proof terms that Lean's kernel checks against the stated
+theorem. Definition discovery, witness selection, branch ordering, and summary
+conjecture need not themselves be trusted for logical correctness: a wrong
+guess still needs a valid proof. Bugs can cause failure, excessive search, or
+a proof term rejected by the kernel.
+
+This guarantee assumes the correctness of Lean's kernel and excludes reliance
+on `sorry` or additional untrusted axioms. The proof-audit tests inspect
+representative generated proofs, accepting only `propext`, `Classical.choice`,
+and `Quot.sound` among their axioms; this is not a per-invocation audit of every
+use of the tactic. Kernel checking establishes the stated Lean contract, not
+that the term model, translated operations, or contract express the intended
+Erlang behavior. Those definitions and the translation still require review.
 -/
 
 open Lean Meta Elab Tactic
@@ -143,8 +225,8 @@ private structure Solver where
   inducted : Bool := false
 
 /-- Discover executable definitions by their result type, following their calls.
-Library implementation bodies, rather than operation-specific theorems, supply
-the reduction rules. -/
+Their bodies supply reduction rules alongside registered library simp theorems;
+translated definitions need no separate semantic theorem. -/
 private def mkSolver : TacticM Solver := withMainContext do
   let mut pending := (← getMainTarget).getUsedConstants
   let mut inputs := #[]
@@ -165,34 +247,56 @@ private def mkSolver : TacticM Solver := withMainContext do
     let executable ← forallTelescopeReducing info.type fun _ result =>
       pure (result.isAppOf ``Outcome)
     unless executable do continue
-    definitions := definitions.push (mkIdent name)
+    if name != ``Modules.Erlang.andalso then
+      definitions := definitions.push (mkIdent name)
+    else if let some equations ← getEqnsFor? name then
+      -- Unfolding the body here would hide `andalso` from its logical rule.
+      -- Equations still handle short-circuiting, exceptions, and bad booleans.
+      definitions := definitions ++ equations.map mkIdent
     if ← isRecursiveDefinition name then
       recursive := recursive.push name
       if let some index ← getStructuralRecArgPos? name then
         majors := majors.insert name index
     pending := pending ++ info.value.getUsedConstants
   let simpSyntax ← `(tactic| simp_all (config := { failIfUnchanged := false })
-    [Modules.Erlang.accepted_andalso, Accepted, Term.true, Term.false,
+    [Accepted, Term.true, Term.false,
     Pure.pure, $[$definitions:ident],*])
   let result ← mkSimpContext simpSyntax (eraseLocal := true) (kind := .simpAll)
   return ⟨result.ctx, result.simprocs, recursive, majors, inputs, false⟩
 
+/-- One forward pass; search revisits normalization after structural progress.
+Do not repeatedly traverse quantified recursive proofs as `simpAll` does. -/
 private def normalize (solver : Solver) : TacticM Bool := do
   let start ← IO.monoMsNow
-  let goal ← getMainGoal
-  let constraints ← goal.withContext do
-    let context ← getLCtx
-    return (← getPropHyps).filter (fun h =>
-      match context.find? h with
-      | some decl => !decl.type.isForall && !decl.userName.toString.startsWith "recursive_result" &&
-          (decl.type.isAppOf ``Accepted ||
-            (decl.type.isAppOf ``Eq && decl.type.getAppArgs[2]!.isAppOf ``Outcome.value))
-      | none => false)
-  let (pruned, _) ← simpGoal goal solver.context solver.simprocs
-    (simplifyTarget := false) (fvarIdsToSimp := constraints)
-  let some (_, goal) := pruned | setGoals []; return true
-  setGoals [goal]
-  let (result, _) ← simpAll (← getMainGoal) solver.context solver.simprocs
+  let mut goal ← getMainGoal
+  let (hypotheses, context) ← goal.withContext do
+    let hypotheses ← (← getPropHyps).filterM fun h => return !(← h.getType).isForall
+    let mut context := solver.context
+    for h in hypotheses do
+      context := context.setSimpTheorems (← context.simpTheorems.addTheorem
+        (.fvar h) (mkFVar h) (config := context.indexConfig))
+    let constraints ← hypotheses.filterM fun h => do
+      let decl ← h.getDecl
+      return !decl.userName.toString.startsWith "recursive_result" &&
+        (decl.type.isAppOf ``Accepted ||
+          (decl.type.isAppOf ``Eq && decl.type.getAppArgs[2]!.isAppOf ``Outcome.value))
+    return (constraints ++ hypotheses.filter (fun h => !constraints.contains h), context)
+  let mut context := context
+  for h in hypotheses do
+    -- Replace rules immediately: simplifying all facts against the original
+    -- set could turn both copies of a duplicate hypothesis into `True`.
+    context := context.setSimpTheorems (context.simpTheorems.eraseTheorem (.fvar h))
+    let (result, _) ← simpLocalDecl goal h context solver.simprocs
+    let some (h, next) := result | setGoals []; return true
+    goal := next
+    let type ← goal.withContext h.getType
+    if type.isTrue then
+      goal ← goal.tryClear h
+    else
+      context ← goal.withContext do
+        return context.setSimpTheorems (← context.simpTheorems.addTheorem
+          (.fvar h) (mkFVar h) (config := context.indexConfig))
+  let (result, _) ← simpTarget goal context solver.simprocs
   trace[lynx] "normalize: {(← IO.monoMsNow) - start}ms"
   replaceMainGoal result.toList
   return result.isNone
@@ -218,8 +322,8 @@ private def destructFacts : TacticM Bool := withMainContext do
         return true
   return false
 
-/-- Use input constraints before inspecting possible returned values. This also
-handles matches on compound computations, not just local variables. -/
+/-- Split match-bearing hypotheses, including compound computations. Early calls
+protect prospective induction inputs; later calls prioritize recursive results. -/
 private def splitHypothesis (protectedInputs : Array FVarId := #[])
     (constraintsOnly : Bool := false) : TacticM Bool := withMainContext do
   let goal ← getMainGoal
@@ -316,7 +420,8 @@ private def splitComputation : TacticM Bool := withMainContext do
       catch _ => saved.restore
   return false
 
-/-- Small local proofs of recursive-call expectations never invent an assumption. -/
+/-- Prove coverage or call premises by bounded simplification and splitting,
+without induction or summary synthesis. -/
 private partial def proveGuard (solver : Solver) (fuel : Nat) : TacticM Unit := do
   if fuel == 0 then return
   match (← simpTargetStar (← getMainGoal) solver.context solver.simprocs).1 with
@@ -335,8 +440,8 @@ private partial def proveGuard (solver : Solver) (fuel : Nat) : TacticM Unit := 
   else if ← splitHypothesis then
     allGoals (proveGuard solver (fuel - 1))
 
-/-- Premise checks do not need unrelated induction hypotheses or other calls'
-domains. Keep the local variables, but slice proof assumptions by dependency. -/
+/-- Slice premise assumptions by shared free-variable dependencies. Attempt to
+clear quantified and unrelated hypotheses; keep declarations needed by others. -/
 private def guardGoal (premise : Expr) : TacticM Expr := do
   let proof ← mkFreshExprSyntheticOpaqueMVar premise
   let mut goal := proof.mvarId!
@@ -408,7 +513,9 @@ private partial def nameHasComponent (name : Name) (component : String) : Bool :
 private def hasCoverageTag (goal : MVarId) : MetaM Bool := do
   return nameHasComponent (← goal.getTag) "coverage"
 
-private def solveCoverage (solver : Solver) : TacticM Bool := withMainContext do
+/-- Concrete coverage normally needs only evaluation. Build a simplification
+context lazily, retaining the guard prover for expectations using local facts. -/
+private def solveCoverage (solver? : Option Solver := none) : TacticM Bool := withMainContext do
   let goal ← getMainGoal
   let rawTarget ← goal.getType
   unless rawTarget.isAppOf ``Covered || (← hasCoverageTag goal) do return false
@@ -416,25 +523,31 @@ private def solveCoverage (solver : Solver) : TacticM Bool := withMainContext do
   unless target.isAppOf ``Exists do return false
   let args := target.getAppArgs
   let candidates ← coverageCandidates args[0]!
-  for candidate in candidates do
-    let saved ← saveState
-    try
-      let proposition ← whnf (mkApp args[1]! candidate)
-      let proof ← mkFreshExprSyntheticOpaqueMVar proposition
-      setGoals [proof.mvarId!]
-      proveGuard solver 12
-      unless (← getGoals).isEmpty do
+  for reduceOnly in #[true, false] do
+    let solver? ← if reduceOnly then pure none else some <$> solver?.getDM mkSolver
+    for candidate in candidates do
+      let saved ← saveState
+      try
+        let proposition ← whnf (mkApp args[1]! candidate)
+        let proof ← mkFreshExprSyntheticOpaqueMVar proposition
+        setGoals [proof.mvarId!]
+        if let some solver := solver? then
+          proveGuard solver 12
+        else
+          proof.mvarId!.refl
+          setGoals []
+        unless (← getGoals).isEmpty do
+          saved.restore
+          continue
+        let .sort level ← whnf (← inferType args[0]!)
+          | throwError "coverage domain is not a sort"
+        let intro := mkConst ``Exists.intro [level]
+        goal.assign (mkAppN intro #[args[0]!, args[1]!, candidate, ← instantiateMVars proof])
+        setGoals []
+        return true
+      catch error =>
+        trace[lynx] "coverage candidate {candidate} failed: {error.toMessageData}"
         saved.restore
-        continue
-      let .sort level ← whnf (← inferType args[0]!)
-        | throwError "coverage domain is not a sort"
-      let intro := mkConst ``Exists.intro [level]
-      goal.assign (mkAppN intro #[args[0]!, args[1]!, candidate, ← instantiateMVars proof])
-      setGoals []
-      return true
-    catch error =>
-      trace[lynx] "coverage candidate {candidate} failed: {error.toMessageData}"
-      saved.restore
   return false
 
 private def applyHypothesis (solver : Solver) : TacticM Bool := withMainContext do
@@ -504,14 +617,14 @@ private def applySummary (solver : Solver) : TacticM Bool := withMainContext do
       catch _ => saved.restore
   return false
 
-/-- Expectations prune each structural branch before recursive-call outcomes
-are explored. Independent arguments can each receive their own induction. -/
+/-- Normalize constraints and check guarded applications before induction or
+outcome splitting. Independent inputs can each receive their own induction. -/
 private partial def search (solver : Solver) (fuel : Nat) : TacticM Unit := do
   if fuel == 0 then return
   trace[lynx] "search ({fuel}): {← getMainGoal}"
   let (_, goal) ← (← getMainGoal).intros
   replaceMainGoal [goal]
-  if ← solveCoverage solver then return
+  if ← solveCoverage (some solver) then return
   if ← destructFacts then
     allGoals (search solver (fuel - 1))
     return
@@ -565,7 +678,7 @@ private partial def collectDomains (expression : Expr) (fuel : Nat) : MetaM (Arr
   return result
 
 /-- Infer a uniform constructor of normal returns from executable bodies. This
-is only a conjecture: the resulting summary must still be proved by induction. -/
+is only a conjecture: the resulting summary must still be proved independently. -/
 private def returnConstructor (function : Name) : MetaM (Option Name) := do
   let mut pending := #[function]
   let mut seen : NameSet := {}
@@ -639,6 +752,7 @@ private def synthesizeSummaries (solver : Solver) : TacticM Unit := withMainCont
         saved.restore
 
 private def solveGoal (fuel : Nat) : TacticM Unit := do
+  if ← solveCoverage then return
   let solver ← mkSolver
   let start ← IO.monoMsNow
   unless (← getMainTarget).isAppOf ``Exists do synthesizeSummaries solver

@@ -42,17 +42,17 @@ instance : MonadExceptOf Exception Outcome where
     | .value value => .value value
     | .raised exception => handler exception
 
-@[simp] theorem Outcome.value_bind
+@[simp] theorem Outcome.bind_value_spec
     (value : α) (next : α → Outcome β) :
     (Outcome.value value >>= next) = next value :=
   rfl
 
-@[simp] theorem Outcome.raised_bind
+@[simp] theorem Outcome.bind_raised_spec
     (exception : Exception) (next : α → Outcome β) :
     (Outcome.raised exception >>= next) = .raised exception :=
   rfl
 
-@[simp] theorem Outcome.throw_eq (exception : Exception) :
+@[simp] theorem Outcome.throw_spec (exception : Exception) :
     (throw exception : Outcome α) = .raised exception :=
   rfl
 

@@ -11,6 +11,12 @@ run_cmd do
     ``LynxTest.Integration.Sum.sum_append_property,
     ``LynxTest.Tactic.Contracts.structure_contract,
     ``LynxTest.Tactic.Contracts.ensures_clauses,
+    ``LynxTest.Tactic.Contracts.duplicate_constraints,
+    ``LynxTest.Tactic.Contracts.local_implication,
+    ``LynxTest.Tactic.Contracts.assumed_coverage,
+    ``LynxTest.Tactic.Contracts.andalso_short_circuit,
+    ``LynxTest.Tactic.Contracts.andalso_raises,
+    ``LynxTest.Tactic.Contracts.andalso_non_boolean,
     ``LynxTest.Tactic.Recursive.duplicate_contract,
     ``LynxTest.Tactic.Recursive.leaves_contract]
   for name in theorems do
