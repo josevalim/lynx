@@ -1,10 +1,11 @@
 name = "Lynx"
 version = "0.1.0"
-defaultTargets = ["lynx"]
+defaultTargets = ["Lynx"]
+testDriver = "LynxTest"
 
 [[lean_lib]]
 name = "Lynx"
 
-[[lean_exe]]
-name = "lynx"
-root = "Main"
+[[lean_lib]]
+name = "LynxTest"
+globs = ["LynxTest.+"]

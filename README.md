@@ -24,9 +24,14 @@ All three clauses contain single expressions; they do not introduce `do` blocks.
 
 ## Implementation
 
-Build and run it with:
+Build the public library with:
 
 ```console
 lake build
-lake exe lynx
+```
+
+Elaborate and kernel-check the integration-test examples with:
+
+```console
+lake test
 ```
