@@ -9,3 +9,7 @@ name = "Lynx"
 [[lean_lib]]
 name = "LynxTest"
 globs = ["LynxTest.+"]
+
+[[lean_lib]]
+name = "Benchmarks"
+globs = ["Benchmarks.Common"]
