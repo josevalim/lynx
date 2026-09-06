@@ -1,4 +1,4 @@
-import Benchmarks.Common
+import LynxTest.Bench
 
 set_option Elab.async false
 

@@ -1,14 +1,27 @@
 import LynxTest.Integration.Sum
+import LynxTest.Integration.Reverse
+import LynxTest.Modules.Erlang
 import LynxTest.Tactic.Contracts
 import LynxTest.Tactic.Recursive
 
 open Lean
 
-/-! Reject `sorryAx` and unexpected axioms in representative generated proofs. -/
+/-! Reject `sorryAx` and unexpected axioms in representative integration,
+library, and generated tactic proofs. -/
 run_cmd do
   let theorems := #[
     ``LynxTest.Integration.Sum.sum_satisfies_contract,
     ``LynxTest.Integration.Sum.sum_append_property,
+    ``LynxTest.Integration.Reverse.reverseAux_proper_spec,
+    ``LynxTest.Integration.Reverse.reverseAux_reverse_spec,
+    ``LynxTest.Integration.Reverse.reverse_contract_spec,
+    ``LynxTest.Integration.Reverse.reverse_involution_spec,
+    ``Lynx.Term.compare_eq_spec,
+    ``Lynx.Term.compare_swap_spec,
+    ``Lynx.Term.compare_le_trans_spec,
+    ``Lynx.Term.compare_le_total_spec,
+    ``LynxTest.Modules.Erlang.ordered_terms_spec,
+    ``LynxTest.Modules.Erlang.reflexive_operators_spec,
     ``LynxTest.Tactic.Contracts.structure_contract,
     ``LynxTest.Tactic.Contracts.ensures_clauses,
     ``LynxTest.Tactic.Contracts.duplicate_constraints,

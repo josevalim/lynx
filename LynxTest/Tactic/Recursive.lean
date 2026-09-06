@@ -19,7 +19,7 @@ def leaves(_), do: 1
 namespace LynxTest.Tactic.Recursive
 open Lynx Lynx.Modules
 
-def integers (arg : Term) : Outcome Term := Extensions.is_proper_list Erlang.is_integer arg
+def integers (arg : Term) : Outcome Term := Extensions.is_proper_list_with Erlang.is_integer arg
 def listResult (_arg result : Term) : Outcome Term := integers result
 def integerResult (_arg result : Term) : Outcome Term := Erlang.is_integer result
 def anyInput (_ : Term) : Outcome Term := .value Term.true

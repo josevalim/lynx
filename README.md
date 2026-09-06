@@ -2,10 +2,10 @@
 
 An experimental Elixir-to-Lean translation and verification project.
 
-## Example
+## Proposal
 
-Contracts and properties are written as ordinary Elixir expressions immediately
-before a function definition:
+Contracts and properties woudl be written as ordinary Elixir expressions
+immediately before a function definition:
 
 ```elixir
 expects is_proper_list(list, &is_number/1)
@@ -20,23 +20,26 @@ def sum(list)
 - `property` states an additional expression that Lynx must prove. It can call
   the function directly and does not have an implicit result binding.
 
-All three clauses contain single expressions; they do not introduce `do` blocks.
+For programs that need additional proofs, there is also a `~LEAN"..."` sigil
+to embed LEAN source within each module.
 
-`is_proper_list(list, predicate)` accepts proper lists whose elements all satisfy
-the predicate. Each predicate call must return exactly `true`; false, other
-values, and exceptions reject the input. The empty list is accepted.
+At the moment, automatic translation from Erlang/Elixir to Lean has not yet
+been implemented. However, you can find manual translations within the
+[LynxTest/Integration](LynxTest/Integration) directory. Also check the
+[Benchmarks](Benchmarks) folder to compare those examples with native
+implementations.
 
 ## Implementation
 
-This project models Erlang terms with an inductive type and implements Erlang
-NIFs in Lean. Expectations, assurances, and properties are then shaped into a
-contract, which is verified by Lynx.Tactic.
+This project models Erlang terms with an inductive type (see [`Lynx.Term`](Lynx/Term.lean))
+and implements Erlang NIFs in Lean (see [Lynx/Modules](Lynx/Modules)).
+Expectations, assurances, and properties are then shaped into a contract,
+which is verified by [`Lynx.Tactic`](Lynx/Tactic.lean).
 
-Lynx.Tactic constructs proof terms that Lean’s kernel independently checks.
+Everything in this project has been human verified, except for `Lynx.Tactic`.
+`Lynx.Tactic` constructs proof terms that Lean’s kernel independently checks.
 Its proof-search implementation therefore need not itself be trusted for logical
 correctness, provided proofs introduce no untrusted axioms or sorry.
-
-Everything in this project has been human verified, except for Lynx.Tactic.
 Read that module source and documentation for more information.
 
 ## Running tests
@@ -53,6 +56,10 @@ Elaborate and kernel-check the integration-test examples with:
 lake test
 ```
 
-`LynxTest/Integration` contains end-to-end translated examples. Focused tactic
-tests live under `LynxTest/Tactic` and cover contracts, source-labelled VCs,
-distinct recursion shapes, representative failures, and coverage diagnostics.
+[LynxTest/Integration](LynxTest/Integration) contains end-to-end translated examples.
+
+Run benchmarks comparing the translated examples with native ones:
+
+```console
+sh Benchmarks/run.sh 5
+```

@@ -2,11 +2,12 @@
 set -eu
 
 runs="${1:-3}"
-lake build Benchmarks.Common >/dev/null
+lake build LynxTest.Bench >/dev/null
 run=1
 while [ "$run" -le "$runs" ]; do
-  for file in Erlang Native; do
-    lake env lean "Benchmarks/Sum/$file.lean"
+  for suite in Sum Reverse; do
+    lake env lean "LynxTest/Integration/$suite.lean"
+    lake env lean "Benchmarks/Native/$suite.lean"
   done
   run=$((run + 1))
 done

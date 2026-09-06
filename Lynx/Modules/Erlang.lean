@@ -1,5 +1,6 @@
 import Lynx.Contract
 import Lynx.Term
+import Lynx.Term.Order
 
 namespace Lynx.Modules.Erlang
 
@@ -20,6 +21,18 @@ def add : Term → Term → Outcome Term
 
 def equal (left right : Term) : Outcome Term :=
   .value (if left = right then Term.true else Term.false)
+
+def less_than (left right : Term) : Outcome Term :=
+  .value (if (Term.compare left right).isLT then Term.true else Term.false)
+
+def greater_than (left right : Term) : Outcome Term :=
+  .value (if (Term.compare left right).isGT then Term.true else Term.false)
+
+def less_than_or_equal (left right : Term) : Outcome Term :=
+  .value (if (Term.compare left right).isLE then Term.true else Term.false)
+
+def greater_than_or_equal (left right : Term) : Outcome Term :=
+  .value (if (Term.compare left right).isGE then Term.true else Term.false)
 
 def append : Term → Term → Outcome Term
   | .nil, right => .value right
