@@ -1,6 +1,6 @@
 # Lynx
 
-An experimental Elixir-to-Lean translation and verification project.
+An experimental Erlang/Elixir-to-Lean translation and verification project.
 
 ## Proposal
 
@@ -23,9 +23,28 @@ def sum(list)
 Proofs are done over dynamic Erlang terms. For programs that need additional proofs,
 there is a `~LEAN"..."` sigil to embed LEAN source within each module.
 
+Erlang could use the same contracts through module attributes and a parse
+transform:
+
+```erlang
+-module(sum).
+-export([sum/1]).
+-compile({parse_transform, lynx}).
+
+-expects("fun(List) -> is_proper_list(List, fun erlang:is_integer/1) end").
+-ensures("fun(Result) -> is_integer(Result) end").
+-property("fun(L, R) -> sum(L) + sum(R) == sum(L ++ R) end").
+sum([]) -> 0;
+sum([X | Xs]) -> X + sum(Xs).
+```
+
+In both examples, `is_proper_list/2` is a Lynx extension with guard semantics:
+the list must be proper and the predicate must return exactly `true` for every
+element. This Erlang syntax and `lynx` are proposals, not implemented features.
+
 At the moment, automatic translation from Erlang/Elixir to Lean has not yet
-been implemented. In the future, it should likely be done from Core Erlang
-AST. For now, you can find manual translations within the
+been implemented. It must be implemented either from Erlang or Core Erlang ASTs.
+For now, you can find manual translations within the
 [LynxTest/Integration](LynxTest/Integration) directory. Also check the
 [Benchmarks](Benchmarks) folder to compare those examples with native
 implementations.
