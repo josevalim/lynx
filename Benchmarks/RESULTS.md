@@ -1,7 +1,7 @@
 # Benchmark results
 
-Captured on 2026-09-06 using Lean 4.33.1 (release build, commit
-`4d4d5e4`) on macOS arm64.
+Captured on 2026-09-06 using Lean 4.33.1 (release build) on macOS arm64.
+Repository base: `9cae6af`, with the current working-tree changes.
 
 Command, run from the repository root:
 
@@ -17,11 +17,11 @@ Milliseconds, over five runs:
 
 | Final proof | Lynx terms | Native Lean |
 | --- | ---: | ---: |
-| Sum integer-result contract | 222.47 | — |
-| Sum append property | 805.91 | 13.02 |
-| Reverse proper-list return contract | 86.51 | — |
-| Reverse involution | 15.88 | 1.34 |
-| Native reverse exact result | — | 1.75 |
+| Sum integer-result contract | 223.45 | — |
+| Sum append property | 785.18 | 13.13 |
+| Reverse proper-list return contract | 86.98 | — |
+| Reverse involution | 15.61 | 0.86 |
+| Reverse append property | 58.66 | 5.30 |
 
 These are final theorem-elaboration times, not execution times of the algorithms.
 Supporting lemmas and imports are outside the timed sections. The Lynx contracts
@@ -29,45 +29,53 @@ and properties include executable expectations and successful return; native
 lists encode properness in their type. A dash means there is no corresponding
 benchmark, not zero cost. See [README.md](README.md) for measurement details.
 
+Append reversal now uses a single accumulator invariant in each version, with
+the induction performed inside the timed final proof. Shared append facts and
+the accumulator invariant itself are elaborated outside the timed sections.
+
 ## Captured output
 
-The original output below has been converted to milliseconds, matching the
-current reporting format. Each consecutive group of seven lines is one run.
+Timings are in milliseconds. Each consecutive group of eight lines is one run.
 
 ```text
-LYNX_BENCH erlang/sum-contract 219.32ms
-LYNX_BENCH erlang/sum-append 791.50ms
-LYNX_BENCH native/sum-append 12.80ms
-LYNX_BENCH erlang/reverse-contract 87.54ms
-LYNX_BENCH erlang/reverse-involution 15.99ms
-LYNX_BENCH native/reverse-correctness 1.47ms
-LYNX_BENCH native/reverse-involution 1.49ms
-LYNX_BENCH erlang/sum-contract 225.95ms
-LYNX_BENCH erlang/sum-append 833.61ms
-LYNX_BENCH native/sum-append 13.02ms
-LYNX_BENCH erlang/reverse-contract 86.44ms
-LYNX_BENCH erlang/reverse-involution 15.30ms
-LYNX_BENCH native/reverse-correctness 1.75ms
-LYNX_BENCH native/reverse-involution 1.23ms
-LYNX_BENCH erlang/sum-contract 231.91ms
-LYNX_BENCH erlang/sum-append 821.12ms
-LYNX_BENCH native/sum-append 14.07ms
-LYNX_BENCH erlang/reverse-contract 86.51ms
-LYNX_BENCH erlang/reverse-involution 15.50ms
-LYNX_BENCH native/reverse-correctness 1.97ms
-LYNX_BENCH native/reverse-involution 1.40ms
-LYNX_BENCH erlang/sum-contract 222.47ms
-LYNX_BENCH erlang/sum-append 802.94ms
-LYNX_BENCH native/sum-append 13.42ms
-LYNX_BENCH erlang/reverse-contract 84.83ms
-LYNX_BENCH erlang/reverse-involution 15.88ms
-LYNX_BENCH native/reverse-correctness 1.80ms
-LYNX_BENCH native/reverse-involution 1.34ms
-LYNX_BENCH erlang/sum-contract 220.64ms
-LYNX_BENCH erlang/sum-append 805.91ms
-LYNX_BENCH native/sum-append 12.87ms
-LYNX_BENCH erlang/reverse-contract 91.42ms
-LYNX_BENCH erlang/reverse-involution 15.91ms
-LYNX_BENCH native/reverse-correctness 1.33ms
-LYNX_BENCH native/reverse-involution 1.19ms
+LYNX_BENCH erlang/sum-contract 224.25ms
+LYNX_BENCH erlang/sum-append 791.51ms
+LYNX_BENCH native/sum-append 12.69ms
+LYNX_BENCH erlang/reverse-contract 88.12ms
+LYNX_BENCH erlang/reverse-involution 16.69ms
+LYNX_BENCH erlang/reverse-append 58.66ms
+LYNX_BENCH native/reverse-involution 0.90ms
+LYNX_BENCH native/reverse-append 4.97ms
+LYNX_BENCH erlang/sum-contract 219.15ms
+LYNX_BENCH erlang/sum-append 779.57ms
+LYNX_BENCH native/sum-append 12.54ms
+LYNX_BENCH erlang/reverse-contract 85.90ms
+LYNX_BENCH erlang/reverse-involution 14.91ms
+LYNX_BENCH erlang/reverse-append 59.08ms
+LYNX_BENCH native/reverse-involution 0.74ms
+LYNX_BENCH native/reverse-append 4.93ms
+LYNX_BENCH erlang/sum-contract 223.45ms
+LYNX_BENCH erlang/sum-append 786.74ms
+LYNX_BENCH native/sum-append 13.13ms
+LYNX_BENCH erlang/reverse-contract 85.17ms
+LYNX_BENCH erlang/reverse-involution 15.32ms
+LYNX_BENCH erlang/reverse-append 57.81ms
+LYNX_BENCH native/reverse-involution 0.86ms
+LYNX_BENCH native/reverse-append 5.32ms
+LYNX_BENCH erlang/sum-contract 222.29ms
+LYNX_BENCH erlang/sum-append 777.97ms
+LYNX_BENCH native/sum-append 13.17ms
+LYNX_BENCH erlang/reverse-contract 86.98ms
+LYNX_BENCH erlang/reverse-involution 15.61ms
+LYNX_BENCH erlang/reverse-append 58.67ms
+LYNX_BENCH native/reverse-involution 0.98ms
+LYNX_BENCH native/reverse-append 5.63ms
+LYNX_BENCH erlang/sum-contract 225.17ms
+LYNX_BENCH erlang/sum-append 785.18ms
+LYNX_BENCH native/sum-append 13.93ms
+LYNX_BENCH erlang/reverse-contract 89.54ms
+LYNX_BENCH erlang/reverse-involution 15.73ms
+LYNX_BENCH erlang/reverse-append 57.06ms
+LYNX_BENCH native/reverse-involution 0.82ms
+LYNX_BENCH native/reverse-append 5.30ms
 ```

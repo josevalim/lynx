@@ -56,4 +56,13 @@ instance : MonadExceptOf Exception Outcome where
     (throw exception : Outcome α) = .raised exception :=
   rfl
 
+theorem Outcome.bind_assoc_spec (outcome : Outcome α)
+    (first : α → Outcome β) (next : β → Outcome γ) :
+    ((outcome >>= first) >>= next) = (outcome >>= fun value => first value >>= next) := by
+  cases outcome <;> rfl
+
+theorem Outcome.bind_value_right_spec (outcome : Outcome α) :
+    (outcome >>= Outcome.value) = outcome := by
+  cases outcome <;> rfl
+
 end Lynx

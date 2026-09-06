@@ -4,7 +4,7 @@ An experimental Elixir-to-Lean translation and verification project.
 
 ## Proposal
 
-Contracts and properties woudl be written as ordinary Elixir expressions
+Contracts and properties would be written as ordinary Elixir expressions
 immediately before a function definition:
 
 ```elixir
@@ -20,11 +20,12 @@ def sum(list)
 - `property` states an additional expression that Lynx must prove. It can call
   the function directly and does not have an implicit result binding.
 
-For programs that need additional proofs, there is also a `~LEAN"..."` sigil
-to embed LEAN source within each module.
+Proofs are done over dynamic Erlang terms. For programs that need additional proofs,
+there is a `~LEAN"..."` sigil to embed LEAN source within each module.
 
 At the moment, automatic translation from Erlang/Elixir to Lean has not yet
-been implemented. However, you can find manual translations within the
+been implemented. In the future, it should likely be done from Core Erlang
+AST. For now, you can find manual translations within the
 [LynxTest/Integration](LynxTest/Integration) directory. Also check the
 [Benchmarks](Benchmarks) folder to compare those examples with native
 implementations.
@@ -33,6 +34,8 @@ implementations.
 
 This project models Erlang terms with an inductive type (see [`Lynx.Term`](Lynx/Term.lean))
 and implements Erlang NIFs in Lean (see [Lynx/Modules](Lynx/Modules)).
+Only some terms and NIFs are implemented in this proof of concept.
+
 Expectations, assurances, and properties are then shaped into a contract,
 which is verified by [`Lynx.Tactic`](Lynx/Tactic.lean).
 

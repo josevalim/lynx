@@ -18,11 +18,17 @@ milliseconds. These are proof times, not executable runtime measurements.
 The Lynx version proves its integer-list contract and the append property;
 native proves the append property.
 
-`Reverse` proves successful proper-list return and involution over Term.
-Both final Term proofs use `lynx_verify`, supported by handwritten `@[simp]`
-accumulator lemmas. Unmatched function clauses raise `function_clause`.
-The native implementation proves exact reversal and involution using a
-handwritten accumulator lemma and Lean's existing list theorems.
+`Reverse` proves successful proper-list return, involution, and append reversal
+over Term. The return and involution proofs use `lynx_verify`, supported by
+handwritten accumulator lemmas. Append reversal uses a guided inductive Lean proof
+and one accumulator law in both versions:
+`reverse_aux(input, acc) == reverse(input) ++ acc`. The property is
+`reverse(left ++ right) == reverse(right) ++ reverse(left)`. Both inputs must
+be proper lists, with arbitrary elements. Unmatched function clauses raise
+`function_clause`. The native implementation proves involution and the same
+append law using handwritten accumulator lemmas. General append facts (success,
+right identity, and associativity) are shared in
+`Lynx/Modules/Erlang/ListLemmas.lean` and are imported outside the timed sections.
 
 Native lists statically exclude malformed outer lists; the native functions
 have no exception result. Coverage remains part of the Lynx specifications,
