@@ -8,7 +8,7 @@ Contracts and properties are written as ordinary Elixir expressions immediately
 before a function definition:
 
 ```elixir
-expects is_list(list) and Enum.all?(list, &is_number/1)
+expects is_proper_list(list, &is_number/1)
 ensures (result -> is_number(result))
 property sum(l) + sum(r) == sum(l ++ r)
 def sum(list)
@@ -21,6 +21,10 @@ def sum(list)
   the function directly and does not have an implicit result binding.
 
 All three clauses contain single expressions; they do not introduce `do` blocks.
+
+`is_proper_list(list, predicate)` accepts proper lists whose elements all satisfy
+the predicate. Each predicate call must return exactly `true`; false, other
+values, and exceptions reject the input. The empty list is accepted.
 
 ## Implementation
 

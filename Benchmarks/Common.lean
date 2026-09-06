@@ -21,7 +21,7 @@ def sumTerm : Term → Outcome Term
   | _ => throw (.error (.atom "function_clause"))
 
 def sumExpects (arg : Term) : Outcome Term :=
-  Erlang.andalso (Erlang.is_list arg) (fun _ => Enum.all Erlang.is_integer arg)
+  Extensions.is_proper_list Erlang.is_integer arg
 
 def sumEnsures (_arg result : Term) : Outcome Term :=
   Erlang.is_integer result

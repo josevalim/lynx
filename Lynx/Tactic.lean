@@ -1,5 +1,5 @@
 import Lean
-import Lynx.Modules.Enum
+import Lynx.Modules.Extensions
 
 /-!
 # How the Lynx tactic works

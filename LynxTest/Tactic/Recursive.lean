@@ -4,8 +4,8 @@ import Lynx
 The Lean definitions below correspond to this Elixir input:
 
 ```elixir
-expects Enum.all?(list, &is_integer/1)
-ensures (result -> Enum.all?(result, &is_integer/1))
+expects is_proper_list(list, &is_integer/1)
+ensures (result -> is_proper_list(result, &is_integer/1))
 def duplicate([]), do: []
 def duplicate([head | tail]), do: [head, head | duplicate(tail)]
 
@@ -19,7 +19,7 @@ def leaves(_), do: 1
 namespace LynxTest.Tactic.Recursive
 open Lynx Lynx.Modules
 
-def integers (arg : Term) : Outcome Term := Enum.all Erlang.is_integer arg
+def integers (arg : Term) : Outcome Term := Extensions.is_proper_list Erlang.is_integer arg
 def listResult (_arg result : Term) : Outcome Term := integers result
 def integerResult (_arg result : Term) : Outcome Term := Erlang.is_integer result
 def anyInput (_ : Term) : Outcome Term := .value Term.true
