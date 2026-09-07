@@ -1,4 +1,4 @@
-import Lynx.Contract
+import Lynx.Attribute
 import Lynx.Term
 import Lynx.Term.Order
 
@@ -34,7 +34,7 @@ def less_than_or_equal (left right : Term) : Outcome Term :=
 def greater_than_or_equal (left right : Term) : Outcome Term :=
   .value (if (Term.compare left right).isGE then Term.true else Term.false)
 
-def append : Term → Term → Outcome Term
+@[lynx_opaque] def append : Term → Term → Outcome Term
   | .nil, right => .value right
   | .cons head tail, right => do
       let rest ← append tail right

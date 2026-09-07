@@ -1,4 +1,6 @@
 import Lean
+import Lynx.Attribute
+import Lynx.Contract
 import Lynx.Modules.Extensions
 
 /-!
@@ -53,9 +55,18 @@ builds one local simplification context from those executable bodies. This is
 why ordinary translated functions need no registration attribute or separate
 semantics file. Library-level, kernel-proved `@[simp]` rules supplement the
 executable bodies, including generic `Outcome` reductions; translated functions
-themselves remain annotation-free. The library uses the `_spec` suffix for these
+themselves can remain annotation-free. Mark a library abstraction `@[lynx_opaque]`
+to stop discovery at that function and use its specifications instead. This
+also stops domain/return-summary discovery through its body. It is a proof-search
+boundary, not Lean's `opaque`: kernel conversion, explicit unfolding and concrete
+coverage evaluation remain available. The library uses the `_spec` suffix for these
 theorems. Their statements and `@[simp]` attributes drive rewriting; that naming
 convention is not a discovery rule.
+
+Search substitutes equalities introduced by specifications before normalization.
+When simplifying the target, whole local assumptions can discharge specification
+premises, including quantified invariants; their bodies need not become global
+rewrite rules. No operation names or representation types are hardcoded for this.
 
 Normalization makes one ordered pass over non-quantified hypotheses, starting
 with expectation-derived constraints, and then simplifies the target. Each
@@ -240,6 +251,7 @@ private def mkSolver : TacticM Solver := withMainContext do
     pending := pending.pop
     if seen.contains name then continue
     seen := seen.insert name
+    if opaqueAttr.hasTag (← getEnv) name then continue
     let .defnInfo info ← getConstInfo name | continue
     let executable ← forallTelescopeReducing info.type fun _ result =>
       pure (result.isAppOf ``Outcome)
@@ -255,6 +267,14 @@ private def mkSolver : TacticM Solver := withMainContext do
     Pure.pure, $[$definitions:ident],*])
   let result ← mkSimpContext simpSyntax (eraseLocal := true) (kind := .simpAll)
   return ⟨result.ctx, result.simprocs, recursive, majors, inputs, false⟩
+
+/-- Keep quantified invariants available as whole premises of specification
+lemmas, without installing their bodies as unrestricted rewrite rules. -/
+private def dischargeAssumption : Simp.Discharge := fun proposition => do
+  for decl in ← getLCtx do
+    unless decl.isImplementationDetail do
+      if ← isDefEq decl.type proposition then return some decl.toExpr
+  return none
 
 /-- One forward pass; search revisits normalization after structural progress.
 Do not repeatedly traverse quantified recursive proofs as `simpAll` does. -/
@@ -288,7 +308,7 @@ private def normalize (solver : Solver) : TacticM Bool := do
       context ← goal.withContext do
         return context.setSimpTheorems (← context.simpTheorems.addTheorem
           (.fvar h) (mkFVar h) (config := context.indexConfig))
-  let (result, _) ← simpTarget goal context solver.simprocs
+  let (result, _) ← simpTarget goal context solver.simprocs (some dischargeAssumption)
   trace[lynx] "normalize: {(← IO.monoMsNow) - start}ms"
   replaceMainGoal result.toList
   return result.isNone
@@ -629,7 +649,7 @@ private partial def search (solver : Solver) (fuel : Nat) : TacticM Unit := do
   if fuel == 0 then return
   trace[lynx] "search ({fuel}): {← getMainGoal}"
   let (_, goal) ← (← getMainGoal).intros
-  replaceMainGoal [goal]
+  replaceMainGoal [← substVars goal]
   if ← solveCoverage (some solver) then return
   if ← destructFacts then
     allGoals (search solver (fuel - 1))
@@ -672,7 +692,7 @@ private partial def collectDomains (expression : Expr) (fuel : Nat) : MetaM (Arr
       let fn := mkAppN expression.getAppFn args.pop
       if (← inferType expression).isAppOf ``Outcome then result := result.push fn
     if let .const name _ := expression.getAppFn then
-      if !(← isRecursiveDefinition name) then
+      if !opaqueAttr.hasTag (← getEnv) name && !(← isRecursiveDefinition name) then
         if let some unfolded ← unfoldDefinition? expression then
           result := result ++ (← collectDomains unfolded (fuel - 1))
   match expression with
@@ -694,6 +714,7 @@ private def returnConstructor (function : Name) : MetaM (Option Name) := do
     pending := pending.pop
     if seen.contains name then continue
     seen := seen.insert name
+    if opaqueAttr.hasTag (← getEnv) name then continue
     let .defnInfo info ← getConstInfo name | continue
     info.value.forEach fun e => do
       if e.isAppOfArity ``Outcome.value 2 then

@@ -1,6 +1,14 @@
+import Lynx.Contract
 import Lynx.Modules.Extensions
 
 namespace Lynx.Modules.Erlang
+
+@[simp] theorem append_nil_left_spec (right : Term) :
+    append .nil right = .value right := rfl
+
+@[simp] theorem append_cons_spec (head tail right : Term) :
+    append (.cons head tail) right =
+      (append tail right >>= fun rest => .value (.cons head rest)) := rfl
 
 /-- Appending to a proper list succeeds, with any right-hand tail. -/
 theorem append_success_spec (left right : Term)

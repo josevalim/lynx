@@ -3,6 +3,7 @@ import LynxTest.Integration.Reverse
 import LynxTest.Modules.Erlang
 import LynxTest.Tactic.Contracts
 import LynxTest.Tactic.Recursive
+import LynxTest.Tactic.Opaque
 
 open Lean
 
@@ -10,6 +11,13 @@ open Lean
 library, and generated tactic proofs. -/
 run_cmd do
   let theorems := #[
+    ``Lynx.Modules.Erlang.append_nil_left_spec,
+    ``Lynx.Modules.Erlang.append_cons_spec,
+    ``LynxTest.Tactic.Opaque.missing_specification,
+    ``LynxTest.Tactic.Opaque.through_wrapper,
+    ``LynxTest.Tactic.Opaque.rejects_false_claim,
+    ``LynxTest.Tactic.Opaque.quantified_premise,
+    ``LynxTest.Tactic.Opaque.representation_equality,
     ``LynxTest.Integration.Sum.sum_satisfies_contract,
     ``LynxTest.Integration.Sum.sum_append_property,
     ``LynxTest.Integration.Reverse.reverseAux_proper_spec,
