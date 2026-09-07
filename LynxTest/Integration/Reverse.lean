@@ -46,7 +46,7 @@ def reverseInvolution (input : Term) : Result := do
   | cons head tail _ ih => exact ih (.cons head acc) accepted accAccepted
 
 @[simp] theorem reverse_aux_reverse (input acc : Term)
-    (next : Term → Except Exception α) (accepted : properList input = .ok (.atom "true")) :
+    (next : Term → Result α) (accepted : properList input = .ok (.atom "true")) :
     (do let result ← reverse_aux input acc; let restored ← reverse_aux result .nil; next restored) =
       (reverse_aux acc input >>= next) := by
   have reject : ¬ Accepted (.ok (.atom "false")) := by decide

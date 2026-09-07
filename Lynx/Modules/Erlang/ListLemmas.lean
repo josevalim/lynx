@@ -13,7 +13,7 @@ namespace Lynx.Modules.Erlang
 theorem append_success (left right : Term)
     (accepted : Extensions.is_proper_list_1 left = .ok (.atom "true")) :
     ∃ joined, append_2 left right = .ok joined := by
-  have reject : (Except.ok (.atom "false") : Result) ≠ .ok (.atom "true") := by decide
+  have reject : (Result.ok (.atom "false") : Result) ≠ .ok (.atom "true") := by decide
   induction left with
   | nil => exact ⟨right, rfl⟩
   | integer _ => exact False.elim (reject accepted)
@@ -25,7 +25,7 @@ theorem append_success (left right : Term)
 @[simp] theorem append_nil (input : Term)
     (accepted : Extensions.is_proper_list_1 input = .ok (.atom "true")) :
     append_2 input .nil = .ok input := by
-  have reject : (Except.ok (.atom "false") : Result) ≠ .ok (.atom "true") := by decide
+  have reject : (Result.ok (.atom "false") : Result) ≠ .ok (.atom "true") := by decide
   induction input with
   | nil => rfl
   | integer _ => exact False.elim (reject accepted)
@@ -38,7 +38,7 @@ theorem append_assoc (left right suffix : Term)
     (accepted : Extensions.is_proper_list_1 left = .ok (.atom "true")) :
     (append_2 left right >>= fun joined => append_2 joined suffix) =
       (append_2 right suffix >>= append_2 left) := by
-  have reject : (Except.ok (.atom "false") : Result) ≠ .ok (.atom "true") := by decide
+  have reject : (Result.ok (.atom "false") : Result) ≠ .ok (.atom "true") := by decide
   induction left with
   | nil =>
     simp only [append_2, Result.ok_bind]
@@ -47,6 +47,6 @@ theorem append_assoc (left right suffix : Term)
   | atom _ => exact False.elim (reject accepted)
   | cons head tail _ ih =>
     simpa only [append_2, bind_assoc, Result.ok_bind] using
-      congrArg (fun outcome => outcome >>= fun rest => Except.ok (Term.cons head rest)) (ih accepted)
+      congrArg (fun outcome => outcome >>= fun rest => Result.ok (Term.cons head rest)) (ih accepted)
 
 end Lynx.Modules.Erlang

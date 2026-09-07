@@ -54,7 +54,7 @@ and local hypotheses. It follows definitions whose result is `Result`, then
 builds one local simplification context from those executable bodies. This is
 why ordinary translated functions need no registration attribute or separate
 semantics file. Library-level, kernel-proved `@[simp]` rules supplement the
-executable bodies, including generic `Except` reductions; translated functions
+executable bodies, including generic `Result` reductions; translated functions
 themselves can remain annotation-free. Mark a library abstraction `@[lynx_opaque]`
 to stop discovery at that function and use its specifications instead. This
 also stops domain/return-summary discovery through its body. It is a proof-search
@@ -86,7 +86,7 @@ matches. For example:
 
 ```lean
 (match input with
- | .nil => Except.ok (Term.atom "true")
+ | .nil => Result.ok (Term.atom "true")
  | _ => .ok (Term.atom "false")) = .ok (Term.atom "true")
 ```
 
@@ -144,7 +144,7 @@ goals:
    independent input may be inducted.
 7. Generalize and split one shared monadic computation, retaining an equation
    for its outcome. This avoids duplicating nested bind continuations before
-   its `Except.ok`/`Except.error` result is known.
+   its `Result.ok`/`Result.error` result is known.
 8. Try remaining hypothesis matches, then split a target match or conditional.
 
 The main search and independent summary proofs start with fuel 24. The smaller
@@ -232,11 +232,10 @@ private structure Solver where
   inputs : Array FVarId
   inducted : Bool := false
 
-/-- Recognize both the public alias and its expanded representation. -/
+/-- Recognize Erlang results, whose success type is `Term`. -/
 private def isResultType (type : Expr) : MetaM Bool := do
   let type ← whnf type
-  return type.isAppOfArity ``Except 2 && type.getAppArgs[0]!.isConstOf ``Exception
-    && type.getAppArgs[1]!.isConstOf ``Term
+  return type.isAppOfArity ``Result 1 && type.getAppArgs[0]!.isConstOf ``Term
 
 /-- Discover executable definitions by their result type, following their calls.
 Their bodies supply reduction rules alongside registered library simp theorems;
@@ -299,7 +298,7 @@ private def normalize (solver : Solver) : TacticM Bool := do
       let decl ← h.getDecl
       return !decl.userName.toString.startsWith "recursive_result" &&
         (decl.type.isAppOf ``Accepted ||
-          (decl.type.isAppOf ``Eq && decl.type.getAppArgs[2]!.isAppOf ``Except.ok))
+          (decl.type.isAppOf ``Eq && decl.type.getAppArgs[2]!.isAppOf ``Result.ok))
     return (constraints ++ hypotheses.filter (fun h => !constraints.contains h), context)
   let mut context := context
   for h in hypotheses do
@@ -439,8 +438,8 @@ private def splitComputation : TacticM Bool := withMainContext do
         if args.size >= 2 then
           let computation := args[args.size - 2]!
           unless computation.hasLooseBVars do
-            if !computation.isAppOf ``Bind.bind && !computation.isAppOf ``Except.ok &&
-                !computation.isAppOf ``Except.error && (← isResultType (← inferType computation)) then
+            if !computation.isAppOf ``Bind.bind && !computation.isAppOf ``Result.ok &&
+                !computation.isAppOf ``Result.error && (← isResultType (← inferType computation)) then
               candidates.modify (·.push computation)
     for computation in ← candidates.get do
       let saved ← saveState
@@ -725,8 +724,8 @@ private def returnConstructor (function : Name) : MetaM (Option Name) := do
     if opaqueAttr.hasTag (← getEnv) name then continue
     let .defnInfo info ← getConstInfo name | continue
     info.value.forEach fun e => do
-      if e.isAppOfArity ``Except.ok 3 then
-        let returned := e.getAppArgs[2]!
+      if e.isAppOfArity ``Result.ok 2 then
+        let returned := e.getAppArgs[1]!
         if let .const ctor _ := returned.getAppFn then
           if let .ctorInfo ci ← getConstInfo ctor then
             if ci.induct == ``Term then constructors.modify (·.insert ctor)
@@ -761,8 +760,7 @@ private def synthesizeSummaries (solver : Solver) : TacticM Unit := withMainCont
         let proposition ← withLocalDeclD `input (mkConst ``Term) fun input => do
           let accepted ← mkAppM ``Accepted #[mkApp domain input]
           let result ← forallTelescope (← inferType (mkConst constructor)) fun fields _ => do
-            let value ← mkAppOptM ``Except.ok #[some (mkConst ``Exception), none,
-              some (mkAppN (mkConst constructor) fields)]
+            let value ← mkAppM ``Result.ok #[mkAppN (mkConst constructor) fields]
             let mut equation ← mkEq (mkApp (mkConst function) input) value
             for field in fields.reverse do
               equation ← mkAppM ``Exists #[← mkLambdaFVars #[field] equation]
