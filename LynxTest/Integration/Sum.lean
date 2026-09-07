@@ -18,28 +18,28 @@ def sumTerm : Term → Result
   | .nil => .ok (.integer 0)
   | .cons x xs => do
       let subtotal ← sumTerm xs
-      Erlang.add x subtotal
+      Erlang.add_2 x subtotal
   | _ => throw (.error (.atom "function_clause"))
 
 /-! Translated integer-list expectation and integer-result guarantee. -/
 def sumExpects (arg : Term) : Result :=
-  Extensions.is_proper_list_with Erlang.is_integer arg
+  Extensions.is_proper_list_2 Erlang.is_integer_1 arg
 
 def sumEnsures (_arg result : Term) : Result :=
-  Erlang.is_integer result
+  Erlang.is_integer_1 result
 
 /-- Both operands of the property must satisfy the function's expectation. -/
 def appendExpects (args : Term × Term) : Result :=
-  Erlang.andalso (sumExpects args.1) (fun _ => sumExpects args.2)
+  Erlang.andalso_2 (sumExpects args.1) (fun _ => sumExpects args.2)
 
 /-- Translated `sum(l) + sum(r) == sum(l ++ r)`. -/
 def appendExpression (args : Term × Term) : Result := do
   let left ← sumTerm args.1
   let right ← sumTerm args.2
-  let total ← Erlang.add left right
-  let joined ← Erlang.append args.1 args.2
+  let total ← Erlang.add_2 left right
+  let joined ← Erlang.append_2 args.1 args.2
   let combined ← sumTerm joined
-  Erlang.equal total combined
+  Erlang.equal_2 total combined
 
 #bench "erlang/sum-contract"
 theorem sum_satisfies_contract : Satisfies sumTerm sumExpects sumEnsures := by

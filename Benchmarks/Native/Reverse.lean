@@ -4,14 +4,14 @@ set_option Elab.async false
 
 namespace LynxBench
 
-def nativeReverseAux {α : Type} : List α → List α → List α
+def native_reverse_aux {α : Type} : List α → List α → List α
   | [], acc => acc
-  | x :: xs, acc => nativeReverseAux xs (x :: acc)
+  | x :: xs, acc => native_reverse_aux xs (x :: acc)
 
-def nativeReverse {α : Type} (xs : List α) : List α := nativeReverseAux xs []
+def nativeReverse {α : Type} (xs : List α) : List α := native_reverse_aux xs []
 
-@[simp] theorem nativeReverseAux_reverse {α : Type} (xs acc : List α) :
-    nativeReverseAux (nativeReverseAux xs acc) [] = nativeReverseAux acc xs := by
+@[simp] theorem native_reverse_aux_reverse {α : Type} (xs acc : List α) :
+    native_reverse_aux (native_reverse_aux xs acc) [] = native_reverse_aux acc xs := by
   induction xs generalizing acc with
   | nil => rfl
   | cons x xs ih => exact ih (x :: acc)
@@ -23,17 +23,17 @@ open LynxBench
 #bench "native/reverse-involution"
 theorem native_reverse_involution {α : Type} (xs : List α) :
     nativeReverse (nativeReverse xs) = xs := by
-  exact nativeReverseAux_reverse xs []
+  exact native_reverse_aux_reverse xs []
 
 namespace LynxBench
 
 /-- The accumulator is appended after reversing the input. -/
-theorem nativeReverseAux_acc {α : Type} (input acc : List α) :
-    nativeReverseAux input acc = nativeReverse input ++ acc := by
+theorem native_reverse_aux_acc {α : Type} (input acc : List α) :
+    native_reverse_aux input acc = nativeReverse input ++ acc := by
   induction input generalizing acc with
   | nil => rfl
   | cons head tail ih =>
-    change nativeReverseAux tail (head :: acc) = nativeReverseAux tail [head] ++ acc
+    change native_reverse_aux tail (head :: acc) = native_reverse_aux tail [head] ++ acc
     rw [ih (head :: acc), ih [head], List.append_assoc]
     rfl
 
@@ -45,7 +45,7 @@ theorem native_reverse_append {α : Type} (left right : List α) :
   induction left with
   | nil => exact (List.append_nil _).symm
   | cons head tail ih =>
-    change nativeReverseAux (tail ++ right) [head] =
-      nativeReverse right ++ nativeReverseAux tail [head]
-    rw [nativeReverseAux_acc (tail ++ right), nativeReverseAux_acc tail,
+    change native_reverse_aux (tail ++ right) [head] =
+      nativeReverse right ++ native_reverse_aux tail [head]
+    rw [native_reverse_aux_acc (tail ++ right), native_reverse_aux_acc tail,
       ih, List.append_assoc]

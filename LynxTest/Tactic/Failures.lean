@@ -29,7 +29,7 @@ theorem false_contract : ¬ Satisfies sumTerm sumExpects falseEnsures := by
 theorem rejects_uncovered_expectation : Satisfies raises raises falseEnsures := by
   lynx_verify
 
-def onlySpecial (input : Term) : Result := Erlang.equal input (.atom "special")
+def onlySpecial (input : Term) : Result := Erlang.equal_2 input (.atom "special")
 
 -- A valid domain outside automatic candidates fails explicitly rather than vacuously.
 /-- error: lynx: could not prove that `expects` accepts any input; it may be empty or unsupported by automatic coverage -/
@@ -45,7 +45,7 @@ theorem manual_coverage : Satisfies zero onlySpecial sumEnsures := by
 
 def badCall (_ : Term) : Result := do
   let result ← sumTerm (.integer 0)
-  Erlang.equal result (.integer 0)
+  Erlang.equal_2 result (.integer 0)
 
 -- A property may not assume the expectation of a function it calls.
 /--

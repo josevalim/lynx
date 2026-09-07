@@ -19,9 +19,9 @@ def leaves(_), do: 1
 namespace LynxTest.Tactic.Recursive
 open Lynx Lynx.Modules
 
-def integers (arg : Term) : Result := Extensions.is_proper_list_with Erlang.is_integer arg
+def integers (arg : Term) : Result := Extensions.is_proper_list_2 Erlang.is_integer_1 arg
 def listResult (_arg result : Term) : Result := integers result
-def integerResult (_arg result : Term) : Result := Erlang.is_integer result
+def integerResult (_arg result : Term) : Result := Erlang.is_integer_1 result
 def anyInput (_ : Term) : Result := .ok Term.true
 
 /-- Recursive functions may return a recursive constructor rather than a scalar. -/
@@ -40,7 +40,7 @@ def leaves : Term → Result
   | .cons head tail => do
       let left ← leaves head
       let right ← leaves tail
-      Erlang.add left right
+      Erlang.add_2 left right
   | _ => .ok (.integer 1)
 
 theorem leaves_contract : Satisfies leaves anyInput integerResult := by
