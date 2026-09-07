@@ -3,10 +3,10 @@ import LynxTest.Integration.Sum
 namespace LynxTest.Tactic.Failures
 open Lynx Lynx.Modules LynxTest.Integration.Sum
 
-def anyInput (_ : Term) : Outcome Term := .value Term.true
-def zero (_ : Term) : Outcome Term := .value (.integer 0)
-def falseEnsures (_ _ : Term) : Outcome Term := .value Term.false
-def raises (_ : Term) : Outcome Term := .raised (.error (.atom "boom"))
+def anyInput (_ : Term) : Result := .ok Term.true
+def zero (_ : Term) : Result := .ok (.integer 0)
+def falseEnsures (_ _ : Term) : Result := .ok Term.false
+def raises (_ : Term) : Result := .error (.error (.atom "boom"))
 
 /--
 error: unsolved goals
@@ -29,7 +29,7 @@ theorem false_contract : ¬ Satisfies sumTerm sumExpects falseEnsures := by
 theorem rejects_uncovered_expectation : Satisfies raises raises falseEnsures := by
   lynx_verify
 
-def onlySpecial (input : Term) : Outcome Term := Erlang.equal input (.atom "special")
+def onlySpecial (input : Term) : Result := Erlang.equal input (.atom "special")
 
 -- A valid domain outside automatic candidates fails explicitly rather than vacuously.
 /-- error: lynx: could not prove that `expects` accepts any input; it may be empty or unsupported by automatic coverage -/
@@ -43,7 +43,7 @@ theorem manual_coverage : Satisfies zero onlySpecial sumEnsures := by
   case coverage => exact ⟨.atom "special", rfl⟩
   case ensures => lynx_solve
 
-def badCall (_ : Term) : Outcome Term := do
+def badCall (_ : Term) : Result := do
   let result ← sumTerm (.integer 0)
   Erlang.equal result (.integer 0)
 

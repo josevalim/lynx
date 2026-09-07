@@ -7,24 +7,24 @@ structure Arguments where
   input : Term
   ignored : Term
 
-def identity (args : Arguments) : Outcome Term := .value args.input
-def always (_ : Arguments) : Outcome Term := .value Term.true
-def unchanged (args : Arguments) (result : Term) : Outcome Term :=
+def identity (args : Arguments) : Result := .ok args.input
+def always (_ : Arguments) : Result := .ok Term.true
+def unchanged (args : Arguments) (result : Term) : Result :=
   Erlang.equal result args.input
 
 /-- Generated argument structures are unpacked before verification. -/
 theorem structure_contract : Satisfies identity always unchanged := by
   lynx_verify
 
-def addPair (args : Term × Term) : Outcome Term := Erlang.add args.1 args.2
+def addPair (args : Term × Term) : Result := Erlang.add args.1 args.2
 
-def twoIntegers (args : Term × Term) : Outcome Term :=
+def twoIntegers (args : Term × Term) : Result :=
   Erlang.andalso (Erlang.is_integer args.1) (fun _ => Erlang.is_integer args.2)
 
-def numberResult (_ : Term × Term) (result : Term) : Outcome Term :=
+def numberResult (_ : Term × Term) (result : Term) : Result :=
   Erlang.is_integer result
 
-def agrees (args : Term × Term) (result : Term) : Outcome Term := do
+def agrees (args : Term × Term) (result : Term) : Result := do
   let expected ← addPair args
   Erlang.equal result expected
 
@@ -43,7 +43,7 @@ theorem source_labeled_vcs :
   case «add.ex:3».coverage => exact ⟨(.integer 0, .integer 0), rfl⟩
   case «add.ex:3» =>
     rename_i left right accepted
-    guard_target = ∃ result, addPair (left, right) = .value result ∧
+    guard_target = ∃ result, addPair (left, right) = .ok result ∧
       Accepted (numberResult (left, right) result)
     lynx_solve
 
@@ -64,37 +64,37 @@ theorem local_implication (p q : Prop) (step : p → q) (premise : p) : q := by
   lynx_solve
 
 /-- Coverage still uses hypotheses when direct evaluation cannot decide it. -/
-theorem assumed_coverage (expects : Term → Outcome Term)
+theorem assumed_coverage (expects : Term → Result)
     (accepted : Accepted (expects (.integer 0))) : Covered expects := by
   lynx_solve
 
 /-- Match reasoning retains the executable short-circuit rules. -/
-theorem andalso_short_circuit (right : Unit → Outcome Term) :
-    Erlang.andalso (.value Term.false) right = .value Term.false := by
+theorem andalso_short_circuit (right : Unit → Result) :
+    Erlang.andalso (.ok Term.false) right = .ok Term.false := by
   lynx_solve
 
-theorem andalso_raises (right : Unit → Outcome Term) (exception : Exception) :
-    Erlang.andalso (.raised exception) right = .raised exception := by
+theorem andalso_raises (right : Unit → Result) (exception : Exception) :
+    Erlang.andalso (.error exception) right = .error exception := by
   lynx_solve
 
-theorem andalso_non_boolean (right : Unit → Outcome Term) (value : Int) :
-    Erlang.andalso (.value (.integer value)) right =
-      .raised (.error (.atom "badarg")) := by
+theorem andalso_non_boolean (right : Unit → Result) (value : Int) :
+    Erlang.andalso (.ok (.integer value)) right =
+      .error (.error (.atom "badarg")) := by
   lynx_solve
 
 /-- Acceptance eliminates the non-nil branch. -/
 theorem nil_spec (input : Term)
     (accepted : Accepted (match input with
-      | .nil => Outcome.value (Term.atom "true")
-      | _ => .value (.atom "false"))) : input = .nil := by
+      | .nil => Except.ok (Term.atom "true")
+      | _ => .ok (.atom "false"))) : input = .nil := by
   lynx_solve
 
 /-- Splitting a computation preserves its connection to its input. -/
-theorem compound_spec (input : Term) (probe : Term → Outcome Term)
+theorem compound_spec (input : Term) (probe : Term → Result)
     (accepted : Accepted (match probe input with
-      | .value (.atom "true") => Outcome.value (Term.atom "true")
-      | _ => .value (.atom "false"))) :
-    probe input = .value (.atom "true") := by
+      | .ok (.atom "true") => Except.ok (Term.atom "true")
+      | _ => .ok (.atom "false"))) :
+    probe input = .ok (.atom "true") := by
   lynx_solve
 
 end LynxTest.Tactic.Contracts

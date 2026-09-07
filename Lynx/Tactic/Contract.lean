@@ -1,20 +1,23 @@
 import Lynx.Term
 
+/-! Internal proposition vocabulary for Lynx's tactic and translated contracts.
+This module is not a supported library API. -/
+
 namespace Lynx
 
 /-! A contract accepts exactly when its translated Elixir expression returns `true`. -/
-def Accepted (outcome : Outcome Term) : Prop :=
-  outcome = .value Term.true
+def Accepted (outcome : Result) : Prop :=
+  outcome = .ok Term.true
 
-instance (outcome : Outcome Term) : Decidable (Accepted outcome) :=
-  inferInstanceAs (Decidable (outcome = .value Term.true))
+instance (outcome : Result) : Decidable (Accepted outcome) :=
+  inferInstanceAs (Decidable (outcome = .ok Term.true))
 
 /-!
 An expectation must accept at least one input. This is part of verification,
 not an optional diagnostic: otherwise every implication below could be true
 without checking the implementation.
 -/
-def Covered {Args : Type} (expects : Args → Outcome Term) : Prop :=
+def Covered {Args : Type} (expects : Args → Result) : Prop :=
   ∃ input, Accepted (expects input)
 
 /-!
@@ -23,19 +26,19 @@ must return normally and its actual result must satisfy the guarantee. `Args`
 is a Lean argument container.
 -/
 def Satisfies {Args : Type}
-    (function : Args → Outcome Term)
-    (expects : Args → Outcome Term)
-    (ensures : Args → Term → Outcome Term) : Prop :=
+    (function : Args → Result)
+    (expects : Args → Result)
+    (ensures : Args → Term → Result) : Prop :=
   Covered expects ∧
     ∀ input,
       Accepted (expects input) →
       ∃ result,
-        function input = .value result ∧
+        function input = .ok result ∧
         Accepted (ensures input result)
 
 /-- A property has a nonempty explicit domain and no implicit returned value. -/
 def Property {Args : Type}
-    (expects expression : Args → Outcome Term) : Prop :=
+    (expects expression : Args → Result) : Prop :=
   Covered expects ∧
     ∀ args, Accepted (expects args) → Accepted (expression args)
 
@@ -53,13 +56,10 @@ def WithSourceLabel (_source : SourceLabel) (proposition : Prop) : Prop := propo
 
 /-- Named Elixir `ensures` clauses share one required expectation-coverage proof
 and are each checked against the same function outcome. -/
-def EnsuresClauses {Args : Type} (function expects : Args → Outcome Term)
-    (clauses : List (SourceLabel × (Args → Term → Outcome Term))) : Prop :=
+def EnsuresClauses {Args : Type} (function expects : Args → Result)
+    (clauses : List (SourceLabel × (Args → Term → Result))) : Prop :=
   Covered expects ∧ clauses.foldr (fun (source, ensures) rest =>
     WithSourceLabel source (∀ input, Accepted (expects input) →
-      ∃ result, function input = .value result ∧ Accepted (ensures input result)) ∧ rest) True
-
-abbrev accepts := Accepted
-abbrev SatisfiesUnary := @Satisfies Term
+      ∃ result, function input = .ok result ∧ Accepted (ensures input result)) ∧ rest) True
 
 end Lynx

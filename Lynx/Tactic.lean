@@ -1,6 +1,6 @@
 import Lean
 import Lynx.Attribute
-import Lynx.Contract
+import Lynx.Tactic.Contract
 import Lynx.Modules.Extensions
 
 /-!
@@ -17,13 +17,13 @@ function, nor an annotation on every translated definition.
 ```lean
 Covered expects ∧
   ∀ input, Accepted (expects input) →
-    ∃ result, function input = .value result ∧
+    ∃ result, function input = .ok result ∧
       Accepted (ensures input result)
 ```
 
 `Property expects expression` has the same `Covered expects` conjunct. Thus a
 proof can never succeed merely because the expectation accepts no inputs.
-`Accepted outcome` means exactly `outcome = .value Term.true`; false, non-boolean
+`Accepted outcome` means exactly `outcome = .ok Term.true`; false, non-boolean
 values, and exceptions are not accepted.
 
 For a single contract or property, `lynx_vcgen` separates coverage from behavior,
@@ -50,11 +50,11 @@ An interactive proof may use `lynx_vcgen` and provide the witness directly.
 ## Definition discovery and normalization
 
 For symbolic proof search, the solver gathers constants used by the goal
-and local hypotheses. It follows definitions whose result is `Outcome _`, then
+and local hypotheses. It follows definitions whose result is `Result`, then
 builds one local simplification context from those executable bodies. This is
 why ordinary translated functions need no registration attribute or separate
 semantics file. Library-level, kernel-proved `@[simp]` rules supplement the
-executable bodies, including generic `Outcome` reductions; translated functions
+executable bodies, including generic `Except` reductions; translated functions
 themselves can remain annotation-free. Mark a library abstraction `@[lynx_opaque]`
 to stop discovery at that function and use its specifications instead. This
 also stops domain/return-summary discovery through its body. It is a proof-search
@@ -80,14 +80,14 @@ results are explored.
 ## Propagating acceptance requirements
 
 An expectation is accepted only when its final outcome is
-`.value (Term.atom "true")`. The solver uses Lean's built-in case splitting and
+`.ok (Term.atom "true")`. The solver uses Lean's built-in case splitting and
 simplification to propagate the required result backward through executable
 matches. For example:
 
 ```lean
 (match input with
- | .nil => Outcome.value (Term.atom "true")
- | _ => .value (Term.atom "false")) = .value (Term.atom "true")
+ | .nil => Except.ok (Term.atom "true")
+ | _ => .ok (Term.atom "false")) = .ok (Term.atom "true")
 ```
 
 forces `input = Term.nil`: simplification closes the rejected branch. Multiple
@@ -144,7 +144,7 @@ goals:
    independent input may be inducted.
 7. Generalize and split one shared monadic computation, retaining an equation
    for its outcome. This avoids duplicating nested bind continuations before
-   its `Outcome.value`/`Outcome.raised` result is known.
+   its `Except.ok`/`Except.error` result is known.
 8. Try remaining hypothesis matches, then split a target match or conditional.
 
 The main search and independent summary proofs start with fuel 24. The smaller
@@ -165,7 +165,7 @@ Properties such as `sum(l) + sum(r) == sum(l ++ r)` need information about
 recursive calls on values other than a direct structural child. The solver
 therefore attempts a narrow summary synthesis step:
 
-1. Find discovered recursive functions of type `Term → Outcome Term`.
+1. Find discovered recursive functions of type `Term → Result`.
 2. Find candidate input domains inside existing `Accepted` hypotheses, looking
    through executable wrappers with bounded traversal.
 3. Look for a single candidate `Term` constructor in normal returns from the
@@ -232,6 +232,12 @@ private structure Solver where
   inputs : Array FVarId
   inducted : Bool := false
 
+/-- Recognize both the public alias and its expanded representation. -/
+private def isResultType (type : Expr) : MetaM Bool := do
+  let type ← whnf type
+  return type.isAppOfArity ``Except 2 && type.getAppArgs[0]!.isConstOf ``Exception
+    && type.getAppArgs[1]!.isConstOf ``Term
+
 /-- Discover executable definitions by their result type, following their calls.
 Their bodies supply reduction rules alongside registered library simp theorems;
 translated definitions need no separate semantic theorem. -/
@@ -254,7 +260,7 @@ private def mkSolver : TacticM Solver := withMainContext do
     if opaqueAttr.hasTag (← getEnv) name then continue
     let .defnInfo info ← getConstInfo name | continue
     let executable ← forallTelescopeReducing info.type fun _ result =>
-      pure (result.isAppOf ``Outcome)
+      isResultType result
     unless executable do continue
     definitions := definitions.push (mkIdent name)
     if ← isRecursiveDefinition name then
@@ -262,9 +268,11 @@ private def mkSolver : TacticM Solver := withMainContext do
       if let some index ← getStructuralRecArgPos? name then
         majors := majors.insert name index
     pending := pending ++ info.value.getUsedConstants
+  -- Preserve executable bind structure for branch discovery; the generic
+  -- lawful-monad rewrites reassociate binds or turn them into functor maps.
   let simpSyntax ← `(tactic| simp_all (config := { failIfUnchanged := false })
     [Accepted, Term.true, Term.false,
-    Pure.pure, $[$definitions:ident],*])
+    Pure.pure, -bind_assoc, -bind_pure_comp, $[$definitions:ident],*])
   let result ← mkSimpContext simpSyntax (eraseLocal := true) (kind := .simpAll)
   return ⟨result.ctx, result.simprocs, recursive, majors, inputs, false⟩
 
@@ -291,7 +299,7 @@ private def normalize (solver : Solver) : TacticM Bool := do
       let decl ← h.getDecl
       return !decl.userName.toString.startsWith "recursive_result" &&
         (decl.type.isAppOf ``Accepted ||
-          (decl.type.isAppOf ``Eq && decl.type.getAppArgs[2]!.isAppOf ``Outcome.value))
+          (decl.type.isAppOf ``Eq && decl.type.getAppArgs[2]!.isAppOf ``Except.ok))
     return (constraints ++ hypotheses.filter (fun h => !constraints.contains h), context)
   let mut context := context
   for h in hypotheses do
@@ -431,8 +439,8 @@ private def splitComputation : TacticM Bool := withMainContext do
         if args.size >= 2 then
           let computation := args[args.size - 2]!
           unless computation.hasLooseBVars do
-            if !computation.isAppOf ``Bind.bind && !computation.isAppOf ``Outcome.value &&
-                !computation.isAppOf ``Outcome.raised && (← inferType computation).isAppOf ``Outcome then
+            if !computation.isAppOf ``Bind.bind && !computation.isAppOf ``Except.ok &&
+                !computation.isAppOf ``Except.error && (← isResultType (← inferType computation)) then
               candidates.modify (·.push computation)
     for computation in ← candidates.get do
       let saved ← saveState
@@ -690,7 +698,7 @@ private partial def collectDomains (expression : Expr) (fuel : Nat) : MetaM (Arr
     let args := expression.getAppArgs
     if (← whnf args.back!).isFVar && (← inferType args.back!).isConstOf ``Term then
       let fn := mkAppN expression.getAppFn args.pop
-      if (← inferType expression).isAppOf ``Outcome then result := result.push fn
+      if ← isResultType (← inferType expression) then result := result.push fn
     if let .const name _ := expression.getAppFn then
       if !opaqueAttr.hasTag (← getEnv) name && !(← isRecursiveDefinition name) then
         if let some unfolded ← unfoldDefinition? expression then
@@ -717,15 +725,15 @@ private def returnConstructor (function : Name) : MetaM (Option Name) := do
     if opaqueAttr.hasTag (← getEnv) name then continue
     let .defnInfo info ← getConstInfo name | continue
     info.value.forEach fun e => do
-      if e.isAppOfArity ``Outcome.value 2 then
-        let returned := e.getAppArgs[1]!
+      if e.isAppOfArity ``Except.ok 3 then
+        let returned := e.getAppArgs[2]!
         if let .const ctor _ := returned.getAppFn then
           if let .ctorInfo ci ← getConstInfo ctor then
             if ci.induct == ``Term then constructors.modify (·.insert ctor)
     for callee in info.value.getUsedConstants do
       if callee == function then continue
       let .defnInfo calleeInfo ← getConstInfo callee | continue
-      if ← forallTelescopeReducing calleeInfo.type fun _ result => pure (result.isAppOf ``Outcome) then
+      if ← forallTelescopeReducing calleeInfo.type fun _ result => isResultType result then
         pending := pending.push callee
   let names := (← constructors.get).toArray
   return if names.size == 1 then some names[0]! else none
@@ -740,7 +748,7 @@ private def synthesizeSummaries (solver : Solver) : TacticM Unit := withMainCont
     domains.filter (fun d => !solver.recursive.contains (d.getAppFn.constName?.getD .anonymous))
   for function in solver.recursive do
     let info ← getConstInfo function
-    unless ← isDefEq info.type (← elabTerm (← `(Term → Outcome Term)) none) do continue
+    unless ← isDefEq info.type (← elabTerm (← `(Term → Result)) none) do continue
     let some constructor ← returnConstructor function | continue
     trace[lynx] "summary constructor: {function} -> {constructor}"
     let mut seen : ExprSet := {}
@@ -753,7 +761,8 @@ private def synthesizeSummaries (solver : Solver) : TacticM Unit := withMainCont
         let proposition ← withLocalDeclD `input (mkConst ``Term) fun input => do
           let accepted ← mkAppM ``Accepted #[mkApp domain input]
           let result ← forallTelescope (← inferType (mkConst constructor)) fun fields _ => do
-            let value ← mkAppM ``Outcome.value #[mkAppN (mkConst constructor) fields]
+            let value ← mkAppOptM ``Except.ok #[some (mkConst ``Exception), none,
+              some (mkAppN (mkConst constructor) fields)]
             let mut equation ← mkEq (mkApp (mkConst function) input) value
             for field in fields.reverse do
               equation ← mkAppM ``Exists #[← mkLambdaFVars #[field] equation]

@@ -1,4 +1,5 @@
 import LynxTest.Integration.Sum
+import LynxTest.Term
 import LynxTest.Integration.Reverse
 import LynxTest.Tactic.Contracts
 import LynxTest.Tactic.Recursive

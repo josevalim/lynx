@@ -23,46 +23,27 @@ inductive Exception where
   | exit : Term → Exception
 deriving Repr, DecidableEq
 
-inductive Outcome (α : Type) where
-  | value : α → Outcome α
-  | raised : Exception → Outcome α
-deriving Repr, DecidableEq
+/-- An Erlang computation: `.ok` returns a value; `.error` carries an Erlang
+exception (which itself distinguishes error, throw, and exit). Monad operations
+and their laws are inherited from `Except`. -/
+abbrev Result := Except Exception Term
 
-instance : Monad Outcome where
-  pure := .value
-  bind outcome next :=
-    match outcome with
-    | .value value => next value
-    | .raised exception => .raised exception
+instance : DecidableEq Result
+  | .ok left, .ok right => decidable_of_iff (left = right) ⟨congrArg Except.ok, Except.ok.inj⟩
+  | .error left, .error right =>
+    decidable_of_iff (left = right) ⟨congrArg Except.error, Except.error.inj⟩
+  | .ok _, .error _ => isFalse (by intro h; cases h)
+  | .error _, .ok _ => isFalse (by intro h; cases h)
 
-instance : MonadExceptOf Exception Outcome where
-  throw := .raised
-  tryCatch outcome handler :=
-    match outcome with
-    | .value value => .value value
-    | .raised exception => handler exception
+-- Constructor-facing simplification rules for translated code. The monad
+-- instances and generic laws themselves come from `Except`.
+@[simp] theorem Result.ok_bind (value : α) (next : α → Except Exception β) :
+    (Except.ok value >>= next) = next value := rfl
 
-@[simp] theorem Outcome.bind_value_spec
-    (value : α) (next : α → Outcome β) :
-    (Outcome.value value >>= next) = next value :=
-  rfl
+@[simp] theorem Result.error_bind (exception : Exception) (next : α → Except Exception β) :
+    (Except.error exception >>= next) = .error exception := rfl
 
-@[simp] theorem Outcome.bind_raised_spec
-    (exception : Exception) (next : α → Outcome β) :
-    (Outcome.raised exception >>= next) = .raised exception :=
-  rfl
-
-@[simp] theorem Outcome.throw_spec (exception : Exception) :
-    (throw exception : Outcome α) = .raised exception :=
-  rfl
-
-theorem Outcome.bind_assoc_spec (outcome : Outcome α)
-    (first : α → Outcome β) (next : β → Outcome γ) :
-    ((outcome >>= first) >>= next) = (outcome >>= fun value => first value >>= next) := by
-  cases outcome <;> rfl
-
-theorem Outcome.bind_value_right_spec (outcome : Outcome α) :
-    (outcome >>= Outcome.value) = outcome := by
-  cases outcome <;> rfl
+@[simp] theorem Result.throw_eq (exception : Exception) :
+    (throw exception : Except Exception α) = .error exception := rfl
 
 end Lynx

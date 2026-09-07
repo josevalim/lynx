@@ -1,4 +1,5 @@
 import LynxTest.Integration.Sum
+import LynxTest.Term
 import LynxTest.Integration.Reverse
 import LynxTest.Modules.Erlang
 import LynxTest.Tactic.Contracts
@@ -29,8 +30,7 @@ run_cmd do
     ``Lynx.Modules.Erlang.append_success_spec,
     ``Lynx.Modules.Erlang.append_nil_spec,
     ``Lynx.Modules.Erlang.append_assoc_spec,
-    ``Lynx.Outcome.bind_assoc_spec,
-    ``Lynx.Outcome.bind_value_right_spec,
+    ``LynxTest.Term.decidable_results,
     ``Lynx.Term.compare_eq_spec,
     ``Lynx.Term.compare_swap_spec,
     ``Lynx.Term.compare_le_trans_spec,

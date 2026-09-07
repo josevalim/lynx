@@ -16,29 +16,29 @@ namespace LynxTest.Integration.Reverse
 open Lynx Lynx.Modules
 set_option Elab.async false
 
-abbrev properList (input : Term) : Outcome Term :=
+abbrev properList (input : Term) : Result :=
   Extensions.is_proper_list input
 
-def reverseAux : Term → Term → Outcome Term
-  | .nil, acc => .value acc
+def reverseAux : Term → Term → Result
+  | .nil, acc => .ok acc
   | .cons head tail, acc => reverseAux tail (.cons head acc)
-  | _, _ => .raised (.error (.atom "function_clause"))
+  | _, _ => .error (.error (.atom "function_clause"))
 
-def reverseTerm (input : Term) : Outcome Term := reverseAux input .nil
+def reverseTerm (input : Term) : Result := reverseAux input .nil
 
-def reverseEnsures (_input result : Term) : Outcome Term := properList result
+def reverseEnsures (_input result : Term) : Result := properList result
 
-def reverseInvolution (input : Term) : Outcome Term := do
+def reverseInvolution (input : Term) : Result := do
   let reversed ← reverseTerm input
   let restored ← reverseTerm reversed
   Erlang.equal restored input
 
 -- Handwritten Lean support, using the standard simp attribute.
 @[simp] theorem reverseAux_proper_spec (input acc : Term)
-    (accepted : properList input = .value (.atom "true"))
-    (accAccepted : properList acc = .value (.atom "true")) :
-    ∃ result, reverseAux input acc = .value result ∧ properList result = .value (.atom "true") := by
-  have reject : ¬ Accepted (.value (.atom "false")) := by decide
+    (accepted : properList input = .ok (.atom "true"))
+    (accAccepted : properList acc = .ok (.atom "true")) :
+    ∃ result, reverseAux input acc = .ok result ∧ properList result = .ok (.atom "true") := by
+  have reject : ¬ Accepted (.ok (.atom "false")) := by decide
   induction input generalizing acc with
   | nil => exact ⟨acc, rfl, accAccepted⟩
   | integer _ => exact False.elim (reject accepted)
@@ -46,10 +46,10 @@ def reverseInvolution (input : Term) : Outcome Term := do
   | cons head tail _ ih => exact ih (.cons head acc) accepted accAccepted
 
 @[simp] theorem reverseAux_reverse_spec (input acc : Term)
-    (next : Term → Outcome α) (accepted : properList input = .value (.atom "true")) :
+    (next : Term → Except Exception α) (accepted : properList input = .ok (.atom "true")) :
     (do let result ← reverseAux input acc; let restored ← reverseAux result .nil; next restored) =
       (reverseAux acc input >>= next) := by
-  have reject : ¬ Accepted (.value (.atom "false")) := by decide
+  have reject : ¬ Accepted (.ok (.atom "false")) := by decide
   induction input generalizing acc with
   | nil => rfl
   | integer _ => exact False.elim (reject accepted)
@@ -66,10 +66,10 @@ theorem reverse_involution_spec : Property properList reverseInvolution := by
   lynx_verify
 
 /-- Both lists must satisfy the reverse expectation. -/
-def reverseAppendExpects (args : Term × Term) : Outcome Term :=
+def reverseAppendExpects (args : Term × Term) : Result :=
   Erlang.andalso (properList args.1) (fun _ => properList args.2)
 
-def reverseAppend (args : Term × Term) : Outcome Term := do
+def reverseAppend (args : Term × Term) : Result := do
   let joined ← Erlang.append args.1 args.2
   let reversed ← reverseTerm joined
   let right ← reverseTerm args.2
@@ -80,7 +80,7 @@ def reverseAppend (args : Term × Term) : Outcome Term := do
 /-- The accumulator is appended after reversing the input. -/
 theorem reverseAux_acc_spec (input acc : Term) :
     reverseAux input acc = (reverseTerm input >>= fun result => Erlang.append result acc) := by
-  suffices ∀ start suffix extended, Erlang.append start suffix = .value extended →
+  suffices ∀ start suffix extended, Erlang.append start suffix = .ok extended →
       reverseAux input extended =
         (reverseAux input start >>= fun result => Erlang.append result suffix) from
     this .nil acc acc rfl
@@ -91,15 +91,15 @@ theorem reverseAux_acc_spec (input acc : Term) :
   | cons head tail _ ih =>
     intro start suffix extended appended
     apply ih (.cons head start) suffix (.cons head extended)
-    simp only [Erlang.append, appended, Outcome.bind_value_spec]
+    simp only [Erlang.append, appended, Result.ok_bind]
 
 #bench "erlang/reverse-append"
 theorem reverse_append_spec : Property reverseAppendExpects reverseAppend := by
   constructor
   · exact ⟨(.nil, .nil), rfl⟩
   · intro ⟨left, right⟩ accepted
-    have both : properList left = .value (.atom "true") ∧
-        properList right = .value (.atom "true") := by
+    have both : properList left = .ok (.atom "true") ∧
+        properList right = .ok (.atom "true") := by
       change Accepted (Erlang.andalso (properList left) (fun _ => properList right)) at accepted
       unfold Erlang.andalso at accepted
       split at accepted
@@ -110,20 +110,20 @@ theorem reverse_append_spec : Property reverseAppendExpects reverseAppend := by
         reverseTerm (.cons head tail) =
           (reverseTerm tail >>= fun result => Erlang.append result (.cons head .nil)) :=
       reverseAux_acc_spec tail (.cons head .nil)
-    have law (input : Term) (inputAccepted : properList input = .value (.atom "true")) :
+    have law (input : Term) (inputAccepted : properList input = .ok (.atom "true")) :
         (Erlang.append input right >>= reverseTerm) =
           (reverseTerm input >>= Erlang.append reversedRight) := by
-      have reject : ¬ Accepted (.value (.atom "false")) := by decide
+      have reject : ¬ Accepted (.ok (.atom "false")) := by decide
       induction input with
       | nil =>
-        simp only [Erlang.append, reverseTerm, reverseAux, Outcome.bind_value_spec,
+        simp only [Erlang.append, reverseTerm, reverseAux, Result.ok_bind,
           rightReturned, Erlang.append_nil_spec reversedRight rightProper]
       | integer _ => exact False.elim (reject inputAccepted)
       | atom _ => exact False.elim (reject inputAccepted)
       | cons head tail _ ih =>
         have assoc (middle : Term) :=
           Erlang.append_assoc_spec reversedRight middle (.cons head .nil) rightProper
-        simpa only [Erlang.append, step, Outcome.bind_assoc_spec, Outcome.bind_value_spec,
+        simpa only [Erlang.append, step, bind_assoc, Result.ok_bind,
           assoc] using
           congrArg (fun output => output >>= fun result => Erlang.append result (.cons head .nil))
             (ih inputAccepted)
@@ -131,8 +131,8 @@ theorem reverse_append_spec : Property reverseAppendExpects reverseAppend := by
     obtain ⟨reversedLeft, leftReturned, _⟩ := reverseAux_proper_spec left .nil both.1 rfl
     obtain ⟨result, resultReturned⟩ := Erlang.append_success_spec reversedRight reversedLeft rightProper
     have joinedReturned := law left both.1
-    simp only [appended, reverseTerm, leftReturned, Outcome.bind_value_spec, resultReturned] at joinedReturned
-    simp only [Accepted, reverseAppend, reverseTerm, appended, Outcome.bind_value_spec,
+    simp only [appended, reverseTerm, leftReturned, Result.ok_bind, resultReturned] at joinedReturned
+    simp only [Accepted, reverseAppend, reverseTerm, appended, Result.ok_bind,
       joinedReturned, leftReturned, rightReturned, resultReturned, Erlang.equal, ite_true, Term.true]
 
 end LynxTest.Integration.Reverse

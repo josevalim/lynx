@@ -14,26 +14,26 @@ namespace LynxTest.Integration.Sum
 open Lynx Lynx.Modules
 set_option Elab.async false
 
-def sumTerm : Term → Outcome Term
-  | .nil => .value (.integer 0)
+def sumTerm : Term → Result
+  | .nil => .ok (.integer 0)
   | .cons x xs => do
       let subtotal ← sumTerm xs
       Erlang.add x subtotal
   | _ => throw (.error (.atom "function_clause"))
 
 /-! Translated integer-list expectation and integer-result guarantee. -/
-def sumExpects (arg : Term) : Outcome Term :=
+def sumExpects (arg : Term) : Result :=
   Extensions.is_proper_list_with Erlang.is_integer arg
 
-def sumEnsures (_arg result : Term) : Outcome Term :=
+def sumEnsures (_arg result : Term) : Result :=
   Erlang.is_integer result
 
 /-- Both operands of the property must satisfy the function's expectation. -/
-def appendExpects (args : Term × Term) : Outcome Term :=
+def appendExpects (args : Term × Term) : Result :=
   Erlang.andalso (sumExpects args.1) (fun _ => sumExpects args.2)
 
 /-- Translated `sum(l) + sum(r) == sum(l ++ r)`. -/
-def appendExpression (args : Term × Term) : Outcome Term := do
+def appendExpression (args : Term × Term) : Result := do
   let left ← sumTerm args.1
   let right ← sumTerm args.2
   let total ← Erlang.add left right
