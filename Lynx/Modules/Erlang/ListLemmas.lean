@@ -2,15 +2,15 @@ import Lynx.Modules.Extensions
 
 namespace Lynx.Modules.Erlang
 
-@[simp] theorem append_nil_left_spec (right : Term) :
+@[simp] theorem append_nil_left (right : Term) :
     append .nil right = .ok right := rfl
 
-@[simp] theorem append_cons_spec (head tail right : Term) :
+@[simp] theorem append_cons (head tail right : Term) :
     append (.cons head tail) right =
       (append tail right >>= fun rest => .ok (.cons head rest)) := rfl
 
 /-- Appending to a proper list succeeds, with any right-hand tail. -/
-theorem append_success_spec (left right : Term)
+theorem append_success (left right : Term)
     (accepted : Extensions.is_proper_list left = .ok (.atom "true")) :
     ∃ joined, append left right = .ok joined := by
   have reject : (Except.ok (.atom "false") : Result) ≠ .ok (.atom "true") := by decide
@@ -22,7 +22,7 @@ theorem append_success_spec (left right : Term)
     obtain ⟨joined, returned⟩ := ih accepted
     exact ⟨.cons head joined, by simp only [append, returned, Result.ok_bind]⟩
 
-@[simp] theorem append_nil_spec (input : Term)
+@[simp] theorem append_nil (input : Term)
     (accepted : Extensions.is_proper_list input = .ok (.atom "true")) :
     append input .nil = .ok input := by
   have reject : (Except.ok (.atom "false") : Result) ≠ .ok (.atom "true") := by decide
@@ -34,7 +34,7 @@ theorem append_success_spec (left right : Term)
     simp only [append, ih accepted, Result.ok_bind]
 
 /-- Associativity, preserving the evaluation and exception behavior of append. -/
-theorem append_assoc_spec (left right suffix : Term)
+theorem append_assoc (left right suffix : Term)
     (accepted : Extensions.is_proper_list left = .ok (.atom "true")) :
     (append left right >>= fun joined => append joined suffix) =
       (append right suffix >>= append left) := by

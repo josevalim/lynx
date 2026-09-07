@@ -7,7 +7,7 @@ open Lynx.Modules.Erlang
 theorem append_lemmas_reexported (head tail right : Term) :
     append (.cons head tail) right =
       (append tail right >>= fun rest => .ok (.cons head rest)) :=
-  append_cons_spec head tail right
+  append_cons head tail right
 
 -- Strictly increasing in Erlang term order. Includes Unicode atoms, large
 -- integers, improper tails, prefixes, and nested lists.
@@ -28,7 +28,7 @@ def orderedTerms : List Term := [
   .cons .nil .nil,
   .cons (.cons (.integer 0) .nil) .nil]
 
-theorem ordered_terms_spec :
+theorem ordered_terms :
     orderedTerms.Pairwise (fun a b =>
       Term.compare a b = .lt ∧ Term.compare b a = .gt ∧
       less_than a b = .ok (.atom "true") ∧
@@ -40,12 +40,12 @@ theorem ordered_terms_spec :
       less_than_or_equal b a = .ok (.atom "false") ∧
       greater_than_or_equal b a = .ok (.atom "true")) := by decide
 
-theorem reflexive_operators_spec (a : Term) :
+theorem reflexive_operators (a : Term) :
     less_than a a = .ok (.atom "false") ∧
     greater_than a a = .ok (.atom "false") ∧
     less_than_or_equal a a = .ok (.atom "true") ∧
     greater_than_or_equal a a = .ok (.atom "true") := by
-  have self := (Term.compare_eq_spec a a).mpr rfl
+  have self := (Term.compare_eq a a).mpr rfl
   simp [less_than, greater_than, less_than_or_equal, greater_than_or_equal, self,
     Term.true, Term.false]
 

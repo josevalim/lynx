@@ -83,14 +83,14 @@ theorem andalso_non_boolean (right : Unit → Result) (value : Int) :
   lynx_solve
 
 /-- Acceptance eliminates the non-nil branch. -/
-theorem nil_spec (input : Term)
+theorem nil (input : Term)
     (accepted : Accepted (match input with
       | .nil => Except.ok (Term.atom "true")
       | _ => .ok (.atom "false"))) : input = .nil := by
   lynx_solve
 
 /-- Splitting a computation preserves its connection to its input. -/
-theorem compound_spec (input : Term) (probe : Term → Result)
+theorem compound (input : Term) (probe : Term → Result)
     (accepted : Accepted (match probe input with
       | .ok (.atom "true") => Except.ok (Term.atom "true")
       | _ => .ok (.atom "false"))) :

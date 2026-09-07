@@ -16,7 +16,7 @@ theorem missing_specification : True := by
     have : ∀ input, copy input = .ok input := by lynx_verify
   trivial
 
-@[simp] theorem copy_spec (input : Term) : copy input = .ok input := by
+@[simp] theorem copy_eq (input : Term) : copy input = .ok input := by
   induction input <;> simp_all [copy]
 
 def twice (input : Term) : Result := do copy (← copy input)
@@ -30,7 +30,7 @@ theorem rejects_false_claim : True := by
 
 @[lynx_opaque] def guarded (f : Nat → Nat) : Result := .ok (.integer (f 0))
 
-@[simp] theorem guarded_spec (f : Nat → Nat) (h : ∀ n, f n = n) :
+@[simp] theorem guarded_eq (f : Nat → Nat) (h : ∀ n, f n = n) :
     guarded f = .ok (.integer 0) := by simp [guarded, h]
 
 theorem quantified_premise (f : Nat → Nat) (h : ∀ n, f n = n) :
@@ -40,7 +40,7 @@ theorem quantified_premise (f : Nat → Nat) (h : ∀ n, f n = n) :
   | .integer _ => .ok (.atom "true")
   | _ => .ok (.atom "false")
 
-@[simp] theorem expectsInteger_spec (input : Term) :
+@[simp] theorem expectsInteger_iff (input : Term) :
     expectsInteger input = .ok (.atom "true") ↔ ∃ n, input = .integer n := by
   cases input <;> simp [expectsInteger]
 
@@ -48,7 +48,7 @@ theorem quantified_premise (f : Nat → Nat) (h : ∀ n, f n = n) :
   | .integer n => .ok (.integer (n + 1))
   | _ => .error (.error (.atom "badarith"))
 
-@[simp] theorem increment_spec (n : Int) :
+@[simp] theorem increment_eq (n : Int) :
     increment (.integer n) = .ok (.integer (n + 1)) := rfl
 
 theorem representation_equality (input : Term) (h : Accepted (expectsInteger input)) :

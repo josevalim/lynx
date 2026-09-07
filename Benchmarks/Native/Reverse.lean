@@ -10,7 +10,7 @@ def nativeReverseAux {α : Type} : List α → List α → List α
 
 def nativeReverse {α : Type} (xs : List α) : List α := nativeReverseAux xs []
 
-@[simp] theorem nativeReverseAux_spec {α : Type} (xs acc : List α) :
+@[simp] theorem nativeReverseAux_reverse {α : Type} (xs acc : List α) :
     nativeReverseAux (nativeReverseAux xs acc) [] = nativeReverseAux acc xs := by
   induction xs generalizing acc with
   | nil => rfl
@@ -21,14 +21,14 @@ end LynxBench
 open LynxBench
 
 #bench "native/reverse-involution"
-theorem native_reverse_involution_spec {α : Type} (xs : List α) :
+theorem native_reverse_involution {α : Type} (xs : List α) :
     nativeReverse (nativeReverse xs) = xs := by
-  exact nativeReverseAux_spec xs []
+  exact nativeReverseAux_reverse xs []
 
 namespace LynxBench
 
 /-- The accumulator is appended after reversing the input. -/
-theorem nativeReverseAux_acc_spec {α : Type} (input acc : List α) :
+theorem nativeReverseAux_acc {α : Type} (input acc : List α) :
     nativeReverseAux input acc = nativeReverse input ++ acc := by
   induction input generalizing acc with
   | nil => rfl
@@ -40,12 +40,12 @@ theorem nativeReverseAux_acc_spec {α : Type} (input acc : List α) :
 end LynxBench
 
 #bench "native/reverse-append"
-theorem native_reverse_append_spec {α : Type} (left right : List α) :
+theorem native_reverse_append {α : Type} (left right : List α) :
     nativeReverse (left ++ right) = nativeReverse right ++ nativeReverse left := by
   induction left with
   | nil => exact (List.append_nil _).symm
   | cons head tail ih =>
     change nativeReverseAux (tail ++ right) [head] =
       nativeReverse right ++ nativeReverseAux tail [head]
-    rw [nativeReverseAux_acc_spec (tail ++ right), nativeReverseAux_acc_spec tail,
+    rw [nativeReverseAux_acc (tail ++ right), nativeReverseAux_acc tail,
       ih, List.append_assoc]

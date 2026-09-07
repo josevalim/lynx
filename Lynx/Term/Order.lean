@@ -19,17 +19,17 @@ def compare : Term → Term → Ordering
   | .cons _ _, .nil => .gt
   | .cons x xs, .cons y ys => (compare x y).then (compare xs ys)
 
-theorem compare_eq_spec (a b : Term) : compare a b = .eq ↔ a = b := by
+theorem compare_eq (a b : Term) : compare a b = .eq ↔ a = b := by
   induction a generalizing b <;> cases b <;>
     simp_all [compare]
 
-theorem compare_swap_spec (a b : Term) : compare a b = (compare b a).swap := by
+theorem compare_swap (a b : Term) : compare a b = (compare b a).swap := by
   induction a generalizing b <;> cases b <;>
     simp_all only [compare, Ordering.swap_then, Ordering.swap_eq, Ordering.swap_lt,
       Ordering.swap_gt]
   all_goals exact Std.OrientedOrd.eq_swap
 
-theorem compare_le_trans_spec (a b c : Term)
+theorem compare_le_trans (a b c : Term)
     (ab : (compare a b).isLE) (bc : (compare b c).isLE) :
     (compare a c).isLE := by
   induction a generalizing b c <;> cases b <;> cases c <;>
@@ -46,20 +46,20 @@ theorem compare_le_trans_spec (a b c : Term)
     | lt => simp
     | gt => simp [e] at hac
     | eq =>
-      have same := (compare_eq_spec ah ch).mp e
+      have same := (compare_eq ah ch).mp e
       subst ch
       have eqAB : compare ah bh = .eq := by
-        rw [compare_swap_spec bh ah] at hbc
+        rw [compare_swap bh ah] at hbc
         cases h : compare ah bh <;> simp_all
-      have same := (compare_eq_spec ah bh).mp eqAB
+      have same := (compare_eq ah bh).mp eqAB
       subst bh
-      have self := (compare_eq_spec ah ah).mpr rfl
+      have self := (compare_eq ah ah).mpr rfl
       simp only [self, Ordering.eq_then] at ab bc ⊢
       exact iht bt ct ab bc
 
-theorem compare_le_total_spec (a b : Term) :
+theorem compare_le_total (a b : Term) :
     (compare a b).isLE ∨ (compare b a).isLE := by
-  rw [compare_swap_spec b a]
+  rw [compare_swap b a]
   cases compare a b <;> decide
 
 /-- Non-strict Erlang term order, used in mathematical specifications. -/
