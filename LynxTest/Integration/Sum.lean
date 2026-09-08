@@ -14,10 +14,10 @@ namespace LynxTest.Integration.Sum
 open Lynx Lynx.Modules
 set_option Elab.async false
 
-def sumTerm : Term → Result
+def sum_1 : Term → Result
   | .nil => .ok (.integer 0)
   | .cons x xs => do
-      let subtotal ← sumTerm xs
+      let subtotal ← sum_1 xs
       Erlang.add_2 x subtotal
   | _ => throw (.error (.atom "function_clause"))
 
@@ -34,15 +34,15 @@ def appendExpects (args : Term × Term) : Result :=
 
 /-- Translated `sum(l) + sum(r) == sum(l ++ r)`. -/
 def appendExpression (args : Term × Term) : Result := do
-  let left ← sumTerm args.1
-  let right ← sumTerm args.2
+  let left ← sum_1 args.1
+  let right ← sum_1 args.2
   let total ← Erlang.add_2 left right
   let joined ← Erlang.append_2 args.1 args.2
-  let combined ← sumTerm joined
+  let combined ← sum_1 joined
   Erlang.equal_2 total combined
 
 #bench "erlang/sum-contract"
-theorem sum_satisfies_contract : Satisfies sumTerm sumExpects sumEnsures := by
+theorem sum_satisfies_contract : Satisfies sum_1 sumExpects sumEnsures := by
   lynx_verify
 
 #bench "erlang/sum-append"

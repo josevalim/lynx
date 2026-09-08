@@ -1,6 +1,6 @@
 import Lynx.Attribute
 import Lynx.Term
-import Lynx.Term.Order
+import Lynx.Term.Compare
 
 /-! Executable Erlang operations, independent of contract/tactic machinery. -/
 
@@ -22,7 +22,7 @@ def add_2 : Term → Term → Result
   | _, _ => throw (.error (.atom "badarith"))
 
 def equal_2 (left right : Term) : Result :=
-  .ok (if left = right then Term.true else Term.false)
+  .ok (if Term.compare left right = .eq then Term.true else Term.false)
 
 def less_than_2 (left right : Term) : Result :=
   .ok (if (Term.compare left right).isLT then Term.true else Term.false)

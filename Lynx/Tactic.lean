@@ -281,7 +281,8 @@ private def dischargeAssumption : Simp.Discharge := fun proposition => do
   for decl in ← getLCtx do
     unless decl.isImplementationDetail do
       if ← isDefEq decl.type proposition then return some decl.toExpr
-  return none
+  -- Preserve standard recursive simp discharge for composed conditional specs.
+  Simp.dischargeDefault? proposition
 
 /-- One forward pass; search revisits normalization after structural progress.
 Do not repeatedly traverse quantified recursive proofs as `simpAll` does. -/
@@ -396,7 +397,7 @@ private def inductInput (solver : Solver) : TacticM (Option Solver) := withMainC
         match solver.majors.find? (e.getAppFn.constName?.getD .anonymous) with
         | some index => e.getAppArgs[index]? == some (mkFVar input)
         | none => false).isSome then
-      let branches ← goal.induction input ``Lynx.Term.rec
+      let branches ← goal.induction input ``Lynx.Term.induct
       let mut remaining := []
       for branch in branches do
         let (simplified, _) ← simpTarget branch.mvarId solver.context solver.simprocs
@@ -509,6 +510,7 @@ private partial def coverageCandidates (type : Expr) (depth : Nat := 3) : Tactic
     return #[
       ← elabTerm (← `(Term.integer 0)) (some type),
       ← elabTerm (← `(Term.nil)) (some type),
+      ← elabTerm (← `(Lynx.Term.empty_map)) (some type),
       ← elabTerm (← `(Term.atom "")) (some type),
       ← elabTerm (← `(Term.atom "true")) (some type),
       ← elabTerm (← `(Term.cons (Term.integer 0) Term.nil)) (some type),
@@ -521,7 +523,7 @@ private partial def coverageCandidates (type : Expr) (depth : Nat := 3) : Tactic
     for l in left do
       for r in right do result := result.push (← mkAppM ``Prod.mk #[l, r])
     return result
-  if type.isConstOf ``Unit then return #[mkConst ``Unit.unit]
+  if ← isDefEq type (mkConst ``Unit) then return #[mkConst ``Unit.unit]
   let some name := type.getAppFn.constName? | return #[]
   let env ← getEnv
   let some _ := getStructureInfo? env name | return #[]

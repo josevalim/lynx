@@ -1,5 +1,7 @@
 import LynxTest.Integration.Sum
 import LynxTest.Term
+import LynxTest.Term.Compare
+import LynxTest.Term.Map
 import LynxTest.Integration.Reverse
 import LynxTest.Tactic.Contracts
 import LynxTest.Tactic.Recursive
@@ -8,3 +10,5 @@ import LynxTest.Tactic.Failures
 import LynxTest.ProofAudit
 import LynxTest.Modules.Extensions
 import LynxTest.Modules.Erlang
+import LynxTest.Integration.Sets
+import LynxTest.Modules.Maps

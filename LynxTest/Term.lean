@@ -14,13 +14,15 @@ theorem generic_result_bind :
 theorem generic_result_catch (exception : Exception) (handler : Exception → Result Nat) :
     tryCatch (throw exception : Result Nat) handler = handler exception := rfl
 
--- Equality remains computable, including all three Erlang exception classes.
-theorem decidable_results :
+-- Constructors distinguish success and the three Erlang exception classes.
+theorem result_constructors :
     (Result.ok .nil : Result) = .ok .nil ∧
     (Result.ok .nil : Result) ≠ .error (.error .nil) ∧
     (Result.error (.error .nil) : Result) ≠ .ok .nil ∧
     (Result.error (.throw .nil) : Result) = .error (.throw .nil) ∧
     (Result.error (.error .nil) : Result) ≠ .error (.throw .nil) ∧
-    (Result.error (.throw .nil) : Result) ≠ .error (.exit .nil) := by decide
+    (Result.error (.throw .nil) : Result) ≠ .error (.exit .nil) ∧
+    (Result.error (.error (.tuple #[.atom "badkey", .nil])) : Result) ≠
+      .error (.error (.tuple #[.atom "badmap", .nil])) := by simp
 
 end LynxTest.Term

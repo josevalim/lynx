@@ -1,5 +1,9 @@
 import LynxTest.Integration.Sum
+import LynxTest.Integration.Sets
+import LynxTest.Modules.Maps
+import LynxTest.Modules.Extensions
 import LynxTest.Term
+import LynxTest.Term.Map
 import LynxTest.Integration.Reverse
 import LynxTest.Modules.Erlang
 import LynxTest.Tactic.Contracts
@@ -30,16 +34,8 @@ run_cmd do
     ``Lynx.Modules.Erlang.append_success,
     ``Lynx.Modules.Erlang.append_nil,
     ``Lynx.Modules.Erlang.append_assoc,
-    ``LynxTest.Term.decidable_results,
-    ``LynxTest.Term.generic_result_bind,
-    ``LynxTest.Term.generic_result_catch,
+    ``Lynx.instEquivBEqTerm,
     ``Lynx.instLawfulMonadResult,
-    ``Lynx.Term.compare_eq,
-    ``Lynx.Term.compare_swap,
-    ``Lynx.Term.compare_le_trans,
-    ``Lynx.Term.compare_le_total,
-    ``LynxTest.Modules.Erlang.ordered_terms,
-    ``LynxTest.Modules.Erlang.reflexive_operators,
     ``LynxTest.Tactic.Contracts.structure_contract,
     ``LynxTest.Tactic.Contracts.ensures_clauses,
     ``LynxTest.Tactic.Contracts.duplicate_constraints,
@@ -62,3 +58,21 @@ run_cmd do
   if proof.getUsedConstants.contains
       ``LynxTest.Integration.Sum.sum_satisfies_contract then
     throwError "the append proof must synthesize its own implementation facts"
+
+/- Audit term, map, guard, and regression theorems as a group.
+Sets targets must synthesize their proofs without reusing each other. -/
+run_cmd do
+  let env ← getEnv
+  let prefixes := #["Lynx.Term.", "Lynx.Modules.Maps.", "Lynx.Modules.Extensions.",
+    "LynxTest.Term.", "LynxTest.Modules.Erlang.", "LynxTest.Integration.Sets.", "LynxTest.Modules.Maps.", "LynxTest.Modules.Extensions."]
+  for (name, info) in env.constants.toList do
+    unless prefixes.any (name.toString.startsWith ·) do continue
+    let .thmInfo theoremInfo := info | continue
+    for axiomName in ← collectAxioms name do
+      unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
+        throwError "unexpected axiom in {name}: {axiomName}"
+    if name.toString.startsWith "LynxTest.Integration.Sets." then
+      for dependency in theoremInfo.value.getUsedConstants do
+        if dependency.toString.startsWith "LynxTest.Integration.Sets." then
+          if let some (.thmInfo _) := env.find? dependency then
+            throwError "integration target {name} reused target {dependency}"

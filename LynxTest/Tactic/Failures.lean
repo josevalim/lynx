@@ -19,10 +19,10 @@ theorem rejects_false_guarantee : WithSourceLabel { file := "bad.ex", line := 3 
     (Satisfies zero anyInput falseEnsures) := by
   lynx_verify
 
-theorem false_contract : ¬ Satisfies sumTerm sumExpects falseEnsures := by
+theorem false_contract : ¬ Satisfies sum_1 sumExpects falseEnsures := by
   intro contract
   have failure := contract.2 .nil rfl
-  simp [sumTerm, Accepted, falseEnsures, Term.true, Term.false] at failure
+  simp [sum_1, Accepted, falseEnsures, Term.true, Term.false] at failure
 
 /-- error: lynx: could not prove that `expects` accepts any input; it may be empty or unsupported by automatic coverage -/
 #guard_msgs in
@@ -44,7 +44,7 @@ theorem manual_coverage : Satisfies zero onlySpecial sumEnsures := by
   case ensures => lynx_solve
 
 def badCall (_ : Term) : Result := do
-  let result ← sumTerm (.integer 0)
+  let result ← sum_1 (.integer 0)
   Erlang.equal_2 result (.integer 0)
 
 -- A property may not assume the expectation of a function it calls.
@@ -62,6 +62,6 @@ theorem rejects_unjustified_call_domain : WithSourceLabel { file := "bad.ex", li
 theorem bad_call_property : ¬ Property anyInput badCall := by
   intro property
   have failure := property.2 .nil rfl
-  simp [badCall, sumTerm, Accepted] at failure
+  simp [badCall, sum_1, Accepted] at failure
 
 end LynxTest.Tactic.Failures

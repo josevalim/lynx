@@ -9,9 +9,6 @@ namespace Lynx
 def Accepted (outcome : Result) : Prop :=
   outcome = .ok Term.true
 
-instance (outcome : Result) : Decidable (Accepted outcome) :=
-  inferInstanceAs (Decidable (outcome = .ok Term.true))
-
 /-!
 An expectation must accept at least one input. This is part of verification,
 not an optional diagnostic: otherwise every implication below could be true

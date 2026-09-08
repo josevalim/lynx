@@ -58,11 +58,12 @@ Only some terms and NIFs are implemented in this proof of concept.
 Expectations, assurances, and properties are then shaped into a contract,
 which is verified by [`Lynx.Tactic`](Lynx/Tactic.lean).
 
-Everything in this project has been human verified, except for `Lynx.Tactic`.
-`Lynx.Tactic` constructs proof terms that Lean’s kernel independently checks.
-Its proof-search implementation therefore need not itself be trusted for logical
-correctness, provided proofs introduce no untrusted axioms or sorry.
-Read that module source and documentation for more information.
+Everything in this project has been human verified, except for the tactic and
+theorems, which are written with the support of AI. In particular, `Lynx.Tactic`
+constructs proof terms that Lean's kernel independently checks. Therefore its
+proof-search implementation does not need itself to be trusted for logical
+correctness, provided proofs introduce no untrusted axioms or sorry. Read that
+module source and documentation for more information.
 
 ## Running tests
 
