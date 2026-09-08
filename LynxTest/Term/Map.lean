@@ -1,3 +1,4 @@
+import LynxTest.ProofAudit
 import Lynx.Term
 
 namespace LynxTest.Term.Map
@@ -43,3 +44,7 @@ theorem semantic_beq :
   simp [a, b]
 
 end LynxTest.Term.Map
+
+run_cmd do
+  LynxTest.ProofAudit.checkModule `Lynx.Term.Map
+  LynxTest.ProofAudit.checkModule `LynxTest.Term.Map

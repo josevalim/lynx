@@ -1,3 +1,4 @@
+import LynxTest.ProofAudit
 import Lynx
 
 namespace LynxTest.Tactic.Opaque
@@ -55,3 +56,6 @@ theorem representation_equality (input : Term) (h : Accepted (expectsInteger inp
     ∃ n, increment input = .ok (.integer (n + 1)) := by lynx_verify
 
 end LynxTest.Tactic.Opaque
+
+run_cmd do
+  LynxTest.ProofAudit.checkModule `LynxTest.Tactic.Opaque

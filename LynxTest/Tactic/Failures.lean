@@ -1,3 +1,4 @@
+import LynxTest.ProofAudit
 import LynxTest.Integration.Sum
 
 namespace LynxTest.Tactic.Failures
@@ -65,3 +66,9 @@ theorem bad_call_property : ¬ Property anyInput badCall := by
   simp [badCall, sum_1, Accepted] at failure
 
 end LynxTest.Tactic.Failures
+
+run_cmd do
+  -- The expected elaboration failures above intentionally leave incomplete proofs.
+  LynxTest.ProofAudit.checkDeclaration ``LynxTest.Tactic.Failures.false_contract
+  LynxTest.ProofAudit.checkDeclaration ``LynxTest.Tactic.Failures.manual_coverage
+  LynxTest.ProofAudit.checkDeclaration ``LynxTest.Tactic.Failures.bad_call_property

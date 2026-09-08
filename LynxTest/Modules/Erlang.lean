@@ -1,3 +1,4 @@
+import LynxTest.ProofAudit
 import Lynx.Modules.Erlang
 import LynxTest.Term.Compare
 
@@ -69,3 +70,8 @@ theorem semantic_comparison_operators :
   repeat' first | apply And.intro | rfl
 
 end LynxTest.Modules.Erlang
+
+run_cmd do
+  LynxTest.ProofAudit.checkModule `LynxTest.Modules.Erlang
+  LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.Definitions
+  LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.ListLemmas

@@ -1,3 +1,4 @@
+import LynxTest.ProofAudit
 import Lynx.Term
 
 namespace LynxTest.Term
@@ -26,3 +27,9 @@ theorem result_constructors :
       .error (.error (.tuple #[.atom "badmap", .nil])) := by simp
 
 end LynxTest.Term
+
+run_cmd do
+  LynxTest.ProofAudit.checkModule `Lynx.Term
+  LynxTest.ProofAudit.checkModule `LynxTest.Term
+  LynxTest.ProofAudit.checkModule `Lynx.Term.DataTypes
+  LynxTest.ProofAudit.checkModule `Lynx.Term.Induction

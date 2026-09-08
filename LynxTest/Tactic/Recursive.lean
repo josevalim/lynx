@@ -1,3 +1,4 @@
+import LynxTest.ProofAudit
 import Lynx
 
 /-!
@@ -47,3 +48,6 @@ theorem leaves_contract : Satisfies leaves anyInput integerResult := by
   lynx_verify
 
 end LynxTest.Tactic.Recursive
+
+run_cmd do
+  LynxTest.ProofAudit.checkModule `LynxTest.Tactic.Recursive

@@ -1,3 +1,4 @@
+import LynxTest.ProofAudit
 import Lynx.Modules.Extensions
 
 namespace LynxTest.Modules.Extensions
@@ -95,3 +96,7 @@ theorem map_guard_shadowing :
   repeat' first | apply And.intro | rfl
 
 end LynxTest.Modules.Extensions
+
+run_cmd do
+  LynxTest.ProofAudit.checkModule `Lynx.Modules.Extensions
+  LynxTest.ProofAudit.checkModule `LynxTest.Modules.Extensions

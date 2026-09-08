@@ -1,3 +1,4 @@
+import LynxTest.ProofAudit
 import Lynx.Term
 
 namespace LynxTest.Term.Compare
@@ -85,3 +86,7 @@ theorem comparison_keys_before_values (k l v w : Term) (h : Term.compare k l = .
   simp [Term.compare_cons, Term.compare_singleton_map, h]
 
 end LynxTest.Term.Compare
+
+run_cmd do
+  LynxTest.ProofAudit.checkModule `Lynx.Term.Compare
+  LynxTest.ProofAudit.checkModule `LynxTest.Term.Compare

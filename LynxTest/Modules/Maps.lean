@@ -1,3 +1,4 @@
+import LynxTest.ProofAudit
 import Lynx
 
 namespace LynxTest.Modules.Maps
@@ -48,3 +49,7 @@ theorem bad_maps : ∀ bad ∈ [one, .nil, .tuple #[]],
   rcases h with rfl | rfl | rfl <;> simp [Maps.get_2, Maps.put_3, Maps.merge_2, one, Term.empty_map]
 
 end LynxTest.Modules.Maps
+
+run_cmd do
+  LynxTest.ProofAudit.checkModule `Lynx.Modules.Maps
+  LynxTest.ProofAudit.checkModule `LynxTest.Modules.Maps

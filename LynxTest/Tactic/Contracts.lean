@@ -1,3 +1,4 @@
+import LynxTest.ProofAudit
 import Lynx
 
 namespace LynxTest.Tactic.Contracts
@@ -98,3 +99,6 @@ theorem compound (input : Term) (probe : Term → Result)
   lynx_solve
 
 end LynxTest.Tactic.Contracts
+
+run_cmd do
+  LynxTest.ProofAudit.checkModule `LynxTest.Tactic.Contracts
