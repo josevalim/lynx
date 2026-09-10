@@ -1,12 +1,11 @@
-import Lynx.Attribute
-import Lynx.Term
+import Lynx.Tactic
 
 namespace Lynx.Modules.Maps
 open Term.Map
 
-def new_0 : Result := .ok Term.empty_map
+#lynx_pure def new_0 : Result := .ok Term.empty_map
 
-@[lynx_opaque] def get_2 (key input : Term) : Result :=
+#lynx_pure @[lynx_opaque] def get_2 (key input : Term) : Result :=
   match input with
   | .map entries =>
     match find key entries with
@@ -19,7 +18,7 @@ def new_0 : Result := .ok Term.empty_map
       | some v => .ok v
       | none => .error (.error (.tuple #[.atom "badkey", k])) := rfl
 
-@[lynx_opaque] def put_3 (key value input : Term) : Result :=
+#lynx_pure @[lynx_opaque] def put_3 (key value input : Term) : Result :=
   match input with
   | .map entries => .ok (.map (put key value entries))
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
@@ -27,7 +26,7 @@ def new_0 : Result := .ok Term.empty_map
 @[simp] theorem put_map (k v : Term) (entries : Entries) :
     put_3 k v (.map entries) = .ok (.map (put k v entries)) := rfl
 
-@[lynx_opaque] def merge_2 (left right : Term) : Result :=
+#lynx_pure @[lynx_opaque] def merge_2 (left right : Term) : Result :=
   match left, right with
   | .map a, .map b => .ok (.map (merge a b))
   | .map _, _ => .error (.error (.tuple #[.atom "badmap", right]))

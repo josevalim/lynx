@@ -1,4 +1,5 @@
 import Lynx.Modules.Erlang.Definitions
+import Lynx.Tactic
 import Lynx.Term
 
 namespace Lynx.Modules.Extensions
@@ -13,15 +14,10 @@ private def isTrue (computation : Result) : Result Bool := fun env =>
 
 /-- Traverse the outer list, accepting only a tail ending in nil.
 Elements are unrestricted and are not inspected. -/
-def is_proper_list_1 : Term → Result
+#lynx_pure def is_proper_list_1 : Term → Result
   | .nil => .ok (.atom "true")
   | .cons _ tail => is_proper_list_1 tail
   | _ => .ok (.atom "false")
-
-@[simp] theorem is_proper_list_1_run_iff (input : Term) (env final : Environment) :
-    is_proper_list_1 input env = .ok (.atom "true") final ↔
-      is_proper_list_1 input = .ok (.atom "true") ∧ env = final := by
-  induction input <;> simp_all [is_proper_list_1]
 
 /-- A proper-list guard: every element must return exactly `.ok (.atom "true")`.
 The empty list succeeds. Improper lists, false/non-boolean predicate results,
@@ -47,7 +43,8 @@ def is_proper_list_2 (predicate : Term → Result) : Term → Result
 /-- A map guard in source argument order: map, then key/value predicate.
 Only effective bindings are tested. Nonmaps, false/non-boolean predicate results,
 and raised outcomes return false; the empty map succeeds. -/
-@[lynx_opaque] def is_map_2 (input : Term) (predicate : Term → Term → Result) : Result := do
+@[lynx_opaque] def is_map_2
+    (input : Term) (predicate : Term → Term → Result) : Result := do
   let accepted ← match input with
     | .map entries => Term.Map.allM entries (fun k v => isTrue (predicate k v))
     | _ => Result.ok false

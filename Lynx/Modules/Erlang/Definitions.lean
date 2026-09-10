@@ -1,14 +1,13 @@
-import Lynx.Attribute
-import Lynx.Term
+import Lynx.Tactic
 import Lynx.Term.Compare
 
-/-! Executable Erlang operations, independent of contract/tactic machinery. -/
+/-! Executable Erlang operations and their generated state-independence proofs. -/
 
 namespace Lynx.Modules.Erlang
 
 open Lynx
 
-def is_integer_1 (input : Term) : Result :=
+#lynx_pure def is_integer_1 (input : Term) : Result :=
   .ok (match input with | .integer _ => Term.true | _ => Term.false)
 
 /-- Expose the state-preserving callback even when passed without its argument. -/
@@ -16,31 +15,31 @@ def is_integer_1 (input : Term) : Result :=
     is_integer_1 = fun input => Result.ok
       (match input with | .integer _ => Term.true | _ => Term.false) := rfl
 
-def is_list_1 : Term → Result
+#lynx_pure def is_list_1 : Term → Result
   | .nil => .ok Term.true
   | .cons _ _ => .ok Term.true
   | _ => .ok Term.false
 
-def add_2 : Term → Term → Result
+#lynx_pure def add_2 : Term → Term → Result
   | .integer x, .integer y => .ok (.integer (x + y))
   | _, _ => throw (.error (.atom "badarith"))
 
-def equal_2 (left right : Term) : Result :=
+#lynx_pure def equal_2 (left right : Term) : Result :=
   .ok (if Term.compare left right = .eq then Term.true else Term.false)
 
-def less_than_2 (left right : Term) : Result :=
+#lynx_pure def less_than_2 (left right : Term) : Result :=
   .ok (if (Term.compare left right).isLT then Term.true else Term.false)
 
-def greater_than_2 (left right : Term) : Result :=
+#lynx_pure def greater_than_2 (left right : Term) : Result :=
   .ok (if (Term.compare left right).isGT then Term.true else Term.false)
 
-def less_than_or_equal_2 (left right : Term) : Result :=
+#lynx_pure def less_than_or_equal_2 (left right : Term) : Result :=
   .ok (if (Term.compare left right).isLE then Term.true else Term.false)
 
-def greater_than_or_equal_2 (left right : Term) : Result :=
+#lynx_pure def greater_than_or_equal_2 (left right : Term) : Result :=
   .ok (if (Term.compare left right).isGE then Term.true else Term.false)
 
-@[lynx_opaque] def append_2 : Term → Term → Result
+#lynx_pure @[lynx_opaque] def append_2 : Term → Term → Result
   | .nil, right => .ok right
   | .cons head tail, right => do
       let rest ← append_2 tail right

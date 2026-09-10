@@ -1,7 +1,7 @@
 import Lean
 import Lynx.Attribute
 import Lynx.Tactic.Contract
-import Lynx.Modules.Extensions
+import Lynx.Term
 
 /-!
 # How the Lynx tactic works
@@ -287,7 +287,7 @@ private def isResultType (type : Expr) : MetaM Bool := do
 /-- Discover executable definitions by their result type, following their calls.
 Their bodies supply reduction rules alongside registered library simp theorems;
 translated definitions need no separate semantic theorem. -/
-private def mkSolver : TacticM Solver := withMainContext do
+private def mkSolver (unfoldOpaque? : Option Name := none) : TacticM Solver := withMainContext do
   let mut pending := (← getMainTarget).getUsedConstants
   let mut inputs := #[]
   for decl in ← getLCtx do
@@ -303,7 +303,7 @@ private def mkSolver : TacticM Solver := withMainContext do
     pending := pending.pop
     if seen.contains name then continue
     seen := seen.insert name
-    if opaqueAttr.hasTag (← getEnv) name then continue
+    if opaqueAttr.hasTag (← getEnv) name && unfoldOpaque? != some name then continue
     let .defnInfo info ← getConstInfo name | continue
     let executable ← forallTelescopeReducing info.type fun _ result =>
       isResultType result
@@ -1060,6 +1060,40 @@ private partial def generate : TacticM Unit := do
 
 elab "lynx_vcgen" : tactic => focus generate
 elab "lynx_solve" : tactic => focus (solveGoal 24)
+elab "lynx_pure_solve " function:ident : tactic => focus <| withMainContext do
+  let function ← resolveGlobalConstNoOverload function
+  let solver ← mkSolver (some function)
+  let goal ← getMainGoal
+  let target ← goal.getType
+  for input in solver.inputs do
+    if (target.find? fun expression =>
+        match solver.majors.find? (expression.getAppFn.constName?.getD .anonymous) with
+        | some index => expression.getAppArgs[index]? == some (mkFVar input)
+        | none => false).isSome then
+      let generalized := (← getLCtx).foldl (init := #[]) fun variables decl =>
+        if decl.type.isConstOf ``Term && decl.fvarId != input then variables.push decl.fvarId
+        else variables
+      let (_, goal) ← goal.revert generalized
+      let branches ← goal.induction input ``Lynx.Term.induct
+      replaceBranches (branches.toList.map (·.mvarId))
+      let definitions := solver.recursive.map mkIdent
+      let finish ← `(tacticSeq| intros; simp_all [$[$definitions:ident],*])
+      allGoals (evalTactic finish)
+      return
+  if solver.recursive.isEmpty then
+    for input in solver.inputs do
+      allGoals <| withMainContext do
+        let goal ← getMainGoal
+        if (← getLCtx).contains input then
+          let branches ← goal.cases input
+          replaceBranches (branches.toList.map (·.mvarId))
+    let functionId := mkIdent function
+    let finish ← `(tacticSeq|
+      simp_all [$functionId:ident, Result.rebase]
+      repeat' first | split at * | simp_all [Result.rebase])
+    allGoals (evalTactic finish)
+    return
+  search solver 24
 elab "lynx_verify" : tactic => focus do
   generate
   allGoals (solveGoal 24)
@@ -1068,5 +1102,70 @@ elab "lynx_verify" : tactic => focus do
     if ← isCoverageGoal goal then coverageFailed := true
   if coverageFailed then
     throwError "lynx: could not prove that `expects` accepts any input; it may be empty or unsupported by automatic coverage"
+
+/-- Elaborate a definition and prove once that each fully applied computation
+neither reads nor changes the environment. The generated `<name>_pure` theorem
+is a simp rule, so execution facts for callers reduce back to ordinary
+computation equalities. -/
+elab doc?:(docComment)? "#lynx_pure " declaration:command : command => do
+  if let some doc := doc? then
+    unless declaration.raw.getArg 0 |>.getArg 0 |>.isNone do
+      throwErrorAt doc "#lynx_pure declaration has two documentation comments"
+  let declaration : TSyntax `command := match doc? with
+    | some doc =>
+        let modifiers := declaration.raw.getArg 0
+        let modifiers := modifiers.setArg 0 (mkNullNode #[doc.raw])
+        ⟨declaration.raw.setArg 0 modifiers⟩
+    | none => declaration
+  let inner := declaration.raw.getArg 1
+  unless inner.getKind == ``Lean.Parser.Command.definition do
+    throwErrorAt declaration "#lynx_pure must wrap a `def` declaration"
+  let declId := inner.getArg 1
+  let id := if declId.isIdent then declId else declId.getArg 0
+  unless id.isIdent do
+    throwErrorAt declId "could not determine the definition name"
+  Command.elabCommand declaration
+  let function ← resolveGlobalConstNoOverload id
+  let info ← getConstInfo function
+  let levels := info.levelParams.map Level.param
+  let functionExpr := mkConst function levels
+  let purityType ← Command.liftTermElabM do
+    forallTelescopeReducing info.type fun arguments resultType => do
+      unless resultType.isAppOf ``EStateM.Result && !arguments.isEmpty &&
+          (← inferType arguments.back!).isConstOf ``Environment do
+        throwErrorAt declId "#lynx_pure requires a definition returning `Result`"
+      let inputs := arguments.pop
+      let proposition ← mkAppM ``Result.IsPure #[mkAppN functionExpr inputs]
+      mkForallFVars inputs proposition
+  let proof ← Command.liftTermElabM do
+    let functionId := mkIdent function
+    let proofSyntax ← if ← isRecursiveDefinition function then
+      `(by intros; lynx_pure_solve $functionId:ident)
+    else
+      `(by
+        intros
+        first
+        | (unfold Result.IsPure
+           intros
+           simp only [$functionId:ident]
+           repeat' first | split | simp_all [Result.rebase]
+           all_goals repeat' first | split at * | simp_all [Result.rebase]
+           all_goals lynx_solve
+           done)
+        | lynx_pure_solve $functionId:ident)
+    let proof ← Term.elabTermEnsuringType
+      proofSyntax
+      purityType
+    Term.synthesizeSyntheticMVarsNoPostponing
+    instantiateMVars proof
+  let theoremName := function.getPrefix ++
+    Name.mkSimple (function.getString! ++ "_pure")
+  Command.liftCoreM <| addAndCompile <| Declaration.thmDecl {
+    name := theoremName
+    levelParams := info.levelParams
+    type := purityType
+    value := proof
+  }
+  Command.elabCommand (← `(attribute [simp↓] $(mkIdent theoremName)))
 
 end Lynx.Tactic

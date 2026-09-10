@@ -14,7 +14,7 @@ namespace LynxTest.Integration.Sum
 open Lynx Lynx.Modules
 set_option Elab.async false
 
-def sum_1 : Term → Result
+#lynx_pure def sum_1 : Term → Result
   | .nil => .ok (.integer 0)
   | .cons x xs => do
       let subtotal ← sum_1 xs
