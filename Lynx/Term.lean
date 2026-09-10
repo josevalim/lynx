@@ -6,7 +6,7 @@ import Lynx.Term.Map
 namespace Lynx.Term
 
 /-- Empty Erlang map literal. -/
-def empty_map : Term := .map []
+def emptyMap : Term := .map []
 
 def «true» : Term := .atom "true"
 def «false» : Term := .atom "false"

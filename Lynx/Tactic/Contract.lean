@@ -8,7 +8,7 @@ namespace Lynx
 /-! Contract expressions are observations of an environment snapshot. Their
 own state changes are discarded; only a normal return of exactly `true` accepts. -/
 def Accepted (computation : Result) (env : Environment := {}) : Prop :=
-  ∃ final, Result.run computation env = .ok Term.true final
+  ∃ final, computation env = .ok Term.true final
 
 /-!
 An expectation must accept at least one input/environment pair. This is part of verification,
@@ -31,7 +31,7 @@ def Satisfies {Args : Type}
     ∀ input env,
       Accepted (expects input) env →
       ∃ result final,
-        Result.run (function input) env = .ok result final ∧
+        function input env = .ok result final ∧
         Accepted (ensures input result) final
 
 /-- A property has a nonempty explicit domain and no implicit returned value. -/
@@ -58,7 +58,7 @@ def EnsuresClauses {Args : Type} (function expects : Args → Result)
     (clauses : List (SourceLabel × (Args → Term → Result))) : Prop :=
   Covered expects ∧ clauses.foldr (fun (source, ensures) rest =>
     WithSourceLabel source (∀ input env, Accepted (expects input) env →
-      ∃ result final, Result.run (function input) env = .ok result final ∧
+      ∃ result final, function input env = .ok result final ∧
         Accepted (ensures input result) final) ∧ rest) True
 
 end Lynx

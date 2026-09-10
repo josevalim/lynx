@@ -17,7 +17,7 @@ function, nor an annotation on every translated definition.
 ```lean
 Covered expects ∧
   ∀ input env, Accepted (expects input) env →
-    ∃ result final, Result.run (function input) env = .ok result final ∧
+    ∃ result final, function input env = .ok result final ∧
       Accepted (ensures input result) final
 ```
 
@@ -317,7 +317,7 @@ private def mkSolver (unfoldOpaque? : Option Name := none) : TacticM Solver := w
   -- Preserve executable bind structure for branch discovery; the generic
   -- lawful-monad rewrites reassociate binds or turn them into functor maps.
   let simpSyntax ← `(tactic| simp_all (config := { failIfUnchanged := false })
-    [Accepted, Result.run, EStateM.run, Term.true, Term.false, and_assoc,
+    [Accepted, Term.true, Term.false, and_assoc,
     Pure.pure, EStateM.pure, -bind_assoc, -bind_pure_comp, $[$definitions:ident],*])
   let result ← mkSimpContext simpSyntax (eraseLocal := true) (kind := .simpAll)
   return ⟨result.ctx, result.simprocs, recursive, majors, inputs, false, {},
@@ -616,7 +616,7 @@ private partial def coverageCandidates (type : Expr) (depth : Nat := 3) : Tactic
     let nil := mkConst ``Term.nil
     let atom := mkApp (mkConst ``Term.atom) ∘ mkStrLit
     return #[
-      zero, nil, mkConst ``Term.empty_map, atom "", atom "true",
+      zero, nil, mkConst ``Term.emptyMap, atom "", atom "true",
       mkApp2 (mkConst ``Term.cons) zero nil,
       mkApp2 (mkConst ``Term.cons) (atom "") nil]
   if type.isAppOf ``Prod then
@@ -1089,8 +1089,8 @@ elab "lynx_pure_solve " function:ident : tactic => focus <| withMainContext do
           replaceBranches (branches.toList.map (·.mvarId))
     let functionId := mkIdent function
     let finish ← `(tacticSeq|
-      simp_all [$functionId:ident, Result.rebase]
-      repeat' first | split at * | simp_all [Result.rebase])
+      simp_all [$functionId:ident]
+      repeat' first | split at * | simp_all)
     allGoals (evalTactic finish)
     return
   search solver 24
@@ -1145,11 +1145,9 @@ elab doc?:(docComment)? "#lynx_pure " declaration:command : command => do
       `(by
         intros
         first
-        | (unfold Result.IsPure
-           intros
-           simp only [$functionId:ident]
-           repeat' first | split | simp_all [Result.rebase]
-           all_goals repeat' first | split at * | simp_all [Result.rebase]
+        | (simp only [$functionId:ident]
+           repeat' first | split | simp_all
+           all_goals repeat' first | split at * | simp_all
            all_goals lynx_solve
            done)
         | lynx_pure_solve $functionId:ident)

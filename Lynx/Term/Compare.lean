@@ -6,49 +6,49 @@ scaffolding are private implementation details of this module. -/
 /-! Temporary sorted bindings for map comparison. Keys and values retain their
 original representation; only the supplied key comparator is used to sort and
 resolve shadowing. -/
-namespace Lynx.Term.Internal.MapView
+namespace Lynx.Term.Compare
 
 variable {α β : Type}
 
-private def lookup (cmp : α → α → Ordering) (xs : List (α × α)) (q : α) : Option α :=
+private def mapViewLookup (cmp : α → α → Ordering) (xs : List (α × α)) (q : α) : Option α :=
   (xs.find? fun e => decide (cmp q e.1 = .eq)).map Prod.snd
 
-private def insert (cmp : α → α → Ordering) (e : α × α) : List (α × α) → List (α × α)
+private def mapViewInsert (cmp : α → α → Ordering) (e : α × α) : List (α × α) → List (α × α)
   | [] => [e]
   | p :: xs => match cmp e.1 p.1 with
     | .eq => e :: xs
     | .lt => e :: p :: xs
-    | .gt => p :: insert cmp e xs
+    | .gt => p :: mapViewInsert cmp e xs
 
-private def view (cmp : α → α → Ordering) : List (α × α) → List (α × α)
+private def mapView (cmp : α → α → Ordering) : List (α × α) → List (α × α)
   | [] => []
-  | e :: xs => insert cmp e (view cmp xs)
+  | e :: xs => mapViewInsert cmp e (mapView cmp xs)
 
-private def onCmp (cmp : β → β → Ordering) (f : α → β) (a b : α) := cmp (f a) (f b)
+private def compareOn (cmp : β → β → Ordering) (f : α → β) (a b : α) := cmp (f a) (f b)
 
-private instance (cmp : β → β → Ordering) (f : α → β) [Std.TransCmp cmp] : Std.TransCmp (onCmp cmp f) where
+private instance (cmp : β → β → Ordering) (f : α → β) [Std.TransCmp cmp] : Std.TransCmp (compareOn cmp f) where
   eq_swap := by intros; exact Std.OrientedCmp.eq_swap (cmp := cmp)
   isLE_trans := by intros; exact Std.TransCmp.isLE_trans (cmp := cmp) ‹_› ‹_›
 
-private def compare (cmp : α → α → Ordering) : List (α × α) → List (α × α) → Ordering :=
-  compareLex (onCmp Ord.compare List.length)
-    (compareLex (onCmp (List.compareLex cmp) (List.map Prod.fst))
-      (onCmp (List.compareLex cmp) (List.map Prod.snd)))
+private def compareMapViews (cmp : α → α → Ordering) : List (α × α) → List (α × α) → Ordering :=
+  compareLex (compareOn Ord.compare List.length)
+    (compareLex (compareOn (List.compareLex cmp) (List.map Prod.fst))
+      (compareOn (List.compareLex cmp) (List.map Prod.snd)))
 
-private instance (cmp : α → α → Ordering) [Std.TransCmp cmp] : Std.TransCmp (compare cmp) :=
+private instance (cmp : α → α → Ordering) [Std.TransCmp cmp] : Std.TransCmp (compareMapViews cmp) :=
   inferInstanceAs (Std.TransCmp (compareLex _ _))
 
-@[simp] private theorem insert_map (cmp : β → β → Ordering) (f : α → β) (e : α × α) (xs : List (α × α)) :
-    (insert (fun a b => cmp (f a) (f b)) e xs).map (Prod.map f f) =
-      insert cmp (Prod.map f f e) (xs.map (Prod.map f f)) := by
+@[simp] private theorem mapViewInsert_map (cmp : β → β → Ordering) (f : α → β) (e : α × α) (xs : List (α × α)) :
+    (mapViewInsert (fun a b => cmp (f a) (f b)) e xs).map (Prod.map f f) =
+      mapViewInsert cmp (Prod.map f f e) (xs.map (Prod.map f f)) := by
   induction xs with
   | nil => rfl
-  | cons p xs ih => simp only [insert, List.map_cons]; split <;> simp_all
+  | cons p xs ih => simp only [mapViewInsert, List.map_cons]; split <;> simp_all
 
-@[simp] private theorem view_map (cmp : β → β → Ordering) (f : α → β) (xs : List (α × α)) :
-    (view (fun a b => cmp (f a) (f b)) xs).map (Prod.map f f) =
-      view cmp (xs.map (Prod.map f f)) := by
-  induction xs <;> simp_all [view]
+@[simp] private theorem mapView_map (cmp : β → β → Ordering) (f : α → β) (xs : List (α × α)) :
+    (mapView (fun a b => cmp (f a) (f b)) xs).map (Prod.map f f) =
+      mapView cmp (xs.map (Prod.map f f)) := by
+  induction xs <;> simp_all [mapView]
 
 @[simp] private theorem lex_map (cmp : β → β → Ordering) (f : α → β) (xs ys : List α) :
     List.compareLex cmp (xs.map f) (ys.map f) =
@@ -57,16 +57,16 @@ private instance (cmp : α → α → Ordering) [Std.TransCmp cmp] : Std.TransCm
   | nil => cases ys <;> rfl
   | cons x xs ih => cases ys <;> simp_all [List.compareLex_cons_cons, List.compareLex_cons_nil]
 
-@[simp] private theorem compare_map (cmp : β → β → Ordering) (f : α → β) (xs ys : List (α × α)) :
-    compare cmp (xs.map (Prod.map f f)) (ys.map (Prod.map f f)) =
-      compare (fun a b => cmp (f a) (f b)) xs ys := by
-  simp [compare, compareLex, onCmp, List.map_map, ← lex_map, Function.comp_def, Prod.map]
+@[simp] private theorem compareMapViews_map (cmp : β → β → Ordering) (f : α → β) (xs ys : List (α × α)) :
+    compareMapViews cmp (xs.map (Prod.map f f)) (ys.map (Prod.map f f)) =
+      compareMapViews (fun a b => cmp (f a) (f b)) xs ys := by
+  simp [compareMapViews, compareLex, compareOn, List.map_map, ← lex_map, Function.comp_def, Prod.map]
 
-end Lynx.Term.Internal.MapView
+end Lynx.Term.Compare
 
 /-! ## Recursive comparison -/
 
-namespace Lynx.Term.Internal
+namespace Lynx.Term.Compare
 
 /-- One comparison step. The callback compares immediate children only. -/
 private def compareStep (cmp : Term → Term → Ordering) : Term → Term → Ordering
@@ -80,7 +80,7 @@ private def compareStep (cmp : Term → Term → Ordering) : Term → Term → O
     (Ord.compare a.size b.size).then (List.compareLex cmp a.toList b.toList)
   | .tuple _, _ => .lt
   | _, .tuple _ => .gt
-  | .map a, .map b => MapView.compare cmp (MapView.view cmp a) (MapView.view cmp b)
+  | .map a, .map b => compareMapViews cmp (mapView cmp a) (mapView cmp b)
   | .map _, _ => .lt
   | _, .map _ => .gt
   | .nil, .nil => .eq
@@ -134,8 +134,8 @@ private def boundedStep (n : Nat) (cmp : Child n → Child n → Ordering)
   | .tuple _, _ => .lt
   | _, .tuple _ => .gt
   | .map a, .map b =>
-    MapView.compare cmp (MapView.view cmp (boundedEntries n a (map_child ha)))
-      (MapView.view cmp (boundedEntries n b (map_child hb)))
+    compareMapViews cmp (mapView cmp (boundedEntries n a (map_child ha)))
+      (mapView cmp (boundedEntries n b (map_child hb)))
   | .map _, _ => .lt
   | _, .map _ => .gt
   | .nil, .nil => .eq
@@ -152,11 +152,11 @@ private theorem boundedStep_eq (n : Nat) (cmp : Term → Term → Ordering) (a b
     boundedStep n (fun a b => cmp a.val b.val) a b ha hb = compareStep cmp a b := by
   cases a <;> cases b <;> simp only [boundedStep, compareStep]
   all_goals try rfl
-  · rw [← MapView.lex_map cmp Subtype.val, boundedList_val, boundedList_val]
-  · rw [← MapView.compare_map cmp Subtype.val, MapView.view_map, MapView.view_map,
+  · rw [← lex_map cmp Subtype.val, boundedList_val, boundedList_val]
+  · rw [← compareMapViews_map cmp Subtype.val, mapView_map, mapView_map,
       boundedEntries_val, boundedEntries_val]
 
-end Lynx.Term.Internal
+end Lynx.Term.Compare
 
 namespace Lynx.Term
 
@@ -164,21 +164,20 @@ namespace Lynx.Term
 Map comparison resolves shadowing and sorts outer bindings, without rebuilding
 nested terms. The termination bound is erased from executable code. -/
 @[semireducible] def compare (a b : Term) : Ordering :=
-  Internal.boundedStep (max (sizeOf a) (sizeOf b))
+  Compare.boundedStep (max (sizeOf a) (sizeOf b))
     (fun x y => compare x.val y.val) a b (Nat.le_max_left _ _) (Nat.le_max_right _ _)
 termination_by max (sizeOf a) (sizeOf b)
 decreasing_by exact Nat.max_lt.mpr ⟨x.property, y.property⟩
 
-private theorem compare_eq_step (a b : Term) : compare a b = Internal.compareStep compare a b := by
+private theorem compare_eq_step (a b : Term) : compare a b = Compare.compareStep compare a b := by
   rw [compare]
-  exact Internal.boundedStep_eq _ _ _ _ _ _
+  exact Compare.boundedStep_eq _ _ _ _ _ _
 
 end Lynx.Term
 
 /-! ## Ordering laws -/
 
-namespace Lynx.Term.Internal
-open MapView (onCmp)
+namespace Lynx.Term.Compare
 
 private instance (cmp : Term → Term → Ordering) [Std.TransCmp cmp] : Std.TransCmp (compareStep cmp) where
   eq_swap := by
@@ -199,10 +198,10 @@ private instance (cmp : Term → Term → Ordering) [Std.TransCmp cmp] : Std.Tra
     all_goals try exact Std.TransCmp.isLE_trans ab bc
     case tuple.tuple.tuple a b c =>
       exact Std.TransCmp.isLE_trans
-        (cmp := compareLex (onCmp Ord.compare Array.size) (onCmp (List.compareLex cmp) Array.toList)) ab bc
+        (cmp := compareLex (compareOn Ord.compare Array.size) (compareOn (List.compareLex cmp) Array.toList)) ab bc
     case cons.cons.cons ah ats bh bt ch ct =>
       exact Std.TransCmp.isLE_trans
-        (cmp := compareLex (onCmp cmp Prod.fst) (onCmp cmp Prod.snd))
+        (cmp := compareLex (compareOn cmp Prod.fst) (compareOn cmp Prod.snd))
         (a := (ah,ats)) (b := (bh,bt)) (c := (ch,ct)) ab bc
 
 /-- Finite approximations used only to prove ordering laws. Executable comparison
@@ -230,26 +229,26 @@ private theorem compare_eq_approximation (n : Nat) (a b : Term)
     funext x y
     exact ih x.val y.val (by have := x.property; have := y.property; omega)
 
-end Lynx.Term.Internal
+end Lynx.Term.Compare
 
 namespace Lynx.Term
 
 @[simp] theorem compare_self (a : Term) : compare a a = .eq := by
-  rw [Internal.compare_eq_approximation (sizeOf a) a a (by simp)]
+  rw [Compare.compare_eq_approximation (sizeOf a) a a (by simp)]
   exact Std.ReflCmp.compare_self
 
 theorem compare_swap (a b : Term) : compare a b = (compare b a).swap := by
   let n := max (sizeOf a) (sizeOf b)
-  rw [Internal.compare_eq_approximation n a b (by omega),
-    Internal.compare_eq_approximation n b a (by omega)]
+  rw [Compare.compare_eq_approximation n a b (by omega),
+    Compare.compare_eq_approximation n b a (by omega)]
   exact Std.OrientedCmp.eq_swap
 
 theorem compare_le_trans (a b c : Term)
     (ab : (compare a b).isLE) (bc : (compare b c).isLE) : (compare a c).isLE := by
   let n := max (max (sizeOf a) (sizeOf b)) (sizeOf c)
-  rw [Internal.compare_eq_approximation n a b (by omega)] at ab
-  rw [Internal.compare_eq_approximation n b c (by omega)] at bc
-  rw [Internal.compare_eq_approximation n a c (by omega)]
+  rw [Compare.compare_eq_approximation n a b (by omega)] at ab
+  rw [Compare.compare_eq_approximation n b c (by omega)] at bc
+  rw [Compare.compare_eq_approximation n a c (by omega)]
   exact Std.TransCmp.isLE_trans ab bc
 
 theorem compare_le_total (a b : Term) : (compare a b).isLE ∨ (compare b a).isLE := by
@@ -277,20 +276,20 @@ theorem equivalent_trans {a b c : Term} (h : Equivalent a b) (h' : Equivalent b 
     Equivalent a c := Std.TransCmp.eq_trans h h'
 
 @[simp] theorem compare_eq_nil (a : Term) : compare a .nil = .eq ↔ a = .nil := by
-  cases a <;> rw [compare_eq_step] <;> simp [Internal.compareStep]
+  cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
 @[simp] theorem nil_compare_eq (a : Term) : compare .nil a = .eq ↔ a = .nil := by
   rw [compare_swap, Ordering.swap_eq_eq]
   exact compare_eq_nil a
 @[simp] theorem compare_eq_integer (a : Term) (n : Int) :
     compare a (.integer n) = .eq ↔ a = .integer n := by
-  cases a <;> rw [compare_eq_step] <;> simp [Internal.compareStep]
+  cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
 @[simp] theorem integer_compare_eq (n : Int) (a : Term) :
     compare (.integer n) a = .eq ↔ a = .integer n := by
   rw [compare_swap, Ordering.swap_eq_eq]
   exact compare_eq_integer a n
 @[simp] theorem compare_eq_atom (a : Term) (s : String) :
     compare a (.atom s) = .eq ↔ a = .atom s := by
-  cases a <;> rw [compare_eq_step] <;> simp [Internal.compareStep]
+  cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
 @[simp] theorem atom_compare_eq (s : String) (a : Term) :
     compare (.atom s) a = .eq ↔ a = .atom s := by
   rw [compare_swap, Ordering.swap_eq_eq]
@@ -336,27 +335,27 @@ end Lynx.Term
 
 /-! ## Map extensionality through first-binding lookups -/
 
-namespace Lynx.Term.Internal.MapView
+namespace Lynx.Term.Compare
 variable {α : Type} (cmp : α → α → Ordering)
 
-private def Sorted (xs : List (α × α)) : Prop := xs.Pairwise (fun a b => cmp a.1 b.1 = .lt)
+private def MapViewSorted (xs : List (α × α)) : Prop := xs.Pairwise (fun a b => cmp a.1 b.1 = .lt)
 
-@[simp] private theorem lookup_nil (q : α) : lookup cmp [] q = none := rfl
+@[simp] private theorem mapViewLookup_nil (q : α) : mapViewLookup cmp [] q = none := rfl
 
-@[simp] private theorem lookup_cons (e : α × α) (xs : List (α × α)) (q : α) :
-    lookup cmp (e :: xs) q = if cmp q e.1 = .eq then some e.2 else lookup cmp xs q := by
-  by_cases h : cmp q e.1 = .eq <;> simp [lookup, List.find?, h]
+@[simp] private theorem mapViewLookup_cons (e : α × α) (xs : List (α × α)) (q : α) :
+    mapViewLookup cmp (e :: xs) q = if cmp q e.1 = .eq then some e.2 else mapViewLookup cmp xs q := by
+  by_cases h : cmp q e.1 = .eq <;> simp [mapViewLookup, List.find?, h]
 
-@[simp] private theorem sorted_nil : Sorted cmp [] := by simp [Sorted]
-@[simp] private theorem sorted_cons (e : α × α) (xs : List (α × α)) :
-    Sorted cmp (e :: xs) ↔ (∀ p ∈ xs, cmp e.1 p.1 = .lt) ∧ Sorted cmp xs := List.pairwise_cons
+@[simp] private theorem mapViewSorted_nil : MapViewSorted cmp [] := by simp [MapViewSorted]
+@[simp] private theorem mapViewSorted_cons (e : α × α) (xs : List (α × α)) :
+    MapViewSorted cmp (e :: xs) ↔ (∀ p ∈ xs, cmp e.1 p.1 = .lt) ∧ MapViewSorted cmp xs := List.pairwise_cons
 
-private theorem mem_insert {xs : List (α × α)} {e p : α × α} (h : p ∈ insert cmp e xs) :
+private theorem mem_mapViewInsert {xs : List (α × α)} {e p : α × α} (h : p ∈ mapViewInsert cmp e xs) :
     p = e ∨ p ∈ xs := by
   induction xs with
-  | nil => simpa [insert] using h
+  | nil => simpa [mapViewInsert] using h
   | cons q xs ih =>
-    simp only [insert] at h
+    simp only [mapViewInsert] at h
     split at h
     · rcases List.mem_cons.mp h with h | h
       · exact Or.inl h
@@ -370,119 +369,120 @@ private theorem mem_insert {xs : List (α × α)} {e p : α × α} (h : p ∈ in
 
 variable [Std.TransCmp cmp]
 
-@[simp] private theorem sorted_insert (e : α × α) (xs : List (α × α)) (hs : Sorted cmp xs) :
-    Sorted cmp (insert cmp e xs) := by
+@[simp] private theorem mapViewSorted_insert (e : α × α) (xs : List (α × α)) (hs : MapViewSorted cmp xs) :
+    MapViewSorted cmp (mapViewInsert cmp e xs) := by
   induction xs with
-  | nil => simp [insert]
+  | nil => simp [mapViewInsert]
   | cons p xs ih =>
-    obtain ⟨head,tail⟩ := (sorted_cons cmp p xs).mp hs
-    simp only [insert]
+    obtain ⟨head,tail⟩ := (mapViewSorted_cons cmp p xs).mp hs
+    simp only [mapViewInsert]
     split
     · rename_i eq
-      exact (sorted_cons cmp e xs).mpr ⟨fun q h => by
+      exact (mapViewSorted_cons cmp e xs).mpr ⟨fun q h => by
         rw [Std.TransCmp.congr_left eq]; exact head q h, tail⟩
     · rename_i lt
-      apply (sorted_cons cmp e (p :: xs)).mpr
+      apply (mapViewSorted_cons cmp e (p :: xs)).mpr
       refine ⟨?_, hs⟩
       intro q h
       rcases List.mem_cons.mp h with rfl | h
       · exact lt
       · exact Std.TransCmp.lt_trans lt (head q h)
     · rename_i gt
-      apply (sorted_cons cmp p _).mpr
+      apply (mapViewSorted_cons cmp p _).mpr
       refine ⟨?_, ih tail⟩
       intro q h
-      rcases mem_insert cmp h with rfl | h
+      rcases mem_mapViewInsert cmp h with rfl | h
       · exact Std.OrientedCmp.lt_of_gt gt
       · exact head q h
 
-@[simp] private theorem sorted_view (xs : List (α × α)) : Sorted cmp (view cmp xs) := by
-  induction xs <;> simp_all [view]
+@[simp] private theorem mapView_sorted (xs : List (α × α)) : MapViewSorted cmp (mapView cmp xs) := by
+  induction xs <;> simp_all [mapView]
 
-@[simp] private theorem lookup_insert (xs : List (α × α)) (e : α × α) (q : α) :
-    lookup cmp (insert cmp e xs) q = if cmp q e.1 = .eq then some e.2 else lookup cmp xs q := by
+@[simp] private theorem mapViewLookup_insert (xs : List (α × α)) (e : α × α) (q : α) :
+    mapViewLookup cmp (mapViewInsert cmp e xs) q = if cmp q e.1 = .eq then some e.2 else mapViewLookup cmp xs q := by
   induction xs with
-  | nil => simp [insert, lookup_cons, lookup_nil]
+  | nil => simp [mapViewInsert, mapViewLookup_cons, mapViewLookup_nil]
   | cons p xs ih =>
-    simp only [insert]
+    simp only [mapViewInsert]
     split
     · rename_i eq
-      by_cases h : cmp q p.1 = .eq <;> simp [lookup_cons, Std.TransCmp.congr_right (a := q) eq, h]
-    · by_cases h : cmp q e.1 = .eq <;> simp [lookup_cons, h]
+      by_cases h : cmp q p.1 = .eq <;> simp [mapViewLookup_cons, Std.TransCmp.congr_right (a := q) eq, h]
+    · by_cases h : cmp q e.1 = .eq <;> simp [mapViewLookup_cons, h]
     · rename_i gt
       by_cases h : cmp q e.1 = .eq
       · have ne : cmp q p.1 ≠ .eq := by rw [Std.TransCmp.congr_left h, gt]; decide
-        simp [lookup_cons, h, ne, ih]
-      · simp [lookup_cons, h, ih]
+        simp [mapViewLookup_cons, h, ne, ih]
+      · simp [mapViewLookup_cons, h, ih]
 
-@[simp] private theorem lookup_view (xs : List (α × α)) (q : α) :
-    lookup cmp (view cmp xs) q = lookup cmp xs q := by
-  induction xs <;> simp_all [view, lookup_cons, lookup_nil]
+@[simp] private theorem mapViewLookup_view (xs : List (α × α)) (q : α) :
+    mapViewLookup cmp (mapView cmp xs) q = mapViewLookup cmp xs q := by
+  induction xs <;> simp_all [mapView, mapViewLookup_cons, mapViewLookup_nil]
 
 omit [Std.TransCmp cmp] in
-private theorem lookup_absent {xs : List (α × α)} {q : α}
-    (h : ∀ e ∈ xs, cmp q e.1 = .lt) : lookup cmp xs q = none := by
+private theorem mapViewLookup_absent {xs : List (α × α)} {q : α}
+    (h : ∀ e ∈ xs, cmp q e.1 = .lt) : mapViewLookup cmp xs q = none := by
   induction xs with
   | nil => rfl
   | cons e xs ih =>
     have head := h e (by simp)
-    simp [lookup_cons, head, ih (fun p mem => h p (List.mem_cons_of_mem _ mem))]
+    simp [mapViewLookup_cons, head, ih (fun p mem => h p (List.mem_cons_of_mem _ mem))]
 
 /-- Sorted views are extensionally equal with respect to comparator equality;
 the stored representatives themselves need not be equal. -/
-private theorem compare_eq_of_lookup (a b : List (α × α)) (ha : Sorted cmp a) (hb : Sorted cmp b)
-    (h : ∀ q, Option.Rel (fun a b => cmp a b = .eq) (lookup cmp a q) (lookup cmp b q)) :
-    compare cmp a b = .eq := by
+private theorem compareMapViews_eq_of_lookup (a b : List (α × α))
+    (ha : MapViewSorted cmp a) (hb : MapViewSorted cmp b)
+    (h : ∀ q, Option.Rel (fun a b => cmp a b = .eq) (mapViewLookup cmp a q) (mapViewLookup cmp b q)) :
+    compareMapViews cmp a b = .eq := by
   induction a generalizing b with
   | nil =>
     cases b with
     | nil => rfl
-    | cons e b => have := h e.1; simp [lookup_cons, Std.ReflCmp.compare_self] at this
+    | cons e b => have := h e.1; simp [mapViewLookup_cons, Std.ReflCmp.compare_self] at this
   | cons e a ih =>
     cases b with
-    | nil => have := h e.1; simp [lookup_cons, Std.ReflCmp.compare_self] at this
+    | nil => have := h e.1; simp [mapViewLookup_cons, Std.ReflCmp.compare_self] at this
     | cons f b =>
-      obtain ⟨ah,ats⟩ := (sorted_cons cmp e a).mp ha
-      obtain ⟨bh,bt⟩ := (sorted_cons cmp f b).mp hb
+      obtain ⟨ah,ats⟩ := (mapViewSorted_cons cmp e a).mp ha
+      obtain ⟨bh,bt⟩ := (mapViewSorted_cons cmp f b).mp hb
       have keys : cmp e.1 f.1 = .eq := by
         cases eq : cmp e.1 f.1 with
         | eq => rfl
         | lt =>
-          have absent : lookup cmp (f :: b) e.1 = none := lookup_absent cmp (by
+          have absent : mapViewLookup cmp (f :: b) e.1 = none := mapViewLookup_absent cmp (by
             intro p mem
             rcases List.mem_cons.mp mem with rfl | mem
             · exact eq
             · exact Std.TransCmp.lt_trans eq (bh p mem))
           have := h e.1
           rw [absent] at this
-          simp [lookup_cons, Std.ReflCmp.compare_self] at this
+          simp [mapViewLookup_cons, Std.ReflCmp.compare_self] at this
         | gt =>
           have lt := Std.OrientedCmp.lt_of_gt eq
-          have absent : lookup cmp (e :: a) f.1 = none := lookup_absent cmp (by
+          have absent : mapViewLookup cmp (e :: a) f.1 = none := mapViewLookup_absent cmp (by
             intro p mem
             rcases List.mem_cons.mp mem with rfl | mem
             · exact lt
             · exact Std.TransCmp.lt_trans lt (ah p mem))
           have := h f.1
           rw [absent] at this
-          simp [lookup_cons, Std.ReflCmp.compare_self] at this
+          simp [mapViewLookup_cons, Std.ReflCmp.compare_self] at this
       have values : cmp e.2 f.2 = .eq := by
-        simpa [lookup_cons, Std.ReflCmp.compare_self, keys] using h e.1
+        simpa [mapViewLookup_cons, Std.ReflCmp.compare_self, keys] using h e.1
       have tails := ih b ats bt (by
         intro q
         by_cases eq : cmp q e.1 = .eq
-        · have aa : lookup cmp a q = none := lookup_absent cmp (fun p mem =>
+        · have aa : mapViewLookup cmp a q = none := mapViewLookup_absent cmp (fun p mem =>
             Std.TransCmp.lt_of_eq_of_lt eq (ah p mem))
-          have bb : lookup cmp b q = none := lookup_absent cmp (fun p mem =>
+          have bb : mapViewLookup cmp b q = none := mapViewLookup_absent cmp (fun p mem =>
             Std.TransCmp.lt_of_eq_of_lt (Std.TransCmp.eq_trans eq keys) (bh p mem))
           simp [aa, bb]
-        · simpa [lookup_cons, eq, ← Std.TransCmp.congr_right (a := q) keys] using h q)
-      simp only [compare, compareLex, onCmp, Ordering.then_eq_eq,
+        · simpa [mapViewLookup_cons, eq, ← Std.TransCmp.congr_right (a := q) keys] using h q)
+      simp only [compareMapViews, compareLex, compareOn, Ordering.then_eq_eq,
         List.length_cons, List.map_cons, List.compareLex_cons_cons, keys, values,
         Ordering.eq_then, Std.compare_eq_iff_eq, Nat.add_right_cancel_iff] at tails ⊢
       exact tails
 
-end Lynx.Term.Internal.MapView
+end Lynx.Term.Compare
 
 namespace Lynx.Term
 
@@ -515,8 +515,9 @@ theorem compare_singleton_map_empty (k v : Term) :
 theorem compare_singleton_map (k v l w : Term) :
     compare (.map [(k,v)]) (.map [(l,w)]) = (compare k l).then (compare v w) := by
   rw [compare_eq_step]
-  simp [Internal.compareStep, Internal.MapView.view, Internal.MapView.insert,
-    Internal.MapView.compare, compareLex, Internal.MapView.onCmp, List.compareLex_cons_cons, List.compareLex_nil_nil]
+  simp [Compare.compareStep, Compare.mapView, Compare.mapViewInsert, Compare.compareMapViews,
+    compareLex, Compare.compareOn,
+    List.compareLex_cons_cons, List.compareLex_nil_nil]
 
 /-- Matching first-binding lookups suffice for semantic map equality. -/
 theorem map_equivalent_of_lookup (a b : List (Term × Term))
@@ -525,10 +526,10 @@ theorem map_equivalent_of_lookup (a b : List (Term × Term))
       ((b.find? fun e => decide (compare q e.1 = .eq)).map Prod.snd)) :
     Equivalent (.map a) (.map b) := by
   rw [Equivalent, compare_eq_step]
-  apply Internal.MapView.compare_eq_of_lookup _ _ _
-    (Internal.MapView.sorted_view _ _) (Internal.MapView.sorted_view _ _)
+  apply Compare.compareMapViews_eq_of_lookup _ _ _
+    (Compare.mapView_sorted _ _) (Compare.mapView_sorted _ _)
   intro q
-  simp only [Internal.MapView.lookup_view]
+  simp only [Compare.mapViewLookup_view]
   exact h q
 
 end Lynx.Term

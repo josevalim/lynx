@@ -36,7 +36,7 @@ def unionCommutative (args : Term × Term) : Result := do
 
 /-- Translated `union(set, %{}) == set`. -/
 def unionEmpty (input : Term) : Result := do
-  let result ← union_2 input Term.empty_map
+  let result ← union_2 input Term.emptyMap
   Erlang.equal_2 result input
 
 #bench "erlang/sets-union-contract"

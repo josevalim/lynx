@@ -21,15 +21,15 @@ private def one : Term := .integer 1
 private def two : Term := .integer 2
 
 theorem new_and_get :
-    Maps.new_0 = .ok Term.empty_map ∧
+    Maps.new_0 = .ok Term.emptyMap ∧
     Maps.get_2 a (.map [(a, one)]) = .ok one := by
   repeat' first | apply And.intro | rfl
 
 theorem missing_key (key : Term) :
-    Maps.get_2 key Term.empty_map = .error (.error (.tuple #[.atom "badkey", key])) := rfl
+    Maps.get_2 key Term.emptyMap = .error (.error (.tuple #[.atom "badkey", key])) := rfl
 
 theorem put_overwrites :
-    (Maps.put_3 a one Term.empty_map >>= Maps.put_3 a two) = .ok (.map [(a, two), (a, one)]) := by
+    (Maps.put_3 a one Term.emptyMap >>= Maps.put_3 a two) = .ok (.map [(a, two), (a, one)]) := by
   repeat' first | apply And.intro | rfl
 
 theorem merge_bindings :
@@ -42,11 +42,11 @@ theorem merge_bindings :
 theorem bad_maps : ∀ bad ∈ [one, .nil, .tuple #[]],
     Maps.get_2 a bad = .error (.error (.tuple #[.atom "badmap", bad])) ∧
     Maps.put_3 a one bad = .error (.error (.tuple #[.atom "badmap", bad])) ∧
-    Maps.merge_2 bad Term.empty_map = .error (.error (.tuple #[.atom "badmap", bad])) ∧
-    Maps.merge_2 Term.empty_map bad = .error (.error (.tuple #[.atom "badmap", bad])) := by
+    Maps.merge_2 bad Term.emptyMap = .error (.error (.tuple #[.atom "badmap", bad])) ∧
+    Maps.merge_2 Term.emptyMap bad = .error (.error (.tuple #[.atom "badmap", bad])) := by
   intro bad h
   simp only [List.mem_cons, List.not_mem_nil, or_false] at h
-  rcases h with rfl | rfl | rfl <;> simp [Maps.get_2, Maps.put_3, Maps.merge_2, one, Term.empty_map]
+  rcases h with rfl | rfl | rfl <;> simp [Maps.get_2, Maps.put_3, Maps.merge_2, one, Term.emptyMap]
 
 end LynxTest.Modules.Maps
 

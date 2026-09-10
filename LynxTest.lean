@@ -1,4 +1,5 @@
 import LynxTest.Integration
+import LynxTest.PublicApi
 import LynxTest.Tactic.Environment
 import LynxTest.Tactic.Summaries
 import LynxTest.Term

@@ -6,7 +6,9 @@ in Lynx/Term.lean and within the Lynx/Term/ directory.
 The implementation of Erlang NIFs goes to Lynx/Modules/.
 Functions follow their Erlang name with the arity followed
 by underscore, such as `is_integer_1`. There is an additional
-set of custom "NIFs" in the Extensions.lean file.
+set of custom "NIFs" in the Extensions.lean file. Functions that
+are pure from Elixir's point of view (they don't spawn messages
+or use pdict, albeit they can raise) should be tagged with #lynx_pure.
 
 Integration tests go in LynxTest/Integration and they all
 have the same shape: they have a version of the Elixir module

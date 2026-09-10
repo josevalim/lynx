@@ -5,7 +5,7 @@ import Lynx.Term
 namespace Lynx.Modules.Extensions
 
 private def isTrue (computation : Result) : Result Bool := fun env =>
-  match Result.run computation env with
+  match computation env with
   | .ok value next => .ok value.isTrue next
   | .error _ next => .ok false next
 

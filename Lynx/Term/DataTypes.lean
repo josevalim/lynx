@@ -23,38 +23,15 @@ deriving Repr, Inhabited
 
 abbrev Result (α : Type := Term) := EStateM Exception Environment α
 
+/-- Run a computation in a fresh environment. -/
+def run (computation : Result α) : EStateM.Result Exception Environment α :=
+  EStateM.run computation {}
+
 namespace Result
-
-/-- Run a computation, starting with an empty environment unless supplied. -/
-def run (computation : Result α) (env : Environment := {}) :
-    EStateM.Result Exception Environment α := EStateM.run computation env
-
-@[simp] theorem run_eq (computation : Result α) (env : Environment) :
-    run computation env = computation env := rfl
 
 def ok (value : α) : Result α := pure value
 
 def error (exception : Exception) : Result α := throw exception
-
-@[simp] theorem run_ok (value : α) (env : Environment) :
-    run (ok value) env = .ok value env := rfl
-
-@[simp] theorem run_error (exception : Exception) (env : Environment) :
-    run (error exception : Result α) env = .error exception env := rfl
-
-@[simp] theorem run_bind (computation : Result α) (next : α → Result β) (env : Environment) :
-    run (computation >>= next) env =
-      match run computation env with
-      | .ok value updated => run (next value) updated
-      | .error exception updated => .error exception updated := by
-  simp only [run, EStateM.run, Bind.bind, EStateM.bind]
-  cases computation env <;> rfl
-
-@[simp] theorem run_pure (value : α) (env : Environment) :
-    run (pure value : Result α) env = .ok value env := rfl
-
-@[simp] theorem run_throw (exception : Exception) (env : Environment) :
-    run (throw exception : Result α) env = .error exception env := rfl
 
 @[simp] theorem ok_apply (value : α) (env : Environment) :
     ok value env = .ok value env := rfl
@@ -82,25 +59,15 @@ def error (exception : Exception) : Result α := throw exception
       match computation env with
       | .ok value updated => next value updated
       | .error exception updated => .error exception updated := by
-  exact run_bind computation next env
-
-/-- Replace the final state of an outcome while retaining its value or exception. -/
-def rebase (outcome : EStateM.Result Exception Environment α) (env : Environment) :
-    EStateM.Result Exception Environment α :=
-  match outcome with
-  | .ok value _ => .ok value env
-  | .error exception _ => .error exception env
-
-@[simp] theorem rebase_ok (value : α) (previous env : Environment) :
-    rebase (.ok value previous) env = .ok value env := rfl
-
-@[simp] theorem rebase_error (exception : Exception) (previous env : Environment) :
-    rebase (.error exception previous : EStateM.Result Exception Environment α) env =
-      .error exception env := rfl
+  simp only [Bind.bind, EStateM.bind]
+  cases computation env <;> rfl
 
 /-- A computation neither reads nor changes the environment. -/
 def IsPure (computation : Result α) : Prop :=
-  ∀ reference env, computation env = rebase (computation reference) env
+  ∀ reference env,
+    match computation reference with
+    | .ok value _ => computation env = .ok value env
+    | .error exception _ => computation env = .error exception env
 
 @[simp] theorem isPure_ok (value : α) : IsPure (ok value) := by
   intro reference env
@@ -115,12 +82,18 @@ def IsPure (computation : Result α) : Prop :=
     (computationPure : IsPure computation) (nextPure : ∀ value, IsPure (next value)) :
     IsPure (computation >>= next) := by
   intro reference env
-  rw [bind_apply, bind_apply, computationPure reference env]
   cases outcome : computation reference with
   | ok value final =>
-      simp only [rebase]
+      have current := computationPure reference env
+      rw [outcome] at current
+      simp only at current ⊢
+      rw [bind_apply, bind_apply, outcome, current]
       exact nextPure value final env
-  | error exception final => rfl
+  | error exception final =>
+      have current := computationPure reference env
+      rw [outcome] at current
+      simp only at current ⊢
+      rw [bind_apply, bind_apply, outcome, current]
 
 @[simp] theorem IsPure.ok_iff (computation : Result α) (pure : IsPure computation)
     (env final : Environment) (value : α) :
@@ -132,8 +105,9 @@ def IsPure (computation : Result α) : Prop :=
     have finalEq : final = env := EStateM.Result.ok.inj preserved |>.2
     refine ⟨?_, finalEq.symm⟩
     funext current
-    rw [pure env current, accepted]
-    rfl
+    have outcome := pure env current
+    rw [accepted] at outcome
+    exact outcome
   · rintro ⟨rfl, rfl⟩
     rfl
 
@@ -148,23 +122,24 @@ def IsPure (computation : Result α) : Prop :=
     have finalEq : final = env := EStateM.Result.error.inj preserved |>.2
     refine ⟨?_, finalEq.symm⟩
     funext current
-    rw [pure env current, failed]
-    rfl
+    have outcome := pure env current
+    rw [failed] at outcome
+    exact outcome
   · rintro ⟨rfl, rfl⟩
     rfl
 
 @[simp] theorem ok_inj (a b : α) : (ok a : Result α) = ok b ↔ a = b := by
   constructor
   · intro h
-    have := congrArg (fun computation => run computation {}) h
+    have := congrArg Lynx.run h
     exact EStateM.Result.ok.inj this |>.1
   · rintro rfl; rfl
 
 @[simp] theorem ok_ne_error (value : α) (exception : Exception) :
     (ok value : Result α) ≠ error exception := by
   intro h
-  have := congrArg (fun computation => run computation {}) h
-  simp at this
+  have := congrArg Lynx.run h
+  cases this
 
 @[simp] theorem error_ne_ok (exception : Exception) (value : α) :
     (error exception : Result α) ≠ ok value := Ne.symm (ok_ne_error value exception)
@@ -173,7 +148,7 @@ def IsPure (computation : Result α) : Prop :=
     (error a : Result α) = error b ↔ a = b := by
   constructor
   · intro h
-    have := congrArg (fun computation => run computation {}) h
+    have := congrArg Lynx.run h
     exact EStateM.Result.error.inj this |>.1
   · rintro rfl; rfl
 

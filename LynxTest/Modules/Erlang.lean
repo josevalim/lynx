@@ -43,19 +43,19 @@ theorem tuple_equality :
       (.tuple #[.atom "a", .integer 1]) = .ok Term.false ∧
     equal_2 (.tuple #[.tuple #[.nil], .cons (.atom "a") .nil])
       (.tuple #[.tuple #[.nil], .cons (.atom "a") .nil]) = .ok Term.true ∧
-    equal_2 (.tuple #[]) Term.empty_map = .ok Term.false := by
+    equal_2 (.tuple #[]) Term.emptyMap = .ok Term.false := by
   repeat' first | apply And.intro | rfl
 
 theorem map_equality :
-    equal_2 Term.empty_map (Term.map []) = .ok Term.true ∧
+    equal_2 Term.emptyMap (Term.map []) = .ok Term.true ∧
     equal_2 (Term.map [(.atom "a", .integer 1), (.atom "b", .integer 2)])
       (Term.map [(.atom "b", .integer 2), (.atom "a", .integer 1)]) = .ok Term.true ∧
     equal_2 (Term.map [(.atom "a", .integer 1)])
       (Term.map [(.atom "a", .integer 2)]) = .ok Term.false ∧
     equal_2 (Term.map [(.atom "a", .integer 1)])
       (Term.map [(.atom "b", .integer 1)]) = .ok Term.false ∧
-    equal_2 Term.empty_map (Term.map [(.atom "a", .nil)]) = .ok Term.false ∧
-    equal_2 (Term.map [(.tuple #[Term.empty_map], .tuple #[.nil])])
+    equal_2 Term.emptyMap (Term.map [(.atom "a", .nil)]) = .ok Term.false ∧
+    equal_2 (Term.map [(.tuple #[Term.emptyMap], .tuple #[.nil])])
       (Term.map [(.tuple #[Term.map []], .tuple #[.nil])]) = .ok Term.true := by
   repeat' first | apply And.intro | rfl
 
@@ -67,6 +67,37 @@ theorem semantic_comparison_operators :
     greater_than_2 a b = .ok Term.false ∧
     less_than_or_equal_2 a b = .ok Term.true ∧
     greater_than_or_equal_2 a b = .ok Term.true := by
+  repeat' first | apply And.intro | rfl
+
+theorem process_dictionary_empty :
+    Lynx.run get_0 = .ok .nil {} ∧
+    Lynx.run (get_1 (.atom "missing")) = .ok (.atom "undefined") {} ∧
+    Lynx.run get_keys_0 = .ok .nil {} ∧
+    Lynx.run erase_0 = .ok .nil {} := by
+  repeat' first | apply And.intro | rfl
+
+theorem process_dictionary_put_replace_erase :
+    Lynx.run (do
+      let missing ← put_2 (.atom "key") (.integer 1)
+      let previous ← put_2 (.atom "key") (.integer 2)
+      let found ← get_1 (.atom "key")
+      let erased ← erase_1 (.atom "key")
+      let absent ← get_1 (.atom "key")
+      Result.ok (Term.tuple #[missing, previous, found, erased, absent])) =
+      .ok (Term.tuple #[.atom "undefined", .integer 1, .integer 2,
+        .integer 2, .atom "undefined"]) {} := by
+  rfl
+
+theorem process_dictionary_queries :
+    let env : Environment := {
+      pdict := [(.atom "a", .integer 1), (.atom "b", .integer 1)] }
+    get_0 env = .ok (.cons (.tuple #[.atom "a", .integer 1])
+      (.cons (.tuple #[.atom "b", .integer 1]) .nil)) env ∧
+    get_keys_0 env = .ok (.cons (.atom "a") (.cons (.atom "b") .nil)) env ∧
+    get_keys_1 (.integer 1) env =
+      .ok (.cons (.atom "a") (.cons (.atom "b") .nil)) env ∧
+    erase_0 env = .ok (.cons (.tuple #[.atom "a", .integer 1])
+      (.cons (.tuple #[.atom "b", .integer 1]) .nil)) {} := by
   repeat' first | apply And.intro | rfl
 
 end LynxTest.Modules.Erlang

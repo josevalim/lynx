@@ -143,7 +143,7 @@ theorem reverse_append : Property reverseAppendExpects reverseAppend := by
     simp only [appended, reverse_1, leftReturned, Result.ok_bind, resultReturned] at joinedReturned
     simp only [Accepted, reverseAppend, reverse_1, appended, Result.ok_bind,
       joinedReturned, leftReturned, rightReturned, resultReturned, Erlang.equal_2, Term.compare_self, ite_true, Term.true,
-      Result.run_ok, EStateM.Result.ok.injEq, true_and]
+      Result.ok_apply, EStateM.Result.ok.injEq, true_and]
     exact ⟨env, rfl⟩
 
 end LynxTest.Integration.Reverse

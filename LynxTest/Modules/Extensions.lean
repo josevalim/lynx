@@ -51,7 +51,7 @@ example (tail : Term) :
 private def bindings : Term := .map [(.integer 1, Term.nil), (.integer 2, Term.nil)]
 
 theorem map_guard_empty (predicate : Term → Term → Result) :
-    Extensions.is_map_2 Term.empty_map predicate = .ok Term.true := rfl
+    Extensions.is_map_2 Term.emptyMap predicate = .ok Term.true := rfl
 
 theorem map_guard_key_value :
     Extensions.is_map_2 bindings (fun key value =>

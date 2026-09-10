@@ -7,7 +7,7 @@ open Lynx Lynx.Term.Map
 private def a : Term := .atom "a"
 private def b : Term := .atom "b"
 
-theorem empty : Term.empty_map = .map [] := rfl
+theorem empty : Term.emptyMap = .map [] := rfl
 
 /-- Storage keeps insertion history; lookup uses the first matching key. -/
 theorem shadowing :

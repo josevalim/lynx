@@ -44,7 +44,7 @@ theorem source_labeled_vcs :
   case «add.ex:3».coverage => exact ⟨((.integer 0, .integer 0), {}), {}, rfl⟩
   case «add.ex:3» =>
     rename_i env left right accepted
-    guard_target = ∃ result final, Result.run (addPair (left, right)) env = .ok result final ∧
+    guard_target = ∃ result final, addPair (left, right) env = .ok result final ∧
       Accepted (numberResult (left, right) result) final
     lynx_solve
 
@@ -93,7 +93,7 @@ theorem nil (input : Term)
 /-- Splitting a computation preserves its connection to its input. -/
 theorem compound (input : Term) (probe : Term → Result)
     (env : Environment)
-    (accepted : Accepted (fun initial => match Result.run (probe input) initial with
+    (accepted : Accepted (fun initial => match probe input initial with
       | .ok (.atom "true") final => .ok (.atom "true") final
       | .ok _ final | .error _ final => .ok (.atom "false") final) env) :
     Accepted (probe input) env := by
