@@ -1,9 +1,11 @@
-import Lynx.Term.DataTypes
+module
+
+public import Lynx.Term.DataTypes
 
 namespace Lynx
 
 /-- Structural induction with elementwise hypotheses for tuples and map bindings. -/
-@[induction_eliminator] protected theorem Term.induct {motive : Term → Prop} (t : Term)
+@[induction_eliminator] public protected theorem Term.induct {motive : Term → Prop} (t : Term)
     (integer : ∀ n, motive (.integer n))
     (atom : ∀ s, motive (.atom s))
     (tuple : ∀ xs, (∀ x ∈ xs, motive x) → motive (.tuple xs))

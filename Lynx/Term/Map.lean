@@ -1,4 +1,9 @@
-import Lynx.Term.Compare
+module
+
+public import Lynx.Term.Compare
+import all Lynx.Term.Compare
+
+public section
 
 /-!
 We chose association lists over hash maps or trees because embedding maps of
@@ -25,10 +30,10 @@ private def findEntry (xs : Entries) (q : Term) : Option (Term × Term) :=
 def find (q : Term) (xs : Entries) : Option Term := (findEntry xs q).map Prod.snd
 
 /-- Put a binding, shadowing any previous value for the key. -/
-def put (k v : Term) (xs : Entries) : Entries := (k,v) :: xs
+@[expose] def put (k v : Term) (xs : Entries) : Entries := (k,v) :: xs
 
 /-- Right bindings win, including when equivalent keys have different representations. -/
-def merge (a b : Entries) : Entries := b ++ a
+@[expose] def merge (a b : Entries) : Entries := b ++ a
 
 @[simp] private theorem findEntry_cons (k v : Term) (xs : Entries) (q : Term) :
     findEntry ((k,v) :: xs) q =
@@ -36,7 +41,7 @@ def merge (a b : Entries) : Entries := b ++ a
   by_cases h : compare q k = .eq <;> simp [findEntry, List.find?, h]
 
 @[simp] private theorem findEntry_nil (q : Term) : findEntry [] q = none := rfl
-@[simp] theorem find_nil (q : Term) : find q [] = none := rfl
+@[simp] private theorem find_nil (q : Term) : find q [] = none := rfl
 
 @[simp] private theorem findEntry_put (xs : Entries) (k v q : Term) :
     findEntry (put k v xs) q =

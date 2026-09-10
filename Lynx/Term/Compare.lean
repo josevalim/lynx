@@ -1,4 +1,8 @@
-import Lynx.Term.DataTypes
+module
+
+public import Lynx.Term.DataTypes
+
+public section
 
 /-! Erlang term comparison and semantic equality. Sorted map views and termination
 scaffolding are private implementation details of this module. -/
@@ -266,7 +270,7 @@ end Lynx.Term
 namespace Lynx.Term
 
 /-- Erlang equality is the equality case of recursive term comparison. -/
-def Equivalent (a b : Term) : Prop := compare a b = .eq
+@[expose] def Equivalent (a b : Term) : Prop := compare a b = .eq
 
 instance (a b : Term) : Decidable (Equivalent a b) := inferInstanceAs (Decidable (_ = _))
 

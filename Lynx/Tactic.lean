@@ -1,7 +1,8 @@
 import Lean
+import Lynx.Term
 import Lynx.Attribute
 import Lynx.Tactic.Contract
-import Lynx.Term
+import Lynx.Term.Induction
 
 /-!
 # How the Lynx tactic works

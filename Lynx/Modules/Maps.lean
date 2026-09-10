@@ -1,3 +1,5 @@
+import Lynx.Term
+import Lynx.Term.Map
 import Lynx.Tactic
 
 namespace Lynx.Modules.Maps

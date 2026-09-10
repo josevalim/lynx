@@ -1,5 +1,5 @@
+import Lynx.Term
 import Lynx.Tactic
-import Lynx.Term.Compare
 
 /-! Executable Erlang operations and their generated state-independence proofs. -/
 

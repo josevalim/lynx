@@ -1,4 +1,8 @@
-import Std
+module
+
+public import Std
+
+public section
 
 namespace Lynx
 
@@ -29,9 +33,9 @@ def run (computation : Result α) : EStateM.Result Exception Environment α :=
 
 namespace Result
 
-def ok (value : α) : Result α := pure value
+@[expose] def ok (value : α) : Result α := pure value
 
-def error (exception : Exception) : Result α := throw exception
+@[expose] def error (exception : Exception) : Result α := throw exception
 
 @[simp] theorem ok_apply (value : α) (env : Environment) :
     ok value env = .ok value env := rfl

@@ -1,6 +1,8 @@
 import Lynx.Modules.Erlang.Definitions
 import Lynx.Tactic
+
 import Lynx.Term
+import Lynx.Term.Map
 
 namespace Lynx.Modules.Extensions
 
