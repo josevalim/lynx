@@ -1,4 +1,6 @@
 import LynxTest.Integration
+import LynxTest.Tactic.Environment
+import LynxTest.Tactic.Summaries
 import LynxTest.Term
 import LynxTest.Term.Compare
 import LynxTest.Term.Map

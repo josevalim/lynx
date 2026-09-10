@@ -80,6 +80,29 @@ def all (xs : Entries) (predicate : Term → Term → Bool) : Bool :=
     | some (key,value) => predicate key value
     | none => true
 
+/-- Stateful counterpart of `all`, retaining its winning-binding traversal order
+and short circuiting. Every callback receives the previous callback's state. -/
+def allM (xs : Entries) (predicate : Term → Term → Result Bool) : Result Bool :=
+  xs.allM fun (k,_) => match findEntry xs k with
+    | some (key,value) => predicate key value
+    | none => .ok true
+
+@[simp] theorem allM_ok (xs : Entries) (predicate : Term → Term → Bool) :
+    allM xs (fun k v => .ok (predicate k v)) = .ok (all xs predicate) := by
+  have listAll (test : (Term × Term) → Bool) (entries : Entries) :
+      entries.allM (fun entry => Result.ok (test entry)) = Result.ok (entries.all test) := by
+    exact List.allM_pure
+  unfold allM all
+  have pointwise : (fun (entry : Term × Term) =>
+      match findEntry xs entry.1 with
+      | some (k,v) => (Result.ok (predicate k v) : Result Bool)
+      | none => .ok true) = fun entry => Result.ok
+        (match findEntry xs entry.1 with | some (k,v) => predicate k v | none => true) := by
+    funext entry
+    cases findEntry xs entry.1 <;> rfl
+  rw [pointwise]
+  exact listAll _ _
+
 @[simp] theorem all_iff (xs : Entries) (predicate : Term → Term → Bool) :
     all xs predicate = true ↔ All (fun k v => predicate k v = true) xs := by
   simp only [all, List.all_eq_true]

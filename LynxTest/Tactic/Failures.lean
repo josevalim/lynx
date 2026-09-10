@@ -13,6 +13,7 @@ def raises (_ : Term) : Result := .error (.error (.atom "boom"))
 error: unsolved goals
 case «bad.ex:3»
 input✝ : Term
+env✝ : Environment
 ⊢ False
 -/
 #guard_msgs in
@@ -22,7 +23,7 @@ theorem rejects_false_guarantee : WithSourceLabel { file := "bad.ex", line := 3 
 
 theorem false_contract : ¬ Satisfies sum_1 sumExpects falseEnsures := by
   intro contract
-  have failure := contract.2 .nil rfl
+  have failure := contract.2 .nil {} ⟨{}, rfl⟩
   simp [sum_1, Accepted, falseEnsures, Term.true, Term.false] at failure
 
 /-- error: lynx: could not prove that `expects` accepts any input; it may be empty or unsupported by automatic coverage -/
@@ -41,7 +42,7 @@ theorem reports_unsupported_coverage : Satisfies zero onlySpecial sumEnsures := 
 /-- Lean integrations can discharge an unsupported coverage condition directly. -/
 theorem manual_coverage : Satisfies zero onlySpecial sumEnsures := by
   lynx_vcgen
-  case coverage => exact ⟨.atom "special", rfl⟩
+  case coverage => exact ⟨(.atom "special", {}), {}, rfl⟩
   case ensures => lynx_solve
 
 def badCall (_ : Term) : Result := do
@@ -53,6 +54,7 @@ def badCall (_ : Term) : Result := do
 error: unsolved goals
 case «bad.ex:20»
 args✝ : Term
+env✝ : Environment
 ⊢ False
 -/
 #guard_msgs in
@@ -62,7 +64,7 @@ theorem rejects_unjustified_call_domain : WithSourceLabel { file := "bad.ex", li
 
 theorem bad_call_property : ¬ Property anyInput badCall := by
   intro property
-  have failure := property.2 .nil rfl
+  have failure := property.2 .nil {} ⟨{}, rfl⟩
   simp [badCall, sum_1, Accepted] at failure
 
 end LynxTest.Tactic.Failures

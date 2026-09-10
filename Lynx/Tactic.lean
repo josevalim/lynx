@@ -16,15 +16,18 @@ function, nor an annotation on every translated definition.
 
 ```lean
 Covered expects ∧
-  ∀ input, Accepted (expects input) →
-    ∃ result, function input = .ok result ∧
-      Accepted (ensures input result)
+  ∀ input env, Accepted (expects input) env →
+    ∃ result final, Result.run (function input) env = .ok result final ∧
+      Accepted (ensures input result) final
 ```
 
 `Property expects expression` has the same `Covered expects` conjunct. Thus a
-proof can never succeed merely because the expectation accepts no inputs.
-`Accepted outcome` means exactly `outcome = .ok Term.true`; false, non-boolean
-values, and exceptions are not accepted.
+proof can never succeed merely because the expectation accepts no input/state
+pairs. `Accepted computation env` requires a normal return of exactly
+`Term.true`, with any final state; false, non-boolean values, and exceptions are
+not accepted. Expectations observe the initial environment and guarantees
+observe the returned environment. Their own state changes are discarded, so
+checking a contract cannot change the implementation's execution state.
 
 For a single contract or property, `lynx_vcgen` separates coverage from behavior,
 using the goal tags `coverage` and `ensures` (or `property`). It unfolds the
@@ -69,18 +72,25 @@ premises, including quantified invariants; their bodies need not become global
 rewrite rules. No operation names or representation types are hardcoded for this.
 
 Normalization makes one ordered pass over non-quantified hypotheses, starting
-with expectation-derived constraints, and then simplifies the target. Each
+with expectation-derived constraints. If that exposes structural facts, target
+simplification is deferred until search unpacks them and substitutes the newly
+known inputs. Otherwise the target is simplified immediately. Each
 updated fact immediately replaces its old rewrite rule, so duplicate facts
 cannot both disappear by simplifying each other to `True`. This normalization
-pass neither rewrites quantified hypotheses nor adds them as local simp rules;
-separate guarded application handles induction hypotheses and summaries.
+pass does not add quantified hypotheses as local simp rules; separate guarded
+application handles induction hypotheses and summaries. Known success/error
+equations are also registered as pre-order rules, so executable unfolding
+cannot hide their left-hand sides. A temporarily erased rule is explicitly
+re-enabled when its hypothesis is retained, even if simplification did not
+change that hypothesis. An unchanged hypothesis also reuses its existing rule
+instead of rebuilding its simp-theorem entries.
 Rejected input branches usually close before the implementation's possible
 results are explored.
 
 ## Propagating acceptance requirements
 
 An expectation is accepted only when its final outcome is
-`.ok (Term.atom "true")`. The solver uses Lean's built-in case splitting and
+`.ok (Term.atom "true") final`. The solver uses Lean's built-in case splitting and
 simplification to propagate the required result backward through executable
 matches. For example:
 
@@ -116,24 +126,34 @@ Coverage still requires an actual input satisfying the executable expectation.
 ## Bounded search
 
 `solveGoal` first attempts coverage, then builds a solver context if needed.
-For a non-existential target it attempts summary synthesis before the main
-search. Each main search call follows this order; structural changes and
+When recursive definitions are present, it attempts summary synthesis before
+the main search, including for return contracts. Each main search call follows
+this order; structural changes and
 successful hypothesis applications recurse with less fuel on the resulting
 goals:
 
 1. Introduce binders and solve a `Covered` goal by testing a small set of
-   concrete `Term`, tuple, unit, or structure values. First try reflexivity on
-   every candidate, using definitional evaluation without a simp context; if
+   concrete `Term`, tuple, unit, or structure values, with empty initial
+   environments. First try definitional equality on
+   every candidate, inferring the actual final environment without elaborating
+   a tactic or building a simp context; concrete term and tuple candidates are
+   built directly as expressions in the same bounded order. If
    none succeeds, fall back to the guard prover. A candidate is accepted only
    after proving the real executable expectation; the candidate list is not
    treated as a model of the domain.
-2. Destructure conjunctions, disjunctions, existentials, and products in
-   hypotheses. If none is available, normalize hypotheses and the target, then
-   try destructuring again.
+2. Destructure already exposed conjunctions, disjunctions, existentials, and
+   products before normalizing again. Otherwise normalize hypotheses and the
+   target when no new structural facts were exposed, then try destructuring.
+   This avoids a full normalization pass per
+   constructor, while letting normalization eliminate trivial state witnesses
+   before unfolding an `Accepted` hypothesis into an existential.
 3. Split eligible hypothesis matches before exploring returned values,
    protecting recorded input variables so they remain available for induction.
 4. Specialize a synthesized summary when applicable, or apply a hypothesis with
-   a propositional premise. Each application must first prove its premise in a
+   a propositional premise. State-generalized hypotheses are specialized at
+   environments of relevant calls; repeated specializations are tracked and,
+   when fully determined, skipped before reproving their premises.
+   Each application must first prove its premise in a
    separate goal. Premise preparation attempts to clear quantified hypotheses
    and unrelated assumptions, retaining any required by local dependencies.
 5. Try assumptions, reflexivity, `omega`, and `grind` with case splitting
@@ -141,10 +161,11 @@ goals:
 6. Induct on a recorded `Term` input used as the structural argument of a
    discovered recursive definition. Simplify branch targets and try to remove
    induction hypotheses irrelevant to remaining recursive calls. More than one
-   independent input may be inducted.
+   independent input may be inducted. Environments are generalized before
+   induction so hypotheses remain usable after state-changing calls.
 7. Generalize and split one shared monadic computation, retaining an equation
    for its outcome. This avoids duplicating nested bind continuations before
-   its `Result.ok`/`Result.error` result is known.
+   its `EStateM.Result.ok`/`EStateM.Result.error` outcome and returned state are known.
 8. Try remaining hypothesis matches, then split a target match or conditional.
 
 The main search and independent summary proofs start with fuel 24. The smaller
@@ -171,17 +192,32 @@ therefore attempts a narrow summary synthesis step:
 3. Look for a single candidate `Term` constructor in normal returns from the
    function body and the executable callees it follows.
 4. Construct a normal-return proposition and prove it in a fresh context using
-   the same bounded search.
+   the same bounded search, or reuse an identical closed proof from the local
+   environment cache.
 5. Add the summary only if that independent proof closed completely.
 
 The summary is a proved local theorem, never an assumption or a reuse of
-another application contract. After induction, the solver may specialize it
-for a unary recursive call in the target when an existing hypothesis contains
-the corresponding domain constraint. It still proves that constraint before
+another application contract. Current summaries assert equality to a
+state-preserving `Result.ok` computation, with a domain accepted from empty
+state. This stronger, state-independent claim is useful for existing pure
+functions and must itself be proved; it is not assumed for stateful functions.
+For an initially existential target, such as a return contract, the solver may
+use a summary immediately. For relational properties it waits until after
+induction, preserving the executable calls needed to discover that induction.
+It still proves the corresponding domain constraint before
 using the summary; it does not invent a domain for arbitrary intermediate
 results. Current synthesis handles unary functions with a uniform candidate
 result constructor when bounded search can prove the conjecture. It is not
 general invariant discovery.
+
+Summary caching is keyed by the entire closed proposition, including its
+domain and result constructor. Neither local assumptions nor unresolved
+metavariables can enter the cache. The cache follows environment snapshots,
+so speculative branches roll it back; it is not serialized into imports or
+shared across fresh Lean processes. Sequential proofs in one module can reuse
+it, while asynchronous elaboration keeps caches local. Every resulting theorem
+still undergoes kernel checking; a cached return shape does not discharge a
+call's domain or establish a stronger guarantee.
 
 ## Trust boundary
 
@@ -205,6 +241,11 @@ open Lean Meta Elab Tactic
 namespace Lynx.Tactic
 
 initialize registerTraceClass `lynx
+
+/-- Closed proofs only; environment snapshots handle rollback and asynchronous
+elaboration. This cache is not serialized into imported modules. -/
+private initialize summaryProofs : EnvExtension (ExprMap Expr) ←
+  registerEnvExtension (pure {}) (asyncMode := .local)
 
 private def allGoals (action : TacticM Unit) : TacticM Unit := do
   let goals ← getGoals
@@ -231,11 +272,17 @@ private structure Solver where
   majors : NameMap Nat
   inputs : Array FVarId
   inducted : Bool := false
+  applications : ExprSet := {}
+  summarizeRoot : Bool := false
 
 /-- Recognize Erlang results, whose success type is `Term`. -/
 private def isResultType (type : Expr) : MetaM Bool := do
+  if type.isAppOfArity ``Result 1 && type.getAppArgs[0]!.isConstOf ``Term then return true
   let type ← whnf type
-  return type.isAppOfArity ``Result 1 && type.getAppArgs[0]!.isConstOf ``Term
+  return type.isAppOfArity ``EStateM.Result 3 &&
+    type.getAppArgs[0]!.isConstOf ``Exception &&
+    type.getAppArgs[1]!.isConstOf ``Environment &&
+    type.getAppArgs[2]!.isConstOf ``Term
 
 /-- Discover executable definitions by their result type, following their calls.
 Their bodies supply reduction rules alongside registered library simp theorems;
@@ -270,19 +317,40 @@ private def mkSolver : TacticM Solver := withMainContext do
   -- Preserve executable bind structure for branch discovery; the generic
   -- lawful-monad rewrites reassociate binds or turn them into functor maps.
   let simpSyntax ← `(tactic| simp_all (config := { failIfUnchanged := false })
-    [Accepted, Term.true, Term.false,
-    Pure.pure, -bind_assoc, -bind_pure_comp, $[$definitions:ident],*])
+    [Accepted, Result.run, EStateM.run, Term.true, Term.false, and_assoc,
+    Pure.pure, EStateM.pure, -bind_assoc, -bind_pure_comp, $[$definitions:ident],*])
   let result ← mkSimpContext simpSyntax (eraseLocal := true) (kind := .simpAll)
-  return ⟨result.ctx, result.simprocs, recursive, majors, inputs, false⟩
+  return ⟨result.ctx, result.simprocs, recursive, majors, inputs, false, {},
+    (← getMainTarget).isAppOf ``Exists⟩
 
 /-- Keep quantified invariants available as whole premises of specification
 lemmas, without installing their bodies as unrestricted rewrite rules. -/
 private def dischargeAssumption : Simp.Discharge := fun proposition => do
   for decl in ← getLCtx do
     unless decl.isImplementationDetail do
+      if decl.type == proposition then return some decl.toExpr
+      -- A simp premise is a proposition: data variables cannot prove it.
+      -- Keep proposition wrappers too, including abstract library invariants.
+      unless ← isProp decl.type do continue
       if ← isDefEq decl.type proposition then return some decl.toExpr
   -- Preserve standard recursive simp discharge for composed conditional specs.
   Simp.dischargeDefault? proposition
+
+/-- Rewrite known computation outcomes before their executable head unfolds.
+Post-order rewriting alone can lose the matching call during descent. -/
+private def addFact (context : Simp.Context) (h : FVarId) : MetaM Simp.Context := do
+  let mut thms ← context.simpTheorems.addTheorem
+    (.fvar h) (mkFVar h) (config := context.indexConfig)
+  let type ← h.getType
+  if type.isAppOf ``Eq then
+    let rhs := type.getAppArgs[2]!
+    if rhs.isAppOf ``Result.ok || rhs.isAppOf ``Result.error ||
+        rhs.isAppOf ``EStateM.Result.ok || rhs.isAppOf ``EStateM.Result.error then
+      thms ← thms.modifyM 0 fun set => set.add (.fvar h) #[] (mkFVar h)
+        (post := false) (config := context.indexConfig)
+  -- Removing a rule while simplifying its own hypothesis marks its origin as
+  -- erased. Re-adding an unchanged hypothesis does not clear that marker.
+  return context.setSimpTheorems (thms.map (·.unerase (.fvar h)))
 
 /-- One forward pass; search revisits normalization after structural progress.
 Do not repeatedly traverse quantified recursive proofs as `simpAll` does. -/
@@ -293,29 +361,45 @@ private def normalize (solver : Solver) : TacticM Bool := do
     let hypotheses ← (← getPropHyps).filterM fun h => return !(← h.getType).isForall
     let mut context := solver.context
     for h in hypotheses do
-      context := context.setSimpTheorems (← context.simpTheorems.addTheorem
-        (.fvar h) (mkFVar h) (config := context.indexConfig))
+      context ← addFact context h
     let constraints ← hypotheses.filterM fun h => do
       let decl ← h.getDecl
       return !decl.userName.toString.startsWith "recursive_result" &&
         (decl.type.isAppOf ``Accepted ||
-          (decl.type.isAppOf ``Eq && decl.type.getAppArgs[2]!.isAppOf ``Result.ok))
+          (decl.type.isAppOf ``Eq &&
+            (decl.type.getAppArgs[2]!.isAppOf ``Result.ok ||
+              decl.type.getAppArgs[2]!.isAppOf ``EStateM.Result.ok)))
     return (constraints ++ hypotheses.filter (fun h => !constraints.contains h), context)
   let mut context := context
   for h in hypotheses do
     -- Replace rules immediately: simplifying all facts against the original
     -- set could turn both copies of a duplicate hypothesis into `True`.
     context := context.setSimpTheorems (context.simpTheorems.eraseTheorem (.fvar h))
+    let oldType ← goal.withContext h.getType
+    let oldId := h
     let (result, _) ← simpLocalDecl goal h context solver.simprocs
     let some (h, next) := result | setGoals []; return true
     goal := next
     let type ← goal.withContext h.getType
     if type.isTrue then
       goal ← goal.tryClear h
+    else if h == oldId && type == oldType then
+      context := context.setSimpTheorems
+        (context.simpTheorems.map (·.unerase (.fvar h)))
     else
       context ← goal.withContext do
-        return context.setSimpTheorems (← context.simpTheorems.addTheorem
-          (.fvar h) (mkFVar h) (config := context.indexConfig))
+        addFact context h
+  -- Expose newly learned inputs before exploring implementation outcomes.
+  -- Search will unpack these facts and substitute their equalities first.
+  let exposed ← goal.withContext do
+    return (← getLCtx).any fun decl =>
+      let type := decl.type.consumeMData
+      !decl.isImplementationDetail &&
+        (type.isAppOf ``Exists || type.isAppOf ``And || type.isAppOf ``Or || type.isAppOf ``Prod)
+  if exposed then
+    trace[lynx] "normalize (deferred target): {(← IO.monoMsNow) - start}ms"
+    replaceMainGoal [goal]
+    return false
   let (result, _) ← simpTarget goal context solver.simprocs (some dischargeAssumption)
   trace[lynx] "normalize: {(← IO.monoMsNow) - start}ms"
   replaceMainGoal result.toList
@@ -331,11 +415,11 @@ private def closeLeaf : TacticM Bool := do
     saved.restore
     return false
 
-private def destructFacts : TacticM Bool := withMainContext do
+private def destructFacts (reduce : Bool := true) : TacticM Bool := withMainContext do
   let goal ← getMainGoal
   for decl in ← getLCtx do
     unless decl.isImplementationDetail do
-      let type ← whnf decl.type
+      let type ← if reduce then whnf decl.type else pure decl.type.consumeMData
       if type.isAppOf ``Exists || type.isAppOf ``And || type.isAppOf ``Or || type.isAppOf ``Prod then
         let branches ← goal.cases decl.fvarId
         replaceBranches (branches.toList.map (·.mvarId))
@@ -358,6 +442,7 @@ private def splitHypothesis (solver : Solver) (protectedInputs : Array FVarId :=
       if constraintsOnly && decl.userName.toString.startsWith "recursive_result" then continue
       let discriminants ← IO.mkRef (#[] : Array FVarId)
       decl.type.forEach fun e => do
+        if e.hasLooseBVars then return
         if let some matcher ← matchMatcherApp? e then
           for discr in matcher.discrs do
             if discr.isFVar && !protectedInputs.contains discr.fvarId! then
@@ -383,9 +468,12 @@ private def splitHypothesis (solver : Solver) (protectedInputs : Array FVarId :=
           -- constructor of the recursive input it depends on.
           if matcher.discrs.any (fun d => d.isFVar && protectedInputs.contains d.fvarId!) then
             continue
-      if let some branches ← splitLocalDecl? goal decl.fvarId then
-        replaceBranches branches
-        return true
+      let saved ← saveState
+      try
+        if let some branches ← splitLocalDecl? goal decl.fvarId then
+          replaceBranches branches
+          return true
+      catch _ => saved.restore
   return false
 
 private def inductInput (solver : Solver) : TacticM (Option Solver) := withMainContext do
@@ -397,10 +485,16 @@ private def inductInput (solver : Solver) : TacticM (Option Solver) := withMainC
         match solver.majors.find? (e.getAppFn.constName?.getD .anonymous) with
         | some index => e.getAppArgs[index]? == some (mkFVar input)
         | none => false).isSome then
-      let branches ← goal.induction input ``Lynx.Term.induct
+      -- A preceding recursive call may change state before the next call.
+      -- Generalize environments so induction hypotheses apply to that state too.
+      let environments := (← getLCtx).foldl (init := #[]) fun envs decl =>
+        if decl.type.isConstOf ``Environment then envs.push decl.fvarId else envs
+      let (_, generalized) ← goal.revert environments
+      let branches ← generalized.induction input ``Lynx.Term.induct
       let mut remaining := []
       for branch in branches do
-        let (simplified, _) ← simpTarget branch.mvarId solver.context solver.simprocs
+        let (_, introduced) ← branch.mvarId.intros
+        let (simplified, _) ← simpTarget introduced solver.context solver.simprocs
         let some next := simplified | continue
         let next ← next.withContext do
           let mut next := next
@@ -434,6 +528,11 @@ private def splitComputation : TacticM Bool := withMainContext do
   for expression in expressions do
     let candidates ← IO.mkRef (#[] : Array Expr)
     expression.forEach fun e => do
+      unless e.isApp && !e.hasLooseBVars do return
+      if !(← matchMatcherApp? e).isSome &&
+          (← inferType e).isAppOf ``EStateM.Result &&
+          !e.isAppOf ``EStateM.Result.ok && !e.isAppOf ``EStateM.Result.error then
+        candidates.modify (·.push e)
       if e.isAppOf ``Bind.bind then
         let args := e.getAppArgs
         if args.size >= 2 then
@@ -443,6 +542,10 @@ private def splitComputation : TacticM Bool := withMainContext do
                 !computation.isAppOf ``Result.error && (← isResultType (← inferType computation)) then
               candidates.modify (·.push computation)
     for computation in ← candidates.get do
+      if (← getLCtx).any (fun decl => decl.type.isAppOf ``Eq &&
+          decl.type.getAppArgs[1]! == computation &&
+          (decl.type.getAppArgs[2]!.isAppOf ``EStateM.Result.ok ||
+            decl.type.getAppArgs[2]!.isAppOf ``EStateM.Result.error)) then continue
       let saved ← saveState
       try
         let (_, variables, next) ← goal.generalizeHyp
@@ -506,22 +609,24 @@ the selected candidate still has to prove the real executable expectation. -/
 private partial def coverageCandidates (type : Expr) (depth : Nat := 3) : TacticM (Array Expr) := do
   if depth == 0 then return #[]
   let type ← whnf type
+  if type.isConstOf ``Environment then
+    return #[← elabTerm (← `(({} : Environment))) (some type)]
   if type.isConstOf ``Term then
+    let zero := mkApp (mkConst ``Term.integer) (mkIntLit 0)
+    let nil := mkConst ``Term.nil
+    let atom := mkApp (mkConst ``Term.atom) ∘ mkStrLit
     return #[
-      ← elabTerm (← `(Term.integer 0)) (some type),
-      ← elabTerm (← `(Term.nil)) (some type),
-      ← elabTerm (← `(Lynx.Term.empty_map)) (some type),
-      ← elabTerm (← `(Term.atom "")) (some type),
-      ← elabTerm (← `(Term.atom "true")) (some type),
-      ← elabTerm (← `(Term.cons (Term.integer 0) Term.nil)) (some type),
-      ← elabTerm (← `(Term.cons (Term.atom "") Term.nil)) (some type)]
+      zero, nil, mkConst ``Term.empty_map, atom "", atom "true",
+      mkApp2 (mkConst ``Term.cons) zero nil,
+      mkApp2 (mkConst ``Term.cons) (atom "") nil]
   if type.isAppOf ``Prod then
     let args := type.getAppArgs
     let left ← coverageCandidates args[0]! (depth - 1)
     let right ← coverageCandidates args[1]! (depth - 1)
+    let constructor := mkApp2 (mkConst ``Prod.mk type.getAppFn.constLevels!) args[0]! args[1]!
     let mut result := #[]
     for l in left do
-      for r in right do result := result.push (← mkAppM ``Prod.mk #[l, r])
+      for r in right do result := result.push (mkApp2 constructor l r)
     return result
   if ← isDefEq type (mkConst ``Unit) then return #[mkConst ``Unit.unit]
   let some name := type.getAppFn.constName? | return #[]
@@ -552,7 +657,7 @@ private def hasCoverageTag (goal : MVarId) : MetaM Bool := do
 context lazily, retaining the guard prover for expectations using local facts. -/
 private def solveCoverage (solver? : Option Solver := none) : TacticM Bool := withMainContext do
   let goal ← getMainGoal
-  let rawTarget ← goal.getType
+  let rawTarget := (← instantiateMVars (← goal.getType)).consumeMData
   unless rawTarget.isAppOf ``Covered || (← hasCoverageTag goal) do return false
   let target ← withTransparency .all <| whnf rawTarget
   unless target.isAppOf ``Exists do return false
@@ -569,7 +674,21 @@ private def solveCoverage (solver? : Option Solver := none) : TacticM Bool := wi
         if let some solver := solver? then
           proveGuard solver 12
         else
-          proof.mvarId!.refl
+          -- Infer the observed final state by conversion, without elaborating
+          -- a failing `exact` tactic (and its diagnostic) for every candidate.
+          let accepted ← whnf proposition
+          unless accepted.isAppOf ``Exists do saved.restore; continue
+          let acceptedArgs := accepted.getAppArgs
+          let final ← mkFreshExprMVar acceptedArgs[0]!
+          let equation ← whnf (mkApp acceptedArgs[1]! final)
+          unless equation.isAppOf ``Eq do saved.restore; continue
+          let equationArgs := equation.getAppArgs
+          unless ← isDefEq equationArgs[1]! equationArgs[2]! do saved.restore; continue
+          let final ← instantiateMVars final
+          if final.hasExprMVar then saved.restore; continue
+          let .sort level ← whnf (← inferType acceptedArgs[0]!) | saved.restore; continue
+          proof.mvarId!.assign (mkAppN (mkConst ``Exists.intro [level])
+            #[acceptedArgs[0]!, acceptedArgs[1]!, final, ← mkEqRefl equationArgs[1]!])
           setGoals []
         unless (← getGoals).isEmpty do
           saved.restore
@@ -585,32 +704,105 @@ private def solveCoverage (solver? : Option Solver := none) : TacticM Bool := wi
         saved.restore
   return false
 
-private def applyHypothesis (solver : Solver) : TacticM Bool := withMainContext do
+private def applyHypothesis (solver : Solver) : TacticM (Option Solver) := withMainContext do
   let goal ← getMainGoal
   for decl in ← getLCtx do
     unless decl.isImplementationDetail do
       let type ← whnf decl.type
-      let .forallE _ premise _ _ := type | continue
-      unless ← isProp premise do continue
-      let saved ← saveState
-      try
-        let proof ← guardGoal premise
-        proveGuard solver 8
-        unless (← getGoals).isEmpty do
-          saved.restore
-          continue
-        let value := mkApp decl.toExpr (← instantiateMVars proof)
-        let resultType ← inferType value
-        let next ← goal.assert (← mkFreshUserName `recursive_result) resultType value
-        let (_, next) ← next.intro1
-        let next ← next.tryClear decl.fvarId
-        setGoals [next]
-        return true
-      catch _ => saved.restore
-  return false
+      let .forallE _ domain _ _ := type | continue
+      let mut candidates := #[decl.toExpr]
+      if domain.isConstOf ``Environment then
+        candidates := #[]
+        for state in ← getLCtx do
+          if state.type.isConstOf ``Environment then
+            candidates := candidates.push (mkApp decl.toExpr state.toExpr)
+        -- State changes often leave a structure expression, not a named local.
+        -- Include environments actually passed to computations in the goal or
+        -- observed outcomes, so recursive calls can use those states too.
+        let mut expressions := #[← goal.getType]
+        for fact in ← getLCtx do
+          if !fact.type.isForall then expressions := expressions.push fact.type
+        let states ← IO.mkRef ({} : ExprSet)
+        for expression in expressions do
+          expression.forEach fun e => do
+            let .app _ env := e | return
+            unless !e.hasLooseBVars do return
+            if e.isAppOf ``EStateM.Result.ok || e.isAppOf ``EStateM.Result.error then return
+            unless (← inferType e).isAppOf ``EStateM.Result do return
+            if (← inferType env).isConstOf ``Environment then states.modify (·.insert env)
+        for state in (← states.get).toArray do
+          let candidate := mkApp decl.toExpr state
+          unless candidates.contains candidate do candidates := candidates.push candidate
+      else unless ← isProp domain do continue
+      for candidate in candidates do
+        let saved ← saveState
+        try
+          let mut specialized := candidate
+          let mut type ← whnf (← inferType specialized)
+          -- Remaining state witnesses are inferred while proving the premise.
+          while type.isForall && type.bindingDomain!.isConstOf ``Environment do
+            specialized := mkApp specialized (← mkFreshExprMVar (mkConst ``Environment))
+            type ← whnf (← inferType specialized)
+          -- Already-used specializations need no second premise proof. Keep
+          -- the later check too: unresolved state witnesses may be inferred
+          -- only while discharging the premise.
+          if !specialized.hasExprMVar && solver.applications.contains specialized then
+            saved.restore
+            continue
+          let mut value := specialized
+          if let .forallE _ premise _ _ := type then
+            unless ← isProp premise do saved.restore; continue
+            let proof ← guardGoal premise
+            proveGuard solver 8
+            unless (← getGoals).isEmpty do saved.restore; continue
+            value := mkApp specialized (← instantiateMVars proof)
+          specialized ← instantiateMVars specialized
+          if specialized.hasExprMVar || solver.applications.contains specialized then
+            saved.restore
+            continue
+          let resultType ← inferType value
+          if domain.isConstOf ``Environment then
+            let target ← goal.getType
+            let hasOutcome ← IO.mkRef false
+            let outcomeRelevant ← IO.mkRef false
+            let computationRelevant ← IO.mkRef false
+            resultType.forEach fun e => do
+              unless e.isApp && !e.hasLooseBVars do return
+              if e.isAppOf ``EStateM.Result.ok || e.isAppOf ``EStateM.Result.error then return
+              let type ← inferType e
+              if type.isAppOf ``EStateM.Result then
+                hasOutcome.set true
+                if (target.find? (· == e)).isSome then outcomeRelevant.set true
+              else if ← isResultType type then
+                if (target.find? (· == e)).isSome then computationRelevant.set true
+            let mut relevant ← if ← hasOutcome.get then outcomeRelevant.get else computationRelevant.get
+            if !relevant then
+              -- Calls below a bind have a bound environment in the theorem.
+              -- Match their computation against actual calls at the chosen
+              -- state, including calls already evaluated into local equations.
+              let state := candidate.getAppArgs.back!
+              let found ← IO.mkRef false
+              let mut expressions := #[target]
+              for fact in ← getLCtx do
+                if !fact.type.isForall then expressions := expressions.push fact.type
+              for expression in expressions do
+                expression.forEach fun e => do
+                  let .app computation env := e | return
+                  unless !e.hasLooseBVars && env == state do return
+                  if e.isAppOf ``EStateM.Result.ok || e.isAppOf ``EStateM.Result.error then return
+                  unless (← inferType e).isAppOf ``EStateM.Result do return
+                  if (resultType.find? (· == computation)).isSome then found.set true
+              relevant ← found.get
+            unless relevant do saved.restore; continue
+          let next ← goal.assert (← mkFreshUserName `recursive_result) resultType value
+          let (_, next) ← next.intro1
+          setGoals [next]
+          return some { solver with applications := solver.applications.insert specialized }
+        catch _ => saved.restore
+  return none
 
 private def applySummary (solver : Solver) : TacticM Bool := withMainContext do
-  unless solver.inducted do return false
+  unless solver.inducted || solver.summarizeRoot do return false
   let goal ← getMainGoal
   let target ← goal.getType
   for decl in ← getLCtx do
@@ -631,13 +823,9 @@ private def applySummary (solver : Solver) : TacticM Bool := withMainContext do
         let .forallE _ premise body _ := type | continue
         -- Only specialize a summary for the computation actually being inspected.
         unless body.getUsedConstants.contains (call.getAppFn.constName?.getD .anonymous) do continue
-        -- A summary is useful only where an expectation already constrains
-        -- this argument. Do not search for a new invariant on an arbitrary
-        -- intermediate result (for example, the result of concatenation).
-        let constraint := if premise.isAppOf ``Accepted then premise.getAppArgs[0]!
-          else if premise.isAppOf ``Eq then premise.getAppArgs[1]! else premise
-        unless (← getLCtx).any (fun h => !h.type.isForall &&
-            (h.type.find? (· == constraint)).isSome) do continue
+        -- Prove the real expectation, allowing stateful observations to have
+        -- normalized into equations about pure callbacks. Syntactic occurrence
+        -- of the original wrapper is no longer a reliable applicability test.
         let proof ← guardGoal premise
         proveGuard solver 8
         unless (← getGoals).isEmpty do
@@ -660,7 +848,7 @@ private partial def search (solver : Solver) (fuel : Nat) : TacticM Unit := do
   let (_, goal) ← (← getMainGoal).intros
   replaceMainGoal [← substVars goal]
   if ← solveCoverage (some solver) then return
-  if ← destructFacts then
+  if ← destructFacts false then
     allGoals (search solver (fuel - 1))
     return
   if ← normalize solver then return
@@ -673,7 +861,7 @@ private partial def search (solver : Solver) (fuel : Nat) : TacticM Unit := do
   if ← applySummary solver then
     search solver (fuel - 1)
     return
-  if ← applyHypothesis solver then
+  if let some solver ← applyHypothesis solver then
     search solver (fuel - 1)
     return
   if ← closeLeaf then return
@@ -760,7 +948,8 @@ private def synthesizeSummaries (solver : Solver) : TacticM Unit := withMainCont
       let saved ← saveState
       try
         let proposition ← withLocalDeclD `input (mkConst ``Term) fun input => do
-          let accepted ← mkAppM ``Accepted #[mkApp domain input]
+          let accepted ← mkAppM ``Accepted #[mkApp domain input,
+            ← elabTerm (← `(({} : Environment))) none]
           let result ← forallTelescope (← inferType (mkConst constructor)) fun fields _ => do
             let value ← mkAppM ``Result.ok #[mkAppN (mkConst constructor) fields]
             let mut equation ← mkEq (mkApp (mkConst function) input) value
@@ -768,17 +957,25 @@ private def synthesizeSummaries (solver : Solver) : TacticM Unit := withMainCont
               equation ← mkAppM ``Exists #[← mkLambdaFVars #[field] equation]
             return equation
           mkForallFVars #[input] (← mkArrow accepted result)
-        if proposition.hasFVar then continue
-        let proof ← withLCtx {} {} <| mkFreshExprSyntheticOpaqueMVar proposition
-        trace[lynx] "proving summary: {proposition}"
-        setGoals [proof.mvarId!]
-        let (_, next) ← proof.mvarId!.intros
-        setGoals [next]
-        search (← mkSolver) 24
-        unless (← getGoals).isEmpty do
-          saved.restore
-          continue
-        let proof ← instantiateMVars proof
+        let proposition ← instantiateMVars proposition
+        if proposition.hasFVar || proposition.hasMVar then continue
+        let proof ← if let some proof := (summaryProofs.getState (← getEnv))[proposition]? then
+          trace[lynx] "reusing summary: {proposition}"
+          pure proof
+        else
+          let proof ← withLCtx {} {} <| mkFreshExprSyntheticOpaqueMVar proposition
+          trace[lynx] "proving summary: {proposition}"
+          setGoals [proof.mvarId!]
+          let (_, next) ← proof.mvarId!.intros
+          setGoals [next]
+          search (← mkSolver) 24
+          unless (← getGoals).isEmpty do
+            throwError "summary proof did not close"
+          let proof ← instantiateMVars proof
+          if proof.hasMVar || proof.hasFVar then
+            throwError "summary proof is not closed"
+          modifyEnv fun env => summaryProofs.modifyState env (·.insert proposition proof)
+          pure proof
         let next ← goal.assert (← mkFreshUserName `normal_return) proposition proof
         let (_, next) ← next.intro1
         setGoals [next]
@@ -788,10 +985,15 @@ private def synthesizeSummaries (solver : Solver) : TacticM Unit := withMainCont
         saved.restore
 
 private def solveGoal (fuel : Nat) : TacticM Unit := do
-  if ← solveCoverage then return
+  let coverageStart ← IO.monoMsNow
+  if ← solveCoverage then
+    trace[lynx] "coverage time: {(← IO.monoMsNow) - coverageStart}ms"
+    return
+  let setupStart ← IO.monoMsNow
   let solver ← mkSolver
+  trace[lynx] "setup time: {(← IO.monoMsNow) - setupStart}ms"
   let start ← IO.monoMsNow
-  unless (← getMainTarget).isAppOf ``Exists do synthesizeSummaries solver
+  unless solver.recursive.isEmpty do synthesizeSummaries solver
   trace[lynx] "summary time: {(← IO.monoMsNow) - start}ms"
   search solver fuel
   trace[lynx] "solver time: {(← IO.monoMsNow) - start}ms"

@@ -35,7 +35,7 @@ example : Extensions.is_proper_list_2 Erlang.is_integer_1
 example (result : Term) (notTrue : result ≠ .atom "true") :
     Extensions.is_proper_list_2 (fun _ => .ok result) (.cons .nil .nil) =
       .ok (.atom "false") := by
-  simp [Extensions.is_proper_list_2, notTrue]
+  simp [Extensions.is_proper_list_2, Term.true, notTrue]
 
 example (exception : Exception) :
     Extensions.is_proper_list_2 (fun _ => .error exception) (.cons .nil .nil) =

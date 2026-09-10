@@ -45,6 +45,11 @@ theorem quantified_premise (f : Nat → Nat) (h : ∀ n, f n = n) :
     expectsInteger input = .ok (.atom "true") ↔ ∃ n, input = .integer n := by
   cases input <;> simp [expectsInteger]
 
+@[simp] theorem expectsInteger_run_iff (input : Term) (env final : Environment) :
+    expectsInteger input env = .ok (.atom "true") final ↔
+      env = final ∧ ∃ n, input = .integer n := by
+  cases input <;> simp [expectsInteger]
+
 @[lynx_opaque] def increment : Term → Result
   | .integer n => .ok (.integer (n + 1))
   | _ => .error (.error (.atom "badarith"))

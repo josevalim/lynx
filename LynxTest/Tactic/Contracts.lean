@@ -41,11 +41,11 @@ theorem source_labeled_vcs :
     WithSourceLabel { file := "add.ex", line := 3 }
       (Satisfies addPair twoIntegers numberResult) := by
   lynx_vcgen
-  case «add.ex:3».coverage => exact ⟨(.integer 0, .integer 0), rfl⟩
+  case «add.ex:3».coverage => exact ⟨((.integer 0, .integer 0), {}), {}, rfl⟩
   case «add.ex:3» =>
-    rename_i left right accepted
-    guard_target = ∃ result, addPair (left, right) = .ok result ∧
-      Accepted (numberResult (left, right) result)
+    rename_i env left right accepted
+    guard_target = ∃ result final, Result.run (addPair (left, right)) env = .ok result final ∧
+      Accepted (numberResult (left, right) result) final
     lynx_solve
 
 /-- Solving one branch does not discard sibling goals. -/
@@ -92,10 +92,11 @@ theorem nil (input : Term)
 
 /-- Splitting a computation preserves its connection to its input. -/
 theorem compound (input : Term) (probe : Term → Result)
-    (accepted : Accepted (match probe input with
-      | .ok (.atom "true") => Result.ok (Term.atom "true")
-      | _ => .ok (.atom "false"))) :
-    probe input = .ok (.atom "true") := by
+    (env : Environment)
+    (accepted : Accepted (fun initial => match Result.run (probe input) initial with
+      | .ok (.atom "true") final => .ok (.atom "true") final
+      | .ok _ final | .error _ final => .ok (.atom "false") final) env) :
+    Accepted (probe input) env := by
   lynx_solve
 
 end LynxTest.Tactic.Contracts

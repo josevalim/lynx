@@ -20,5 +20,10 @@ a Benchmarks/Native equivalent example, using the same data types
 but without the Term wrapping, so we can compare them. Add the
 relevant #bench annotations to both native and integration.
 Read Benchmarks/README.md for context around benchmarks.
+Update RESULTS.md on new benchmarks but only change the minimum
+amount of text necessary. The overall goal is to facilitate proofs,
+which is more valuable than proof performance. Runtime performance
+itself is not an important metric (the code is not meant to run at
+speed).
 
 Do not change the README.md unless asked to do so.

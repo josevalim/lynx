@@ -15,7 +15,7 @@ theorem generic_result_bind :
 theorem generic_result_catch (exception : Exception) (handler : Exception → Result Nat) :
     tryCatch (throw exception : Result Nat) handler = handler exception := rfl
 
--- Constructors distinguish success and the three Erlang exception classes.
+-- Constant computations distinguish success and the three Erlang exception classes.
 theorem result_constructors :
     (Result.ok .nil : Result) = .ok .nil ∧
     (Result.ok .nil : Result) ≠ .error (.error .nil) ∧

@@ -1,6 +1,5 @@
 import Std
 
-/-! Erlang term and outcome datatypes. Equality and ordering are defined downstream. -/
 namespace Lynx
 
 inductive Term where
@@ -18,33 +17,101 @@ inductive Exception where
   | exit : Term → Exception
 deriving Repr
 
-inductive Result (α : Type := Term) where
-  | error : Exception → Result α
-  | ok : α → Result α
-deriving Repr
+structure Environment where
+  pdict : List (Term × Term) := []
+deriving Repr, Inhabited
 
--- `@Result` suppresses the default argument when a type constructor is needed.
-instance : Monad @Result where
-  pure := .ok
-  bind outcome next :=
-    match outcome with
-    | .ok value => next value
-    | .error exception => .error exception
+abbrev Result (α : Type := Term) := EStateM Exception Environment α
 
-instance : LawfulMonad @Result := LawfulMonad.mk'
-  (id_map := fun outcome => by cases outcome <;> rfl)
-  (pure_bind := fun _ _ => rfl)
-  (bind_assoc := fun outcome _ _ => by cases outcome <;> rfl)
+namespace Result
 
-instance : MonadExceptOf Exception @Result where
-  throw := .error
-  tryCatch outcome handler :=
-    match outcome with
-    | .ok value => .ok value
-    | .error exception => handler exception
+/-- Run a computation, starting with an empty environment unless supplied. -/
+def run (computation : Result α) (env : Environment := {}) :
+    EStateM.Result Exception Environment α := EStateM.run computation env
 
--- Constructor-facing simplification rules for translated code. The generic
--- monad laws are supplied by the LawfulMonad instance.
+@[simp] theorem run_eq (computation : Result α) (env : Environment) :
+    run computation env = computation env := rfl
+
+def ok (value : α) : Result α := pure value
+
+def error (exception : Exception) : Result α := throw exception
+
+@[simp] theorem run_ok (value : α) (env : Environment) :
+    run (ok value) env = .ok value env := rfl
+
+@[simp] theorem run_error (exception : Exception) (env : Environment) :
+    run (error exception : Result α) env = .error exception env := rfl
+
+@[simp] theorem run_bind (computation : Result α) (next : α → Result β) (env : Environment) :
+    run (computation >>= next) env =
+      match run computation env with
+      | .ok value updated => run (next value) updated
+      | .error exception updated => .error exception updated := by
+  simp only [run, EStateM.run, Bind.bind, EStateM.bind]
+  cases computation env <;> rfl
+
+@[simp] theorem run_pure (value : α) (env : Environment) :
+    run (pure value : Result α) env = .ok value env := rfl
+
+@[simp] theorem run_throw (exception : Exception) (env : Environment) :
+    run (throw exception : Result α) env = .error exception env := rfl
+
+@[simp] theorem ok_apply (value : α) (env : Environment) :
+    ok value env = .ok value env := rfl
+
+@[simp] theorem error_apply (exception : Exception) (env : Environment) :
+    (error exception : Result α) env = .error exception env := rfl
+
+@[simp] theorem pure_apply (value : α) (env : Environment) :
+    (pure value : Result α) env = .ok value env := rfl
+
+@[simp] theorem throw_apply (exception : Exception) (env : Environment) :
+    (throw exception : Result α) env = .error exception env := rfl
+
+@[simp] theorem get_apply (env : Environment) :
+    (get : Result Environment) env = .ok env env := rfl
+
+@[simp] theorem set_apply (next env : Environment) :
+    (set next : Result PUnit) env = .ok .unit next := rfl
+
+@[simp] theorem modify_apply (update : Environment → Environment) (env : Environment) :
+    (modify update : Result PUnit) env = .ok .unit (update env) := rfl
+
+@[simp] theorem bind_apply (computation : Result α) (next : α → Result β) (env : Environment) :
+    (computation >>= next) env =
+      match computation env with
+      | .ok value updated => next value updated
+      | .error exception updated => .error exception updated := by
+  exact run_bind computation next env
+
+@[simp] theorem ok_inj (a b : α) : (ok a : Result α) = ok b ↔ a = b := by
+  constructor
+  · intro h
+    have := congrArg (fun computation => run computation {}) h
+    exact EStateM.Result.ok.inj this |>.1
+  · rintro rfl; rfl
+
+@[simp] theorem ok_ne_error (value : α) (exception : Exception) :
+    (ok value : Result α) ≠ error exception := by
+  intro h
+  have := congrArg (fun computation => run computation {}) h
+  simp at this
+
+@[simp] theorem error_ne_ok (exception : Exception) (value : α) :
+    (error exception : Result α) ≠ ok value := Ne.symm (ok_ne_error value exception)
+
+@[simp] theorem error_inj (a b : Exception) :
+    (error a : Result α) = error b ↔ a = b := by
+  constructor
+  · intro h
+    have := congrArg (fun computation => run computation {}) h
+    exact EStateM.Result.error.inj this |>.1
+  · rintro rfl; rfl
+
+end Result
+
+-- Computation-facing simplification rules for translated code.
+-- The generic monad laws are supplied by the LawfulMonad instance.
 @[simp] theorem Result.ok_bind (value : α) (next : α → Result β) :
     (Result.ok value >>= next) = next value := rfl
 
