@@ -20,25 +20,13 @@ def leaves(_), do: 1
 namespace LynxTest.Tactic.Recursive
 open Lynx Lynx.Modules
 
-def integers : Term → Result
+#lynx_pure def integers : Term → Result
   | .nil => .ok Term.true
   | .cons head tail => do
       match ← Erlang.is_integer_1 head with
       | .atom "true" => integers tail
       | _ => .ok Term.false
   | _ => .ok Term.false
-
-@[simp] theorem integers_pure (input : Term) : Result.IsPure (integers input) := by
-  induction input with
-  | cons head tail _ tailIH =>
-      cases head <;>
-        simp_all [integers, Erlang.is_integer_1, Result.IsPure, Term.true, Term.false]
-  | _ => simp [integers, Result.IsPure]
-
-@[simp] theorem integers_run_iff (input : Term) (env final : Environment) :
-    integers input env = .ok Term.true final ↔
-      integers input = .ok Term.true ∧ env = final :=
-  Result.IsPure.ok_iff _ (integers_pure input) env final Term.true
 
 def listResult (_arg result : Term) : Result := integers result
 def integerResult (_arg result : Term) : Result := Erlang.is_integer_1 result

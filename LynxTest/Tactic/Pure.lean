@@ -18,6 +18,13 @@ open Lynx
   | .cons _ tail => proper tail
   | _ => .ok Term.false
 
+/-- Nested matching on list elements remains structurally recursive on the tail. -/
+#lynx_pure def properIntegers : Term → Result
+  | .nil => .ok Term.true
+  | .cons (.integer _) tail => properIntegers tail
+  | .cons _ _ => .ok Term.false
+  | _ => .ok Term.false
+
 theorem execution_reuses_purity (input : Term) (env final : Environment) :
     classifyTwice input env = .ok Term.false final ↔
       classifyTwice input = .ok Term.false ∧ env = final := by

@@ -1148,7 +1148,45 @@ elab "lynx_pure_solve " function:ident : tactic => focus <| withMainContext do
       let branches ← goal.induction input ``Lynx.Term.induct
       replaceBranches (branches.toList.map (·.mvarId))
       let definitions := solver.recursive.map mkIdent
-      let finish ← `(tacticSeq| intros; simp_all [$[$definitions:ident],*])
+      let simplify ← `(tacticSeq|
+        intros
+        simp_all (config := { failIfUnchanged := false })
+          [Term.true, Term.false, $[$definitions:ident],*])
+      allGoals (evalTactic simplify)
+      if (← getGoals).isEmpty then return
+      -- Equation compilation leaves nested constructor patterns as matches on
+      -- immediate `Term` fields. Split those discriminants, but preserve fields
+      -- used as structural recursive arguments so their induction hypotheses
+      -- continue to discharge the recursive calls.
+      let mut expanded : Array MVarId := #[]
+      for goal in ← getGoals do
+        let termFields ← goal.withContext do
+          let target ← goal.getType
+          (← getLCtx).foldlM (init := #[]) fun fields decl => do
+            if decl.isImplementationDetail || !decl.type.isConstOf ``Term ||
+                !target.containsFVar decl.fvarId then return fields
+            let recursiveMajor := (target.find? fun expression =>
+              match solver.majors.find? (expression.getAppFn.constName?.getD .anonymous) with
+              | some index => expression.getAppArgs[index]? == some decl.toExpr
+              | none => false).isSome
+            return if recursiveMajor then fields else fields.push decl.toExpr
+        let mut pending : Array MVarId := #[goal]
+        for field in termFields do
+          let mut next : Array MVarId := #[]
+          for candidate in pending do
+            let present ← candidate.withContext do
+              return (← getLCtx).contains field.fvarId!
+            if present then
+              let alternatives ← candidate.cases field.fvarId!
+              next := next ++ alternatives.map (·.mvarId)
+            else
+              next := next.push candidate
+          pending := next
+        expanded := expanded ++ pending
+      replaceBranches expanded.toList
+      let finish ← `(tacticSeq|
+        simp_all (config := { failIfUnchanged := false })
+          [Term.true, Term.false, $[$definitions:ident],*])
       allGoals (evalTactic finish)
       return
   if solver.recursive.isEmpty then
