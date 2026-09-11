@@ -837,14 +837,12 @@ private def applyHypothesis (solver : Solver) : TacticM (Option Solver) := withM
                 if !fact.type.isForall then expressions := expressions.push fact.type
               for expression in expressions do
                 expression.forEach fun e => do
-                  unless e.isAppOf ``run && !e.hasLooseBVars do return
+                  unless e.isAppOf ``Term.Runner.run && !e.hasLooseBVars do return
                   let args := e.getAppArgs
                   unless args.size >= 2 do return
                   let computation := args[args.size - 2]!
                   let env := args.back!
                   unless env == state do return
-                  if e.isAppOf ``Outcome.ok || e.isAppOf ``Outcome.error then return
-                  unless (← inferType e).isAppOf ``Outcome do return
                   if (resultType.find? (· == computation)).isSome then found.set true
               relevant ← found.get
             unless relevant do saved.restore; continue

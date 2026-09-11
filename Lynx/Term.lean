@@ -2,7 +2,17 @@ module
 
 public import Lynx.Term.DataTypes
 public import Lynx.Term.Compare
+public import Lynx.Term.Runner
 import all Lynx.Term.Induction
+
+namespace Lynx
+
+/-- Run a complete process tree from a fresh runtime using the supplied
+scheduler choices. Every process created by the run has finished on return. -/
+public def run (computation : Result α) (schedule : List ScheduleChoice := []) : Outcome α :=
+  Term.Runner.run computation { schedule }
+
+end Lynx
 
 namespace Lynx.Term
 

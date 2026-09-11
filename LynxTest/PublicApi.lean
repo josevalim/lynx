@@ -120,7 +120,8 @@ private def privateModules : Array String := #[
   "Lynx.Term.Compare",
   "Lynx.Term.DataTypes",
   "Lynx.Term.Induction",
-  "Lynx.Term.Map"
+  "Lynx.Term.Map",
+  "Lynx.Term.Runner"
 ]
 
 private def apiContributorModules : Array String := #[
@@ -131,7 +132,8 @@ private def apiContributorModules : Array String := #[
   "Lynx.Modules.Maps",
   "Lynx.Term",
   "Lynx.Term.Compare",
-  "Lynx.Term.DataTypes"
+  "Lynx.Term.DataTypes",
+  "Lynx.Term.Runner"
 ]
 
 private def actualModules (env : Environment) : Array String :=
@@ -151,6 +153,7 @@ private def actualDeclarations : CoreM (Array String) := do
         let isGenerated := (← Lean.isAutoDeclOrPrivate_Internal name) ||
           Lean.isRecCore env name || Lean.Meta.isInstanceCore env name.getPrefix
         if apiContributorModules.contains moduleName.toString &&
+            !name.toString.startsWith "Lynx.Term.Runner." &&
             !info.isTheorem && !isPrivateName name && !isGenerated then
           pure (some name.toString)
         else pure none

@@ -52,12 +52,22 @@ private def spawnCaller : Result := do
 theorem spawn_schedules_child_or_parent_first :
     let final : Environment := {
       pidCounter := 2
-      currentProcess := { pdict := [(.atom "pid", .pid 1)] }
-      processes := [(2, { pdict := [(.atom "pid", .pid 2)] })] }
-    Lynx.run spawnCaller { schedule := [.spawned] } =
+      currentProcess := { pdict := [(.atom "pid", .pid 1)] } }
+    Lynx.run spawnCaller [.spawned] =
       .ok (.tuple #[.pid 2, .pid 1]) final ∧
-    Lynx.run spawnCaller { schedule := [.current] } =
+    Lynx.run spawnCaller [.current] =
       .ok (.tuple #[.pid 2, .pid 1]) final := by
+  exact ⟨rfl, rfl⟩
+
+private def nestedSpawnCaller : Result :=
+  spawn_1 fun _ => spawn_1 fun _ => rememberSelf
+
+theorem completed_nested_processes_are_removed :
+    let final : Environment := { pidCounter := 3 }
+    Lynx.run nestedSpawnCaller [.spawned, .spawned] =
+      .ok (.pid 2) final ∧
+    Lynx.run nestedSpawnCaller [.current, .current] =
+      .ok (.pid 2) final := by
   exact ⟨rfl, rfl⟩
 
 theorem tuple_equality :
