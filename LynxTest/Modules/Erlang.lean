@@ -89,7 +89,7 @@ theorem process_dictionary_put_replace_erase :
 
 theorem process_dictionary_queries :
     let env : Environment := {
-      pdict := [(.atom "a", .integer 1), (.atom "b", .integer 1)] }
+      currentProcess := { pdict := [(.atom "a", .integer 1), (.atom "b", .integer 1)] } }
     get_0 env = .ok (.cons (.tuple #[.atom "a", .integer 1])
       (.cons (.tuple #[.atom "b", .integer 1]) .nil)) env ∧
     get_keys_0 env = .ok (.cons (.atom "a") (.cons (.atom "b") .nil)) env ∧

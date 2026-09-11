@@ -25,13 +25,38 @@ inductive Exception where
   | exit : Term → Exception
 deriving Repr
 
-structure Environment where
-  /-- PID of the process running the current computation. -/
-  current_pid : PID := 1
-  /-- Greatest PID allocated so far. A spawn increments this before allocation. -/
-  pid_counter : PID := 1
+structure ProcessState where
   pdict : List (Term × Term) := []
 deriving Repr, Inhabited
+
+structure Environment where
+  /-- PID of the process running the current computation. -/
+  currentPid : PID := 1
+  /-- Greatest PID allocated so far. A spawn increments this before allocation. -/
+  pidCounter : PID := 1
+  /-- State of the process running the current computation. -/
+  currentProcess : ProcessState := {}
+  /-- Saved states of non-current processes, indexed by PID. -/
+  processes : List (PID × ProcessState) := []
+deriving Repr, Inhabited
+
+namespace Environment
+
+/-- Process dictionary belonging to the process running the current computation. -/
+def pdict (env : Environment) : List (Term × Term) := env.currentProcess.pdict
+
+/-- Replace the process dictionary belonging to the current process. -/
+def setPdict (env : Environment) (pdict : List (Term × Term)) : Environment :=
+  { currentPid := env.currentPid
+    pidCounter := env.pidCounter
+    currentProcess := { pdict }
+    processes := env.processes }
+
+@[simp] theorem pdict_setPdict (env : Environment) (pdict : List (Term × Term)) :
+    (env.setPdict pdict).pdict = pdict := by
+  rfl
+
+end Environment
 
 abbrev Result (α : Type := Term) := EStateM Exception Environment α
 

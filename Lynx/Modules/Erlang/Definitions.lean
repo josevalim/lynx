@@ -42,7 +42,7 @@ open Lynx
 /-- Return the PID of the process running the current computation. -/
 def self_0 : Result := do
   let env ← get
-  .ok (.pid env.current_pid)
+  .ok (.pid env.currentPid)
 
 private def termList : List Term → Term
   | [] => .nil
@@ -88,20 +88,20 @@ def get_keys_1 (value : Term) : Result := do
 def put_2 (key value : Term) : Result := do
   let env ← get
   let previous := undefinedOr (pdictFind key env.pdict)
-  set { env with pdict := (key, value) :: pdictRemove key env.pdict }
+  set (env.setPdict ((key, value) :: pdictRemove key env.pdict))
   .ok previous
 
 /-- Return all process-dictionary bindings and clear the dictionary. -/
 def erase_0 : Result := do
   let env ← get
-  set { env with pdict := [] }
+  set (env.setPdict [])
   .ok (termList (env.pdict.map fun (key, value) => .tuple #[key, value]))
 
 /-- Delete `key` and return its previous value, or `undefined`. -/
 def erase_1 (key : Term) : Result := do
   let env ← get
   let previous := undefinedOr (pdictFind key env.pdict)
-  set { env with pdict := pdictRemove key env.pdict }
+  set (env.setPdict (pdictRemove key env.pdict))
   .ok previous
 
 #lynx_pure @[lynx_opaque] def append_2 : Term → Term → Result
