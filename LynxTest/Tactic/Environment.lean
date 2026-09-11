@@ -14,6 +14,11 @@ private def readFirst : Result := do
   let env ← get
   pure (match env.pdict with | (_, value) :: _ => value | [] => .atom "undefined")
 
+#lynx_pure private def properList : Term → Result
+  | .nil => .ok Term.true
+  | .cons _ tail => properList tail
+  | _ => .ok Term.false
+
 theorem default_environment : Lynx.run (pure .nil : Result) = .ok .nil {} := rfl
 
 theorem default_pid :
@@ -59,25 +64,6 @@ theorem higher_order_threads_state (env : Environment) (a b : Term) :
       .ok [match env.pdict with | (_, value) :: _ => value | [] => .atom "undefined", a]
         (env.setPdict ((.nil, b) :: (.nil, a) :: env.pdict)) := rfl
 
-theorem guard_callback_threads_state (env : Environment) (a b : Term) :
-    (Extensions.is_proper_list_2
-      (fun value => do let _ ← record .nil value; pure Term.true)
-      (.cons a (.cons b .nil))) env =
-      .ok Term.true (env.setPdict ((.nil, b) :: (.nil, a) :: env.pdict)) := rfl
-
-theorem guard_rejection_retains_state (env : Environment) (value : Term) :
-    (Extensions.is_proper_list_2
-      (fun value => do let _ ← record .nil value; throw (.throw value))
-      (.cons value .nil)) env =
-      .ok Term.false (env.setPdict ((.nil, value) :: env.pdict)) := rfl
-
-theorem map_callback_threads_state (env : Environment) :
-    (Extensions.is_map_2 (.map [(.integer 1, .integer 10), (.integer 2, .integer 20)])
-      (fun key value => do let _ ← record key value; pure Term.true)) env =
-      .ok Term.true
-        (env.setPdict ((.integer 2, .integer 20) ::
-          (.integer 1, .integer 10) :: env.pdict)) := rfl
-
 theorem short_circuit_retains_state (env : Environment) (value : Term) :
     (Erlang.andalso_2
       (do let _ ← record .nil value; pure Term.false)
@@ -92,7 +78,7 @@ private def rememberList : Term → Result
   | _ => throw (.error (.atom "function_clause"))
 
 /-- Recursive hypotheses must apply to the updated, not just initial, state. -/
-theorem stateful_recursive_contract : Satisfies rememberList Extensions.is_proper_list_1
+theorem stateful_recursive_contract : Satisfies rememberList properList
     (fun _ result => Erlang.equal_2 result .nil) := by
   lynx_verify
 

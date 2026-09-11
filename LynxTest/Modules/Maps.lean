@@ -6,14 +6,20 @@ open Lynx Lynx.Modules
 open Lynx.Term.Map
 
 /-- Arbitrary terms need no validity assumptions. -/
-theorem get_after_put (m k v : Term) (hm : Extensions.is_map_2 m (fun _ _ => .ok Term.true) = .ok Term.true) :
-    (Maps.put_3 k v m >>= Maps.get_2 k) = .ok v := by lynx_verify
+theorem get_after_put (m k v : Term)
+    (hm : m.isMap = true) :
+    (Maps.put_3 k v m >>= Maps.get_2 k) = .ok v := by
+  obtain ⟨entries, rfl⟩ := Term.isMap_iff m |>.mp hm
+  simp [Maps.put_3, Maps.get_2]
 
 theorem merge_associative (a b c : Term)
-    (ha : Extensions.is_map_2 a (fun _ _ => .ok Term.true) = .ok Term.true) (hb : Extensions.is_map_2 b (fun _ _ => .ok Term.true) = .ok Term.true)
-    (hc : Extensions.is_map_2 c (fun _ _ => .ok Term.true) = .ok Term.true) :
+    (ha : a.isMap = true) (hb : b.isMap = true) (hc : c.isMap = true) :
     (Maps.merge_2 a b >>= fun ab => Maps.merge_2 ab c) =
-    (Maps.merge_2 b c >>= Maps.merge_2 a) := by lynx_verify
+    (Maps.merge_2 b c >>= Maps.merge_2 a) := by
+  obtain ⟨left, rfl⟩ := Term.isMap_iff a |>.mp ha
+  obtain ⟨middle, rfl⟩ := Term.isMap_iff b |>.mp hb
+  obtain ⟨right, rfl⟩ := Term.isMap_iff c |>.mp hc
+  simp [Maps.merge_2]
 
 private def a : Term := .atom "a"
 private def b : Term := .atom "b"

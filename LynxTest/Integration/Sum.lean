@@ -14,6 +14,28 @@ namespace LynxTest.Integration.Sum
 open Lynx Lynx.Modules
 set_option Elab.async false
 
+def isProperIntegerList : Term → Result
+  | .nil => .ok Term.true
+  | .cons head tail => do
+      match ← Erlang.is_integer_1 head with
+      | .atom "true" => isProperIntegerList tail
+      | _ => .ok Term.false
+  | _ => .ok Term.false
+
+@[simp] theorem isProperIntegerList_pure (input : Term) :
+    Result.IsPure (isProperIntegerList input) := by
+  induction input with
+  | cons head tail _ tailIH =>
+      cases head <;>
+        simp_all [isProperIntegerList, Erlang.is_integer_1, Result.IsPure,
+          Term.true, Term.false]
+  | _ => simp [isProperIntegerList, Result.IsPure]
+
+@[simp] theorem isProperIntegerList_run_iff (input : Term) (env final : Environment) :
+    isProperIntegerList input env = .ok Term.true final ↔
+      isProperIntegerList input = .ok Term.true ∧ env = final :=
+  Result.IsPure.ok_iff _ (isProperIntegerList_pure input) env final Term.true
+
 #lynx_pure def sum_1 : Term → Result
   | .nil => .ok (.integer 0)
   | .cons x xs => do
@@ -23,7 +45,7 @@ set_option Elab.async false
 
 /-! Translated integer-list expectation and integer-result guarantee. -/
 def sumExpects (arg : Term) : Result :=
-  Extensions.is_proper_list_2 Erlang.is_integer_1 arg
+  isProperIntegerList arg
 
 def sumEnsures (_arg result : Term) : Result :=
   Erlang.is_integer_1 result

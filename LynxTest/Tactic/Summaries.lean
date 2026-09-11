@@ -12,7 +12,10 @@ private def count : Term → Result
     Erlang.add_2 (.integer 1) size
   | _ => .error (.error (.atom "function_clause"))
 
-private def properList := Extensions.is_proper_list_1
+#lynx_pure private def properList : Term → Result
+  | .nil => .ok Term.true
+  | .cons _ tail => properList tail
+  | _ => .ok Term.false
 private def integerResult (_ result : Term) : Result := Erlang.is_integer_1 result
 private def anyInput (_ : Term) : Result := .ok Term.true
 

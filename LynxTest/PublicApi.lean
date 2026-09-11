@@ -10,7 +10,6 @@ open Lean Elab Command
 private def expectedModules : Array String := #[
   "Lynx",
   "Lynx.Modules.Erlang",
-  "Lynx.Modules.Extensions",
   "Lynx.Modules.Maps",
   "Lynx.Term"
 ]
@@ -48,9 +47,6 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Modules.Erlang.put_2",
   "Lynx.Modules.Erlang.self_0",
   "Lynx.Modules.Erlang.spawn_1",
-  "Lynx.Modules.Extensions.is_map_2",
-  "Lynx.Modules.Extensions.is_proper_list_1",
-  "Lynx.Modules.Extensions.is_proper_list_2",
   "Lynx.Modules.Maps.get_2",
   "Lynx.Modules.Maps.merge_2",
   "Lynx.Modules.Maps.new_0",
@@ -87,6 +83,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.instDecidableEquivalent",
   "Lynx.Term.integer",
   "Lynx.Term.isFalse",
+  "Lynx.Term.isMap",
   "Lynx.Term.isTrue",
   "Lynx.Term.le",
   "Lynx.Term.map",
@@ -128,7 +125,6 @@ private def apiContributorModules : Array String := #[
   "Lynx",
   "Lynx.Modules.Erlang",
   "Lynx.Modules.Erlang.Definitions",
-  "Lynx.Modules.Extensions",
   "Lynx.Modules.Maps",
   "Lynx.Term",
   "Lynx.Term.Compare",

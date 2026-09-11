@@ -16,12 +16,25 @@ namespace LynxTest.Integration.Sets
 open Lynx Lynx.Modules
 set_option Elab.async false
 
+#lynx_pure @[lynx_opaque] def isSet (input : Term) : Result := do
+  let accepted ← match input with
+    | .map entries => Term.Map.allM entries (fun _ value => .ok (value == .nil))
+    | _ => Result.ok false
+  .ok (if accepted then Term.true else Term.false)
+
+@[simp] theorem isSet_iff (input : Term) :
+    isSet input = .ok (.atom "true") ↔
+      ∃ entries, input = .map entries ∧
+        Term.Map.All (fun _ value => value = .nil) entries := by
+  cases input <;>
+    simp [isSet, Term.true, Term.false, Term.beq_iff_equivalent, Term.Equivalent]
+
 /-- Translation of the map-backed set union. -/
 def union_2 (left right : Term) : Result := Maps.merge_2 left right
 
 /-- Translated `is_map(value, fn _, v -> v == [] end)`. -/
 def setExpects (input : Term) : Result :=
-  Extensions.is_map_2 input (fun _ value => Erlang.equal_2 value .nil)
+  isSet input
 
 def unionExpects (args : Term × Term) : Result :=
   Erlang.andalso_2 (setExpects args.1) (fun _ => setExpects args.2)

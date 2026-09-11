@@ -16,8 +16,48 @@ namespace LynxTest.Integration.Reverse
 open Lynx Lynx.Modules
 set_option Elab.async false
 
-abbrev properList (input : Term) : Result :=
-  Extensions.is_proper_list_1 input
+#lynx_pure def properList : Term → Result
+  | .nil => .ok Term.true
+  | .cons _ tail => properList tail
+  | _ => .ok Term.false
+
+private theorem append_success (left right : Term)
+    (accepted : properList left = .ok Term.true) :
+    ∃ joined, Erlang.append_2 left right = .ok joined := by
+  have reject : (Result.ok Term.false : Result) ≠ .ok Term.true := by
+    simp [Term.false, Term.true]
+  induction left with
+  | nil => exact ⟨right, rfl⟩
+  | cons head tail _ ih =>
+    obtain ⟨joined, returned⟩ := ih accepted
+    exact ⟨.cons head joined, by simp only [Erlang.append_2, returned, Result.ok_bind]⟩
+  | _ => exact False.elim (reject accepted)
+
+@[simp] private theorem append_nil (input : Term)
+    (accepted : properList input = .ok Term.true) :
+    Erlang.append_2 input .nil = .ok input := by
+  have reject : (Result.ok Term.false : Result) ≠ .ok Term.true := by
+    simp [Term.false, Term.true]
+  induction input with
+  | nil => rfl
+  | cons head tail _ ih => simp only [Erlang.append_2, ih accepted, Result.ok_bind]
+  | _ => exact False.elim (reject accepted)
+
+private theorem append_assoc (left right suffix : Term)
+    (accepted : properList left = .ok Term.true) :
+    (Erlang.append_2 left right >>= fun joined => Erlang.append_2 joined suffix) =
+      (Erlang.append_2 right suffix >>= Erlang.append_2 left) := by
+  have reject : (Result.ok Term.false : Result) ≠ .ok Term.true := by
+    simp [Term.false, Term.true]
+  induction left with
+  | nil =>
+    simp only [Erlang.append_2, Result.ok_bind]
+    exact (bind_pure (Erlang.append_2 right suffix)).symm
+  | cons head tail _ ih =>
+    simpa only [Erlang.append_2, bind_assoc, Result.ok_bind] using
+      congrArg (fun outcome => outcome >>= fun rest => Result.ok (Term.cons head rest))
+        (ih accepted)
+  | _ => exact False.elim (reject accepted)
 
 def reverse_aux_2 : Term → Term → Result
   | .nil, acc => .ok acc
@@ -128,18 +168,18 @@ theorem reverse_append : Property reverseAppendExpects reverseAppend := by
       induction input with
       | nil =>
         simp only [Erlang.append_2, reverse_1, reverse_aux_2, Result.ok_bind,
-          rightReturned, Erlang.append_nil reversedRight rightProper]
+          rightReturned, append_nil reversedRight rightProper]
       | cons head tail _ ih =>
         have assoc (middle : Term) :=
-          Erlang.append_assoc reversedRight middle (.cons head .nil) rightProper
+          append_assoc reversedRight middle (.cons head .nil) rightProper
         simpa only [Erlang.append_2, step, bind_assoc, Result.ok_bind,
           assoc] using
           congrArg (fun output => output >>= fun result => Erlang.append_2 result (.cons head .nil))
             (ih inputAccepted)
       | _ => exact False.elim (reject inputAccepted)
-    obtain ⟨joined, appended⟩ := Erlang.append_success left right both.1
+    obtain ⟨joined, appended⟩ := append_success left right both.1
     obtain ⟨reversedLeft, leftReturned, _⟩ := reverse_aux_proper left .nil both.1 rfl
-    obtain ⟨result, resultReturned⟩ := Erlang.append_success reversedRight reversedLeft rightProper
+    obtain ⟨result, resultReturned⟩ := append_success reversedRight reversedLeft rightProper
     have joinedReturned := law left both.1
     simp only [appended, reverse_1, leftReturned, Result.ok_bind, resultReturned] at joinedReturned
     simp only [Accepted, reverseAppend, reverse_1, appended, Result.ok_bind,

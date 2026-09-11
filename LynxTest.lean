@@ -10,6 +10,5 @@ import LynxTest.Tactic.Recursive
 import LynxTest.Tactic.Opaque
 import LynxTest.Tactic.Pure
 import LynxTest.Tactic.Failures
-import LynxTest.Modules.Extensions
 import LynxTest.Modules.Erlang
 import LynxTest.Modules.Maps

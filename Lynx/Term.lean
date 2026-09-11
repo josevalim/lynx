@@ -32,10 +32,19 @@ namespace Lynx.Term
   | .atom name => name == "false"
   | _ => .false
 
+/-- Recognize Erlang maps. -/
+@[expose] public def isMap : Term → Bool
+  | .map _ => .true
+  | _ => .false
+
 @[simp] public theorem isTrue_iff (value : Term) : isTrue value = .true ↔ value = Term.true := by
   cases value <;> simp [isTrue, Term.true]
 
 @[simp] public theorem isFalse_iff (value : Term) : isFalse value = .true ↔ value = Term.false := by
   cases value <;> simp [isFalse, Term.false]
+
+@[simp] public theorem isMap_iff (value : Term) :
+    isMap value = .true ↔ ∃ entries, value = .map entries := by
+  cases value <;> simp [isMap]
 
 end Lynx.Term
