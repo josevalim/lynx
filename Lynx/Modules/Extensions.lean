@@ -6,10 +6,8 @@ import Lynx.Term.Map
 
 namespace Lynx.Modules.Extensions
 
-private def isTrue (computation : Result) : Result Bool := fun env =>
-  match computation env with
-  | .ok value next => .ok value.isTrue next
-  | .error _ next => .ok false next
+private def isTrue (computation : Result) : Result Bool :=
+  Result.handle (computation >>= fun value => .ok value.isTrue) fun _ => .ok false
 
 @[simp] private theorem isTrue_ok (value : Term) :
     isTrue (.ok value) = .ok value.isTrue := rfl
@@ -42,6 +40,15 @@ def is_proper_list_2 (predicate : Term → Result) : Term → Result
     by_cases h : (predicate head).isTrue = true <;> simp [is_proper_list_2, h, ih]
   | _ => simp [is_proper_list_2]
 
+@[simp] theorem is_proper_list_2_pure (predicate : Term → Term) (input : Term) :
+    Result.IsPure (is_proper_list_2 (fun value => .ok (predicate value)) input) := by
+  induction input with
+  | cons head tail _ ih =>
+      by_cases accepted : (predicate head).isTrue = true
+      · simpa [is_proper_list_2, isTrue, Result.handle, accepted] using ih
+      · simp [is_proper_list_2, isTrue, Result.handle, accepted]
+  | _ => simp [is_proper_list_2]
+
 /-- A map guard in source argument order: map, then key/value predicate.
 Only effective bindings are tested. Nonmaps, false/non-boolean predicate results,
 and raised outcomes return false; the empty map succeeds. -/
@@ -57,6 +64,10 @@ and raised outcomes return false; the empty map succeeds. -/
       ∃ entries, input = .map entries ∧
         Term.Map.All (fun k v => predicate k v = .atom "true") entries := by
   cases input <;> simp [is_map_2, Term.true, Term.false]
+
+@[simp] theorem is_map_2_pure (input : Term) (predicate : Term → Term → Term) :
+    Result.IsPure (is_map_2 input (fun k v => .ok (predicate k v))) := by
+  cases input <;> simp [is_map_2, isTrue, Result.handle]
 
 /-- Pure callbacks retain the caller's environment. Stateful callbacks use the
 same implementation, but cannot use this pure specification. -/

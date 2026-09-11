@@ -35,6 +35,31 @@ theorem reflexive_operators (a : Term) :
   simp [less_than_2, greater_than_2, less_than_or_equal_2, greater_than_or_equal_2,
     Term.true, Term.false]
 
+private def rememberSelf : Result := do
+  let pid ← self_0
+  let _ ← put_2 (.atom "pid") pid
+  .ok pid
+
+/-- Callers remain in direct style even when the helper they invoke spawns. -/
+private def spawnFromHelper : Result :=
+  spawn_1 fun _ => rememberSelf
+
+private def spawnCaller : Result := do
+  let childPid ← spawnFromHelper
+  let parentPid ← rememberSelf
+  pure (.tuple #[childPid, parentPid])
+
+theorem spawn_schedules_child_or_parent_first :
+    let final : Environment := {
+      pidCounter := 2
+      currentProcess := { pdict := [(.atom "pid", .pid 1)] }
+      processes := [(2, { pdict := [(.atom "pid", .pid 2)] })] }
+    Lynx.run spawnCaller { schedule := [.spawned] } =
+      .ok (.tuple #[.pid 2, .pid 1]) final ∧
+    Lynx.run spawnCaller { schedule := [.current] } =
+      .ok (.tuple #[.pid 2, .pid 1]) final := by
+  exact ⟨rfl, rfl⟩
+
 theorem tuple_equality :
     equal_2 (.tuple #[]) (.tuple #[]) = .ok Term.true ∧
     equal_2 (.tuple #[.integer 1]) (.tuple #[.integer 1, .nil]) = .ok Term.false ∧

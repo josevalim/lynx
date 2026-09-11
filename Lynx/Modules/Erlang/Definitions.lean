@@ -44,6 +44,10 @@ def self_0 : Result := do
   let env ← get
   .ok (.pid env.currentPid)
 
+/-- Spawn a process. `Result.bind` captures the caller continuation for scheduling. -/
+def spawn_1 (child : Unit → Result) : Result :=
+  .spawn (child ()) fun pid => .ok (.pid pid)
+
 private def termList : List Term → Term
   | [] => .nil
   | head :: tail => .cons head (termList tail)
@@ -113,23 +117,45 @@ def erase_1 (key : Term) : Result := do
 
 @[lynx_opaque] def andalso_2
     (left : Result)
-    (right : Unit → Result) : Result := fun env =>
-  match left env with
-  | .ok (.atom "true") next => right () next
-  | .ok (.atom "false") next => .ok Term.false next
-  | .ok _ next => .error (.error (.atom "badarg")) next
-  | .error exception next => .error exception next
+    (right : Unit → Result) : Result := do
+  match ← left with
+  | .atom "true" => right ()
+  | .atom "false" => .ok Term.false
+  | _ => .error (.error (.atom "badarg"))
 
 /-- Successful short-circuit conjunction records the actual intermediate state.
 The right operand may return any term, not just a boolean. For acceptance goals
 (`value = true`), simplification also eliminates the false-left branch. -/
 @[simp low] theorem andalso_2_run_ok_iff (left : Result) (right : Unit → Result)
-    (env final : Environment) (value : Term) :
+    (env final : Environment) (value : Term) (pure : Result.IsPure left) :
     andalso_2 left right env = .ok value final ↔
       (left env = .ok (.atom "false") final ∧ value = .atom "false") ∨
       ∃ next, left env = .ok (.atom "true") next ∧
         right () next = .ok value final := by
   unfold andalso_2
-  split <;> simp_all [Term.false, eq_comm, and_comm]
+  cases left <;> simp_all [Result.IsPure, Term.false, eq_comm, and_comm]
+  split <;> simp_all [eq_comm, and_comm]
+
+@[simp low] theorem andalso_2_ok_iff (left : Result) (right : Unit → Result)
+    (value : Term) :
+    andalso_2 left right = .ok value ↔
+      (left = .ok (.atom "false") ∧ value = .atom "false") ∨
+      (left = .ok (.atom "true") ∧ right () = .ok value) := by
+  cases left <;> simp_all [andalso_2, Term.false, eq_comm, and_comm]
+  split <;> simp_all [eq_comm, and_comm]
+
+@[simp] theorem andalso_2_pure (left : Result) (right : Unit → Result)
+    (leftPure : Result.IsPure left) (rightPure : Result.IsPure (right ())) :
+    Result.IsPure (andalso_2 left right) := by
+  unfold andalso_2
+  apply Result.IsPure.bind left _ leftPure
+  intro value
+  cases value <;> simp [Result.IsPure]
+  rename_i name
+  by_cases isTrue : name = "true"
+  · subst name; exact rightPure
+  · by_cases isFalse : name = "false"
+    · subst name; simp
+    · simp [isTrue, isFalse]
 
 end Lynx.Modules.Erlang

@@ -93,9 +93,10 @@ theorem nil (input : Term)
 /-- Splitting a computation preserves its connection to its input. -/
 theorem compound (input : Term) (probe : Term → Result)
     (env : Environment)
-    (accepted : Accepted (fun initial => match probe input initial with
-      | .ok (.atom "true") final => .ok (.atom "true") final
-      | .ok _ final | .error _ final => .ok (.atom "false") final) env) :
+    (pure : Result.IsPure (probe input))
+    (accepted : Accepted (do
+      let value ← probe input
+      Erlang.equal_2 value (.atom "true")) env) :
     Accepted (probe input) env := by
   lynx_solve
 

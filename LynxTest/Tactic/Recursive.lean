@@ -26,7 +26,7 @@ def integerResult (_arg result : Term) : Result := Erlang.is_integer_1 result
 def anyInput (_ : Term) : Result := .ok Term.true
 
 /-- Recursive functions may return a recursive constructor rather than a scalar. -/
-def duplicate : Term → Result
+#lynx_pure def duplicate : Term → Result
   | .nil => .ok .nil
   | .cons head tail => do
       let rest ← duplicate tail
@@ -37,7 +37,7 @@ theorem duplicate_contract : Satisfies duplicate integers listResult := by
   lynx_verify
 
 /-- Independent recursive calls may descend through both constructor fields. -/
-def leaves : Term → Result
+#lynx_pure def leaves : Term → Result
   | .cons head tail => do
       let left ← leaves head
       let right ← leaves tail

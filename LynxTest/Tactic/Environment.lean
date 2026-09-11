@@ -29,6 +29,7 @@ theorem stateful_coverage : Covered (fun value : Term => do
 
 /-- An unchanged local outcome equation must stay active after normalization. -/
 theorem known_outcome (computation : Result) (env final : Environment)
+    (pure : Result.IsPure computation)
     (returned : computation env = .ok (.integer 7) final) :
     Accepted (do Erlang.equal_2 (← computation) (.integer 7)) env := by
   lynx_solve
@@ -132,7 +133,7 @@ theorem checks_nonempty_initial_state :
   intro contract
   let env := ({} : Environment).setPdict [(.nil, .integer 7)]
   have failed := contract.2 .nil env ⟨env, rfl⟩
-  simp [Accepted, readFirst, Erlang.equal_2, Pure.pure, EStateM.pure,
+  simp [Accepted, readFirst, Erlang.equal_2, Pure.pure,
     Term.true, Term.false, env] at failed
 
 theorem observes_state_in_property : Property anyInput (fun input => do

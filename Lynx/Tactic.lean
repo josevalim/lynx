@@ -166,7 +166,7 @@ goals:
    induction so hypotheses remain usable after state-changing calls.
 7. Generalize and split one shared monadic computation, retaining an equation
    for its outcome. This avoids duplicating nested bind continuations before
-   its `EStateM.Result.ok`/`EStateM.Result.error` outcome and returned state are known.
+   its `Outcome.ok`/`Outcome.error` result and returned environment are known.
 8. Try remaining hypothesis matches, then split a target match or conditional.
 
 The main search and independent summary proofs start with fuel 24. The smaller
@@ -278,12 +278,8 @@ private structure Solver where
 
 /-- Recognize Erlang results, whose success type is `Term`. -/
 private def isResultType (type : Expr) : MetaM Bool := do
-  if type.isAppOfArity ``Result 1 && type.getAppArgs[0]!.isConstOf ``Term then return true
   let type ← whnf type
-  return type.isAppOfArity ``EStateM.Result 3 &&
-    type.getAppArgs[0]!.isConstOf ``Exception &&
-    type.getAppArgs[1]!.isConstOf ``Environment &&
-    type.getAppArgs[2]!.isConstOf ``Term
+  return type.isAppOfArity ``Result 1 && type.getAppArgs[0]!.isConstOf ``Term
 
 /-- Discover executable definitions by their result type, following their calls.
 Their bodies supply reduction rules alongside registered library simp theorems;
@@ -319,7 +315,16 @@ private def mkSolver (unfoldOpaque? : Option Name := none) : TacticM Solver := w
   -- lawful-monad rewrites reassociate binds or turn them into functor maps.
   let simpSyntax ← `(tactic| simp_all (config := { failIfUnchanged := false })
     [Accepted, Term.true, Term.false, and_assoc,
-    Pure.pure, EStateM.pure, -bind_assoc, -bind_pure_comp, $[$definitions:ident],*])
+    Pure.pure,
+    Result.IsPure.ok_iff, Result.IsPure.error_iff,
+    Result.IsPure.bind_apply,
+    Result.get_continuation_apply, Result.set_continuation_apply,
+    Result.ok_bind, Result.error_bind, Result.get_bind, Result.set_bind,
+    Result.state_get_bind_apply, Result.state_set_bind_apply,
+    Result.state_modify_bind_apply,
+    Result.state_get_bind_bind_apply, Result.state_set_bind_bind_apply,
+    Result.state_modify_bind_bind_apply,
+    -bind_assoc, -bind_pure_comp, $[$definitions:ident],*])
   let result ← mkSimpContext simpSyntax (eraseLocal := true) (kind := .simpAll)
   return ⟨result.ctx, result.simprocs, recursive, majors, inputs, false, {},
     (← getMainTarget).isAppOf ``Exists⟩
@@ -346,7 +351,7 @@ private def addFact (context : Simp.Context) (h : FVarId) : MetaM Simp.Context :
   if type.isAppOf ``Eq then
     let rhs := type.getAppArgs[2]!
     if rhs.isAppOf ``Result.ok || rhs.isAppOf ``Result.error ||
-        rhs.isAppOf ``EStateM.Result.ok || rhs.isAppOf ``EStateM.Result.error then
+        rhs.isAppOf ``Outcome.ok || rhs.isAppOf ``Outcome.error then
       thms ← thms.modifyM 0 fun set => set.add (.fvar h) #[] (mkFVar h)
         (post := false) (config := context.indexConfig)
   -- Removing a rule while simplifying its own hypothesis marks its origin as
@@ -369,7 +374,7 @@ private def normalize (solver : Solver) : TacticM Bool := do
         (decl.type.isAppOf ``Accepted ||
           (decl.type.isAppOf ``Eq &&
             (decl.type.getAppArgs[2]!.isAppOf ``Result.ok ||
-              decl.type.getAppArgs[2]!.isAppOf ``EStateM.Result.ok)))
+              decl.type.getAppArgs[2]!.isAppOf ``Outcome.ok)))
     return (constraints ++ hypotheses.filter (fun h => !constraints.contains h), context)
   let mut context := context
   for h in hypotheses do
@@ -519,7 +524,7 @@ private def inductInput (solver : Solver) : TacticM (Option Solver) := withMainC
 
 /-- Inspect one shared computation at a time. Keeping binds intact until this
 point avoids expanding all continuations into nested matches during simp. -/
-private def splitComputation : TacticM Bool := withMainContext do
+private def splitComputation (solver : Solver) : TacticM Bool := withMainContext do
   let goal ← getMainGoal
   let mut expressions := #[]
   for decl in ← getLCtx do
@@ -527,32 +532,68 @@ private def splitComputation : TacticM Bool := withMainContext do
       expressions := expressions.push decl.type
   expressions := expressions.push (← goal.getType)
   for expression in expressions do
+    let bindCandidates ← IO.mkRef (#[] : Array Expr)
     let candidates ← IO.mkRef (#[] : Array Expr)
     expression.forEach fun e => do
       unless e.isApp && !e.hasLooseBVars do return
       if !(← matchMatcherApp? e).isSome &&
-          (← inferType e).isAppOf ``EStateM.Result &&
-          !e.isAppOf ``EStateM.Result.ok && !e.isAppOf ``EStateM.Result.error then
+          (← inferType e).isAppOf ``Outcome &&
+          !e.isAppOf ``Outcome.ok && !e.isAppOf ``Outcome.error then
         candidates.modify (·.push e)
-      if e.isAppOf ``Bind.bind then
+      if e.isAppOf ``Bind.bind || e.isAppOf ``Result.bind then
         let args := e.getAppArgs
         if args.size >= 2 then
           let computation := args[args.size - 2]!
           unless computation.hasLooseBVars do
-            if !computation.isAppOf ``Bind.bind && !computation.isAppOf ``Result.ok &&
+            if !computation.isAppOf ``Bind.bind && !computation.isAppOf ``Result.bind &&
+                !computation.isAppOf ``Result.ok &&
                 !computation.isAppOf ``Result.error && (← isResultType (← inferType computation)) then
-              candidates.modify (·.push computation)
-    for computation in ← candidates.get do
+              bindCandidates.modify (·.push computation)
+    let ordered := ((← candidates.get) ++ (← bindCandidates.get)).reverse
+    for computation in ordered do
+      let computationType ← inferType computation
+      let resultComputation ← isResultType computationType
       if (← getLCtx).any (fun decl => decl.type.isAppOf ``Eq &&
           decl.type.getAppArgs[1]! == computation &&
-          (decl.type.getAppArgs[2]!.isAppOf ``EStateM.Result.ok ||
-            decl.type.getAppArgs[2]!.isAppOf ``EStateM.Result.error)) then continue
+          ((computationType.isAppOf ``Outcome &&
+              (decl.type.getAppArgs[2]!.isAppOf ``Outcome.ok ||
+                decl.type.getAppArgs[2]!.isAppOf ``Outcome.error)) ||
+            (resultComputation &&
+              (decl.type.getAppArgs[2]!.isAppOf ``Result.ok ||
+                decl.type.getAppArgs[2]!.isAppOf ``Result.error)))) then continue
       let saved ← saveState
       try
-        let (_, variables, next) ← goal.generalizeHyp
-          #[{ expr := computation, xName? := some `outcome, hName? := some `evaluated }]
-          (← getPropHyps)
-        let branches ← next.cases variables[0]!
+        let mut next := goal
+        if resultComputation then
+          let purity ← mkAppM ``Result.IsPure #[computation]
+          let mut proof? : Option Expr := none
+          for decl in ← getLCtx do
+            if !decl.isImplementationDetail && (← isDefEq decl.type purity) then
+              proof? := some decl.toExpr
+              break
+          if proof?.isNone then
+            let proof ← mkFreshExprSyntheticOpaqueMVar purity
+            let (remaining, _) ← simpGoal proof.mvarId! solver.context solver.simprocs
+            unless remaining.isNone do throwError "purity could not be established"
+            proof? := some (← instantiateMVars proof)
+          let terminal ← mkAppM ``Result.IsPure.terminal #[computation, proof?.get!]
+          let terminalType ← inferType terminal
+          let terminalName ← mkFreshUserName `terminal_computation
+          let asserted ← next.assert terminalName terminalType terminal
+          let (terminalHyp, asserted) ← asserted.intro1
+          let choices ← asserted.cases terminalHyp
+          let mut remaining := []
+          for choice in choices do
+            let alternatives ← choice.mvarId.cases choice.fields[0]!.fvarId!
+            remaining := remaining ++ alternatives.toList.map (·.mvarId)
+          replaceBranches remaining
+          return true
+        let hypotheses ← next.withContext getPropHyps
+        let (_, variables, generalized) ← next.withContext do
+          next.generalizeHyp
+            #[{ expr := computation, xName? := some `outcome, hName? := some `evaluated }]
+            hypotheses
+        let branches ← generalized.cases variables[0]!
         replaceBranches (branches.toList.map (·.mvarId))
         return true
       catch _ => saved.restore
@@ -573,7 +614,7 @@ private partial def proveGuard (solver : Solver) (fuel : Nat) : TacticM Unit := 
   else if let some branches ← splitTarget? (← getMainGoal) then
     replaceBranches branches
     allGoals (proveGuard solver (fuel - 1))
-  else if ← splitComputation then
+  else if ← splitComputation solver then
     allGoals (proveGuard solver (fuel - 1))
   else if ← splitHypothesis solver then
     allGoals (proveGuard solver (fuel - 1))
@@ -707,7 +748,14 @@ private def solveCoverage (solver? : Option Solver := none) : TacticM Bool := wi
 
 private def applyHypothesis (solver : Solver) : TacticM (Option Solver) := withMainContext do
   let goal ← getMainGoal
-  for decl in ← getLCtx do
+  let target ← goal.getType
+  let mut declarations := #[]
+  for decl in ← getLCtx do declarations := declarations.push decl
+  declarations := (declarations.filter fun decl =>
+      decl.userName.toString.startsWith "recursive_result").reverse ++
+    declarations.filter (fun decl =>
+      !decl.userName.toString.startsWith "recursive_result")
+  for decl in declarations do
     unless decl.isImplementationDetail do
       let type ← whnf decl.type
       let .forallE _ domain _ _ := type | continue
@@ -728,8 +776,8 @@ private def applyHypothesis (solver : Solver) : TacticM (Option Solver) := withM
           expression.forEach fun e => do
             let .app _ env := e | return
             unless !e.hasLooseBVars do return
-            if e.isAppOf ``EStateM.Result.ok || e.isAppOf ``EStateM.Result.error then return
-            unless (← inferType e).isAppOf ``EStateM.Result do return
+            if e.isAppOf ``Outcome.ok || e.isAppOf ``Outcome.error then return
+            unless (← inferType e).isAppOf ``Outcome do return
             if (← inferType env).isConstOf ``Environment then states.modify (·.insert env)
         for state in (← states.get).toArray do
           let candidate := mkApp decl.toExpr state
@@ -769,14 +817,15 @@ private def applyHypothesis (solver : Solver) : TacticM (Option Solver) := withM
             let computationRelevant ← IO.mkRef false
             resultType.forEach fun e => do
               unless e.isApp && !e.hasLooseBVars do return
-              if e.isAppOf ``EStateM.Result.ok || e.isAppOf ``EStateM.Result.error then return
+              if e.isAppOf ``Outcome.ok || e.isAppOf ``Outcome.error then return
               let type ← inferType e
-              if type.isAppOf ``EStateM.Result then
+              if type.isAppOf ``Outcome then
                 hasOutcome.set true
                 if (target.find? (· == e)).isSome then outcomeRelevant.set true
               else if ← isResultType type then
                 if (target.find? (· == e)).isSome then computationRelevant.set true
-            let mut relevant ← if ← hasOutcome.get then outcomeRelevant.get else computationRelevant.get
+            let mut relevant ← if target.isFalse then pure true
+              else if ← hasOutcome.get then outcomeRelevant.get else computationRelevant.get
             if !relevant then
               -- Calls below a bind have a bound environment in the theorem.
               -- Match their computation against actual calls at the chosen
@@ -788,16 +837,32 @@ private def applyHypothesis (solver : Solver) : TacticM (Option Solver) := withM
                 if !fact.type.isForall then expressions := expressions.push fact.type
               for expression in expressions do
                 expression.forEach fun e => do
-                  let .app computation env := e | return
-                  unless !e.hasLooseBVars && env == state do return
-                  if e.isAppOf ``EStateM.Result.ok || e.isAppOf ``EStateM.Result.error then return
-                  unless (← inferType e).isAppOf ``EStateM.Result do return
+                  unless e.isAppOf ``run && !e.hasLooseBVars do return
+                  let args := e.getAppArgs
+                  unless args.size >= 2 do return
+                  let computation := args[args.size - 2]!
+                  let env := args.back!
+                  unless env == state do return
+                  if e.isAppOf ``Outcome.ok || e.isAppOf ``Outcome.error then return
+                  unless (← inferType e).isAppOf ``Outcome do return
                   if (resultType.find? (· == computation)).isSome then found.set true
               relevant ← found.get
             unless relevant do saved.restore; continue
           let next ← goal.assert (← mkFreshUserName `recursive_result) resultType value
-          let (_, next) ← next.intro1
-          setGoals [next]
+          let (resultHyp, next) ← next.intro1
+          if target.isFalse then
+            let mut context := solver.context
+            let facts ← next.withContext do
+              (← getPropHyps).filterM fun (hypothesis : FVarId) => do
+                let type ← hypothesis.getType
+                return hypothesis != resultHyp && !type.isForall
+            for fact in facts do context ← next.withContext do addFact context fact
+            let (simplified, _) ← simpLocalDecl next resultHyp context solver.simprocs
+            match simplified with
+            | none => setGoals []
+            | some (_, next) => setGoals [next]
+          else
+            setGoals [next]
           return some { solver with applications := solver.applications.insert specialized }
         catch _ => saved.restore
   return none
@@ -863,13 +928,14 @@ private partial def search (solver : Solver) (fuel : Nat) : TacticM Unit := do
     search solver (fuel - 1)
     return
   if let some solver ← applyHypothesis solver then
+    if (← getGoals).isEmpty then return
     search solver (fuel - 1)
     return
   if ← closeLeaf then return
   if let some solver ← inductInput solver then
     allGoals (search solver (fuel - 1))
     return
-  if ← splitComputation then
+  if ← splitComputation solver then
     allGoals (search solver (fuel - 1))
     return
   if ← splitHypothesis solver then
@@ -878,6 +944,12 @@ private partial def search (solver : Solver) (fuel : Nat) : TacticM Unit := do
   if let some branches ← splitTarget? (← getMainGoal) then
     replaceBranches branches
     allGoals (search solver (fuel - 1))
+  else
+    -- Reserve whole-context simplification for a leaf. Constructor pruning
+    -- above uses only the purity fact, avoiding this cost at every split.
+    let saved ← saveState
+    try evalTactic (← `(tactic| simp_all [Result.IsPure] <;> omega))
+    catch _ => saved.restore
 
 /-- Candidate domains are executable predicates already present in the expects
 clause. Looking inside wrappers does not assume that any candidate is accepted. -/
@@ -1132,12 +1204,10 @@ elab doc?:(docComment)? "#lynx_pure " declaration:command : command => do
   let functionExpr := mkConst function levels
   let purityType ← Command.liftTermElabM do
     forallTelescopeReducing info.type fun arguments resultType => do
-      unless resultType.isAppOf ``EStateM.Result && !arguments.isEmpty &&
-          (← inferType arguments.back!).isConstOf ``Environment do
+      unless ← isResultType resultType do
         throwErrorAt declId "#lynx_pure requires a definition returning `Result`"
-      let inputs := arguments.pop
-      let proposition ← mkAppM ``Result.IsPure #[mkAppN functionExpr inputs]
-      mkForallFVars inputs proposition
+      let proposition ← mkAppM ``Result.IsPure #[mkAppN functionExpr arguments]
+      mkForallFVars arguments proposition
   let proof ← Command.liftTermElabM do
     let functionId := mkIdent function
     let proofSyntax ← if ← isRecursiveDefinition function then
