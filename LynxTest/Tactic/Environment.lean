@@ -16,6 +16,11 @@ private def readFirst : Result := do
 
 theorem default_environment : Lynx.run (pure .nil : Result) = .ok .nil {} := rfl
 
+theorem default_pid :
+    ({} : Environment).current_pid = 1 ∧
+    ({} : Environment).pid_counter = 1 := by
+  exact ⟨rfl, rfl⟩
+
 /-- Coverage infers the actual returned state, which need not be empty. -/
 theorem stateful_coverage : Covered (fun value : Term => do
     let _ ← record .nil value

@@ -6,9 +6,13 @@ public section
 
 namespace Lynx
 
+/-- Process identifiers are monotonically allocated natural numbers. -/
+abbrev PID := Nat
+
 inductive Term where
   | integer : Int → Term
   | atom : String → Term
+  | pid : PID → Term
   | tuple : Array Term → Term
   | map : List (Term × Term) → Term
   | nil : Term
@@ -22,6 +26,10 @@ inductive Exception where
 deriving Repr
 
 structure Environment where
+  /-- PID of the process running the current computation. -/
+  current_pid : PID := 1
+  /-- Greatest PID allocated so far. A spawn increments this before allocation. -/
+  pid_counter : PID := 1
   pdict : List (Term × Term) := []
 deriving Repr, Inhabited
 

@@ -80,6 +80,9 @@ private def compareStep (cmp : Term → Term → Ordering) : Term → Term → O
   | .atom a, .atom b => Ord.compare a b
   | .atom _, _ => .lt
   | _, .atom _ => .gt
+  | .pid a, .pid b => Ord.compare a b
+  | .pid _, _ => .lt
+  | _, .pid _ => .gt
   | .tuple a, .tuple b =>
     (Ord.compare a.size b.size).then (List.compareLex cmp a.toList b.toList)
   | .tuple _, _ => .lt
@@ -131,6 +134,9 @@ private def boundedStep (n : Nat) (cmp : Child n → Child n → Ordering)
   | .atom a, .atom b => Ord.compare a b
   | .atom _, _ => .lt
   | _, .atom _ => .gt
+  | .pid a, .pid b => Ord.compare a b
+  | .pid _, _ => .lt
+  | _, .pid _ => .gt
   | .tuple a, .tuple b =>
     (Ord.compare a.size b.size).then
       (List.compareLex cmp (boundedList n a.toList (tuple_child ha))
@@ -298,6 +304,13 @@ theorem equivalent_trans {a b c : Term} (h : Equivalent a b) (h' : Equivalent b 
     compare (.atom s) a = .eq ↔ a = .atom s := by
   rw [compare_swap, Ordering.swap_eq_eq]
   exact compare_eq_atom a s
+@[simp] theorem compare_eq_pid (a : Term) (pid : PID) :
+    compare a (.pid pid) = .eq ↔ a = .pid pid := by
+  cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
+@[simp] theorem pid_compare_eq (pid : PID) (a : Term) :
+    compare (.pid pid) a = .eq ↔ a = .pid pid := by
+  rw [compare_swap, Ordering.swap_eq_eq]
+  exact compare_eq_pid a pid
 
 end Lynx.Term
 

@@ -39,6 +39,11 @@ open Lynx
 #lynx_pure def greater_than_or_equal_2 (left right : Term) : Result :=
   .ok (if (Term.compare left right).isGE then Term.true else Term.false)
 
+/-- Return the PID of the process running the current computation. -/
+def self_0 : Result := do
+  let env ← get
+  .ok (.pid env.current_pid)
+
 private def termList : List Term → Term
   | [] => .nil
   | head :: tail => .cons head (termList tail)
