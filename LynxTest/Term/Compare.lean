@@ -11,6 +11,7 @@ def orderedTerms : List Term := [
   .integer (-1000000000000000000000000000000), .integer (-1), .integer 0,
   .integer 1000000000000000000000000000000,
   .atom "", .atom "a", .atom "aa", .atom "b", .atom "é", .atom "λ", .atom "😀",
+  .function 0 0, .function 0 1, .function 1 0,
   .pid 0, .pid 1, .pid 1000000000000000000000000000000,
   .tuple #[],
   .tuple #[.integer (-1)], .tuple #[.integer 0], .tuple #[.atom "a"],

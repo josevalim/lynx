@@ -52,6 +52,26 @@ private def termList : List Term → Term
   | [] => .nil
   | head :: tail => .cons head (termList tail)
 
+private def properList? : Term → Option (List Term)
+  | .nil => some []
+  | .cons head tail => (properList? tail).map (head :: ·)
+  | _ => none
+
+/-- Dynamically apply a function to an Erlang list of arguments. Internal
+application uses an array and does not retain the source list encoding. -/
+def apply_2 (table : Term.FunTable) (function arguments : Term) : Result :=
+  match properList? arguments with
+  | none => .error (.error (.atom "badarg"))
+  | some decoded =>
+      match Term.fetchFun table function with
+      | none => .error (.error (.tuple #[.atom "badfun", function]))
+      | some (implementation, arity) =>
+          if decoded.length = arity then
+            implementation decoded.toArray
+          else
+            .error (.error
+              (.tuple #[.atom "badarity", .tuple #[function, arguments]]))
+
 private def pdictFind (key : Term) : List (Term × Term) → Option Term
   | [] => none
   | (stored, value) :: rest =>

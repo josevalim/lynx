@@ -7,6 +7,39 @@ open Lynx
 open Lynx.Modules.Erlang
 open LynxTest.Term.Compare (orderedTerms ordered_terms)
 
+private def identityFun : Term.Fun
+  | #[value] => .ok value
+  | _ => .error (.error (.atom "unexpected_arguments"))
+
+private def firstFun : Term.Fun
+  | #[left, _] => .ok left
+  | _ => .error (.error (.atom "unexpected_arguments"))
+
+private def functions : Term.FunTable := #[identityFun, firstFun]
+
+theorem fetch_fun :
+    (Term.fetchFun functions (.function 0 1)).map Prod.snd = some 1 ∧
+    Term.fetchFun functions (.function 2 0) = none ∧
+    Term.fetchFun functions .nil = none := by
+  exact ⟨rfl, rfl, rfl⟩
+
+theorem dynamic_apply_2 :
+    apply_2 functions (.function 0 1) (.cons (.integer 7) .nil) = .ok (.integer 7) ∧
+    apply_2 functions (.function 1 2)
+      (.cons (.atom "left") (.cons (.atom "right") .nil)) = .ok (.atom "left") ∧
+    apply_2 functions (.function 0 1) (.cons (.integer 7) (.atom "improper")) =
+      .error (.error (.atom "badarg")) := by
+  exact ⟨rfl, rfl, rfl⟩
+
+theorem dynamic_apply_2_errors :
+    apply_2 functions (.atom "not_a_fun") .nil =
+        .error (.error (.tuple #[.atom "badfun", .atom "not_a_fun"])) ∧
+    apply_2 functions (.function 9 0) .nil =
+        .error (.error (.tuple #[.atom "badfun", .function 9 0])) ∧
+    apply_2 functions (.function 0 1) .nil =
+        .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 1, .nil]])) := by
+  exact ⟨rfl, rfl, rfl⟩
+
 theorem append_lemmas_reexported (head tail right : Term) :
     append_2 (.cons head tail) right =
       (append_2 tail right >>= fun rest => .ok (.cons head rest)) :=

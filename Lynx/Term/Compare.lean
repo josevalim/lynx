@@ -80,6 +80,10 @@ private def compareStep (cmp : Term → Term → Ordering) : Term → Term → O
   | .atom a, .atom b => Ord.compare a b
   | .atom _, _ => .lt
   | _, .atom _ => .gt
+  | .function id arity, .function otherId otherArity =>
+    (Ord.compare id otherId).then (Ord.compare arity otherArity)
+  | .function _ _, _ => .lt
+  | _, .function _ _ => .gt
   | .pid a, .pid b => Ord.compare a b
   | .pid _, _ => .lt
   | _, .pid _ => .gt
@@ -134,6 +138,10 @@ private def boundedStep (n : Nat) (cmp : Child n → Child n → Ordering)
   | .atom a, .atom b => Ord.compare a b
   | .atom _, _ => .lt
   | _, .atom _ => .gt
+  | .function id arity, .function otherId otherArity =>
+    (Ord.compare id otherId).then (Ord.compare arity otherArity)
+  | .function _ _, _ => .lt
+  | _, .function _ _ => .gt
   | .pid a, .pid b => Ord.compare a b
   | .pid _, _ => .lt
   | _, .pid _ => .gt
@@ -206,6 +214,10 @@ private instance (cmp : Term → Term → Ordering) [Std.TransCmp cmp] : Std.Tra
     all_goals try contradiction
     all_goals try trivial
     all_goals try exact Std.TransCmp.isLE_trans ab bc
+    case function.function.function aid arity bid barity cid carity =>
+      exact Std.TransCmp.isLE_trans
+        (cmp := compareLex (compareOn Ord.compare Prod.fst) (compareOn Ord.compare Prod.snd))
+        (a := (aid,arity)) (b := (bid,barity)) (c := (cid,carity)) ab bc
     case tuple.tuple.tuple a b c =>
       exact Std.TransCmp.isLE_trans
         (cmp := compareLex (compareOn Ord.compare Array.size) (compareOn (List.compareLex cmp) Array.toList)) ab bc
@@ -304,6 +316,13 @@ theorem equivalent_trans {a b c : Term} (h : Equivalent a b) (h' : Equivalent b 
     compare (.atom s) a = .eq ↔ a = .atom s := by
   rw [compare_swap, Ordering.swap_eq_eq]
   exact compare_eq_atom a s
+@[simp] theorem compare_eq_function (a : Term) (id arity : Nat) :
+    compare a (.function id arity) = .eq ↔ a = .function id arity := by
+  cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
+@[simp] theorem function_compare_eq (id arity : Nat) (a : Term) :
+    compare (.function id arity) a = .eq ↔ a = .function id arity := by
+  rw [compare_swap, Ordering.swap_eq_eq]
+  exact compare_eq_function a id arity
 @[simp] theorem compare_eq_pid (a : Term) (pid : PID) :
     compare a (.pid pid) = .eq ↔ a = .pid pid := by
   cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]

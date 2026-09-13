@@ -16,6 +16,18 @@ end Lynx
 
 namespace Lynx.Term
 
+/-- Executable implementation of a function term. Arguments use a Lean array,
+avoiding Erlang-list encoding at internal call sites. -/
+public abbrev Fun := Array Term → Result
+
+/-- Program-local function implementations indexed by `Term.function` IDs. -/
+public abbrev FunTable := Array Fun
+
+/-- Resolve a function term to its implementation and declared arity. -/
+@[expose] public def fetchFun (table : FunTable) : Term → Option (Fun × Nat)
+  | .function id arity => table[id]?.map (·, arity)
+  | _ => none
+
 /-- Empty Erlang map literal. -/
 @[expose] public def emptyMap : Term := .map []
 

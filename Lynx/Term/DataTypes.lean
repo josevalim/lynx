@@ -12,6 +12,7 @@ abbrev PID := Nat
 inductive Term where
   | integer : Int → Term
   | atom : String → Term
+  | function : Nat → Nat → Term
   | pid : PID → Term
   | tuple : Array Term → Term
   | map : List (Term × Term) → Term
