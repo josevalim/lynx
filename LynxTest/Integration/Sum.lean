@@ -29,6 +29,21 @@ set_option Elab.async false
       Erlang.add_2 x subtotal
   | _ => throw (.error (.atom "function_clause"))
 
+private theorem sum_1_integer_or_error (input : Term) :
+    (∃ value, sum_1 input = .ok (.integer value)) ∨
+      ∃ exception, sum_1 input = .error exception := by
+  induction input using Term.induct with
+  | cons head tail _ tailIh =>
+    rcases tailIh with ⟨subtotal, returned⟩ | ⟨exception, returned⟩
+    · cases head <;> simp [sum_1, returned, Erlang.add_2]
+    · simp [sum_1, returned]
+  | _ => simp [sum_1]
+
+@[simp] theorem sum_1_ne_float (input : Term) (value : Term.FiniteFloat) :
+    sum_1 input ≠ .ok (.float value) := by
+  rcases sum_1_integer_or_error input with ⟨integer, returned⟩ | ⟨exception, returned⟩ <;>
+    simp [returned]
+
 /-! Translated integer-list expectation and integer-result guarantee. -/
 def sumExpects (arg : Term) : Result :=
   isProperIntegerList arg

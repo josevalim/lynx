@@ -10,6 +10,9 @@ open Lynx
 #lynx_pure def is_integer_1 (input : Term) : Result :=
   .ok (match input with | .integer _ => Term.true | _ => Term.false)
 
+#lynx_pure def is_float_1 (input : Term) : Result :=
+  .ok (match input with | .float _ => Term.true | _ => Term.false)
+
 /-- Expose the state-preserving callback even when passed without its argument. -/
 @[simp] theorem is_integer_1_function :
     is_integer_1 = fun input => Result.ok
@@ -26,6 +29,15 @@ open Lynx
 
 #lynx_pure def equal_2 (left right : Term) : Result :=
   .ok (if Term.compare left right = .eq then Term.true else Term.false)
+
+#lynx_pure def not_equal_2 (left right : Term) : Result :=
+  .ok (if Term.compare left right = .eq then Term.false else Term.true)
+
+#lynx_pure def exact_equal_2 (left right : Term) : Result :=
+  .ok (if Term.exactCompare left right = .eq then Term.true else Term.false)
+
+#lynx_pure def exact_not_equal_2 (left right : Term) : Result :=
+  .ok (if Term.exactCompare left right = .eq then Term.false else Term.true)
 
 #lynx_pure def less_than_2 (left right : Term) : Result :=
   .ok (if (Term.compare left right).isLT then Term.true else Term.false)

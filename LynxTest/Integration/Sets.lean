@@ -18,7 +18,7 @@ open Lynx.Term.Map
 set_option Elab.async false
 
 private def findEntry (xs : Entries) (q : Term) : Option (Term × Term) :=
-  xs.find? fun e => decide (Term.compare q e.1 = .eq)
+  xs.find? fun e => decide (Term.exactCompare q e.1 = .eq)
 
 /-- A predicate on effective stored bindings only, excluding shadowed entries. -/
 def All (predicate : Term → Term → Prop) (xs : Entries) : Prop :=
@@ -36,10 +36,10 @@ private def allM (xs : Entries) (predicate : Term → Term → Result Bool) : Re
 
 private theorem findEntry_self {xs : Entries} {q : Term} {e : Term × Term}
     (h : findEntry xs q = some e) : findEntry xs e.1 = some e := by
-  have accepted : decide (Term.compare q e.1 = .eq) = true :=
+  have accepted : decide (Term.exactCompare q e.1 = .eq) = true :=
     List.find?_some
-      (p := fun (e : Term × Term) => decide (Term.compare q e.1 = .eq)) h
-  have key : Term.compare q e.1 = .eq := of_decide_eq_true accepted
+      (p := fun (e : Term × Term) => decide (Term.exactCompare q e.1 = .eq)) h
+  have key : Term.exactCompare q e.1 = .eq := of_decide_eq_true accepted
   simpa only [findEntry, Std.TransCmp.congr_left key] using h
 
 @[simp] private theorem allM_ok (xs : Entries) (predicate : Term → Term → Bool) :
@@ -89,7 +89,7 @@ private theorem findEntry_self {xs : Entries} {q : Term} {e : Term × Term}
   intro q k v found
   unfold findEntry at found
   simp only [merge, List.find?_append] at found
-  cases h : List.find? (fun e => decide (Term.compare q e.1 = .eq)) b with
+  cases h : List.find? (fun e => decide (Term.exactCompare q e.1 = .eq)) b with
   | none => exact ha q k v (by simpa [findEntry, h] using found)
   | some e => simp only [h] at found; cases found; exact hb q k v (by simpa [findEntry] using h)
 
@@ -107,11 +107,10 @@ private theorem merge_comm_of_equivalent_constant (value : Term) (a b : Entries)
     (ha : All (fun _ v => Term.compare v value = .eq) a)
     (hb : All (fun _ v => Term.compare v value = .eq) b) :
     Term.compare (.map (merge a b)) (.map (merge b a)) = .eq := by
-  change Term.Equivalent (.map (merge a b)) (.map (merge b a))
-  apply equivalent_of_find
+  apply compare_eq_of_find
   intro q
   simp only [find_merge]
-  cases ea : find q a <;> cases eb : find q b <;> simp_all [Term.Equivalent]
+  cases ea : find q a <;> cases eb : find q b <;> simp_all
   exact Std.TransCmp.eq_trans (all_find _ hb eb)
     (Std.OrientedCmp.eq_symm (all_find _ ha ea))
 
@@ -133,7 +132,7 @@ private theorem merge_comm_of_equivalent_constant (value : Term) (a b : Entries)
       ∃ entries, input = .map entries ∧
         All (fun _ value => value = .nil) entries := by
   cases input <;>
-    simp [isSet, Term.true, Term.false, Term.beq_iff_equivalent, Term.Equivalent]
+    simp [isSet, Term.true, Term.false, Term.beq_iff_compare_eq]
 
 /-- Translation of the map-backed set union. -/
 def union_2 (left right : Term) : Result := Maps.merge_2 left right

@@ -26,6 +26,19 @@ private def rememberSelfFun : Term.Fun
 
 private def functions : Term.FunTable := #[identityFun, firstFun, rememberSelfFun]
 
+private def floatOne : Term.FiniteFloat :=
+  ⟨false, 1023, 0⟩
+
+private def floatOneAndHalf : Term.FiniteFloat :=
+  ⟨false, 1023, 2 ^ 51⟩
+
+private theorem floatOne_toRat : floatOne.toRat = 1 := by
+  simp [floatOne, Term.FiniteFloat.toRat, Term.FiniteFloat.magnitude]
+  change (4503599627370496 : Rat) * 2 ^ (-52 : Int) = 1
+  rw [show (-52 : Int) = -(52 : Int) by rfl, Rat.zpow_neg]
+  change (2 : Rat) ^ (52 : Nat) * ((2 : Rat) ^ (52 : Nat))⁻¹ = 1
+  exact Rat.mul_inv_cancel _ (by decide)
+
 theorem fetch_fun :
     (Term.fetchFun functions (.function 0 1)).map Prod.snd = some 1 ∧
     Term.fetchFun functions (.function 3 0) = none ∧
@@ -48,6 +61,15 @@ theorem dynamic_apply_2_errors :
     apply_2 functions (.function 0 1) .nil =
         .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 1, .nil]])) := by
   exact ⟨rfl, rfl, rfl⟩
+
+theorem float_equality_guards :
+    is_float_1 (.float floatOneAndHalf) = .ok Term.true ∧
+    equal_2 (.integer 1) (.float floatOne) = .ok Term.true ∧
+    not_equal_2 (.integer 1) (.float floatOne) = .ok Term.false ∧
+    exact_equal_2 (.integer 1) (.float floatOne) = .ok Term.false ∧
+    exact_not_equal_2 (.integer 1) (.float floatOne) = .ok Term.true := by
+  simp [is_float_1, equal_2, not_equal_2, exact_equal_2, exact_not_equal_2,
+    floatOne_toRat]
 
 theorem append_lemmas_reexported (head tail right : Term) :
     append_2 (.cons head tail) right =
@@ -167,6 +189,18 @@ theorem process_dictionary_put_replace_erase :
       Result.ok (Term.tuple #[missing, previous, found, erased, absent])) =
       .ok (Term.tuple #[.atom "undefined", .integer 1, .integer 2,
         .integer 2, .atom "undefined"]) {} := by
+  rfl
+
+theorem process_dictionary_numeric_types_are_distinct :
+    Lynx.run (do
+      let _ ← put_2 (.integer 1) (.atom "integer")
+      let _ ← put_2 (.float floatOne) (.atom "float")
+      let integer ← get_1 (.integer 1)
+      let float ← get_1 (.float floatOne)
+      Result.ok (Term.tuple #[integer, float])) =
+      .ok (Term.tuple #[.atom "integer", .atom "float"])
+        { currentProcess := { pdict :=
+            [(.float floatOne, .atom "float"), (.integer 1, .atom "integer")] } } := by
   rfl
 
 theorem process_dictionary_queries :

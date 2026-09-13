@@ -25,6 +25,8 @@ private def a : Term := .atom "a"
 private def b : Term := .atom "b"
 private def one : Term := .integer 1
 private def two : Term := .integer 2
+private def floatOne : Term.FiniteFloat :=
+  ⟨false, 1023, 0⟩
 
 theorem new_and_get :
     Maps.new_0 = .ok Term.emptyMap ∧
@@ -33,6 +35,13 @@ theorem new_and_get :
 
 theorem missing_key (key : Term) :
     Maps.get_2 key Term.emptyMap = .error (.error (.tuple #[.atom "badkey", key])) := rfl
+
+theorem numeric_key_types_are_distinct :
+    Maps.get_2 (.integer 1) (.map [(.float floatOne, a)]) =
+      .error (.error (.tuple #[.atom "badkey", .integer 1])) ∧
+    Maps.get_2 (.float floatOne) (.map [(.integer 1, a)]) =
+      .error (.error (.tuple #[.atom "badkey", .float floatOne])) := by
+  exact ⟨rfl, rfl⟩
 
 theorem put_overwrites :
     (Maps.put_3 a one Term.emptyMap >>= Maps.put_3 a two) = .ok (.map [(a, two), (a, one)]) := by

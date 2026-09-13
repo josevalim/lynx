@@ -1,6 +1,7 @@
 module
 
 public import Std
+public import Lynx.Term.FiniteFloat
 
 public section
 
@@ -11,6 +12,7 @@ abbrev PID := Nat
 
 inductive Term where
   | integer : Int → Term
+  | float : _root_.Lynx.Term.FiniteFloat → Term
   | atom : String → Term
   | function : Nat → Nat → Term
   | pid : PID → Term

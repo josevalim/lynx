@@ -7,6 +7,7 @@ namespace Lynx
 /-- Structural induction with elementwise hypotheses for tuples and map bindings. -/
 @[induction_eliminator] public protected theorem Term.induct {motive : Term → Prop} (t : Term)
     (integer : ∀ n, motive (.integer n))
+    (float : ∀ n, motive (.float n))
     (atom : ∀ s, motive (.atom s))
     (function : ∀ id arity, motive (.function id arity))
     (pid : ∀ pid, motive (.pid pid))
@@ -19,7 +20,7 @@ namespace Lynx
     (motive_3 := fun entries => ∀ k v, (k, v) ∈ entries → motive k ∧ motive v)
     (motive_4 := fun xs => ∀ x ∈ xs, motive x)
     (motive_5 := fun entry => motive entry.1 ∧ motive entry.2)
-    integer atom function pid tuple map nil cons ?_ ?_ ?_ ?_ ?_ ?_ t
+    integer float atom function pid tuple map nil cons ?_ ?_ ?_ ?_ ?_ ?_ t
   · intro xs ih x hx
     exact ih x (by simpa using hx)
   · simp

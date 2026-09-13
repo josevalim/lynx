@@ -18,12 +18,12 @@ private def termList : List Term → Term
 private def pdictFind (key : Term) : List (Term × Term) → Option Term
   | [] => none
   | (stored, value) :: rest =>
-      if Term.compare key stored = .eq then some value else pdictFind key rest
+      if Term.exactCompare key stored = .eq then some value else pdictFind key rest
 
 private def pdictRemove (key : Term) : List (Term × Term) → List (Term × Term)
   | [] => []
   | entry :: rest =>
-      if Term.compare key entry.1 = .eq then pdictRemove key rest
+      if Term.exactCompare key entry.1 = .eq then pdictRemove key rest
       else entry :: pdictRemove key rest
 
 private def undefinedOr : Option Term → Term
@@ -49,7 +49,7 @@ def get_keys_0 : Result := do
 def get_keys_1 (value : Term) : Result := do
   let env ← get
   .ok (termList (env.pdict.filterMap fun entry =>
-    if Term.compare value entry.2 = .eq then some entry.1 else none))
+    if Term.exactCompare value entry.2 = .eq then some entry.1 else none))
 
 /-- Store a binding and return its previous value, or `undefined`. -/
 def put_2 (key value : Term) : Result := do

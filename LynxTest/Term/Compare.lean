@@ -4,6 +4,22 @@ import Lynx.Term
 namespace LynxTest.Term.Compare
 open Lynx
 
+private def floatOne : Term.FiniteFloat :=
+  ⟨false, 1023, 0⟩
+
+private def positiveZero : Term.FiniteFloat :=
+  ⟨false, 0, 0⟩
+
+private def negativeZero : Term.FiniteFloat :=
+  ⟨true, 0, 0⟩
+
+private theorem floatOne_toRat : floatOne.toRat = 1 := by
+  simp [floatOne, Term.FiniteFloat.toRat, Term.FiniteFloat.magnitude]
+  change (4503599627370496 : Rat) * 2 ^ (-52 : Int) = 1
+  rw [show (-52 : Int) = -(52 : Int) by rfl, Rat.zpow_neg]
+  change (2 : Rat) ^ (52 : Nat) * ((2 : Rat) ^ (52 : Nat))⁻¹ = 1
+  exact Rat.mul_inv_cancel _ (by decide)
+
 -- Strictly increasing across every represented category. Tuples compare arity
 -- before elements; maps compare size, all keys, then values. Includes nested
 -- tuples/maps, Unicode atoms, large integers, improper tails, and list prefixes.
@@ -49,6 +65,23 @@ theorem ordered_terms :
     orderedTerms.Pairwise (fun a b =>
       Term.compare a b = .lt ∧ Term.compare b a = .gt) := by decide
 
+theorem numeric_and_exact_comparison :
+    Term.compare (.integer 1) (.float floatOne) = .eq ∧
+    Term.exactCompare (.integer 1) (.float floatOne) = .lt ∧
+    Term.compare (.tuple #[.integer 1]) (.tuple #[.float floatOne]) = .eq ∧
+    Term.exactCompare (.tuple #[.integer 1]) (.tuple #[.float floatOne]) = .lt ∧
+    Term.compare (.map [(.atom "key", .integer 1)])
+      (.map [(.atom "key", .float floatOne)]) = .eq ∧
+    Term.compare (.map [(.integer 1, .nil)])
+      (.map [(.float floatOne, .nil)]) = .lt := by
+  simp [Term.compare_tuple, Term.exactCompare_tuple, Term.compare_singleton_map,
+    List.compareLex_cons_cons, List.compareLex_nil_nil, floatOne_toRat]
+
+theorem signed_zero_comparison :
+    Term.compare (.float positiveZero) (.float negativeZero) = .eq ∧
+    Term.exactCompare (.float positiveZero) (.float negativeZero) ≠ .eq := by
+  simp [positiveZero, negativeZero]
+
 /-- Size counts effective keys; key comparison precedes every value comparison. -/
 theorem association_list_order :
     let a := Term.atom "a"
@@ -82,10 +115,11 @@ theorem comparison_short_circuit (a b : Term) :
   rfl
 
 /-- A decisive head/key comparison makes the tails/values irrelevant. -/
-theorem comparison_keys_before_values (k l v w : Term) (h : Term.compare k l = .lt) :
+theorem comparison_keys_before_values (k l v w : Term)
+    (head : Term.compare k l = .lt) (key : Term.exactCompare k l = .lt) :
     Term.compare (.cons k v) (.cons l w) = .lt ∧
     Term.compare (.map [(k,v)]) (.map [(l,w)]) = .lt := by
-  simp [Term.compare_cons, Term.compare_singleton_map, h]
+  simp [Term.compare_cons, Term.compare_singleton_map, head, key]
 
 end LynxTest.Term.Compare
 
