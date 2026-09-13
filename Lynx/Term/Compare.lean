@@ -548,26 +548,42 @@ namespace Lynx.Term
 @[simp] theorem nil_compare_eq (a : Term) : compare .nil a = .eq ↔ a = .nil := by
   rw [compare_swap, Ordering.swap_eq_eq]
   exact compare_eq_nil a
-@[simp] theorem compare_eq_integer (a : Term) (n : Int) :
+theorem compare_eq_integer (a : Term) (n : Int) :
     compare a (.integer n) = .eq ↔
       a = .integer n ∨ ∃ float, a = .float float ∧ float.toRat = n := by
   cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
-@[simp] theorem integer_compare_eq (n : Int) (a : Term) :
+theorem integer_compare_eq (n : Int) (a : Term) :
     compare (.integer n) a = .eq ↔
       a = .integer n ∨ ∃ float, a = .float float ∧ float.toRat = n := by
   rw [compare_swap, Ordering.swap_eq_eq]
   exact compare_eq_integer a n
-@[simp] theorem compare_eq_float (a : Term) (n : FiniteFloat) :
+theorem compare_eq_float (a : Term) (n : FiniteFloat) :
     compare a (.float n) = .eq ↔
       (∃ float, a = .float float ∧ float.toRat = n.toRat) ∨
       ∃ integer : Int, a = .integer integer ∧ integer = n.toRat := by
   cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
-@[simp] theorem float_compare_eq (n : FiniteFloat) (a : Term) :
+theorem float_compare_eq (n : FiniteFloat) (a : Term) :
     compare (.float n) a = .eq ↔
       (∃ float, a = .float float ∧ float.toRat = n.toRat) ∨
       ∃ integer : Int, a = .integer integer ∧ integer = n.toRat := by
   rw [compare_swap, Ordering.swap_eq_eq]
   exact compare_eq_float a n
+@[simp] theorem integer_compare_integer_eq (a b : Int) :
+    compare (.integer a) (.integer b) = .eq ↔ a = b := by
+  rw [integer_compare_eq]
+  simp [eq_comm]
+@[simp] theorem integer_compare_float_eq (integer : Int) (float : FiniteFloat) :
+    compare (.integer integer) (.float float) = .eq ↔ integer = float.toRat := by
+  rw [integer_compare_eq]
+  simp [eq_comm]
+@[simp] theorem float_compare_integer_eq (float : FiniteFloat) (integer : Int) :
+    compare (.float float) (.integer integer) = .eq ↔ float.toRat = integer := by
+  rw [compare_eq_integer]
+  simp
+@[simp] theorem float_compare_float_eq (a b : FiniteFloat) :
+    compare (.float a) (.float b) = .eq ↔ a.toRat = b.toRat := by
+  rw [float_compare_eq]
+  simp [eq_comm]
 @[simp] theorem compare_eq_atom (a : Term) (s : String) :
     compare a (.atom s) = .eq ↔ a = .atom s := by
   cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]

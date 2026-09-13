@@ -207,7 +207,9 @@ use a summary immediately. For relational properties it waits until after
 induction, preserving the executable calls needed to discover that induction.
 It still proves the corresponding domain constraint before
 using the summary; it does not invent a domain for arbitrary intermediate
-results. Current synthesis handles unary functions with a uniform candidate
+results. Calls that have been split into result equations remain eligible for
+summary application; calls already known to have the summarized constructor
+are skipped. Current synthesis handles unary functions with a uniform candidate
 result constructor when bounded search can prove the conjecture. It is not
 general invariant discovery.
 
@@ -873,13 +875,36 @@ private def applySummary (solver : Solver) : TacticM Bool := withMainContext do
     unless decl.userName.toString.startsWith "normal_return" do continue
     let .forallE _ domain _ _ := decl.type | continue
     unless domain.isConstOf ``Term do continue
+    let constructor ← IO.mkRef (none : Option Name)
+    decl.type.forEach fun e => do
+      if e.isAppOfArity ``Result.ok 2 then
+        let value := e.getAppArgs[1]!
+        if let .const name _ := value.getAppFn then
+          if let .ctorInfo info ← getConstInfo name then
+            if info.induct == ``Term then constructor.set (some name)
+    let some constructor ← constructor.get | continue
     let calls ← IO.mkRef (#[] : Array Expr)
-    target.forEach fun e => do
-      if !e.hasLooseBVars && e.isApp && solver.recursive.contains (e.getAppFn.constName?.getD .anonymous) then
-        calls.modify (·.push e)
+    let mut expressions := #[target]
+    for fact in ← getLCtx do
+      if !fact.type.isForall then expressions := expressions.push fact.type
+    for expression in expressions do
+      expression.forEach fun e => do
+        if !e.hasLooseBVars && e.isApp && solver.recursive.contains (e.getAppFn.constName?.getD .anonymous) then
+          calls.modify fun found => if found.contains e then found else found.push e
     for call in ← calls.get do
       let args := call.getAppArgs
       unless args.size == 1 do continue
+      let mut resolved := false
+      for fact in ← getLCtx do
+        let type := fact.type.consumeMData
+        if type.isAppOf ``Eq then
+          let equationArgs := type.getAppArgs
+          if equationArgs[1]! == call then
+            let rhs := equationArgs[2]!
+            if rhs.isAppOf ``Result.ok then
+              let value := rhs.getAppArgs.back!
+              if value.getAppFn.constName? == some constructor then resolved := true
+      if resolved then continue
       let saved ← saveState
       try
         let partialProof := mkApp decl.toExpr args[0]!

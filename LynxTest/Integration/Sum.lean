@@ -29,20 +29,29 @@ set_option Elab.async false
       Erlang.add_2 x subtotal
   | _ => throw (.error (.atom "function_clause"))
 
-private theorem sum_1_integer_or_error (input : Term) :
-    (∃ value, sum_1 input = .ok (.integer value)) ∨
-      ∃ exception, sum_1 input = .error exception := by
-  induction input using Term.induct with
+@[grind →] private theorem append_preserves_isProperIntegerList
+    (left right joined : Term)
+    (leftProper : isProperIntegerList left = .ok Term.true)
+    (rightProper : isProperIntegerList right = .ok Term.true)
+    (appended : Erlang.append_2 left right = .ok joined) :
+    isProperIntegerList joined = .ok Term.true := by
+  induction left using Term.induct generalizing joined with
   | cons head tail _ tailIh =>
-    rcases tailIh with ⟨subtotal, returned⟩ | ⟨exception, returned⟩
-    · cases head <;> simp [sum_1, returned, Erlang.add_2]
-    · simp [sum_1, returned]
-  | _ => simp [sum_1]
-
-@[simp] theorem sum_1_ne_float (input : Term) (value : Term.FiniteFloat) :
-    sum_1 input ≠ .ok (.float value) := by
-  rcases sum_1_integer_or_error input with ⟨integer, returned⟩ | ⟨exception, returned⟩ <;>
-    simp [returned]
+    have appendPure := Erlang.append_2_pure tail right
+    cases returned : Erlang.append_2 tail right
+    case ok rest =>
+      cases head
+      case integer value =>
+        simp [isProperIntegerList, Erlang.is_integer_1, Erlang.append_2,
+          returned, Term.true, Term.false] at leftProper appended
+        subst joined
+        have restProper := tailIh rest leftProper returned
+        simpa [isProperIntegerList, Erlang.is_integer_1, Term.true, Term.false]
+          using restProper
+      all_goals simp_all [isProperIntegerList, Erlang.is_integer_1,
+        Erlang.append_2, Term.true, Term.false]
+    all_goals simp_all
+  | _ => simp_all [isProperIntegerList, Erlang.append_2, Term.true, Term.false]
 
 /-! Translated integer-list expectation and integer-result guarantee. -/
 def sumExpects (arg : Term) : Result :=
