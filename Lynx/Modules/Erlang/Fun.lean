@@ -12,10 +12,14 @@ namespace Lynx.Modules.Erlang
 
 open Lynx
 
-/-- Spawn a process. The translator resolves the child before this call.
-`Result.bind` captures the caller continuation for scheduling. -/
-def spawn_1 (_table : Term.FunTable) (child : Unit → Result) : Result :=
-  .spawn (child ()) fun pid => .ok (.pid pid)
+/-- Spawn a zero-arity function term. Resolution and arity validation happen in
+the caller before the child is scheduled. `Result.bind` captures the caller
+continuation for scheduling. -/
+def spawn_1 (table : Term.FunTable) (child : Term) : Result :=
+  match Term.fetchFun table child with
+  | some (implementation, 0) =>
+      .spawn (implementation #[]) fun pid => .ok (.pid pid)
+  | _ => .error (.error (.atom "badarg"))
 
 private def properList? : Term → Option (List Term)
   | .nil => some []

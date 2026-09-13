@@ -15,11 +15,20 @@ private def firstFun : Term.Fun
   | #[left, _] => .ok left
   | _ => .error (.error (.atom "unexpected_arguments"))
 
-private def functions : Term.FunTable := #[identityFun, firstFun]
+private def rememberSelf : Result := do
+  let pid ← self_0
+  let _ ← put_2 (.atom "pid") pid
+  .ok pid
+
+private def rememberSelfFun : Term.Fun
+  | #[] => rememberSelf
+  | _ => .error (.error (.atom "unexpected_arguments"))
+
+private def functions : Term.FunTable := #[identityFun, firstFun, rememberSelfFun]
 
 theorem fetch_fun :
     (Term.fetchFun functions (.function 0 1)).map Prod.snd = some 1 ∧
-    Term.fetchFun functions (.function 2 0) = none ∧
+    Term.fetchFun functions (.function 3 0) = none ∧
     Term.fetchFun functions .nil = none := by
   exact ⟨rfl, rfl, rfl⟩
 
@@ -68,14 +77,9 @@ theorem reflexive_operators (a : Term) :
   simp [less_than_2, greater_than_2, less_than_or_equal_2, greater_than_or_equal_2,
     Term.true, Term.false]
 
-private def rememberSelf : Result := do
-  let pid ← self_0
-  let _ ← put_2 (.atom "pid") pid
-  .ok pid
-
 /-- Callers remain in direct style even when the helper they invoke spawns. -/
 private def spawnFromHelper : Result :=
-  spawn_1 functions fun _ => rememberSelf
+  spawn_1 functions (.function 2 0)
 
 private def spawnCaller : Result := do
   let childPid ← spawnFromHelper
@@ -92,8 +96,12 @@ theorem spawn_schedules_child_or_parent_first :
       .ok (.tuple #[.pid 2, .pid 1]) final := by
   exact ⟨rfl, rfl⟩
 
+private def nestedSpawnFun : Term.Fun
+  | #[] => spawn_1 functions (.function 2 0)
+  | _ => .error (.error (.atom "unexpected_arguments"))
+
 private def nestedSpawnCaller : Result :=
-  spawn_1 functions fun _ => spawn_1 functions fun _ => rememberSelf
+  spawn_1 #[nestedSpawnFun] (.function 0 0)
 
 theorem completed_nested_processes_are_removed :
     let final : Environment := { pidCounter := 3 }
@@ -102,6 +110,12 @@ theorem completed_nested_processes_are_removed :
     Lynx.run nestedSpawnCaller [.current, .current] =
       .ok (.pid 2) final := by
   exact ⟨rfl, rfl⟩
+
+theorem spawn_rejects_invalid_fun :
+    spawn_1 functions (.atom "not_a_fun") = .error (.error (.atom "badarg")) ∧
+    spawn_1 functions (.function 9 0) = .error (.error (.atom "badarg")) ∧
+    spawn_1 functions (.function 0 1) = .error (.error (.atom "badarg")) := by
+  exact ⟨rfl, rfl, rfl⟩
 
 theorem tuple_equality :
     equal_2 (.tuple #[]) (.tuple #[]) = .ok Term.true ∧
