@@ -75,7 +75,7 @@ private def rememberSelf : Result := do
 
 /-- Callers remain in direct style even when the helper they invoke spawns. -/
 private def spawnFromHelper : Result :=
-  spawn_1 fun _ => rememberSelf
+  spawn_1 functions fun _ => rememberSelf
 
 private def spawnCaller : Result := do
   let childPid ← spawnFromHelper
@@ -93,7 +93,7 @@ theorem spawn_schedules_child_or_parent_first :
   exact ⟨rfl, rfl⟩
 
 private def nestedSpawnCaller : Result :=
-  spawn_1 fun _ => spawn_1 fun _ => rememberSelf
+  spawn_1 functions fun _ => spawn_1 functions fun _ => rememberSelf
 
 theorem completed_nested_processes_are_removed :
     let final : Environment := { pidCounter := 3 }
@@ -171,5 +171,6 @@ end LynxTest.Modules.Erlang
 
 run_cmd do
   LynxTest.ProofAudit.checkModule `LynxTest.Modules.Erlang
-  LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.Definitions
-  LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.ListLemmas
+  LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.Fun
+  LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.Guards
+  LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.Process

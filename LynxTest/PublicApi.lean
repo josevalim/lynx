@@ -115,8 +115,9 @@ private def sorted (items : List String) : Array String :=
 
 private def privateModules : Array String := #[
   "Lynx.Attribute",
-  "Lynx.Modules.Erlang.Definitions",
-  "Lynx.Modules.Erlang.ListLemmas",
+  "Lynx.Modules.Erlang.Fun",
+  "Lynx.Modules.Erlang.Guards",
+  "Lynx.Modules.Erlang.Process",
   "Lynx.Tactic",
   "Lynx.Tactic.Contract",
   "Lynx.Term.Compare",
@@ -129,7 +130,9 @@ private def privateModules : Array String := #[
 private def apiContributorModules : Array String := #[
   "Lynx",
   "Lynx.Modules.Erlang",
-  "Lynx.Modules.Erlang.Definitions",
+  "Lynx.Modules.Erlang.Fun",
+  "Lynx.Modules.Erlang.Guards",
+  "Lynx.Modules.Erlang.Process",
   "Lynx.Modules.Maps",
   "Lynx.Term",
   "Lynx.Term.Compare",

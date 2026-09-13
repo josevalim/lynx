@@ -1,2 +1,3 @@
-import Lynx.Modules.Erlang.Definitions
-import Lynx.Modules.Erlang.ListLemmas
+import Lynx.Modules.Erlang.Fun
+import Lynx.Modules.Erlang.Guards
+import Lynx.Modules.Erlang.Process
