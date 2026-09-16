@@ -1,6 +1,10 @@
 import Lean
 import Lynx
 
+-- Internal packed-bit helpers must not leak through the public imports.
+#check_failure Lynx.Term.Bitstring.bitSize
+#check_failure Lynx.Term.Bitstring.toBits
+
 /-! A deliberate snapshot of Lynx's exported modules and declarations.
 Any public API addition or removal must update this file. -/
 
@@ -32,6 +36,8 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Modules.Erlang.andalso_2",
   "Lynx.Modules.Erlang.append_2",
   "Lynx.Modules.Erlang.apply_2",
+  "Lynx.Modules.Erlang.bit_size_1",
+  "Lynx.Modules.Erlang.byte_size_1",
   "Lynx.Modules.Erlang.equal_2",
   "Lynx.Modules.Erlang.erase_0",
   "Lynx.Modules.Erlang.erase_1",
@@ -43,6 +49,8 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Modules.Erlang.get_keys_1",
   "Lynx.Modules.Erlang.greater_than_2",
   "Lynx.Modules.Erlang.greater_than_or_equal_2",
+  "Lynx.Modules.Erlang.is_binary_1",
+  "Lynx.Modules.Erlang.is_bitstring_1",
   "Lynx.Modules.Erlang.is_float_1",
   "Lynx.Modules.Erlang.is_integer_1",
   "Lynx.Modules.Erlang.is_list_1",
@@ -82,6 +90,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.Fun",
   "Lynx.Term.FunTable",
   "Lynx.Term.atom",
+  "Lynx.Term.bitstring",
   "Lynx.Term.compare",
   "Lynx.Term.cons",
   "Lynx.Term.emptyMap",
@@ -124,6 +133,7 @@ private def privateModules : Array String := #[
   "Lynx.Modules.Erlang.Process",
   "Lynx.Tactic",
   "Lynx.Tactic.Contract",
+  "Lynx.Term.Bitstring",
   "Lynx.Term.Compare",
   "Lynx.Term.DataTypes",
   "Lynx.Term.FiniteFloat",

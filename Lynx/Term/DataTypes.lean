@@ -2,6 +2,7 @@ module
 
 public import Std
 public import Lynx.Term.FiniteFloat
+import all Lynx.Term.Bitstring
 
 public section
 
@@ -20,6 +21,9 @@ inductive Term where
   | map : List (Term × Term) → Term
   | nil : Term
   | cons : Term → Term → Term
+  /-- Packed bits, with `0` denoting whole bytes and `1`–`7` denoting
+  the used high bits of the last byte. Empty storage ignores the count. -/
+  | bitstring : ByteArray → Fin 8 → Term
 deriving Repr
 
 inductive Exception where

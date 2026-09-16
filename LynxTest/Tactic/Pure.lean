@@ -4,6 +4,25 @@ import LynxTest.ProofAudit
 namespace LynxTest.Tactic.Pure
 open Lynx
 
+theorem binary_is_bitstring (input : Term)
+    (accepted : Accepted (Modules.Erlang.is_binary_1 input)) :
+    Accepted (Modules.Erlang.is_bitstring_1 input) := by
+  lynx_solve
+
+theorem bitstring_size_is_integer (input : Term)
+    (accepted : Accepted (Modules.Erlang.is_bitstring_1 input)) :
+    Accepted (do
+      let size ← Modules.Erlang.bit_size_1 input
+      Modules.Erlang.is_integer_1 size) := by
+  lynx_solve
+
+theorem bitstring_byte_size_is_integer (input : Term)
+    (accepted : Accepted (Modules.Erlang.is_bitstring_1 input)) :
+    Accepted (do
+      let size ← Modules.Erlang.byte_size_1 input
+      Modules.Erlang.is_integer_1 size) := by
+  lynx_solve
+
 #lynx_pure def classify (input : Term) : Result :=
   .ok (match input with | .integer _ => Term.true | _ => Term.false)
 

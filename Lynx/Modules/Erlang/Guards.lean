@@ -13,6 +13,27 @@ open Lynx
 #lynx_pure def is_float_1 (input : Term) : Result :=
   .ok (match input with | .float _ => Term.true | _ => Term.false)
 
+#lynx_pure def is_bitstring_1 : Term → Result
+  | .bitstring _ _ => .ok Term.true
+  | _ => .ok Term.false
+
+#lynx_pure def is_binary_1 : Term → Result
+  | .bitstring bytes lastBits =>
+      .ok (if bytes.size = 0 ∨ lastBits = 0 then Term.true else Term.false)
+  | _ => .ok Term.false
+
+#lynx_pure def bit_size_1 : Term → Result
+  | .bitstring bytes lastBits =>
+      .ok (.integer (if bytes.size = 0 then 0
+        else if lastBits = 0 then bytes.size * 8
+        else (bytes.size - 1) * 8 + lastBits.val))
+  | _ => throw (.error (.atom "badarg"))
+
+/-- Partial final bytes count as one byte, as in Erlang's `byte_size/1`. -/
+#lynx_pure def byte_size_1 : Term → Result
+  | .bitstring bytes _ => .ok (.integer bytes.size)
+  | _ => throw (.error (.atom "badarg"))
+
 /-- Expose the state-preserving callback even when passed without its argument. -/
 @[simp] theorem is_integer_1_function :
     is_integer_1 = fun input => Result.ok

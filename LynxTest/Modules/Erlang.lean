@@ -32,6 +32,57 @@ private def floatOne : Term.FiniteFloat :=
 private def floatOneAndHalf : Term.FiniteFloat :=
   ⟨false, 1023, 2 ^ 51⟩
 
+-- Elixir: <<>>, <<1::1>>, <<1::7>>, <<1>>, <<1, 1::1>>.
+-- Partial bytes store their meaningful bits at the most significant end.
+private def bitstrings : List Term := [
+  .bitstring ⟨#[]⟩ 0, .bitstring ⟨#[128]⟩ 1,
+  .bitstring ⟨#[2]⟩ 7, .bitstring ⟨#[1]⟩ 0,
+  .bitstring ⟨#[1, 128]⟩ 1]
+
+theorem bitstring_guards :
+    bitstrings.map is_binary_1 =
+      [.ok Term.true, .ok Term.false, .ok Term.false, .ok Term.true, .ok Term.false] ∧
+    bitstrings.map is_bitstring_1 = List.replicate 5 (.ok Term.true) ∧
+    bitstrings.map bit_size_1 =
+      [.ok (.integer 0), .ok (.integer 1), .ok (.integer 7),
+       .ok (.integer 8), .ok (.integer 9)] ∧
+    bitstrings.map byte_size_1 =
+      [.ok (.integer 0), .ok (.integer 1), .ok (.integer 1),
+       .ok (.integer 1), .ok (.integer 2)] := by
+  exact ⟨rfl, rfl, rfl, rfl⟩
+
+theorem all_partial_byte_sizes :
+    ([0, 1, 2, 3, 4, 5, 6, 7] : List (Fin 8)).map
+      (fun bits => bit_size_1 (.bitstring ⟨#[255, 255]⟩ bits)) =
+    [16, 9, 10, 11, 12, 13, 14, 15].map (fun n => .ok (.integer n)) := rfl
+
+theorem non_bitstrings_rejected (input : Term)
+    (h : ∀ bytes bits, input ≠ .bitstring bytes bits) :
+    is_binary_1 input = .ok Term.false ∧
+    is_bitstring_1 input = .ok Term.false ∧
+    bit_size_1 input = .error (.error (.atom "badarg")) ∧
+    byte_size_1 input = .error (.error (.atom "badarg")) := by
+  cases input <;> simp_all [is_binary_1, is_bitstring_1, bit_size_1, byte_size_1]
+
+theorem bitstring_comparison :
+    -- A proper prefix sorts first; significant bits take precedence over length.
+    less_than_2 (.bitstring ⟨#[128]⟩ 1) (.bitstring ⟨#[128]⟩ 0) = .ok Term.true ∧
+    greater_than_2 (.bitstring ⟨#[128]⟩ 1) (.bitstring ⟨#[127]⟩ 0) = .ok Term.true ∧
+    less_than_2 (.cons (.integer 1) .nil) (.bitstring ⟨#[]⟩ 0) = .ok Term.true ∧
+    -- Padding is ignored by ordinary and exact equality.
+    equal_2 (.bitstring ⟨#[128]⟩ 1) (.bitstring ⟨#[255]⟩ 1) = .ok Term.true ∧
+    exact_equal_2 (.bitstring ⟨#[128]⟩ 1) (.bitstring ⟨#[255]⟩ 1) = .ok Term.true ∧
+    exact_equal_2 (.bitstring ⟨#[128]⟩ 1) (.bitstring ⟨#[128]⟩ 2) = .ok Term.false ∧
+    exact_equal_2 (.map [(.bitstring ⟨#[128]⟩ 1, .integer 42)])
+      (.map [(.bitstring ⟨#[255]⟩ 1, .integer 42)]) = .ok Term.true := by
+  repeat' first | apply And.intro | rfl
+
+theorem empty_bitstring_ignores_count (bits : Fin 8) :
+    is_binary_1 (.bitstring ⟨#[]⟩ bits) = .ok Term.true ∧
+    bit_size_1 (.bitstring ⟨#[]⟩ bits) = .ok (.integer 0) ∧
+    byte_size_1 (.bitstring ⟨#[]⟩ bits) = .ok (.integer 0) := by
+  exact ⟨rfl, rfl, rfl⟩
+
 private theorem floatOne_toRat : floatOne.toRat = 1 := by
   simp [floatOne, Term.FiniteFloat.toRat, Term.FiniteFloat.magnitude]
   change (4503599627370496 : Rat) * 2 ^ (-52 : Int) = 1

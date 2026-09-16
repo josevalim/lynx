@@ -33,4 +33,5 @@ run_cmd do
   LynxTest.ProofAudit.checkModule `LynxTest.Term
   LynxTest.ProofAudit.checkModule `Lynx.Term.DataTypes
   LynxTest.ProofAudit.checkModule `Lynx.Term.FiniteFloat
+  LynxTest.ProofAudit.checkModule `Lynx.Term.Bitstring
   LynxTest.ProofAudit.checkModule `Lynx.Term.Induction

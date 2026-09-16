@@ -1,6 +1,7 @@
 module
 
 public import Lynx.Term.DataTypes
+import all Lynx.Term.Bitstring
 
 public section
 
@@ -202,6 +203,10 @@ private def compareStep (exact : Bool) (cmp exactCmp : Term → Term → Orderin
   | .nil, .cons _ _ => .lt
   | .cons _ _, .nil => .gt
   | .cons a as, .cons b bs => (cmp a b).then (cmp as bs)
+  | .bitstring a ab, .bitstring b bb =>
+    List.compareLex Ord.compare (Bitstring.toBits a ab) (Bitstring.toBits b bb)
+  | .bitstring _ _, _ => .gt
+  | _, .bitstring _ _ => .lt
 
 private abbrev Child (n : Nat) := {t : Term // sizeOf t < n}
 
@@ -274,6 +279,10 @@ private def boundedStep (exact : Bool) (n : Nat) (cmp exactCmp : Child n → Chi
       ⟨b, by simp only [Term.cons.sizeOf_spec] at hb; omega⟩).then
       (cmp ⟨as, by simp only [Term.cons.sizeOf_spec] at ha; omega⟩
         ⟨bs, by simp only [Term.cons.sizeOf_spec] at hb; omega⟩)
+  | .bitstring a ab, .bitstring b bb =>
+    List.compareLex Ord.compare (Bitstring.toBits a ab) (Bitstring.toBits b bb)
+  | .bitstring _ _, _ => .gt
+  | _, .bitstring _ _ => .lt
 
 private theorem boundedStep_eq (exact : Bool) (n : Nat)
     (cmp exactCmp : Term → Term → Ordering) (a b : Term)

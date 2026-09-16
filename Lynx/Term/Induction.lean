@@ -15,12 +15,13 @@ namespace Lynx
     (map : ∀ entries, (∀ k v, (k, v) ∈ entries → motive k ∧ motive v) →
       motive (.map entries))
     (nil : motive .nil)
-    (cons : ∀ x xs, motive x → motive xs → motive (.cons x xs)) : motive t := by
+    (cons : ∀ x xs, motive x → motive xs → motive (.cons x xs))
+    (bitstring : ∀ bytes lastBits, motive (.bitstring bytes lastBits)) : motive t := by
   refine Term.rec (motive_2 := fun xs => ∀ x ∈ xs, motive x)
     (motive_3 := fun entries => ∀ k v, (k, v) ∈ entries → motive k ∧ motive v)
     (motive_4 := fun xs => ∀ x ∈ xs, motive x)
     (motive_5 := fun entry => motive entry.1 ∧ motive entry.2)
-    integer float atom function pid tuple map nil cons ?_ ?_ ?_ ?_ ?_ ?_ t
+    integer float atom function pid tuple map nil cons bitstring ?_ ?_ ?_ ?_ ?_ ?_ t
   · intro xs ih x hx
     exact ih x (by simpa using hx)
   · simp
