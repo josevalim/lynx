@@ -1,4 +1,8 @@
-import Lynx.Term
+module
+
+public import Lynx.Term
+
+public section
 
 /-! Erlang process identity and process-dictionary operations. -/
 

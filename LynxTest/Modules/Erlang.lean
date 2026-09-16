@@ -1,6 +1,19 @@
-import LynxTest.ProofAudit
+module
+
+meta import LynxTest.ProofAudit
 import Lynx.Modules.Erlang
 import LynxTest.Term.Compare
+import all Lynx.Term
+import all Lynx.Term.DataTypes
+import all Lynx.Term.FiniteFloat
+import all Lynx.Term.Compare
+import all Lynx.Term.Runner
+import all Lynx.Modules.Erlang.Fun
+import all Lynx.Modules.Erlang.Process
+import all Std
+import all Init.Data.List.Basic
+import all Init.Data.List.Control
+import all Init.Data.Ord.String
 
 namespace LynxTest.Modules.Erlang
 open Lynx
@@ -122,10 +135,10 @@ theorem float_equality_guards :
   simp [is_float_1, equal_2, not_equal_2, exact_equal_2, exact_not_equal_2,
     floatOne_toRat]
 
-theorem append_lemmas_reexported (head tail right : Term) :
+theorem append_reduces (head tail right : Term) :
     append_2 (.cons head tail) right =
       (append_2 tail right >>= fun rest => .ok (.cons head rest)) :=
-  append_cons head tail right
+  rfl
 
 theorem ordered_operators :
     orderedTerms.Pairwise (fun a b =>

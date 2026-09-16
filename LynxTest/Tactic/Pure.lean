@@ -1,8 +1,24 @@
+module
+
 import Lynx
-import LynxTest.ProofAudit
+meta import LynxTest.ProofAudit
 
 namespace LynxTest.Tactic.Pure
 open Lynx
+
+-- The coercion exposes only the named operation, not the scheduler body.
+theorem callable_result (computation : Result) (env : Environment) :
+    computation env = computation.run env := rfl
+
+theorem run_ok (value : Term) (env : Environment) :
+    (Result.ok value).run env = .ok value env := by simp
+
+theorem one_bit_size :
+    Modules.Erlang.bit_size_1 (.bitstring ⟨#[128]⟩ 1) = .ok (.integer 1) := by
+  rfl
+
+theorem float_zero_value :
+    Term.FiniteFloat.toRat ⟨false, 0, 0⟩ = 0 := rfl
 
 theorem binary_is_bitstring (input : Term)
     (accepted : Accepted (Modules.Erlang.is_binary_1 input)) :
@@ -50,7 +66,7 @@ theorem execution_reuses_purity (input : Term) (env final : Environment) :
   simp
 
 run_cmd do
-  let some doc ← Lean.findSimpleDocString? (← Lean.getEnv) `LynxTest.Tactic.Pure.classifyTwice
+  let some doc ← Lean.findSimpleDocString? (← Lean.getEnv) ``LynxTest.Tactic.Pure.classifyTwice
     | throwError "classifyTwice documentation was not registered"
   unless doc.startsWith "Purity composes through calls already checked by `#lynx_pure`." do
     throwError "unexpected classifyTwice documentation: {doc}"

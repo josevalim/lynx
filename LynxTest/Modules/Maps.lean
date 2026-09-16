@@ -1,5 +1,12 @@
-import LynxTest.ProofAudit
+module
+
+meta import LynxTest.ProofAudit
 import Lynx
+import all Lynx.Term.Compare
+import all Std
+import all Init.Data.List.Basic
+import all Init.Data.List.Control
+import all Init.Data.Ord.String
 
 namespace LynxTest.Modules.Maps
 open Lynx Lynx.Modules
@@ -10,7 +17,7 @@ theorem get_after_put (m k v : Term)
     (hm : m.isMap = true) :
     (Maps.put_3 k v m >>= Maps.get_2 k) = .ok v := by
   obtain ⟨entries, rfl⟩ := Term.isMap_iff m |>.mp hm
-  simp [Maps.put_3, Maps.get_2]
+  simp [Maps.put_3, Maps.get_2, Term.Map.find]
 
 theorem merge_associative (a b c : Term)
     (ha : a.isMap = true) (hb : b.isMap = true) (hc : c.isMap = true) :

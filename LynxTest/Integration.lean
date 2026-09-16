@@ -11,7 +11,13 @@ run_cmd do
   LynxTest.ProofAudit.checkNoDependencies
     ``LynxTest.Integration.Sum.sum_append_property
     #[``LynxTest.Integration.Sum.sum_satisfies_contract]
-  LynxTest.ProofAudit.checkIndependent #[
-    ``LynxTest.Integration.Sets.union_satisfies_contract,
-    ``LynxTest.Integration.Sets.union_commutative,
-    ``LynxTest.Integration.Sets.union_empty]
+  -- These internal examples need not export their declarations for auditing.
+  let declarations ← LynxTest.ProofAudit.moduleDeclarations `LynxTest.Integration.Sets
+  let targets ← #[
+    `LynxTest.Integration.Sets.union_satisfies_contract,
+    `LynxTest.Integration.Sets.union_commutative,
+    `LynxTest.Integration.Sets.union_empty].mapM fun target => do
+      let some name := declarations.find? (Lean.privateToUserName · == target)
+        | throwError "missing integration theorem: {target}"
+      pure name
+  LynxTest.ProofAudit.checkIndependent targets

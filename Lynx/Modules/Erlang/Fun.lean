@@ -1,4 +1,8 @@
-import Lynx.Term
+module
+
+public import Lynx.Term
+
+public section
 
 /-! Helpers for calls whose translated Lean signature includes the program-local
 function table.

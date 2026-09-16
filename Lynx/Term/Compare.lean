@@ -1,7 +1,8 @@
 module
 
 public import Lynx.Term.DataTypes
-import all Lynx.Term.Bitstring
+public import Lynx.Term.Bitstring
+import all Lynx.Term.FiniteFloat
 
 public section
 

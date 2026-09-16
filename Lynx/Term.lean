@@ -3,14 +3,14 @@ module
 public import Lynx.Term.DataTypes
 public import Lynx.Term.Compare
 public import Lynx.Term.Runner
-import all Lynx.Term.Induction
+public import Lynx.Term.Induction
 
 namespace Lynx
 
 /-- Run a complete process tree from a fresh runtime using the supplied
 scheduler choices. Every process created by the run has finished on return. -/
 public def run (computation : Result α) (schedule : List ScheduleChoice := []) : Outcome α :=
-  Term.Runner.run computation { schedule }
+  computation.run { schedule }
 
 end Lynx
 
@@ -29,7 +29,7 @@ public abbrev FunTable := Array Fun
   | _ => none
 
 /-- Empty Erlang map literal. -/
-@[expose] public def emptyMap : Term := .map []
+@[expose, simp] public def emptyMap : Term := .map []
 
 @[expose] public def «true» : Term := .atom "true"
 @[expose] public def «false» : Term := .atom "false"

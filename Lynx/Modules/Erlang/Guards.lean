@@ -1,5 +1,10 @@
-import Lynx.Term
-import Lynx.Tactic
+module
+
+public import Lynx.Term
+public import Lynx.Term.Bitstring
+public import Lynx.Tactic
+
+@[expose] public section
 
 /-! Stateless Erlang operators and their generated purity proofs. -/
 
@@ -24,9 +29,7 @@ open Lynx
 
 #lynx_pure def bit_size_1 : Term → Result
   | .bitstring bytes lastBits =>
-      .ok (.integer (if bytes.size = 0 then 0
-        else if lastBits = 0 then bytes.size * 8
-        else (bytes.size - 1) * 8 + lastBits.val))
+      .ok (.integer (Term.Bitstring.bitSize bytes lastBits))
   | _ => throw (.error (.atom "badarg"))
 
 /-- Partial final bytes count as one byte, as in Erlang's `byte_size/1`. -/
@@ -72,20 +75,14 @@ open Lynx
 #lynx_pure def greater_than_or_equal_2 (left right : Term) : Result :=
   .ok (if (Term.compare left right).isGE then Term.true else Term.false)
 
-#lynx_pure @[lynx_opaque] def append_2 : Term → Term → Result
+#lynx_pure def append_2 : Term → Term → Result
   | .nil, right => .ok right
   | .cons head tail, right => do
       let rest ← append_2 tail right
       .ok (.cons head rest)
   | _, _ => throw (.error (.atom "badarg"))
 
-@[simp] theorem append_nil_left (right : Term) :
-    append_2 .nil right = .ok right := rfl
-
-@[simp] theorem append_cons (head tail right : Term) :
-    append_2 (.cons head tail) right =
-      (append_2 tail right >>= fun rest => .ok (.cons head rest)) := rfl
-
+-- Keep short-circuit branching behind its specification during proof search.
 @[lynx_opaque] def andalso_2
     (left : Result)
     (right : Unit → Result) : Result := do

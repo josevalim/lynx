@@ -1,24 +1,22 @@
-import Lean
-import Lynx
+module
 
--- Internal packed-bit helpers must not leak through the public imports.
-#check_failure Lynx.Term.Bitstring.bitSize
-#check_failure Lynx.Term.Bitstring.toBits
+meta import Lean
+public import Lynx
 
-/-! A deliberate snapshot of Lynx's exported modules and declarations.
-Any public API addition or removal must update this file. -/
+meta section
+
+/-! Snapshot of public types and executable declarations available through `Lynx`.
+Inspect the exporting environment across every Lynx module, so internal helpers
+cannot escape the check by living in a module omitted from a contributor list.
+Proofs, generated declarations, and meta elaborator code are not snapshotted. -/
 
 namespace LynxTest.PublicApi
 open Lean Elab Command
 
-private def expectedModules : Array String := #[
-  "Lynx",
-  "Lynx.Modules.Erlang",
-  "Lynx.Modules.Maps",
-  "Lynx.Term"
-]
-
 private def expectedDeclarations : Array String := #[
+  "Lynx.Accepted",
+  "Lynx.Covered",
+  "Lynx.EnsuresClauses",
   "Lynx.Environment",
   "Lynx.Environment.currentPid",
   "Lynx.Environment.currentProcess",
@@ -71,6 +69,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.ProcessState",
   "Lynx.ProcessState.mk",
   "Lynx.ProcessState.pdict",
+  "Lynx.Property",
   "Lynx.Result",
   "Lynx.Result.IsPure",
   "Lynx.Result.bind",
@@ -81,14 +80,33 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.instMonadExceptOfException",
   "Lynx.Result.instMonadStateOfEnvironment",
   "Lynx.Result.ok",
+  "Lynx.Result.run",
   "Lynx.Result.set",
   "Lynx.Result.spawn",
+  "Lynx.Satisfies",
   "Lynx.ScheduleChoice",
   "Lynx.ScheduleChoice.current",
   "Lynx.ScheduleChoice.spawned",
+  "Lynx.SourceLabel",
+  "Lynx.SourceLabel.file",
+  "Lynx.SourceLabel.line",
+  "Lynx.SourceLabel.mk",
   "Lynx.Term",
+  "Lynx.Term.Bitstring.bitSize",
+  "Lynx.Term.Bitstring.toBits",
+  "Lynx.Term.FiniteFloat",
+  "Lynx.Term.FiniteFloat.exponent",
+  "Lynx.Term.FiniteFloat.fraction",
+  "Lynx.Term.FiniteFloat.magnitude",
+  "Lynx.Term.FiniteFloat.mk",
+  "Lynx.Term.FiniteFloat.negative",
+  "Lynx.Term.FiniteFloat.toRat",
   "Lynx.Term.Fun",
   "Lynx.Term.FunTable",
+  "Lynx.Term.Map.Entries",
+  "Lynx.Term.Map.find",
+  "Lynx.Term.Map.merge",
+  "Lynx.Term.Map.put",
   "Lynx.Term.atom",
   "Lynx.Term.bitstring",
   "Lynx.Term.compare",
@@ -99,6 +117,8 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.fetchFun",
   "Lynx.Term.float",
   "Lynx.Term.function",
+  "Lynx.Term.instDecidableEqFiniteFloat",
+  "Lynx.Term.instReprFiniteFloat",
   "Lynx.Term.integer",
   "Lynx.Term.isFalse",
   "Lynx.Term.isMap",
@@ -109,8 +129,10 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.pid",
   "Lynx.Term.true",
   "Lynx.Term.tuple",
+  "Lynx.WithSourceLabel",
   "Lynx.instBEqTerm",
   "Lynx.instCoeFunResultForallEnvironmentOutcome",
+  "Lynx.instDecidableEqSourceLabel",
   "Lynx.instInhabitedEnvironment",
   "Lynx.instInhabitedProcessState",
   "Lynx.instInhabitedScheduleChoice",
@@ -119,62 +141,28 @@ private def expectedDeclarations : Array String := #[
   "Lynx.instReprOutcome",
   "Lynx.instReprProcessState",
   "Lynx.instReprScheduleChoice",
+  "Lynx.instReprSourceLabel",
   "Lynx.instReprTerm",
+  "Lynx.instToStringSourceLabel",
   "Lynx.run",
 ]
 
 private def sorted (items : List String) : Array String :=
   (items.mergeSort (fun left right => left < right)).toArray
 
-private def privateModules : Array String := #[
-  "Lynx.Attribute",
-  "Lynx.Modules.Erlang.Fun",
-  "Lynx.Modules.Erlang.Guards",
-  "Lynx.Modules.Erlang.Process",
-  "Lynx.Tactic",
-  "Lynx.Tactic.Contract",
-  "Lynx.Term.Bitstring",
-  "Lynx.Term.Compare",
-  "Lynx.Term.DataTypes",
-  "Lynx.Term.FiniteFloat",
-  "Lynx.Term.Induction",
-  "Lynx.Term.Map",
-  "Lynx.Term.Runner"
-]
-
-private def apiContributorModules : Array String := #[
-  "Lynx",
-  "Lynx.Modules.Erlang",
-  "Lynx.Modules.Erlang.Fun",
-  "Lynx.Modules.Erlang.Guards",
-  "Lynx.Modules.Erlang.Process",
-  "Lynx.Modules.Maps",
-  "Lynx.Term",
-  "Lynx.Term.Compare",
-  "Lynx.Term.DataTypes",
-  "Lynx.Term.Runner"
-]
-
-private def actualModules (env : Environment) : Array String :=
-  sorted <| env.header.moduleNames.toList.filterMap fun name =>
-    let name := name.toString
-    if (name == "Lynx" || name.startsWith "Lynx.") && !privateModules.contains name then
-      some name
-    else none
-
-private def actualDeclarations : CoreM (Array String) := do
-  let env ← getEnv
+private def actualDeclarations : MetaM (Array String) := do
+  let env := (← getEnv).setExporting true
   let declarations ← env.constants.toList.filterMapM fun (name, info) => do
     match env.getModuleIdxFor? name with
     | none => pure none
     | some moduleIdx =>
-        let moduleName := env.header.moduleNames[moduleIdx.toNat]!
+        let moduleName := env.header.moduleNames[moduleIdx.toNat]!.toString
         let isGenerated := (← Lean.isAutoDeclOrPrivate_Internal name) ||
           Lean.isRecCore env name || Lean.Meta.isInstanceCore env name.getPrefix
-        if apiContributorModules.contains moduleName.toString &&
-            !name.toString.startsWith "Lynx.Term.Runner." &&
-            !info.isTheorem && !isPrivateName name && !isGenerated then
-          pure (some name.toString)
+        if (moduleName == "Lynx" || moduleName.startsWith "Lynx.") &&
+            (env.find? name).isSome && !isMarkedMeta env name &&
+            !isPrivateName name && !isGenerated then
+          if ← Meta.isProp info.type then pure none else pure (some name.toString)
         else pure none
   return sorted declarations
 
@@ -182,12 +170,10 @@ private def lines (items : Array String) : String :=
   String.intercalate "\n" items.toList
 
 run_cmd do
-  let env ← getEnv
-  let modules := actualModules env
-  unless modules == expectedModules do
-    throwError "public module snapshot changed:\n{lines modules}"
-  let declarations ← liftCoreM actualDeclarations
+  let declarations ← liftTermElabM actualDeclarations
   unless declarations == expectedDeclarations do
-    throwError "public declaration snapshot changed:\n{lines declarations}"
+    let added := declarations.filter (!expectedDeclarations.contains ·)
+    let removed := expectedDeclarations.filter (!declarations.contains ·)
+    throwError "public declaration snapshot changed:\nUnexpected:\n{lines added}\nMissing:\n{lines removed}"
 
 end LynxTest.PublicApi

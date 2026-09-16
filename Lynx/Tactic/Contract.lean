@@ -1,7 +1,10 @@
-import Lynx.Term
+module
 
-/-! Internal proposition vocabulary for Lynx's tactic and translated contracts.
-This module is not a supported library API. -/
+public import Lynx.Term
+
+@[expose] public section
+
+/-! Public proposition vocabulary for Lynx's tactic and translated contracts. -/
 
 namespace Lynx
 

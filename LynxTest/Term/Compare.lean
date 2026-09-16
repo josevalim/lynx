@@ -1,5 +1,13 @@
-import LynxTest.ProofAudit
-import Lynx.Term
+module
+
+public meta import LynxTest.ProofAudit
+public import Lynx.Term
+import all Lynx.Term.Compare
+import all Lynx.Term.FiniteFloat
+import all Std
+import all Init.Data.List.Basic
+import all Init.Data.List.Control
+import all Init.Data.Ord.String
 
 namespace LynxTest.Term.Compare
 open Lynx
@@ -23,7 +31,7 @@ private theorem floatOne_toRat : floatOne.toRat = 1 := by
 -- Strictly increasing across every represented category. Tuples compare arity
 -- before elements; maps compare size, all keys, then values. Includes nested
 -- tuples/maps, Unicode atoms, large integers, improper tails, and list prefixes.
-def orderedTerms : List Term := [
+@[expose] public def orderedTerms : List Term := [
   .integer (-1000000000000000000000000000000), .integer (-1), .integer 0,
   .integer 1000000000000000000000000000000,
   .atom "", .atom "a", .atom "aa", .atom "b", .atom "é", .atom "λ", .atom "😀",
@@ -61,7 +69,7 @@ def orderedTerms : List Term := [
 
 set_option maxRecDepth 10000 in
 set_option maxHeartbeats 4000000 in
-theorem ordered_terms :
+public theorem ordered_terms :
     orderedTerms.Pairwise (fun a b =>
       Term.compare a b = .lt ∧ Term.compare b a = .gt) := by decide
 

@@ -50,7 +50,7 @@ set_option Elab.async false
           using restProper
       all_goals simp_all [isProperIntegerList, Erlang.is_integer_1,
         Erlang.append_2, Term.true, Term.false]
-    all_goals simp_all
+    all_goals simp_all [Erlang.append_2]
   | _ => simp_all [isProperIntegerList, Erlang.append_2, Term.true, Term.false]
 
 /-! Translated integer-list expectation and integer-result guarantee. -/

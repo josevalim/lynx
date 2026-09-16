@@ -162,7 +162,7 @@ instance : LawfulMonad @Result := LawfulMonad.mk' _
   (bind_assoc := bind_assoc_proof)
 
 /-- A pure computation is already terminal and therefore independent of runtime state. -/
-def IsPure : Result α → Prop
+@[expose] def IsPure : Result α → Prop
   | .ok _ | .error _ => True
   | _ => False
 

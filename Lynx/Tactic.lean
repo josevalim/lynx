@@ -1,8 +1,12 @@
-import Lean
-import Lynx.Term
-import Lynx.Attribute
-import Lynx.Tactic.Contract
-import Lynx.Term.Induction
+module
+
+public meta import Lean
+public import Lynx.Term
+public meta import Lynx.Attribute
+public import Lynx.Tactic.Contract
+public meta import Lynx.Tactic.Contract
+
+public meta section
 
 /-!
 # How the Lynx tactic works
@@ -294,7 +298,7 @@ private def mkSolver (unfoldOpaque? : Option Name := none) : TacticM Solver := w
       pending := pending ++ decl.type.getUsedConstants
       if decl.type.isConstOf ``Lynx.Term then inputs := inputs.push decl.fvarId
   let mut seen : NameSet := {}
-  let mut definitions : Array (TSyntax `ident) := #[]
+  let mut definitions : Array Name := #[]
   let mut recursive := #[]
   let mut majors : NameMap Nat := {}
   while !pending.isEmpty do
@@ -307,7 +311,7 @@ private def mkSolver (unfoldOpaque? : Option Name := none) : TacticM Solver := w
     let executable ← forallTelescopeReducing info.type fun _ result =>
       isResultType result
     unless executable do continue
-    definitions := definitions.push (mkIdent name)
+    definitions := definitions.push name
     if ← isRecursiveDefinition name then
       recursive := recursive.push name
       if let some index ← getStructuralRecArgPos? name then
@@ -315,20 +319,27 @@ private def mkSolver (unfoldOpaque? : Option Name := none) : TacticM Solver := w
     pending := pending ++ info.value.getUsedConstants
   -- Preserve executable bind structure for branch discovery; the generic
   -- lawful-monad rewrites reassociate binds or turn them into functor maps.
-  let simpSyntax ← `(tactic| simp_all (config := { failIfUnchanged := false })
-    [Accepted, Term.true, Term.false, and_assoc,
-    Pure.pure,
-    Result.IsPure.ok_iff, Result.IsPure.error_iff,
-    Result.IsPure.bind_apply,
-    Result.get_continuation_apply, Result.set_continuation_apply,
-    Result.ok_bind, Result.error_bind, Result.get_bind, Result.set_bind,
-    Result.state_get_bind_apply, Result.state_set_bind_apply,
-    Result.state_modify_bind_apply,
-    Result.state_get_bind_bind_apply, Result.state_set_bind_bind_apply,
-    Result.state_modify_bind_bind_apply,
-    -bind_assoc, -bind_pure_comp, $[$definitions:ident],*])
-  let result ← mkSimpContext simpSyntax (eraseLocal := true) (kind := .simpAll)
-  return ⟨result.ctx, result.simprocs, recursive, majors, inputs, false, {},
+  -- Install the known declarations directly. Re-elaborating a `simp_all`
+  -- quotation here needlessly repeats name resolution in every goal, which
+  -- is especially expensive in files using the module system.
+  let mut thms ← getSimpTheorems
+  for name in #[``and_assoc, ``Result.IsPure.ok_iff, ``Result.IsPure.error_iff,
+      ``Result.IsPure.bind_apply, ``Result.get_continuation_apply,
+      ``Result.set_continuation_apply, ``Result.ok_bind, ``Result.error_bind,
+      ``Result.get_bind, ``Result.set_bind, ``Result.state_get_bind_apply,
+      ``Result.state_set_bind_apply, ``Result.state_modify_bind_apply,
+      ``Result.state_get_bind_bind_apply, ``Result.state_set_bind_bind_apply,
+      ``Result.state_modify_bind_bind_apply] do
+    thms ← (thms.unerase (.decl name)).addConst name
+  thms ← thms.erase (.decl ``bind_assoc)
+  thms ← thms.erase (.decl ``bind_pure_comp)
+  for name in #[``Accepted, ``Term.true, ``Term.false, ``Pure.pure] ++ definitions do
+    for entry in ← mkSimpEntryOfDeclToUnfold name do
+      thms := (thms.uneraseSimpEntry entry).addSimpEntry entry
+  let context ← Simp.mkContext
+    (config := { ({} : Simp.ConfigCtx) with failIfUnchanged := false })
+    (simpTheorems := #[thms]) (congrTheorems := ← getSimpCongrTheorems)
+  return ⟨context, #[← Simp.getSimprocs], recursive, majors, inputs, false, {},
     (← getMainTarget).isAppOf ``Exists⟩
 
 /-- Keep quantified invariants available as whole premises of specification
@@ -839,7 +850,7 @@ private def applyHypothesis (solver : Solver) : TacticM (Option Solver) := withM
                 if !fact.type.isForall then expressions := expressions.push fact.type
               for expression in expressions do
                 expression.forEach fun e => do
-                  unless e.isAppOf ``Term.Runner.run && !e.hasLooseBVars do return
+                  unless e.isAppOf ``Result.run && !e.hasLooseBVars do return
                   let args := e.getAppArgs
                   unless args.size >= 2 do return
                   let computation := args[args.size - 2]!

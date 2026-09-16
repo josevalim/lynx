@@ -1,5 +1,11 @@
 Start with the README.md to understand the general project scope.
 
+Use Lean's `module` system with explicit `public` declarations and deliberate
+`public import` re-exports. Update `LynxTest/PublicApi.lean` for exported API
+changes. Its snapshot must check actual public declarations without excluding
+modules by name. Keep other implementation details private and use
+`import all` where needed.
+
 The Erlang Term definition and its general properties are defined
 in Lynx/Term.lean and within the Lynx/Term/ directory.
 
@@ -9,6 +15,11 @@ by underscore, such as `is_integer_1`. The translator may also
 emit generated, program-local helper functions. Functions that
 are pure from Elixir's point of view (they don't spawn messages
 or use pdict, albeit they can raise) should be tagged with #lynx_pure.
+
+Prefer unfolding over lemmas that merely restate definitions.
+Keep lemmas needed for useful simplification or mathematical properties,
+use `lynx_opaque` only when tests or benchmarks justify specification-based
+proof search.
 
 Integration tests go in LynxTest/Integration and they all
 have the same shape: they have a version of the Elixir module

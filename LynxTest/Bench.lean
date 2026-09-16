@@ -1,4 +1,9 @@
-import Lynx
+module
+
+public import Lynx
+public meta import Lean
+
+public meta section
 
 open Lean.Elab.Command
 

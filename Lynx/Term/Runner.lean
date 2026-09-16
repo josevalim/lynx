@@ -2,8 +2,6 @@ module
 
 public import Lynx.Term.DataTypes
 
-public section
-
 namespace Lynx.Term.Runner
 
 open Lynx
@@ -99,10 +97,18 @@ def run (computation : Result α) (env : Environment) : Outcome α :=
 
 end Lynx.Term.Runner
 
+public section
+
 namespace Lynx
 
+/-- Execute a computation in an existing environment. Use `Lynx.run` to start
+from a fresh runtime. The implementation is hidden; the application lemmas
+below describe its behavior. -/
+def Result.run (computation : Result α) (env : Environment) : Outcome α :=
+  Term.Runner.run computation env
+
 instance : CoeFun (Result α) fun _ => Environment → Outcome α :=
-  ⟨Term.Runner.run⟩
+  ⟨Result.run⟩
 
 namespace Result
 
@@ -146,12 +152,14 @@ namespace Result
     (Result.get continuation) env = continuation env env := by
   change Term.Runner.run (.get continuation) env = _
   rw [Term.Runner.run]
+  rfl
 
 @[simp] theorem set_continuation_apply (next : Environment) (continuation : Result α)
     (env : Environment) :
     (Result.set next continuation) env = continuation next := by
   change Term.Runner.run (.set next continuation) env = _
   rw [Term.Runner.run]
+  rfl
 
 /-- The former state-monad `bind_apply` rule remains valid when the left
 computation is pure. It is deliberately conditional: across `spawn`, running
@@ -164,6 +172,7 @@ the left side to completion could schedule a child before the continuation. -/
       | .error exception updated => .error exception updated := by
   change Term.Runner.run (Result.bind computation next) env = _
   cases computation <;> simp_all [Result.bind, Term.Runner.run]
+  rfl
 
 @[simp] theorem state_get_bind_apply (next : Environment → Result α) (env : Environment) :
     ((MonadState.get : Result Environment) >>= next : Result α) env = next env env := by
@@ -200,13 +209,13 @@ the left side to completion could schedule a child before the continuation. -/
 @[simp] theorem IsPure.ok_iff (computation : Result α) (pure : IsPure computation)
     (env final : Environment) (value : α) :
     computation env = .ok value final ↔ computation = .ok value ∧ env = final := by
-  cases computation <;> simp_all [Term.Runner.run]
+  cases computation <;> simp_all
 
 @[simp] theorem IsPure.error_iff (computation : Result α) (pure : IsPure computation)
     (env final : Environment) (exception : Exception) :
     computation env = .error exception final ↔
       computation = .error exception ∧ env = final := by
-  cases computation <;> simp_all [Term.Runner.run]
+  cases computation <;> simp_all
 
 @[simp] theorem IsPure.bind_ok_iff (computation : Result α) (next : α → Result β)
     (computationPure : IsPure computation) (nextPure : ∀ value, IsPure (next value))

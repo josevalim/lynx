@@ -24,7 +24,7 @@ theorem shadowing :
     put a (.integer 2) [(a, .integer 1)] = [(a, .integer 2), (a, .integer 1)] ∧
     find a [(a, .integer 2), (a, .integer 1)] = some (.integer 2) ∧
     find a [(b, .nil), (a, .integer 1)] = some (.integer 1) := by
-  simp [put, find, findEntry, a, b]
+  simp [put, find, a, b]
 
 theorem numeric_key_types_are_distinct :
     find (.integer 1) [(.float floatOne, a)] = none ∧
