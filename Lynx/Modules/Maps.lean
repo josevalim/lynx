@@ -4,14 +4,14 @@ public import Lynx.Term
 public import Lynx.Term.Map
 public import Lynx.Tactic
 
-@[expose] public section
+public section
 
 namespace Lynx.Modules.Maps
 open Term.Map
 
-#lynx_pure def new_0 : Result := .ok Term.emptyMap
+#lynx_pure @[expose] def new_0 : Result := .ok Term.emptyMap
 
-#lynx_pure def get_2 (key input : Term) : Result :=
+#lynx_pure @[expose] def get_2 (key input : Term) : Result :=
   match input with
   | .map entries =>
     match find key entries with
@@ -19,12 +19,12 @@ open Term.Map
     | none => .error (.error (.tuple #[.atom "badkey", key]))
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
-#lynx_pure def put_3 (key value input : Term) : Result :=
+#lynx_pure @[expose] def put_3 (key value input : Term) : Result :=
   match input with
   | .map entries => .ok (.map (put key value entries))
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
-#lynx_pure def merge_2 (left right : Term) : Result :=
+#lynx_pure @[expose] def merge_2 (left right : Term) : Result :=
   match left, right with
   | .map a, .map b => .ok (.map (merge a b))
   | .map _, _ => .error (.error (.tuple #[.atom "badmap", right]))
