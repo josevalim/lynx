@@ -4,7 +4,7 @@ public import Lynx.Term
 
 public section
 
-/-! Erlang process identity and process-dictionary operations. -/
+/-! Erlang process identity, local messaging, and process-dictionary operations. -/
 
 namespace Lynx.Modules.Erlang
 
@@ -14,6 +14,14 @@ open Lynx
 def self_0 : Result := do
   let env ← get
   .ok (.pid env.currentPid)
+
+/-- Send to a local PID and return the message. A nonexistent or terminated
+PID silently discards the message. Registered names and remote destinations
+are not modeled. Sending is a scheduler boundary, even to self or a dead PID. -/
+def send_2 (destination message : Term) : Result :=
+  match destination with
+  | .pid pid => .send pid message (.ok message)
+  | _ => .error (.error (.atom "badarg"))
 
 private def termList : List Term → Term
   | [] => .nil

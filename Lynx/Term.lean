@@ -8,7 +8,9 @@ public import Lynx.Term.Induction
 namespace Lynx
 
 /-- Run a complete process tree from a fresh runtime using the supplied
-scheduler choices. Every process created by the run has finished on return. -/
+scheduler choices.
+An `ok` or `error` outcome means every spawned process has finished.
+`deadlock` means the modeled process tree is stuck. -/
 public def run (computation : Result α) (schedule : List ScheduleChoice := []) : Outcome α :=
   computation.run { schedule }
 

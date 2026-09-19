@@ -176,11 +176,14 @@ theorem spawn_schedules_child_or_parent_first :
     let final : Environment := {
       pidCounter := 2
       currentProcess := { pdict := [(.atom "pid", .pid 1)] } }
-    Lynx.run spawnCaller [.spawned] =
+    Lynx.run spawnCaller [.swap 2] =
       .ok (.tuple #[.pid 2, .pid 1]) final ∧
     Lynx.run spawnCaller [.current] =
       .ok (.tuple #[.pid 2, .pid 1]) final := by
-  exact ⟨rfl, rfl⟩
+  rw [show spawnCaller = Result.spawn rememberSelf (fun childPid => do
+    let parentPid ← rememberSelf
+    pure (.tuple #[.pid childPid, parentPid])) from rfl]
+  cbv
 
 private def nestedSpawnFun : Term.Fun
   | #[] => spawn_1 functions (.function 2 0)
@@ -191,11 +194,14 @@ private def nestedSpawnCaller : Result :=
 
 theorem completed_nested_processes_are_removed :
     let final : Environment := { pidCounter := 3 }
-    Lynx.run nestedSpawnCaller [.spawned, .spawned] =
+    Lynx.run nestedSpawnCaller [.swap 2, .swap 3] =
       .ok (.pid 2) final ∧
     Lynx.run nestedSpawnCaller [.current, .current] =
       .ok (.pid 2) final := by
-  exact ⟨rfl, rfl⟩
+  rw [show nestedSpawnCaller =
+    Result.spawn (Result.spawn rememberSelf (fun pid => .ok (.pid pid)))
+      (fun pid => .ok (.pid pid)) from rfl]
+  cbv
 
 theorem spawn_rejects_invalid_fun :
     spawn_1 functions (.atom "not_a_fun") = .error (.error (.atom "badarg")) ∧

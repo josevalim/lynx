@@ -34,11 +34,13 @@ deriving Repr
 
 structure ProcessState where
   pdict : List (Term × Term) := []
+  mailbox : List Term := []
 deriving Repr, Inhabited
 
 inductive ScheduleChoice where
-  | spawned
   | current
+  /-- Prefer this runnable process; unavailable choices fall back to the current/first runnable process. -/
+  | swap : PID → ScheduleChoice
 deriving Repr
 
 instance : Inhabited ScheduleChoice := ⟨.current⟩
@@ -52,7 +54,9 @@ structure Environment where
   currentProcess : ProcessState := {}
   /-- Saved states of non-current processes, indexed by PID. -/
   processes : List (PID × ProcessState) := []
-  /-- Scheduler decisions consumed at spawn points. Empty defaults to the caller. -/
+  /-- Scheduler decisions consumed after spawn, send, and successful receive.
+  Empty defaults to the current process when runnable. `swap pid` prefers
+  the named process; blocked or finished processes yield automatically. -/
   schedule : List ScheduleChoice := []
 deriving Repr, Inhabited
 
@@ -65,7 +69,7 @@ def pdict (env : Environment) : List (Term × Term) := env.currentProcess.pdict
 def setPdict (env : Environment) (pdict : List (Term × Term)) : Environment :=
   { currentPid := env.currentPid
     pidCounter := env.pidCounter
-    currentProcess := { pdict }
+    currentProcess := { env.currentProcess with pdict }
     processes := env.processes
     schedule := env.schedule }
 
@@ -78,6 +82,8 @@ end Environment
 inductive Outcome (α : Type) where
   | ok : α → Environment → Outcome α
   | error : Exception → Environment → Outcome α
+  /-- No modeled process can proceed. This is not an Erlang exception. -/
+  | deadlock : Environment → Outcome α
 deriving Repr
 
 /-- A resumable process computation. Bind stores continuations so scheduling
@@ -88,6 +94,12 @@ inductive Result : (α : Type := Term) → Type 1 where
   | get {α : Type} : (Environment → Result α) → Result α
   | set {α : Type} : Environment → Result α → Result α
   | spawn {α : Type} : Result Term → (PID → Result α) → Result α
+  /-- Local asynchronous send. The continuation receives control after delivery. -/
+  | send {α : Type} : PID → Term → Result α → Result α
+  /-- Select the oldest matching message. The pure selector checks clauses in
+  source order and returns their bindings; only the chosen continuation runs.
+  No match suspends the process without consuming any message. -/
+  | receive {α β : Type} : (Term → Option β) → (β → Result α) → Result α
 
 namespace Result
 
@@ -98,6 +110,8 @@ namespace Result
   | .get continuation => .get fun env => Result.bind (continuation env) next
   | .set env continuation => .set env (Result.bind continuation next)
   | .spawn child continuation => .spawn child fun pid => Result.bind (continuation pid) next
+  | .send pid message continuation => .send pid message (Result.bind continuation next)
+  | .receive select continuation => .receive select fun value => Result.bind (continuation value) next
 
 instance : Monad @Result where
   pure := .ok
@@ -117,6 +131,8 @@ protected def handle (computation : Result α) (handler : Exception → Result �
   | .get continuation => .get fun env => Result.handle (continuation env) handler
   | .set env continuation => .set env (Result.handle continuation handler)
   | .spawn child continuation => .spawn child fun pid => Result.handle (continuation pid) handler
+  | .send pid message continuation => .send pid message (Result.handle continuation handler)
+  | .receive select continuation => .receive select fun value => Result.handle (continuation value) handler
 
 instance : MonadExceptOf Exception @Result where
   throw := .error
@@ -137,6 +153,12 @@ private theorem bind_ok (computation : Result α) :
       congr
       funext pid
       exact continuationIh pid
+  | send pid message continuation ih => simp [Result.bind, ih]
+  | receive select continuation ih =>
+      simp only [Result.bind]
+      congr
+      funext value
+      exact ih value
 
 private theorem bind_assoc_proof (computation : Result α)
     (next : α → Result β) (final : β → Result γ) :
@@ -155,6 +177,12 @@ private theorem bind_assoc_proof (computation : Result α)
       congr
       funext pid
       exact continuationIh pid next
+  | send pid message continuation ih => simp [Result.bind, ih next]
+  | receive select continuation ih =>
+      simp only [Result.bind]
+      congr
+      funext value
+      exact ih value next
 
 instance : LawfulMonad @Result := LawfulMonad.mk' _
   (id_map := fun computation => bind_ok computation)
@@ -174,6 +202,11 @@ instance : LawfulMonad @Result := LawfulMonad.mk' _
     ¬ IsPure (.set env next) := by simp [IsPure]
 @[simp] theorem not_isPure_spawn (child : Result Term) (next : PID → Result α) :
     ¬ IsPure (.spawn child next) := by simp [IsPure]
+
+@[simp] theorem not_isPure_send (pid : PID) (message : Term) (next : Result α) :
+    ¬ IsPure (.send pid message next) := by simp [IsPure]
+@[simp] theorem not_isPure_receive (select : Term → Option β) (next : β → Result α) :
+    ¬ IsPure (.receive select next) := by simp [IsPure]
 
 theorem IsPure.terminal (computation : Result α) (pure : IsPure computation) :
     (∃ value, computation = .ok value) ∨
@@ -218,6 +251,16 @@ theorem IsPure.terminal (computation : Result α) (pure : IsPure computation) :
     (next : α → Result β) :
     (Result.spawn child continuation >>= next) =
       .spawn child (fun pid => continuation pid >>= next) := by rfl
+
+@[simp] theorem send_bind (pid : PID) (message : Term) (continuation : Result α)
+    (next : α → Result β) :
+    (Result.send pid message continuation >>= next) =
+      .send pid message (continuation >>= next) := rfl
+
+@[simp] theorem receive_bind (select : Term → Option γ) (continuation : γ → Result α)
+    (next : α → Result β) :
+    (Result.receive select continuation >>= next) =
+      .receive select (fun value => continuation value >>= next) := rfl
 
 @[simp] theorem throw_eq (exception : Exception) :
     (throw exception : Result α) = .error exception := rfl

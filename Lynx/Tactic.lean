@@ -170,7 +170,7 @@ goals:
    induction so hypotheses remain usable after state-changing calls.
 7. Generalize and split one shared monadic computation, retaining an equation
    for its outcome. This avoids duplicating nested bind continuations before
-   its `Outcome.ok`/`Outcome.error` result and returned environment are known.
+   its runtime outcome and returned environment are known.
 8. Try remaining hypothesis matches, then split a target match or conditional.
 
 The main search and independent summary proofs start with fuel 24. The smaller
@@ -355,6 +355,11 @@ private def dischargeAssumption : Simp.Discharge := fun proposition => do
   -- Preserve standard recursive simp discharge for composed conditional specs.
   Simp.dischargeDefault? proposition
 
+/-- All terminal runtime outcomes, including unsuccessful execution states. -/
+private def isOutcomeConstructor (expression : Expr) : Bool :=
+  expression.isAppOf ``Outcome.ok || expression.isAppOf ``Outcome.error ||
+    expression.isAppOf ``Outcome.deadlock
+
 /-- Rewrite known computation outcomes before their executable head unfolds.
 Post-order rewriting alone can lose the matching call during descent. -/
 private def addFact (context : Simp.Context) (h : FVarId) : MetaM Simp.Context := do
@@ -364,7 +369,7 @@ private def addFact (context : Simp.Context) (h : FVarId) : MetaM Simp.Context :
   if type.isAppOf ``Eq then
     let rhs := type.getAppArgs[2]!
     if rhs.isAppOf ``Result.ok || rhs.isAppOf ``Result.error ||
-        rhs.isAppOf ``Outcome.ok || rhs.isAppOf ``Outcome.error then
+        isOutcomeConstructor rhs then
       thms ← thms.modifyM 0 fun set => set.add (.fvar h) #[] (mkFVar h)
         (post := false) (config := context.indexConfig)
   -- Removing a rule while simplifying its own hypothesis marks its origin as
@@ -551,7 +556,7 @@ private def splitComputation (solver : Solver) : TacticM Bool := withMainContext
       unless e.isApp && !e.hasLooseBVars do return
       if !(← matchMatcherApp? e).isSome &&
           (← inferType e).isAppOf ``Outcome &&
-          !e.isAppOf ``Outcome.ok && !e.isAppOf ``Outcome.error then
+          !isOutcomeConstructor e then
         candidates.modify (·.push e)
       if e.isAppOf ``Bind.bind || e.isAppOf ``Result.bind then
         let args := e.getAppArgs
@@ -569,8 +574,7 @@ private def splitComputation (solver : Solver) : TacticM Bool := withMainContext
       if (← getLCtx).any (fun decl => decl.type.isAppOf ``Eq &&
           decl.type.getAppArgs[1]! == computation &&
           ((computationType.isAppOf ``Outcome &&
-              (decl.type.getAppArgs[2]!.isAppOf ``Outcome.ok ||
-                decl.type.getAppArgs[2]!.isAppOf ``Outcome.error)) ||
+              isOutcomeConstructor decl.type.getAppArgs[2]!) ||
             (resultComputation &&
               (decl.type.getAppArgs[2]!.isAppOf ``Result.ok ||
                 decl.type.getAppArgs[2]!.isAppOf ``Result.error)))) then continue
@@ -789,7 +793,7 @@ private def applyHypothesis (solver : Solver) : TacticM (Option Solver) := withM
           expression.forEach fun e => do
             let .app _ env := e | return
             unless !e.hasLooseBVars do return
-            if e.isAppOf ``Outcome.ok || e.isAppOf ``Outcome.error then return
+            if isOutcomeConstructor e then return
             unless (← inferType e).isAppOf ``Outcome do return
             if (← inferType env).isConstOf ``Environment then states.modify (·.insert env)
         for state in (← states.get).toArray do
@@ -830,7 +834,7 @@ private def applyHypothesis (solver : Solver) : TacticM (Option Solver) := withM
             let computationRelevant ← IO.mkRef false
             resultType.forEach fun e => do
               unless e.isApp && !e.hasLooseBVars do return
-              if e.isAppOf ``Outcome.ok || e.isAppOf ``Outcome.error then return
+              if isOutcomeConstructor e then return
               let type ← inferType e
               if type.isAppOf ``Outcome then
                 hasOutcome.set true
