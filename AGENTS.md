@@ -39,4 +39,28 @@ which is more valuable than proof performance. Runtime performance
 itself is not an important metric (the code is not meant to run at
 speed).
 
+## Benchmarks
+
+When changing `Result`, `Outcome`, or the runtime, run the existing verification
+benchmarks even if their examples do not use the new operation. New constructors
+can add branches to `lynx_verify` proofs. Compare medians from repeated runs
+against the preceding commit on the same machine, with each revision built from
+its own source. The measured sections exclude imports and supporting lemmas;
+also run `lake test` to check those proofs.
+
+Keep the tactic's search focused on useful proof states. Simplify or close
+impossible branches immediately after splitting a computation; do not spend
+another search round on an outcome contradicted by a local equation. Preserve
+shared binds until their result is needed, and retain input variables needed
+for induction. Normalize expectation constraints before implementation results,
+and avoid repeatedly simplifying quantified induction hypotheses.
+
+Reuse a simplification context within a search, install known declarations
+directly instead of elaborating the same `simp_all` syntax in every goal, and
+try definitional evaluation before building a context for coverage. Use proved
+specifications and `lynx_opaque` for expensive abstractions when benchmarks
+justify the boundary. Check that new simp rules or proof search shortcuts help
+representative contracts and properties, including `sum-append`; a faster
+single proof can still slow the rest of the suite.
+
 Do not change the README.md unless asked to do so.

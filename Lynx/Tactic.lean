@@ -172,6 +172,8 @@ goals:
    for its outcome. This avoids duplicating nested bind continuations before
    its runtime outcome and returned environment are known.
 8. Try remaining hypothesis matches, then split a target match or conditional.
+   Simplify the affected hypothesis or target in each branch immediately, so
+   contradictory runtime outcomes do not enter another search round.
 
 The main search and independent summary proofs start with fuel 24. The smaller
 guard prover uses simplification, leaf solvers, destructuring, and splitting;
@@ -495,7 +497,14 @@ private def splitHypothesis (solver : Solver) (protectedInputs : Array FVarId :=
       let saved ← saveState
       try
         if let some branches ← splitLocalDecl? goal decl.fvarId then
-          replaceBranches branches
+          let mut remaining := []
+          for branch in branches do
+            -- A split outcome can contradict this very hypothesis. Close it
+            -- before entering another search round over the whole goal.
+            let (result, _) ← simpLocalDecl branch decl.fvarId
+              solver.context solver.simprocs
+            if let some (_, next) := result then remaining := remaining ++ [next]
+          replaceBranches remaining
           return true
       catch _ => saved.restore
   return false
@@ -980,11 +989,19 @@ private partial def search (solver : Solver) (fuel : Nat) : TacticM Unit := do
     allGoals (search solver (fuel - 1))
     return
   if let some branches ← splitTarget? (← getMainGoal) then
-    replaceBranches branches
+    let mut remaining := []
+    for branch in branches do
+      -- Constructor branches inconsistent with the requested outcome often
+      -- simplify to False immediately.
+      match (← simpTargetStar branch solver.context solver.simprocs).1 with
+      | .closed => pure ()
+      | .modified branchGoal => remaining := remaining ++ [branchGoal]
+      | .noChange => remaining := remaining ++ [branch]
+    replaceBranches remaining
     allGoals (search solver (fuel - 1))
   else
-    -- Reserve whole-context simplification for a leaf. Constructor pruning
-    -- above uses only the purity fact, avoiding this cost at every split.
+    -- Reserve whole-context simplification for a leaf. Branch pruning above
+    -- simplifies only the affected hypothesis or target.
     let saved ← saveState
     try evalTactic (← `(tactic| simp_all [Result.IsPure] <;> omega))
     catch _ => saved.restore
