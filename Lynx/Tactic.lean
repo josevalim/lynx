@@ -1190,6 +1190,14 @@ elab "lynx_vcgen" : tactic => focus generate
 elab "lynx_solve" : tactic => focus (solveGoal 24)
 elab "lynx_pure_solve " function:ident : tactic => focus <| withMainContext do
   let function ← resolveGlobalConstNoOverload function
+  -- The existing simp theorem is indexed by `Bind.bind`. Direct syntax clients
+  -- use `Result.bind`, so give purity simplification its definitionally equal form.
+  evalTactic (← `(tactic|
+    have explicitBindPure {α β : Type} (computation : Result α)
+        (next : α → Result β) (hp : Result.IsPure computation)
+        (hn : ∀ value, Result.IsPure (next value)) :
+        Result.IsPure (Result.bind computation next) :=
+      Result.IsPure.bind computation next hp hn))
   let solver ← mkSolver (some function)
   let goal ← getMainGoal
   let target ← goal.getType
