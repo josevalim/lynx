@@ -3,20 +3,23 @@ module
 import Lynx
 import Lean
 
-/-! Internal JSON frontend. Positions are one-based Unicode character positions.
+/-! JSON runner for verification and Lean source rendering. Positions are one-based Unicode character positions.
 Every syntax node requires `span`: `[]`, `[line]`, or `[line, column]`.
 Nodes without a location inherit the enclosing location, if any. Line-only spans
 never imply a diagnostic column. Names use dot-separated alphanumeric/underscore/apostrophe
 components, beginning with a letter or underscore.
 
-`run` returns `{"status": "ok" | "error", "diagnostics": [...]}`. Each diagnostic
-has `file`, `kind` (input/error/warning/info), and `message`, with `line` and
+`verify` returns `{"status": "ok" | "error", "diagnostics": [...]}`.
+`render` returns `{"status": "ok", "files": {...}}`, mapping original source paths to Lean source.
+Invalid input and runner failures return `{"status": "failure", "message": "..."}`.
+Exit codes are 0 for success, 1 for verification errors, and 2 for runner failures.
+Each verification diagnostic has `file`, `kind` (error/warning/info), and `message`, with `line` and
 `column` included only when known.
 Files share only the fixed `Lynx` imports, never declarations or scope changes.
 Library references use fully qualified names; local variables and generated
 function references remain unqualified. No namespaces are opened for input files.
-No Lean source is parsed or generated. -/
-namespace Lynx.Frontend
+Verification elaborates decoded syntax directly. Rendering pretty-prints that syntax as Lean source. -/
+namespace Lynx.Runner
 open Lean
 
 private def fields (j : Json) (allowed : List String) : Except String Unit := do
@@ -193,7 +196,7 @@ private def elaborateFile (env : Lean.Environment) (file : String) (map : FileMa
     for cmd in commands do Elab.Command.elabCommandTopLevel cmd
   let (_, state) ← (action.run { fileName := file, fileMap := map, snap? := none, cancelTk? := none }).run
     (Elab.Command.mkState env {} (Options.empty.setBool `Elab.async false)) |>.toIO
-      (fun _ => IO.userError "frontend elaboration failed")
+      (fun _ => IO.userError "runner elaboration failed")
   return state
 
 /-- One input file, decoded directly to Lean commands without elaboration. -/
@@ -203,80 +206,66 @@ structure DecodedFile where
   commands : Array (TSyntax `command)
   private spans : Array Span
 
-structure DecodedRequest where
-  files : Array DecodedFile := #[]
-  diagnostics : Array Json := #[]
-
-/-- Decode a request and read its original sources for positions. Malformed
-requests fail outright; file-specific input errors are collected independently. -/
-def decode (request : String) : IO (Except String DecodedRequest) := do
-  let decoded := do
+/-- Decode the request once for either command. Invalid input aborts the request. -/
+private def decode (request : String) : IO (Array DecodedFile) := do
+  let files ← IO.ofExcept do
     let j ← Json.parse request
     fields j ["files", "version"]
     unless (← str j "version") == "1.0" do throw "unsupported version"
     (← field j "files").getObj?
-  let files ← match decoded with
-    | .ok files => pure files
-    | .error err => return .error err
-  let mut result : DecodedRequest := {}
-  for (file, nodes) in files.toArray do
+  files.toArray.mapM fun (file, nodes) => do
     try
       let map := FileMap.ofString (← IO.FS.readFile file)
-      match nodes.getArr? >>= fun ns => (ns.mapM (command map)).run #[] with
-      | .error err =>
-        result := { result with diagnostics := result.diagnostics.push (diagnostic file "input" err) }
-      | .ok (commands, spans) =>
-        result := { result with files := result.files.push ⟨file, map, commands, spans⟩ }
-    catch err =>
-      result := { result with diagnostics := result.diagnostics.push (diagnostic file "input" err.toString) }
-  return .ok result
+      let (commands, spans) ← IO.ofExcept do
+        (← nodes.getArr?).mapM (command map) |>.run #[]
+      return ⟨file, map, commands, spans⟩
+    catch err => throw (IO.userError s!"{file}: {err}")
 
-/-- Elaboration keeps each file's environment available for inspection. -/
-structure ElaboratedRequest where
-  files : Array (String × Lean.Environment) := #[]
-  diagnostics : Array Json := #[]
+/-- Render syntax without elaborating the input declarations. -/
+private def render (files : Array DecodedFile) (env : Lean.Environment) : IO (UInt32 × Json) := do
+  let sources ← files.mapM fun file => do
+    let action : CoreM String := do
+      let commands ← file.commands.mapM fun cmd => do
+        return (← PrettyPrinter.ppCommand cmd).pretty 100
+      return "module\n\nimport Lynx\n\n" ++ String.intercalate "\n\n" commands.toList ++ "\n"
+    let source ← (action.run' { fileName := file.fileName, fileMap := file.fileMap }
+      { env := env }).toIO (fun _ => IO.userError s!"{file.fileName}: Lean source rendering failed")
+    return (file.fileName, toJson source)
+  return (0, Json.mkObj [("status", toJson "ok"), ("files", Json.mkObj sources.toList)])
 
-/-- Elaborate decoded syntax in fresh per-file environments and collect diagnostics. -/
-def elaborate (decoded : DecodedRequest) : IO ElaboratedRequest := do
-  let mut result : ElaboratedRequest := { diagnostics := decoded.diagnostics }
-  unless decoded.files.isEmpty do
+/-- Each file is verified independently; only Lean messages become diagnostics. -/
+private def verify (files : Array DecodedFile) (env : Lean.Environment) : IO (UInt32 × Json) := do
+  let mut diagnostics := #[]
+  let mut failed := false
+  for file in files do
+    let state ← elaborateFile env file.fileName file.fileMap file.commands
+    for msg in state.messages.toList do
+      if msg.severity == .error then failed := true
+      diagnostics := diagnostics.push (diagnostic file.fileName
+        (match msg.severity with | .error => "error" | .warning => "warning" | .information => "info")
+        (← msg.data.toString) (messageLocation file.fileMap file.spans msg))
+  return (if failed then 1 else 0, Json.mkObj [
+    ("status", toJson (if failed then "error" else "ok")), ("diagnostics", .arr diagnostics)])
+
+private def run (action : Array DecodedFile → Lean.Environment → IO (UInt32 × Json)) : IO UInt32 := do
+  let (status, response) ← try
+    let files ← decode (← (← IO.getStdin).getLine)
     unsafe enableInitializersExecution
     let env ← importModules #[{ module := `Lynx }] {} (loadExts := true)
-    for file in decoded.files do
-      try
-        let state ← elaborateFile env file.fileName file.fileMap file.commands
-        result := { result with files := result.files.push (file.fileName, state.env) }
-        for msg in state.messages.toList do
-          result := { result with diagnostics := result.diagnostics.push (diagnostic file.fileName
-            (match msg.severity with | .error => "error" | .warning => "warning" | .information => "info")
-            (← msg.data.toString) (messageLocation file.fileMap file.spans msg)) }
-      catch err =>
-        result := { result with diagnostics := result.diagnostics.push (diagnostic file.fileName "error" err.toString) }
-  return result
+    action files env
+  catch err =>
+    pure (2, Json.mkObj [("status", toJson "failure"), ("message", toJson err.toString)])
+  IO.println response.compress
+  return status
 
-private def ElaboratedRequest.toJson (result : ElaboratedRequest) : Json :=
-  let failed := result.diagnostics.any fun d =>
-    let k := (d.getObjValAs? String "kind").toOption.getD ""
-    k == "error" || k == "input"
-  Json.mkObj [("status", Lean.toJson (if failed then "error" else "ok")),
-    ("diagnostics", .arr result.diagnostics)]
+end Lynx.Runner
 
-/-- Internal entry point: decode, elaborate, then serialize the result. -/
-def run (request : String) : IO String := do
-  let result ← match ← decode request with
-    | .error err => pure { diagnostics := #[diagnostic "" "input" err] }
-    | .ok decoded => elaborate decoded
-  return result.toJson.compress
-
-end Lynx.Frontend
-
-/-- Verify one JSON request from stdin and write its diagnostics to stdout. -/
+/-- Process one newline-delimited JSON request and write one JSON response to stdout. -/
 public def main (args : List String) : IO UInt32 := do
-  unless args == ["verify"] do
-    (← IO.getStderr).putStrLn "usage: Frontend.lean verify"
+  match args with
+  | ["verify"] => Lynx.Runner.run Lynx.Runner.verify
+  | ["render"] => Lynx.Runner.run Lynx.Runner.render
+  | _ =>
+    IO.println (Lean.Json.mkObj [("status", Lean.toJson "failure"),
+      ("message", Lean.toJson "usage: Runner.lean (verify|render)")]).compress
     return 2
-  let request ← (← IO.getStdin).readToEnd
-  let response ← Lynx.Frontend.run request
-  IO.println response
-  let json ← IO.ofExcept (Lean.Json.parse response)
-  return if (json.getObjValAs? String "status").toOption == some "ok" then 0 else 1

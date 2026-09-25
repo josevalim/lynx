@@ -1,13 +1,13 @@
 module
 
 meta import Lean
-public import Lynx.Frontend
+public import Lynx.Runner
 public import Lynx
 
 meta section
 
 /-! Snapshot of public types and executable declarations available through `Lynx`
-and the frontend command.
+and the runner command.
 Inspect the exporting environment across every Lynx module, so internal helpers
 cannot escape the check by living in a module omitted from a contributor list.
 Proofs, generated declarations, and meta elaborator code are not snapshotted. -/
