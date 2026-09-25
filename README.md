@@ -20,69 +20,64 @@ def sum(list)
 - `property` states an additional expression that Lynx must prove. It can call
   the function directly and does not have an implicit result binding.
 
-Proofs are done over dynamic Erlang terms. For programs that need additional proofs,
-there is a `~LEAN"..."` sigil to embed LEAN source within each module.
+Proofs are done over dynamic Erlang terms. For programs that need
+additional proofs, a proposed `~LEAN"..."` sigil would embed Lean source
+within each module. The sigil is not implemented yet.
 
-Erlang could use the same contracts through module attributes and a parse
-transform:
-
-```erlang
--module(sum).
--export([sum/1]).
--compile({parse_transform, lynx}).
-
--expects("fun(List) -> is_proper_list(List, fun erlang:is_integer/1) end").
--ensures("fun(Result) -> is_integer(Result) end").
--property("fun(L, R) -> sum(L) + sum(R) == sum(L ++ R) end").
-sum([]) -> 0;
-sum([X | Xs]) -> X + sum(Xs).
-```
-
-In both examples, `is_proper_list/2` is a Lynx extension with guard semantics:
-the list must be proper and the predicate must return exactly `true` for every
-element. This Erlang syntax and `lynx` are proposals, not implemented features.
-
-At the moment, automatic translation from Erlang/Elixir to Lean has not yet
-been implemented. It must be implemented either from Erlang or Core Erlang ASTs.
+Automatic translation from Erlang/Elixir to Lean is work in progress.
 For now, you can find manual translations within the
-[LynxTest/Integration](LynxTest/Integration) directory. Also check the
-[Benchmarks](Benchmarks) folder to compare those examples with native
+[LynxTest/Integration](Lean/LynxTest/Integration) directory. Also check the
+[Benchmarks](Lean/Benchmarks) folder to compare those examples with native
 implementations.
 
 ## Implementation
 
-This project models Erlang terms with an inductive type (see [`Lynx.Term`](Lynx/Term.lean))
-and implements Erlang NIFs in Lean (see [Lynx/Modules](Lynx/Modules)).
-Only some terms and NIFs are implemented in this proof of concept.
+This project models Erlang terms with an inductive type (see [`Lynx.Term`](Lean/Lynx/Term.lean))
+and implements Erlang NIFs in Lean (see [Lynx/Modules](Lean/Lynx/Modules)).
+Only some terms and NIFs are implemented in the current proof of concept.
 
 Expectations, assurances, and properties are then shaped into a contract,
-which is verified by [`Lynx.Tactic`](Lynx/Tactic.lean).
+which is verified by [`Lynx.Tactic`](Lean/Lynx/Tactic.lean).
 
 Everything in this project has been human verified, except for the tactic and
-theorems, which are written with the support of AI. In particular, `Lynx.Tactic`
-constructs proof terms that Lean's kernel independently checks. Therefore its
-proof-search implementation does not need itself to be trusted for logical
-correctness, provided proofs introduce no untrusted axioms or sorry. Read that
-module source and documentation for more information.
+theorems, which are written with coding agents. In particular, `Lynx.Tactic`
+constructs proof terms that Lean's kernel independently checks. Proofs must not
+introduce untrusted axioms or sorry. Read that module source and documentation
+for more information.
 
-## Running tests
+Note the operational semantics of translating Erlang/Elixir to Lean has not
+been verified and the translation mechanism may have bugs.
 
-Build with:
+## Contributing
+
+The project requires Elixir 1.18 or newer in the 1.x series and Lean 4.33.1,
+which includes Lake. With those installed, fetch dependencies and build Lean with:
 
 ```console
-lake build
+mix setup
 ```
 
-Elaborate and kernel-check the integration-test examples with:
+Run tests with:
 
 ```console
-lake test
+mix test          # Elixir tests
+mix test.lean     # Lean tests only
+mix test.all      # Elixir + Lean
 ```
 
-[LynxTest/Integration](LynxTest/Integration) contains end-to-end translated examples.
-
-Run benchmarks comparing the translated examples with native ones:
+Before committing:
 
 ```console
-sh Benchmarks/run.sh 5
+mix precommit
+```
+
+The Lean source code can be found in the `Lean` directory,
+you can run `lake` commands from that directory whenever working
+with Lean directly.
+
+Benchmarks comparing the translated examples with native ones
+can be run with:
+
+```console
+sh Lean/Benchmarks/run.sh 5
 ```

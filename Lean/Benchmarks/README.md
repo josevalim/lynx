@@ -1,6 +1,6 @@
 # Verification benchmarks
 
-Run from the repository root:
+Run from the Lean package root (`Lean/`):
 
 ```console
 sh Benchmarks/run.sh 5
