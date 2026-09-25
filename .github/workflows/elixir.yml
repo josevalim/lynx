@@ -30,6 +30,14 @@ jobs:
           otp-version: ${{matrix.pair.otp}}
           elixir-version: ${{matrix.pair.elixir}}
 
+      - uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: Lean
+          auto-config: "false"
+          build: "false"
+          test: "false"
+          use-github-cache: "false"
+
       - uses: actions/cache@v4
         with:
           path: |

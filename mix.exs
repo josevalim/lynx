@@ -7,8 +7,18 @@ defmodule Lynx.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      aliases: [
+        setup: ["deps.get", "cmd --cd Lean lake build"],
+        precommit: ["format", "test.all"],
+        "test.lean": ["cmd --cd Lean lake test"],
+        "test.all": ["test", "test.lean"]
+      ]
     ]
+  end
+
+  def cli do
+    [preferred_envs: ["test.all": :test, precommit: :test]]
   end
 
   # Run "mix help compile.app" to learn about applications.
