@@ -34,12 +34,14 @@ private inductive Location where
   | unknown
   | line (line : Nat)
   | column (position : Position)
-  deriving Inhabited
+
+private instance : Inhabited Location := ⟨.unknown⟩
 
 private structure Span where
   info : SourceInfo := .synthetic 0 0 true
   location : Location := .unknown
-  deriving Inhabited
+
+private instance : Inhabited Span := ⟨{}⟩
 
 private abbrev DecodeM := StateT (Array Span) (Except String)
 
@@ -267,3 +269,14 @@ def run (request : String) : IO String := do
   return result.toJson.compress
 
 end Lynx.Frontend
+
+/-- Verify one JSON request from stdin and write its diagnostics to stdout. -/
+public def main (args : List String) : IO UInt32 := do
+  unless args == ["verify"] do
+    (← IO.getStderr).putStrLn "usage: Frontend.lean verify"
+    return 2
+  let request ← (← IO.getStdin).readToEnd
+  let response ← Lynx.Frontend.run request
+  IO.println response
+  let json ← IO.ofExcept (Lean.Json.parse response)
+  return if (json.getObjValAs? String "status").toOption == some "ok" then 0 else 1

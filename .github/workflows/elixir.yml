@@ -44,21 +44,21 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-${{matrix.pair.elixir}}-${{matrix.pair.otp}}-${{ hashFiles('**/mix.lock') }}
+          key: ${{runner.os}}-mix-${{matrix.pair.elixir}}-${{matrix.pair.otp}}-${{hashFiles('**/mix.lock')}}
           restore-keys: |
-            ${{ runner.os }}-mix-${{matrix.pair.elixir}}-${{matrix.pair.otp}}
+            ${{runner.os}}-mix-${{matrix.pair.elixir}}-${{matrix.pair.otp}}
 
-      - run: mix deps.get
+      - run: mix setup
 
       - run: mix format --check-formatted
-        if: ${{ matrix.lint }}
+        if: ${{matrix.lint}}
 
       - run: mix deps.unlock --check-unused
-        if: ${{ matrix.lint }}
+        if: ${{matrix.lint}}
 
       - run: mix deps.compile
 
       - run: mix compile --warnings-as-errors
-        if: ${{ matrix.lint }}
+        if: ${{matrix.lint}}
 
       - run: mix test
