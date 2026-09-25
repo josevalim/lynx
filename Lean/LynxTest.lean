@@ -13,3 +13,5 @@ import LynxTest.Tactic.Failures
 import LynxTest.Modules.Erlang
 import LynxTest.Modules.Maps
 import LynxTest.Modules.Process
+import LynxTest.Frontend
+import LynxTest.Frontend.Diagnostics

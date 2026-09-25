@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+cd "$(dirname "$0")/.."
+
 runs="${1:-5}"
 lake build LynxTest.Bench >/dev/null
 run=1

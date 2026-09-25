@@ -1,4 +1,9 @@
 Start with the README.md to understand the general project scope.
+Do not change the README.md unless asked to do so.
+
+## Lean
+
+All package paths below are relative to `Lean/`.
 
 Use Lean's `module` system with explicit `public` declarations and deliberate
 `public import` re-exports. Update `LynxTest/PublicApi.lean` for exported API
@@ -62,5 +67,3 @@ specifications and `lynx_opaque` for expensive abstractions when benchmarks
 justify the boundary. Check that new simp rules or proof search shortcuts help
 representative contracts and properties, including `sum-append`; a faster
 single proof can still slow the rest of the suite.
-
-Do not change the README.md unless asked to do so.
