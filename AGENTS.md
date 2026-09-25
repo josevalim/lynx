@@ -1,5 +1,8 @@
 Start with the README.md to understand the general project scope.
 
+The Lean package lives in `Lean/`. Run `lake` commands from that directory;
+all package paths below are relative to `Lean/`.
+
 Use Lean's `module` system with explicit `public` declarations and deliberate
 `public import` re-exports. Update `LynxTest/PublicApi.lean` for exported API
 changes. Its snapshot must check actual public declarations without excluding
