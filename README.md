@@ -1,4 +1,8 @@
-# Lynx
+<div align="center">
+  <img height="240" alt="Lynx logo" src="logo.png" />
+</div>
+
+# LYNX
 
 An experimental Erlang/Elixir-to-Lean translation and verification project.
 
