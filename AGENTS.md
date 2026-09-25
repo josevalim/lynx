@@ -1,6 +1,7 @@
 Start with the README.md to understand the general project scope.
 
-The Lean package lives in `Lean/`. Run `lake` commands from that directory;
+The root project is an Elixir project that integrates Elixir and Lean.
+The Lean package lives in `Lean/`. Run `lake` commands from that directory,
 all package paths below are relative to `Lean/`.
 
 Use Lean's `module` system with explicit `public` declarations and deliberate
