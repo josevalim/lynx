@@ -59,17 +59,58 @@ An interactive proof may use `lynx_vcgen` and provide the witness directly.
 
 For symbolic proof search, the solver gathers constants used by the goal
 and local hypotheses. It follows definitions whose result is `Result`, then
-builds one local simplification context from those executable bodies. This is
-why ordinary translated functions need no registration attribute or separate
+builds two reusable local simplification contexts from those executable bodies.
+This is why ordinary translated functions need no registration attribute or separate
 semantics file. Library-level, kernel-proved `@[simp]` rules supplement the
 executable bodies, including generic `Result` reductions; translated functions
 themselves can remain annotation-free. Mark a library abstraction `@[lynx_opaque]`
 to stop discovery at that function and use its specifications instead. This
 also stops domain/return-summary discovery through its body. It is a proof-search
 boundary, not Lean's `opaque`: kernel conversion, explicit unfolding and concrete
-coverage evaluation remain available. The library uses the `_spec` suffix for these
-theorems. Their statements and `@[simp]` attributes drive rewriting; that naming
-convention is not a discovery rule.
+coverage evaluation remain available. Specification statements and `@[simp]`
+attributes drive rewriting; theorem names are not a discovery rule. Both contexts
+respect this boundary.
+
+Ordinary calls use staged unfolding without any registration attribute. The
+normal context installs generated equation theorems, so constructor arguments
+can select a branch without exposing every alternative. When equations exist,
+it withholds the additional unconditional unfolding entry that Lean's simplifier
+normally installs. Definitions without equations and contract wrappers still
+unfold normally. This gives specifications, known outcomes, and induction
+hypotheses a chance to determine arguments before their callees expand.
+
+The fallback context also permits the withheld unfolding entries. After normal
+simplification and the applicable proof steps have stalled, search tries one
+normalization pass with this context. If it changes the goal or hypotheses,
+search resumes with the normal context; if it does not, search proceeds to
+splitting. The fallback can expose an unknown match needed to infer an input
+constraint. It does not make every invocation opaque or require a specification
+for each translated function. Equation theorems can themselves expose a match,
+so this is a scheduling policy rather than a guarantee that all branching is
+delayed. Both contexts share the same proved rules and congruence information;
+they are built once per solver, not once per search round.
+
+## Return specifications
+
+For reachable functions, the solver automatically reads successful-return
+shapes from existing `@[simp]` equations of the form
+`∀ arguments, premises → function arguments = Result.ok (Term.constructor fields)`.
+No additional attribute is needed. For example, `add_2_integers` already describes
+the integer branch of opaque `add_2`.
+
+Discovery queries the simplifier's index for each function, including
+pre-order and post-order rules, and respects local registrations and erased
+rules. It uses registered simp rules, excluding generated equations added only
+for executable unfolding. It does not scan the whole environment. After reading
+a function’s rules, discovery follows its callees only when it is not opaque.
+Conditional equations can suggest shapes, but their premises still have to be
+proved when applying them. Multiple equations may suggest different constructors.
+
+These shapes are only candidates for caller summaries. Each summary must be
+independently proved under its actual input domain; failed candidates never
+become assumptions or cached proofs. Functions without a matching equation
+supply no candidates of their own. Ordinary functions retain staged unfolding, while opaque
+functions retain their specification-only search boundary in both contexts.
 
 Search substitutes equalities introduced by specifications before normalization.
 When simplifying the target, whole local assumptions can discharge specification
@@ -168,15 +209,19 @@ goals:
    induction hypotheses irrelevant to remaining recursive calls. More than one
    independent input may be inducted. Environments are generalized before
    induction so hypotheses remain usable after state-changing calls.
-7. Generalize and split one shared monadic computation, retaining an equation
+7. Try fallback unfolding if the preceding steps made no progress. Resume
+   normal search on changed goals, allowing newly exposed input constraints to
+   simplify before splitting implementation outcomes.
+8. Generalize and split one shared monadic computation, retaining an equation
    for its outcome. This avoids duplicating nested bind continuations before
    its runtime outcome and returned environment are known.
-8. Try remaining hypothesis matches, then split a target match or conditional.
+9. Try remaining hypothesis matches, then split a target match or conditional.
    Simplify the affected hypothesis or target in each branch immediately, so
    contradictory runtime outcomes do not enter another search round.
 
 The main search and independent summary proofs start with fuel 24. The smaller
-guard prover uses simplification, leaf solvers, destructuring, and splitting;
+guard prover uses simplification, leaf solvers, destructuring, and splitting,
+with the same fallback unfolding when these steps stall;
 it does not perform induction or synthesize summaries. Coverage fallback uses
 guard fuel 12, and hypothesis applications use 8. Coverage candidates have a
 construction depth limit of 3: products combine candidates, while structures
@@ -196,9 +241,12 @@ therefore attempts a narrow summary synthesis step:
 1. Find discovered recursive functions of type `Term → Result`.
 2. Find candidate input domains inside existing `Accepted` hypotheses, looking
    through executable wrappers with bounded traversal.
-3. Look for a single candidate `Term` constructor in normal returns from the
-   function body and the executable callees it follows.
-4. Construct a normal-return proposition and prove it in a fresh context using
+3. Collect candidate result constructors from existing simp equations of
+   reachable functions, regardless of opacity. Do not infer return types
+   by scanning `Result.ok` expressions inside implementations. Opaque bodies
+   remain closed, including when no suitable specification exists.
+4. For each candidate constructor and domain, construct a normal-return
+   proposition and prove it in a fresh context using
    the same bounded search, or reuse an identical closed proof from the local
    environment cache.
 5. Add the summary only if that independent proof closed completely.
@@ -215,8 +263,9 @@ It still proves the corresponding domain constraint before
 using the summary; it does not invent a domain for arbitrary intermediate
 results. Calls that have been split into result equations remain eligible for
 summary application; calls already known to have the summarized constructor
-are skipped. Current synthesis handles unary functions with a uniform candidate
-result constructor when bounded search can prove the conjecture. It is not
+are skipped. Current synthesis handles unary functions whose callees’ simp
+specifications suggest a result constructor and whose domain makes that result
+uniform, when bounded search can prove the conjecture. It is not
 general invariant discovery.
 
 Summary caching is keyed by the entire closed proposition, including its
@@ -275,7 +324,10 @@ private def replaceBranches (branches : List MVarId) : TacticM Unit := do
   replaceMainGoal branches
 
 private structure Solver where
+  /-- Equations and specifications, without redundant unconditional unfolding. -/
   context : Simp.Context
+  /-- The same rules plus ordinary unfolding, used only when normal search stalls. -/
+  eagerContext : Simp.Context
   simprocs : Simp.SimprocsArray
   recursive : Array Name
   majors : NameMap Nat
@@ -290,8 +342,8 @@ private def isResultType (type : Expr) : MetaM Bool := do
   return type.isAppOfArity ``Result 1 && type.getAppArgs[0]!.isConstOf ``Term
 
 /-- Discover executable definitions by their result type, following their calls.
-Their bodies supply reduction rules alongside registered library simp theorems;
-translated definitions need no separate semantic theorem. -/
+Their equations supply reduction rules alongside registered library simp theorems.
+Retain unconditional unfolding in a second context for fallback search. -/
 private def mkSolver (unfoldOpaque? : Option Name := none) : TacticM Solver := withMainContext do
   let mut pending := (← getMainTarget).getUsedConstants
   let mut inputs := #[]
@@ -335,13 +387,27 @@ private def mkSolver (unfoldOpaque? : Option Name := none) : TacticM Solver := w
     thms ← (thms.unerase (.decl name)).addConst name
   thms ← thms.erase (.decl ``bind_assoc)
   thms ← thms.erase (.decl ``bind_pure_comp)
-  for name in #[``Accepted, ``Term.true, ``Term.false, ``Pure.pure] ++ definitions do
+  for name in #[``Accepted, ``Term.true, ``Term.false, ``Pure.pure] do
     for entry in ← mkSimpEntryOfDeclToUnfold name do
       thms := (thms.uneraseSimpEntry entry).addSimpEntry entry
+  let mut deferred := #[]
+  for name in definitions do
+    let entries ← mkSimpEntryOfDeclToUnfold name
+    let hasEquations := entries.any fun entry => match entry with
+      | .thm _ => true
+      | _ => false
+    if hasEquations then deferred := deferred.push name
+    for entry in entries do
+      thms := (thms.uneraseSimpEntry entry).addSimpEntry entry
+  -- Index equations only once. The normal context shares these persistent
+  -- theorem trees with the fallback context and removes only unfolding names.
+  let eagerThms := thms
+  thms := { thms with toUnfold := deferred.foldl (·.erase ·) thms.toUnfold }
   let context ← Simp.mkContext
     (config := { ({} : Simp.ConfigCtx) with failIfUnchanged := false })
     (simpTheorems := #[thms]) (congrTheorems := ← getSimpCongrTheorems)
-  return ⟨context, #[← Simp.getSimprocs], recursive, majors, inputs, false, {},
+  let eagerContext := context.setSimpTheorems #[eagerThms]
+  return ⟨context, eagerContext, #[← Simp.getSimprocs], recursive, majors, inputs, false, {},
     (← getMainTarget).isAppOf ``Exists⟩
 
 /-- Keep quantified invariants available as whole premises of specification
@@ -430,6 +496,16 @@ private def normalize (solver : Solver) : TacticM Bool := do
   trace[lynx] "normalize: {(← IO.monoMsNow) - start}ms"
   replaceMainGoal result.toList
   return result.isNone
+
+/-- A fallback pass must make progress before consuming another search round.
+The caller resumes with the normal context, so one stalled call does not enable
+eager unfolding for the rest of the proof. Explicit opaque boundaries remain. -/
+private def unfoldStuck (solver : Solver) : TacticM Bool := do
+  let before ← getMainGoal
+  if ← normalize { solver with context := solver.eagerContext } then return true
+  let changed := (← getMainGoal) != before
+  if changed then trace[lynx] "fallback unfolding made progress"
+  return changed
 
 private def closeLeaf : TacticM Bool := do
   let saved ← saveState
@@ -643,6 +719,8 @@ private partial def proveGuard (solver : Solver) (fuel : Nat) : TacticM Unit := 
   else if ← splitComputation solver then
     allGoals (proveGuard solver (fuel - 1))
   else if ← splitHypothesis solver then
+    allGoals (proveGuard solver (fuel - 1))
+  else if ← unfoldStuck solver then
     allGoals (proveGuard solver (fuel - 1))
 
 /-- Slice premise assumptions by shared free-variable dependencies. Attempt to
@@ -982,6 +1060,9 @@ private partial def search (solver : Solver) (fuel : Nat) : TacticM Unit := do
   if let some solver ← inductInput solver then
     allGoals (search solver (fuel - 1))
     return
+  if ← unfoldStuck solver then
+    allGoals (search solver (fuel - 1))
+    return
   if ← splitComputation solver then
     allGoals (search solver (fuel - 1))
     return
@@ -1028,34 +1109,59 @@ private partial def collectDomains (expression : Expr) (fuel : Nat) : MetaM (Arr
   | _ => pure ()
   return result
 
-/-- Infer a uniform constructor of normal returns from executable bodies. This
-is only a conjecture: the resulting summary must still be proved independently. -/
-private def returnConstructor (function : Name) : MetaM (Option Name) := do
+/-- Read successful-return shapes from the existing simp index for a call.
+Only inspect rules indexed under this function, respecting erased/local rules. -/
+private def simpReturnConstructors (function : Name)
+    (sets : SimpTheoremsArray) : MetaM (Array Name) := do
+  let info ← getConstInfo function
+  let arity ← forallTelescopeReducing info.type fun args _ => pure args.size
+  let mut constructors := #[]
+  for thms in sets do
+    for tree in #[thms.pre, thms.post] do
+      let some rules := tree.root.find? (.const function arity) | continue
+      for rule in rules.foldValues (fun acc rule => acc.push rule) #[] do
+        if thms.erased.contains rule.origin then continue
+        let type ← inferType (← rule.getValue)
+        let candidate ← forallTelescopeReducing type fun _ conclusion => do
+          unless conclusion.isAppOfArity ``Eq 3 do return none
+          let left := conclusion.getAppArgs[1]!
+          let right := conclusion.getAppArgs[2]!
+          unless left.getAppFn.isConstOf function && right.isAppOfArity ``Result.ok 2 do
+            return none
+          let .const constructor _ := right.getAppArgs[1]!.getAppFn | return none
+          let .ctorInfo ctor ← getConstInfo constructor | return none
+          return if ctor.induct == ``Term then some constructor else none
+        if let some constructor := candidate then
+          unless constructors.contains constructor do
+            constructors := constructors.push constructor
+  return constructors
+
+/-- Callees supply hints through their existing simp specifications, regardless of opacity.
+A caller summary must still be independently proved under its input domain. -/
+private def returnConstructors (function : Name)
+    (sets : SimpTheoremsArray) : MetaM (Array Name) := do
   let mut pending := #[function]
   let mut seen : NameSet := {}
-  let constructors ← IO.mkRef ({} : NameSet)
+  let mut constructors : Array Name := #[]
   while !pending.isEmpty do
     let name := pending.back!
     pending := pending.pop
     if seen.contains name then continue
     seen := seen.insert name
+    for constructor in ← simpReturnConstructors name sets do
+      unless constructors.contains constructor do
+        constructors := constructors.push constructor
     if opaqueAttr.hasTag (← getEnv) name then continue
     let .defnInfo info ← getConstInfo name | continue
-    info.value.forEach fun e => do
-      if e.isAppOfArity ``Result.ok 2 then
-        let returned := e.getAppArgs[1]!
-        if let .const ctor _ := returned.getAppFn then
-          if let .ctorInfo ci ← getConstInfo ctor then
-            if ci.induct == ``Term then constructors.modify (·.insert ctor)
     for callee in info.value.getUsedConstants do
-      if callee == function then continue
       let .defnInfo calleeInfo ← getConstInfo callee | continue
       if ← forallTelescopeReducing calleeInfo.type fun _ result => isResultType result then
         pending := pending.push callee
-  let names := (← constructors.get).toArray
-  return if names.size == 1 then some names[0]! else none
+  return constructors
 
 private def synthesizeSummaries (solver : Solver) : TacticM Unit := withMainContext do
+  -- Use registered simp rules, not equations installed for executable unfolding.
+  let summaryTheorems := #[← getSimpTheorems]
   let mut domains := #[]
   for decl in ← getLCtx do
     if decl.type.isAppOf ``Accepted then
@@ -1066,51 +1172,51 @@ private def synthesizeSummaries (solver : Solver) : TacticM Unit := withMainCont
   for function in solver.recursive do
     let info ← getConstInfo function
     unless ← isDefEq info.type (← elabTerm (← `(Term → Result)) none) do continue
-    let some constructor ← returnConstructor function | continue
-    trace[lynx] "summary constructor: {function} -> {constructor}"
-    let mut seen : ExprSet := {}
-    for domain in domains do
-      if seen.contains domain then continue
-      seen := seen.insert domain
-      let goal ← getMainGoal
-      let saved ← saveState
-      try
-        let proposition ← withLocalDeclD `input (mkConst ``Term) fun input => do
-          let accepted ← mkAppM ``Accepted #[mkApp domain input,
-            ← elabTerm (← `(({} : Environment))) none]
-          let result ← forallTelescope (← inferType (mkConst constructor)) fun fields _ => do
-            let value ← mkAppM ``Result.ok #[mkAppN (mkConst constructor) fields]
-            let mut equation ← mkEq (mkApp (mkConst function) input) value
-            for field in fields.reverse do
-              equation ← mkAppM ``Exists #[← mkLambdaFVars #[field] equation]
-            return equation
-          mkForallFVars #[input] (← mkArrow accepted result)
-        let proposition ← instantiateMVars proposition
-        if proposition.hasFVar || proposition.hasMVar then continue
-        let proof ← if let some proof := (summaryProofs.getState (← getEnv))[proposition]? then
-          trace[lynx] "reusing summary: {proposition}"
-          pure proof
-        else
-          let proof ← withLCtx {} {} <| mkFreshExprSyntheticOpaqueMVar proposition
-          trace[lynx] "proving summary: {proposition}"
-          setGoals [proof.mvarId!]
-          let (_, next) ← proof.mvarId!.intros
+    for constructor in ← returnConstructors function summaryTheorems do
+      trace[lynx] "summary constructor: {function} -> {constructor}"
+      let mut seen : ExprSet := {}
+      for domain in domains do
+        if seen.contains domain then continue
+        seen := seen.insert domain
+        let goal ← getMainGoal
+        let saved ← saveState
+        try
+          let proposition ← withLocalDeclD `input (mkConst ``Term) fun input => do
+            let accepted ← mkAppM ``Accepted #[mkApp domain input,
+              ← elabTerm (← `(({} : Environment))) none]
+            let result ← forallTelescope (← inferType (mkConst constructor)) fun fields _ => do
+              let value ← mkAppM ``Result.ok #[mkAppN (mkConst constructor) fields]
+              let mut equation ← mkEq (mkApp (mkConst function) input) value
+              for field in fields.reverse do
+                equation ← mkAppM ``Exists #[← mkLambdaFVars #[field] equation]
+              return equation
+            mkForallFVars #[input] (← mkArrow accepted result)
+          let proposition ← instantiateMVars proposition
+          if proposition.hasFVar || proposition.hasMVar then continue
+          let proof ← if let some proof := (summaryProofs.getState (← getEnv))[proposition]? then
+            trace[lynx] "reusing summary: {proposition}"
+            pure proof
+          else
+            let proof ← withLCtx {} {} <| mkFreshExprSyntheticOpaqueMVar proposition
+            trace[lynx] "proving summary: {proposition}"
+            setGoals [proof.mvarId!]
+            let (_, next) ← proof.mvarId!.intros
+            setGoals [next]
+            search (← mkSolver) 24
+            unless (← getGoals).isEmpty do
+              throwError "summary proof did not close"
+            let proof ← instantiateMVars proof
+            if proof.hasMVar || proof.hasFVar then
+              throwError "summary proof is not closed"
+            modifyEnv fun env => summaryProofs.modifyState env (·.insert proposition proof)
+            pure proof
+          let next ← goal.assert (← mkFreshUserName `normal_return) proposition proof
+          let (_, next) ← next.intro1
           setGoals [next]
-          search (← mkSolver) 24
-          unless (← getGoals).isEmpty do
-            throwError "summary proof did not close"
-          let proof ← instantiateMVars proof
-          if proof.hasMVar || proof.hasFVar then
-            throwError "summary proof is not closed"
-          modifyEnv fun env => summaryProofs.modifyState env (·.insert proposition proof)
-          pure proof
-        let next ← goal.assert (← mkFreshUserName `normal_return) proposition proof
-        let (_, next) ← next.intro1
-        setGoals [next]
-        break
-      catch e =>
-        trace[lynx] "summary failed: {e.toMessageData}"
-        saved.restore
+          break
+        catch e =>
+          trace[lynx] "summary failed: {e.toMessageData}"
+          saved.restore
 
 private def solveGoal (fuel : Nat) : TacticM Unit := do
   let coverageStart ← IO.monoMsNow
