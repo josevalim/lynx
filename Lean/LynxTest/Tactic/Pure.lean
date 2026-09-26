@@ -20,6 +20,24 @@ theorem one_bit_size :
 theorem float_zero_value :
     Term.FiniteFloat.toRat ⟨false, 0, 0⟩ = 0 := rfl
 
+-- The integer shortcut must retain symbolic float and mixed-addition proofs.
+theorem float_addition (left right result : Term.FiniteFloat)
+    (sum : left.add right = some result) :
+    Modules.Erlang.add_2 (.float left) (.float right) = .ok (.float result) := by
+  lynx_solve
+
+theorem mixed_addition (integer : Int) (converted right result : Term.FiniteFloat)
+    (conversion : Term.FiniteFloat.ofInt integer = some converted)
+    (sum : converted.add right = some result) :
+    Modules.Erlang.add_2 (.integer integer) (.float right) = .ok (.float result) := by
+  lynx_solve
+
+theorem mixed_addition_reversed (integer : Int) (converted left result : Term.FiniteFloat)
+    (conversion : Term.FiniteFloat.ofInt integer = some converted)
+    (sum : left.add converted = some result) :
+    Modules.Erlang.add_2 (.float left) (.integer integer) = .ok (.float result) := by
+  lynx_solve
+
 theorem binary_is_bitstring (input : Term)
     (accepted : Accepted (Modules.Erlang.is_binary_1 input)) :
     Accepted (Modules.Erlang.is_bitstring_1 input) := by
