@@ -47,9 +47,51 @@ open Lynx
   | .cons _ _ => .ok Term.true
   | _ => .ok Term.false
 
-#lynx_pure @[expose] def add_2 : Term → Term → Result
+-- Keep binary64 rounding out of proof search over Erlang result shapes.
+#lynx_pure @[lynx_opaque] private def floatResult (value : Option Term.FiniteFloat) : Result :=
+  match value with
+  | some value => .ok (.float value)
+  | none => throw (.error (.atom "badarith"))
+
+@[simp] private theorem floatResult_ok_iff (value : Option Term.FiniteFloat) (result : Term) :
+    floatResult value = .ok result ↔ ∃ f, value = some f ∧ result = .float f := by
+  cases value <;> simp [floatResult, eq_comm]
+
+-- Preserve unknown operands until their numeric types are known. In particular,
+-- integer-list proofs should not split the float cases before applying induction.
+#lynx_pure @[lynx_opaque] def add_2 : Term → Term → Result
   | .integer x, .integer y => .ok (.integer (x + y))
+  | .float x, .float y => floatResult (x.add y)
+  | .integer x, .float y => floatResult (Term.FiniteFloat.ofInt x >>= (·.add y))
+  | .float x, .integer y => floatResult (Term.FiniteFloat.ofInt y >>= x.add)
   | _, _ => throw (.error (.atom "badarith"))
+
+@[simp↓] theorem add_2_integers (left right : Int) :
+    add_2 (.integer left) (.integer right) = .ok (.integer (left + right)) := by rfl
+
+/-- An integer sum can only come from two integer operands. -/
+@[simp↓] theorem add_2_integer_ok_iff (left right : Term) (sum : Int) :
+    add_2 left right = .ok (.integer sum) ↔
+      ∃ x y, left = .integer x ∧ right = .integer y ∧ x + y = sum := by
+  cases left <;> cases right <;> simp [add_2, floatResult_ok_iff]
+
+@[simp] theorem add_2_floats (left right : Term.FiniteFloat) :
+    add_2 (.float left) (.float right) =
+      (match left.add right with
+      | some result => .ok (.float result)
+      | none => .error (.error (.atom "badarith"))) := by rfl
+
+@[simp] theorem add_2_integer_float (left : Int) (right : Term.FiniteFloat) :
+    add_2 (.integer left) (.float right) =
+      (match Term.FiniteFloat.ofInt left >>= (·.add right) with
+      | some result => .ok (.float result)
+      | none => .error (.error (.atom "badarith"))) := by rfl
+
+@[simp] theorem add_2_float_integer (left : Term.FiniteFloat) (right : Int) :
+    add_2 (.float left) (.integer right) =
+      (match Term.FiniteFloat.ofInt right >>= left.add with
+      | some result => .ok (.float result)
+      | none => .error (.error (.atom "badarith"))) := by rfl
 
 #lynx_pure @[expose] def equal_2 (left right : Term) : Result :=
   .ok (if Term.compare left right = .eq then Term.true else Term.false)

@@ -14,6 +14,28 @@ deriving DecidableEq, Repr
 
 namespace FiniteFloat
 
+private def toModel (value : FiniteFloat) : Float.Model :=
+  Float.Model.ofBits (UInt64.ofNat
+    ((if value.negative then 2 ^ 63 else 0) +
+      value.exponent.val * 2 ^ 52 + value.fraction.val))
+
+/-- Exponent 2047 rejects both infinities and NaNs. -/
+private def ofModel (value : Float.Model) : Option FiniteFloat :=
+  let bits := value.toBits.toNat
+  let exponent := bits / 2 ^ 52 % 2048
+  if h : exponent < 2047 then
+    some ⟨bits / 2 ^ 63 != 0, ⟨exponent, h⟩,
+      ⟨bits % 2 ^ 52, Nat.mod_lt _ (by decide)⟩⟩
+  else none
+
+/-- Convert with binary64 rounding, failing if the integer overflows. -/
+public def ofInt (value : Int) : Option FiniteFloat :=
+  ofModel (Float.Model.ofInt value)
+
+/-- IEEE binary64 addition, failing on any non-finite result. -/
+public def add (left right : FiniteFloat) : Option FiniteFloat :=
+  ofModel (left.toModel + right.toModel)
+
 /-- The nonnegative mathematical magnitude of a finite binary64 value. -/
 @[expose] public def magnitude (value : FiniteFloat) : Rat :=
   if value.exponent.val = 0 then

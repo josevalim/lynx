@@ -8,6 +8,7 @@ import all Lynx.Term.DataTypes
 import all Lynx.Term.FiniteFloat
 import all Lynx.Term.Compare
 import all Lynx.Term.Runner
+import all Lynx.Modules.Erlang.Guards
 import all Lynx.Modules.Erlang.Fun
 import all Lynx.Modules.Erlang.Process
 import all Std
@@ -44,6 +45,79 @@ private def floatOne : Term.FiniteFloat :=
 
 private def floatOneAndHalf : Term.FiniteFloat :=
   ⟨false, 1023, 2 ^ 51⟩
+
+theorem nonfinite_float_results_rejected :
+    Term.FiniteFloat.ofModel (Float.Model.ofBits 0x7ff0000000000000) = none ∧
+    Term.FiniteFloat.ofModel (Float.Model.ofBits 0xfff0000000000000) = none ∧
+    Term.FiniteFloat.ofModel (Float.Model.ofBits 0x7ff8000000000001) = none := by
+  exact ⟨rfl, rfl, rfl⟩
+
+theorem addition_numeric_types :
+    add_2 (.integer 2) (.integer 3) = .ok (.integer 5) ∧
+    add_2 (.float floatOne) (.float floatOneAndHalf) =
+      .ok (.float ⟨false, 1024, 2 ^ 50⟩) ∧
+    add_2 (.integer 1) (.float floatOneAndHalf) =
+      .ok (.float ⟨false, 1024, 2 ^ 50⟩) ∧
+    add_2 (.float floatOneAndHalf) (.integer 1) =
+      .ok (.float ⟨false, 1024, 2 ^ 50⟩) ∧
+    add_2 (.float floatOneAndHalf) (.integer (-2)) =
+      .ok (.float ⟨true, 1022, 0⟩) := by
+  repeat' first | apply And.intro | rfl
+
+-- Halfway sums choose the even significand; rounding may carry into the exponent.
+theorem addition_rounding :
+    add_2 (.float ⟨false, 1023, 0⟩) (.float ⟨false, 970, 0⟩) =
+      .ok (.float ⟨false, 1023, 0⟩) ∧
+    add_2 (.float ⟨false, 1023, 1⟩) (.float ⟨false, 970, 0⟩) =
+      .ok (.float ⟨false, 1023, 2⟩) ∧
+    add_2 (.float ⟨false, 1023, 2 ^ 52 - 1⟩) (.float ⟨false, 970, 0⟩) =
+      .ok (.float ⟨false, 1024, 0⟩) ∧
+    -- Integer conversion rounds before addition, rather than rounding the exact sum.
+    add_2 (.integer (2 ^ 53 + 1)) (.float floatOne) =
+      .ok (.float ⟨false, 1076, 0⟩) ∧
+    add_2 (.float ⟨true, 1076, 0⟩) (.integer (2 ^ 53 + 1)) =
+      .ok (.float ⟨false, 0, 0⟩) := by
+  repeat' first | apply And.intro | rfl
+
+theorem addition_subnormals_and_zero :
+    add_2 (.float ⟨false, 0, 1⟩) (.float ⟨false, 0, 1⟩) =
+      .ok (.float ⟨false, 0, 2⟩) ∧
+    add_2 (.float ⟨false, 0, 2 ^ 52 - 1⟩) (.float ⟨false, 0, 1⟩) =
+      .ok (.float ⟨false, 1, 0⟩) ∧
+    add_2 (.float ⟨false, 1, 0⟩) (.float ⟨true, 0, 2 ^ 52 - 1⟩) =
+      .ok (.float ⟨false, 0, 1⟩) ∧
+    add_2 (.float ⟨true, 0, 0⟩) (.float ⟨true, 0, 0⟩) =
+      .ok (.float ⟨true, 0, 0⟩) ∧
+    add_2 (.float ⟨true, 0, 0⟩) (.float ⟨false, 0, 0⟩) =
+      .ok (.float ⟨false, 0, 0⟩) ∧
+    add_2 (.integer 0) (.float ⟨true, 0, 0⟩) =
+      .ok (.float ⟨false, 0, 0⟩) := by
+  repeat' first | apply And.intro | rfl
+
+set_option exponentiation.threshold 2048 in
+set_option maxRecDepth 4096 in
+theorem addition_overflow :
+    add_2 (.float ⟨false, 2046, 2 ^ 52 - 1⟩) (.float ⟨false, 2046, 0⟩) =
+      .error (.error (.atom "badarith")) ∧
+    add_2 (.float ⟨true, 2046, 2 ^ 52 - 1⟩) (.float ⟨true, 2046, 0⟩) =
+      .error (.error (.atom "badarith")) ∧
+    -- Rounding at the overflow boundary, and a sum just below it.
+    add_2 (.float ⟨false, 2046, 2 ^ 52 - 1⟩) (.float ⟨false, 1993, 0⟩) =
+      .error (.error (.atom "badarith")) ∧
+    add_2 (.float ⟨false, 2046, 2 ^ 52 - 1⟩) (.float ⟨false, 1992, 0⟩) =
+      .ok (.float ⟨false, 2046, 2 ^ 52 - 1⟩) ∧
+    -- Conversion must fail even if exact addition would cancel the large integer.
+    add_2 (.integer (2 ^ 1024)) (.float ⟨true, 2046, 0⟩) =
+      .error (.error (.atom "badarith")) ∧
+    add_2 (.float ⟨false, 2046, 0⟩) (.integer (-(2 ^ 1024))) =
+      .error (.error (.atom "badarith")) := by
+  repeat' first | apply And.intro | rfl
+
+theorem addition_rejects_nonnumeric (input other : Term)
+    (hi : ∀ n, input ≠ .integer n) (hf : ∀ f, input ≠ .float f) :
+    add_2 input other = .error (.error (.atom "badarith")) ∧
+    add_2 other input = .error (.error (.atom "badarith")) := by
+  cases input <;> cases other <;> simp_all [add_2]
 
 -- Elixir: <<>>, <<1::1>>, <<1::7>>, <<1>>, <<1, 1::1>>.
 -- Partial bytes store their meaningful bits at the most significant end.
