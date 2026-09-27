@@ -52,7 +52,7 @@ defmodule Lynx.RunnerTest do
 
       assert Enum.any?(diagnostics, fn diagnostic ->
                diagnostic["file"] == @sum_erl and diagnostic["kind"] == "error" and
-                 diagnostic["line"] == 4 and diagnostic["column"] == 18
+                 diagnostic["line"] == 4 and diagnostic["column"] == 20
              end)
     end
 
