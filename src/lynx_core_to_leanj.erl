@@ -72,9 +72,9 @@ emit_group(Names, Graph) ->
 
 %% Erlang: case X of [] -> 0; Other -> 1 end
 %% Lean:
-%%   match v_X with
+%%   match vX with
 %%   | Lynx.Term.nil => Lynx.Result.ok (Lynx.Term.integer 0)
-%%   | v_Other => Lynx.Result.ok (Lynx.Term.integer 1)
+%%   | vOther => Lynx.Result.ok (Lynx.Term.integer 1)
 expression(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
     {TranslatedArg, State1} = value(Arg, State0),
     {TranslatedClauses, State2} = lists:mapfoldl(fun clause/2, State1, Clauses),
@@ -83,7 +83,7 @@ expression(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
         ~"cases" => TranslatedClauses
     }), State2};
 %% Erlang: Y = f(X), g(Y)
-%% Lean: Lynx.Result.bind (f_1 v_X) fun v_Y => g_1 v_Y
+%% Lean: Lynx.Result.bind (f_1 vX) fun vY => g_1 vY
 expression(#c_let{anno = Anno, vars = [Var], arg = Arg, body = Body}, State0) ->
     {TranslatedArg, State1} = expression(Arg, State0),
     {TranslatedBody, State2} = expression(Body, State1),
@@ -92,7 +92,7 @@ expression(#c_let{anno = Anno, vars = [Var], arg = Arg, body = Body}, State0) ->
     }),
     {apply_node(~"Lynx.Result.bind", [TranslatedArg, Continuation], Anno), State2};
 %% Erlang: f(X, Y)
-%% Lean: f_2 v_X v_Y
+%% Lean: f_2 vX vY
 expression(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args}, State0) ->
     {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
     case State1#state.name of
@@ -101,7 +101,7 @@ expression(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args}, State0)
     end,
     {apply_node(function_name(Name), TranslatedArgs, Anno), State1};
 %% Erlang: X + Y
-%% Lean: Lynx.Modules.Erlang.add_2 v_X v_Y
+%% Lean: Lynx.Modules.Erlang.add_2 vX vY
 expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
                    name = #c_literal{val = '+'}, args = [Left, Right]}, State0) ->
     {Args, State1} = lists:mapfoldl(fun value/2, State0, [Left, Right]),
@@ -121,7 +121,7 @@ expression(#c_literal{anno = Anno} = Literal, State0) ->
     {Translated, State1} = value(Literal, State0),
     {apply_node(~"Lynx.Result.ok", [Translated], Anno), State1};
 %% Erlang: X
-%% Lean: Lynx.Result.ok v_X
+%% Lean: Lynx.Result.ok vX
 expression(#c_var{anno = Anno} = Var, State) ->
     {apply_node(~"Lynx.Result.ok", [variable(Var)], Anno), State};
 %% Erlang: receive X -> X end
@@ -130,11 +130,7 @@ expression(Core, _State) ->
     unsupported(Core).
 
 clause(#c_clause{anno = Anno, pats = [Pattern], guard = #c_literal{val = true}, body = Body}, State0) ->
-    {Pat, State1} = case {lists:member(compiler_generated, Anno), Pattern, Body} of
-        {true, #c_var{}, #c_primop{name = #c_literal{val = match_fail}}} ->
-            {node(~"wildcard", [], #{}), State0};
-        _ -> value(Pattern, State0)
-    end,
+    {Pat, State1} = value(Pattern, State0),
     {TranslatedBody, State2} = expression(Body, State1),
     {#{~"span" => span(Anno), ~"pattern" => Pat, ~"body" => TranslatedBody}, State2};
 clause(Core, _State) ->
@@ -157,11 +153,15 @@ value(Core, _State) ->
     unsupported(Core).
 
 %% Keep compiler temporaries and source variables in distinct name spaces.
-%% Prefixing also avoids Lean keywords without losing the original spelling.
+%% Preserve the underscore prefix for source names that start with one.
 variable(#c_var{anno = Anno, name = Name}) when is_integer(Name), Name >= 0 ->
-    ident_node(<<"v", (integer_to_binary(Name))/binary>>, Anno);
+    ident_node(<<"_", (integer_to_binary(Name))/binary>>, Anno);
 variable(#c_var{anno = Anno, name = Name}) when is_atom(Name) ->
-    ident_node(<<"v_", (atom_to_binary(Name, utf8))/binary>>, Anno);
+    Binary = atom_to_binary(Name, utf8),
+    case Binary of
+        <<"_", _/binary>> -> ident_node(<<"_v", Binary/binary>>, Anno);
+        _ -> ident_node(<<"v", Binary/binary>>, Anno)
+    end;
 variable(Core) ->
     unsupported(Core).
 

@@ -109,10 +109,6 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   | "string" => do
     fields j ["kind", "value", "span"]
     pure ⟨Syntax.mkStrLit (← str j "value")⟩
-  | "wildcard" => do
-    fields j ["kind", "span"]
-    unless pattern do throw "wildcard is only valid in patterns"
-    pure (Unhygienic.run `(_))
   | "apply" => do
     fields j ["kind", "function", "args", "span"]
     let fnJson ← field j "function"
