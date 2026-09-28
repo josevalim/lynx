@@ -1,7 +1,7 @@
 defmodule Lynx.Translation do
   @moduledoc false
 
-  defstruct modules: %{}
+  defstruct modules: %{}, external_calls: %{}, stack: []
 
   def new(cores) do
     modules =
@@ -15,61 +15,104 @@ defmodule Lynx.Translation do
     %__MODULE__{modules: modules}
   end
 
-  @doc "Translates the requested functions using the definitions registered by new/1."
-  def add(%__MODULE__{modules: modules} = translation, name, names) do
-    module = Map.fetch!(modules, name)
+  @doc "Translates the requested functions and their local and remote callees."
+  def add(%__MODULE__{modules: modules, stack: stack} = translation, name, names) do
+    module = fetch_module!(modules, name, fn -> [] end)
 
-    with {:ok, functions} <-
-           :lynx_core_to_leanj.translate(name, module.definitions, names, module.translations) do
-      updated = %{module | translations: functions}
-      %{translation | modules: Map.put(modules, name, updated)}
+    for {function, arity} <- names do
+      validate_function!(module, name, function, arity, fn -> [file: module.file] end)
+    end
+
+    context = {%{translation | stack: [name | stack]}, &remote_call/5}
+    %{definitions: definitions, translations: translations} = module
+
+    case :lynx_core_to_leanj.translate(name, definitions, names, translations, context) do
+      {:ok, functions, translation} ->
+        updated = %{module | translations: functions}
+        %{translation | modules: Map.put(translation.modules, name, updated), stack: stack}
+
+      {:unsupported_core, span_anno, core} ->
+        raise CompileError,
+              source_location(span_anno, module.file) ++
+                [description: "unsupported Core expression:\n#{core}"]
     end
   end
 
-  @doc "Translates external callees and assembles modules in dependency order."
-  def assemble(%__MODULE__{modules: modules} = translation) do
-    calls = for {module, data} <- modules, {name, _} <- data.translations, do: {module, name}
+  defp remote_call(
+         %__MODULE__{stack: [caller | _]} = translation,
+         module,
+         function,
+         arity,
+         span_anno
+       ) do
+    location = fn -> source_location(span_anno, translation.modules[caller].file) end
+    target = fetch_module!(translation.modules, module, location)
+    validate_function!(target, module, function, arity, location)
 
-    with %__MODULE__{modules: modules} <- add_external_calls(translation, calls, MapSet.new()) do
-      assemble_modules(modules)
+    if module in translation.stack do
+      cycle = Enum.map_join(Enum.reverse([module | translation.stack]), " -> ", &inspect/1)
+
+      raise CompileError,
+            location.() ++
+              [
+                description:
+                  "cyclic module call to #{Exception.format_mfa(module, function, arity)} (#{cycle})"
+              ]
     end
-  end
 
-  defp add_external_calls(translation, [], _visited), do: translation
-
-  defp add_external_calls(translation, [{module, name} = call | rest], visited) do
-    if MapSet.member?(visited, call) do
-      add_external_calls(translation, rest, visited)
-    else
-      with %__MODULE__{} = translation <- add(translation, module, [name]) do
-        function = translation.modules[module].translations[name]
-        local = Enum.map(function.local_calls, &{module, &1})
-
-        external =
-          Enum.map(function.external_calls, fn {mod, fun, arity} -> {mod, {fun, arity}} end)
-
-        add_external_calls(translation, local ++ external ++ rest, MapSet.put(visited, call))
-      end
-    end
-  end
-
-  defp assemble_modules(modules) do
-    modules =
-      Map.new(modules, fn {name, module} ->
-        imports =
-          for {_, function} <- module.translations,
-              {callee, _, _} <- function.external_calls,
-              do: callee
-
-        {name, Map.put(module, :external_modules, imports |> Enum.uniq() |> Enum.sort())}
+    translation =
+      update_in(translation.external_calls[caller], fn
+        nil -> MapSet.new([module])
+        set -> MapSet.put(set, module)
       end)
 
+    {:ok, add(translation, module, [{function, arity}])}
+  end
+
+  defp source_location(annotations, default_file) do
+    file =
+      case List.keyfind(annotations, :file, 0) do
+        {:file, file} when file not in [[], ""] -> :unicode.characters_to_binary(file)
+        _ -> default_file
+      end
+
+    line =
+      Enum.find_value(annotations, fn
+        {line, column} when is_integer(line) and line > 0 and is_integer(column) -> line
+        line when is_integer(line) and line > 0 -> line
+        _ -> nil
+      end)
+
+    [file: file, line: line]
+  end
+
+  defp fetch_module!(modules, module, location) do
+    case Map.fetch(modules, module) do
+      {:ok, data} ->
+        data
+
+      :error ->
+        raise CompileError,
+              location.() ++ [description: "unknown module #{inspect(module)}"]
+    end
+  end
+
+  defp validate_function!(target, module, function, arity, location) do
+    unless Map.has_key?(target.definitions, {function, arity}) do
+      raise CompileError,
+            location.() ++
+              [description: "undefined function #{Exception.format_mfa(module, function, arity)}"]
+    end
+  end
+
+  @doc "Assembles translated modules in dependency order."
+  def assemble(%__MODULE__{modules: modules, external_calls: external_calls}) do
     graph = :digraph.new()
 
     try do
       for {name, _} <- modules, do: :digraph.add_vertex(graph, [name])
 
-      for {name, module} <- modules, dependency <- module.external_modules do
+      for {name, dependencies} <- external_calls, dependency <- dependencies do
         :digraph.add_edge(graph, [dependency], [name])
       end
 
@@ -79,7 +122,11 @@ defmodule Lynx.Translation do
         %{
           "module" => Atom.to_string(name),
           "file" => module.file,
-          "imports" => Enum.map(module.external_modules, &Atom.to_string/1),
+          "imports" =>
+            external_calls
+            |> Map.get(name, MapSet.new())
+            |> Enum.sort()
+            |> Enum.map(&Atom.to_string/1),
           "contents" => assemble_module(module.translations)
         }
       end
@@ -122,7 +169,7 @@ defmodule Lynx.Translation do
     case ready do
       [] ->
         if :digraph.no_vertices(graph) != 0 do
-          raise ArgumentError, "found cycle during topsort"
+          raise CompileError, description: "found cycle during topsort"
         end
 
         []

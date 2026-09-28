@@ -67,20 +67,6 @@ defmodule Lynx.TranslationTest do
              |> Translation.assemble()
   end
 
-  test "propagates unsupported Core from an exported function" do
-    core =
-      cerl("""
-      -module(example).
-      -export([entry/1]).
-      entry(X) -> erlang:abs(X).
-      """)
-
-    assert {:unsupported_core, text} =
-             Translation.add(Translation.new([{"example.erl", core}]), :example, [{:entry, 1}])
-
-    assert text =~ "call 'erlang':'abs'"
-  end
-
   test "follows remote calls and orders external modules before callers" do
     caller =
       cerl("""
@@ -104,7 +90,9 @@ defmodule Lynx.TranslationTest do
       |> Translation.add(:a_caller, [{:entry, 1}])
 
     assert Translation.add(translation, :a_caller, [{:entry, 1}]) == translation
-    assert translation.modules.z_dependency.translations == %{}
+    assert Map.keys(translation.modules.z_dependency.translations) == [{:entry, 1}]
+    assert translation.external_calls == %{a_caller: MapSet.new([:z_dependency])}
+    assert translation.stack == []
 
     assert [
              %{
@@ -117,69 +105,110 @@ defmodule Lynx.TranslationTest do
            ] = Translation.assemble(translation)
 
     assert dependency["expr"]["name"] == "entry_1"
+  end
 
-    assert_raise KeyError, fn ->
-      Translation.new([{"caller.erl", caller}])
-      |> Translation.add(:a_caller, [{:entry, 1}])
-      |> Translation.assemble()
+  describe "errors" do
+    test "raises on unsupported Core" do
+      core =
+        cerl("""
+        -module(example).
+        -export([entry/1]).
+        entry(X) -> erlang:abs(X).
+        """)
+
+      error =
+        assert_raise CompileError, fn ->
+          Translation.add(Translation.new([{"example.erl", core}]), :example, [{:entry, 1}])
+        end
+
+      assert error.file == "example.erl"
+      assert error.line == 3
+      assert Exception.message(error) =~ "example.erl:3: unsupported Core expression:"
+      assert error.description =~ "call 'erlang':'abs'"
     end
 
-    assert_raise KeyError, fn -> Translation.new([]) |> Translation.add(:missing, []) end
-  end
+    test "validates remote modules" do
+      caller =
+        cerl("""
+        -module(a_caller).
+        -export([entry/1]).
+        entry(X) -> z_dependency:entry(X).
+        """)
 
-  test "translates qualified calls to the current module as local calls" do
-    core =
-      cerl("""
-      -module(example).
-      -export([entry/1, helper/1]).
-      entry(X) -> example:helper(X).
-      helper([]) -> 0;
-      helper([_ | Xs]) -> example:helper(Xs).
-      """)
+      assert_raise CompileError,
+                   "caller.erl:3: unknown module :z_dependency",
+                   fn ->
+                     Translation.new([{"caller.erl", caller}])
+                     |> Translation.add(:a_caller, [{:entry, 1}])
+                   end
+    end
 
-    translation =
-      Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
+    test "validates remote functions" do
+      caller =
+        cerl("""
+        -module(caller).
+        -export([entry/1]).
+        entry(X) -> other:entry(X).
+        """)
 
-    functions = translation.modules.example.translations
-    assert functions[{:entry, 1}].local_calls == [{:helper, 1}]
-    assert functions[{:entry, 1}].external_calls == []
-    assert functions[{:helper, 1}].local_calls == []
-    assert functions[{:helper, 1}].external_calls == []
-    json = JSON.encode!(functions[{:entry, 1}].translation)
-    assert json =~ ~s("name":"helper_1")
-    refute json =~ "example.helper_1"
+      missing =
+        cerl("""
+        -module(other).
+        -export([different/1]).
+        different(X) -> X.
+        """)
 
-    assert [%{"imports" => [], "contents" => commands}] = Translation.assemble(translation)
-    assert Enum.map(commands, & &1["expr"]["name"]) == ["helper_1", "entry_1"]
-  end
+      assert_raise CompileError, "caller.erl:3: undefined function :other.entry/1", fn ->
+        Translation.new([{"caller.erl", caller}, {"other.erl", missing}])
+        |> Translation.add(:caller, [{:entry, 1}])
+      end
+    end
 
-  test "rejects cycles between modules during assembly" do
-    first =
-      cerl("""
-      -module(first).
-      -export([entry/1]).
-      entry(X) -> second:entry(X).
-      """)
+    test "rejects cycles between modules during translation" do
+      first =
+        cerl("""
+        -module(first).
+        -export([entry/1]).
+        entry(X) -> second:entry(X).
+        """)
 
-    second =
-      cerl("""
-      -module(second).
-      -export([entry/1]).
-      entry(X) -> first:entry(X).
-      """)
+      second =
+        cerl("""
+        -module(second).
+        -export([entry/1]).
+        entry(X) -> first:entry(X).
+        """)
 
-    translation =
-      Translation.new([{"first.erl", first}, {"second.erl", second}])
-      |> Translation.add(:first, [{:entry, 1}])
+      assert_raise CompileError,
+                   "second.erl:3: cyclic module call to :first.entry/1 (:first -> :second -> :first)",
+                   fn ->
+                     Translation.new([{"first.erl", first}, {"second.erl", second}])
+                     |> Translation.add(:first, [{:entry, 1}])
+                   end
+    end
 
-    assert_raise ArgumentError, "found cycle during topsort", fn ->
-      Translation.assemble(translation)
+    test "uses the file directive for unknown remote module errors" do
+      core =
+        cerl("""
+        -module(example).
+        -export([entry/1]).
+        -file("foo", 1).
+        entry(X) -> missing:entry(X).
+        """)
+
+      error =
+        assert_raise CompileError, "foo:4: unknown module :missing", fn ->
+          Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
+        end
+
+      assert error.file == "foo"
+      assert error.line == 4
     end
   end
 
   defp cerl(source) do
     forms =
-      {String.to_charlist(source), 1}
+      {String.to_charlist(source), {1, 1}}
       |> Stream.unfold(fn {chars, line} ->
         result =
           case :erl_scan.tokens([], chars, line) do
