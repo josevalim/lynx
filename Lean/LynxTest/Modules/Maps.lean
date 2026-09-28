@@ -1,5 +1,6 @@
 module
 
+import Erlang.maps
 meta import LynxTest.ProofAudit
 import Lynx
 import all Lynx.Term.Compare

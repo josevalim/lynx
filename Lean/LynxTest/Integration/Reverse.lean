@@ -10,6 +10,7 @@ defmodule Reverse do
   defp reverse_aux([head | tail], acc), do: reverse_aux(tail, [head | acc])
 end
 -/
+import Erlang.erlang
 import LynxTest.Bench
 
 namespace LynxTest.Integration.Reverse

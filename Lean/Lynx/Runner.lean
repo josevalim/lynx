@@ -17,7 +17,7 @@ Each verification diagnostic has `file`, `kind` (error/warning/info), and `messa
 Input files are an ordered array of {file, module, imports, contents} objects.
 Files are elaborated in the supplied dependency order, sharing declarations but
 not local scopes or messages. Each file's definitions live in its module namespace.
-Imports name other input modules; verification does not load them from disk.
+Imports may name other input modules or compiled Lean modules loaded from disk.
 Verification elaborates decoded syntax directly. Rendering pretty-prints that syntax as Lean source. -/
 namespace Lynx.Runner
 open Lean
@@ -255,6 +255,15 @@ private def render (files : Array DecodedFile) (env : Lean.Environment) : IO (UI
 
 /-- Verify in input order, retaining declarations while resetting per-file state. -/
 private def verify (files : Array DecodedFile) (env : Lean.Environment) : IO (UInt32 × Json) := do
+  let mut imports : Array Import := #[{ module := `Lynx }]
+  for file in files do
+    for name in file.imports do
+      unless files.any (·.moduleName == name) do
+        let id ← IO.ofExcept <| (identifier name).run env |>.run' #[]
+        unless imports.any (·.module == id.getId) do
+          imports := imports.push { module := id.getId }
+  unsafe enableInitializersExecution
+  let env ← importModules imports {} (loadExts := true)
   let mut diagnostics := #[]
   let mut failed := false
   let mut env := env

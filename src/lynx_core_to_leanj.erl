@@ -92,17 +92,11 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
                    name = #c_literal{val = Name}, args = Args}, #state{module = Module} = State)
         when is_atom(Name) ->
     expression(#c_apply{anno = Anno, op = #c_var{name = {Name, length(Args)}}, args = Args}, State);
-%% Erlang: X + Y
-%% Lean: Erlang.erlang.«+/2» vX vY
-expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
-                   name = #c_literal{val = '+'}, args = [Left, Right]}, State0) ->
-    {Args, State1} = lists:mapfoldl(fun value/2, State0, [Left, Right]),
-    {apply_node(~"Erlang.erlang.«+/2»", Args, Anno), State1};
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX
 expression(#c_call{anno = Anno, module = #c_literal{val = Module},
                    name = #c_literal{val = Name}, args = Args}, State0)
-        when is_atom(Module), Module =/= erlang, is_atom(Name) ->
+        when is_atom(Module), is_atom(Name) ->
     {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
     Arity = length(Args),
     {Context, Callback} = State1#state.remote,

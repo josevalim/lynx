@@ -1,6 +1,6 @@
 name = "Lynx"
 version = "0.1.0"
-defaultTargets = ["Lynx"]
+defaultTargets = ["Lynx", "Erlang"]
 testDriver = "LynxTest"
 
 [[lean_lib]]

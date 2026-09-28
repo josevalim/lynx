@@ -1,5 +1,6 @@
 module
 
+import Erlang.erlang
 import Lynx
 meta import LynxTest.ProofAudit
 

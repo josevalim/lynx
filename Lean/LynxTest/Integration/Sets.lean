@@ -12,6 +12,8 @@ defmodule SetUnion do
   def union(left, right), do: :maps.merge(left, right)
 end
 -/
+import Erlang.erlang
+import Erlang.maps
 import LynxTest.Bench
 import all Lynx.Term.Runner
 import all Std
