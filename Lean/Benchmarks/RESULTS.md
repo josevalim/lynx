@@ -21,7 +21,7 @@ Medians exclude imports and supporting lemmas.
 
 Return-shape candidates come from existing simp equations for reachable functions,
 regardless of opacity. Only implementation traversal depends on `lynx_opaque`;
-`add_2` retains that annotation. Generated equations installed for unfolding are
+`Erlang.erlang.«+/2»` retains that annotation. Generated equations installed for unfolding are
 excluded from hint discovery, and all summaries require independent proofs.
 General discovery leaves translated proof medians within -0.8% to +1.4% of the
 opaque-only version. Native control medians varied from -10.3% to +5.6%, with the
@@ -51,7 +51,7 @@ Medians exclude imports and supporting lemmas.
 The general policy preserves all existing proofs with modest overhead; it does
 not establish a suite-wide speedup. Native control medians varied from -6.7% to
 +1.2%. Equation indexing is shared between the normal and fallback contexts.
-Explicit `lynx_opaque` boundaries remain: removing `add_2`'s boundary slowed
+Explicit `lynx_opaque` boundaries remain: removing `Erlang.erlang.«+/2»`'s boundary slowed
 sum-append by about 32% in an isolated trial, so it was retained.
 
 ## Previous capture

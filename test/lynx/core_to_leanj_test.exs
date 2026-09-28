@@ -31,7 +31,7 @@ defmodule Lynx.CoreToLeanjTest do
 
     for {{name, 1}, %{translation: translation}} <- functions do
       assert %{"kind" => "def", "name" => translated_name} = translation
-      assert translated_name == "#{name}_1"
+      assert translated_name == "«#{name}/1»"
     end
   end
 
@@ -68,7 +68,7 @@ defmodule Lynx.CoreToLeanjTest do
     assert functions[{:helper, 1}].local_calls == []
 
     for name <- [:entry, :helper] do
-      assert functions[{name, 1}].translation["body"]["function"]["name"] == "helper_1"
+      assert functions[{name, 1}].translation["body"]["function"]["name"] == "«helper/1»"
     end
   end
 
@@ -89,8 +89,8 @@ defmodule Lynx.CoreToLeanjTest do
 
   test "qualifies remote function names with Erlang and Elixir namespaces" do
     for {module, expected} <- [
-          {:other, "Erlang.other.entry_1"},
-          {Foo.Bar, "Elixir.Foo.Bar.entry_1"}
+          {:other, "Erlang.other.«entry/1»"},
+          {Foo.Bar, "Elixir.Foo.Bar.«entry/1»"}
         ] do
       body = :cerl.c_call(:cerl.c_atom(module), :cerl.c_atom(:entry), [:cerl.c_var(0)])
 

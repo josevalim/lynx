@@ -19,7 +19,7 @@ end
 import LynxTest.Bench
 
 namespace LynxTest.Integration.ProcessDeadlock
-open Lynx Lynx.Modules
+open Lynx
 set_option Elab.async false
 
 private def receiveAtom (name : String) : Result :=
@@ -38,14 +38,14 @@ private def workerFun : Term.Fun
 private def functions : Term.FunTable := #[workerFun]
 
 def run_0 : Result := do
-  let _ ← Erlang.spawn_1 functions (.function 0 0)
+  let _ ← Erlang.erlang.«spawn/1» functions (.function 0 0)
   let _ ← receiveAtom "pong"
   .ok (.atom "ok")
 
 def runExpects (_ : Unit) : Result := .ok Term.true
 
 def runEnsures (_ : Unit) (result : Term) : Result :=
-  Erlang.equal_2 result (.atom "ok")
+  Erlang.erlang.«==/2» result (.atom "ok")
 
 private def runFunction (_ : Unit) : Result := run_0
 

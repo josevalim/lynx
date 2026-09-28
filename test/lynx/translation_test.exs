@@ -41,16 +41,16 @@ defmodule Lynx.TranslationTest do
       end)
 
     assert Enum.sort(groups) == [
-             ["caller_1"],
-             ["even_1", "odd_1"],
-             ["first_1", "second_1", "third_1"],
-             ["identity_1"],
-             ["self_1"]
+             ["«caller/1»"],
+             ["«even/1»", "«odd/1»"],
+             ["«first/1»", "«second/1»", "«third/1»"],
+             ["«identity/1»"],
+             ["«self/1»"]
            ]
 
-    caller = Enum.find_index(groups, &("caller_1" in &1))
-    assert Enum.find_index(groups, &("odd_1" in &1)) < caller
-    assert Enum.find_index(groups, &("first_1" in &1)) < caller
+    caller = Enum.find_index(groups, &("«caller/1»" in &1))
+    assert Enum.find_index(groups, &("«odd/1»" in &1)) < caller
+    assert Enum.find_index(groups, &("«first/1»" in &1)) < caller
   end
 
   test "only translates requested roots" do
@@ -108,7 +108,7 @@ defmodule Lynx.TranslationTest do
              }
            ] = Translation.assemble(translation)
 
-    assert dependency["expr"]["name"] == "entry_1"
+    assert dependency["expr"]["name"] == "«entry/1»"
   end
 
   test "keeps Elixir namespaces in module names and imports" do

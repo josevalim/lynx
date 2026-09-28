@@ -6,8 +6,7 @@ import Lean
 /-! JSON runner for verification and Lean source rendering. Positions are one-based Unicode character positions.
 Every syntax node requires `span`: `[]`, `[line]`, or `[line, column]`.
 Nodes without a location inherit the enclosing location, if any. Line-only spans
-never imply a diagnostic column. Names use dot-separated alphanumeric/underscore/apostrophe
-components, beginning with a letter or underscore.
+never imply a diagnostic column. Names use Lean identifiers, including quoted components such as `«+/2»`.
 
 `verify` returns `{"status": "ok" | "error", "diagnostics": [...]}`.
 `render` returns `{"status": "ok", "files": {...}}`, mapping original source paths to Lean source.
@@ -47,7 +46,7 @@ private structure Span where
 
 private instance : Inhabited Span := ⟨{}⟩
 
-private abbrev DecodeM := StateT (Array Span) (Except String)
+private abbrev DecodeM := ReaderT Lean.Environment (StateT (Array Span) (Except String))
 
 private def span (map : FileMap) (j : Json) (parent : Span := {}) : DecodeM Span := do
   let xs ← arr j "span"
@@ -69,14 +68,10 @@ private def span (map : FileMap) (j : Json) (parent : Span := {}) : DecodeM Span
   modify (·.push result)
   return result
 
-private def identifier (value : String) : Except String (TSyntax `ident) := do
-  let parts := value.splitOn "."
-  for part in parts do
-    let chars := part.toList
-    unless chars.head?.any (fun c => c.isAlpha || c == '_') &&
-        chars.all (fun c => c.isAlphanum || c == '_' || c == '\'') && part != "_" do
-      throw s!"invalid identifier '{value}'"
-  return mkIdent (parts.foldl Name.str .anonymous)
+private def identifier (value : String) : DecodeM (TSyntax `ident) := do
+  let stx ← Parser.runParserCategory (← read) `term value
+  unless stx.isIdent do throw s!"invalid identifier '{value}'"
+  return mkIdent stx.getId
 
 /-- Fill quotation scaffolding only; preserve source information on spliced nodes. -/
 private partial def located (info : SourceInfo) (stx : Syntax) : Syntax :=
@@ -93,8 +88,9 @@ private def param (map : FileMap) (info : Span) (j : Json) : DecodeM (TSyntax `i
   fields j ["kind", "name", "span"]
   unless (← str j "kind") == "ident" do throw "parameter must be an identifier"
   let name ← str j "name"
-  if name.contains '.' then throw "parameter must be an unqualified identifier"
-  return withSpan (← span map j info).info (← identifier name)
+  let name ← identifier name
+  unless name.getId.getPrefix == .anonymous do throw "parameter must be an unqualified identifier"
+  return withSpan (← span map j info).info name
 
 private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     (j : Json) : DecodeM (TSyntax `term) := do
@@ -163,8 +159,8 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) : D
   | "def" => do
     fields j ["kind", "name", "params", "body", "span"]
     let name ← str j "name"
-    if name.contains '.' then throw "definition name must be unqualified"
     let name ← identifier name
+    unless name.getId.getPrefix == .anonymous do throw "definition name must be unqualified"
     let params ← (← arr j "params").mapM (param map info)
     let termType := mkIdent ``Lynx.Term
     let resultType := mkIdent ``Lynx.Result
@@ -218,7 +214,7 @@ structure DecodedFile where
   private spans : Array Span
 
 /-- Decode the request once for either command. Invalid input aborts the request. -/
-private def decode (request : String) : IO (Array DecodedFile) := do
+private def decode (request : String) (env : Lean.Environment) : IO (Array DecodedFile) := do
   let files ← IO.ofExcept do
     let j ← Json.parse request
     fields j ["files", "version"]
@@ -231,12 +227,12 @@ private def decode (request : String) : IO (Array DecodedFile) := do
       let (moduleName, imports, commands, spans) ← IO.ofExcept do
         fields entry ["file", "module", "imports", "contents"]
         let moduleName ← str entry "module"
-        let namespaceId ← identifier moduleName
+        let namespaceId ← (identifier moduleName).run env |>.run' #[]
         let imports ← (← arr entry "imports").mapM fun j => do
           let name ← j.getStr?
-          let _ ← identifier name
+          let _ ← (identifier name).run env |>.run' #[]
           pure name
-        let (commands, spans) ← (← arr entry "contents").mapM (command map) |>.run #[]
+        let (commands, spans) ← (← arr entry "contents").mapM (command map) |>.run env |>.run #[]
         let start := Unhygienic.run `(namespace $namespaceId)
         let stop := Unhygienic.run `(end $namespaceId)
         pure (moduleName, imports, #[start] ++ commands ++ #[stop], spans)
@@ -250,7 +246,7 @@ private def render (files : Array DecodedFile) (env : Lean.Environment) : IO (UI
       let commands ← file.commands.mapM fun cmd => do
         return (← PrettyPrinter.ppCommand cmd).pretty 100
       let imports := file.imports.toList.map ("import " ++ ·)
-      return "module\n\n" ++ String.intercalate "\n" ("import Lynx" :: imports) ++
+      return "module\n\n" ++ String.intercalate "\n" ("public import Lynx" :: imports) ++
         "\n\n" ++ String.intercalate "\n\n" commands.toList ++ "\n"
     let source ← (action.run' { fileName := file.fileName, fileMap := file.fileMap }
       { env := env }).toIO (fun _ => IO.userError s!"{file.fileName}: Lean source rendering failed")
@@ -275,9 +271,10 @@ private def verify (files : Array DecodedFile) (env : Lean.Environment) : IO (UI
 
 private def run (action : Array DecodedFile → Lean.Environment → IO (UInt32 × Json)) : IO UInt32 := do
   let (status, response) ← try
-    let files ← decode (← (← IO.getStdin).getLine)
+    let request ← (← IO.getStdin).getLine
     unsafe enableInitializersExecution
     let env ← importModules #[{ module := `Lynx }] {} (loadExts := true)
+    let files ← decode request env
     action files env
   catch err =>
     pure (2, Json.mkObj [("status", toJson "failure"), ("message", toJson err.toString)])

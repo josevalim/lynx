@@ -14,7 +14,7 @@ theorem run_ok (value : Term) (env : Environment) :
     (Result.ok value).run env = .ok value env := by simp
 
 theorem one_bit_size :
-    Modules.Erlang.bit_size_1 (.bitstring ⟨#[128]⟩ 1) = .ok (.integer 1) := by
+    Erlang.erlang.«bit_size/1» (.bitstring ⟨#[128]⟩ 1) = .ok (.integer 1) := by
   rfl
 
 theorem float_zero_value :
@@ -23,38 +23,38 @@ theorem float_zero_value :
 -- The integer shortcut must retain symbolic float and mixed-addition proofs.
 theorem float_addition (left right result : Term.FiniteFloat)
     (sum : left.add right = some result) :
-    Modules.Erlang.add_2 (.float left) (.float right) = .ok (.float result) := by
+    Erlang.erlang.«+/2» (.float left) (.float right) = .ok (.float result) := by
   lynx_solve
 
 theorem mixed_addition (integer : Int) (converted right result : Term.FiniteFloat)
     (conversion : Term.FiniteFloat.ofInt integer = some converted)
     (sum : converted.add right = some result) :
-    Modules.Erlang.add_2 (.integer integer) (.float right) = .ok (.float result) := by
+    Erlang.erlang.«+/2» (.integer integer) (.float right) = .ok (.float result) := by
   lynx_solve
 
 theorem mixed_addition_reversed (integer : Int) (converted left result : Term.FiniteFloat)
     (conversion : Term.FiniteFloat.ofInt integer = some converted)
     (sum : left.add converted = some result) :
-    Modules.Erlang.add_2 (.float left) (.integer integer) = .ok (.float result) := by
+    Erlang.erlang.«+/2» (.float left) (.integer integer) = .ok (.float result) := by
   lynx_solve
 
 theorem binary_is_bitstring (input : Term)
-    (accepted : Accepted (Modules.Erlang.is_binary_1 input)) :
-    Accepted (Modules.Erlang.is_bitstring_1 input) := by
+    (accepted : Accepted (Erlang.erlang.«is_binary/1» input)) :
+    Accepted (Erlang.erlang.«is_bitstring/1» input) := by
   lynx_solve
 
 theorem bitstring_size_is_integer (input : Term)
-    (accepted : Accepted (Modules.Erlang.is_bitstring_1 input)) :
+    (accepted : Accepted (Erlang.erlang.«is_bitstring/1» input)) :
     Accepted (do
-      let size ← Modules.Erlang.bit_size_1 input
-      Modules.Erlang.is_integer_1 size) := by
+      let size ← Erlang.erlang.«bit_size/1» input
+      Erlang.erlang.«is_integer/1» size) := by
   lynx_solve
 
 theorem bitstring_byte_size_is_integer (input : Term)
-    (accepted : Accepted (Modules.Erlang.is_bitstring_1 input)) :
+    (accepted : Accepted (Erlang.erlang.«is_bitstring/1» input)) :
     Accepted (do
-      let size ← Modules.Erlang.byte_size_1 input
-      Modules.Erlang.is_integer_1 size) := by
+      let size ← Erlang.erlang.«byte_size/1» input
+      Erlang.erlang.«is_integer/1» size) := by
   lynx_solve
 
 #lynx_pure def classify (input : Term) : Result :=
@@ -82,11 +82,11 @@ theorem bitstring_byte_size_is_integer (input : Term)
 #lynx_pure mutual
   def sumLeft : Term → Result
     | .nil => .ok (.integer 0)
-    | .cons x xs => Result.bind (sumRight xs) fun total => Modules.Erlang.add_2 x total
+    | .cons x xs => Result.bind (sumRight xs) fun total => Erlang.erlang.«+/2» x total
     | _ => .error (.error (.atom "function_clause"))
   def sumRight : Term → Result
     | .nil => .ok (.integer 0)
-    | .cons x xs => Result.bind (sumLeft xs) fun total => Modules.Erlang.add_2 x total
+    | .cons x xs => Result.bind (sumLeft xs) fun total => Erlang.erlang.«+/2» x total
     | _ => .error (.error (.atom "function_clause"))
 end
 

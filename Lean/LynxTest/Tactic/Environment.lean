@@ -4,7 +4,7 @@ import LynxTest.ProofAudit
 /-! Execution-state regression tests. These use Lean's state operations directly;
 no Erlang process-dictionary operations are introduced by this migration. -/
 namespace LynxTest.Tactic.Environment
-open Lynx Lynx.Modules
+open Lynx
 
 private def record (key value : Term) : Result := do
   modify fun env => env.setPdict ((key, value) :: env.pdict)
@@ -36,11 +36,11 @@ theorem stateful_coverage : Covered (fun value : Term => do
 theorem known_outcome (computation : Result) (env final : Environment)
     (pure : Result.IsPure computation)
     (returned : computation env = .ok (.integer 7) final) :
-    Accepted (do Erlang.equal_2 (← computation) (.integer 7)) env := by
+    Accepted (do Erlang.erlang.«==/2» (← computation) (.integer 7)) env := by
   lynx_solve
 
 theorem pure_preserves_environment (env : Environment) (a b : Int) :
-    Erlang.add_2 (.integer a) (.integer b) env =
+    Erlang.erlang.«+/2» (.integer a) (.integer b) env =
       .ok (.integer (a + b)) env := rfl
 
 theorem bind_threads_state (env : Environment) (key value : Term) :
@@ -65,7 +65,7 @@ theorem higher_order_threads_state (env : Environment) (a b : Term) :
         (env.setPdict ((.nil, b) :: (.nil, a) :: env.pdict)) := rfl
 
 theorem short_circuit_retains_state (env : Environment) (value : Term) :
-    (Erlang.andalso_2
+    (Erlang.erlang.«andalso/2»
       (do let _ ← record .nil value; pure Term.false)
       (fun _ => record .nil (.atom "unreachable"))) env =
       .ok Term.false (env.setPdict ((.nil, value) :: env.pdict)) := rfl
@@ -79,20 +79,20 @@ private def rememberList : Term → Result
 
 /-- Recursive hypotheses must apply to the updated, not just initial, state. -/
 theorem stateful_recursive_contract : Satisfies rememberList properList
-    (fun _ result => Erlang.equal_2 result .nil) := by
+    (fun _ result => Erlang.erlang.«==/2» result .nil) := by
   lynx_verify
 
 private def anyInput (_ : Term) : Result := pure Term.true
 
 /-- Abstracting short-circuit guards must not restrict the right result to booleans. -/
 theorem short_circuit_nonboolean_contract :
-    Satisfies (fun value => Erlang.andalso_2 (.ok Term.true) (fun _ => record .nil value))
-      anyInput (fun input result => Erlang.equal_2 input result) := by
+    Satisfies (fun value => Erlang.erlang.«andalso/2» (.ok Term.true) (fun _ => record .nil value))
+      anyInput (fun input result => Erlang.erlang.«==/2» input result) := by
   lynx_verify
 
 private def remember (value : Term) : Result := record .nil value
 private def remembered (_input result : Term) : Result := do
-  Erlang.equal_2 (← readFirst) result
+  Erlang.erlang.«==/2» (← readFirst) result
 
 /-- Guarantees observe the environment returned by the implementation. -/
 theorem stateful_contract : Satisfies remember anyInput remembered := by
@@ -100,12 +100,12 @@ theorem stateful_contract : Satisfies remember anyInput remembered := by
 
 /-- Expectations observe a snapshot; their effects do not initialize the function. -/
 private def snapshotExpects (input : Term) : Result := do
-  let accepted ← Erlang.equal_2 input (← readFirst)
+  let accepted ← Erlang.erlang.«==/2» input (← readFirst)
   let _ ← record .nil (.atom "expectation")
   pure accepted
 
 theorem expectation_snapshot : Satisfies (fun _ => readFirst) snapshotExpects
-    (fun input result => Erlang.equal_2 input result) := by
+    (fun input result => Erlang.erlang.«==/2» input result) := by
   lynx_vcgen
   case coverage =>
     exact ⟨(.atom "undefined", {}),
@@ -115,11 +115,11 @@ theorem expectation_snapshot : Satisfies (fun _ => readFirst) snapshotExpects
 /-- A computation that happens to work from empty state is not enough. -/
 theorem checks_nonempty_initial_state :
     ¬ Satisfies (fun _ => readFirst) anyInput
-      (fun _ result => Erlang.equal_2 result (.atom "undefined")) := by
+      (fun _ result => Erlang.erlang.«==/2» result (.atom "undefined")) := by
   intro contract
   let env := ({} : Environment).setPdict [(.nil, .integer 7)]
   have failed := contract.2 .nil env ⟨env, rfl⟩
-  simp [Accepted, readFirst, Erlang.equal_2, Pure.pure,
+  simp [Accepted, readFirst, Erlang.erlang.«==/2», Pure.pure,
     Term.true, Term.false, env] at failed
 
 theorem observes_state_in_property : Property anyInput (fun input => do

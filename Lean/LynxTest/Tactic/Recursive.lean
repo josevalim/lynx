@@ -18,18 +18,18 @@ def leaves(_), do: 1
 -/
 
 namespace LynxTest.Tactic.Recursive
-open Lynx Lynx.Modules
+open Lynx
 
 #lynx_pure def integers : Term → Result
   | .nil => .ok Term.true
   | .cons head tail => do
-      match ← Erlang.is_integer_1 head with
+      match ← Erlang.erlang.«is_integer/1» head with
       | .atom "true" => integers tail
       | _ => .ok Term.false
   | _ => .ok Term.false
 
 def listResult (_arg result : Term) : Result := integers result
-def integerResult (_arg result : Term) : Result := Erlang.is_integer_1 result
+def integerResult (_arg result : Term) : Result := Erlang.erlang.«is_integer/1» result
 def anyInput (_ : Term) : Result := .ok Term.true
 
 /-- Recursive functions may return a recursive constructor rather than a scalar. -/
@@ -48,7 +48,7 @@ theorem duplicate_contract : Satisfies duplicate integers listResult := by
   | .cons head tail => do
       let left ← leaves head
       let right ← leaves tail
-      Erlang.add_2 left right
+      Erlang.erlang.«+/2» left right
   | _ => .ok (.integer 1)
 
 theorem leaves_contract : Satisfies leaves anyInput integerResult := by

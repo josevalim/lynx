@@ -19,7 +19,7 @@ import all Init.Data.List.Basic
 import all Init.Data.List.Control
 
 namespace LynxTest.Integration.Sets
-open Lynx Lynx.Modules
+open Lynx
 set_option Elab.async false
 
 private def findEntry (xs : List (Term × Term)) (q : Term) : Option (Term × Term) :=
@@ -90,8 +90,8 @@ private theorem findEntry_self {xs : List (Term × Term)} {q : Term} {e : Term �
 
 private theorem all_get (value : Term) {xs : List (Term × Term)}
     (h : All (fun _ v => v = value) xs) (q : Term) :
-    Maps.get_2 q (.map xs) = .ok value ∨
-      Maps.get_2 q (.map xs) = .error (.error (.tuple #[.atom "badkey", q])) := by
+    Erlang.maps.«get/2» q (.map xs) = .ok value ∨
+      Erlang.maps.«get/2» q (.map xs) = .error (.error (.tuple #[.atom "badkey", q])) := by
   change (let result : Result := match (findEntry xs q).map Prod.snd with
     | some value => Result.ok value
     | none => .error (.error (.tuple #[.atom "badkey", q]))
@@ -103,11 +103,11 @@ private theorem all_get (value : Term) {xs : List (Term × Term)}
 @[simp] theorem merge_comm_of_constant (value : Term) (a b : List (Term × Term))
     (ha : All (fun _ v => v = value) a) (hb : All (fun _ v => v = value) b) :
     Term.compare (.map (b ++ a)) (.map (a ++ b)) = .eq := by
-  apply Maps.compare_eq_of_get
+  apply Erlang.maps.compare_eq_of_get
   intro q
-  change (Maps.merge_2 (.map a) (.map b) >>= Maps.get_2 q) =
-    (Maps.merge_2 (.map b) (.map a) >>= Maps.get_2 q)
-  rw [Maps.get_merge, Maps.get_merge]
+  change (Erlang.maps.«merge/2» (.map a) (.map b) >>= Erlang.maps.«get/2» q) =
+    (Erlang.maps.«merge/2» (.map b) (.map a) >>= Erlang.maps.«get/2» q)
+  rw [Erlang.maps.get_merge, Erlang.maps.get_merge]
   rcases all_get value ha q with ea | ea <;>
     rcases all_get value hb q with eb | eb <;> simp [ea, eb]
 
@@ -126,14 +126,14 @@ private theorem all_get (value : Term) {xs : List (Term × Term)}
     simp [isSet, Term.true, Term.false, Term.beq_iff_compare_eq]
 
 /-- Translation of the map-backed set union. -/
-def union_2 (left right : Term) : Result := Maps.merge_2 left right
+def union_2 (left right : Term) : Result := Erlang.maps.«merge/2» left right
 
 /-- Translated `is_map(value, fn _, v -> v == [] end)`. -/
 def setExpects (input : Term) : Result :=
   isSet input
 
 def unionExpects (args : Term × Term) : Result :=
-  Erlang.andalso_2 (setExpects args.1) (fun _ => setExpects args.2)
+  Erlang.erlang.«andalso/2» (setExpects args.1) (fun _ => setExpects args.2)
 
 def unionEnsures (_args : Term × Term) (result : Term) : Result := setExpects result
 
@@ -141,12 +141,12 @@ def unionEnsures (_args : Term × Term) (result : Term) : Result := setExpects r
 def unionCommutative (args : Term × Term) : Result := do
   let leftRight ← union_2 args.1 args.2
   let rightLeft ← union_2 args.2 args.1
-  Erlang.equal_2 leftRight rightLeft
+  Erlang.erlang.«==/2» leftRight rightLeft
 
 /-- Translated `union(set, %{}) == set`. -/
 def unionEmpty (input : Term) : Result := do
   let result ← union_2 input Term.emptyMap
-  Erlang.equal_2 result input
+  Erlang.erlang.«==/2» result input
 
 #bench "erlang/sets-union-contract"
 theorem union_satisfies_contract :

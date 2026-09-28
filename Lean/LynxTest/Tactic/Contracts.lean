@@ -2,7 +2,7 @@ import LynxTest.ProofAudit
 import Lynx
 
 namespace LynxTest.Tactic.Contracts
-open Lynx Lynx.Modules
+open Lynx
 
 structure Arguments where
   input : Term
@@ -11,23 +11,23 @@ structure Arguments where
 def identity (args : Arguments) : Result := .ok args.input
 def always (_ : Arguments) : Result := .ok Term.true
 def unchanged (args : Arguments) (result : Term) : Result :=
-  Erlang.equal_2 result args.input
+  Erlang.erlang.«==/2» result args.input
 
 /-- Generated argument structures are unpacked before verification. -/
 theorem structure_contract : Satisfies identity always unchanged := by
   lynx_verify
 
-def addPair (args : Term × Term) : Result := Erlang.add_2 args.1 args.2
+def addPair (args : Term × Term) : Result := Erlang.erlang.«+/2» args.1 args.2
 
 def twoIntegers (args : Term × Term) : Result :=
-  Erlang.andalso_2 (Erlang.is_integer_1 args.1) (fun _ => Erlang.is_integer_1 args.2)
+  Erlang.erlang.«andalso/2» (Erlang.erlang.«is_integer/1» args.1) (fun _ => Erlang.erlang.«is_integer/1» args.2)
 
 def numberResult (_ : Term × Term) (result : Term) : Result :=
-  Erlang.is_integer_1 result
+  Erlang.erlang.«is_integer/1» result
 
 def agrees (args : Term × Term) (result : Term) : Result := do
   let expected ← addPair args
-  Erlang.equal_2 result expected
+  Erlang.erlang.«==/2» result expected
 
 /-- Named ensures clauses share one coverage condition. -/
 theorem ensures_clauses :
@@ -56,8 +56,8 @@ theorem sibling_goal : Satisfies identity always unchanged ∧ True := by
 
 /-- Normalizing duplicate facts must retain a usable proof of the constraint. -/
 theorem duplicate_constraints (input : Term)
-    (_first _second : Accepted (Erlang.is_integer_1 input)) :
-    Accepted (Erlang.is_integer_1 input) := by
+    (_first _second : Accepted (Erlang.erlang.«is_integer/1» input)) :
+    Accepted (Erlang.erlang.«is_integer/1» input) := by
   lynx_solve
 
 /-- Quantified facts are applied after proving their premises. -/
@@ -71,15 +71,15 @@ theorem assumed_coverage (expects : Term → Result)
 
 /-- Match reasoning retains the executable short-circuit rules. -/
 theorem andalso_short_circuit (right : Unit → Result) :
-    Erlang.andalso_2 (.ok Term.false) right = .ok Term.false := by
+    Erlang.erlang.«andalso/2» (.ok Term.false) right = .ok Term.false := by
   lynx_solve
 
 theorem andalso_raises (right : Unit → Result) (exception : Exception) :
-    Erlang.andalso_2 (.error exception) right = .error exception := by
+    Erlang.erlang.«andalso/2» (.error exception) right = .error exception := by
   lynx_solve
 
 theorem andalso_non_boolean (right : Unit → Result) (value : Int) :
-    Erlang.andalso_2 (.ok (.integer value)) right =
+    Erlang.erlang.«andalso/2» (.ok (.integer value)) right =
       .error (.error (.atom "badarg")) := by
   lynx_solve
 
@@ -96,7 +96,7 @@ theorem compound (input : Term) (probe : Term → Result)
     (pure : Result.IsPure (probe input))
     (accepted : Accepted (do
       let value ← probe input
-      Erlang.equal_2 value (.atom "true")) env) :
+      Erlang.erlang.«==/2» value (.atom "true")) env) :
     Accepted (probe input) env := by
   lynx_solve
 

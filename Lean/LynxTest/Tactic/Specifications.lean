@@ -5,7 +5,7 @@ meta import all Lynx.Tactic
 meta import LynxTest.ProofAudit
 
 namespace LynxTest.Tactic.Specifications
-open Lynx Lynx.Modules
+open Lynx
 set_option Elab.async false
 
 -- One operation has several result shapes. The caller's domain determines
@@ -74,7 +74,7 @@ run_cmd checkShapes ``wrapper #[``Term.nil]
   | .cons _ tail => properList tail
   | _ => .ok Term.false
 
-def integerResult (_ result : Term) : Result := Erlang.is_integer_1 result
+def integerResult (_ result : Term) : Result := Erlang.erlang.«is_integer/1» result
 
 theorem count_contract : Satisfies count properList integerResult := by
   lynx_verify
@@ -102,7 +102,7 @@ theorem rejects_invalid_claims : True := by
   fail_if_success
     have : ∀ n, positive n = .ok (.integer n) := by lynx_solve
   fail_if_success
-    have : Satisfies count properList (fun _ result => Erlang.is_float_1 result) := by
+    have : Satisfies count properList (fun _ result => Erlang.erlang.«is_float/1» result) := by
       lynx_verify
   fail_if_success
     have : Satisfies count (fun _ => .ok Term.true) integerResult := by lynx_verify

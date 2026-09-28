@@ -95,8 +95,8 @@ they are built once per solver, not once per search round.
 For reachable functions, the solver automatically reads successful-return
 shapes from existing `@[simp]` equations of the form
 `∀ arguments, premises → function arguments = Result.ok (Term.constructor fields)`.
-No additional attribute is needed. For example, `add_2_integers` already describes
-the integer branch of opaque `add_2`.
+No additional attribute is needed. For example, `«+/2_integers»` already describes
+the integer branch of opaque `«+/2»`.
 
 Discovery queries the simplifier's index for each function, including
 pre-order and post-order rules, and respects local registrations and erased
