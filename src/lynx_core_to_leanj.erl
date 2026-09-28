@@ -28,10 +28,21 @@ to_definitions(#c_module{defs = Defs}) ->
     {ok, map(), map(), term()} | {unsupported_core, list(), binary()}.
 translate(Module, Definitions, Names, Translated, Funs, Remote) ->
     try
-        State = lists:foldl(fun translate_def/2,
-            #state{module = Module, defs = Definitions, translated = Translated, funs = Funs, remote = Remote}, Names),
-        {Context, _Callback} = State#state.remote,
-        {ok, State#state.translated, State#state.funs, Context}
+        State = #state{
+          module = Module,
+          defs = Definitions,
+          translated = Translated,
+          funs = Funs,
+          remote = Remote
+        },
+
+        #state{
+          translated = NewTranslated,
+          funs = NewFuns,
+          remote = {NewContext, _Callback}
+        } = lists:foldl(fun translate_def/2, State, Names),
+
+        {ok, NewTranslated, NewFuns, NewContext}
     catch
         throw:{unsupported_core, Core} ->
             {unsupported_core, cerl:get_ann(Core),
