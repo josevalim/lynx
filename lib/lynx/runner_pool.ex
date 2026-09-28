@@ -115,7 +115,12 @@ defmodule Lynx.RunnerPool do
 
   @impl NimblePool
   def terminate_worker(_reason, port, pool_state) do
-    Port.close(port)
+    try do
+      Port.close(port)
+    rescue
+      _ -> :ok
+    end
+
     {:ok, pool_state}
   end
 
