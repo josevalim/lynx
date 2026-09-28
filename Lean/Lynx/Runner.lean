@@ -10,8 +10,9 @@ never imply a diagnostic column. Names use Lean identifiers, including quoted co
 
 `verify` returns `{"status": "ok" | "error", "diagnostics": [...]}`.
 `render` returns `{"status": "ok", "files": {...}}`, mapping original source paths to Lean source.
+Each newline-delimited request includes `"command": "verify" | "render"`.
+The runner responds to each request and continues until stdin closes.
 Invalid input and runner failures return `{"status": "failure", "message": "..."}`.
-Exit codes are 0 for success, 1 for verification errors, and 2 for runner failures.
 Each verification diagnostic has `file`, `kind` (error/warning/info), and `message`, with `line` and
 `column` included only when known.
 Input files are an ordered array of {file, module, imports, contents} objects.
@@ -213,13 +214,8 @@ structure DecodedFile where
   commands : Array (TSyntax `command)
   private spans : Array Span
 
-/-- Decode the request once for either command. Invalid input aborts the request. -/
-private def decode (request : String) (env : Lean.Environment) : IO (Array DecodedFile) := do
-  let files ← IO.ofExcept do
-    let j ← Json.parse request
-    fields j ["files", "version"]
-    unless (← str j "version") == "1.0" do throw "unsupported version"
-    arr j "files"
+/-- Decode input files after the selected command requests them. -/
+private def decode (files : Array Json) (env : Lean.Environment) : IO (Array DecodedFile) := do
   files.mapM fun entry => do
     let file ← IO.ofExcept (str entry "file")
     try
@@ -278,26 +274,43 @@ private def verify (files : Array DecodedFile) (env : Lean.Environment) : IO (UI
   return (if failed then 1 else 0, Json.mkObj [
     ("status", toJson (if failed then "error" else "ok")), ("diagnostics", .arr diagnostics)])
 
-private def run (action : Array DecodedFile → Lean.Environment → IO (UInt32 × Json)) : IO UInt32 := do
-  let (status, response) ← try
-    let request ← (← IO.getStdin).getLine
-    unsafe enableInitializersExecution
-    let env ← importModules #[{ module := `Lynx }] {} (loadExts := true)
-    let files ← decode request env
-    action files env
+private def runFiles (j : Json)
+    (action : Array DecodedFile → Lean.Environment → IO (UInt32 × Json)) : IO Json := do
+  let files ← IO.ofExcept do
+    fields j ["command", "version", "files"]
+    arr j "files"
+  unsafe enableInitializersExecution
+  let env ← importModules #[{ module := `Lynx }] {} (loadExts := true)
+  return (← action (← decode files env) env).2
+
+private def run (request : String) : IO Json := do
+  try
+    let j ← IO.ofExcept (Json.parse request)
+    let command ← IO.ofExcept (str j "command")
+    let version ← IO.ofExcept (str j "version")
+    unless version == "1.0" do throw (IO.userError "unsupported version")
+    match command with
+    | "verify" => runFiles j verify
+    | "render" => runFiles j render
+    | _ => throw (IO.userError s!"unsupported runner command '{command}'")
   catch err =>
-    pure (2, Json.mkObj [("status", toJson "failure"), ("message", toJson err.toString)])
-  IO.println response.compress
-  return status
+    return Json.mkObj [("status", toJson "failure"), ("message", toJson err.toString)]
 
 end Lynx.Runner
 
-/-- Process one newline-delimited JSON request and write one JSON response to stdout. -/
+/-- Process newline-delimited JSON requests until stdin closes. -/
 public def main (args : List String) : IO UInt32 := do
   match args with
-  | ["verify"] => Lynx.Runner.run Lynx.Runner.verify
-  | ["render"] => Lynx.Runner.run Lynx.Runner.render
+  | [] =>
+    let stdin ← IO.getStdin
+    let stdout ← IO.getStdout
+    repeat
+      let request ← stdin.getLine
+      if request.isEmpty then break
+      stdout.putStrLn (← Lynx.Runner.run request).compress
+      stdout.flush
+    return 0
   | _ =>
     IO.println (Lean.Json.mkObj [("status", Lean.toJson "failure"),
-      ("message", Lean.toJson "usage: Runner.lean (verify|render)")]).compress
+      ("message", Lean.toJson "usage: Runner.lean")]).compress
     return 2

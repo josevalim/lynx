@@ -30,10 +30,10 @@ defmodule Lynx.Integration.TranslationTest do
       assert request == JSON.decode!(File.read!(Path.rootname(fixture) <> ".json")),
              "translated output does not match #{fixture}"
 
-      json = JSON.encode!(request)
+      json = request |> Map.put("command", "render") |> JSON.encode!()
       expected = File.read!(Path.rootname(fixture) <> ".lean")
 
-      assert Lynx.Commands.runner!(@lean_dir, "render", json) == %{
+      assert Lynx.Commands.runner!(@lean_dir, json) == %{
                "status" => "ok",
                "files" => %{source => expected}
              },

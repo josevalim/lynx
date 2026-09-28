@@ -8,11 +8,60 @@ defmodule Lynx.RunnerTest do
 
   @moduletag timeout: to_timeout(minute: 10)
 
+  test "one runner handles successive commands and continues after a failed request" do
+    lake = System.find_executable("lake")
+
+    port =
+      Port.open(
+        {:spawn_executable, String.to_charlist(lake)},
+        [
+          :binary,
+          :exit_status,
+          :use_stdio,
+          :hide,
+          {:line, 1_000_000},
+          cd: @lean_dir,
+          args: ["env", "lean", "--run", Path.join(@lean_dir, "Lynx/Runner.lean")]
+        ]
+      )
+
+    try do
+      assert request(port, %{"command" => "unknown", "version" => "1.0"}) == %{
+               "status" => "failure",
+               "message" => "unsupported runner command 'unknown'"
+             }
+
+      assert request(port, %{"command" => "verify", "version" => "2.0"}) == %{
+               "status" => "failure",
+               "message" => "unsupported version"
+             }
+
+      assert %{"status" => "failure", "message" => missing_files} =
+               request(port, %{"command" => "verify", "version" => "1.0"})
+
+      assert missing_files =~ "files"
+
+      fixture = JSON.decode!(File.read!(@sum_json))
+
+      assert request(port, Map.put(fixture, "command", "verify")) == %{
+               "status" => "ok",
+               "diagnostics" => []
+             }
+
+      assert %{"status" => "ok", "files" => files} =
+               request(port, Map.put(fixture, "command", "render"))
+
+      assert Map.has_key?(files, @sum_erl)
+    after
+      Port.close(port)
+    end
+  end
+
   describe "render" do
     test "rejects malformed JSON" do
       error =
         assert_raise RuntimeError, fn ->
-          Lynx.Commands.runner!(@lean_dir, "render", "{")
+          Lynx.Commands.runner!(@lean_dir, "{")
         end
 
       assert error.message == "offset 2: unexpected end of input"
@@ -25,7 +74,7 @@ defmodule Lynx.RunnerTest do
       assert fixtures != []
 
       for fixture <- fixtures do
-        assert Lynx.Commands.runner!(@lean_dir, "verify", File.read!(fixture)) ==
+        assert Lynx.Commands.runner!(@lean_dir, fixture_request(fixture, "verify")) ==
                  %{"status" => "ok", "diagnostics" => []},
                "verification failed for #{fixture}"
       end
@@ -34,11 +83,11 @@ defmodule Lynx.RunnerTest do
     test "reports verification errors with source diagnostics" do
       request =
         @sum_json
-        |> File.read!()
+        |> fixture_request("verify")
         |> String.replace("Erlang.erlang.«+/2»", "Erlang.erlang.«unknown/2»")
 
       assert %{"status" => "error", "diagnostics" => diagnostics} =
-               Lynx.Commands.runner!(@lean_dir, "verify", request)
+               Lynx.Commands.runner!(@lean_dir, request)
 
       assert Enum.any?(diagnostics, fn diagnostic ->
                diagnostic["file"] == @sum_erl and diagnostic["kind"] == "error" and
@@ -49,7 +98,7 @@ defmodule Lynx.RunnerTest do
     test "rejects malformed JSON" do
       error =
         assert_raise RuntimeError, fn ->
-          Lynx.Commands.runner!(@lean_dir, "verify", "{")
+          Lynx.Commands.runner!(@lean_dir, "{")
         end
 
       assert error.message == "offset 2: unexpected end of input"
@@ -57,13 +106,14 @@ defmodule Lynx.RunnerTest do
 
     test "rejects missing source files" do
       missing = %{
+        "command" => "verify",
         "version" => "1.0",
         "files" => [file("../test/fixtures/translations/missing.erl", "missing", [])]
       }
 
       error =
         assert_raise RuntimeError, fn ->
-          Lynx.Commands.runner!(@lean_dir, "verify", JSON.encode!(missing))
+          Lynx.Commands.runner!(@lean_dir, JSON.encode!(missing))
         end
 
       assert error.message =~ "missing.erl"
@@ -77,13 +127,14 @@ defmodule Lynx.RunnerTest do
            "mutual requires def declarations"}
         ] do
       request = %{
+        "command" => "render",
         "version" => "1.0",
         "files" => [file(@sum_erl, "sum", [%{"kind" => "mutual", "span" => [], "defs" => defs}])]
       }
 
       error =
         assert_raise RuntimeError, fn ->
-          Lynx.Commands.runner!(@lean_dir, "render", JSON.encode!(request))
+          Lynx.Commands.runner!(@lean_dir, JSON.encode!(request))
         end
 
       assert error.message =~ message
@@ -92,13 +143,14 @@ defmodule Lynx.RunnerTest do
 
   test "rejects invalid instructions" do
     invalid = %{
+      "command" => "render",
       "version" => "1.0",
       "files" => [file(@sum_erl, "sum", [%{"kind" => "unknown", "span" => []}])]
     }
 
     error =
       assert_raise RuntimeError, fn ->
-        Lynx.Commands.runner!(@lean_dir, "render", JSON.encode!(invalid))
+        Lynx.Commands.runner!(@lean_dir, JSON.encode!(invalid))
       end
 
     assert error.message =~ @sum_erl
@@ -107,5 +159,31 @@ defmodule Lynx.RunnerTest do
 
   defp file(path, module, contents, imports \\ []) do
     %{"file" => path, "module" => module, "contents" => contents, "imports" => imports}
+  end
+
+  defp fixture_request(path, command) do
+    path
+    |> File.read!()
+    |> JSON.decode!()
+    |> Map.put("command", command)
+    |> JSON.encode!()
+  end
+
+  defp request(port, value) do
+    Port.command(port, JSON.encode!(value) <> "\n")
+    response(port, "")
+  end
+
+  defp response(port, output) do
+    receive do
+      {^port, {:data, {:eol, data}}} ->
+        JSON.decode!(output <> data)
+
+      {^port, {:data, {:noeol, data}}} ->
+        response(port, output <> data)
+
+      {^port, {:exit_status, status}} ->
+        flunk("runner exited before responding with status #{status}")
+    end
   end
 end
