@@ -23,17 +23,15 @@ defmodule Lynx.Translation do
     modules =
       Map.new(cores, fn {file, core} ->
         name = core |> :cerl.module_name() |> :cerl.atom_val()
-        definitions = :lynx_core_to_leanj.to_definitions(core)
-
-        {name, %{definitions: definitions, translations: %{}, file: file}}
+        {name, module_data(file, core)}
       end)
 
     %__MODULE__{modules: modules}
   end
 
   @doc "Translates the requested functions and their local and remote callees."
-  def add(%__MODULE__{modules: modules, stack: stack} = translation, name, names) do
-    module = fetch_module!(modules, name, fn -> [] end)
+  def add(%__MODULE__{stack: stack} = translation, name, names) do
+    {module, translation} = fetch_module!(translation, name, fn -> [] end)
 
     for {function, arity} <- names do
       validate_function!(module, name, function, arity, fn -> [file: module.file] end)
@@ -93,7 +91,7 @@ defmodule Lynx.Translation do
          span_anno
        ) do
     location = fn -> source_location(span_anno, translation.modules[caller].file) end
-    target = fetch_module!(translation.modules, module, location)
+    {target, translation} = fetch_module!(translation, module, location)
     validate_function!(target, module, function, arity, location)
 
     if module in translation.stack do
@@ -129,15 +127,66 @@ defmodule Lynx.Translation do
     [file: file, line: line]
   end
 
-  defp fetch_module!(modules, module, location) do
-    case Map.fetch(modules, module) do
-      {:ok, data} ->
-        data
+  defp fetch_module!(translation, module, location) do
+    case translation.modules do
+      %{^module => data} ->
+        {data, translation}
 
-      :error ->
-        raise CompileError,
-              location.() ++ [description: "unknown module #{inspect(module)}"]
+      %{} ->
+        data = load_module!(module, location)
+        {data, put_in(translation.modules[module], data)}
     end
+  end
+
+  defp load_module!(module, location) do
+    beam =
+      case :code.which(module) do
+        path when is_list(path) ->
+          path
+
+        :non_existing ->
+          raise CompileError, location.() ++ [description: "unknown module #{inspect(module)}"]
+
+        reason ->
+          raise CompileError,
+                location.() ++
+                  [description: "cannot locate BEAM for #{inspect(module)}: #{inspect(reason)}"]
+      end
+
+    case :beam_lib.chunks(beam, [:debug_info, :compile_info]) do
+      {:ok, {^module, [debug_info: {:debug_info_v1, backend, data}, compile_info: info]}} ->
+        case backend.debug_info(:core_v1, module, data, []) do
+          {:ok, core} ->
+            file = info |> Keyword.get(:source, beam) |> :unicode.characters_to_binary()
+            module_data(file, core)
+
+          {:error, reason} ->
+            raise CompileError,
+                  location.() ++
+                    [
+                      description:
+                        "cannot convert debug information for #{inspect(module)} to Core: #{inspect(reason)}"
+                    ]
+        end
+
+      {:error, :beam_lib, _} = error ->
+        message = error |> :beam_lib.format_error() |> IO.chardata_to_string()
+
+        raise CompileError,
+              location.() ++ [description: "cannot read BEAM for #{inspect(module)}: #{message}"]
+
+      {:ok, _} ->
+        raise CompileError,
+              location.() ++
+                [
+                  description:
+                    "no supported debug information for #{inspect(module)}; compile with debug_info"
+                ]
+    end
+  end
+
+  defp module_data(file, core) do
+    %{definitions: :lynx_core_to_leanj.to_definitions(core), translations: %{}, file: file}
   end
 
   defp validate_function!(target, module, function, arity, location) do

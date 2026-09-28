@@ -305,7 +305,78 @@ defmodule Lynx.TranslationTest do
     assert JSON.encode!(definition) =~ "Erlang.lists.«reverse/2»"
   end
 
+  @tag :tmp_dir
+  test "loads modules from code path", %{tmp_dir: tmp_dir} do
+    {_beam, source} =
+      write_beam(
+        :lynx_lookup_root,
+        """
+        -export([entry/1]).
+        entry(X) -> X.
+        """,
+        tmp_dir
+      )
+
+    assert [%{"module" => "Erlang.lynx_lookup_root", "file" => ^source, "contents" => [_]}] =
+             Translation.new([])
+             |> Translation.add(:lynx_lookup_root, [{:entry, 1}])
+             |> Translation.assemble()
+  end
+
   describe "errors" do
+    @tag :tmp_dir
+    test "reports missing debug information at the caller", %{tmp_dir: tmp_dir} do
+      write_beam(
+        :lynx_lookup_no_debug,
+        """
+        -export([entry/1]).
+        entry(X) -> X.
+        """,
+        tmp_dir,
+        [:no_debug_info]
+      )
+
+      caller =
+        cerl("""
+        -module(caller).
+        -export([entry/1]).
+        -file("lookup_caller.erl", 1).
+        entry(X) -> lynx_lookup_no_debug:entry(X).
+        """)
+
+      error =
+        assert_raise CompileError, fn ->
+          Translation.new([{"caller.erl", caller}]) |> Translation.add(:caller, [{:entry, 1}])
+        end
+
+      assert error.file == "lookup_caller.erl"
+      assert error.line == 4
+      assert error.description =~ "debug information"
+      assert error.description =~ ":lynx_lookup_no_debug"
+    end
+
+    @tag :tmp_dir
+    test "reports invalid BEAM files at the caller", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "lynx_lookup_invalid.beam"), "not a BEAM")
+      add_code_path(tmp_dir)
+
+      caller =
+        cerl("""
+        -module(caller).
+        -export([entry/1]).
+        entry(X) -> lynx_lookup_invalid:entry(X).
+        """)
+
+      error =
+        assert_raise CompileError, fn ->
+          Translation.new([{"caller.erl", caller}]) |> Translation.add(:caller, [{:entry, 1}])
+        end
+
+      assert error.file == "caller.erl"
+      assert error.line == 3
+      assert error.description =~ "cannot read BEAM for :lynx_lookup_invalid"
+    end
+
     test "does not skip a runtime function with the wrong arity" do
       core =
         cerl("""
@@ -314,7 +385,7 @@ defmodule Lynx.TranslationTest do
         entry(X) -> maps:new(X).
         """)
 
-      assert_raise CompileError, "example.erl:3: unknown module :maps", fn ->
+      assert_raise CompileError, "example.erl:3: undefined function :maps.new/1", fn ->
         Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
       end
     end
@@ -415,6 +486,22 @@ defmodule Lynx.TranslationTest do
       assert error.file == "foo"
       assert error.line == 4
     end
+  end
+
+  defp write_beam(module, body, directory, options \\ [:debug_info]) do
+    source = Path.join(directory, "#{module}.erl")
+    beam = Path.join(directory, "#{module}.beam")
+    File.write!(source, "-module(#{module}).\n" <> body)
+    assert {:ok, ^module, binary} = :compile.file(String.to_charlist(source), [:binary | options])
+    File.write!(beam, binary)
+    add_code_path(directory)
+    {beam, source}
+  end
+
+  defp add_code_path(directory) do
+    path = String.to_charlist(directory)
+    assert :code.add_patha(path) == true
+    on_exit(fn -> :code.del_path(path) end)
   end
 
   defp cerl(source) do
