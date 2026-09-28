@@ -1,7 +1,7 @@
 module
 
 meta import LynxTest.ProofAudit
-import Erlang.erlang
+import all Erlang.erlang
 import LynxTest.Term.Compare
 import all Lynx.Term
 import all Lynx.Term.DataTypes
@@ -10,7 +10,6 @@ import all Lynx.Term.Compare
 import all Lynx.Term.Dispatch
 import all Lynx.Term.Runner
 import all Erlang.erlang.Guards
-import all Erlang.erlang.Fun
 import all Erlang.erlang.Process
 import all Std
 import all Init.Data.List.Basic
@@ -382,6 +381,6 @@ end LynxTest.Modules.Erlang
 
 run_cmd do
   LynxTest.ProofAudit.checkModule `LynxTest.Modules.Erlang
-  LynxTest.ProofAudit.checkModule `Erlang.erlang.Fun
+  LynxTest.ProofAudit.checkModule `Erlang.erlang
   LynxTest.ProofAudit.checkModule `Erlang.erlang.Guards
   LynxTest.ProofAudit.checkModule `Erlang.erlang.Process

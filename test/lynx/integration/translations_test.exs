@@ -63,8 +63,7 @@ defmodule Lynx.Integration.TranslationTest do
       |> Path.join("functions.lean")
       |> File.read!()
       |> String.replace("import Erlang.erlang", """
-      import Erlang.erlang
-      import all Erlang.erlang.Fun
+      import all Erlang.erlang
       import all Erlang.erlang.Guards
       import all Erlang.erlang.Process
       import all Lynx.Term
@@ -161,7 +160,7 @@ defmodule Lynx.Integration.TranslationTest do
           import all Lynx.Term.Dispatch
           import all Lynx.Term.Runner
           import all Erlang.erlang.Guards
-          import all Erlang.erlang.Fun
+          import all Erlang.erlang
           """)
           |> Kernel.<>("""
 
