@@ -28,7 +28,7 @@ defmodule Lynx.Commands do
         response
 
       _ ->
-        raise "Unexpected Runner #{command_type} response with exit status #{status}: #{output}"
+        raise "running lynx #{command_type} failed with status #{status}: #{output}"
     end
   end
 
