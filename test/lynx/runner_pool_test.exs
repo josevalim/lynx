@@ -25,6 +25,8 @@ defmodule Lynx.RunnerPoolTest do
            }
 
     assert [{^pool, _}] = Registry.lookup(Lynx.RunnerRegistry, @lean_dir)
+    assert {:links, links} = Process.info(self(), :links)
+    refute Enum.any?(links, &is_port/1)
   end
 
   describe "render" do

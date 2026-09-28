@@ -144,11 +144,23 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) : D
   let result ← match kind with
   | "command" => do
     fields j ["kind", "name", "expr", "span"]
-    unless (← str j "name") == "lynx_pure" do throw "unsupported command name"
+    let name ← str j "name"
+    unless name ∈ ["lynx_pure", "lynx_neutral"] do throw "unsupported command name"
     let inner ← field j "expr"
     unless (← str inner "kind") ∈ ["def", "mutual"] do throw "lynx_pure must wrap def or mutual"
     let decl ← command map inner info
-    pure (Unhygienic.run `(#lynx_pure $decl:command))
+    if name == "lynx_pure" then pure (Unhygienic.run `(#lynx_pure $decl:command))
+    else pure (Unhygienic.run `(#lynx_neutral $decl:command))
+  | "fun_table" => do
+    fields j ["kind", "name", "body", "pure", "span"]
+    let name ← identifier (← str j "name")
+    unless name.getId.getPrefix == .anonymous do throw "table name must be unqualified"
+    let body ← term map info false (← field j "body")
+    let tableType := mkIdent ``Lynx.Term.FunTable
+    let declaration := Unhygienic.run `(public def $name : $tableType := $body)
+    if ← (← field j "pure").getBool? then
+      pure (Unhygienic.run `(#lynx_fun_table $declaration:command))
+    else pure declaration
   | "mutual" => do
     fields j ["kind", "defs", "span"]
     let defs ← arr j "defs"
@@ -219,9 +231,11 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
   files.mapM fun entry => do
     let file ← IO.ofExcept (str entry "file")
     try
-      let map := FileMap.ofString (← IO.FS.readFile file)
+      let generated := (entry.getObjValAs? Bool "generated").toOption.getD false
+      let source ← if generated then pure "" else IO.FS.readFile file
+      let map := FileMap.ofString source
       let (moduleName, imports, commands, spans) ← IO.ofExcept do
-        fields entry ["file", "module", "imports", "contents"]
+        fields entry ["file", "module", "imports", "contents", "generated"]
         let moduleName ← str entry "module"
         let namespaceId ← (identifier moduleName).run env |>.run' #[]
         let imports ← (← arr entry "imports").mapM fun j => do

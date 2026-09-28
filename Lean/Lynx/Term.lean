@@ -10,42 +10,17 @@ namespace Lynx
 /-- Run a complete process tree from a fresh runtime using the supplied
 scheduler choices.
 An `ok` or `error` outcome means every spawned process has finished.
-`deadlock` means the modeled process tree is stuck. -/
-public def run (computation : Result α) (schedule : List ScheduleChoice := []) : Outcome α :=
-  computation.run { schedule }
+`deadlock` means the modeled process tree is stuck. `exhausted` means a dynamic
+call exceeded `callDepth`; it is not an Erlang exception. The immutable table
+is separate from process state. -/
+public def run (computation : Result α) (schedule : List ScheduleChoice := [])
+    (table : Term.FunTable := #[]) (callDepth : Nat := 100) : Outcome α :=
+  if table.isEmpty then computation.run { schedule }
+  else computation.runWith table callDepth { schedule }
 
 end Lynx
 
 namespace Lynx.Term
-
-/-- Executable implementation of a function term. Arguments use a Lean array,
-avoiding Erlang-list encoding at internal call sites. -/
-public abbrev Fun := Array Term → Result
-
-/-- Program-local function implementations indexed by `Term.function` IDs.
-Each entry receives the captured values before the invocation arguments. -/
-public abbrev FunTable := Array (Array Term → Fun)
-
-/-- Adapt a lifted closure body, rejecting malformed capture or argument arrays. -/
-public def FunTable.entry (captureCount arity : Nat)
-    (body : Array Term → Array Term → Result) (captures arguments : Array Term) : Result :=
-  if captures.size = captureCount ∧ arguments.size = arity then
-    body captures arguments
-  else
-    .error (.error (.atom "badarg"))
-
-@[simp↓] public theorem FunTable.entry_pure (captureCount arity : Nat)
-    (body : Array Term → Array Term → Result)
-    (pure : ∀ captures arguments, Result.IsPure (body captures arguments))
-    (captures arguments : Array Term) :
-    Result.IsPure (FunTable.entry captureCount arity body captures arguments) := by
-  unfold FunTable.entry
-  split <;> simp_all
-
-/-- Resolve a function term to its implementation and declared arity. -/
-@[expose] public def fetchFun (table : FunTable) : Term → Option (Fun × Nat)
-  | .function id arity captures => table[id]?.map (fun implementation => (implementation captures, arity))
-  | _ => none
 
 /-- Empty Erlang map literal. -/
 @[expose, simp] public def emptyMap : Term := .map []

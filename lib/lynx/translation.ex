@@ -208,7 +208,7 @@ defmodule Lynx.Translation do
         external_calls: external_calls,
         builtin_modules: builtin_modules
       }) do
-    # Resolve neutral definitions only against the complete translated graph.
+    # Certify the table only against the complete translated graph.
     # Keep stored summaries neutral so subsequent add/3 calls can introduce effects.
     neutral_pure? =
       Enum.all?(modules, fn {_, module} ->
@@ -231,22 +231,6 @@ defmodule Lynx.Translation do
 
     table = array(Enum.map(funs, &fun_entry/1))
 
-    external_calls =
-      Enum.reduce(modules, external_calls, fn {name, module}, calls ->
-        if Enum.any?(module.translations, fn {_, definition} -> definition.dynamic end) do
-          dependencies = for {owner, _, _} <- funs, owner != name, do: owner
-
-          Map.update(
-            calls,
-            name,
-            MapSet.new(dependencies),
-            &MapSet.union(&1, MapSet.new(dependencies))
-          )
-        else
-          calls
-        end
-      end)
-
     graph = :digraph.new()
 
     try do
@@ -258,26 +242,47 @@ defmodule Lynx.Translation do
         :digraph.add_edge(graph, [dependency], [name])
       end
 
-      for [name] <- topsort(graph) do
-        module = Map.fetch!(modules, name)
-        imports = Map.get(external_calls, name, MapSet.new())
-        imports = if builtin_modules[name], do: MapSet.put(imports, name), else: imports
+      files =
+        for [name] <- topsort(graph) do
+          module = Map.fetch!(modules, name)
+          imports = Map.get(external_calls, name, MapSet.new())
+          imports = if builtin_modules[name], do: MapSet.put(imports, name), else: imports
 
-        %{
-          "module" => :lynx_core_to_leanj.module_name(name),
-          "file" => module.file,
-          "imports" =>
-            imports
-            |> Enum.sort()
-            |> Enum.map(&:lynx_core_to_leanj.module_name/1),
-          "contents" =>
-            module.translations
-            |> assemble_module(
-              neutral_pure?,
-              for({owner, fun, _} <- funs, owner == name, do: fun.name)
-            )
-            |> resolve_funs(indices, table)
-        }
+          %{
+            "module" => :lynx_core_to_leanj.module_name(name),
+            "file" => module.file,
+            "imports" =>
+              imports
+              |> Enum.sort()
+              |> Enum.map(&:lynx_core_to_leanj.module_name/1),
+            "contents" =>
+              module.translations
+              |> assemble_module()
+              |> resolve_funs(indices)
+          }
+        end
+
+      if funs == [] do
+        files
+      else
+        files ++
+          [
+            %{
+              "module" => "Lynx.Program",
+              "file" => "Lynx/Program.lean",
+              "generated" => true,
+              "imports" => Enum.map(files, & &1["module"]),
+              "contents" => [
+                %{
+                  "kind" => "fun_table",
+                  "span" => [],
+                  "name" => "functions",
+                  "body" => table,
+                  "pure" => neutral_pure?
+                }
+              ]
+            }
+          ]
       end
     after
       :digraph.delete(graph)
@@ -316,7 +321,7 @@ defmodule Lynx.Translation do
 
   defp integer(value), do: %{"kind" => "integer", "span" => [], "value" => value}
 
-  defp resolve_funs(%{"kind" => "closure"} = closure, indices, table) do
+  defp resolve_funs(%{"kind" => "closure"} = closure, indices) do
     apply_node("Lynx.Term.«function»", [
       %{
         "kind" => "integer",
@@ -324,20 +329,18 @@ defmodule Lynx.Translation do
         "value" => Map.fetch!(indices, {closure["module"], closure["name"]})
       },
       %{"kind" => "integer", "span" => [], "value" => closure["arity"]},
-      resolve_funs(closure["captures"], indices, table)
+      resolve_funs(closure["captures"], indices)
     ])
     |> Map.put("span", closure["span"])
   end
 
-  defp resolve_funs(%{"kind" => "fun_table"}, _indices, table), do: table
+  defp resolve_funs(value, indices) when is_map(value),
+    do: Map.new(value, fn {key, value} -> {key, resolve_funs(value, indices)} end)
 
-  defp resolve_funs(value, indices, table) when is_map(value),
-    do: Map.new(value, fn {key, value} -> {key, resolve_funs(value, indices, table)} end)
+  defp resolve_funs(values, indices) when is_list(values),
+    do: Enum.map(values, &resolve_funs(&1, indices))
 
-  defp resolve_funs(values, indices, table) when is_list(values),
-    do: Enum.map(values, &resolve_funs(&1, indices, table))
-
-  defp resolve_funs(value, _indices, _table), do: value
+  defp resolve_funs(value, _indices), do: value
 
   defp ident(name), do: %{"kind" => "ident", "span" => [], "name" => name}
   defp apply_node(name, []), do: ident(name)
@@ -368,21 +371,17 @@ defmodule Lynx.Translation do
     if changed?, do: propagate_purity(functions), else: functions
   end
 
-  defp assemble_module(functions, neutral_pure?, fun_names) do
+  defp assemble_module(functions) do
     graph = :digraph.new()
 
     try do
       for {name, %{translation: translation, purity: purity}} <- functions do
-        pure = purity == :pure or (purity == :neutral and neutral_pure?)
-        :digraph.add_vertex(graph, name, {translation, pure})
+        :digraph.add_vertex(graph, name, {translation, purity})
       end
 
       # Edges point from callees to callers, so dependencies are emitted first.
       for {name, definition} <- functions,
-          callee <-
-            definition.local_calls ++
-              definition.references ++
-              if(definition.dynamic, do: fun_names, else: []),
+          callee <- definition.local_calls,
           callee != name do
         :digraph.add_edge(graph, callee, name)
       end
@@ -426,9 +425,9 @@ defmodule Lynx.Translation do
 
   defp emit_group(names, graph) do
     {defs, pure} =
-      Enum.map_reduce(names, true, fn name, pure ->
+      Enum.map_reduce(names, :pure, fn name, pure ->
         {^name, {translation, definition_pure}} = :digraph.vertex(graph, name)
-        {translation, pure and definition_pure}
+        {translation, :lynx_core_to_leanj.join_purity(pure, definition_pure)}
       end)
 
     [first | _] = defs
@@ -440,8 +439,9 @@ defmodule Lynx.Translation do
         _ -> %{"kind" => "mutual", "span" => span, "defs" => defs}
       end
 
-    if pure do
-      %{"kind" => "command", "span" => span, "name" => "lynx_pure", "expr" => declaration}
+    if pure != :impure do
+      name = if pure == :pure, do: "lynx_pure", else: "lynx_neutral"
+      %{"kind" => "command", "span" => span, "name" => name, "expr" => declaration}
     else
       declaration
     end

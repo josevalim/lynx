@@ -92,7 +92,7 @@ expression(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args}
     {apply_node(function_name(Name), TranslatedArgs, Anno),
      State2#state{local_calls = Calls}};
 %% Erlang: F(X, Y)
-%% Lean: Erlang.erlang.«apply/2» table vF (Lynx.Term.cons vX (Lynx.Term.cons vY Lynx.Term.nil))
+%% Lean: Erlang.erlang.«apply/2» vF (Lynx.Term.cons vX (Lynx.Term.cons vY Lynx.Term.nil))
 expression(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->
     ArgList = lists:foldr(fun(Arg, Tail) ->
         #c_cons{anno = Anno, hd = Arg, tl = Tail}
@@ -107,7 +107,7 @@ expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
     {_Purity, NewContext} = Callback(Context, erlang, apply, 2, Anno),
     {TranslatedArgs, State1} = lists:mapfoldl(fun value/2,
         State0#state{remote = {NewContext, Callback}}, Args),
-    {apply_node(~"Erlang.erlang.«apply/2»", [node(~"fun_table", [], #{}) | TranslatedArgs], Anno),
+    {apply_node(~"Erlang.erlang.«apply/2»", TranslatedArgs, Anno),
      State1#state{dynamic = true, purity = join_purity(State1#state.purity, neutral)}};
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX

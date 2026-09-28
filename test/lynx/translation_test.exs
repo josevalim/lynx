@@ -270,7 +270,7 @@ defmodule Lynx.TranslationTest do
       neutral = Translation.add(base, :dependency, [{:entry, 1}])
 
       for %{"contents" => contents} <- Translation.assemble(neutral) do
-        assert Enum.all?(contents, &(&1["name"] == "lynx_pure"))
+        assert Enum.all?(contents, &(&1["name"] in ["lynx_pure", "lynx_neutral"]))
       end
 
       translation = Translation.add(neutral, :caller, [{:entry, 1}, {:pure, 1}])
@@ -305,7 +305,7 @@ defmodule Lynx.TranslationTest do
 
         assert %{
                  "function" => %{"name" => "Erlang.erlang.«apply/2»"},
-                 "args" => [%{"kind" => "fun_table"}, %{"name" => "«vF»"}, args]
+                 "args" => [%{"name" => "«vF»"}, args]
                } = call
 
         assert %{
@@ -329,7 +329,6 @@ defmodule Lynx.TranslationTest do
       assert %{
                "function" => %{"name" => "Erlang.erlang.«apply/2»"},
                "args" => [
-                 %{"kind" => "fun_table"},
                  %{"name" => "«vF»"},
                  %{"name" => "Lynx.Term.«nil»"}
                ]
@@ -339,13 +338,13 @@ defmodule Lynx.TranslationTest do
 
       if purity == :neutral do
         for %{"contents" => contents} <- files do
-          assert Enum.all?(contents, &(&1["name"] == "lynx_pure"))
+          assert Enum.all?(contents, &(&1["name"] in ["lynx_pure", "lynx_neutral"]))
         end
       else
         commands =
           for %{"contents" => contents} <- files,
               command <- contents,
-              command["kind"] == "command",
+              command["name"] == "lynx_pure",
               do: command
 
         assert [%{"name" => "lynx_pure", "expr" => %{"name" => "«pure/1»"}}] = commands
@@ -377,10 +376,11 @@ defmodule Lynx.TranslationTest do
     assert %{purity: :impure} = translation.modules.example.translations[helper]
     assert Translation.add(translation, :example, [{:make, 1}]) == translation
 
-    assert [%{"contents" => contents}] = Translation.assemble(translation)
+    assert [%{"contents" => contents}, %{"contents" => [%{"pure" => false}]}] =
+             Translation.assemble(translation)
 
     assert [%{"name" => "lynx_pure", "expr" => %{"name" => "«make/1»"}}] =
-             Enum.filter(contents, &(&1["kind"] == "command"))
+             Enum.filter(contents, &(&1["name"] == "lynx_pure"))
   end
 
   test "imports a module BIF if used" do

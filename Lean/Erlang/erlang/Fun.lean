@@ -4,25 +4,19 @@ public import Lynx.Term
 
 public section
 
-/-! Helpers for calls whose translated Lean signature includes the program-local
-function table.
-
-The translator must rewrite calls to every function in this module during
-compilation so they receive the generated program's function table. Any future
-function with the same requirement must be added here.
--/
+/-! Erlang function values produce dispatch requests resolved by the runner. -/
 
 namespace Erlang.erlang
 
 open Lynx
 
-/-- Spawn a zero-arity function term. Resolution and arity validation happen in
-the caller before the child is scheduled. `Result.bind` captures the caller
-continuation for scheduling. -/
-def «spawn/1» (table : Term.FunTable) (child : Term) : Result :=
-  match Term.fetchFun table child with
-  | some (implementation, 0) =>
-      .spawn (implementation #[]) fun pid => .ok (.pid pid)
+/-- Request a zero-arity function spawn. The dispatcher validates the table entry
+before creating the child; the function body executes in the child's process. -/
+def «spawn/1» (child : Term) : Result :=
+  match child with
+  | .function _ 0 _ => .spawn child fun
+      | .ok pid => .ok pid
+      | .error exception => .error exception
   | _ => .error (.error (.atom "badarg"))
 
 private def properList? : Term → Option (List Term)
@@ -32,37 +26,30 @@ private def properList? : Term → Option (List Term)
 
 /-- Dynamically apply a function to an Erlang list of arguments. Internal
 application uses an array and does not retain the source list encoding. -/
-def «apply/2» (table : Term.FunTable) (function arguments : Term) : Result :=
+def «apply/2» (function arguments : Term) : Result :=
   match properList? arguments with
   | none => .error (.error (.atom "badarg"))
   | some decoded =>
-      match Term.fetchFun table function with
-      | none => .error (.error (.tuple #[.atom "badfun", function]))
-      | some (implementation, arity) =>
+      match function with
+      | .function _ arity _ =>
           if decoded.length = arity then
-            implementation decoded.toArray
+            .apply function decoded.toArray fun
+              | .ok value => .ok value
+              | .error exception => .error exception
           else
-            .error (.error
-              (.tuple #[.atom "badarity", .tuple #[function, arguments]]))
+            .error (.error (.tuple #[.atom "badarity", .tuple #[function, arguments]]))
+      | _ => .error (.error (.tuple #[.atom "badfun", function]))
 
-/-- Dynamic calls are pure when every implementation in the supplied table is pure. -/
-@[simp↓] theorem apply_pure (table : Term.FunTable)
-    (pure : ∀ implementation ∈ table, ∀ captures arguments,
-      Result.IsPure (implementation captures arguments))
-    (function arguments : Term) :
-    Result.IsPure («apply/2» table function arguments) := by
+/-- Application has no effects of its own; its implementation is supplied by the program. -/
+@[simp↓] theorem apply_neutral (function arguments : Term) :
+    Result.IsNeutral («apply/2» function arguments) := by
   unfold «apply/2»
   split
   · simp
-  · cases function <;> simp only [Term.fetchFun]
+  · cases function <;> simp only
     all_goals try simp
-    rename_i id arity captures
-    cases h : table[id]? with
-    | none => simp
-    | some implementation =>
-      simp only [Option.map_some]
-      split
-      · exact pure implementation (Array.mem_of_getElem? h) captures _
-      · simp
+    split <;> simp [Result.IsNeutral]
+    intro result
+    cases result <;> trivial
 
 end Erlang.erlang

@@ -23,11 +23,16 @@ defmodule Lynx.RunnerPool do
       NimblePool.checkout!(
         pool,
         :checkout,
-        fn {pool_pid, _ref}, port ->
-          Port.command(port, payload <> "\n")
+        fn _from, port ->
+          send(port, {self(), {:command, payload <> "\n"}})
           output = response(port, "")
-          Port.connect(port, pool_pid)
-          {output, :ok}
+
+          try do
+            Process.unlink(port)
+            {output, :ok}
+          rescue
+            _ -> {output, :close}
+          end
         end,
         :infinity
       )
@@ -100,26 +105,17 @@ defmodule Lynx.RunnerPool do
 
   @impl NimblePool
   def handle_checkout(:checkout, {pid, _ref}, port, pool_state) do
-    if Port.info(port) do
-      Port.connect(port, pid)
-      {:ok, port, port, pool_state}
-    else
-      {:remove, :closed, pool_state}
-    end
+    Port.connect(port, pid)
+    {:ok, port, port, pool_state}
   end
 
   @impl NimblePool
   def handle_checkin(:ok, _from, port, pool_state), do: {:ok, port, pool_state}
-
-  @impl NimblePool
-  def handle_info({message_port, {:exit_status, _status}}, port) when message_port == port,
-    do: {:remove, :closed}
-
-  def handle_info(_message, port), do: {:ok, port}
+  def handle_checkin(:close, _from, _port, pool_state), do: {:remove, :closed, pool_state}
 
   @impl NimblePool
   def terminate_worker(_reason, port, pool_state) do
-    if Port.info(port), do: Port.close(port)
+    Port.close(port)
     {:ok, pool_state}
   end
 
