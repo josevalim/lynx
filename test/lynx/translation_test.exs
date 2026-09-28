@@ -4,31 +4,28 @@ defmodule Lynx.TranslationTest do
   alias Lynx.Translation
 
   test "clusters cycles separately and emits dependencies before callers" do
-    body =
-      :cerl.c_let(
-        [:cerl.c_var(:Y)],
-        call(:odd),
-        :cerl.c_case(:cerl.c_var(:Y), [
-          :cerl.c_clause([:cerl.c_nil()], call(:first)),
-          :cerl.c_clause([:cerl.c_var(:Other)], call(:even))
-        ])
-      )
-
     core =
-      :cerl.c_module(
-        :cerl.c_atom(:example),
-        Enum.map([:caller, :identity, :self], &:cerl.c_fname(&1, 1)),
-        [
-          definition(:caller, body),
-          definition(:odd, call(:even)),
-          definition(:even, call(:odd)),
-          definition(:first, call(:second)),
-          definition(:second, call(:third)),
-          definition(:third, call(:first)),
-          definition(:identity, :cerl.c_var(0)),
-          definition(:self, call(:self))
-        ]
-      )
+      cerl("""
+      -module(example).
+      -export([caller/1, identity/1, self/1]).
+
+      caller(X) ->
+          Y = odd(X),
+          Z = first(Y),
+          Z + even(X).
+      odd([]) -> false;
+      odd([_ | Xs]) -> even(Xs).
+      even([]) -> true;
+      even([_ | Xs]) -> odd(Xs).
+      first([]) -> 0;
+      first([_ | Xs]) -> second(Xs).
+      second([]) -> 1;
+      second([_ | Xs]) -> third(Xs).
+      third([]) -> 2;
+      third([_ | Xs]) -> first(Xs).
+      identity(X) -> X.
+      self(X) -> self(X).
+      """)
 
     assert %{example: commands} =
              Translation.new()
@@ -58,26 +55,23 @@ defmodule Lynx.TranslationTest do
 
   test "only translates requested roots" do
     core =
-      :cerl.c_module(
-        :cerl.c_atom(:example),
-        [:cerl.c_fname(:module_info, 0), :cerl.c_fname(:module_info, 1)],
-        [
-          {:cerl.c_fname(:module_info, 0), :cerl.c_fun([], :cerl.c_atom(:unused))},
-          definition(:module_info, :cerl.c_var(0))
-        ]
-      )
+      cerl("""
+      -module(example).
+      -export([identity/1]).
+      identity(X) -> X.
+      """)
 
     assert %{example: []} =
              Translation.new() |> Translation.add(core, []) |> Translation.assemble()
   end
 
   test "propagates unsupported Core from an exported function" do
-    call = :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:abs), [:cerl.c_int(-1)])
-
     core =
-      :cerl.c_module(:cerl.c_atom(:example), [:cerl.c_fname(:entry, 1)], [
-        definition(:entry, call)
-      ])
+      cerl("""
+      -module(example).
+      -export([entry/1]).
+      entry(X) -> erlang:abs(X).
+      """)
 
     assert {:unsupported_core, text} = Translation.add(Translation.new(), core, [{:entry, 1}])
     assert text =~ "call 'erlang':'abs'"
@@ -85,16 +79,20 @@ defmodule Lynx.TranslationTest do
 
   test "accumulates roots across modules and reuses each module's translations" do
     first =
-      :cerl.c_module(:cerl.c_atom(:first), [], [
-        definition(:entry, call(:helper)),
-        definition(:helper, :cerl.c_var(0)),
-        definition(:extra, :cerl.c_int(1))
-      ])
+      cerl("""
+      -module(first).
+      -export([entry/1, extra/1]).
+      entry(X) -> helper(X).
+      helper(X) -> X.
+      extra(_) -> 1.
+      """)
 
     second =
-      :cerl.c_module(:cerl.c_atom(:second), [], [
-        definition(:entry, :cerl.c_int(2))
-      ])
+      cerl("""
+      -module(second).
+      -export([entry/1]).
+      entry(_) -> 2.
+      """)
 
     initial = Translation.new() |> Translation.add(first, [{:entry, 1}])
     assert Enum.sort(Map.keys(initial.modules.first)) == [{:entry, 1}, {:helper, 1}]
@@ -119,6 +117,28 @@ defmodule Lynx.TranslationTest do
     assert Translation.assemble(Translation.new()) == %{}
   end
 
-  defp definition(name, body), do: {:cerl.c_fname(name, 1), :cerl.c_fun([:cerl.c_var(0)], body)}
-  defp call(name), do: :cerl.c_apply(:cerl.c_fname(name, 1), [:cerl.c_var(0)])
+  defp cerl(source) do
+    forms =
+      {String.to_charlist(source), 1}
+      |> Stream.unfold(fn {chars, line} ->
+        result =
+          case :erl_scan.tokens([], chars, line) do
+            {:more, continuation} -> :erl_scan.tokens(continuation, :eof, line)
+            done -> done
+          end
+
+        case result do
+          {:done, {:eof, _}, _} ->
+            nil
+
+          {:done, {:ok, tokens, next_line}, rest} ->
+            assert {:ok, form} = :erl_parse.parse_form(tokens)
+            {form, {rest, next_line}}
+        end
+      end)
+      |> Enum.to_list()
+
+    assert {:ok, core, _warnings} = :v3_core.module(forms, [])
+    core
+  end
 end
