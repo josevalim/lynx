@@ -21,8 +21,7 @@ defmodule Lynx.CoreToLeanjTest do
         definition(:unused, unsupported_call())
       ])
 
-    assert {:ok, functions} =
-             :lynx_core_to_leanj.translate(:example, definitions, [{:entry, 1}], %{})
+    assert {:ok, functions, []} = translate(definitions)
 
     assert Enum.sort(Map.keys(functions)) == [{:entry, 1}, {:even, 1}, {:helper, 1}, {:odd, 1}]
     assert Enum.sort(functions[{:entry, 1}].local_calls) == [{:even, 1}, {:helper, 1}, {:odd, 1}]
@@ -34,6 +33,72 @@ defmodule Lynx.CoreToLeanjTest do
       assert %{"kind" => "def", "name" => translated_name} = translation
       assert translated_name == "#{name}_1"
     end
+  end
+
+  test "threads the remote callback context through local functions and reuses translations" do
+    remote = fn module ->
+      :cerl.c_call(:cerl.c_atom(module), :cerl.c_atom(:entry), [:cerl.c_var(0)])
+    end
+
+    definitions =
+      definitions([
+        definition(:entry, :cerl.c_let([:cerl.c_var(:Y)], call(:first), call(:second))),
+        definition(:first, remote.(:one)),
+        definition(:second, remote.(:two))
+      ])
+
+    assert {:ok, functions, calls} = translate(definitions)
+
+    assert calls == [{:two, :entry, 1, []}, {:one, :entry, 1, []}]
+    assert Enum.sort(functions[{:entry, 1}].local_calls) == [{:first, 1}, {:second, 1}]
+    assert functions[{:first, 1}].local_calls == []
+    assert functions[{:second, 1}].local_calls == []
+
+    assert {:ok, ^functions, []} = translate(definitions, functions)
+  end
+
+  test "translates qualified calls to the current module as local calls" do
+    qualified = :cerl.c_call(:cerl.c_atom(:example), :cerl.c_atom(:helper), [:cerl.c_var(0)])
+    definitions = definitions([definition(:entry, qualified), definition(:helper, qualified)])
+
+    assert {:ok, functions, []} = translate(definitions)
+
+    assert Enum.sort(Map.keys(functions)) == [{:entry, 1}, {:helper, 1}]
+    assert functions[{:entry, 1}].local_calls == [{:helper, 1}]
+    assert functions[{:helper, 1}].local_calls == []
+
+    for name <- [:entry, :helper] do
+      assert functions[{name, 1}].translation["body"]["function"]["name"] == "helper_1"
+    end
+  end
+
+  test "passes raw file and position annotations to remote calls" do
+    body =
+      :cerl.ann_c_call(
+        [{:file, ~c"foo"}, {7, 3}],
+        :cerl.c_atom(:other),
+        :cerl.c_atom(:entry),
+        [:cerl.c_var(0)]
+      )
+
+    assert {:ok, _, [{:other, :entry, 1, span_anno}]} =
+             translate(definitions([definition(:entry, body)]))
+
+    assert span_anno == [{:file, ~c"foo"}, {7, 3}]
+  end
+
+  defp translate(definitions, translated \\ %{}) do
+    callback = fn calls, module, function, arity, span_anno ->
+      {:ok, [{module, function, arity, span_anno} | calls]}
+    end
+
+    :lynx_core_to_leanj.translate(
+      :example,
+      definitions,
+      [{:entry, 1}],
+      translated,
+      {[], callback}
+    )
   end
 
   defp definitions(defs) do
