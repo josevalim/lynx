@@ -206,11 +206,7 @@ values_node([Value | Rest], Anno) ->
     apply_node(~"Prod.mk", [Value, values_node(Rest, Anno)], Anno).
 
 array_node(Values, Anno) ->
-    apply_node(~"Array.mk", [list_node(Values, Anno)], Anno).
-
-list_node(Values, Anno) ->
-    lists:foldr(fun(Value, Tail) -> apply_node(~"List.cons", [Value, Tail], Anno) end,
-                ident_node(~"List.nil", Anno), Values).
+    node(~"array", Anno, #{~"elements" => Values}).
 
 %% Keep compiler temporaries and source variables in distinct name spaces.
 %% Preserve the underscore prefix for source names that start with one.

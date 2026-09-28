@@ -107,6 +107,10 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   | "string" => do
     fields j ["kind", "value", "span"]
     pure ⟨Syntax.mkStrLit (← str j "value")⟩
+  | "array" => do
+    fields j ["kind", "elements", "span"]
+    let elements ← (← arr j "elements").mapM (term map info pattern)
+    pure (Unhygienic.run `(#[$elements,*]))
   | "apply" => do
     fields j ["kind", "function", "args", "span"]
     let fnJson ← field j "function"

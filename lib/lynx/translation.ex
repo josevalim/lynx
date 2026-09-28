@@ -347,10 +347,7 @@ defmodule Lynx.Translation do
   defp apply_node(name, args),
     do: %{"kind" => "apply", "span" => [], "function" => ident(name), "args" => args}
 
-  defp list(values),
-    do: Enum.reduce(Enum.reverse(values), ident("List.nil"), &apply_node("List.cons", [&1, &2]))
-
-  defp array(values), do: apply_node("Array.mk", [list(values)])
+  defp array(values), do: %{"kind" => "array", "span" => [], "elements" => values}
 
   defp propagate_purity(functions) do
     {functions, changed?} =

@@ -306,23 +306,17 @@ defmodule Lynx.TranslationTest do
                "function" => %{"name" => "Lynx.Term.apply"},
                "args" => [
                  %{"name" => "«vF»"},
-                 %{"function" => %{"name" => "Array.mk"}, "args" => [args]}
+                 %{"kind" => "array", "elements" => args}
                ]
              } = dynamic
 
-      assert %{
-               "function" => %{"name" => "List.cons"},
-               "args" => [
-                 %{
-                   "function" => %{"name" => "Lynx.Term.integer"},
-                   "args" => [%{"kind" => "integer", "value" => 7}]
-                 },
-                 %{
-                   "function" => %{"name" => "List.cons"},
-                   "args" => [%{"name" => "«vF»"}, %{"name" => "List.nil"}]
-                 }
-               ]
-             } = args
+      assert [
+               %{
+                 "function" => %{"name" => "Lynx.Term.integer"},
+                 "args" => [%{"kind" => "integer", "value" => 7}]
+               },
+               %{"name" => "«vF»"}
+             ] = args
 
       assert %{"body" => %{"cases" => [%{"body" => explicit} | _]}} =
                functions[{:explicit, 1}].translation
@@ -354,7 +348,7 @@ defmodule Lynx.TranslationTest do
                "function" => %{"name" => "Lynx.Term.apply"},
                "args" => [
                  %{"name" => "«vF»"},
-                 %{"function" => %{"name" => "Array.mk"}, "args" => [%{"name" => "List.nil"}]}
+                 %{"kind" => "array", "elements" => []}
                ]
              } = zero
 
