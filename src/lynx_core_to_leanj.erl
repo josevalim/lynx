@@ -4,6 +4,8 @@
 
 -include_lib("compiler/src/core_parse.hrl").
 
+%% Anonymous functions use integer keys; named functions use {Module, {Name, Arity}}.
+%% Every entry carries a global integer ID for ordering and dispatch.
 -record(state, {module, name, defs, translated, funs = #{},
                 local_calls = #{}, purity = pure, remote}).
 
@@ -19,12 +21,12 @@ to_definitions(#c_module{defs = Defs}) ->
     maps:from_list([{Name, Fun} || {#c_var{name = Name}, Fun} <- Defs]).
 
 %% Translate the requested functions and their reachable local callees.
-%% The supplied maps contain translated definitions and closure metadata for this module.
+%% The supplied maps contain this module's definitions and the program-wide function registry.
 %% The callback returns remote callee purity. Local purity is propagated by Lynx.Translation.
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
 -spec translate(module(), #{{atom(), arity()} => cerl:c_fun()}, [{atom(), arity()}], map(), map(),
-                {term(), fun((term(), module(), atom(), arity(), list()) ->
-                    {pure | impure | neutral, term()} | local)}) ->
+                {term(), fun((term(), module(), atom(), arity(), list(), map()) ->
+                    {pure | impure | neutral, map(), term()} | local)}) ->
     {ok, map(), map(), term()} | {unsupported_core, list(), binary()}.
 translate(Module, Definitions, Names, Translated, Funs, Remote) ->
     try
@@ -49,24 +51,25 @@ translate(Module, Definitions, Names, Translated, Funs, Remote) ->
              unicode:characters_to_binary(core_pp:format(Core))}
     end.
 
-translate_def(Name, #state{translated = Translated} = State0) ->
+translate_def(Name, #state{translated = Translated} = State) ->
     case maps:is_key(Name, Translated) of
-        true -> State0;
-        false ->
-            #c_fun{anno = Anno, vars = Vars, body = Body} = maps:get(Name, State0#state.defs),
-            State1 = State0#state{name = Name, local_calls = #{}, purity = pure,
-                                  translated = Translated#{Name => pending}},
-            {TranslatedBody, State2} = expression(Body, State1),
-            Def = node(~"def", Anno, #{
-                ~"name" => function_name(Name),
-                ~"params" => [variable(Var) || Var <- Vars],
-                ~"body" => TranslatedBody
-            }),
-            Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls),
-                      purity => State2#state.purity},
-            State0#state{translated = (State2#state.translated)#{Name => Entry},
-                         funs = State2#state.funs, remote = State2#state.remote}
+        true -> State;
+        false -> translate_def(Name, maps:get(Name, State#state.defs), State)
     end.
+
+translate_def(Name, #c_fun{anno = Anno, vars = Vars, body = Body}, State0) ->
+    State1 = State0#state{name = Name, local_calls = #{}, purity = pure,
+                          translated = (State0#state.translated)#{Name => pending}},
+    {TranslatedBody, State2} = expression(Body, State1),
+    Def = node(~"def", Anno, #{
+        ~"name" => function_name(Name),
+        ~"params" => [variable(Var) || Var <- Vars],
+        ~"body" => TranslatedBody
+    }),
+    Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls),
+              purity => State2#state.purity},
+    State0#state{translated = (State2#state.translated)#{Name => Entry},
+                 funs = State2#state.funs, remote = State2#state.remote}.
 
 %% Erlang: case X of [] -> 0; Other -> 1 end
 %% Lean:
@@ -116,13 +119,13 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
         when is_atom(Module), is_atom(Name) ->
     Arity = length(Args),
     {Context, Callback} = State0#state.remote,
-    case Callback(Context, Module, Name, Arity, Anno) of
+    case Callback(Context, Module, Name, Arity, Anno, State0#state.funs) of
         local when Module =:= State0#state.module ->
             expression(#c_apply{anno = Anno, op = #c_var{name = {Name, Arity}}, args = Args},
                 State0);
-        {Purity, NewContext} ->
+        {Purity, NewFuns, NewContext} ->
             {TranslatedArgs, State1} = lists:mapfoldl(fun value/2,
-                State0#state{remote = {NewContext, Callback}}, Args),
+                State0#state{funs = NewFuns, remote = {NewContext, Callback}}, Args),
             Function = <<(module_name(Module))/binary, ".", (function_name({Name, Arity}))/binary>>,
             {apply_node(Function, TranslatedArgs, Anno), State1#state{purity = join_purity(State1#state.purity, Purity)}}
     end;
@@ -155,24 +158,26 @@ value(#c_values{anno = Anno, es = Values}, State0) ->
     {Translated, State1} = lists:mapfoldl(fun value/2, State0, Values),
     {values_node(Translated, Anno), State1};
 value(#c_fun{vars = Vars} = Fun, State0) ->
-    Key = {anonymous, State0#state.name, Fun},
+    Captures = [#c_var{name = V} || V <- cerl_trees:free_variables(Fun),
+                                   not is_tuple(V)],
+    Id = map_size(State0#state.funs),
+    Name = {list_to_atom("$lynx_fun_" ++ integer_to_list(Id)), length(Captures) + length(Vars)},
+    Entry = #{id => Id, module => State0#state.module,
+              name => Name, arity => length(Vars), captures => Captures},
+    State1 = State0#state{funs = (State0#state.funs)#{Id => Entry}},
+    State2 = translate_def(Name, Fun#c_fun{vars = Captures ++ Vars}, State1),
+    function_node(Entry, cerl:get_ann(Fun), State2);
+value(#c_var{anno = Anno, name = {_, Arity} = Name}, State0) ->
+    Key = {State0#state.module, Name},
     case maps:find(Key, State0#state.funs) of
-        {ok, Entry} -> closure(Entry, cerl:get_ann(Fun), State0);
+        {ok, Entry} -> function_node(Entry, Anno, State0);
         error ->
-            Captures = [#c_var{name = V} || V <- cerl_trees:free_variables(Fun),
-                                           not is_tuple(V)],
-            Name = {{anonymous, map_size(State0#state.funs)}, length(Captures) + length(Vars)},
-            Entry = #{name => Name, arity => length(Vars), captures => Captures},
-            State1 = State0#state{
-                funs = (State0#state.funs)#{Key => Entry},
-                defs = (State0#state.defs)#{Name => Fun#c_fun{vars = Captures ++ Vars}}},
+            Entry = #{id => map_size(State0#state.funs), module => State0#state.module,
+                      name => Name, arity => Arity, captures => []},
+            State1 = State0#state{funs = (State0#state.funs)#{Key => Entry}},
             State2 = translate_def(Name, State1),
-            closure(Entry, cerl:get_ann(Fun), State2)
+            function_node(Entry, Anno, State2)
     end;
-value(#c_var{anno = Anno, name = {_, _} = Name}, State0) ->
-    Entry = #{name => Name, arity => element(2, Name), captures => []},
-    State1 = translate_def(Name, State0),
-    closure(Entry, Anno, State1#state{funs = (State1#state.funs)#{{named, Name} => Entry}});
 value(#c_var{} = Var, State) ->
     {variable(Var), State};
 value(#c_literal{anno = Anno, val = []}, State) ->
@@ -193,12 +198,11 @@ value(Core, _State) ->
     unsupported(Core).
 
 %% The table contains code; every function value carries its own capture values.
-closure(#{name := Name, arity := Arity, captures := Captures}, Anno, State0) ->
+function_node(#{id := Id, arity := Arity, captures := Captures}, Anno, State0) ->
     {Values, State1} = lists:mapfoldl(fun value/2, State0, Captures),
-    {node(~"closure", Anno, #{~"module" => module_name(State1#state.module),
-                             ~"name" => function_name(Name), ~"arity" => Arity,
-                             ~"captures" => array_node(Values, Anno)}),
-     State1}.
+    {apply_node(~"Lynx.Term.function", [node(~"integer", [], #{~"value" => Id}),
+                                      node(~"integer", [], #{~"value" => Arity}),
+                                      array_node(Values, Anno)], Anno), State1}.
 
 values_node([], Anno) -> ident_node(~"Unit.unit", Anno);
 values_node([Value], _Anno) -> Value;
@@ -221,8 +225,6 @@ variable(#c_var{anno = Anno, name = Name}) when is_atom(Name) ->
 variable(Core) ->
     unsupported(Core).
 
-function_name({{anonymous, Index}, _Arity}) ->
-    quote_identifier(<<"$lynx_fun_", (integer_to_binary(Index))/binary>>);
 function_name({Name, Arity}) when is_atom(Name), is_integer(Arity), Arity >= 0 ->
     quote_identifier(<<(atom_to_binary(Name, utf8))/binary, "/", (integer_to_binary(Arity))/binary>>).
 

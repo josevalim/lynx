@@ -1,7 +1,7 @@
 defmodule Lynx.Translation do
   @moduledoc false
 
-  defstruct modules: %{}, external_calls: %{}, builtin_modules: %{}, stack: []
+  defstruct modules: %{}, funs: %{}, external_calls: %{}, builtin_modules: %{}, stack: []
 
   @external_resource Path.expand("../../Lean/modules.json", __DIR__)
   for {module, functions} <- JSON.decode!(File.read!(@external_resource)),
@@ -44,13 +44,20 @@ defmodule Lynx.Translation do
       validate_function!(module, name, function, arity, fn -> [file: module.file] end)
     end
 
-    context = {%{translation | stack: [name | stack]}, &remote_call/5}
-    %{definitions: definitions, translations: translations, funs: funs} = module
+    context = {%{translation | stack: [name | stack]}, &remote_call/6}
+    %{definitions: definitions, translations: translations} = module
+    %{funs: funs} = translation
 
     case :lynx_core_to_leanj.translate(name, definitions, names, translations, funs, context) do
       {:ok, functions, funs, translation} ->
-        updated = %{module | translations: propagate_purity(functions), funs: funs}
-        %{translation | modules: Map.put(translation.modules, name, updated), stack: stack}
+        updated = %{module | translations: propagate_purity(functions)}
+
+        %{
+          translation
+          | modules: Map.put(translation.modules, name, updated),
+            funs: funs,
+            stack: stack
+        }
 
       {:unsupported_core, span_anno, core} ->
         raise CompileError,
@@ -64,8 +71,11 @@ defmodule Lynx.Translation do
          module,
          function,
          arity,
-         span_anno
+         span_anno,
+         funs
        ) do
+    translation = %{translation | funs: funs}
+
     translation =
       if module == caller do
         translation
@@ -80,7 +90,7 @@ defmodule Lynx.Translation do
       {:ok, purity} ->
         translation = put_in(translation.builtin_modules[module], true)
 
-        {purity, translation}
+        {purity, translation.funs, translation}
 
       :error when module == caller ->
         :local
@@ -114,7 +124,7 @@ defmodule Lynx.Translation do
 
     translation = add(translation, module, [{function, arity}])
     purity = translation.modules[module].translations[{function, arity}].purity
-    {purity, translation}
+    {purity, translation.funs, translation}
   end
 
   defp source_location(annotations, default_file) do
@@ -196,7 +206,6 @@ defmodule Lynx.Translation do
     %{
       definitions: :lynx_core_to_leanj.to_definitions(core),
       translations: %{},
-      funs: %{},
       file: file
     }
   end
@@ -212,24 +221,19 @@ defmodule Lynx.Translation do
   @doc "Assembles translated modules in dependency order."
   def assemble(%__MODULE__{
         modules: modules,
+        funs: funs,
         external_calls: external_calls,
         builtin_modules: builtin_modules
       }) do
-    funs =
-      for {module_name, module} <- Enum.sort(modules),
-          fun <- module.funs |> Map.values() |> Enum.uniq_by(& &1.name) |> Enum.sort_by(& &1.name) do
-        definition = Map.fetch!(module.translations, fun.name).translation
-        {module_name, fun, definition}
-      end
-
-    indices =
+    table =
       funs
-      |> Enum.with_index()
-      |> Map.new(fn {{module, _fun, definition}, index} ->
-        {{:lynx_core_to_leanj.module_name(module), definition["name"]}, index}
+      |> Map.values()
+      |> Enum.sort_by(& &1.id)
+      |> Enum.map(fn fun ->
+        definition = Map.fetch!(modules[fun.module].translations, fun.name).translation
+        fun_entry({fun.module, fun, definition})
       end)
-
-    table = array(Enum.map(funs, &fun_entry/1))
+      |> array()
 
     graph = :digraph.new()
 
@@ -255,14 +259,11 @@ defmodule Lynx.Translation do
               imports
               |> Enum.sort()
               |> Enum.map(&:lynx_core_to_leanj.module_name/1),
-            "contents" =>
-              module.translations
-              |> assemble_module()
-              |> resolve_funs(indices)
+            "contents" => assemble_module(module.translations)
           }
         end
 
-      if funs == [] do
+      if map_size(funs) == 0 do
         files
       else
         files ++
@@ -319,27 +320,6 @@ defmodule Lynx.Translation do
   end
 
   defp integer(value), do: %{"kind" => "integer", "span" => [], "value" => value}
-
-  defp resolve_funs(%{"kind" => "closure"} = closure, indices) do
-    apply_node("Lynx.Term.«function»", [
-      %{
-        "kind" => "integer",
-        "span" => [],
-        "value" => Map.fetch!(indices, {closure["module"], closure["name"]})
-      },
-      %{"kind" => "integer", "span" => [], "value" => closure["arity"]},
-      resolve_funs(closure["captures"], indices)
-    ])
-    |> Map.put("span", closure["span"])
-  end
-
-  defp resolve_funs(value, indices) when is_map(value),
-    do: Map.new(value, fn {key, value} -> {key, resolve_funs(value, indices)} end)
-
-  defp resolve_funs(values, indices) when is_list(values),
-    do: Enum.map(values, &resolve_funs(&1, indices))
-
-  defp resolve_funs(value, _indices), do: value
 
   defp ident(name), do: %{"kind" => "ident", "span" => [], "name" => name}
   defp apply_node(name, []), do: ident(name)

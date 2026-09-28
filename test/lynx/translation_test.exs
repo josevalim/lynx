@@ -363,37 +363,103 @@ defmodule Lynx.TranslationTest do
     end
   end
 
-  test "generates a function table" do
-    core =
+  test "generates a function table with stable IDs across modules and incremental roots" do
+    caller =
       cerl("""
-      -module(example).
-      -export([make/1, call/1]).
-      make(X) -> fun() -> erlang:get(X) end.
-      call(F) -> F().
+      -module(caller).
+      -export([entry/1, extra/1, again/0]).
+      entry(X) -> F = fun local/1, G = dependency:entry(F), fun(Y) -> G(X + Y) end.
+      local(X) -> X.
+      extra(X) -> fun() -> erlang:get(X) end.
+      again() -> fun local/1.
+      """)
+
+    dependency =
+      cerl("""
+      -module(dependency).
+      -export([entry/1]).
+      entry(F) -> G = fun local/1, fun(X) -> F(G(X)) end.
+      local(X) -> X + 1.
       """)
 
     translation =
-      Translation.new([{"example.erl", core}])
-      |> Translation.add(:example, [{:make, 1}, {:call, 1}])
-
-    assert [%{name: helper, arity: 0, captures: [_]}] =
-             Map.values(translation.modules.example.funs)
+      Translation.new([{"caller.erl", caller}, {"dependency.erl", dependency}])
+      |> Translation.add(:caller, [{:entry, 1}])
 
     assert %{
-             {:make, 1} => %{purity: :pure, local_calls: []},
-             {:call, 1} => %{purity: :neutral}
-           } = translation.modules.example.translations
+             {:caller, {:local, 1}} => %{id: 0, captures: []},
+             {:dependency, {:local, 1}} => %{id: 1, captures: []},
+             2 => %{
+               id: 2,
+               module: :dependency,
+               name: {:"$lynx_fun_2", 3},
+               arity: 1,
+               captures: [_, _]
+             },
+             3 => %{id: 3, module: :caller, name: {:"$lynx_fun_3", 3}, arity: 1, captures: [_, _]}
+           } = translation.funs
 
-    assert %{purity: :impure} = translation.modules.example.translations[helper]
-    assert Translation.add(translation, :example, [{:make, 1}]) == translation
+    assert map_size(translation.funs) == 4
 
-    assert [%{"contents" => contents}, %{"contents" => [%{"kind" => "fun_table"} = table]}] =
-             Translation.assemble(translation)
+    assert Translation.add(translation, :caller, [{:entry, 1}]) == translation
+
+    updated = Translation.add(translation, :caller, [{:again, 0}, {:extra, 1}])
+    assert map_size(updated.funs) == 5
+    assert Map.take(updated.funs, Map.keys(translation.funs)) == translation.funs
+
+    assert %{id: 4, module: :caller, name: {:"$lynx_fun_4", 1}, arity: 0, captures: [_]} =
+             updated.funs[4]
+
+    assert %{purity: :pure, local_calls: []} = updated.modules.caller.translations[{:extra, 1}]
+    assert %{purity: :impure} = updated.modules.caller.translations[{:"$lynx_fun_4", 1}]
+    assert %{purity: :neutral} = updated.modules.dependency.translations[{:"$lynx_fun_2", 3}]
+
+    assert %{"body" => %{"cases" => [%{"body" => %{"args" => [function]}} | _]}} =
+             updated.modules.caller.translations[{:again, 0}].translation
+
+    assert %{
+             "function" => %{"name" => "Lynx.Term.function"},
+             "args" => [
+               %{"value" => 0},
+               %{"value" => 1},
+               %{"kind" => "array", "elements" => []}
+             ]
+           } = function
+
+    files = Translation.assemble(updated)
+
+    assert %{
+             "module" => "Lynx.Program",
+             "contents" => [
+               %{"kind" => "fun_table", "body" => %{"kind" => "array", "elements" => entries}} =
+                 table
+             ]
+           } = List.last(files)
 
     refute Map.has_key?(table, "pure")
 
-    assert [%{"name" => "lynx_pure", "expr" => %{"name" => "«make/1»"}}] =
-             Enum.filter(contents, &(&1["name"] == "lynx_pure"))
+    %{"contents" => contents} = Enum.find(files, &(&1["module"] == "Erlang.caller"))
+
+    assert Enum.any?(
+             contents,
+             &match?(%{"name" => "lynx_pure", "expr" => %{"name" => "«extra/1»"}}, &1)
+           )
+
+    assert Enum.map(entries, fn %{
+                                  "args" => [
+                                    _,
+                                    _,
+                                    %{"body" => %{"function" => %{"name" => name}}}
+                                  ]
+                                } ->
+             name
+           end) == [
+             "Erlang.caller.«local/1»",
+             "Erlang.dependency.«local/1»",
+             "Erlang.dependency.«$lynx_fun_2/3»",
+             "Erlang.caller.«$lynx_fun_3/3»",
+             "Erlang.caller.«$lynx_fun_4/1»"
+           ]
   end
 
   test "imports a module BIF if used" do

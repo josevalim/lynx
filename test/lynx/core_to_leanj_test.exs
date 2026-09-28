@@ -132,12 +132,12 @@ defmodule Lynx.CoreToLeanjTest do
   end
 
   defp translate(definitions, translated \\ %{}, purity \\ %{}) do
-    callback = fn calls, module, function, arity, span_anno ->
+    callback = fn calls, module, function, arity, span_anno, funs ->
       if module == :example do
         :local
       else
         purity = Map.get(purity, {module, function, arity}, :pure)
-        {purity, [{module, function, arity, span_anno} | calls]}
+        {purity, funs, [{module, function, arity, span_anno} | calls]}
       end
     end
 
