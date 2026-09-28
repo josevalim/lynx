@@ -1,0 +1,127 @@
+defmodule Lynx.RunnerPoolTest do
+  use ExUnit.Case, async: true
+
+  @lean_dir Path.expand("../../Lean", __DIR__)
+  @translations_dir Path.expand("../fixtures/translations", __DIR__)
+  @sum_erl "../test/fixtures/translations/sum.erl"
+  @sum_json Path.join(@translations_dir, "sum.json")
+  @moduletag timeout: to_timeout(minute: 10)
+
+  test "reuses the registered pool for successive commands" do
+    render = %{"command" => "render", "version" => "1.0", "files" => []}
+    verify = %{"command" => "verify", "version" => "1.0", "files" => []}
+    invalid = %{"command" => "unknown", "version" => "1.0"}
+
+    assert Lynx.RunnerPool.command(@lean_dir, render) == %{"status" => "ok", "files" => %{}}
+    assert [{pool, _}] = Registry.lookup(Lynx.RunnerRegistry, @lean_dir)
+
+    assert_raise RuntimeError, "unsupported runner command 'unknown'", fn ->
+      Lynx.RunnerPool.command(@lean_dir, invalid)
+    end
+
+    assert Lynx.RunnerPool.command(@lean_dir, verify) == %{
+             "status" => "ok",
+             "diagnostics" => []
+           }
+
+    assert [{^pool, _}] = Registry.lookup(Lynx.RunnerRegistry, @lean_dir)
+  end
+
+  describe "render" do
+    test "rejects unsupported versions before reading files" do
+      error =
+        assert_raise RuntimeError, fn ->
+          Lynx.RunnerPool.command(@lean_dir, %{"command" => "render", "version" => "2.0"})
+        end
+
+      assert error.message == "unsupported version"
+    end
+  end
+
+  describe "verify" do
+    test "verifies all translation fixtures" do
+      fixtures = Path.wildcard(Path.join(@translations_dir, "*.json"))
+      assert fixtures != []
+
+      fixtures
+      |> Task.async_stream(
+        fn fixture ->
+          assert Lynx.RunnerPool.command(@lean_dir, fixture_request(fixture, "verify")) ==
+                   %{"status" => "ok", "diagnostics" => []},
+                 "verification failed for #{fixture}"
+        end,
+        ordered: false,
+        timeout: :infinity
+      )
+      |> Stream.run()
+    end
+
+    test "reports verification errors with source diagnostics" do
+      request =
+        @sum_json
+        |> File.read!()
+        |> String.replace("Erlang.erlang.«+/2»", "Erlang.erlang.«unknown/2»")
+        |> JSON.decode!()
+        |> Map.put("command", "verify")
+
+      assert %{"status" => "error", "diagnostics" => diagnostics} =
+               Lynx.RunnerPool.command(@lean_dir, request)
+
+      assert Enum.any?(diagnostics, fn diagnostic ->
+               diagnostic["file"] == @sum_erl and diagnostic["kind"] == "error" and
+                 diagnostic["line"] == 4 and diagnostic["column"] == 20
+             end)
+    end
+
+    test "rejects missing files" do
+      error =
+        assert_raise RuntimeError, fn ->
+          Lynx.RunnerPool.command(@lean_dir, %{"command" => "verify", "version" => "1.0"})
+        end
+
+      assert error.message =~ "files"
+    end
+
+    test "rejects missing source files" do
+      missing = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "files" => [file("../test/fixtures/translations/missing.erl", "missing", [])]
+      }
+
+      error =
+        assert_raise RuntimeError, fn ->
+          Lynx.RunnerPool.command(@lean_dir, missing)
+        end
+
+      assert error.message =~ "missing.erl"
+    end
+  end
+
+  test "rejects invalid instructions" do
+    invalid = %{
+      "command" => "render",
+      "version" => "1.0",
+      "files" => [file(@sum_erl, "sum", [%{"kind" => "unknown", "span" => []}])]
+    }
+
+    error =
+      assert_raise RuntimeError, fn ->
+        Lynx.RunnerPool.command(@lean_dir, invalid)
+      end
+
+    assert error.message =~ @sum_erl
+    assert error.message =~ "unsupported command kind 'unknown'"
+  end
+
+  defp file(path, module, contents, imports \\ []) do
+    %{"file" => path, "module" => module, "contents" => contents, "imports" => imports}
+  end
+
+  defp fixture_request(path, command) do
+    path
+    |> File.read!()
+    |> JSON.decode!()
+    |> Map.put("command", command)
+  end
+end

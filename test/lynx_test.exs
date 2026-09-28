@@ -25,7 +25,7 @@ defmodule LynxTest do
     import Lynx
     """)
 
-    {status, output} = Lynx.Commands.lake(tmp_dir, ["build"])
+    {output, status} = System.cmd("lake", ["build"], cd: tmp_dir, stderr_to_stdout: true)
     assert status == 0, "lake build failed with exit status #{status}:\n#{output}"
   end
 end
