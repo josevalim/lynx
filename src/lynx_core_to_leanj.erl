@@ -5,7 +5,7 @@
 -include_lib("compiler/src/core_parse.hrl").
 
 -record(state, {module, name, defs, translated, funs = #{},
-                local_calls = #{}, references = #{}, dynamic = false, purity = pure, remote}).
+                local_calls = #{}, purity = pure, remote}).
 
 -spec module_name(module()) -> binary().
 module_name(Module) ->
@@ -43,7 +43,7 @@ translate_def(Name, #state{translated = Translated} = State0) ->
         true -> State0;
         false ->
             #c_fun{anno = Anno, vars = Vars, body = Body} = maps:get(Name, State0#state.defs),
-            State1 = State0#state{name = Name, local_calls = #{}, references = #{}, dynamic = false, purity = pure,
+            State1 = State0#state{name = Name, local_calls = #{}, purity = pure,
                                   translated = Translated#{Name => pending}},
             {TranslatedBody, State2} = expression(Body, State1),
             Def = node(~"def", Anno, #{
@@ -52,8 +52,7 @@ translate_def(Name, #state{translated = Translated} = State0) ->
                 ~"body" => TranslatedBody
             }),
             Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls),
-                      references => maps:keys(State2#state.references),
-                      dynamic => State2#state.dynamic, purity => State2#state.purity},
+                      purity => State2#state.purity},
             State0#state{translated = (State2#state.translated)#{Name => Entry},
                          defs = State2#state.defs, funs = State2#state.funs,
                          remote = State2#state.remote}
@@ -97,7 +96,7 @@ expression(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->
     {Function, State1} = value(Op, State0),
     {TranslatedArgs, State2} = lists:mapfoldl(fun value/2, State1, Args),
     {apply_node(~"Lynx.Term.apply", [Function, array_node(TranslatedArgs, Anno)], Anno),
-     State2#state{dynamic = true, purity = join_purity(State2#state.purity, neutral)}};
+     State2#state{purity = join_purity(State2#state.purity, neutral)}};
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX
 %% Erlang: ?MODULE:f(X) (non-builtin)
@@ -206,7 +205,7 @@ closure(#{name := Name, arity := Arity, captures := Captures}, Anno, State0) ->
     {node(~"closure", Anno, #{~"module" => module_name(State1#state.module),
                              ~"name" => function_name(Name), ~"arity" => Arity,
                              ~"captures" => array_node(Values, Anno)}),
-     State1#state{references = (State1#state.references)#{Name => true}}}.
+     State1}.
 
 values_node([], Anno) -> ident_node(~"Unit.unit", Anno);
 values_node([Value], _Anno) -> Value;
