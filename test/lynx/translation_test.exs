@@ -27,9 +27,9 @@ defmodule Lynx.TranslationTest do
       self(X) -> self(X).
       """)
 
-    assert %{example: commands} =
-             Translation.new()
-             |> Translation.add(core, [{:caller, 1}, {:identity, 1}, {:self, 1}])
+    assert [%{"module" => "example", "contents" => commands}] =
+             Translation.new([{"example.erl", core}])
+             |> Translation.add(:example, [{:caller, 1}, {:identity, 1}, {:self, 1}])
              |> Translation.assemble()
 
     groups =
@@ -61,8 +61,10 @@ defmodule Lynx.TranslationTest do
       identity(X) -> X.
       """)
 
-    assert %{example: []} =
-             Translation.new() |> Translation.add(core, []) |> Translation.assemble()
+    assert [%{"module" => "example", "contents" => []}] =
+             Translation.new([{"example.erl", core}])
+             |> Translation.add(:example, [])
+             |> Translation.assemble()
   end
 
   test "propagates unsupported Core from an exported function" do
@@ -73,48 +75,106 @@ defmodule Lynx.TranslationTest do
       entry(X) -> erlang:abs(X).
       """)
 
-    assert {:unsupported_core, text} = Translation.add(Translation.new(), core, [{:entry, 1}])
+    assert {:unsupported_core, text} =
+             Translation.add(Translation.new([{"example.erl", core}]), :example, [{:entry, 1}])
+
     assert text =~ "call 'erlang':'abs'"
   end
 
-  test "accumulates roots across modules and reuses each module's translations" do
+  test "follows remote calls and orders external modules before callers" do
+    caller =
+      cerl("""
+      -module(a_caller).
+      -export([entry/1, identity/1]).
+      entry(X) -> helper(X).
+      helper(X) -> z_dependency:entry(X).
+      identity(X) -> X.
+      """)
+
+    dependency =
+      cerl("""
+      -module(z_dependency).
+      -export([entry/1]).
+      entry(X) -> X.
+      """)
+
+    translation =
+      Translation.new([{"caller.erl", caller}, {"dependency.erl", dependency}])
+      |> Translation.add(:a_caller, [{:identity, 1}])
+      |> Translation.add(:a_caller, [{:entry, 1}])
+
+    assert Translation.add(translation, :a_caller, [{:entry, 1}]) == translation
+    assert translation.modules.z_dependency.translations == %{}
+
+    assert [
+             %{
+               "module" => "z_dependency",
+               "file" => "dependency.erl",
+               "imports" => [],
+               "contents" => [dependency]
+             },
+             %{"module" => "a_caller", "file" => "caller.erl", "imports" => ["z_dependency"]}
+           ] = Translation.assemble(translation)
+
+    assert dependency["expr"]["name"] == "entry_1"
+
+    assert_raise KeyError, fn ->
+      Translation.new([{"caller.erl", caller}])
+      |> Translation.add(:a_caller, [{:entry, 1}])
+      |> Translation.assemble()
+    end
+
+    assert_raise KeyError, fn -> Translation.new([]) |> Translation.add(:missing, []) end
+  end
+
+  test "translates qualified calls to the current module as local calls" do
+    core =
+      cerl("""
+      -module(example).
+      -export([entry/1, helper/1]).
+      entry(X) -> example:helper(X).
+      helper([]) -> 0;
+      helper([_ | Xs]) -> example:helper(Xs).
+      """)
+
+    translation =
+      Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
+
+    functions = translation.modules.example.translations
+    assert functions[{:entry, 1}].local_calls == [{:helper, 1}]
+    assert functions[{:entry, 1}].external_calls == []
+    assert functions[{:helper, 1}].local_calls == []
+    assert functions[{:helper, 1}].external_calls == []
+    json = JSON.encode!(functions[{:entry, 1}].translation)
+    assert json =~ ~s("name":"helper_1")
+    refute json =~ "example.helper_1"
+
+    assert [%{"imports" => [], "contents" => commands}] = Translation.assemble(translation)
+    assert Enum.map(commands, & &1["expr"]["name"]) == ["helper_1", "entry_1"]
+  end
+
+  test "rejects cycles between modules during assembly" do
     first =
       cerl("""
       -module(first).
-      -export([entry/1, extra/1]).
-      entry(X) -> helper(X).
-      helper(X) -> X.
-      extra(_) -> 1.
+      -export([entry/1]).
+      entry(X) -> second:entry(X).
       """)
 
     second =
       cerl("""
       -module(second).
       -export([entry/1]).
-      entry(_) -> 2.
+      entry(X) -> first:entry(X).
       """)
 
-    initial = Translation.new() |> Translation.add(first, [{:entry, 1}])
-    assert Enum.sort(Map.keys(initial.modules.first)) == [{:entry, 1}, {:helper, 1}]
-
     translation =
-      initial
-      |> Translation.add(second, [{:entry, 1}])
-      |> Translation.add(first, [{:extra, 1}])
+      Translation.new([{"first.erl", first}, {"second.erl", second}])
+      |> Translation.add(:first, [{:entry, 1}])
 
-    assert Map.take(translation.modules.first, Map.keys(initial.modules.first)) ==
-             initial.modules.first
-
-    assert Enum.sort(Map.keys(translation.modules.first)) ==
-             [{:entry, 1}, {:extra, 1}, {:helper, 1}]
-
-    assert Map.keys(translation.modules.second) == [{:entry, 1}]
-    assert Translation.add(translation, first, [{:entry, 1}]) == translation
-
-    assert %{first: first_commands, second: second_commands} = Translation.assemble(translation)
-    assert Enum.map(first_commands, & &1["expr"]["name"]) == ["extra_1", "helper_1", "entry_1"]
-    assert Enum.map(second_commands, & &1["expr"]["name"]) == ["entry_1"]
-    assert Translation.assemble(Translation.new()) == %{}
+    assert_raise ArgumentError, "found cycle during topsort", fn ->
+      Translation.assemble(translation)
+    end
   end
 
   defp cerl(source) do

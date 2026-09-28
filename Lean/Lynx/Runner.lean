@@ -15,9 +15,10 @@ Invalid input and runner failures return `{"status": "failure", "message": "..."
 Exit codes are 0 for success, 1 for verification errors, and 2 for runner failures.
 Each verification diagnostic has `file`, `kind` (error/warning/info), and `message`, with `line` and
 `column` included only when known.
-Files share only the fixed `Lynx` imports, never declarations or scope changes.
-Library references use fully qualified names; local variables and generated
-function references remain unqualified. No namespaces are opened for input files.
+Input files are an ordered array of {file, module, imports, contents} objects.
+Files are elaborated in the supplied dependency order, sharing declarations but
+not local scopes or messages. Each file's definitions live in its module namespace.
+Imports name other input modules; verification does not load them from disk.
 Verification elaborates decoded syntax directly. Rendering pretty-prints that syntax as Lean source. -/
 namespace Lynx.Runner
 open Lean
@@ -169,7 +170,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) : D
     let resultType := mkIdent ``Lynx.Result
     let binders := params.map fun p => Unhygienic.run `(bracketedBinder| ($p : $termType))
     let body ← term map info false (← field j "body")
-    pure (Unhygienic.run `(def $name $binders:bracketedBinder* : $resultType := $body))
+    pure (Unhygienic.run `(public def $name $binders:bracketedBinder* : $resultType := $body))
   | _ => throw s!"unsupported command kind '{kind}'"
   return withSpan info.info result
 
@@ -197,7 +198,11 @@ private def messageLocation (map : FileMap) (spans : Array Span) (msg : Message)
 private def elaborateFile (env : Lean.Environment) (file : String) (map : FileMap)
     (commands : Array (TSyntax `command)) : IO Elab.Command.State := do
   let action : Elab.Command.CommandElabM Unit := do
-    for cmd in commands do Elab.Command.elabCommandTopLevel cmd
+    let mut messages : MessageLog := {}
+    for cmd in commands do
+      Elab.Command.elabCommandTopLevel cmd
+      messages := messages ++ (← get).messages
+    modify fun state => { state with messages }
   let (_, state) ← (action.run { fileName := file, fileMap := map, snap? := none, cancelTk? := none }).run
     (Elab.Command.mkState env {} (Options.empty.setBool `Elab.async false)) |>.toIO
       (fun _ => IO.userError "runner elaboration failed")
@@ -206,6 +211,8 @@ private def elaborateFile (env : Lean.Environment) (file : String) (map : FileMa
 /-- One input file, decoded directly to Lean commands without elaboration. -/
 structure DecodedFile where
   fileName : String
+  moduleName : String
+  imports : Array String
   fileMap : FileMap
   commands : Array (TSyntax `command)
   private spans : Array Span
@@ -216,13 +223,24 @@ private def decode (request : String) : IO (Array DecodedFile) := do
     let j ← Json.parse request
     fields j ["files", "version"]
     unless (← str j "version") == "1.0" do throw "unsupported version"
-    (← field j "files").getObj?
-  files.toArray.mapM fun (file, nodes) => do
+    arr j "files"
+  files.mapM fun entry => do
+    let file ← IO.ofExcept (str entry "file")
     try
       let map := FileMap.ofString (← IO.FS.readFile file)
-      let (commands, spans) ← IO.ofExcept do
-        (← nodes.getArr?).mapM (command map) |>.run #[]
-      return ⟨file, map, commands, spans⟩
+      let (moduleName, imports, commands, spans) ← IO.ofExcept do
+        fields entry ["file", "module", "imports", "contents"]
+        let moduleName ← str entry "module"
+        let namespaceId ← identifier moduleName
+        let imports ← (← arr entry "imports").mapM fun j => do
+          let name ← j.getStr?
+          let _ ← identifier name
+          pure name
+        let (commands, spans) ← (← arr entry "contents").mapM (command map) |>.run #[]
+        let start := Unhygienic.run `(namespace $namespaceId)
+        let stop := Unhygienic.run `(end $namespaceId)
+        pure (moduleName, imports, #[start] ++ commands ++ #[stop], spans)
+      return ⟨file, moduleName, imports, map, commands, spans⟩
     catch err => throw (IO.userError s!"{file}: {err}")
 
 /-- Render syntax without elaborating the input declarations. -/
@@ -231,18 +249,22 @@ private def render (files : Array DecodedFile) (env : Lean.Environment) : IO (UI
     let action : CoreM String := do
       let commands ← file.commands.mapM fun cmd => do
         return (← PrettyPrinter.ppCommand cmd).pretty 100
-      return "module\n\nimport Lynx\n\n" ++ String.intercalate "\n\n" commands.toList ++ "\n"
+      let imports := file.imports.toList.map ("import " ++ ·)
+      return "module\n\n" ++ String.intercalate "\n" ("import Lynx" :: imports) ++
+        "\n\n" ++ String.intercalate "\n\n" commands.toList ++ "\n"
     let source ← (action.run' { fileName := file.fileName, fileMap := file.fileMap }
       { env := env }).toIO (fun _ => IO.userError s!"{file.fileName}: Lean source rendering failed")
     return (file.fileName, toJson source)
   return (0, Json.mkObj [("status", toJson "ok"), ("files", Json.mkObj sources.toList)])
 
-/-- Each file is verified independently; only Lean messages become diagnostics. -/
+/-- Verify in input order, retaining declarations while resetting per-file state. -/
 private def verify (files : Array DecodedFile) (env : Lean.Environment) : IO (UInt32 × Json) := do
   let mut diagnostics := #[]
   let mut failed := false
+  let mut env := env
   for file in files do
     let state ← elaborateFile env file.fileName file.fileMap file.commands
+    env := state.env
     for msg in state.messages.toList do
       if msg.severity == .error then failed := true
       diagnostics := diagnostics.push (diagnostic file.fileName

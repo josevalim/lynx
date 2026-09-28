@@ -1,5 +1,5 @@
 -module(mutual).
--export([odd/1, even/1, first/1, second/1, third/1, identity/1]).
+-export([odd/1, even/1, first/1, second/1, identity/1]).
 
 odd([]) -> false;
 odd([_ | Xs]) -> even(Xs).

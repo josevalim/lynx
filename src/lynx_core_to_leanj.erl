@@ -1,10 +1,10 @@
 -module(lynx_core_to_leanj).
 
--export([to_definitions/1, translate/3]).
+-export([to_definitions/1, translate/4]).
 
 -include_lib("compiler/src/core_parse.hrl").
 
--record(state, {name, defs, translated, local_calls = #{}}).
+-record(state, {module, name, defs, translated, local_calls = #{}, external_calls = #{}}).
 
 -spec to_definitions(cerl:c_module()) -> #{{atom(), arity()} => cerl:c_fun()}.
 to_definitions(#c_module{defs = Defs}) ->
@@ -13,11 +13,11 @@ to_definitions(#c_module{defs = Defs}) ->
 %% Translate the requested functions and their reachable local callees.
 %% The supplied map contains functions already translated from this module.
 %% Unsupported constructs return their pretty-printed Core as a UTF-8 binary.
--spec translate(#{{atom(), arity()} => cerl:c_fun()}, [{atom(), arity()}], map()) ->
+-spec translate(module(), #{{atom(), arity()} => cerl:c_fun()}, [{atom(), arity()}], map()) ->
     {ok, map()} | {unsupported_core, binary()}.
-translate(Definitions, Names, Translated) ->
+translate(Module, Definitions, Names, Translated) ->
     try
-        Acc = lists:foldl(fun(Name, Acc) -> translate_def(Name, Definitions, Acc) end,
+        Acc = lists:foldl(fun(Name, Acc) -> translate_def(Name, Module, Definitions, Acc) end,
                             Translated, Names),
         {ok, Acc}
     catch
@@ -25,12 +25,12 @@ translate(Definitions, Names, Translated) ->
             {unsupported_core, unicode:characters_to_binary(core_pp:format(Core))}
     end.
 
-translate_def(Name, Definitions, Translated) ->
+translate_def(Name, Module, Definitions, Translated) ->
     case maps:is_key(Name, Translated) of
         true -> Translated;
         false ->
             #c_fun{anno = Anno, vars = Vars, body = Body} = maps:get(Name, Definitions),
-            State1 = #state{name = Name, local_calls = #{}, defs = Definitions, 
+            State1 = #state{module = Module, name = Name, local_calls = #{}, defs = Definitions,
                             translated = Translated#{Name => pending}},
             {TranslatedBody, State2} = expression(Body, State1),
             Def = node(~"def", Anno, #{
@@ -38,7 +38,8 @@ translate_def(Name, Definitions, Translated) ->
                 ~"params" => [variable(Var) || Var <- Vars],
                 ~"body" => TranslatedBody
             }),
-            Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls)},
+            Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls),
+                      external_calls => maps:keys(State2#state.external_calls)},
             (State2#state.translated)#{Name => Entry}
     end.
 
@@ -67,19 +68,35 @@ expression(#c_let{anno = Anno, vars = [Var], arg = Arg, body = Body}, State0) ->
 %% Lean: f_2 vX vY
 expression(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args}, State0) ->
     {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
-    Translated = translate_def(Name, State1#state.defs, State1#state.translated),
+    Translated = translate_def(Name, State1#state.module, State1#state.defs, State1#state.translated),
     Calls = case State1#state.name of
         Name -> State1#state.local_calls;
         _ -> (State1#state.local_calls)#{Name => true}
     end,
     {apply_node(function_name(Name), TranslatedArgs, Anno),
      State1#state{local_calls = Calls, translated = Translated}};
+%% Erlang: ?MODULE:f(X)
+%% Lean: f_1 vX
+expression(#c_call{anno = Anno, module = #c_literal{val = Module},
+                   name = #c_literal{val = Name}, args = Args}, #state{module = Module} = State)
+        when is_atom(Name) ->
+    expression(#c_apply{anno = Anno, op = #c_var{name = {Name, length(Args)}}, args = Args}, State);
 %% Erlang: X + Y
 %% Lean: Lynx.Modules.Erlang.add_2 vX vY
 expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
                    name = #c_literal{val = '+'}, args = [Left, Right]}, State0) ->
     {Args, State1} = lists:mapfoldl(fun value/2, State0, [Left, Right]),
     {apply_node(~"Lynx.Modules.Erlang.add_2", Args, Anno), State1};
+%% Erlang: other:f(X)
+%% Lean: other.f_1 vX
+expression(#c_call{anno = Anno, module = #c_literal{val = Module},
+                   name = #c_literal{val = Name}, args = Args}, State0)
+        when is_atom(Module), Module =/= erlang, is_atom(Name) ->
+    {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
+    Arity = length(Args),
+    Calls = (State1#state.external_calls)#{{Module, Name, Arity} => true},
+    Function = <<(atom_to_binary(Module, utf8))/binary, ".", (function_name({Name, Arity}))/binary>>,
+    {apply_node(Function, TranslatedArgs, Anno), State1#state{external_calls = Calls}};
 %% Erlang: f([]) -> ok.
 %% Core inserts match_fail for arguments that match no function clause.
 %% Lean (the generated fallback body):
@@ -99,7 +116,7 @@ expression(#c_literal{anno = Anno} = Literal, State0) ->
 expression(#c_var{anno = Anno} = Var, State) ->
     {apply_node(~"Lynx.Result.ok", [variable(Var)], Anno), State};
 %% Erlang: receive X -> X end
-%% Lean: no translation; translate/3 returns {unsupported_core, CoreString}.
+%% Lean: no translation; translate/4 returns {unsupported_core, CoreString}.
 expression(Core, _State) ->
     unsupported(Core).
 
