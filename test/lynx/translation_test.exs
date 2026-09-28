@@ -305,7 +305,7 @@ defmodule Lynx.TranslationTest do
 
         assert %{
                  "function" => %{"name" => "Erlang.erlang.«apply/2»"},
-                 "args" => [%{"name" => "«vF»"}, args]
+                 "args" => [%{"kind" => "fun_table"}, %{"name" => "«vF»"}, args]
                } = call
 
         assert %{
@@ -328,7 +328,11 @@ defmodule Lynx.TranslationTest do
 
       assert %{
                "function" => %{"name" => "Erlang.erlang.«apply/2»"},
-               "args" => [%{"name" => "«vF»"}, %{"name" => "Lynx.Term.«nil»"}]
+               "args" => [
+                 %{"kind" => "fun_table"},
+                 %{"name" => "«vF»"},
+                 %{"name" => "Lynx.Term.«nil»"}
+               ]
              } = zero
 
       files = Translation.assemble(translation)
@@ -347,6 +351,36 @@ defmodule Lynx.TranslationTest do
         assert [%{"name" => "lynx_pure", "expr" => %{"name" => "«pure/1»"}}] = commands
       end
     end
+  end
+
+  test "creating an impure closure is pure but prevents neutral calls from becoming pure" do
+    core =
+      cerl("""
+      -module(example).
+      -export([make/1, call/1]).
+      make(X) -> fun() -> erlang:get(X) end.
+      call(F) -> F().
+      """)
+
+    translation =
+      Translation.new([{"example.erl", core}])
+      |> Translation.add(:example, [{:make, 1}, {:call, 1}])
+
+    assert [%{name: helper, arity: 0, captures: [_]}] =
+             Map.values(translation.modules.example.funs)
+
+    assert %{
+             {:make, 1} => %{purity: :pure, local_calls: []},
+             {:call, 1} => %{purity: :neutral}
+           } = translation.modules.example.translations
+
+    assert %{purity: :impure} = translation.modules.example.translations[helper]
+    assert Translation.add(translation, :example, [{:make, 1}]) == translation
+
+    assert [%{"contents" => contents}] = Translation.assemble(translation)
+
+    assert [%{"name" => "lynx_pure", "expr" => %{"name" => "«make/1»"}}] =
+             Enum.filter(contents, &(&1["kind"] == "command"))
   end
 
   test "imports a module BIF if used" do

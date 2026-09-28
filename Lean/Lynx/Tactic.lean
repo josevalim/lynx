@@ -1296,14 +1296,6 @@ elab "lynx_vcgen" : tactic => focus generate
 elab "lynx_solve" : tactic => focus (solveGoal 24)
 elab "lynx_pure_solve " function:ident : tactic => focus <| withMainContext do
   let function ← resolveGlobalConstNoOverload function
-  -- The existing simp theorem is indexed by `Bind.bind`. Direct syntax clients
-  -- use `Result.bind`, so give purity simplification its definitionally equal form.
-  evalTactic (← `(tactic|
-    have explicitBindPure {α β : Type} (computation : Result α)
-        (next : α → Result β) (hp : Result.IsPure computation)
-        (hn : ∀ value, Result.IsPure (next value)) :
-        Result.IsPure (Result.bind computation next) :=
-      Result.IsPure.bind computation next hp hn))
   let solver ← mkSolver (some function)
   let goal ← getMainGoal
   let target ← goal.getType
@@ -1432,11 +1424,6 @@ elab doc?:(docComment)? "#lynx_pure " declaration:command : command => do
       let induction := mkIdent (functions[0]! ++ `mutual_induct)
       let definitions := functions.map mkIdent
       let proofSyntax ← `(by
-        have explicitBindPure {α β : Type} (computation : Result α)
-            (next : α → Result β) (hp : Result.IsPure computation)
-            (hn : ∀ value, Result.IsPure (next value)) :
-            Result.IsPure (Result.bind computation next) :=
-          Result.IsPure.bind computation next hp hn
         apply $induction:ident
         all_goals
           intros
@@ -1468,13 +1455,22 @@ elab doc?:(docComment)? "#lynx_pure " declaration:command : command => do
   let purityType ← pureType function
   let proof ← Command.liftTermElabM do
     let functionId := mkIdent function
+    -- Introduce exactly the function parameters: an unbounded `intros` also
+    -- reduces IsPure's computation while looking for another binder.
+    let parameters ← forallTelescopeReducing (← getConstInfo function).type fun args _ =>
+      pure (args.mapIdx fun i _ => mkIdent (Name.mkSimple s!"_pure_arg_{i}"))
+    let introduce ← if parameters.isEmpty then `(tactic| skip)
+      else `(tactic| intro $parameters:ident*)
     let proofSyntax ← if ← isRecursiveDefinition function then
-      `(by intros; lynx_pure_solve $functionId:ident)
+      `(by $introduce:tactic; lynx_pure_solve $functionId:ident)
     else
       `(by
-        intros
+        $introduce:tactic
         first
-        | (simp only [$functionId:ident]
+        | (unfold $functionId:ident
+           simp_all (config := { maxDischargeDepth := 64 })
+           done)
+        | (unfold $functionId:ident
            repeat' first | split | simp_all
            all_goals repeat' first | split at * | simp_all
            all_goals lynx_solve

@@ -44,6 +44,34 @@ defmodule Lynx.Integration.TranslationTest do
     |> Stream.run()
   end
 
+  @tag :tmp_dir
+  test "translated closures retain the captures of each instance", %{tmp_dir: tmp_dir} do
+    source =
+      @translations_dir
+      |> Path.join("functions.lean")
+      |> File.read!()
+      |> String.replace("import Erlang.erlang", """
+      import Erlang.erlang
+      import all Erlang.erlang.Fun
+      import all Erlang.erlang.Guards
+      import all Lynx.Term
+      import all Lynx.Term.DataTypes
+      """)
+
+    checks = """
+    example : Erlang.functions.«run/1» (.integer 5) = .ok (.integer 24) := by rfl
+    example : Erlang.functions.«run/1» (.integer 11) = .ok (.integer 36) := by rfl
+    """
+
+    file = Path.join(tmp_dir, "Closures.lean")
+    File.write!(file, source <> "\n" <> checks)
+
+    {output, status} =
+      System.cmd("lake", ["env", "lean", file], cd: @lean_dir, stderr_to_stdout: true)
+
+    assert status == 0, output
+  end
+
   defp core(fixture, source) do
     assert {:ok, module, beam} =
              :compile.file(String.to_charlist(fixture), [

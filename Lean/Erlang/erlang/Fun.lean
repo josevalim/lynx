@@ -45,4 +45,24 @@ def «apply/2» (table : Term.FunTable) (function arguments : Term) : Result :=
             .error (.error
               (.tuple #[.atom "badarity", .tuple #[function, arguments]]))
 
+/-- Dynamic calls are pure when every implementation in the supplied table is pure. -/
+@[simp↓] theorem apply_pure (table : Term.FunTable)
+    (pure : ∀ implementation ∈ table, ∀ captures arguments,
+      Result.IsPure (implementation captures arguments))
+    (function arguments : Term) :
+    Result.IsPure («apply/2» table function arguments) := by
+  unfold «apply/2»
+  split
+  · simp
+  · cases function <;> simp only [Term.fetchFun]
+    all_goals try simp
+    rename_i id arity captures
+    cases h : table[id]? with
+    | none => simp
+    | some implementation =>
+      simp only [Option.map_some]
+      split
+      · exact pure implementation (Array.mem_of_getElem? h) captures _
+      · simp
+
 end Erlang.erlang

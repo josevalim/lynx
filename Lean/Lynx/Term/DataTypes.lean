@@ -15,7 +15,9 @@ inductive Term where
   | integer : Int → Term
   | float : _root_.Lynx.Term.FiniteFloat → Term
   | atom : String → Term
-  | function : Nat → Nat → Term
+  /-- Program function index, source arity, and captured values.
+  Comparison uses the index followed by the captured values. -/
+  | function (id arity : Nat) (captures : Array Term) : Term
   | pid : PID → Term
   | tuple : Array Term → Term
   | map : List (Term × Term) → Term
@@ -218,6 +220,12 @@ theorem IsPure.terminal (computation : Result α) (pure : IsPure computation) :
     IsPure (computation >>= next) := by
   change IsPure (Result.bind computation next)
   cases computation <;> simp_all [IsPure, Result.bind]
+
+/-- The explicit bind spelling emitted by the translator has a separate simp index. -/
+@[simp↓] theorem IsPure.bind_explicit (computation : Result α) (next : α → Result β)
+    (computationPure : IsPure computation) (nextPure : ∀ value, IsPure (next value)) :
+    IsPure (Result.bind computation next) :=
+  IsPure.bind computation next computationPure nextPure
 
 @[simp] theorem ok_inj (a b : α) : (Result.ok a : Result α) = .ok b ↔ a = b := by
   constructor

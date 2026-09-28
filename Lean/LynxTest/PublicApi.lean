@@ -7,6 +7,11 @@ public import Erlang.erlang
 public import Erlang.lists
 public import Erlang.maps
 
+-- Keep the closure environment and table adapter signatures part of the API check.
+example : Nat → Nat → Array Lynx.Term → Lynx.Term := Lynx.Term.function
+example (entry : Array Lynx.Term → Array Lynx.Term → Lynx.Result) :
+    Lynx.Term.FunTable := #[entry]
+
 meta section
 
 /-! Snapshot of public types and executable declarations available through `Lynx`,
@@ -116,6 +121,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.FiniteFloat.toRat",
   "Lynx.Term.Fun",
   "Lynx.Term.FunTable",
+  "Lynx.Term.FunTable.entry",
   "Lynx.Term.Map.Entries",
   "Lynx.Term.Map.find",
   "Lynx.Term.Map.merge",

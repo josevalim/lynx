@@ -9,19 +9,12 @@ defmodule Lynx.Translation do
     [arity | parts] = name |> String.split("/") |> Enum.reverse()
     function = parts |> Enum.reverse() |> Enum.join("/") |> String.to_atom()
 
-    purity =
-      cond do
-        {module, name} == {"erlang", "apply/2"} -> :neutral
-        pure -> :pure
-        true -> :impure
-      end
-
     defp lean_bif(
            unquote(String.to_atom(module)),
            unquote(function),
            unquote(String.to_integer(arity))
          ),
-         do: {:ok, unquote(purity)}
+         do: {:ok, unquote(pure)}
   end
 
   defp lean_bif(_, _, _), do: :error
@@ -45,11 +38,11 @@ defmodule Lynx.Translation do
     end
 
     context = {%{translation | stack: [name | stack]}, &remote_call/5}
-    %{definitions: definitions, translations: translations} = module
+    %{definitions: definitions, translations: translations, funs: funs} = module
 
-    case :lynx_core_to_leanj.translate(name, definitions, names, translations, context) do
-      {:ok, functions, translation} ->
-        updated = %{module | translations: propagate_purity(functions)}
+    case :lynx_core_to_leanj.translate(name, definitions, names, translations, funs, context) do
+      {:ok, functions, funs, translation} ->
+        updated = %{module | translations: propagate_purity(functions), funs: funs}
         %{translation | modules: Map.put(translation.modules, name, updated), stack: stack}
 
       {:unsupported_core, span_anno, core} ->
@@ -77,10 +70,10 @@ defmodule Lynx.Translation do
       end
 
     case lean_bif(module, function, arity) do
-      {:ok, purity} ->
+      {:ok, pure} ->
         translation = put_in(translation.builtin_modules[module], true)
 
-        {purity, translation}
+        {if(pure, do: :pure, else: :impure), translation}
 
       :error when module == caller ->
         :local
@@ -193,7 +186,12 @@ defmodule Lynx.Translation do
   end
 
   defp module_data(file, core) do
-    %{definitions: :lynx_core_to_leanj.to_definitions(core), translations: %{}, file: file}
+    %{
+      definitions: :lynx_core_to_leanj.to_definitions(core),
+      translations: %{},
+      funs: %{},
+      file: file
+    }
   end
 
   defp validate_function!(target, module, function, arity, location) do
@@ -215,6 +213,38 @@ defmodule Lynx.Translation do
     neutral_pure? =
       Enum.all?(modules, fn {_, module} ->
         Enum.all?(module.translations, fn {_, definition} -> definition.purity != :impure end)
+      end)
+
+    funs =
+      for {module_name, module} <- Enum.sort(modules),
+          fun <- module.funs |> Map.values() |> Enum.uniq_by(& &1.name) |> Enum.sort_by(& &1.name) do
+        definition = Map.fetch!(module.translations, fun.name).translation
+        {module_name, fun, definition}
+      end
+
+    indices =
+      funs
+      |> Enum.with_index()
+      |> Map.new(fn {{module, _fun, definition}, index} ->
+        {{:lynx_core_to_leanj.module_name(module), definition["name"]}, index}
+      end)
+
+    table = array(Enum.map(funs, &fun_entry/1))
+
+    external_calls =
+      Enum.reduce(modules, external_calls, fn {name, module}, calls ->
+        if Enum.any?(module.translations, fn {_, definition} -> definition.dynamic end) do
+          dependencies = for {owner, _, _} <- funs, owner != name, do: owner
+
+          Map.update(
+            calls,
+            name,
+            MapSet.new(dependencies),
+            &MapSet.union(&1, MapSet.new(dependencies))
+          )
+        else
+          calls
+        end
       end)
 
     graph = :digraph.new()
@@ -240,13 +270,85 @@ defmodule Lynx.Translation do
             imports
             |> Enum.sort()
             |> Enum.map(&:lynx_core_to_leanj.module_name/1),
-          "contents" => assemble_module(module.translations, neutral_pure?)
+          "contents" =>
+            module.translations
+            |> assemble_module(
+              neutral_pure?,
+              for({owner, fun, _} <- funs, owner == name, do: fun.name)
+            )
+            |> resolve_funs(indices, table)
         }
       end
     after
       :digraph.delete(graph)
     end
   end
+
+  # Table adapters keep capture values and invocation arguments separate.
+  defp fun_entry({module, fun, definition}) do
+    capture_count = length(definition["params"]) - fun.arity
+    captures = array_args("_lynx_captures", capture_count)
+    args = array_args("_lynx_args", fun.arity)
+
+    body =
+      apply_node(
+        :lynx_core_to_leanj.module_name(module) <> "." <> definition["name"],
+        captures ++ args
+      )
+
+    apply_node("Lynx.Term.FunTable.entry", [
+      integer(capture_count),
+      integer(fun.arity),
+      %{
+        "kind" => "fun",
+        "span" => [],
+        "params" => [ident("_lynx_captures"), ident("_lynx_args")],
+        "body" => body
+      }
+    ])
+  end
+
+  defp array_args(name, count) do
+    for index <- 0..count//1, index < count do
+      apply_node("Array.getD", [ident(name), integer(index), ident("Lynx.Term.«nil»")])
+    end
+  end
+
+  defp integer(value), do: %{"kind" => "integer", "span" => [], "value" => value}
+
+  defp resolve_funs(%{"kind" => "closure"} = closure, indices, table) do
+    apply_node("Lynx.Term.«function»", [
+      %{
+        "kind" => "integer",
+        "span" => [],
+        "value" => Map.fetch!(indices, {closure["module"], closure["name"]})
+      },
+      %{"kind" => "integer", "span" => [], "value" => closure["arity"]},
+      resolve_funs(closure["captures"], indices, table)
+    ])
+    |> Map.put("span", closure["span"])
+  end
+
+  defp resolve_funs(%{"kind" => "fun_table"}, _indices, table), do: table
+
+  defp resolve_funs(value, indices, table) when is_map(value),
+    do: Map.new(value, fn {key, value} -> {key, resolve_funs(value, indices, table)} end)
+
+  defp resolve_funs(values, indices, table) when is_list(values),
+    do: Enum.map(values, &resolve_funs(&1, indices, table))
+
+  defp resolve_funs(value, _indices, _table), do: value
+
+  defp ident(name), do: %{"kind" => "ident", "span" => [], "name" => name}
+  defp apply_node(name, []), do: ident(name)
+
+  defp apply_node(name, args),
+    do: %{"kind" => "apply", "span" => [], "function" => ident(name), "args" => args}
+
+  defp list(values),
+    do: Enum.reduce(Enum.reverse(values), ident("List.nil"), &apply_node("List.cons", [&1, &2]))
+
+  defp array(values), do: apply_node("Array.mk", [list(values)])
 
   defp propagate_purity(functions) do
     {functions, changed?} =
@@ -266,7 +368,7 @@ defmodule Lynx.Translation do
     if changed?, do: propagate_purity(functions), else: functions
   end
 
-  defp assemble_module(functions, neutral_pure?) do
+  defp assemble_module(functions, neutral_pure?, fun_names) do
     graph = :digraph.new()
 
     try do
@@ -276,7 +378,12 @@ defmodule Lynx.Translation do
       end
 
       # Edges point from callees to callers, so dependencies are emitted first.
-      for {name, %{local_calls: calls}} <- functions, callee <- calls do
+      for {name, definition} <- functions,
+          callee <-
+            definition.local_calls ++
+              definition.references ++
+              if(definition.dynamic, do: fun_names, else: []),
+          callee != name do
         :digraph.add_edge(graph, callee, name)
       end
 

@@ -35,7 +35,8 @@ private theorem floatOne_toRat : floatOne.toRat = 1 := by
   .integer (-1000000000000000000000000000000), .integer (-1), .integer 0,
   .integer 1000000000000000000000000000000,
   .atom "", .atom "a", .atom "aa", .atom "b", .atom "é", .atom "λ", .atom "😀",
-  .function 0 0, .function 0 1, .function 1 0,
+  .function 0 1 #[], .function 0 1 #[.integer 10],
+  .function 0 1 #[.integer 20], .function 1 0 #[],
   .pid 0, .pid 1, .pid 1000000000000000000000000000000,
   .tuple #[],
   .tuple #[.integer (-1)], .tuple #[.integer 0], .tuple #[.atom "a"],
@@ -72,6 +73,14 @@ set_option maxHeartbeats 4000000 in
 public theorem ordered_terms :
     orderedTerms.Pairwise (fun a b =>
       Term.compare a b = .lt ∧ Term.compare b a = .gt) := by decide
+
+theorem closure_captures_comparison :
+    Term.compare (.function 0 1 #[.integer 10]) (.function 0 1 #[.integer 20]) = .lt ∧
+    Term.compare (.function 0 1 #[.integer 20]) (.function 0 1 #[.integer 10]) = .gt ∧
+    Term.exactCompare (.function 0 1 #[.integer 10]) (.function 0 1 #[.integer 20]) ≠ .eq ∧
+    Term.exactCompare (.function 0 1 #[.integer 10]) (.function 0 1 #[.integer 10]) = .eq ∧
+    Term.compare (.function 0 1 #[.integer 20]) (.function 1 1 #[.integer 10]) = .lt := by
+  decide
 
 theorem numeric_and_exact_comparison :
     Term.compare (.integer 1) (.float floatOne) = .eq ∧

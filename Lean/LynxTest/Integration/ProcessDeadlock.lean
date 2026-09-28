@@ -36,10 +36,10 @@ private def workerFun : Term.Fun
   | #[] => worker_0
   | _ => .error (.error (.atom "unexpected_arguments"))
 
-private def functions : Term.FunTable := #[workerFun]
+private def functions : Term.FunTable := #[fun _ => workerFun]
 
 def run_0 : Result := do
-  let _ ← Erlang.erlang.«spawn/1» functions (.function 0 0)
+  let _ ← Erlang.erlang.«spawn/1» functions (.function 0 0 #[])
   let _ ← receiveAtom "pong"
   .ok (.atom "ok")
 

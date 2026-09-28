@@ -38,7 +38,7 @@ private def rememberSelfFun : Term.Fun
   | #[] => rememberSelf
   | _ => .error (.error (.atom "unexpected_arguments"))
 
-private def functions : Term.FunTable := #[identityFun, firstFun, rememberSelfFun]
+private def functions : Term.FunTable := #[fun _ => identityFun, fun _ => firstFun, fun _ => rememberSelfFun]
 
 private def floatOne : Term.FiniteFloat :=
   ⟨false, 1023, 0⟩
@@ -178,26 +178,40 @@ private theorem floatOne_toRat : floatOne.toRat = 1 := by
   exact Rat.mul_inv_cancel _ (by decide)
 
 theorem fetch_fun :
-    (Term.fetchFun functions (.function 0 1)).map Prod.snd = some 1 ∧
-    Term.fetchFun functions (.function 3 0) = none ∧
+    (Term.fetchFun functions (.function 0 1 #[])).map Prod.snd = some 1 ∧
+    Term.fetchFun functions (.function 3 0 #[]) = none ∧
     Term.fetchFun functions .nil = none := by
   exact ⟨rfl, rfl, rfl⟩
 
 theorem dynamic_apply_2 :
-    «apply/2» functions (.function 0 1) (.cons (.integer 7) .nil) = .ok (.integer 7) ∧
-    «apply/2» functions (.function 1 2)
+    «apply/2» functions (.function 0 1 #[]) (.cons (.integer 7) .nil) = .ok (.integer 7) ∧
+    «apply/2» functions (.function 1 2 #[])
       (.cons (.atom "left") (.cons (.atom "right") .nil)) = .ok (.atom "left") ∧
-    «apply/2» functions (.function 0 1) (.cons (.integer 7) (.atom "improper")) =
+    «apply/2» functions (.function 0 1 #[]) (.cons (.integer 7) (.atom "improper")) =
+      .error (.error (.atom "badarg")) := by
+  exact ⟨rfl, rfl, rfl⟩
+
+private def closureFunctions : Term.FunTable := #[
+  Term.FunTable.entry 1 1 fun captures args =>
+    «+/2» (captures.getD 0 .nil) (args.getD 0 .nil)
+]
+
+theorem dynamic_apply_captures :
+    «apply/2» closureFunctions (.function 0 1 #[.integer 10]) (.cons (.integer 7) .nil) =
+      .ok (.integer 17) ∧
+    «apply/2» closureFunctions (.function 0 1 #[.integer 20]) (.cons (.integer 7) .nil) =
+      .ok (.integer 27) ∧
+    «apply/2» closureFunctions (.function 0 1 #[]) (.cons (.integer 7) .nil) =
       .error (.error (.atom "badarg")) := by
   exact ⟨rfl, rfl, rfl⟩
 
 theorem dynamic_apply_2_errors :
     «apply/2» functions (.atom "not_a_fun") .nil =
         .error (.error (.tuple #[.atom "badfun", .atom "not_a_fun"])) ∧
-    «apply/2» functions (.function 9 0) .nil =
-        .error (.error (.tuple #[.atom "badfun", .function 9 0])) ∧
-    «apply/2» functions (.function 0 1) .nil =
-        .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 1, .nil]])) := by
+    «apply/2» functions (.function 9 0 #[]) .nil =
+        .error (.error (.tuple #[.atom "badfun", .function 9 0 #[]])) ∧
+    «apply/2» functions (.function 0 1 #[]) .nil =
+        .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 1 #[], .nil]])) := by
   exact ⟨rfl, rfl, rfl⟩
 
 theorem float_equality_guards :
@@ -239,7 +253,7 @@ theorem reflexive_operators (a : Term) :
 
 /-- Callers remain in direct style even when the helper they invoke spawns. -/
 private def spawnFromHelper : Result :=
-  «spawn/1» functions (.function 2 0)
+  «spawn/1» functions (.function 2 0 #[])
 
 private def spawnCaller : Result := do
   let childPid ← spawnFromHelper
@@ -260,11 +274,11 @@ theorem spawn_schedules_child_or_parent_first :
   cbv
 
 private def nestedSpawnFun : Term.Fun
-  | #[] => «spawn/1» functions (.function 2 0)
+  | #[] => «spawn/1» functions (.function 2 0 #[])
   | _ => .error (.error (.atom "unexpected_arguments"))
 
 private def nestedSpawnCaller : Result :=
-  «spawn/1» #[nestedSpawnFun] (.function 0 0)
+  «spawn/1» #[fun _ => nestedSpawnFun] (.function 0 0 #[])
 
 theorem completed_nested_processes_are_removed :
     let final : Environment := { pidCounter := 3 }
@@ -279,8 +293,8 @@ theorem completed_nested_processes_are_removed :
 
 theorem spawn_rejects_invalid_fun :
     «spawn/1» functions (.atom "not_a_fun") = .error (.error (.atom "badarg")) ∧
-    «spawn/1» functions (.function 9 0) = .error (.error (.atom "badarg")) ∧
-    «spawn/1» functions (.function 0 1) = .error (.error (.atom "badarg")) := by
+    «spawn/1» functions (.function 9 0 #[]) = .error (.error (.atom "badarg")) ∧
+    «spawn/1» functions (.function 0 1 #[]) = .error (.error (.atom "badarg")) := by
   exact ⟨rfl, rfl, rfl⟩
 
 theorem tuple_equality :

@@ -9,7 +9,8 @@ namespace Lynx
     (integer : ∀ n, motive (.integer n))
     (float : ∀ n, motive (.float n))
     (atom : ∀ s, motive (.atom s))
-    (function : ∀ id arity, motive (.function id arity))
+    (function : ∀ id arity captures, (∀ x ∈ captures, motive x) →
+      motive (.function id arity captures))
     (pid : ∀ pid, motive (.pid pid))
     (tuple : ∀ xs, (∀ x ∈ xs, motive x) → motive (.tuple xs))
     (map : ∀ entries, (∀ k v, (k, v) ∈ entries → motive k ∧ motive v) →

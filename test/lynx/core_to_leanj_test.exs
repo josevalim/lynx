@@ -141,13 +141,17 @@ defmodule Lynx.CoreToLeanjTest do
       end
     end
 
-    :lynx_core_to_leanj.translate(
-      :example,
-      definitions,
-      [{:entry, 1}],
-      translated,
-      {[], callback}
-    )
+    {:ok, functions, _funs, calls} =
+      :lynx_core_to_leanj.translate(
+        :example,
+        definitions,
+        [{:entry, 1}],
+        translated,
+        %{},
+        {[], callback}
+      )
+
+    {:ok, functions, calls}
   end
 
   defp definitions(defs) do
