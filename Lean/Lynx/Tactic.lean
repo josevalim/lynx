@@ -1383,11 +1383,76 @@ elab "lynx_verify" : tactic => focus do
   if coverageFailed then
     throwError "lynx: could not prove that `expects` accepts any input; it may be empty or unsupported by automatic coverage"
 
-/-- Elaborate a definition and prove once that each fully applied computation
-neither reads nor changes the environment. The generated `<name>_pure` theorem
-is a simp rule, so execution facts for callers reduce back to ordinary
-computation equalities. -/
+private def pureDefinitionId (declaration : TSyntax `command) : Command.CommandElabM Syntax := do
+  let inner := declaration.raw.getArg 1
+  unless inner.getKind == ``Lean.Parser.Command.definition do
+    throwErrorAt declaration "#lynx_pure requires `def` declarations"
+  let declId := inner.getArg 1
+  let id := if declId.isIdent then declId else declId.getArg 0
+  unless id.isIdent do
+    throwErrorAt declId "could not determine the definition name"
+  return id
+
+private def pureType (function : Name) : Command.CommandElabM Expr := do
+  let info ← getConstInfo function
+  let functionExpr := mkConst function (info.levelParams.map Level.param)
+  Command.liftTermElabM do
+    forallTelescopeReducing info.type fun arguments resultType => do
+      unless ← isResultType resultType do
+        throwError "#lynx_pure requires a definition returning `Result`"
+      let proposition ← mkAppM ``Result.IsPure #[mkAppN functionExpr arguments]
+      mkForallFVars arguments proposition
+
+private def registerPureProof (function : Name) (type proof : Expr) : Command.CommandElabM Unit := do
+  let info ← getConstInfo function
+  let theoremName := function.getPrefix ++ Name.mkSimple (function.getString! ++ "_pure")
+  Command.liftCoreM <| addAndCompile <| Declaration.thmDecl {
+    name := theoremName
+    levelParams := info.levelParams
+    type := type
+    value := proof
+  }
+  Command.elabCommand (← `(attribute [simp↓] $(mkIdent theoremName)))
+
+/-- Elaborate pure definitions and prove that each fully applied computation
+neither reads nor changes the environment. Mutually recursive definitions are
+proved together using their generated mutual induction principle. Each generated
+`<name>_pure` theorem is a simp rule. -/
 elab doc?:(docComment)? "#lynx_pure " declaration:command : command => do
+  if let `(mutual $declarations:command* end) := declaration then
+    if doc?.isSome then
+      throwErrorAt declaration "place documentation on the definitions inside the mutual block"
+    if declarations.isEmpty then throwErrorAt declaration "empty mutual block"
+    let ids ← declarations.mapM pureDefinitionId
+    Command.elabCommand declaration
+    let functions ← ids.mapM resolveGlobalConstNoOverload
+    let types ← functions.mapM pureType
+    let jointType := types.toList.dropLast.foldr (mkApp2 (mkConst ``And)) types.back!
+    let proof ← Command.liftTermElabM do
+      let induction := mkIdent (functions[0]! ++ `mutual_induct)
+      let definitions := functions.map mkIdent
+      let proofSyntax ← `(by
+        have explicitBindPure {α β : Type} (computation : Result α)
+            (next : α → Result β) (hp : Result.IsPure computation)
+            (hn : ∀ value, Result.IsPure (next value)) :
+            Result.IsPure (Result.bind computation next) :=
+          Result.IsPure.bind computation next hp hn
+        apply $induction:ident
+        all_goals
+          intros
+          simp_all (config := { failIfUnchanged := false }) [$[$definitions:ident],*]
+          repeat' first | split | simp_all)
+      let proof ← Term.elabTermEnsuringType proofSyntax jointType
+      Term.synthesizeSyntheticMVarsNoPostponing
+      instantiateMVars proof
+    let mut remaining := proof
+    for i in [:functions.size] do
+      let (part, rest) ← Command.liftTermElabM do
+        if i + 1 == functions.size then return (remaining, remaining)
+        return (← mkAppM ``And.left #[remaining], ← mkAppM ``And.right #[remaining])
+      registerPureProof functions[i]! types[i]! part
+      remaining := rest
+    return
   if let some doc := doc? then
     unless declaration.raw.getArg 0 |>.getArg 0 |>.isNone do
       throwErrorAt doc "#lynx_pure declaration has two documentation comments"
@@ -1397,24 +1462,10 @@ elab doc?:(docComment)? "#lynx_pure " declaration:command : command => do
         let modifiers := modifiers.setArg 0 (mkNullNode #[doc.raw])
         ⟨declaration.raw.setArg 0 modifiers⟩
     | none => declaration
-  let inner := declaration.raw.getArg 1
-  unless inner.getKind == ``Lean.Parser.Command.definition do
-    throwErrorAt declaration "#lynx_pure must wrap a `def` declaration"
-  let declId := inner.getArg 1
-  let id := if declId.isIdent then declId else declId.getArg 0
-  unless id.isIdent do
-    throwErrorAt declId "could not determine the definition name"
+  let id ← pureDefinitionId declaration
   Command.elabCommand declaration
   let function ← resolveGlobalConstNoOverload id
-  let info ← getConstInfo function
-  let levels := info.levelParams.map Level.param
-  let functionExpr := mkConst function levels
-  let purityType ← Command.liftTermElabM do
-    forallTelescopeReducing info.type fun arguments resultType => do
-      unless ← isResultType resultType do
-        throwErrorAt declId "#lynx_pure requires a definition returning `Result`"
-      let proposition ← mkAppM ``Result.IsPure #[mkAppN functionExpr arguments]
-      mkForallFVars arguments proposition
+  let purityType ← pureType function
   let proof ← Command.liftTermElabM do
     let functionId := mkIdent function
     let proofSyntax ← if ← isRecursiveDefinition function then
@@ -1434,14 +1485,6 @@ elab doc?:(docComment)? "#lynx_pure " declaration:command : command => do
       purityType
     Term.synthesizeSyntheticMVarsNoPostponing
     instantiateMVars proof
-  let theoremName := function.getPrefix ++
-    Name.mkSimple (function.getString! ++ "_pure")
-  Command.liftCoreM <| addAndCompile <| Declaration.thmDecl {
-    name := theoremName
-    levelParams := info.levelParams
-    type := purityType
-    value := proof
-  }
-  Command.elabCommand (← `(attribute [simp↓] $(mkIdent theoremName)))
+  registerPureProof function purityType proof
 
 end Lynx.Tactic

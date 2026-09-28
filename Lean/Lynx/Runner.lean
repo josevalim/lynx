@@ -152,9 +152,17 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) : D
     fields j ["kind", "name", "expr", "span"]
     unless (← str j "name") == "lynx_pure" do throw "unsupported command name"
     let inner ← field j "expr"
-    unless (← str inner "kind") == "def" do throw "lynx_pure must wrap def"
+    unless (← str inner "kind") ∈ ["def", "mutual"] do throw "lynx_pure must wrap def or mutual"
     let decl ← command map inner info
     pure (Unhygienic.run `(#lynx_pure $decl:command))
+  | "mutual" => do
+    fields j ["kind", "defs", "span"]
+    let defs ← arr j "defs"
+    if defs.isEmpty then throw "mutual requires at least one definition"
+    let decls ← defs.mapM fun decl => do
+      unless (← str decl "kind") == "def" do throw "mutual requires def declarations"
+      command map decl info
+    pure (Unhygienic.run `(mutual $decls:command* end))
   | "def" => do
     fields j ["kind", "name", "params", "body", "span"]
     let name ← str j "name"

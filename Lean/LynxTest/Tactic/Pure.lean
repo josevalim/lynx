@@ -78,6 +78,21 @@ theorem bitstring_byte_size_is_integer (input : Term)
   | .cons _ _ => .ok Term.false
   | _ => .ok Term.false
 
+-- Explicit binds in translated mutual calls retain the group's induction hypotheses.
+#lynx_pure mutual
+  def sumLeft : Term → Result
+    | .nil => .ok (.integer 0)
+    | .cons x xs => Result.bind (sumRight xs) fun total => Modules.Erlang.add_2 x total
+    | _ => .error (.error (.atom "function_clause"))
+  def sumRight : Term → Result
+    | .nil => .ok (.integer 0)
+    | .cons x xs => Result.bind (sumLeft xs) fun total => Modules.Erlang.add_2 x total
+    | _ => .error (.error (.atom "function_clause"))
+end
+
+example (input : Term) : Result.IsPure (sumLeft input) := by simp
+example (input : Term) : Result.IsPure (sumRight input) := by simp
+
 theorem execution_reuses_purity (input : Term) (env final : Environment) :
     classifyTwice input env = .ok Term.false final ↔
       classifyTwice input = .ok Term.false ∧ env = final := by

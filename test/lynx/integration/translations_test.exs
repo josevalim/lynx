@@ -41,5 +41,6 @@ defmodule Lynx.Integration.TranslationTest do
                "files" => %{source => expected}
              },
              "rendered output does not match #{fixture}"
+    end
   end
 end

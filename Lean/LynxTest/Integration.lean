@@ -1,5 +1,6 @@
 import LynxTest.ProofAudit
 import LynxTest.Integration.Sum
+import LynxTest.Integration.Mutual
 import LynxTest.Integration.Reverse
 import LynxTest.Integration.Sets
 import LynxTest.Integration.ProcessDeadlock
@@ -7,6 +8,7 @@ import LynxTest.Integration.ProcessDeadlock
 /-! Integration audits are separate from the files compiled by the benchmark runner. -/
 run_cmd do
   LynxTest.ProofAudit.checkModule `LynxTest.Integration.Sum
+  LynxTest.ProofAudit.checkModule `LynxTest.Integration.Mutual
   LynxTest.ProofAudit.checkModule `LynxTest.Integration.Reverse
   LynxTest.ProofAudit.checkModule `LynxTest.Integration.Sets
   -- The expected verification failure intentionally leaves an incomplete declaration.
