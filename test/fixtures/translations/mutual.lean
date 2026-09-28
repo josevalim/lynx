@@ -2,7 +2,7 @@ module
 
 import Lynx
 
-namespace «mutual»
+namespace Erlang.mutual
 
 #lynx_pure
   mutual
@@ -41,4 +41,4 @@ namespace «mutual»
   public def identity_1 (_0 : Lynx.Term) : Lynx.Result :=
     Lynx.Result.ok _0
 
-end «mutual»
+end Erlang.mutual

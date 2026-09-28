@@ -27,7 +27,7 @@ defmodule Lynx.TranslationTest do
       self(X) -> self(X).
       """)
 
-    assert [%{"module" => "example", "contents" => commands}] =
+    assert [%{"module" => "Erlang.example", "contents" => commands}] =
              Translation.new([{"example.erl", core}])
              |> Translation.add(:example, [{:caller, 1}, {:identity, 1}, {:self, 1}])
              |> Translation.assemble()
@@ -61,7 +61,7 @@ defmodule Lynx.TranslationTest do
       identity(X) -> X.
       """)
 
-    assert [%{"module" => "example", "contents" => []}] =
+    assert [%{"module" => "Erlang.example", "contents" => []}] =
              Translation.new([{"example.erl", core}])
              |> Translation.add(:example, [])
              |> Translation.assemble()
@@ -96,15 +96,45 @@ defmodule Lynx.TranslationTest do
 
     assert [
              %{
-               "module" => "z_dependency",
+               "module" => "Erlang.z_dependency",
                "file" => "dependency.erl",
                "imports" => [],
                "contents" => [dependency]
              },
-             %{"module" => "a_caller", "file" => "caller.erl", "imports" => ["z_dependency"]}
+             %{
+               "module" => "Erlang.a_caller",
+               "file" => "caller.erl",
+               "imports" => ["Erlang.z_dependency"]
+             }
            ] = Translation.assemble(translation)
 
     assert dependency["expr"]["name"] == "entry_1"
+  end
+
+  test "keeps Elixir namespaces in module names and imports" do
+    caller =
+      cerl("""
+      -module(caller).
+      -export([entry/1]).
+      entry(X) -> 'Elixir.Foo.Bar':entry(X).
+      """)
+
+    dependency =
+      cerl("""
+      -module('Elixir.Foo.Bar').
+      -export([entry/1]).
+      entry(X) -> X.
+      """)
+
+    files =
+      Translation.new([{"caller.erl", caller}, {"bar.ex", dependency}])
+      |> Translation.add(:caller, [{:entry, 1}])
+      |> Translation.assemble()
+
+    assert [
+             %{"module" => "Elixir.Foo.Bar", "imports" => []},
+             %{"module" => "Erlang.caller", "imports" => ["Elixir.Foo.Bar"]}
+           ] = files
   end
 
   describe "errors" do

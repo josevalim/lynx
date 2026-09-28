@@ -120,13 +120,13 @@ defmodule Lynx.Translation do
         module = Map.fetch!(modules, name)
 
         %{
-          "module" => Atom.to_string(name),
+          "module" => :lynx_core_to_leanj.module_name(name),
           "file" => module.file,
           "imports" =>
             external_calls
             |> Map.get(name, MapSet.new())
             |> Enum.sort()
-            |> Enum.map(&Atom.to_string/1),
+            |> Enum.map(&:lynx_core_to_leanj.module_name/1),
           "contents" => assemble_module(module.translations)
         }
       end
