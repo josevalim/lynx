@@ -190,7 +190,7 @@ defmodule Lynx.Translation do
   end
 
   defp validate_function!(target, module, function, arity, location) do
-    unless Map.has_key?(target.definitions, {function, arity}) do
+    if not Map.has_key?(target.definitions, {function, arity}) do
       raise CompileError,
             location.() ++
               [description: "undefined function #{Exception.format_mfa(module, function, arity)}"]
