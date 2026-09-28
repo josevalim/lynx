@@ -4,6 +4,7 @@ meta import Lean
 public import Lynx.Runner
 public import Lynx
 public import Erlang.erlang
+public import Erlang.lists
 public import Erlang.maps
 
 meta section
@@ -47,6 +48,7 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«self/0»",
   "Erlang.erlang.«send/2»",
   "Erlang.erlang.«spawn/1»",
+  "Erlang.lists.«reverse/2»",
   "Erlang.maps.«get/2»",
   "Erlang.maps.«merge/2»",
   "Erlang.maps.«new/0»",

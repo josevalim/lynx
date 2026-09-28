@@ -1,7 +1,7 @@
 defmodule Lynx.Translation do
   @moduledoc false
 
-  defstruct modules: %{}, external_calls: %{}, stack: []
+  defstruct modules: %{}, external_calls: %{}, builtin_modules: %{}, stack: []
 
   @external_resource Path.expand("../../Lean/modules.json", __DIR__)
   for {module, functions} <- JSON.decode!(File.read!(@external_resource)),
@@ -9,7 +9,7 @@ defmodule Lynx.Translation do
     [arity | parts] = name |> String.split("/") |> Enum.reverse()
     function = parts |> Enum.reverse() |> Enum.join("/") |> String.to_atom()
 
-    defp runtime_purity(
+    defp lean_bif(
            unquote(String.to_atom(module)),
            unquote(function),
            unquote(String.to_integer(arity))
@@ -17,7 +17,7 @@ defmodule Lynx.Translation do
          do: {:ok, unquote(pure)}
   end
 
-  defp runtime_purity(_, _, _), do: :error
+  defp lean_bif(_, _, _), do: :error
 
   def new(cores) do
     modules =
@@ -62,14 +62,26 @@ defmodule Lynx.Translation do
          span_anno
        ) do
     translation =
-      update_in(translation.external_calls[caller], fn
-        nil -> MapSet.new([module])
-        set -> MapSet.put(set, module)
-      end)
+      if module == caller do
+        translation
+      else
+        update_in(translation.external_calls[caller], fn
+          nil -> MapSet.new([module])
+          set -> MapSet.put(set, module)
+        end)
+      end
 
-    case runtime_purity(module, function, arity) do
-      {:ok, pure} -> {:ok, pure, translation}
-      :error -> translate_remote(translation, module, function, arity, span_anno)
+    case lean_bif(module, function, arity) do
+      {:ok, pure} ->
+        translation = put_in(translation.builtin_modules[module], true)
+
+        {pure, translation}
+
+      :error when module == caller ->
+        :local
+
+      :error ->
+        translate_remote(translation, module, function, arity, span_anno)
     end
   end
 
@@ -97,7 +109,7 @@ defmodule Lynx.Translation do
 
     translation = add(translation, module, [{function, arity}])
     pure = translation.modules[module].translations[{function, arity}].pure
-    {:ok, pure, translation}
+    {pure, translation}
   end
 
   defp source_location(annotations, default_file) do
@@ -137,7 +149,11 @@ defmodule Lynx.Translation do
   end
 
   @doc "Assembles translated modules in dependency order."
-  def assemble(%__MODULE__{modules: modules, external_calls: external_calls}) do
+  def assemble(%__MODULE__{
+        modules: modules,
+        external_calls: external_calls,
+        builtin_modules: builtin_modules
+      }) do
     graph = :digraph.new()
 
     try do
@@ -151,13 +167,14 @@ defmodule Lynx.Translation do
 
       for [name] <- topsort(graph) do
         module = Map.fetch!(modules, name)
+        imports = Map.get(external_calls, name, MapSet.new())
+        imports = if builtin_modules[name], do: MapSet.put(imports, name), else: imports
 
         %{
           "module" => :lynx_core_to_leanj.module_name(name),
           "file" => module.file,
           "imports" =>
-            external_calls
-            |> Map.get(name, MapSet.new())
+            imports
             |> Enum.sort()
             |> Enum.map(&:lynx_core_to_leanj.module_name/1),
           "contents" => assemble_module(module.translations)

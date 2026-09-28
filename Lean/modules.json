@@ -3,6 +3,7 @@
   "new/0": {"pure": true},
   "merge/2": {"pure": true},
   "get/2": {"pure": true}},
+ "lists": {"reverse/2": {"pure": true}},
  "erlang":
  {"spawn/1": {"pure": false},
   "send/2": {"pure": false},

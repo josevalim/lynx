@@ -235,6 +235,76 @@ defmodule Lynx.TranslationTest do
     end
   end
 
+  test "imports a module BIF if used" do
+    lists =
+      cerl("""
+      -module(lists).
+      -export([sum/1, reverse/2]).
+      sum([]) -> 0;
+      sum([X | Xs]) -> X + sum(Xs).
+      reverse(_, _) -> erlang:nif_error(undef).
+      """)
+
+    caller =
+      cerl("""
+      -module(caller).
+      -export([sum/1, reverse/1]).
+      sum(X) -> lists:sum(X).
+      reverse(X) -> lists:reverse(X, []).
+      """)
+
+    translation = Translation.new([{"lists.erl", lists}, {"caller.erl", caller}])
+
+    sum_only = Translation.add(translation, :caller, [{:sum, 1}])
+    assert sum_only.builtin_modules == %{erlang: true}
+
+    assert [
+             %{"module" => "Erlang.lists", "imports" => ["Erlang.erlang"]},
+             %{"module" => "Erlang.caller", "imports" => ["Erlang.lists"]}
+           ] = Translation.assemble(sum_only)
+
+    for roots <- [[{:sum, 1}, {:reverse, 1}], [{:reverse, 1}, {:sum, 1}]] do
+      mixed =
+        Enum.reduce(roots, translation, fn root, acc -> Translation.add(acc, :caller, [root]) end)
+
+      assert mixed.builtin_modules == %{erlang: true, lists: true}
+      assert Map.keys(mixed.modules.lists.translations) == [{:sum, 1}]
+
+      assert [
+               %{
+                 "module" => "Erlang.lists",
+                 "imports" => ["Erlang.erlang", "Erlang.lists"],
+                 "contents" => [%{"expr" => %{"name" => "«sum/1»"}}]
+               },
+               %{"module" => "Erlang.caller", "imports" => ["Erlang.lists"]}
+             ] = Translation.assemble(mixed)
+    end
+  end
+
+  test "qualified self calls resolve builtins before local definitions" do
+    lists =
+      cerl("""
+      -module(lists).
+      -export([reverse/1, reverse/2]).
+      reverse(X) -> lists:reverse(X, []).
+      reverse(_, _) -> erlang:nif_error(undef).
+      """)
+
+    translation =
+      Translation.new([{"lists.erl", lists}]) |> Translation.add(:lists, [{:reverse, 1}])
+
+    assert translation.builtin_modules == %{lists: true}
+    assert translation.external_calls == %{}
+    assert Map.keys(translation.modules.lists.translations) == [{:reverse, 1}]
+    assert translation.modules.lists.translations[{:reverse, 1}].pure
+    assert translation.modules.lists.translations[{:reverse, 1}].local_calls == []
+
+    assert [%{"imports" => ["Erlang.lists"], "contents" => [definition]}] =
+             Translation.assemble(translation)
+
+    assert JSON.encode!(definition) =~ "Erlang.lists.«reverse/2»"
+  end
+
   describe "errors" do
     test "does not skip a runtime function with the wrong arity" do
       core =

@@ -258,7 +258,7 @@ private def verify (files : Array DecodedFile) (env : Lean.Environment) : IO (UI
   let mut imports : Array Import := #[{ module := `Lynx }]
   for file in files do
     for name in file.imports do
-      unless files.any (·.moduleName == name) do
+      if name == file.moduleName || !files.any (·.moduleName == name) then
         let id ← IO.ofExcept <| (identifier name).run env |>.run' #[]
         unless imports.any (·.module == id.getId) do
           imports := imports.push { module := id.getId }
