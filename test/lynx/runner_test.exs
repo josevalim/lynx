@@ -20,11 +20,15 @@ defmodule Lynx.RunnerTest do
   end
 
   describe "verify" do
-    test "verifies valid instructions" do
-      request = File.read!(@sum_json)
+    test "verifies all translation fixtures" do
+      fixtures = Path.wildcard(Path.join(@translations_dir, "*.json"))
+      assert fixtures != []
 
-      assert %{"status" => "ok", "diagnostics" => []} =
-               Lynx.Commands.runner!(@lean_dir, "verify", request)
+      for fixture <- fixtures do
+        assert Lynx.Commands.runner!(@lean_dir, "verify", File.read!(fixture)) ==
+                 %{"status" => "ok", "diagnostics" => []},
+               "verification failed for #{fixture}"
+      end
     end
 
     test "reports verification errors with source diagnostics" do
@@ -64,6 +68,26 @@ defmodule Lynx.RunnerTest do
         end
 
       assert error.message =~ "missing.erl"
+    end
+  end
+
+  test "rejects empty mutual blocks and non-definition members" do
+    for {defs, message} <- [
+          {[], "mutual requires at least one definition"},
+          {[%{"kind" => "mutual", "span" => [], "defs" => []}],
+           "mutual requires def declarations"}
+        ] do
+      request = %{
+        "version" => "1.0",
+        "files" => %{@sum_erl => [%{"kind" => "mutual", "span" => [], "defs" => defs}]}
+      }
+
+      error =
+        assert_raise RuntimeError, fn ->
+          Lynx.Commands.runner!(@lean_dir, "render", JSON.encode!(request))
+        end
+
+      assert error.message =~ message
     end
   end
 

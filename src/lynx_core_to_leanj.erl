@@ -4,101 +4,156 @@
 
 -include_lib("compiler/src/core_parse.hrl").
 
+-record(state, {name, graph}).
+
 %% Translate the Core tree returned by the debug_info backend's core_v1
 %% format into a list of JSON-encodable Lynx commands for one module.
 %% Unsupported constructs return their pretty-printed Core as a UTF-8 binary.
 -spec translate(cerl:c_module()) -> {ok, [map()]} | {unsupported_core, binary()}.
 translate(#c_module{defs = Defs}) ->
-    try lists:flatmap(fun translate_def/1, Defs) of
-        Commands -> {ok, Commands}
+    Graph = digraph:new(),
+    try
+        Functions = [begin
+            digraph:add_vertex(Graph, Name),
+            Def
+        end || {#c_var{name = Name}, _} = Def <- Defs,
+               Name =/= {module_info, 0}, Name =/= {module_info, 1}],
+        [translate_def(Def, Graph) || Def <- Functions],
+        {ok, cluster(Graph)}
     catch
         throw:{unsupported_core, Core} ->
             {unsupported_core, unicode:characters_to_binary(core_pp:format(Core))}
+    after
+        digraph:delete(Graph)
     end.
 
-translate_def({#c_var{name = {module_info, Arity}}, _})
-        when Arity =:= 0; Arity =:= 1 ->
-    [];
-translate_def({#c_var{name = Name}, #c_fun{anno = Anno, vars = Vars, body = Body}}) ->
+translate_def({#c_var{name = Name}, #c_fun{anno = Anno, vars = Vars, body = Body}}, Graph) ->
+    {TranslatedBody, _State} = expression(Body, #state{name = Name, graph = Graph}),
     Def = node(~"def", Anno, #{
         ~"name" => function_name(Name),
         ~"params" => [variable(Var) || Var <- Vars],
-        ~"body" => expression(Body)
+        ~"body" => TranslatedBody
     }),
+    digraph:add_vertex(Graph, Name, Def).
+
+%% Condensation collapses recursive groups into vertices of an acyclic graph.
+%% Edges point from callees to callers, so topsort emits dependencies first.
+cluster(Graph) ->
+    Components = digraph_utils:condensation(Graph),
+    try
+        [emit_group(Group, Graph) || Group <- topsort(Components)]
+    after
+        digraph:delete(Components)
+    end.
+
+%% Alphabetize each ready batch. OTP's topsort leaves ties in arbitrary order.
+%% The condensed graph is acyclic and is no longer needed after this traversal.
+topsort(Graph) ->
+    Ready = lists:sort([{lists:sort(Group), Group} || Group <- digraph:vertices(Graph),
+                                                      digraph:in_degree(Graph, Group) =:= 0]),
+    case Ready of
+        [] -> [];
+        _ ->
+            [digraph:del_vertex(Graph, Group) || {_, Group} <- Ready],
+            [Names || {Names, _} <- Ready] ++ topsort(Graph)
+    end.
+
+emit_group(Names, Graph) ->
+    Defs = [Def || Name <- Names, {_, Def} <- [digraph:vertex(Graph, Name)]],
+    [First | _] = Defs,
+    Span = maps:get(~"span", First),
+    Declaration = case Defs of
+        [Def] -> Def;
+        _ -> #{~"kind" => ~"mutual", ~"span" => Span, ~"defs" => Defs}
+    end,
     % TODO: Track purity
-    [node(~"command", Anno, #{~"name" => ~"lynx_pure", ~"expr" => Def})].
+    #{~"kind" => ~"command", ~"span" => Span,
+      ~"name" => ~"lynx_pure", ~"expr" => Declaration}.
 
 %% Erlang: case X of [] -> 0; Other -> 1 end
 %% Lean:
 %%   match v_X with
 %%   | Lynx.Term.nil => Lynx.Result.ok (Lynx.Term.integer 0)
 %%   | v_Other => Lynx.Result.ok (Lynx.Term.integer 1)
-expression(#c_case{anno = Anno, arg = Arg, clauses = Clauses}) ->
-    node(~"match", Anno, #{
-        ~"expression" => value(Arg),
-        ~"cases" => [clause(Clause) || Clause <- Clauses]
-    });
+expression(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
+    {TranslatedArg, State1} = value(Arg, State0),
+    {TranslatedClauses, State2} = lists:mapfoldl(fun clause/2, State1, Clauses),
+    {node(~"match", Anno, #{
+        ~"expression" => TranslatedArg,
+        ~"cases" => TranslatedClauses
+    }), State2};
 %% Erlang: Y = f(X), g(Y)
 %% Lean: Lynx.Result.bind (f_1 v_X) fun v_Y => g_1 v_Y
-expression(#c_let{anno = Anno, vars = [Var], arg = Arg, body = Body}) ->
+expression(#c_let{anno = Anno, vars = [Var], arg = Arg, body = Body}, State0) ->
+    {TranslatedArg, State1} = expression(Arg, State0),
+    {TranslatedBody, State2} = expression(Body, State1),
     Continuation = node(~"fun", Anno, #{
-        ~"params" => [variable(Var)], ~"body" => expression(Body)
+        ~"params" => [variable(Var)], ~"body" => TranslatedBody
     }),
-    apply_node(~"Lynx.Result.bind", [expression(Arg), Continuation], Anno);
+    {apply_node(~"Lynx.Result.bind", [TranslatedArg, Continuation], Anno), State2};
 %% Erlang: f(X, Y)
 %% Lean: f_2 v_X v_Y
-expression(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args}) ->
-    apply_node(function_name(Name), [value(Arg) || Arg <- Args], Anno);
+expression(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args}, State0) ->
+    {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
+    case State1#state.name of
+        Name -> ok;
+        Caller -> digraph:add_edge(State1#state.graph, {Name, Caller}, Name, Caller, [])
+    end,
+    {apply_node(function_name(Name), TranslatedArgs, Anno), State1};
 %% Erlang: X + Y
 %% Lean: Lynx.Modules.Erlang.add_2 v_X v_Y
 expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
-                   name = #c_literal{val = '+'}, args = [Left, Right]}) ->
-    apply_node(~"Lynx.Modules.Erlang.add_2", [value(Left), value(Right)], Anno);
+                   name = #c_literal{val = '+'}, args = [Left, Right]}, State0) ->
+    {Args, State1} = lists:mapfoldl(fun value/2, State0, [Left, Right]),
+    {apply_node(~"Lynx.Modules.Erlang.add_2", Args, Anno), State1};
 %% Erlang: f([]) -> ok.
 %% Core inserts match_fail for arguments that match no function clause.
 %% Lean (the generated fallback body):
 %%   Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
 expression(#c_primop{anno = Anno, name = #c_literal{val = match_fail},
-                     args = [#c_tuple{es = [#c_literal{val = function_clause}, #c_var{}]}]}) ->
-    Reason = value(#c_literal{anno = Anno, val = function_clause}),
+                     args = [#c_tuple{es = [#c_literal{val = function_clause}, #c_var{}]}]}, State0) ->
+    {Reason, State1} = value(#c_literal{anno = Anno, val = function_clause}, State0),
     Exception = apply_node(~"Lynx.Exception.error", [Reason], Anno),
-    apply_node(~"Lynx.Result.error", [Exception], Anno);
+    {apply_node(~"Lynx.Result.error", [Exception], Anno), State1};
 %% Erlang: 0
 %% Lean: Lynx.Result.ok (Lynx.Term.integer 0)
-expression(#c_literal{anno = Anno} = Literal) ->
-    apply_node(~"Lynx.Result.ok", [value(Literal)], Anno);
+expression(#c_literal{anno = Anno} = Literal, State0) ->
+    {Translated, State1} = value(Literal, State0),
+    {apply_node(~"Lynx.Result.ok", [Translated], Anno), State1};
 %% Erlang: X
 %% Lean: Lynx.Result.ok v_X
-expression(#c_var{anno = Anno} = Var) ->
-    apply_node(~"Lynx.Result.ok", [variable(Var)], Anno);
+expression(#c_var{anno = Anno} = Var, State) ->
+    {apply_node(~"Lynx.Result.ok", [variable(Var)], Anno), State};
 %% Erlang: receive X -> X end
 %% Lean: no translation; translate/1 returns {unsupported_core, CoreString}.
-expression(Core) ->
+expression(Core, _State) ->
     unsupported(Core).
 
-clause(#c_clause{anno = Anno, pats = [Pattern], guard = #c_literal{val = true}, body = Body}) ->
-    Pat = case {lists:member(compiler_generated, Anno), Pattern, Body} of
+clause(#c_clause{anno = Anno, pats = [Pattern], guard = #c_literal{val = true}, body = Body}, State0) ->
+    {Pat, State1} = case {lists:member(compiler_generated, Anno), Pattern, Body} of
         {true, #c_var{}, #c_primop{name = #c_literal{val = match_fail}}} ->
-            node(~"wildcard", [], #{});
-        _ -> value(Pattern)
+            {node(~"wildcard", [], #{}), State0};
+        _ -> value(Pattern, State0)
     end,
-    #{~"span" => span(Anno), ~"pattern" => Pat, ~"body" => expression(Body)};
-clause(Core) ->
+    {TranslatedBody, State2} = expression(Body, State1),
+    {#{~"span" => span(Anno), ~"pattern" => Pat, ~"body" => TranslatedBody}, State2};
+clause(Core, _State) ->
     unsupported(Core).
 
 %% Core separates values from computations; only computations produce Result.
-value(#c_var{} = Var) ->
-    variable(Var);
-value(#c_literal{anno = Anno, val = []}) ->
-    ident_node(~"Lynx.Term.nil", Anno);
-value(#c_literal{anno = Anno, val = N}) when is_integer(N) ->
-    apply_node(~"Lynx.Term.integer", [node(~"integer", Anno, #{~"value" => N})], Anno);
-value(#c_literal{anno = Anno, val = Atom}) when is_atom(Atom) ->
+value(#c_var{} = Var, State) ->
+    {variable(Var), State};
+value(#c_literal{anno = Anno, val = []}, State) ->
+    {ident_node(~"Lynx.Term.nil", Anno), State};
+value(#c_literal{anno = Anno, val = N}, State) when is_integer(N) ->
+    {apply_node(~"Lynx.Term.integer", [node(~"integer", Anno, #{~"value" => N})], Anno), State};
+value(#c_literal{anno = Anno, val = Atom}, State) when is_atom(Atom) ->
     String = node(~"string", Anno, #{~"value" => atom_to_binary(Atom, utf8)}),
-    apply_node(~"Lynx.Term.atom", [String], Anno);
-value(#c_cons{anno = Anno, hd = Head, tl = Tail}) ->
-    apply_node(~"Lynx.Term.cons", [value(Head), value(Tail)], Anno);
-value(Core) ->
+    {apply_node(~"Lynx.Term.atom", [String], Anno), State};
+value(#c_cons{anno = Anno, hd = Head, tl = Tail}, State0) ->
+    {Args, State1} = lists:mapfoldl(fun value/2, State0, [Head, Tail]),
+    {apply_node(~"Lynx.Term.cons", Args, Anno), State1};
+value(Core, _State) ->
     unsupported(Core).
 
 %% Keep compiler temporaries and source variables in distinct name spaces.
