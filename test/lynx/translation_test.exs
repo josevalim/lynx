@@ -270,7 +270,7 @@ defmodule Lynx.TranslationTest do
       neutral = Translation.add(base, :dependency, [{:entry, 1}])
 
       for %{"contents" => contents} <- Translation.assemble(neutral) do
-        assert Enum.all?(contents, &(&1["name"] in ["lynx_pure", "lynx_neutral"]))
+        assert Enum.all?(contents, &(&1["kind"] in ["def", "mutual"]))
       end
 
       translation = Translation.add(neutral, :caller, [{:entry, 1}, {:pure, 1}])
@@ -336,23 +336,16 @@ defmodule Lynx.TranslationTest do
 
       files = Translation.assemble(translation)
 
-      if purity == :neutral do
-        for %{"contents" => contents} <- files do
-          assert Enum.all?(contents, &(&1["name"] in ["lynx_pure", "lynx_neutral"]))
-        end
-      else
-        commands =
-          for %{"contents" => contents} <- files,
-              command <- contents,
-              command["name"] == "lynx_pure",
-              do: command
+      commands =
+        for %{"contents" => contents} <- files,
+            %{"kind" => "command"} = command <- contents,
+            do: command
 
-        assert [%{"name" => "lynx_pure", "expr" => %{"name" => "«pure/1»"}}] = commands
-      end
+      assert [%{"name" => "lynx_pure", "expr" => %{"name" => "«pure/1»"}}] = commands
     end
   end
 
-  test "creating an impure closure is pure but prevents neutral calls from becoming pure" do
+  test "creating an impure closure is pure while dynamic calls remain neutral" do
     core =
       cerl("""
       -module(example).
@@ -376,8 +369,10 @@ defmodule Lynx.TranslationTest do
     assert %{purity: :impure} = translation.modules.example.translations[helper]
     assert Translation.add(translation, :example, [{:make, 1}]) == translation
 
-    assert [%{"contents" => contents}, %{"contents" => [%{"pure" => false}]}] =
+    assert [%{"contents" => contents}, %{"contents" => [%{"kind" => "fun_table"} = table]}] =
              Translation.assemble(translation)
+
+    refute Map.has_key?(table, "pure")
 
     assert [%{"name" => "lynx_pure", "expr" => %{"name" => "«make/1»"}}] =
              Enum.filter(contents, &(&1["name"] == "lynx_pure"))

@@ -145,22 +145,18 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) : D
   | "command" => do
     fields j ["kind", "name", "expr", "span"]
     let name ← str j "name"
-    unless name ∈ ["lynx_pure", "lynx_neutral"] do throw "unsupported command name"
+    unless name == "lynx_pure" do throw "unsupported command name"
     let inner ← field j "expr"
     unless (← str inner "kind") ∈ ["def", "mutual"] do throw "lynx_pure must wrap def or mutual"
     let decl ← command map inner info
-    if name == "lynx_pure" then pure (Unhygienic.run `(#lynx_pure $decl:command))
-    else pure (Unhygienic.run `(#lynx_neutral $decl:command))
+    pure (Unhygienic.run `(#lynx_pure $decl:command))
   | "fun_table" => do
-    fields j ["kind", "name", "body", "pure", "span"]
+    fields j ["kind", "name", "body", "span"]
     let name ← identifier (← str j "name")
     unless name.getId.getPrefix == .anonymous do throw "table name must be unqualified"
     let body ← term map info false (← field j "body")
     let tableType := mkIdent ``Lynx.Term.FunTable
-    let declaration := Unhygienic.run `(public def $name : $tableType := $body)
-    if ← (← field j "pure").getBool? then
-      pure (Unhygienic.run `(#lynx_fun_table $declaration:command))
-    else pure declaration
+    pure (Unhygienic.run `(public def $name : $tableType := $body))
   | "mutual" => do
     fields j ["kind", "defs", "span"]
     let defs ← arr j "defs"

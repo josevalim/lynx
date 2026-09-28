@@ -40,16 +40,4 @@ def «apply/2» (function arguments : Term) : Result :=
             .error (.error (.tuple #[.atom "badarity", .tuple #[function, arguments]]))
       | _ => .error (.error (.tuple #[.atom "badfun", function]))
 
-/-- Application has no effects of its own; its implementation is supplied by the program. -/
-@[simp↓] theorem apply_neutral (function arguments : Term) :
-    Result.IsNeutral («apply/2» function arguments) := by
-  unfold «apply/2»
-  split
-  · simp
-  · cases function <;> simp only
-    all_goals try simp
-    split <;> simp [Result.IsNeutral]
-    intro result
-    cases result <;> trivial
-
 end Erlang.erlang

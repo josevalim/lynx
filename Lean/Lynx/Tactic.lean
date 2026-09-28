@@ -1385,20 +1385,20 @@ private def pureDefinitionId (declaration : TSyntax `command) : Command.CommandE
     throwErrorAt declId "could not determine the definition name"
   return id
 
-private def pureType (function : Name) (neutral : Bool := false) : Command.CommandElabM Expr := do
+private def pureType (function : Name) : Command.CommandElabM Expr := do
   let info ← getConstInfo function
   let functionExpr := mkConst function (info.levelParams.map Level.param)
   Command.liftTermElabM do
     forallTelescopeReducing info.type fun arguments resultType => do
       unless ← isResultType resultType do
         throwError "#lynx_pure requires a definition returning `Result`"
-      let proposition ← mkAppM (if neutral then ``Result.IsNeutral else ``Result.IsPure)
+      let proposition ← mkAppM ``Result.IsPure
         #[mkAppN functionExpr arguments]
       mkForallFVars arguments proposition
 
-private def registerPureProof (function : Name) (type proof : Expr) (neutral : Bool := false) : Command.CommandElabM Unit := do
+private def registerPureProof (function : Name) (type proof : Expr) : Command.CommandElabM Unit := do
   let info ← getConstInfo function
-  let theoremName := function.getPrefix ++ Name.mkSimple (function.getString! ++ if neutral then "_neutral" else "_pure")
+  let theoremName := function.getPrefix ++ Name.mkSimple (function.getString! ++ "_pure")
   Command.liftCoreM <| addAndCompile <| Declaration.thmDecl {
     name := theoremName
     levelParams := info.levelParams
@@ -1412,7 +1412,7 @@ neither reads nor changes the environment. Mutually recursive definitions are
 proved together using their generated mutual induction principle. Each generated
 `<name>_pure` theorem is a simp rule. -/
 private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment))
-    (declaration : TSyntax `command) (neutral : Bool) : Command.CommandElabM Unit := do
+    (declaration : TSyntax `command) : Command.CommandElabM Unit := do
   if let `(mutual $declarations:command* end) := declaration then
     if doc?.isSome then
       throwErrorAt declaration "place documentation on the definitions inside the mutual block"
@@ -1420,7 +1420,7 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
     let ids ← declarations.mapM pureDefinitionId
     Command.elabCommand declaration
     let functions ← ids.mapM resolveGlobalConstNoOverload
-    let types ← functions.mapM (pureType · neutral)
+    let types ← functions.mapM pureType
     let jointType := types.toList.dropLast.foldr (mkApp2 (mkConst ``And)) types.back!
     let proof ← Command.liftTermElabM do
       let induction := mkIdent (functions[0]! ++ `mutual_induct)
@@ -1439,7 +1439,7 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
       let (part, rest) ← Command.liftTermElabM do
         if i + 1 == functions.size then return (remaining, remaining)
         return (← mkAppM ``And.left #[remaining], ← mkAppM ``And.right #[remaining])
-      registerPureProof functions[i]! types[i]! part neutral
+      registerPureProof functions[i]! types[i]! part
       remaining := rest
     return
   if let some doc := doc? then
@@ -1454,7 +1454,7 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
   let id ← pureDefinitionId declaration
   Command.elabCommand declaration
   let function ← resolveGlobalConstNoOverload id
-  let purityType ← pureType function neutral
+  let purityType ← pureType function
   let proof ← Command.liftTermElabM do
     let functionId := mkIdent function
     -- Introduce exactly the function parameters: an unbounded `intros` also
@@ -1483,24 +1483,9 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
       purityType
     Term.synthesizeSyntheticMVarsNoPostponing
     instantiateMVars proof
-  registerPureProof function purityType proof neutral
+  registerPureProof function purityType proof
 
 elab doc?:(docComment)? "#lynx_pure " declaration:command : command =>
-  elaboratePurity doc? declaration false
-
-/-- Prove that a definition has no effects except calls through the program table.
-This certificate becomes effect-freedom when every table entry is also neutral. -/
-elab doc?:(docComment)? "#lynx_neutral " declaration:command : command =>
-  elaboratePurity doc? declaration true
-
-/-- Check the whole-program assumption used to discharge neutral applications. -/
-elab "#lynx_fun_table " declaration:command : command => do
-  let id ← pureDefinitionId declaration
-  Command.elabCommand declaration
-  let table ← resolveGlobalConstNoOverload id
-  let tableId := mkIdent table
-  let proofName := mkIdent (Name.mkSimple (table.getString! ++ "_neutral"))
-  Command.elabCommand (← `(public theorem $proofName : Term.FunTable.IsNeutral $tableId := by
-    simp [$tableId:ident, Term.FunTable.IsNeutral]))
+  elaboratePurity doc? declaration
 
 end Lynx.Tactic

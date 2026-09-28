@@ -208,13 +208,6 @@ defmodule Lynx.Translation do
         external_calls: external_calls,
         builtin_modules: builtin_modules
       }) do
-    # Certify the table only against the complete translated graph.
-    # Keep stored summaries neutral so subsequent add/3 calls can introduce effects.
-    neutral_pure? =
-      Enum.all?(modules, fn {_, module} ->
-        Enum.all?(module.translations, fn {_, definition} -> definition.purity != :impure end)
-      end)
-
     funs =
       for {module_name, module} <- Enum.sort(modules),
           fun <- module.funs |> Map.values() |> Enum.uniq_by(& &1.name) |> Enum.sort_by(& &1.name) do
@@ -277,8 +270,7 @@ defmodule Lynx.Translation do
                   "kind" => "fun_table",
                   "span" => [],
                   "name" => "functions",
-                  "body" => table,
-                  "pure" => neutral_pure?
+                  "body" => table
                 }
               ]
             }
@@ -439,9 +431,8 @@ defmodule Lynx.Translation do
         _ -> %{"kind" => "mutual", "span" => span, "defs" => defs}
       end
 
-    if pure != :impure do
-      name = if pure == :pure, do: "lynx_pure", else: "lynx_neutral"
-      %{"kind" => "command", "span" => span, "name" => name, "expr" => declaration}
+    if pure == :pure do
+      %{"kind" => "command", "span" => span, "name" => "lynx_pure", "expr" => declaration}
     else
       declaration
     end

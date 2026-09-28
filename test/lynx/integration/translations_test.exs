@@ -50,50 +50,42 @@ defmodule Lynx.Integration.TranslationTest do
   end
 
   @tag :tmp_dir
-  test "executes captured closures and spawned functions", %{tmp_dir: tmp_dir} do
-    for {fixture, checks} <- [
-          {"functions",
-           """
-           example : Lynx.run (Erlang.functions.«run/1» (.integer 5)) [] Lynx.Program.functions =
-             .ok (.integer 24) {} := by cbv
-           example : Lynx.run (Erlang.functions.«run/1» (.integer 11)) [] Lynx.Program.functions =
-             .ok (.integer 36) {} := by cbv
-           """},
-          {"spawning",
-           """
-           example : Lynx.run (Erlang.spawning.«run/1» (.integer 7)) [.swap 2] Lynx.Program.functions =
-             .ok (.pid 2) { pidCounter := 2, currentProcess.mailbox := [.integer 7] } := by cbv
-           """}
-        ] do
-      source =
-        @translations_dir
-        |> Path.join(fixture <> ".lean")
-        |> File.read!()
-        |> String.replace("import Erlang.erlang", """
-        import Erlang.erlang
-        import all Erlang.erlang.Fun
-        import all Erlang.erlang.Guards
-        import all Erlang.erlang.Process
-        import all Lynx.Term
-        import all Lynx.Term.Dispatch
-        import all Lynx.Term.Runner
-        import all Lynx.Term.DataTypes
-        """)
+  test "executes captured closures", %{tmp_dir: tmp_dir} do
+    checks = """
+    example : Lynx.run (Erlang.functions.«run/1» (.integer 5)) [] Lynx.Program.functions =
+      .ok (.integer 24) {} := by cbv
+    example : Lynx.run (Erlang.functions.«run/1» (.integer 11)) [] Lynx.Program.functions =
+      .ok (.integer 36) {} := by cbv
+    """
 
-      program =
-        @translations_dir
-        |> Path.join(fixture <> ".program.lean")
-        |> File.read!()
-        |> String.replace(~r/^module\n|^(?:public )?import .*\n/m, "")
+    source =
+      @translations_dir
+      |> Path.join("functions.lean")
+      |> File.read!()
+      |> String.replace("import Erlang.erlang", """
+      import Erlang.erlang
+      import all Erlang.erlang.Fun
+      import all Erlang.erlang.Guards
+      import all Erlang.erlang.Process
+      import all Lynx.Term
+      import all Lynx.Term.Dispatch
+      import all Lynx.Term.Runner
+      import all Lynx.Term.DataTypes
+      """)
 
-      file = Path.join(tmp_dir, fixture <> ".lean")
-      File.write!(file, source <> "\n" <> program <> "\n" <> checks)
+    program =
+      @translations_dir
+      |> Path.join("functions.program.lean")
+      |> File.read!()
+      |> String.replace(~r/^module\n|^(?:public )?import .*\n/m, "")
 
-      {output, status} =
-        System.cmd("lake", ["env", "lean", file], cd: @lean_dir, stderr_to_stdout: true)
+    file = Path.join(tmp_dir, "functions.lean")
+    File.write!(file, source <> "\n" <> program <> "\n" <> checks)
 
-      assert status == 0, output
-    end
+    {output, status} =
+      System.cmd("lake", ["env", "lean", file], cd: @lean_dir, stderr_to_stdout: true)
+
+    assert status == 0, output
   end
 
   @tag :tmp_dir

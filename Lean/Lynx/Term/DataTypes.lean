@@ -264,35 +264,7 @@ theorem IsPure.terminal (computation : Result α) (pure : IsPure computation) :
     IsPure (Result.bind computation next) :=
   IsPure.bind computation next computationPure nextPure
 
-/-- Effect-free except for calls resolved by the program table. This does not
-assert termination or that the table's implementations are effect-free. -/
-@[expose] def IsNeutral : Result α → Prop
-  | .exhausted | .ok _ | .error _ => True
-  | .apply _ _ next => ∀ result, IsNeutral (next result)
-  | _ => False
-
-@[simp] theorem isNeutral_exhausted : IsNeutral (.exhausted : Result α) := trivial
-
 @[simp] theorem not_isPure_exhausted : ¬ IsPure (.exhausted : Result α) := by simp [IsPure]
-
-@[simp] theorem isNeutral_ok (value : α) : IsNeutral (.ok value) := trivial
-@[simp] theorem isNeutral_error (exception : Exception) :
-    IsNeutral (.error exception : Result α) := trivial
-@[simp] theorem isNeutral_apply (function : Term) (arguments : Array Term)
-    (next : Except Exception Term → Result α) :
-    IsNeutral (.apply function arguments next) ↔ ∀ result, IsNeutral (next result) := Iff.rfl
-
-@[simp↓] theorem IsPure.neutral (computation : Result α) (pure : IsPure computation) :
-    IsNeutral computation := by
-  cases computation <;> simp_all [IsPure, IsNeutral]
-
-@[simp↓] theorem IsNeutral.bind (computation : Result α) (next : α → Result β)
-    (neutral : IsNeutral computation) (nextNeutral : ∀ value, IsNeutral (next value)) :
-    IsNeutral (Result.bind computation next) := by
-  induction computation with
-  | apply function arguments continuation ih =>
-      exact fun result => ih result next (neutral result) nextNeutral
-  | _ => simp_all [Result.bind, IsNeutral]
 
 @[simp] theorem ok_inj (a b : α) : (Result.ok a : Result α) = .ok b ↔ a = b := by
   constructor
@@ -374,26 +346,5 @@ public def FunTable.entry (captureCount arity : Nat)
     body captures arguments
   else
     .error (.error (.atom "badarg"))
-
-@[simp↓] public theorem FunTable.entry_pure (captureCount arity : Nat)
-    (body : Array Term → Array Term → Result)
-    (pure : ∀ captures arguments, Result.IsPure (body captures arguments))
-    (captures arguments : Array Term) :
-    Result.IsPure (FunTable.entry captureCount arity body captures arguments) := by
-  unfold FunTable.entry
-  split <;> simp_all
-
-/-- Every callable implementation is effect-free except for further dispatch. -/
-@[expose] public def FunTable.IsNeutral (table : FunTable) : Prop :=
-  ∀ implementation ∈ table, ∀ captures arguments,
-    Result.IsNeutral (implementation captures arguments)
-
-@[simp↓] public theorem FunTable.entry_neutral (captureCount arity : Nat)
-    (body : Array Term → Array Term → Result)
-    (neutral : ∀ captures arguments, Result.IsNeutral (body captures arguments))
-    (captures arguments : Array Term) :
-    Result.IsNeutral (FunTable.entry captureCount arity body captures arguments) := by
-  unfold FunTable.entry
-  split <;> simp_all
 
 end Lynx.Term
