@@ -4,7 +4,7 @@
 
 -include_lib("compiler/src/core_parse.hrl").
 
--record(state, {module, name, defs, translated, local_calls = #{}, remote}).
+-record(state, {module, name, defs, translated, local_calls = #{}, pure = true, remote}).
 
 -spec module_name(module()) -> binary().
 module_name(Module) ->
@@ -19,10 +19,11 @@ to_definitions(#c_module{defs = Defs}) ->
 
 %% Translate the requested functions and their reachable local callees.
 %% The supplied map contains functions already translated from this module.
+%% The callback returns remote callee purity. Local purity is propagated by Lynx.Translation.
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
 -spec translate(module(), #{{atom(), arity()} => cerl:c_fun()}, [{atom(), arity()}], map(),
                 {term(), fun((term(), module(), atom(), arity(), list()) ->
-                    {ok, term()})}) ->
+                    {ok, boolean(), term()})}) ->
     {ok, map(), term()} | {unsupported_core, list(), binary()}.
 translate(Module, Definitions, Names, Translated, Remote) ->
     try
@@ -41,7 +42,7 @@ translate_def(Name, #state{translated = Translated} = State0) ->
         true -> State0;
         false ->
             #c_fun{anno = Anno, vars = Vars, body = Body} = maps:get(Name, State0#state.defs),
-            State1 = State0#state{name = Name, local_calls = #{},
+            State1 = State0#state{name = Name, local_calls = #{}, pure = true,
                                   translated = Translated#{Name => pending}},
             {TranslatedBody, State2} = expression(Body, State1),
             Def = node(~"def", Anno, #{
@@ -49,7 +50,8 @@ translate_def(Name, #state{translated = Translated} = State0) ->
                 ~"params" => [variable(Var) || Var <- Vars],
                 ~"body" => TranslatedBody
             }),
-            Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls)},
+            Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls),
+                      pure => State2#state.pure},
             State0#state{translated = (State2#state.translated)#{Name => Entry},
                          remote = State2#state.remote}
     end.
@@ -100,9 +102,10 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
     {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
     Arity = length(Args),
     {Context, Callback} = State1#state.remote,
-    {ok, NewContext} = Callback(Context, Module, Name, Arity, Anno),
+    {ok, Pure, NewContext} = Callback(Context, Module, Name, Arity, Anno),
     Function = <<(module_name(Module))/binary, ".", (function_name({Name, Arity}))/binary>>,
-    {apply_node(Function, TranslatedArgs, Anno), State1#state{remote = {NewContext, Callback}}};
+    {apply_node(Function, TranslatedArgs, Anno),
+     State1#state{pure = State1#state.pure andalso Pure, remote = {NewContext, Callback}}};
 %% Erlang: f([]) -> ok.
 %% Core inserts match_fail for arguments that match no function clause.
 %% Lean (the generated fallback body):

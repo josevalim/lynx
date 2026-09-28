@@ -12,20 +12,7 @@ defmodule Lynx.Integration.TranslationTest do
     for fixture <- fixtures do
       source = "../test/fixtures/translations/#{Path.basename(fixture)}"
 
-      # Keep compilation and Core extraction here until there is a translation pipeline.
-      # The source annotation is relative to the Lean project, where the runner executes.
-      assert {:ok, module, beam} =
-               :compile.file(String.to_charlist(fixture), [
-                 :binary,
-                 :debug_info,
-                 :return_errors,
-                 {:source, String.to_charlist(source)}
-               ])
-
-      assert {:ok, {^module, [debug_info: {:debug_info_v1, backend, data}]}} =
-               :beam_lib.chunks(beam, [:debug_info])
-
-      assert {:ok, core} = backend.debug_info(:core_v1, module, data, [])
+      {module, core} = core(fixture, source)
 
       exports =
         core

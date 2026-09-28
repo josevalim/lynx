@@ -101,9 +101,27 @@ defmodule Lynx.CoreToLeanjTest do
     end
   end
 
-  defp translate(definitions, translated \\ %{}) do
+  test "accumulates remote impurity without leaking it between functions" do
+    remote = fn module ->
+      :cerl.c_call(:cerl.c_atom(module), :cerl.c_atom(:entry), [:cerl.c_var(0)])
+    end
+
+    defs =
+      definitions([
+        definition(:entry, :cerl.c_let([:cerl.c_var(:Y)], remote.(:impure), call(:helper))),
+        definition(:helper, remote.(:pure))
+      ])
+
+    assert {:ok, functions, calls} = translate(defs, %{}, %{{:impure, :entry, 1} => false})
+    refute functions[{:entry, 1}].pure
+    assert functions[{:helper, 1}].pure
+    assert calls == [{:pure, :entry, 1, []}, {:impure, :entry, 1, []}]
+  end
+
+  defp translate(definitions, translated \\ %{}, purity \\ %{}) do
     callback = fn calls, module, function, arity, span_anno ->
-      {:ok, [{module, function, arity, span_anno} | calls]}
+      pure = Map.get(purity, {module, function, arity}, true)
+      {:ok, pure, [{module, function, arity, span_anno} | calls]}
     end
 
     :lynx_core_to_leanj.translate(
