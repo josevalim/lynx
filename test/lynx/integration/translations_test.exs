@@ -26,7 +26,18 @@ defmodule Lynx.Integration.TranslationTest do
                :beam_lib.chunks(beam, [:debug_info])
 
       assert {:ok, core} = backend.debug_info(:core_v1, module, data, [])
-      assert {:ok, commands} = Lynx.Translation.module(core)
+
+      exports =
+        core
+        |> :cerl.module_exports()
+        |> Enum.map(&:cerl.var_name/1)
+        |> Kernel.--([{:module_info, 0}, {:module_info, 1}])
+
+      assert %Lynx.Translation{} =
+               translation =
+               Lynx.Translation.new() |> Lynx.Translation.add(core, exports)
+
+      commands = Lynx.Translation.assemble(translation)[module]
 
       request = %{"version" => "1.0", "files" => %{source => commands}}
 
