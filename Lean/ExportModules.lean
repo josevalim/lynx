@@ -31,6 +31,7 @@ private def manifest (env : Environment) : Json := Id.run do
 
 public def main : IO Unit := do
   unsafe enableInitializersExecution
-  let env ← importModules #[{ module := `Erlang.erlang }, { module := `Erlang.maps }]
+  let env ← importModules #[{ module := `Erlang.erlang }, { module := `Erlang.lists },
+    { module := `Erlang.maps }]
     {} (loadExts := true)
   IO.println (manifest env).pretty

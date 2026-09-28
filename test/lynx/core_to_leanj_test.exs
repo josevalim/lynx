@@ -120,8 +120,12 @@ defmodule Lynx.CoreToLeanjTest do
 
   defp translate(definitions, translated \\ %{}, purity \\ %{}) do
     callback = fn calls, module, function, arity, span_anno ->
-      pure = Map.get(purity, {module, function, arity}, true)
-      {:ok, pure, [{module, function, arity, span_anno} | calls]}
+      if module == :example do
+        :local
+      else
+        pure = Map.get(purity, {module, function, arity}, true)
+        {pure, [{module, function, arity, span_anno} | calls]}
+      end
     end
 
     :lynx_core_to_leanj.translate(

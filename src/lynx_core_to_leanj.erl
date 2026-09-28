@@ -23,7 +23,7 @@ to_definitions(#c_module{defs = Defs}) ->
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
 -spec translate(module(), #{{atom(), arity()} => cerl:c_fun()}, [{atom(), arity()}], map(),
                 {term(), fun((term(), module(), atom(), arity(), list()) ->
-                    {ok, boolean(), term()})}) ->
+                    {boolean(), term()} | local)}) ->
     {ok, map(), term()} | {unsupported_core, list(), binary()}.
 translate(Module, Definitions, Names, Translated, Remote) ->
     try
@@ -88,24 +88,25 @@ expression(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args}, State0)
     end,
     {apply_node(function_name(Name), TranslatedArgs, Anno),
      State2#state{local_calls = Calls}};
-%% Erlang: ?MODULE:f(X)
-%% Lean: «f/1» vX
-expression(#c_call{anno = Anno, module = #c_literal{val = Module},
-                   name = #c_literal{val = Name}, args = Args}, #state{module = Module} = State)
-        when is_atom(Name) ->
-    expression(#c_apply{anno = Anno, op = #c_var{name = {Name, length(Args)}}, args = Args}, State);
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX
+%% Erlang: ?MODULE:f(X) (non-builtin)
+%% Lean: «f/1» vX
 expression(#c_call{anno = Anno, module = #c_literal{val = Module},
                    name = #c_literal{val = Name}, args = Args}, State0)
         when is_atom(Module), is_atom(Name) ->
-    {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
     Arity = length(Args),
-    {Context, Callback} = State1#state.remote,
-    {ok, Pure, NewContext} = Callback(Context, Module, Name, Arity, Anno),
-    Function = <<(module_name(Module))/binary, ".", (function_name({Name, Arity}))/binary>>,
-    {apply_node(Function, TranslatedArgs, Anno),
-     State1#state{pure = State1#state.pure andalso Pure, remote = {NewContext, Callback}}};
+    {Context, Callback} = State0#state.remote,
+    case Callback(Context, Module, Name, Arity, Anno) of
+        local when Module =:= State0#state.module ->
+            expression(#c_apply{anno = Anno, op = #c_var{name = {Name, Arity}}, args = Args},
+                State0);
+        {Pure, NewContext} ->
+            {TranslatedArgs, State1} = lists:mapfoldl(fun value/2,
+                State0#state{remote = {NewContext, Callback}}, Args),
+            Function = <<(module_name(Module))/binary, ".", (function_name({Name, Arity}))/binary>>,
+            {apply_node(Function, TranslatedArgs, Anno), State1#state{pure = State1#state.pure andalso Pure}}
+    end;
 %% Erlang: f([]) -> ok.
 %% Core inserts match_fail for arguments that match no function clause.
 %% Lean (the generated fallback body):
