@@ -9,12 +9,19 @@ defmodule Lynx.Translation do
     [arity | parts] = name |> String.split("/") |> Enum.reverse()
     function = parts |> Enum.reverse() |> Enum.join("/") |> String.to_atom()
 
+    purity =
+      cond do
+        module == "erlang" and name == "apply/2" -> :neutral
+        pure -> :pure
+        true -> :impure
+      end
+
     defp lean_bif(
            unquote(String.to_atom(module)),
            unquote(function),
            unquote(String.to_integer(arity))
          ),
-         do: {:ok, unquote(pure)}
+         do: {:ok, unquote(purity)}
   end
 
   defp lean_bif(_, _, _), do: :error
@@ -70,10 +77,10 @@ defmodule Lynx.Translation do
       end
 
     case lean_bif(module, function, arity) do
-      {:ok, pure} ->
+      {:ok, purity} ->
         translation = put_in(translation.builtin_modules[module], true)
 
-        {if(pure, do: :pure, else: :impure), translation}
+        {purity, translation}
 
       :error when module == caller ->
         :local

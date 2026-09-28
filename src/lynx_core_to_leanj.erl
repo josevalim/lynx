@@ -98,16 +98,6 @@ expression(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->
     {TranslatedArgs, State2} = lists:mapfoldl(fun value/2, State1, Args),
     {apply_node(~"Lynx.Term.apply", [Function, array_node(TranslatedArgs, Anno)], Anno),
      State2#state{dynamic = true, purity = join_purity(State2#state.purity, neutral)}};
-%% apply/2 dispatches through the program's function table and has neutral purity.
-expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
-                   name = #c_literal{val = apply}, args = Args}, State0)
-        when length(Args) =:= 2 ->
-    {Context, Callback} = State0#state.remote,
-    {_Purity, NewContext} = Callback(Context, erlang, apply, 2, Anno),
-    {TranslatedArgs, State1} = lists:mapfoldl(fun value/2,
-        State0#state{remote = {NewContext, Callback}}, Args),
-    {apply_node(~"Erlang.erlang.«apply/2»", TranslatedArgs, Anno),
-     State1#state{dynamic = true, purity = join_purity(State1#state.purity, neutral)}};
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX
 %% Erlang: ?MODULE:f(X) (non-builtin)
