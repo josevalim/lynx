@@ -2,7 +2,7 @@ import LynxTest.ProofAudit
 import LynxTest.Integration.Sum
 
 namespace LynxTest.Tactic.Failures
-open Lynx Lynx.Modules LynxTest.Integration.Sum
+open Lynx LynxTest.Integration.Sum
 
 def anyInput (_ : Term) : Result := .ok Term.true
 def zero (_ : Term) : Result := .ok (.integer 0)
@@ -31,7 +31,7 @@ theorem false_contract : ¬ Satisfies sum_1 sumExpects falseEnsures := by
 theorem rejects_uncovered_expectation : Satisfies raises raises falseEnsures := by
   lynx_verify
 
-def onlySpecial (input : Term) : Result := Erlang.equal_2 input (.atom "special")
+def onlySpecial (input : Term) : Result := Erlang.erlang.«==/2» input (.atom "special")
 
 -- A valid domain outside automatic candidates fails explicitly rather than vacuously.
 /-- error: lynx: could not prove that `expects` accepts any input; it may be empty or unsupported by automatic coverage -/
@@ -47,7 +47,7 @@ theorem manual_coverage : Satisfies zero onlySpecial sumEnsures := by
 
 def badCall (_ : Term) : Result := do
   let result ← sum_1 (.integer 0)
-  Erlang.equal_2 result (.integer 0)
+  Erlang.erlang.«==/2» result (.integer 0)
 
 -- A property may not assume the expectation of a function it calls.
 /--

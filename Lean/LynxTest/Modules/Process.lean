@@ -6,14 +6,14 @@ import all Lynx.Term
 import all Lynx.Term.DataTypes
 import all Lynx.Term.Compare
 import all Lynx.Term.Runner
-import all Lynx.Modules.Erlang.Process
+import all Erlang.erlang.Process
 import all Std
 import all Init.Data.List.Basic
 import all Init.Data.List.Control
 import all Init.Data.Ord.String
 
 namespace LynxTest.Modules.Process
-open Lynx Lynx.Modules.Erlang
+open Lynx Erlang.erlang
 
 private def receiveAny : Result := .receive some .ok
 
@@ -33,20 +33,20 @@ private def mailbox (outcome : Outcome Term) : List Term :=
 
 /-- Sending returns its argument and appends behind existing messages. -/
 theorem send_to_self :
-    Lynx.run (send_2 (.pid 1) (.integer 7)) =
+    Lynx.run («send/2» (.pid 1) (.integer 7)) =
       .ok (.integer 7) { currentProcess := { mailbox := [.integer 7] } } := by cbv
 
 theorem send_rejects_non_pid :
-    send_2 (.integer 1) .nil = .error (.error (.atom "badarg")) := by cbv
+    «send/2» (.integer 1) .nil = .error (.error (.atom "badarg")) := by cbv
 
 theorem send_to_missing_pid :
-    Lynx.run (send_2 (.pid 99) (.integer 7)) = .ok (.integer 7) {} := by cbv
+    Lynx.run («send/2» (.pid 99) (.integer 7)) = .ok (.integer 7) {} := by cbv
 
 /-- A dictionary update must not erase pending messages. -/
 theorem dictionary_preserves_mailbox :
     returned (Lynx.run (do
-      let _ ← send_2 (.pid 1) (.integer 7)
-      let _ ← put_2 (.atom "key") (.integer 8)
+      let _ ← «send/2» (.pid 1) (.integer 7)
+      let _ ← «put/2» (.atom "key") (.integer 8)
       receiveAny)) = some (.integer 7) := by cbv
 
 /-- Skip unmatched messages and preserve their order on either side of the match. -/
@@ -67,8 +67,8 @@ theorem receive_bindings_and_clause_priority :
 private def handshake : Result := do
   let child ← Result.spawn (do
     let _ ← receiveAtom "start"
-    send_2 (.pid 1) (.atom "done")) (fun pid => .ok (Term.pid pid))
-  let _ ← send_2 child (.atom "start")
+    «send/2» (.pid 1) (.atom "done")) (fun pid => .ok (Term.pid pid))
+  let _ ← «send/2» child (.atom "start")
   receiveAtom "done"
 
 /-- Either process can block first, and both resume with their own state. -/
@@ -78,9 +78,9 @@ theorem blocked_processes_resume :
   cbv
 
 private def interleavedSends : Result := do
-  let _ ← Result.spawn (send_2 (.pid 1) (.atom "child")) (fun pid => .ok (Term.pid pid))
-  let _ ← send_2 (.pid 1) (.atom "first")
-  let _ ← send_2 (.pid 1) (.atom "second")
+  let _ ← Result.spawn («send/2» (.pid 1) (.atom "child")) (fun pid => .ok (Term.pid pid))
+  let _ ← «send/2» (.pid 1) (.atom "first")
+  let _ ← «send/2» (.pid 1) (.atom "second")
   let first ← receiveAny
   let second ← receiveAny
   let third ← receiveAny
@@ -96,8 +96,8 @@ theorem send_is_a_scheduling_boundary :
   cbv
 
 private def twoSenders : Result := do
-  let _ ← Result.spawn (send_2 (.pid 1) (.atom "left")) (fun pid => .ok (Term.pid pid))
-  let _ ← Result.spawn (send_2 (.pid 1) (.atom "right")) (fun pid => .ok (Term.pid pid))
+  let _ ← Result.spawn («send/2» (.pid 1) (.atom "left")) (fun pid => .ok (Term.pid pid))
+  let _ ← Result.spawn («send/2» (.pid 1) (.atom "right")) (fun pid => .ok (Term.pid pid))
   let first ← receiveAny
   let second ← receiveAny
   pure (.tuple #[first, second])
@@ -134,7 +134,7 @@ theorem blocking_is_not_an_exception :
 /-- A selected receive body still raises in the receiving process. -/
 theorem receive_body_exception_is_caught :
     returned (Lynx.run (do
-      let _ ← send_2 (.pid 1) (.integer 7)
+      let _ ← «send/2» (.pid 1) (.integer 7)
       tryCatch (Result.receive some (fun _ => .error (.error (.atom "failure"))))
         (fun _ => .ok (.atom "caught")))) = some (.atom "caught") := by cbv
 
@@ -142,12 +142,12 @@ theorem receive_body_exception_is_caught :
 theorem terminated_child_is_not_revived :
     Lynx.run (do
       let child ← Result.spawn (.ok .nil) (fun pid => .ok (Term.pid pid))
-      send_2 child (.atom "ignored")) [.swap 2] =
+      «send/2» child (.atom "ignored")) [.swap 2] =
       .ok (.atom "ignored") { pidCounter := 2 } := by cbv
 
 /-- Root termination also closes its mailbox while the remaining children finish. -/
 theorem terminated_root_discards_late_messages :
-    mailbox (Lynx.run (Result.spawn (send_2 (.pid 1) (.atom "late"))
+    mailbox (Lynx.run (Result.spawn («send/2» (.pid 1) (.atom "late"))
       (fun _ => .ok .nil))) = [] := by cbv
 
 /-- Child exceptions do not become exceptions in the unlinked parent. -/
@@ -157,14 +157,14 @@ theorem child_exception_is_isolated :
       .ok (.atom "done") { pidCounter := 2 } := by cbv
 
 private def isolatedDictionaries : Result := do
-  let _ ← put_2 (.atom "key") (.atom "parent")
+  let _ ← «put/2» (.atom "key") (.atom "parent")
   let child ← Result.spawn (do
-    let _ ← put_2 (.atom "key") (.atom "child")
+    let _ ← «put/2» (.atom "key") (.atom "child")
     let _ ← receiveAtom "start"
-    send_2 (.pid 1) (← get_1 (.atom "key"))) (fun pid => .ok (Term.pid pid))
-  let _ ← send_2 child (.atom "start")
+    «send/2» (.pid 1) (← «get/1» (.atom "key"))) (fun pid => .ok (Term.pid pid))
+  let _ ← «send/2» child (.atom "start")
   let reply ← receiveAny
-  let own ← get_1 (.atom "key")
+  let own ← «get/1» (.atom "key")
   pure (.tuple #[own, reply])
 
 theorem suspended_processes_keep_their_dictionaries :
@@ -174,11 +174,11 @@ theorem suspended_processes_keep_their_dictionaries :
 private def receiveBoundary : Result := do
   let _ ← Result.spawn (do
     let _ ← receiveAtom "start"
-    send_2 (.pid 1) (.atom "child")) (fun pid => .ok (Term.pid pid))
-  let _ ← send_2 (.pid 2) (.atom "start")
-  let _ ← send_2 (.pid 1) (.atom "ready")
+    «send/2» (.pid 1) (.atom "child")) (fun pid => .ok (Term.pid pid))
+  let _ ← «send/2» (.pid 2) (.atom "start")
+  let _ ← «send/2» (.pid 1) (.atom "ready")
   let _ ← receiveAtom "ready"
-  let _ ← send_2 (.pid 1) (.atom "parent")
+  let _ ← «send/2» (.pid 1) (.atom "parent")
   receiveAny
 
 theorem successful_receive_is_a_scheduling_boundary :

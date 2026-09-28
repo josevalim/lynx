@@ -8,7 +8,7 @@ meta section
 
 /-! Snapshot of public types and executable declarations available through `Lynx`
 and the runner command.
-Inspect the exporting environment across every Lynx module, so internal helpers
+Inspect the exporting environment across every Lynx and Erlang module, so internal helpers
 cannot escape the check by living in a module omitted from a contributor list.
 Proofs, generated declarations, and meta elaborator code are not snapshotted. -/
 
@@ -16,6 +16,39 @@ namespace LynxTest.PublicApi
 open Lean Elab Command
 
 private def expectedDeclarations : Array String := #[
+  "Erlang.erlang.«++/2»",
+  "Erlang.erlang.«+/2»",
+  "Erlang.erlang.«/=/2»",
+  "Erlang.erlang.«</2»",
+  "Erlang.erlang.«=/=/2»",
+  "Erlang.erlang.«=:=/2»",
+  "Erlang.erlang.«=</2»",
+  "Erlang.erlang.«==/2»",
+  "Erlang.erlang.«>/2»",
+  "Erlang.erlang.«>=/2»",
+  "Erlang.erlang.«andalso/2»",
+  "Erlang.erlang.«apply/2»",
+  "Erlang.erlang.«bit_size/1»",
+  "Erlang.erlang.«byte_size/1»",
+  "Erlang.erlang.«erase/0»",
+  "Erlang.erlang.«erase/1»",
+  "Erlang.erlang.«get/0»",
+  "Erlang.erlang.«get/1»",
+  "Erlang.erlang.«get_keys/0»",
+  "Erlang.erlang.«get_keys/1»",
+  "Erlang.erlang.«is_binary/1»",
+  "Erlang.erlang.«is_bitstring/1»",
+  "Erlang.erlang.«is_float/1»",
+  "Erlang.erlang.«is_integer/1»",
+  "Erlang.erlang.«is_list/1»",
+  "Erlang.erlang.«put/2»",
+  "Erlang.erlang.«self/0»",
+  "Erlang.erlang.«send/2»",
+  "Erlang.erlang.«spawn/1»",
+  "Erlang.maps.«get/2»",
+  "Erlang.maps.«merge/2»",
+  "Erlang.maps.«new/0»",
+  "Erlang.maps.«put/3»",
   "Lynx.Accepted",
   "Lynx.Covered",
   "Lynx.EnsuresClauses",
@@ -32,39 +65,6 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Exception.error",
   "Lynx.Exception.exit",
   "Lynx.Exception.throw",
-  "Lynx.Modules.Erlang.add_2",
-  "Lynx.Modules.Erlang.andalso_2",
-  "Lynx.Modules.Erlang.append_2",
-  "Lynx.Modules.Erlang.apply_2",
-  "Lynx.Modules.Erlang.bit_size_1",
-  "Lynx.Modules.Erlang.byte_size_1",
-  "Lynx.Modules.Erlang.equal_2",
-  "Lynx.Modules.Erlang.erase_0",
-  "Lynx.Modules.Erlang.erase_1",
-  "Lynx.Modules.Erlang.exact_equal_2",
-  "Lynx.Modules.Erlang.exact_not_equal_2",
-  "Lynx.Modules.Erlang.get_0",
-  "Lynx.Modules.Erlang.get_1",
-  "Lynx.Modules.Erlang.get_keys_0",
-  "Lynx.Modules.Erlang.get_keys_1",
-  "Lynx.Modules.Erlang.greater_than_2",
-  "Lynx.Modules.Erlang.greater_than_or_equal_2",
-  "Lynx.Modules.Erlang.is_binary_1",
-  "Lynx.Modules.Erlang.is_bitstring_1",
-  "Lynx.Modules.Erlang.is_float_1",
-  "Lynx.Modules.Erlang.is_integer_1",
-  "Lynx.Modules.Erlang.is_list_1",
-  "Lynx.Modules.Erlang.less_than_2",
-  "Lynx.Modules.Erlang.less_than_or_equal_2",
-  "Lynx.Modules.Erlang.not_equal_2",
-  "Lynx.Modules.Erlang.put_2",
-  "Lynx.Modules.Erlang.self_0",
-  "Lynx.Modules.Erlang.send_2",
-  "Lynx.Modules.Erlang.spawn_1",
-  "Lynx.Modules.Maps.get_2",
-  "Lynx.Modules.Maps.merge_2",
-  "Lynx.Modules.Maps.new_0",
-  "Lynx.Modules.Maps.put_3",
   "Lynx.Outcome",
   "Lynx.Outcome.deadlock",
   "Lynx.Outcome.error",
@@ -155,6 +155,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.instToStringSourceLabel",
   "Lynx.run",
   "main",
+
 ]
 
 private def sorted (items : List String) : Array String :=
@@ -169,7 +170,7 @@ private def actualDeclarations : MetaM (Array String) := do
         let moduleName := env.header.moduleNames[moduleIdx.toNat]!.toString
         let isGenerated := (← Lean.isAutoDeclOrPrivate_Internal name) ||
           Lean.isRecCore env name || Lean.Meta.isInstanceCore env name.getPrefix
-        if (moduleName == "Lynx" || moduleName.startsWith "Lynx.") &&
+        if (moduleName == "Lynx" || moduleName.startsWith "Lynx." || moduleName.startsWith "Erlang.") &&
             (env.find? name).isSome && !isMarkedMeta env name &&
             !isPrivateName name && !isGenerated then
           if ← Meta.isProp info.type then pure none else pure (some name.toString)

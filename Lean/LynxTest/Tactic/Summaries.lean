@@ -2,21 +2,21 @@ import Lynx
 import LynxTest.ProofAudit
 
 namespace LynxTest.Tactic.Summaries
-open Lynx Lynx.Modules
+open Lynx
 set_option Elab.async false
 
 private def count : Term → Result
   | .nil => .ok (.integer 0)
   | .cons _ tail => do
     let size ← count tail
-    Erlang.add_2 (.integer 1) size
+    Erlang.erlang.«+/2» (.integer 1) size
   | _ => .error (.error (.atom "function_clause"))
 
 #lynx_pure private def properList : Term → Result
   | .nil => .ok Term.true
   | .cons _ tail => properList tail
   | _ => .ok Term.false
-private def integerResult (_ result : Term) : Result := Erlang.is_integer_1 result
+private def integerResult (_ result : Term) : Result := Erlang.erlang.«is_integer/1» result
 private def anyInput (_ : Term) : Result := .ok Term.true
 
 /-- A speculative proof must not leave cache entries tied to discarded state. -/
@@ -39,7 +39,7 @@ theorem rejects_stronger_claims : True := by
     have : Satisfies count anyInput integerResult := by lynx_verify
   fail_if_success
     have : Satisfies count properList
-        (fun _ result => Erlang.equal_2 result (.integer 0)) := by lynx_verify
+        (fun _ result => Erlang.erlang.«==/2» result (.integer 0)) := by lynx_verify
   trivial
 
 end LynxTest.Tactic.Summaries

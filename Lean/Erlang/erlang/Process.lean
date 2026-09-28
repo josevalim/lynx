@@ -6,19 +6,19 @@ public section
 
 /-! Erlang process identity, local messaging, and process-dictionary operations. -/
 
-namespace Lynx.Modules.Erlang
+namespace Erlang.erlang
 
 open Lynx
 
 /-- Return the PID of the process running the current computation. -/
-def self_0 : Result := do
+def «self/0» : Result := do
   let env ← get
   .ok (.pid env.currentPid)
 
 /-- Send to a local PID and return the message. A nonexistent or terminated
 PID silently discards the message. Registered names and remote destinations
 are not modeled. Sending is a scheduler boundary, even to self or a dead PID. -/
-def send_2 (destination message : Term) : Result :=
+def «send/2» (destination message : Term) : Result :=
   match destination with
   | .pid pid => .send pid message (.ok message)
   | _ => .error (.error (.atom "badarg"))
@@ -42,45 +42,45 @@ private def undefinedOr : Option Term → Term
   | some value => value
   | none => .atom "undefined"
 
-/-- Return all process-dictionary bindings. Their order is unspecified by Erlang. -/
-def get_0 : Result := do
+/-- Return all process-dictionary bindings. Their order is unspecified by Erlang.erlang. -/
+def «get/0» : Result := do
   let env ← get
   .ok (termList (env.pdict.map fun (key, value) => .tuple #[key, value]))
 
 /-- Return the value stored under `key`, or `undefined`. -/
-def get_1 (key : Term) : Result := do
+def «get/1» (key : Term) : Result := do
   let env ← get
   .ok (undefinedOr (pdictFind key env.pdict))
 
-/-- Return all process-dictionary keys. Their order is unspecified by Erlang. -/
-def get_keys_0 : Result := do
+/-- Return all process-dictionary keys. Their order is unspecified by Erlang.erlang. -/
+def «get_keys/0» : Result := do
   let env ← get
   .ok (termList (env.pdict.map Prod.fst))
 
 /-- Return all keys associated with a semantically equal value. -/
-def get_keys_1 (value : Term) : Result := do
+def «get_keys/1» (value : Term) : Result := do
   let env ← get
   .ok (termList (env.pdict.filterMap fun entry =>
     if Term.exactCompare value entry.2 = .eq then some entry.1 else none))
 
 /-- Store a binding and return its previous value, or `undefined`. -/
-def put_2 (key value : Term) : Result := do
+def «put/2» (key value : Term) : Result := do
   let env ← get
   let previous := undefinedOr (pdictFind key env.pdict)
   set (env.setPdict ((key, value) :: pdictRemove key env.pdict))
   .ok previous
 
 /-- Return all process-dictionary bindings and clear the dictionary. -/
-def erase_0 : Result := do
+def «erase/0» : Result := do
   let env ← get
   set (env.setPdict [])
   .ok (termList (env.pdict.map fun (key, value) => .tuple #[key, value]))
 
 /-- Delete `key` and return its previous value. -/
-def erase_1 (key : Term) : Result := do
+def «erase/1» (key : Term) : Result := do
   let env ← get
   let previous := undefinedOr (pdictFind key env.pdict)
   set (env.setPdict (pdictRemove key env.pdict))
   .ok previous
 
-end Lynx.Modules.Erlang
+end Erlang.erlang

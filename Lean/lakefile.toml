@@ -7,5 +7,9 @@ testDriver = "LynxTest"
 name = "Lynx"
 
 [[lean_lib]]
+name = "Erlang"
+globs = ["Erlang.+"]
+
+[[lean_lib]]
 name = "LynxTest"
 globs = ["LynxTest.+"]

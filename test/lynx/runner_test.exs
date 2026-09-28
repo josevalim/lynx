@@ -35,7 +35,7 @@ defmodule Lynx.RunnerTest do
       request =
         @sum_json
         |> File.read!()
-        |> String.replace("Lynx.Modules.Erlang.add_2", "Lynx.Modules.Erlang.unknown_2")
+        |> String.replace("Erlang.erlang.«+/2»", "Erlang.erlang.«unknown/2»")
 
       assert %{"status" => "error", "diagnostics" => diagnostics} =
                Lynx.Commands.runner!(@lean_dir, "verify", request)

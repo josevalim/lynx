@@ -12,14 +12,14 @@ compilation so they receive the generated program's function table. Any future
 function with the same requirement must be added here.
 -/
 
-namespace Lynx.Modules.Erlang
+namespace Erlang.erlang
 
 open Lynx
 
 /-- Spawn a zero-arity function term. Resolution and arity validation happen in
 the caller before the child is scheduled. `Result.bind` captures the caller
 continuation for scheduling. -/
-def spawn_1 (table : Term.FunTable) (child : Term) : Result :=
+def «spawn/1» (table : Term.FunTable) (child : Term) : Result :=
   match Term.fetchFun table child with
   | some (implementation, 0) =>
       .spawn (implementation #[]) fun pid => .ok (.pid pid)
@@ -32,7 +32,7 @@ private def properList? : Term → Option (List Term)
 
 /-- Dynamically apply a function to an Erlang list of arguments. Internal
 application uses an array and does not retain the source list encoding. -/
-def apply_2 (table : Term.FunTable) (function arguments : Term) : Result :=
+def «apply/2» (table : Term.FunTable) (function arguments : Term) : Result :=
   match properList? arguments with
   | none => .error (.error (.atom "badarg"))
   | some decoded =>
@@ -45,4 +45,4 @@ def apply_2 (table : Term.FunTable) (function arguments : Term) : Result :=
             .error (.error
               (.tuple #[.atom "badarity", .tuple #[function, arguments]]))
 
-end Lynx.Modules.Erlang
+end Erlang.erlang

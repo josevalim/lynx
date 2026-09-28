@@ -58,7 +58,7 @@ def rememberFirst (input : Term) : Result := do
   let value ← first input
   let env ← get
   set (env.setPdict [(.atom "first", value)])
-  Modules.Erlang.get_1 (.atom "first")
+  Erlang.erlang.«get/1» (.atom "first")
 
 theorem stateful_continuation (head tail : Term) (env : Environment) :
     rememberFirst (.cons head tail) env =
