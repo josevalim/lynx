@@ -22,6 +22,20 @@ end Lynx
 
 namespace Lynx.Term
 
+/-- Apply a function to native arguments. Build an Erlang argument list only
+when reporting an arity mismatch. -/
+public def apply (function : Term) (arguments : Array Term) : Result :=
+  match function with
+  | .function _ arity _ =>
+      if arguments.size = arity then
+        .apply function arguments fun
+          | .ok value => .ok value
+          | .error exception => .error exception
+      else
+        .error (.error (.tuple #[.atom "badarity", .tuple #[function,
+          arguments.toList.foldr Term.cons Term.nil]]))
+  | _ => .error (.error (.tuple #[.atom "badfun", function]))
+
 /-- Empty Erlang map literal. -/
 @[expose, simp] public def emptyMap : Term := .map []
 

@@ -24,13 +24,12 @@ public def «run/1» (_0 : Lynx.Term) : Lynx.Result :=
   Lynx.Result.bind («make/1» _0) fun vF =>
     Lynx.Result.bind (Erlang.erlang.«+/2» _0 (Lynx.Term.integer 10)) fun _2 =>
       Lynx.Result.bind («make/1» _2) fun vG =>
-        Lynx.Result.bind
-          (Erlang.erlang.«apply/2» vF (Lynx.Term.cons (Lynx.Term.integer 1) Lynx.Term.nil))
+        Lynx.Result.bind (Lynx.Term.apply vF (Array.mk (List.cons (Lynx.Term.integer 1) List.nil)))
           fun vA =>
           Lynx.Result.bind («explicit/2» vG (Lynx.Term.cons (Lynx.Term.integer 2) Lynx.Term.nil))
             fun vB =>
             Lynx.Result.bind (Lynx.Result.ok (Lynx.Term.function 0 1 (Array.mk List.nil))) fun _6 =>
               Lynx.Result.bind (Erlang.erlang.«+/2» vA vB) fun _8 =>
-                Erlang.erlang.«apply/2» _6 (Lynx.Term.cons _8 Lynx.Term.nil)
+                Lynx.Term.apply _6 (Array.mk (List.cons _8 List.nil))
 
 end Erlang.functions

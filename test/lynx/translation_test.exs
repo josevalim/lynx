@@ -299,38 +299,62 @@ defmodule Lynx.TranslationTest do
         assert %{local_calls: []} = functions[{name, 1}]
       end
 
-      for name <- [:dynamic, :explicit] do
-        assert %{"body" => %{"cases" => [%{"body" => call} | _]}} =
-                 functions[{name, 1}].translation
+      assert %{"body" => %{"cases" => [%{"body" => dynamic} | _]}} =
+               functions[{:dynamic, 1}].translation
 
-        assert %{
-                 "function" => %{"name" => "Erlang.erlang.«apply/2»"},
-                 "args" => [%{"name" => "«vF»"}, args]
-               } = call
+      assert %{
+               "function" => %{"name" => "Lynx.Term.apply"},
+               "args" => [
+                 %{"name" => "«vF»"},
+                 %{"function" => %{"name" => "Array.mk"}, "args" => [args]}
+               ]
+             } = dynamic
 
-        assert %{
-                 "function" => %{"name" => "Lynx.Term.«cons»"},
-                 "args" => [
-                   %{
-                     "function" => %{"name" => "Lynx.Term.«integer»"},
-                     "args" => [%{"kind" => "integer", "value" => 7}]
-                   },
-                   %{
-                     "function" => %{"name" => "Lynx.Term.«cons»"},
-                     "args" => [%{"name" => "«vF»"}, %{"name" => "Lynx.Term.«nil»"}]
-                   }
-                 ]
-               } = args
-      end
+      assert %{
+               "function" => %{"name" => "List.cons"},
+               "args" => [
+                 %{
+                   "function" => %{"name" => "Lynx.Term.integer"},
+                   "args" => [%{"kind" => "integer", "value" => 7}]
+                 },
+                 %{
+                   "function" => %{"name" => "List.cons"},
+                   "args" => [%{"name" => "«vF»"}, %{"name" => "List.nil"}]
+                 }
+               ]
+             } = args
 
-      assert %{"body" => %{"cases" => [%{"body" => zero} | _]}} =
-               functions[{:zero, 1}].translation
+      assert %{"body" => %{"cases" => [%{"body" => explicit} | _]}} =
+               functions[{:explicit, 1}].translation
 
       assert %{
                "function" => %{"name" => "Erlang.erlang.«apply/2»"},
                "args" => [
                  %{"name" => "«vF»"},
-                 %{"name" => "Lynx.Term.«nil»"}
+                 %{
+                   "function" => %{"name" => "Lynx.Term.cons"},
+                   "args" => [
+                     %{
+                       "function" => %{"name" => "Lynx.Term.integer"},
+                       "args" => [%{"kind" => "integer", "value" => 7}]
+                     },
+                     %{
+                       "function" => %{"name" => "Lynx.Term.cons"},
+                       "args" => [%{"name" => "«vF»"}, %{"name" => "Lynx.Term.nil"}]
+                     }
+                   ]
+                 }
+               ]
+             } = explicit
+
+      assert %{"body" => %{"cases" => [%{"body" => zero} | _]}} =
+               functions[{:zero, 1}].translation
+
+      assert %{
+               "function" => %{"name" => "Lynx.Term.apply"},
+               "args" => [
+                 %{"name" => "«vF»"},
+                 %{"function" => %{"name" => "Array.mk"}, "args" => [%{"name" => "List.nil"}]}
                ]
              } = zero
 
@@ -345,7 +369,7 @@ defmodule Lynx.TranslationTest do
     end
   end
 
-  test "creating an impure closure is pure while dynamic calls remain neutral" do
+  test "generates a function table" do
     core =
       cerl("""
       -module(example).

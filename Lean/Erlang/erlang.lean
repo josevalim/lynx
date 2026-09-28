@@ -19,15 +19,6 @@ application uses an array and does not retain the source list encoding. -/
 def «apply/2» (function arguments : Term) : Result :=
   match properList? arguments with
   | none => .error (.error (.atom "badarg"))
-  | some decoded =>
-      match function with
-      | .function _ arity _ =>
-          if decoded.length = arity then
-            .apply function decoded.toArray fun
-              | .ok value => .ok value
-              | .error exception => .error exception
-          else
-            .error (.error (.tuple #[.atom "badarity", .tuple #[function, arguments]]))
-      | _ => .error (.error (.tuple #[.atom "badfun", function]))
+  | some decoded => Term.apply function decoded.toArray
 
 end Erlang.erlang

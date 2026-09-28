@@ -15,6 +15,7 @@ example (entry : Array Lynx.Term → Array Lynx.Term → Lynx.Result) :
 example : Lynx.Result → Lynx.Term.FunTable → Nat → Lynx.Environment → Lynx.Outcome Lynx.Term :=
   Lynx.Result.runWith
 example : Lynx.Term → Lynx.Term → Lynx.Result := Erlang.erlang.«apply/2»
+example : Lynx.Term → Array Lynx.Term → Lynx.Result := Lynx.Term.apply
 example : Lynx.Term → Lynx.Result := Erlang.erlang.«spawn/1»
 example : Lynx.Term → (Except Lynx.Exception Lynx.Term → Lynx.Result α) → Lynx.Result α :=
   Lynx.Result.spawn
@@ -139,6 +140,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.Map.find",
   "Lynx.Term.Map.merge",
   "Lynx.Term.Map.put",
+  "Lynx.Term.apply",
   "Lynx.Term.atom",
   "Lynx.Term.bitstring",
   "Lynx.Term.compare",

@@ -192,6 +192,20 @@ theorem dynamic_apply_2 :
   repeat' apply And.intro
   all_goals first | exact rfl | (cbv <;> rfl)
 
+/-- Native argument arrays preserve both the dispatch result and error payloads. -/
+theorem dynamic_apply_array :
+    Result.resolve functions 1 (Term.apply (.function 0 1 #[]) #[.integer 7]) =
+      .ok (.integer 7) ∧
+    Term.apply (.atom "not_a_fun") #[] =
+      .error (.error (.tuple #[.atom "badfun", .atom "not_a_fun"])) ∧
+    Term.apply (.function 0 0 #[]) #[.integer 7, .atom "last"] =
+      .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 0 #[],
+        .cons (.integer 7) (.cons (.atom "last") .nil)]])) ∧
+    «apply/2» (.function 0 0 #[]) (.cons (.integer 7) (.atom "improper")) =
+      .error (.error (.atom "badarg")) := by
+  repeat' apply And.intro
+  all_goals cbv
+
 private def closureFunctions : Term.FunTable := #[
   Term.FunTable.entry 1 1 fun captures args =>
     «+/2» (captures.getD 0 .nil) (args.getD 0 .nil)

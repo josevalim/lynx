@@ -92,13 +92,12 @@ expression(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args}
     {apply_node(function_name(Name), TranslatedArgs, Anno),
      State2#state{local_calls = Calls}};
 %% Erlang: F(X, Y)
-%% Lean: Erlang.erlang.«apply/2» vF (Lynx.Term.cons vX (Lynx.Term.cons vY Lynx.Term.nil))
+%% Lean: Lynx.Term.apply vF #[vX, vY]
 expression(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->
-    ArgList = lists:foldr(fun(Arg, Tail) ->
-        #c_cons{anno = Anno, hd = Arg, tl = Tail}
-    end, #c_literal{anno = Anno, val = []}, Args),
-    expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
-        name = #c_literal{val = apply}, args = [Op, ArgList]}, State0);
+    {Function, State1} = value(Op, State0),
+    {TranslatedArgs, State2} = lists:mapfoldl(fun value/2, State1, Args),
+    {apply_node(~"Lynx.Term.apply", [Function, array_node(TranslatedArgs, Anno)], Anno),
+     State2#state{dynamic = true, purity = join_purity(State2#state.purity, neutral)}};
 %% apply/2 dispatches through the program's function table and has neutral purity.
 expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
                    name = #c_literal{val = apply}, args = Args}, State0)
