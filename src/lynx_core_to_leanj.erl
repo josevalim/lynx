@@ -65,8 +65,7 @@ translate_def(Name, #state{translated = Translated} = State0) ->
             Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls),
                       purity => State2#state.purity},
             State0#state{translated = (State2#state.translated)#{Name => Entry},
-                         defs = State2#state.defs, funs = State2#state.funs,
-                         remote = State2#state.remote}
+                         funs = State2#state.funs, remote = State2#state.remote}
     end.
 
 %% Erlang: case X of [] -> 0; Other -> 1 end
@@ -132,34 +131,16 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
 %% Lean (the generated fallback body):
 %%   Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
 expression(#c_primop{anno = Anno, name = #c_literal{val = match_fail},
-                     args = [#c_literal{val = {function_clause}}]} = Core, State0) ->
-    expression(Core#c_primop{args = [#c_tuple{es = [#c_literal{anno = Anno, val = function_clause}]}]},
-               State0);
+                     args = [#c_literal{val = {function_clause}}]}, State) ->
+    {error_node(function_clause, Anno), State};
 expression(#c_primop{anno = Anno, name = #c_literal{val = match_fail},
-                     args = [#c_tuple{es = [#c_literal{val = function_clause} | _]}]}, State0) ->
-    {Reason, State1} = value(#c_literal{anno = Anno, val = function_clause}, State0),
-    Exception = apply_node(~"Lynx.Exception.error", [Reason], Anno),
-    {apply_node(~"Lynx.Result.error", [Exception], Anno), State1};
-%% Erlang: 0
+                     args = [#c_tuple{es = [#c_literal{val = function_clause} | _]}]}, State) ->
+    {error_node(function_clause, Anno), State};
+%% Everything else (literals, cons, etc)
 %% Lean: Lynx.Result.ok (Lynx.Term.integer 0)
-expression(#c_literal{anno = Anno} = Literal, State0) ->
-    {Translated, State1} = value(Literal, State0),
-    {apply_node(~"Lynx.Result.ok", [Translated], Anno), State1};
-%% Erlang: X
-%% Lean: Lynx.Result.ok vX
-expression(#c_var{anno = Anno} = Var, State0) ->
-    {Translated, State1} = value(Var, State0),
-    {apply_node(~"Lynx.Result.ok", [Translated], Anno), State1};
-expression(#c_fun{anno = Anno} = Fun, State0) ->
-    {Translated, State1} = value(Fun, State0),
-    {apply_node(~"Lynx.Result.ok", [Translated], Anno), State1};
-expression(#c_cons{anno = Anno} = Cons, State0) ->
-    {Translated, State1} = value(Cons, State0),
-    {apply_node(~"Lynx.Result.ok", [Translated], Anno), State1};
-%% Erlang: receive X -> X end
-%% Lean: no translation; translate/6 returns {unsupported_core, SpanAnno, CoreString}.
-expression(Core, _State) ->
-    unsupported(Core).
+expression(Value, State0) ->
+    {Translated, State1} = value(Value, State0),
+    {apply_node(~"Lynx.Result.ok", [Translated], cerl:get_ann(Value)), State1}.
 
 clause(#c_clause{anno = Anno, pats = Patterns, guard = #c_literal{val = true}, body = Body}, State0) ->
     {Pats, State1} = lists:mapfoldl(fun value/2, State0, Patterns),
@@ -197,8 +178,9 @@ value(#c_var{} = Var, State) ->
 value(#c_literal{anno = Anno, val = []}, State) ->
     {ident_node(~"Lynx.Term.nil", Anno), State};
 value(#c_literal{anno = Anno, val = [Head | Tail]}, State0) ->
-    value(#c_cons{anno = Anno, hd = #c_literal{anno = Anno, val = Head},
-                  tl = #c_literal{anno = Anno, val = Tail}}, State0);
+    {TranslatedHead, State1} = value(#c_literal{anno = Anno, val = Head}, State0),
+    {TranslatedTail, State2} = value(#c_literal{anno = Anno, val = Tail}, State1),
+    {apply_node(~"Lynx.Term.cons", [TranslatedHead, TranslatedTail], Anno), State2};
 value(#c_literal{anno = Anno, val = N}, State) when is_integer(N) ->
     {apply_node(~"Lynx.Term.integer", [node(~"integer", Anno, #{~"value" => N})], Anno), State};
 value(#c_literal{anno = Anno, val = Atom}, State) when is_atom(Atom) ->
@@ -254,7 +236,14 @@ quote_identifier(Name) ->
 ident_node(Name, Anno) ->
     node(~"ident", Anno, #{~"name" => Name}).
 
-apply_node(Name, [], Anno) -> ident_node(Name, Anno);
+error_node(Reason, Anno) ->
+    String = node(~"string", Anno, #{~"value" => atom_to_binary(Reason, utf8)}),
+    Atom = apply_node(~"Lynx.Term.atom", [String], Anno),
+    Exception = apply_node(~"Lynx.Exception.error", [Atom], Anno),
+    apply_node(~"Lynx.Result.error", [Exception], Anno).
+
+apply_node(Name, [], Anno) ->
+    ident_node(Name, Anno);
 apply_node(Name, Args, Anno) ->
     node(~"apply", Anno, #{~"function" => ident_node(Name, []), ~"args" => Args}).
 
