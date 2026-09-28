@@ -5,19 +5,19 @@ defmodule Lynx.Translation do
 
   @external_resource Path.expand("../../Lean/modules.json", __DIR__)
   for {module, functions} <- JSON.decode!(File.read!(@external_resource)),
-      {name, _metadata} <- functions do
+      {name, %{"pure" => pure}} <- functions do
     [arity | parts] = name |> String.split("/") |> Enum.reverse()
     function = parts |> Enum.reverse() |> Enum.join("/") |> String.to_atom()
 
-    defp runtime_function?(
+    defp runtime_purity(
            unquote(String.to_atom(module)),
            unquote(function),
            unquote(String.to_integer(arity))
          ),
-         do: true
+         do: {:ok, unquote(pure)}
   end
 
-  defp runtime_function?(_, _, _), do: false
+  defp runtime_purity(_, _, _), do: :error
 
   def new(cores) do
     modules =
@@ -44,7 +44,7 @@ defmodule Lynx.Translation do
 
     case :lynx_core_to_leanj.translate(name, definitions, names, translations, context) do
       {:ok, functions, translation} ->
-        updated = %{module | translations: functions}
+        updated = %{module | translations: propagate_purity(functions)}
         %{translation | modules: Map.put(translation.modules, name, updated), stack: stack}
 
       {:unsupported_core, span_anno, core} ->
@@ -67,10 +67,9 @@ defmodule Lynx.Translation do
         set -> MapSet.put(set, module)
       end)
 
-    if runtime_function?(module, function, arity) do
-      {:ok, translation}
-    else
-      translate_remote(translation, module, function, arity, span_anno)
+    case runtime_purity(module, function, arity) do
+      {:ok, pure} -> {:ok, pure, translation}
+      :error -> translate_remote(translation, module, function, arity, span_anno)
     end
   end
 
@@ -96,7 +95,9 @@ defmodule Lynx.Translation do
               ]
     end
 
-    {:ok, add(translation, module, [{function, arity}])}
+    translation = add(translation, module, [{function, arity}])
+    pure = translation.modules[module].translations[{function, arity}].pure
+    {:ok, pure, translation}
   end
 
   defp source_location(annotations, default_file) do
@@ -167,12 +168,28 @@ defmodule Lynx.Translation do
     end
   end
 
+  defp propagate_purity(functions) do
+    {functions, changed?} =
+      Enum.reduce(functions, {functions, false}, fn {name, definition}, {functions, changed?} ->
+        if definition.pure and
+             Enum.any?(definition.local_calls, fn callee ->
+               not Map.fetch!(functions, callee).pure
+             end) do
+          {Map.put(functions, name, %{definition | pure: false}), true}
+        else
+          {functions, changed?}
+        end
+      end)
+
+    if changed?, do: propagate_purity(functions), else: functions
+  end
+
   defp assemble_module(functions) do
     graph = :digraph.new()
 
     try do
-      for {name, %{translation: translation}} <- functions do
-        :digraph.add_vertex(graph, name, translation)
+      for {name, %{translation: translation, pure: pure}} <- functions do
+        :digraph.add_vertex(graph, name, {translation, pure})
       end
 
       # Edges point from callees to callers, so dependencies are emitted first.
@@ -218,10 +235,10 @@ defmodule Lynx.Translation do
   end
 
   defp emit_group(names, graph) do
-    defs =
-      Enum.map(names, fn name ->
-        {^name, translation} = :digraph.vertex(graph, name)
-        translation
+    {defs, pure} =
+      Enum.map_reduce(names, true, fn name, pure ->
+        {^name, {translation, definition_pure}} = :digraph.vertex(graph, name)
+        {translation, pure and definition_pure}
       end)
 
     [first | _] = defs
@@ -233,7 +250,10 @@ defmodule Lynx.Translation do
         _ -> %{"kind" => "mutual", "span" => span, "defs" => defs}
       end
 
-    # TODO: Track purity
-    %{"kind" => "command", "span" => span, "name" => "lynx_pure", "expr" => declaration}
+    if pure do
+      %{"kind" => "command", "span" => span, "name" => "lynx_pure", "expr" => declaration}
+    else
+      declaration
+    end
   end
 end

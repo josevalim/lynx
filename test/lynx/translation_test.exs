@@ -156,6 +156,85 @@ defmodule Lynx.TranslationTest do
              Translation.assemble(translation)
   end
 
+  test "propagates impurity through recursive groups and their callers only" do
+    core =
+      cerl("""
+      -module(example).
+      -export([entry/1, pure/1, later/1]).
+      entry(X) -> first(X).
+      first([]) -> erlang:get(key);
+      first([_ | Xs]) -> second(Xs).
+      second([]) -> 0;
+      second([_ | Xs]) -> first(Xs).
+      pure(X) -> X + 1.
+      later(X) -> entry(X).
+      """)
+
+    for roots <- [[{:entry, 1}, {:pure, 1}], [{:pure, 1}, {:entry, 1}]] do
+      translation = Translation.new([{"example.erl", core}]) |> Translation.add(:example, roots)
+      translation = Translation.add(translation, :example, [{:later, 1}])
+      functions = translation.modules.example.translations
+
+      assert functions[{:pure, 1}].pure
+      for name <- [:entry, :first, :second, :later], do: refute(functions[{name, 1}].pure)
+      assert Translation.add(translation, :example, roots) == translation
+
+      assert [%{"contents" => contents}] = Translation.assemble(translation)
+      assert Enum.count(contents, &(&1["kind"] == "command")) == 1
+      assert Enum.any?(contents, &(&1["kind"] == "mutual"))
+    end
+  end
+
+  test "tracks purity per function across remote and local call chains" do
+    caller =
+      cerl("""
+      -module(caller).
+      -export([pure/1, impure/1]).
+      pure(X) -> middle:pure(X).
+      impure(X) -> middle:impure(X).
+      """)
+
+    middle =
+      cerl("""
+      -module(middle).
+      -export([pure/1, impure/1]).
+      pure(X) -> dependency:pure(X).
+      impure(X) -> helper(X).
+      helper(X) -> dependency:impure(X).
+      """)
+
+    dependency =
+      cerl("""
+      -module(dependency).
+      -export([pure/1, impure/1]).
+      pure(X) -> X + 1.
+      impure(X) -> erlang:get(X).
+      """)
+
+    translation =
+      Translation.new([
+        {"caller.erl", caller},
+        {"middle.erl", middle},
+        {"dependency.erl", dependency}
+      ])
+      |> Translation.add(:caller, [{:impure, 1}])
+      |> Translation.add(:caller, [{:pure, 1}])
+
+    for module <- [:caller, :middle, :dependency] do
+      assert translation.modules[module].translations[{:pure, 1}].pure
+      refute translation.modules[module].translations[{:impure, 1}].pure
+    end
+
+    for %{"contents" => contents} <- Translation.assemble(translation) do
+      assert Enum.any?(
+               contents,
+               &match?(%{"name" => "lynx_pure", "expr" => %{"name" => "«pure/1»"}}, &1)
+             )
+
+      assert Enum.any?(contents, &match?(%{"kind" => "def", "name" => "«impure/1»"}, &1))
+    end
+  end
+
   describe "errors" do
     test "does not skip a runtime function with the wrong arity" do
       core =
