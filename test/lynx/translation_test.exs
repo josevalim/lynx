@@ -1,6 +1,8 @@
 defmodule Lynx.TranslationTest do
   use ExUnit.Case, async: true
 
+  alias Lynx.Translation
+
   test "clusters cycles separately and emits dependencies before callers" do
     body =
       :cerl.c_let(
@@ -28,7 +30,10 @@ defmodule Lynx.TranslationTest do
         ]
       )
 
-    assert {:ok, commands} = Lynx.Translation.module(core)
+    assert %{example: commands} =
+             Translation.new()
+             |> Translation.add(core, [{:caller, 1}, {:identity, 1}, {:self, 1}])
+             |> Translation.assemble()
 
     groups =
       Enum.map(commands, fn %{"expr" => expr} ->
@@ -51,7 +56,7 @@ defmodule Lynx.TranslationTest do
     assert Enum.find_index(groups, &("first_1" in &1)) < caller
   end
 
-  test "ignores generated module_info definitions" do
+  test "only translates requested roots" do
     core =
       :cerl.c_module(
         :cerl.c_atom(:example),
@@ -62,7 +67,8 @@ defmodule Lynx.TranslationTest do
         ]
       )
 
-    assert {:ok, []} = Lynx.Translation.module(core)
+    assert %{example: []} =
+             Translation.new() |> Translation.add(core, []) |> Translation.assemble()
   end
 
   test "propagates unsupported Core from an exported function" do
@@ -73,8 +79,44 @@ defmodule Lynx.TranslationTest do
         definition(:entry, call)
       ])
 
-    assert {:unsupported_core, text} = Lynx.Translation.module(core)
+    assert {:unsupported_core, text} = Translation.add(Translation.new(), core, [{:entry, 1}])
     assert text =~ "call 'erlang':'abs'"
+  end
+
+  test "accumulates roots across modules and reuses each module's translations" do
+    first =
+      :cerl.c_module(:cerl.c_atom(:first), [], [
+        definition(:entry, call(:helper)),
+        definition(:helper, :cerl.c_var(0)),
+        definition(:extra, :cerl.c_int(1))
+      ])
+
+    second =
+      :cerl.c_module(:cerl.c_atom(:second), [], [
+        definition(:entry, :cerl.c_int(2))
+      ])
+
+    initial = Translation.new() |> Translation.add(first, [{:entry, 1}])
+    assert Enum.sort(Map.keys(initial.modules.first)) == [{:entry, 1}, {:helper, 1}]
+
+    translation =
+      initial
+      |> Translation.add(second, [{:entry, 1}])
+      |> Translation.add(first, [{:extra, 1}])
+
+    assert Map.take(translation.modules.first, Map.keys(initial.modules.first)) ==
+             initial.modules.first
+
+    assert Enum.sort(Map.keys(translation.modules.first)) ==
+             [{:entry, 1}, {:extra, 1}, {:helper, 1}]
+
+    assert Map.keys(translation.modules.second) == [{:entry, 1}]
+    assert Translation.add(translation, first, [{:entry, 1}]) == translation
+
+    assert %{first: first_commands, second: second_commands} = Translation.assemble(translation)
+    assert Enum.map(first_commands, & &1["expr"]["name"]) == ["extra_1", "helper_1", "entry_1"]
+    assert Enum.map(second_commands, & &1["expr"]["name"]) == ["entry_1"]
+    assert Translation.assemble(Translation.new()) == %{}
   end
 
   defp definition(name, body), do: {:cerl.c_fname(name, 1), :cerl.c_fun([:cerl.c_var(0)], body)}

@@ -1,25 +1,31 @@
 defmodule Lynx.Translation do
   @moduledoc false
 
-  @doc """
-  Translates a Core module's exports and reachable local functions into Lean JSON commands.
-  """
-  @spec module(tuple()) :: {:ok, [map()]} | {:unsupported_core, binary()}
-  def module(core) do
-    exports =
-      core
-      |> :cerl.module_exports()
-      |> Enum.map(&:cerl.var_name/1)
-      |> Kernel.--([{:module_info, 0}, {:module_info, 1}])
+  defstruct modules: %{}
 
+  def new, do: %__MODULE__{}
+
+  @doc "Translates the requested functions and adds them to the module's existing translations."
+  def add(%__MODULE__{modules: modules} = translation, core, names) do
+    name = core |> :cerl.module_name() |> :cerl.atom_val()
     definitions = :lynx_core_to_leanj.to_definitions(core)
+    translated = Map.get(modules, name, %{})
 
-    with {:ok, functions} <- :lynx_core_to_leanj.translate(definitions, exports, %{}) do
-      {:ok, assemble(functions)}
+    case :lynx_core_to_leanj.translate(definitions, names, translated) do
+      {:ok, functions} ->
+        %{translation | modules: Map.put(modules, name, functions)}
+
+      {:unsupported_core, _} = error ->
+        error
     end
   end
 
-  defp assemble(functions) do
+  @doc "Assembles each module's translated functions into Lean JSON commands."
+  def assemble(%__MODULE__{modules: modules}) do
+    Map.new(modules, fn {name, functions} -> {name, assemble_module(functions)} end)
+  end
+
+  defp assemble_module(functions) do
     graph = :digraph.new()
 
     try do
@@ -33,7 +39,12 @@ defmodule Lynx.Translation do
       end
 
       components = :digraph_utils.condensation(graph)
-      for group <- topsort(components), do: emit_group(group, graph)
+
+      try do
+        for group <- topsort(components), do: emit_group(group, graph)
+      after
+        :digraph.delete(components)
+      end
     after
       :digraph.delete(graph)
     end
