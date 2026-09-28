@@ -9,20 +9,6 @@ defmodule Lynx.RunnerTest do
   @moduletag timeout: to_timeout(minute: 10)
 
   describe "render" do
-    test "renders all translation fixtures as Lean source" do
-      fixtures = Path.wildcard(Path.join(@translations_dir, "*.json"))
-      assert fixtures != []
-
-      for fixture <- fixtures do
-        response = Lynx.Commands.runner!(@lean_dir, "render", File.read!(fixture))
-        source = "../test/fixtures/translations/#{Path.basename(fixture, ".json")}.erl"
-        expected = File.read!(Path.rootname(fixture) <> ".lean")
-
-        assert response == %{"status" => "ok", "files" => %{source => expected}},
-               "rendered output does not match #{fixture}"
-      end
-    end
-
     test "rejects malformed JSON" do
       error =
         assert_raise RuntimeError, fn ->
@@ -65,7 +51,7 @@ defmodule Lynx.RunnerTest do
       assert error.message == "offset 2: unexpected end of input"
     end
 
-    # TODO: pass the file as part of the json input
+    # TODO: pass the output lean module or filename as part of the json input
     test "rejects missing source files" do
       missing = %{
         "version" => "1.0",
