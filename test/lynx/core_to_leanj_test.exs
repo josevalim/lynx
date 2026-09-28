@@ -87,6 +87,20 @@ defmodule Lynx.CoreToLeanjTest do
     assert span_anno == [{:file, ~c"foo"}, {7, 3}]
   end
 
+  test "qualifies remote function names with Erlang and Elixir namespaces" do
+    for {module, expected} <- [
+          {:other, "Erlang.other.entry_1"},
+          {Foo.Bar, "Elixir.Foo.Bar.entry_1"}
+        ] do
+      body = :cerl.c_call(:cerl.c_atom(module), :cerl.c_atom(:entry), [:cerl.c_var(0)])
+
+      assert {:ok, functions, [{^module, :entry, 1, []}]} =
+               translate(definitions([definition(:entry, body)]))
+
+      assert functions[{:entry, 1}].translation["body"]["function"]["name"] == expected
+    end
+  end
+
   defp translate(definitions, translated \\ %{}) do
     callback = fn calls, module, function, arity, span_anno ->
       {:ok, [{module, function, arity, span_anno} | calls]}

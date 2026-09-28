@@ -1,10 +1,17 @@
 -module(lynx_core_to_leanj).
 
--export([to_definitions/1, translate/5]).
+-export([module_name/1, to_definitions/1, translate/5]).
 
 -include_lib("compiler/src/core_parse.hrl").
 
 -record(state, {module, name, defs, translated, local_calls = #{}, remote}).
+
+-spec module_name(module()) -> binary().
+module_name(Module) ->
+    case atom_to_binary(Module, utf8) of
+        <<"Elixir.", _/binary>> = Name -> Name;
+        Name -> <<"Erlang.", Name/binary>>
+    end.
 
 -spec to_definitions(cerl:c_module()) -> #{{atom(), arity()} => cerl:c_fun()}.
 to_definitions(#c_module{defs = Defs}) ->
@@ -92,7 +99,7 @@ expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
     {Args, State1} = lists:mapfoldl(fun value/2, State0, [Left, Right]),
     {apply_node(~"Lynx.Modules.Erlang.add_2", Args, Anno), State1};
 %% Erlang: other:f(X)
-%% Lean: other.f_1 vX
+%% Lean: Erlang.other.f_1 vX
 expression(#c_call{anno = Anno, module = #c_literal{val = Module},
                    name = #c_literal{val = Name}, args = Args}, State0)
         when is_atom(Module), Module =/= erlang, is_atom(Name) ->
@@ -100,7 +107,7 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
     Arity = length(Args),
     {Context, Callback} = State1#state.remote,
     {ok, NewContext} = Callback(Context, Module, Name, Arity, Anno),
-    Function = <<(atom_to_binary(Module, utf8))/binary, ".", (function_name({Name, Arity}))/binary>>,
+    Function = <<(module_name(Module))/binary, ".", (function_name({Name, Arity}))/binary>>,
     {apply_node(Function, TranslatedArgs, Anno), State1#state{remote = {NewContext, Callback}}};
 %% Erlang: f([]) -> ok.
 %% Core inserts match_fail for arguments that match no function clause.
