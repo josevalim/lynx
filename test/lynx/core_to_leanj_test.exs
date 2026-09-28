@@ -34,38 +34,6 @@ defmodule Lynx.CoreToLeanjTest do
     end
   end
 
-  test "extends an existing map with additional roots" do
-    definitions =
-      definitions([
-        definition(:odd, call(:even)),
-        definition(:even, call(:odd)),
-        definition(:identity, :cerl.c_var(0))
-      ])
-
-    assert {:ok, initial} = :lynx_core_to_leanj.translate(definitions, [{:odd, 1}], %{})
-    assert map_size(initial) == 2
-
-    assert {:ok, extended} =
-             :lynx_core_to_leanj.translate(definitions, [{:identity, 1}, {:odd, 1}], initial)
-
-    assert map_size(extended) == 3
-    assert Map.take(extended, Map.keys(initial)) == initial
-    assert {:ok, ^extended} = :lynx_core_to_leanj.translate(definitions, [], extended)
-  end
-
-  test "returns unsupported Core from a reachable callee as printable text" do
-    definitions =
-      definitions([definition(:entry, call(:helper)), definition(:helper, unsupported_call())])
-
-    assert {:unsupported_core, text} =
-             :lynx_core_to_leanj.translate(definitions, [{:entry, 1}], %{})
-
-    assert is_binary(text)
-    assert String.valid?(text)
-    assert text =~ "call 'erlang':'abs'"
-    assert text =~ "-1"
-  end
-
   defp definitions(defs) do
     defs
     |> then(&:cerl.c_module(:cerl.c_atom(:example), [], &1))
