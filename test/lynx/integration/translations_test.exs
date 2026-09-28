@@ -33,13 +33,12 @@ defmodule Lynx.Integration.TranslationTest do
         |> Enum.map(&:cerl.var_name/1)
         |> Kernel.--([{:module_info, 0}, {:module_info, 1}])
 
-      assert %Lynx.Translation{} =
-               translation =
-               Lynx.Translation.new() |> Lynx.Translation.add(core, exports)
+      files =
+        Lynx.Translation.new([{source, core}])
+        |> Lynx.Translation.add(module, exports)
+        |> Lynx.Translation.assemble()
 
-      commands = Lynx.Translation.assemble(translation)[module]
-
-      request = %{"version" => "1.0", "files" => %{source => commands}}
+      request = %{"version" => "1.0", "files" => files}
 
       assert request == JSON.decode!(File.read!(Path.rootname(fixture) <> ".json")),
              "translated output does not match #{fixture}"

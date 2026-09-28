@@ -55,11 +55,10 @@ defmodule Lynx.RunnerTest do
       assert error.message == "offset 2: unexpected end of input"
     end
 
-    # TODO: pass the output lean module or filename as part of the json input
     test "rejects missing source files" do
       missing = %{
         "version" => "1.0",
-        "files" => %{"../test/fixtures/translations/missing.erl" => []}
+        "files" => [file("../test/fixtures/translations/missing.erl", "missing", [])]
       }
 
       error =
@@ -79,7 +78,7 @@ defmodule Lynx.RunnerTest do
         ] do
       request = %{
         "version" => "1.0",
-        "files" => %{@sum_erl => [%{"kind" => "mutual", "span" => [], "defs" => defs}]}
+        "files" => [file(@sum_erl, "sum", [%{"kind" => "mutual", "span" => [], "defs" => defs}])]
       }
 
       error =
@@ -94,7 +93,7 @@ defmodule Lynx.RunnerTest do
   test "rejects invalid instructions" do
     invalid = %{
       "version" => "1.0",
-      "files" => %{@sum_erl => [%{"kind" => "unknown", "span" => []}]}
+      "files" => [file(@sum_erl, "sum", [%{"kind" => "unknown", "span" => []}])]
     }
 
     error =
@@ -104,5 +103,9 @@ defmodule Lynx.RunnerTest do
 
     assert error.message =~ @sum_erl
     assert error.message =~ "unsupported command kind 'unknown'"
+  end
+
+  defp file(path, module, contents, imports \\ []) do
+    %{"file" => path, "module" => module, "contents" => contents, "imports" => imports}
   end
 end

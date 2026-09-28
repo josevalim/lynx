@@ -21,7 +21,9 @@ defmodule Lynx.CoreToLeanjTest do
         definition(:unused, unsupported_call())
       ])
 
-    assert {:ok, functions} = :lynx_core_to_leanj.translate(definitions, [{:entry, 1}], %{})
+    assert {:ok, functions} =
+             :lynx_core_to_leanj.translate(:example, definitions, [{:entry, 1}], %{})
+
     assert Enum.sort(Map.keys(functions)) == [{:entry, 1}, {:even, 1}, {:helper, 1}, {:odd, 1}]
     assert Enum.sort(functions[{:entry, 1}].local_calls) == [{:even, 1}, {:helper, 1}, {:odd, 1}]
     assert functions[{:odd, 1}].local_calls == [{:even, 1}]
