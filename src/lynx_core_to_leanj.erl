@@ -1,74 +1,46 @@
 -module(lynx_core_to_leanj).
 
--export([translate/1]).
+-export([to_definitions/1, translate/3]).
 
 -include_lib("compiler/src/core_parse.hrl").
 
--record(state, {name, graph}).
+-record(state, {name, defs, translated, local_calls = #{}}).
 
-%% Translate the Core tree returned by the debug_info backend's core_v1
-%% format into a list of JSON-encodable Lynx commands for one module.
+-spec to_definitions(cerl:c_module()) -> #{{atom(), arity()} => cerl:c_fun()}.
+to_definitions(#c_module{defs = Defs}) ->
+    maps:from_list([{Name, Fun} || {#c_var{name = Name}, Fun} <- Defs]).
+
+%% Translate the requested functions and their reachable local callees.
+%% The supplied map contains functions already translated from this module.
 %% Unsupported constructs return their pretty-printed Core as a UTF-8 binary.
--spec translate(cerl:c_module()) -> {ok, [map()]} | {unsupported_core, binary()}.
-translate(#c_module{defs = Defs}) ->
-    Graph = digraph:new(),
+-spec translate(#{{atom(), arity()} => cerl:c_fun()}, [{atom(), arity()}], map()) ->
+    {ok, map()} | {unsupported_core, binary()}.
+translate(Definitions, Names, Translated) ->
     try
-        Functions = [begin
-            digraph:add_vertex(Graph, Name),
-            Def
-        end || {#c_var{name = Name}, _} = Def <- Defs,
-               Name =/= {module_info, 0}, Name =/= {module_info, 1}],
-        [translate_def(Def, Graph) || Def <- Functions],
-        {ok, cluster(Graph)}
+        Acc = lists:foldl(fun(Name, Acc) -> translate_def(Name, Definitions, Acc) end,
+                            Translated, Names),
+        {ok, Acc}
     catch
         throw:{unsupported_core, Core} ->
             {unsupported_core, unicode:characters_to_binary(core_pp:format(Core))}
-    after
-        digraph:delete(Graph)
     end.
 
-translate_def({#c_var{name = Name}, #c_fun{anno = Anno, vars = Vars, body = Body}}, Graph) ->
-    {TranslatedBody, _State} = expression(Body, #state{name = Name, graph = Graph}),
-    Def = node(~"def", Anno, #{
-        ~"name" => function_name(Name),
-        ~"params" => [variable(Var) || Var <- Vars],
-        ~"body" => TranslatedBody
-    }),
-    digraph:add_vertex(Graph, Name, Def).
-
-%% Condensation collapses recursive groups into vertices of an acyclic graph.
-%% Edges point from callees to callers, so topsort emits dependencies first.
-cluster(Graph) ->
-    Components = digraph_utils:condensation(Graph),
-    try
-        [emit_group(Group, Graph) || Group <- topsort(Components)]
-    after
-        digraph:delete(Components)
+translate_def(Name, Definitions, Translated) ->
+    case maps:is_key(Name, Translated) of
+        true -> Translated;
+        false ->
+            #c_fun{anno = Anno, vars = Vars, body = Body} = maps:get(Name, Definitions),
+            State1 = #state{name = Name, local_calls = #{}, defs = Definitions, 
+                            translated = Translated#{Name => pending}},
+            {TranslatedBody, State2} = expression(Body, State1),
+            Def = node(~"def", Anno, #{
+                ~"name" => function_name(Name),
+                ~"params" => [variable(Var) || Var <- Vars],
+                ~"body" => TranslatedBody
+            }),
+            Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls)},
+            (State2#state.translated)#{Name => Entry}
     end.
-
-%% Alphabetize each ready batch. OTP's topsort leaves ties in arbitrary order.
-%% The condensed graph is acyclic and is no longer needed after this traversal.
-topsort(Graph) ->
-    Ready = lists:sort([{lists:sort(Group), Group} || Group <- digraph:vertices(Graph),
-                                                      digraph:in_degree(Graph, Group) =:= 0]),
-    case Ready of
-        [] -> [];
-        _ ->
-            [digraph:del_vertex(Graph, Group) || {_, Group} <- Ready],
-            [Names || {Names, _} <- Ready] ++ topsort(Graph)
-    end.
-
-emit_group(Names, Graph) ->
-    Defs = [Def || Name <- Names, {_, Def} <- [digraph:vertex(Graph, Name)]],
-    [First | _] = Defs,
-    Span = maps:get(~"span", First),
-    Declaration = case Defs of
-        [Def] -> Def;
-        _ -> #{~"kind" => ~"mutual", ~"span" => Span, ~"defs" => Defs}
-    end,
-    % TODO: Track purity
-    #{~"kind" => ~"command", ~"span" => Span,
-      ~"name" => ~"lynx_pure", ~"expr" => Declaration}.
 
 %% Erlang: case X of [] -> 0; Other -> 1 end
 %% Lean:
@@ -95,11 +67,13 @@ expression(#c_let{anno = Anno, vars = [Var], arg = Arg, body = Body}, State0) ->
 %% Lean: f_2 vX vY
 expression(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args}, State0) ->
     {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
-    case State1#state.name of
-        Name -> ok;
-        Caller -> digraph:add_edge(State1#state.graph, {Name, Caller}, Name, Caller, [])
+    Translated = translate_def(Name, State1#state.defs, State1#state.translated),
+    Calls = case State1#state.name of
+        Name -> State1#state.local_calls;
+        _ -> (State1#state.local_calls)#{Name => true}
     end,
-    {apply_node(function_name(Name), TranslatedArgs, Anno), State1};
+    {apply_node(function_name(Name), TranslatedArgs, Anno),
+     State1#state{local_calls = Calls, translated = Translated}};
 %% Erlang: X + Y
 %% Lean: Lynx.Modules.Erlang.add_2 vX vY
 expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
@@ -125,7 +99,7 @@ expression(#c_literal{anno = Anno} = Literal, State0) ->
 expression(#c_var{anno = Anno} = Var, State) ->
     {apply_node(~"Lynx.Result.ok", [variable(Var)], Anno), State};
 %% Erlang: receive X -> X end
-%% Lean: no translation; translate/1 returns {unsupported_core, CoreString}.
+%% Lean: no translation; translate/3 returns {unsupported_core, CoreString}.
 expression(Core, _State) ->
     unsupported(Core).
 
