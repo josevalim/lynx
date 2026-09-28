@@ -9,12 +9,19 @@ defmodule Lynx.Translation do
     [arity | parts] = name |> String.split("/") |> Enum.reverse()
     function = parts |> Enum.reverse() |> Enum.join("/") |> String.to_atom()
 
+    purity =
+      cond do
+        {module, name} == {"erlang", "apply/2"} -> :neutral
+        pure -> :pure
+        true -> :impure
+      end
+
     defp lean_bif(
            unquote(String.to_atom(module)),
            unquote(function),
            unquote(String.to_integer(arity))
          ),
-         do: {:ok, unquote(pure)}
+         do: {:ok, unquote(purity)}
   end
 
   defp lean_bif(_, _, _), do: :error
@@ -70,10 +77,10 @@ defmodule Lynx.Translation do
       end
 
     case lean_bif(module, function, arity) do
-      {:ok, pure} ->
+      {:ok, purity} ->
         translation = put_in(translation.builtin_modules[module], true)
 
-        {pure, translation}
+        {purity, translation}
 
       :error when module == caller ->
         :local
@@ -106,8 +113,8 @@ defmodule Lynx.Translation do
     end
 
     translation = add(translation, module, [{function, arity}])
-    pure = translation.modules[module].translations[{function, arity}].pure
-    {pure, translation}
+    purity = translation.modules[module].translations[{function, arity}].purity
+    {purity, translation}
   end
 
   defp source_location(annotations, default_file) do
@@ -203,6 +210,13 @@ defmodule Lynx.Translation do
         external_calls: external_calls,
         builtin_modules: builtin_modules
       }) do
+    # Resolve neutral definitions only against the complete translated graph.
+    # Keep stored summaries neutral so subsequent add/3 calls can introduce effects.
+    neutral_pure? =
+      Enum.all?(modules, fn {_, module} ->
+        Enum.all?(module.translations, fn {_, definition} -> definition.purity != :impure end)
+      end)
+
     graph = :digraph.new()
 
     try do
@@ -226,7 +240,7 @@ defmodule Lynx.Translation do
             imports
             |> Enum.sort()
             |> Enum.map(&:lynx_core_to_leanj.module_name/1),
-          "contents" => assemble_module(module.translations)
+          "contents" => assemble_module(module.translations, neutral_pure?)
         }
       end
     after
@@ -237,11 +251,13 @@ defmodule Lynx.Translation do
   defp propagate_purity(functions) do
     {functions, changed?} =
       Enum.reduce(functions, {functions, false}, fn {name, definition}, {functions, changed?} ->
-        if definition.pure and
-             Enum.any?(definition.local_calls, fn callee ->
-               not Map.fetch!(functions, callee).pure
-             end) do
-          {Map.put(functions, name, %{definition | pure: false}), true}
+        purity =
+          Enum.reduce(definition.local_calls, definition.purity, fn callee, purity ->
+            :lynx_core_to_leanj.join_purity(purity, Map.fetch!(functions, callee).purity)
+          end)
+
+        if purity != definition.purity do
+          {Map.put(functions, name, %{definition | purity: purity}), true}
         else
           {functions, changed?}
         end
@@ -250,11 +266,12 @@ defmodule Lynx.Translation do
     if changed?, do: propagate_purity(functions), else: functions
   end
 
-  defp assemble_module(functions) do
+  defp assemble_module(functions, neutral_pure?) do
     graph = :digraph.new()
 
     try do
-      for {name, %{translation: translation, pure: pure}} <- functions do
+      for {name, %{translation: translation, purity: purity}} <- functions do
+        pure = purity == :pure or (purity == :neutral and neutral_pure?)
         :digraph.add_vertex(graph, name, {translation, pure})
       end
 

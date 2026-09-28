@@ -99,7 +99,7 @@ defmodule Lynx.TranslationTest do
                "module" => "Erlang.z_dependency",
                "file" => "dependency.erl",
                "imports" => [],
-               "contents" => [dependency]
+               "contents" => [%{"expr" => %{"name" => "«entry/1»"}}]
              },
              %{
                "module" => "Erlang.a_caller",
@@ -107,8 +107,6 @@ defmodule Lynx.TranslationTest do
                "imports" => ["Erlang.z_dependency"]
              }
            ] = Translation.assemble(translation)
-
-    assert dependency["expr"]["name"] == "«entry/1»"
   end
 
   test "keeps Elixir namespaces in module names and imports" do
@@ -175,8 +173,11 @@ defmodule Lynx.TranslationTest do
       translation = Translation.add(translation, :example, [{:later, 1}])
       functions = translation.modules.example.translations
 
-      assert functions[{:pure, 1}].pure
-      for name <- [:entry, :first, :second, :later], do: refute(functions[{name, 1}].pure)
+      assert %{purity: :pure} = functions[{:pure, 1}]
+
+      for name <- [:entry, :first, :second, :later],
+          do: assert(%{purity: :impure} = functions[{name, 1}])
+
       assert Translation.add(translation, :example, roots) == translation
 
       assert [%{"contents" => contents}] = Translation.assemble(translation)
@@ -221,8 +222,10 @@ defmodule Lynx.TranslationTest do
       |> Translation.add(:caller, [{:pure, 1}])
 
     for module <- [:caller, :middle, :dependency] do
-      assert translation.modules[module].translations[{:pure, 1}].pure
-      refute translation.modules[module].translations[{:impure, 1}].pure
+      assert %{
+               {:pure, 1} => %{purity: :pure},
+               {:impure, 1} => %{purity: :impure}
+             } = translation.modules[module].translations
     end
 
     for %{"contents" => contents} <- Translation.assemble(translation) do
@@ -232,6 +235,117 @@ defmodule Lynx.TranslationTest do
              )
 
       assert Enum.any?(contents, &match?(%{"kind" => "def", "name" => "«impure/1»"}, &1))
+    end
+  end
+
+  test "resolves a neutral call chain according to purity at the top" do
+    dependency =
+      cerl("""
+      -module(dependency).
+      -export([entry/1]).
+      entry(F) -> X = dynamic(F), Y = explicit(X), first(Y).
+      dynamic(F) -> F(7, F).
+      explicit(F) -> erlang:apply(F, [7, F]).
+      zero(F) -> F().
+      first([]) -> second([]);
+      first(F) -> zero(F).
+      second(F) -> first(F).
+      """)
+
+    for {body, purity} <- [
+          {"dependency:entry(F)", :neutral},
+          {"X = erlang:get(key), dependency:entry(X)", :impure},
+          {"X = dependency:entry(F), erlang:get(X)", :impure}
+        ] do
+      caller =
+        cerl("""
+        -module(caller).
+        -export([entry/1, pure/1]).
+        entry(F) -> helper(F).
+        helper(F) -> #{body}.
+        pure(X) -> X.
+        """)
+
+      base = Translation.new([{"caller.erl", caller}, {"dependency.erl", dependency}])
+      neutral = Translation.add(base, :dependency, [{:entry, 1}])
+
+      for %{"contents" => contents} <- Translation.assemble(neutral) do
+        assert Enum.all?(contents, &(&1["name"] == "lynx_pure"))
+      end
+
+      translation = Translation.add(neutral, :caller, [{:entry, 1}, {:pure, 1}])
+      direct = Translation.add(base, :caller, [{:entry, 1}, {:pure, 1}])
+      assert Translation.assemble(translation) == Translation.assemble(direct)
+
+      for name <- [:entry, :helper] do
+        assert %{purity: ^purity} = translation.modules.caller.translations[{name, 1}]
+      end
+
+      for {_, definition} <- translation.modules.dependency.translations do
+        assert %{purity: :neutral} = definition
+      end
+
+      assert translation.builtin_modules == %{erlang: true}
+      caller_imports = if purity == :impure, do: [:dependency, :erlang], else: [:dependency]
+
+      assert translation.external_calls == %{
+               caller: MapSet.new(caller_imports),
+               dependency: MapSet.new([:erlang])
+             }
+
+      functions = translation.modules.dependency.translations
+
+      for name <- [:dynamic, :explicit, :zero] do
+        assert %{local_calls: []} = functions[{name, 1}]
+      end
+
+      for name <- [:dynamic, :explicit] do
+        assert %{"body" => %{"cases" => [%{"body" => call} | _]}} =
+                 functions[{name, 1}].translation
+
+        assert %{
+                 "function" => %{"name" => "Erlang.erlang.«apply/2»"},
+                 "args" => [%{"name" => "«vF»"}, args]
+               } = call
+
+        assert %{
+                 "function" => %{"name" => "Lynx.Term.«cons»"},
+                 "args" => [
+                   %{
+                     "function" => %{"name" => "Lynx.Term.«integer»"},
+                     "args" => [%{"kind" => "integer", "value" => 7}]
+                   },
+                   %{
+                     "function" => %{"name" => "Lynx.Term.«cons»"},
+                     "args" => [%{"name" => "«vF»"}, %{"name" => "Lynx.Term.«nil»"}]
+                   }
+                 ]
+               } = args
+      end
+
+      assert %{"body" => %{"cases" => [%{"body" => zero} | _]}} =
+               functions[{:zero, 1}].translation
+
+      assert %{
+               "function" => %{"name" => "Erlang.erlang.«apply/2»"},
+               "args" => [%{"name" => "«vF»"}, %{"name" => "Lynx.Term.«nil»"}]
+             } = zero
+
+      files = Translation.assemble(translation)
+
+      if purity == :neutral do
+        for %{"contents" => contents} <- files do
+          assert Enum.all?(contents, &(&1["name"] == "lynx_pure"))
+        end
+      else
+        commands =
+          for %{"contents" => contents} <- files,
+              command <- contents,
+              command["kind"] == "command",
+              do: command
+
+        assert [%{"name" => "lynx_pure", "expr" => %{"name" => "«pure/1»"}}] = commands
+      end
     end
   end
 
@@ -296,13 +410,15 @@ defmodule Lynx.TranslationTest do
     assert translation.builtin_modules == %{lists: true}
     assert translation.external_calls == %{}
     assert Map.keys(translation.modules.lists.translations) == [{:reverse, 1}]
-    assert translation.modules.lists.translations[{:reverse, 1}].pure
-    assert translation.modules.lists.translations[{:reverse, 1}].local_calls == []
+
+    assert %{purity: :pure, local_calls: []} =
+             translation.modules.lists.translations[{:reverse, 1}]
 
     assert [%{"imports" => ["Erlang.lists"], "contents" => [definition]}] =
              Translation.assemble(translation)
 
-    assert JSON.encode!(definition) =~ "Erlang.lists.«reverse/2»"
+    assert %{"expr" => %{"body" => %{"cases" => [%{"body" => call} | _]}}} = definition
+    assert %{"function" => %{"name" => "Erlang.lists.«reverse/2»"}} = call
   end
 
   @tag :tmp_dir
@@ -349,8 +465,7 @@ defmodule Lynx.TranslationTest do
           Translation.new([{"caller.erl", caller}]) |> Translation.add(:caller, [{:entry, 1}])
         end
 
-      assert error.file == "lookup_caller.erl"
-      assert error.line == 4
+      assert %CompileError{file: "lookup_caller.erl", line: 4} = error
       assert error.description =~ "debug information"
       assert error.description =~ ":lynx_lookup_no_debug"
     end
@@ -372,8 +487,7 @@ defmodule Lynx.TranslationTest do
           Translation.new([{"caller.erl", caller}]) |> Translation.add(:caller, [{:entry, 1}])
         end
 
-      assert error.file == "caller.erl"
-      assert error.line == 3
+      assert %CompileError{file: "caller.erl", line: 3} = error
       assert error.description =~ "cannot read BEAM for :lynx_lookup_invalid"
     end
 
@@ -403,8 +517,7 @@ defmodule Lynx.TranslationTest do
           Translation.add(Translation.new([{"example.erl", core}]), :example, [{:entry, 1}])
         end
 
-      assert error.file == "example.erl"
-      assert error.line == 3
+      assert %CompileError{file: "example.erl", line: 3} = error
       assert Exception.message(error) =~ "example.erl:3: unsupported Core expression:"
       assert error.description =~ "'ok'"
     end
@@ -483,8 +596,7 @@ defmodule Lynx.TranslationTest do
           Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
         end
 
-      assert error.file == "foo"
-      assert error.line == 4
+      assert %CompileError{file: "foo", line: 4} = error
     end
   end
 
