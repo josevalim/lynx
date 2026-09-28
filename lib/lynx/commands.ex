@@ -8,27 +8,58 @@ defmodule Lynx.Commands do
 
   Returns verification errors with their diagnostics. Raises on failure responses,
   invalid JSON output, or unexpected exit statuses.
-  A newline is appended to stdin to terminate the request.
+  The command is included in the newline-delimited JSON request.
   """
-  @spec runner!(String.t(), String.t(), binary()) :: map()
-  def runner!(project_dir, command_type, stdin) do
-    {status, output} =
-      lake(project_dir, ["env", "lean", "--run", @runner, command_type], stdin <> "\n")
+  @spec runner!(String.t(), binary()) :: map()
+  def runner!(project_dir, request) do
+    port = open_lake(project_dir, ["env", "lean", "--run", @runner], [{:line, 1_000_000}])
 
-    response = JSON.decode!(output)
+    output =
+      try do
+        Port.command(port, request <> "\n")
+        collect_response(port, "")
+      after
+        Port.close(port)
+      end
 
-    case {status, response} do
-      {_, %{"status" => "failure", "message" => message}} ->
+    response =
+      case JSON.decode(output) do
+        {:ok, response} ->
+          response
+
+        {:error, reason} ->
+          raise "lynx runner returned invalid JSON (#{json_error(reason)}): #{inspect(output, printable_limit: 200)}"
+      end
+
+    case response do
+      %{"status" => "failure", "message" => message} ->
         raise message
 
-      {0, %{"status" => "ok"}} ->
+      %{"status" => "ok"} ->
         response
 
-      {1, %{"status" => "error"}} ->
+      %{"status" => "error"} ->
         response
 
       _ ->
-        raise "running lynx #{command_type} failed with status #{status}: #{output}"
+        raise "lynx runner returned an unexpected response: #{output}"
+    end
+  end
+
+  defp json_error({:unexpected_end, offset}), do: "input ends at byte #{offset}"
+  defp json_error({:invalid_byte, offset, byte}), do: "invalid byte #{byte} at offset #{offset}"
+  defp json_error(reason), do: inspect(reason)
+
+  defp collect_response(port, chunks) do
+    receive do
+      {^port, {:data, {:eol, data}}} ->
+        chunks <> data
+
+      {^port, {:data, {:noeol, data}}} ->
+        collect_response(port, chunks <> data)
+
+      {^port, {:exit_status, status}} ->
+        raise "lynx runner exited with status #{status} before responding"
     end
   end
 
@@ -44,20 +75,22 @@ defmodule Lynx.Commands do
   @spec lake(String.t(), [String.t()], binary()) :: {non_neg_integer(), binary()}
   def lake(project_dir, args, stdin \\ "")
       when is_binary(project_dir) and is_list(args) and is_binary(stdin) do
+    port = open_lake(project_dir, args)
+    if stdin != "", do: Port.command(port, stdin)
+    collect(port, [])
+  end
+
+  defp open_lake(project_dir, args, options \\ []) do
     executable =
       System.find_executable("lake") ||
         raise(
           "lake command line executable could not be found, make sure it is installed and available in $PATH"
         )
 
-    port =
-      Port.open(
-        {:spawn_executable, String.to_charlist(executable)},
-        [:binary, :exit_status, :use_stdio, :hide, cd: project_dir, args: args]
-      )
-
-    if stdin != "", do: Port.command(port, stdin)
-    collect(port, [])
+    Port.open(
+      {:spawn_executable, String.to_charlist(executable)},
+      [:binary, :exit_status, :use_stdio, :hide, cd: project_dir, args: args] ++ options
+    )
   end
 
   defp collect(port, chunks) do
