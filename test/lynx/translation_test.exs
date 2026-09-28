@@ -137,13 +137,45 @@ defmodule Lynx.TranslationTest do
            ] = files
   end
 
+  test "imports runtime functions without requiring their Core definitions" do
+    core =
+      cerl("""
+      -module(example).
+      -export([entry/1]).
+      entry(X) -> maps:put(key, X + 1, maps:new()).
+      """)
+
+    translation =
+      Translation.new([{"example.erl", core}])
+      |> Translation.add(:example, [{:entry, 1}])
+
+    assert Map.keys(translation.modules) == [:example]
+    assert translation.external_calls == %{example: MapSet.new([:erlang, :maps])}
+
+    assert [%{"imports" => ["Erlang.erlang", "Erlang.maps"], "contents" => [_]}] =
+             Translation.assemble(translation)
+  end
+
   describe "errors" do
+    test "does not skip a runtime function with the wrong arity" do
+      core =
+        cerl("""
+        -module(example).
+        -export([entry/1]).
+        entry(X) -> maps:new(X).
+        """)
+
+      assert_raise CompileError, "example.erl:3: unknown module :maps", fn ->
+        Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
+      end
+    end
+
     test "raises on unsupported Core" do
       core =
         cerl("""
         -module(example).
         -export([entry/1]).
-        entry(X) -> erlang:abs(X).
+        entry(X) -> {ok, X}.
         """)
 
       error =
@@ -154,7 +186,7 @@ defmodule Lynx.TranslationTest do
       assert error.file == "example.erl"
       assert error.line == 3
       assert Exception.message(error) =~ "example.erl:3: unsupported Core expression:"
-      assert error.description =~ "call 'erlang':'abs'"
+      assert error.description =~ "'ok'"
     end
 
     test "validates remote modules" do

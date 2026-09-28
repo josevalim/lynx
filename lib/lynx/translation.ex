@@ -3,6 +3,22 @@ defmodule Lynx.Translation do
 
   defstruct modules: %{}, external_calls: %{}, stack: []
 
+  @external_resource Path.expand("../../Lean/modules.json", __DIR__)
+  for {module, functions} <- JSON.decode!(File.read!(@external_resource)),
+      {name, _metadata} <- functions do
+    [arity | parts] = name |> String.split("/") |> Enum.reverse()
+    function = parts |> Enum.reverse() |> Enum.join("/") |> String.to_atom()
+
+    defp runtime_function?(
+           unquote(String.to_atom(module)),
+           unquote(function),
+           unquote(String.to_integer(arity))
+         ),
+         do: true
+  end
+
+  defp runtime_function?(_, _, _), do: false
+
   def new(cores) do
     modules =
       Map.new(cores, fn {file, core} ->
@@ -45,6 +61,26 @@ defmodule Lynx.Translation do
          arity,
          span_anno
        ) do
+    translation =
+      update_in(translation.external_calls[caller], fn
+        nil -> MapSet.new([module])
+        set -> MapSet.put(set, module)
+      end)
+
+    if runtime_function?(module, function, arity) do
+      {:ok, translation}
+    else
+      translate_remote(translation, module, function, arity, span_anno)
+    end
+  end
+
+  defp translate_remote(
+         %__MODULE__{stack: [caller | _]} = translation,
+         module,
+         function,
+         arity,
+         span_anno
+       ) do
     location = fn -> source_location(span_anno, translation.modules[caller].file) end
     target = fetch_module!(translation.modules, module, location)
     validate_function!(target, module, function, arity, location)
@@ -59,12 +95,6 @@ defmodule Lynx.Translation do
                   "cyclic module call to #{Exception.format_mfa(module, function, arity)} (#{cycle})"
               ]
     end
-
-    translation =
-      update_in(translation.external_calls[caller], fn
-        nil -> MapSet.new([module])
-        set -> MapSet.put(set, module)
-      end)
 
     {:ok, add(translation, module, [{function, arity}])}
   end
@@ -112,7 +142,9 @@ defmodule Lynx.Translation do
     try do
       for {name, _} <- modules, do: :digraph.add_vertex(graph, [name])
 
-      for {name, dependencies} <- external_calls, dependency <- dependencies do
+      for {name, dependencies} <- external_calls,
+          dependency <- dependencies,
+          Map.has_key?(modules, dependency) do
         :digraph.add_edge(graph, [dependency], [name])
       end
 

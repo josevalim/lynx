@@ -16,3 +16,8 @@ jobs:
       - uses: leanprover/lean-action@v1
         with:
           lake-package-directory: Lean
+      - name: Check Erlang function manifest
+        working-directory: Lean
+        run: |
+          lake env lean --run ExportModules.lean > "$RUNNER_TEMP/modules.json"
+          diff -u modules.json "$RUNNER_TEMP/modules.json"

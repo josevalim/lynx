@@ -16,6 +16,7 @@ defmodule ProcessDeadlock do
   end
 end
 -/
+import Erlang.erlang
 import LynxTest.Bench
 
 namespace LynxTest.Integration.ProcessDeadlock

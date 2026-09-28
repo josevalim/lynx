@@ -3,11 +3,13 @@ module
 meta import Lean
 public import Lynx.Runner
 public import Lynx
+public import Erlang.erlang
+public import Erlang.maps
 
 meta section
 
-/-! Snapshot of public types and executable declarations available through `Lynx`
-and the runner command.
+/-! Snapshot of public types and executable declarations available through `Lynx`,
+the Erlang runtime modules, and the runner command.
 Inspect the exporting environment across every Lynx and Erlang module, so internal helpers
 cannot escape the check by living in a module omitted from a contributor list.
 Proofs, generated declarations, and meta elaborator code are not snapshotted. -/

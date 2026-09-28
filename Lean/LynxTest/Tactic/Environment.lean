@@ -1,3 +1,4 @@
+import Erlang.erlang
 import Lynx
 import LynxTest.ProofAudit
 

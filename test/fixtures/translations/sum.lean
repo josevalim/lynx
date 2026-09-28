@@ -1,6 +1,7 @@
 module
 
 public import Lynx
+import Erlang.erlang
 
 namespace Erlang.sum
 

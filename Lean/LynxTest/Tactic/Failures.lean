@@ -1,3 +1,4 @@
+import Erlang.erlang
 import LynxTest.ProofAudit
 import LynxTest.Integration.Sum
 

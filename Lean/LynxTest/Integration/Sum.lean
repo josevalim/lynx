@@ -8,6 +8,7 @@ defmodule Sum do
   def sum([x | xs]), do: x + sum(xs)
 end
 -/
+import Erlang.erlang
 import LynxTest.Bench
 
 namespace LynxTest.Integration.Sum
