@@ -38,11 +38,11 @@ fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Nam
     node(~"fun", [], #{
         ~"params" => Inputs,
         ~"body" => node(~"match", [], #{
-            ~"expression" => values_node(Inputs, []),
+            ~"expressions" => Inputs,
             ~"cases" => [
-                #{~"pattern" => values_node([array_node(Captures, []), array_node(Args, [])], []),
+                #{~"patterns" => [array_node(Captures, []), array_node(Args, [])],
                   ~"body" => Body, ~"span" => []},
-                #{~"pattern" => node(~"wildcard", [], #{}),
+                #{~"patterns" => [node(~"wildcard", [], #{}), node(~"wildcard", [], #{})],
                   ~"body" => error_node(badarg, []), ~"span" => []}
             ]
         })
@@ -105,10 +105,11 @@ translate_def(Name, #c_fun{anno = Anno, vars = Vars, body = Body}, State0) ->
 %%   | Lynx.Term.nil => Lynx.Result.ok (Lynx.Term.integer 0)
 %%   | vOther => Lynx.Result.ok (Lynx.Term.integer 1)
 expression(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
-    {TranslatedArg, State1} = value(Arg, State0),
+    Values = case Arg of #c_values{es = Es} -> Es; _ -> [Arg] end,
+    {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Values),
     {TranslatedClauses, State2} = lists:mapfoldl(fun clause/2, State1, Clauses),
     {node(~"match", Anno, #{
-        ~"expression" => TranslatedArg,
+        ~"expressions" => match_values(TranslatedArgs, Anno),
         ~"cases" => TranslatedClauses
     }), State2};
 %% Erlang: Y = f(X), g(Y)
@@ -175,16 +176,12 @@ expression(Value, State0) ->
 
 clause(#c_clause{anno = Anno, pats = Patterns, guard = #c_literal{val = true}, body = Body}, State0) ->
     {Pats, State1} = lists:mapfoldl(fun value/2, State0, Patterns),
-    Pat = values_node(Pats, Anno),
     {TranslatedBody, State2} = expression(Body, State1),
-    {#{~"span" => span(Anno), ~"pattern" => Pat, ~"body" => TranslatedBody}, State2};
+    {#{~"span" => span(Anno), ~"patterns" => match_values(Pats, Anno), ~"body" => TranslatedBody}, State2};
 clause(Core, _State) ->
     unsupported(Core).
 
 %% Core separates values from computations; only computations produce Result.
-value(#c_values{anno = Anno, es = Values}, State0) ->
-    {Translated, State1} = lists:mapfoldl(fun value/2, State0, Values),
-    {values_node(Translated, Anno), State1};
 value(#c_fun{vars = Vars} = Fun, State0) ->
     Captures = [#c_var{name = V} || V <- cerl_trees:free_variables(Fun),
                                    not is_tuple(V)],
@@ -232,10 +229,8 @@ function_node(#{id := Id, arity := Arity, captures := Captures}, Anno, State0) -
                                       node(~"integer", [], #{~"value" => Arity}),
                                       array_node(Values, Anno)], Anno), State1}.
 
-values_node([], Anno) -> ident_node(~"Unit.unit", Anno);
-values_node([Value], _Anno) -> Value;
-values_node([Value | Rest], Anno) ->
-    apply_node(~"Prod.mk", [Value, values_node(Rest, Anno)], Anno).
+match_values([], Anno) -> [ident_node(~"Unit.unit", Anno)];
+match_values(Values, _Anno) -> Values.
 
 array_node(Values, Anno) ->
     node(~"array", Anno, #{~"elements" => Values}).

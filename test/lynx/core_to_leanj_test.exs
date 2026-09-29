@@ -1,6 +1,33 @@
 defmodule Lynx.CoreToLeanjTest do
   use ExUnit.Case, async: true
 
+  test "translates Core values into separate match expressions and patterns" do
+    body =
+      :cerl.c_case(:cerl.c_values([:cerl.c_var(0), :cerl.c_nil()]), [
+        :cerl.c_clause([:cerl.c_var(:X), :cerl.c_nil()], :cerl.c_var(:X))
+      ])
+
+    assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
+
+    assert %{
+             "body" => %{
+               "kind" => "match",
+               "expressions" => [
+                 %{"kind" => "ident", "name" => "«_0»"},
+                 %{"kind" => "ident", "name" => "Lynx.Term.nil"}
+               ],
+               "cases" => [
+                 %{
+                   "patterns" => [
+                     %{"kind" => "ident", "name" => "«vX»"},
+                     %{"kind" => "ident", "name" => "Lynx.Term.nil"}
+                   ]
+                 }
+               ]
+             }
+           } = functions[{:entry, 1}].translation
+  end
+
   test "recursively translates reachable callees and keeps each function's calls separate" do
     body =
       :cerl.c_let(

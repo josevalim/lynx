@@ -218,8 +218,6 @@ defmodule Lynx.Translation do
         external_calls: external_calls,
         builtin_modules: builtin_modules
       }) do
-    table = :lynx_core_to_leanj.fun_table(funs, modules)
-
     graph = :digraph.new()
 
     try do
@@ -262,7 +260,7 @@ defmodule Lynx.Translation do
                   "kind" => "fun_table",
                   "span" => [],
                   "name" => "fun_table",
-                  "body" => table
+                  "body" => :lynx_core_to_leanj.fun_table(funs, modules)
                 }
               ]
             }

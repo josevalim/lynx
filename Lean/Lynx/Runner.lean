@@ -133,16 +133,18 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     pure (Unhygienic.run `(fun $params:ident* => $body))
   | "match" => do
     if pattern then throw "match is not valid in patterns"
-    fields j ["kind", "expression", "cases", "span"]
-    let expr ← term map info false (← field j "expression")
+    fields j ["kind", "expressions", "cases", "span"]
+    let exprs ← (← arr j "expressions").mapM (term map info false)
+    if exprs.isEmpty then throw "match requires at least one expression"
     let cases ← (← arr j "cases").mapM fun c => do
-      fields c ["pattern", "body", "span"]
+      fields c ["patterns", "body", "span"]
       let ci ← span map c info
-      let pat ← term map ci true (← field c "pattern")
+      let pats ← (← arr c "patterns").mapM (term map ci true)
+      unless pats.size == exprs.size do throw "match case must have one pattern per expression"
       let body ← term map ci false (← field c "body")
-      pure (withSpan ci.info (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $pat => $body)))
+      pure (withSpan ci.info (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $pats,* => $body)))
     if cases.isEmpty then throw "match requires at least one case"
-    pure (Unhygienic.run `(match $expr:term with $cases:matchAlt*))
+    pure (Unhygienic.run `(match $[$exprs:term],* with $cases:matchAlt*))
   | _ => throw s!"unsupported {if pattern then "pattern" else "term"} kind '{kind}'"
   return withSpan info.info result
 
