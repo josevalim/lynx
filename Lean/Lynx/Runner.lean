@@ -103,7 +103,15 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     pure ⟨(← identifier (← str j "name")).raw⟩
   | "integer" => do
     fields j ["kind", "value", "span"]
-    pure ⟨Syntax.mkNumLit (toString (← (← field j "value").getNat?))⟩
+    -- Erlang integers may be negative (for example the pattern in `f(-1) -> ...`).
+    -- Lean has no negative numeric literal token, so `-n` becomes `(-n)`, which
+    -- elaborates both as an `Int` term and as an `Int` match pattern.
+    let value ← (← field j "value").getInt?
+    let literal : TSyntax `num := Syntax.mkNumLit (toString value.natAbs)
+    if value < 0 then
+      pure (Unhygienic.run `((-$literal)))
+    else
+      pure ⟨literal⟩
   | "string" => do
     fields j ["kind", "value", "span"]
     pure ⟨Syntax.mkStrLit (← str j "value")⟩

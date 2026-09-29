@@ -76,6 +76,11 @@ defmodule Lynx.Translation do
         {pure, translation}
 
       :error when module == caller ->
+        # A qualified self call such as `?MODULE:missing(X)` compiles in Erlang
+        # (it fails with `undef` at runtime), so report it like other undefined
+        # remote functions instead of crashing while translating it locally.
+        location = fn -> source_location(span_anno, translation.modules[caller].file) end
+        validate_function!(translation.modules[caller], module, function, arity, location)
         :local
 
       :error ->

@@ -5,8 +5,7 @@
   "get/2": {"pure": true}},
  "lists": {"reverse/2": {"pure": true}},
  "erlang":
- {"spawn/1": {"pure": false},
-  "send/2": {"pure": false},
+ {"send/2": {"pure": false},
   "self/0": {"pure": false},
   "put/2": {"pure": false},
   "is_list/1": {"pure": true},
@@ -22,8 +21,6 @@
   "erase/0": {"pure": false},
   "byte_size/1": {"pure": true},
   "bit_size/1": {"pure": true},
-  "apply/2": {"pure": false},
-  "andalso/2": {"pure": true},
   ">=/2": {"pure": true},
   ">/2": {"pure": true},
   "==/2": {"pure": true},

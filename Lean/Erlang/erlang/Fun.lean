@@ -10,6 +10,11 @@ function table.
 The translator must rewrite calls to every function in this module during
 compilation so they receive the generated program's function table. Any future
 function with the same requirement must be added here.
+
+The translator does not generate function tables yet, so `ExportModules.lean`
+leaves these functions out of `modules.json` (it only exports functions of type
+`Lynx.Term → … → Lynx.Result`). A call such as `erlang:spawn(F)` is therefore
+reported as untranslatable instead of producing ill-typed Lean.
 -/
 
 namespace Erlang.erlang
