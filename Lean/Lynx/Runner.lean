@@ -98,6 +98,10 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   let info ← span map j parent
   let kind ← str j "kind"
   let result ← match kind with
+  | "wildcard" => do
+    fields j ["kind", "span"]
+    unless pattern do throw "wildcard is only valid in patterns"
+    pure (Unhygienic.run `(_))
   | "ident" => do
     fields j ["kind", "name", "span"]
     pure ⟨(← identifier (← str j "name")).raw⟩

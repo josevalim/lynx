@@ -445,11 +445,12 @@ defmodule Lynx.TranslationTest do
            )
 
     assert Enum.map(entries, fn %{
-                                  "args" => [
-                                    _,
-                                    _,
-                                    %{"body" => %{"function" => %{"name" => name}}}
-                                  ]
+                                  "body" => %{
+                                    "cases" => [
+                                      %{"body" => %{"function" => %{"name" => name}}},
+                                      _
+                                    ]
+                                  }
                                 } ->
              name
            end) == [

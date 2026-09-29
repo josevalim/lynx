@@ -218,15 +218,7 @@ defmodule Lynx.Translation do
         external_calls: external_calls,
         builtin_modules: builtin_modules
       }) do
-    table =
-      funs
-      |> Map.values()
-      |> Enum.sort_by(& &1.id)
-      |> Enum.map(fn fun ->
-        definition = Map.fetch!(modules[fun.module].translations, fun.name).translation
-        fun_entry({fun.module, fun, definition})
-      end)
-      |> array()
+    table = :lynx_core_to_leanj.fun_table(funs, modules)
 
     graph = :digraph.new()
 
@@ -280,46 +272,6 @@ defmodule Lynx.Translation do
       :digraph.delete(graph)
     end
   end
-
-  # Table adapters keep capture values and invocation arguments separate.
-  defp fun_entry({module, fun, definition}) do
-    capture_count = length(definition["params"]) - fun.arity
-    captures = array_args("_lynx_captures", capture_count)
-    args = array_args("_lynx_args", fun.arity)
-
-    body =
-      apply_node(
-        :lynx_core_to_leanj.module_name(module) <> "." <> definition["name"],
-        captures ++ args
-      )
-
-    apply_node("Lynx.Term.FunTable.entry", [
-      integer(capture_count),
-      integer(fun.arity),
-      %{
-        "kind" => "fun",
-        "span" => [],
-        "params" => [ident("_lynx_captures"), ident("_lynx_args")],
-        "body" => body
-      }
-    ])
-  end
-
-  defp array_args(name, count) do
-    for index <- 0..count//1, index < count do
-      apply_node("Array.getD", [ident(name), integer(index), ident("Lynx.Term.«nil»")])
-    end
-  end
-
-  defp integer(value), do: %{"kind" => "integer", "span" => [], "value" => value}
-
-  defp ident(name), do: %{"kind" => "ident", "span" => [], "name" => name}
-  defp apply_node(name, []), do: ident(name)
-
-  defp apply_node(name, args),
-    do: %{"kind" => "apply", "span" => [], "function" => ident(name), "args" => args}
-
-  defp array(values), do: %{"kind" => "array", "span" => [], "elements" => values}
 
   defp propagate_purity(functions) do
     {functions, changed?} =
