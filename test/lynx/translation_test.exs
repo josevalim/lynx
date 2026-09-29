@@ -469,6 +469,89 @@ defmodule Lynx.TranslationTest do
                    end
     end
 
+    # Regression: `?MODULE:missing(X)` used to crash the translator with an
+    # internal `badkey` error instead of reporting the undefined function.
+    test "validates qualified calls to the current module" do
+      core =
+        cerl("""
+        -module(example).
+        -export([entry/1]).
+        entry(X) -> example:missing(X).
+        """)
+
+      assert_raise CompileError, "example.erl:3: undefined function :example.missing/1", fn ->
+        Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
+      end
+    end
+
+    # Regression: calling a fun held in a variable, `F(X)`, used to crash the
+    # translator with an internal `badkey` error.
+    test "reports applications of fun variables as unsupported Core" do
+      core =
+        cerl("""
+        -module(example).
+        -export([entry/1]).
+        entry(F) -> F(1).
+        """)
+
+      error =
+        assert_raise CompileError, fn ->
+          Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
+        end
+
+      assert error.line == 3
+      assert error.description =~ "unsupported Core expression:"
+      assert error.description =~ "apply"
+    end
+
+    # Regression: a clause with a guard used to crash while formatting the
+    # error message, because Core pretty-printing cannot print a bare clause.
+    test "reports unsupported guards without crashing" do
+      core =
+        cerl("""
+        -module(example).
+        -export([entry/1]).
+        entry(X) when X > 0 -> X.
+        """)
+
+      error =
+        assert_raise CompileError, fn ->
+          Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
+        end
+
+      assert error.line == 3
+      assert error.description =~ "unsupported Core expression:"
+      assert error.description =~ "'>'"
+    end
+
+    # Regression: runtime functions whose Lean signature is not
+    # `Term -> ... -> Result` (they need the function table or thunks) were
+    # listed as builtins, so the translator emitted ill-typed Lean.
+    test "does not call runtime functions that need more than terms" do
+      for {call, name} <- [
+            {"erlang:spawn(X)", "spawn/1"},
+            {"erlang:apply(X, [])", "apply/2"},
+            {"erlang:'andalso'(X, X)", "andalso/2"}
+          ] do
+        core =
+          cerl("""
+          -module(example).
+          -export([entry/1]).
+          entry(X) -> #{call}.
+          """)
+
+        assert_raise CompileError, ~r/:erlang/, fn ->
+          Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
+        end
+
+        refute name in Map.keys(
+                 JSON.decode!(File.read!(Path.expand("../../Lean/modules.json", __DIR__)))[
+                   "erlang"
+                 ]
+               )
+      end
+    end
+
     test "uses the file directive for unknown remote module errors" do
       core =
         cerl("""

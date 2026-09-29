@@ -118,6 +118,47 @@ defmodule Lynx.CoreToLeanjTest do
     assert calls == [{:pure, :entry, 1, []}, {:impure, :entry, 1, []}]
   end
 
+  # Regression: zero-argument calls used to be emitted as applications without
+  # arguments, which the Lean runner rejects.
+  test "translates zero-argument calls to plain references" do
+    zero = {:cerl.c_fname(:zero, 0), :cerl.c_fun([], :cerl.c_int(0))}
+
+    definitions =
+      definitions([
+        definition(:entry, :cerl.c_apply(:cerl.c_fname(:zero, 0), [])),
+        zero
+      ])
+
+    assert {:ok, functions, []} = translate(definitions)
+
+    assert %{"kind" => "ident", "name" => "«zero/0»"} =
+             functions[{:entry, 1}].translation["body"]
+
+    remote = :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:self), [])
+    assert {:ok, functions, _} = translate(definitions([definition(:entry, remote)]))
+
+    assert %{"kind" => "ident", "name" => "Erlang.erlang.«self/0»"} =
+             functions[{:entry, 1}].translation["body"]
+  end
+
+  test "emits negative integer literals" do
+    assert {:ok, functions, []} =
+             translate(definitions([definition(:entry, :cerl.c_int(-5))]))
+
+    assert %{"args" => [%{"args" => [%{"kind" => "integer", "value" => -5}]}]} =
+             functions[{:entry, 1}].translation["body"]
+  end
+
+  # Regression: module names that are not plain identifiers produced invalid
+  # Lean names such as `Erlang.my-mod`.
+  test "quotes module name components that are not identifiers" do
+    assert :lynx_core_to_leanj.module_name(:sum) == "Erlang.sum"
+    assert :lynx_core_to_leanj.module_name(:"my-mod") == "Erlang.«my-mod»"
+    assert :lynx_core_to_leanj.module_name(:"a.b") == "Erlang.«a.b»"
+    assert :lynx_core_to_leanj.module_name(Foo.Bar) == "Elixir.Foo.Bar"
+    assert :lynx_core_to_leanj.module_name(:"Elixir.Foo.Bar?") == "Elixir.Foo.«Bar?»"
+  end
+
   defp translate(definitions, translated \\ %{}, purity \\ %{}) do
     callback = fn calls, module, function, arity, span_anno ->
       if module == :example do

@@ -9,8 +9,19 @@
 -spec module_name(module()) -> binary().
 module_name(Module) ->
     case atom_to_binary(Module, utf8) of
-        <<"Elixir.", _/binary>> = Name -> Name;
-        Name -> <<"Erlang.", Name/binary>>
+        <<"Elixir.", Rest/binary>> ->
+            Parts = [module_component(Part) || Part <- binary:split(Rest, ~".", [global])],
+            iolist_to_binary(lists:join(~".", [~"Elixir" | Parts]));
+        Name -> <<"Erlang.", (module_component(Name))/binary>>
+    end.
+
+%% Module names become Lean namespaces. A component that is not a plain
+%% identifier, such as the Erlang module 'my-mod', must be quoted as «my-mod».
+%% An Erlang module name is one flat component even when it contains dots.
+module_component(Name) ->
+    case re:run(Name, ~"^[A-Za-z_][A-Za-z0-9_]*$", [unicode]) of
+        {match, _} -> Name;
+        nomatch -> quote_identifier(Name)
     end.
 
 -spec to_definitions(cerl:c_module()) -> #{{atom(), arity()} => cerl:c_fun()}.
@@ -41,7 +52,7 @@ translate_def(Name, #state{translated = Translated} = State0) ->
     case maps:is_key(Name, Translated) of
         true -> State0;
         false ->
-            #c_fun{anno = Anno, vars = Vars, body = Body} = maps:get(Name, State0#state.defs),
+            #c_fun{anno = Anno, vars = Vars, body = Body} = definition(Name, State0),
             State1 = State0#state{name = Name, local_calls = #{}, pure = true,
                                   translated = Translated#{Name => pending}},
             {TranslatedBody, State2} = expression(Body, State1),
@@ -54,6 +65,14 @@ translate_def(Name, #state{translated = Translated} = State0) ->
                       pure => State2#state.pure},
             State0#state{translated = (State2#state.translated)#{Name => Entry},
                          remote = State2#state.remote}
+    end.
+
+%% Only top-level module functions can be translated. A missing name would
+%% otherwise crash with an internal badkey error instead of reporting the call.
+definition(Name, #state{defs = Defs}) ->
+    case Defs of
+        #{Name := Definition} -> Definition;
+        #{} -> unsupported(cerl:c_var(Name))
     end.
 
 %% Erlang: case X of [] -> 0; Other -> 1 end
@@ -79,7 +98,11 @@ expression(#c_let{anno = Anno, vars = [Var], arg = Arg, body = Body}, State0) ->
     {apply_node(~"Lynx.Result.«bind»", [TranslatedArg, Continuation], Anno), State2};
 %% Erlang: f(X, Y)
 %% Lean: «f/2» vX vY
-expression(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args}, State0) ->
+%% Only named module functions ({Name, Arity}) are applied directly. Applying a
+%% variable that holds a fun, such as F(X), is reported as unsupported Core by the
+%% final clause instead of being treated as a module function.
+expression(#c_apply{anno = Anno, op = #c_var{name = {FunName, Arity} = Name}, args = Args}, State0)
+        when is_atom(FunName), is_integer(Arity), Arity =:= length(Args) ->
     {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
     State2 = translate_def(Name, State1),
     Calls = case State2#state.name of
@@ -134,8 +157,12 @@ clause(#c_clause{anno = Anno, pats = [Pattern], guard = #c_literal{val = true}, 
     {Pat, State1} = value(Pattern, State0),
     {TranslatedBody, State2} = expression(Body, State1),
     {#{~"span" => span(Anno), ~"pattern" => Pat, ~"body" => TranslatedBody}, State2};
-clause(Core, _State) ->
-    unsupported(Core).
+%% core_pp cannot print a clause on its own, so report the offending part:
+%% the guard when it is not 'true', otherwise the pattern list.
+clause(#c_clause{pats = [_], guard = Guard}, _State) ->
+    unsupported(Guard);
+clause(#c_clause{anno = Anno, pats = Patterns}, _State) ->
+    unsupported(cerl:ann_c_values(Anno, Patterns)).
 
 %% Core separates values from computations; only computations produce Result.
 value(#c_var{} = Var, State) ->
@@ -147,6 +174,12 @@ value(#c_literal{anno = Anno, val = N}, State) when is_integer(N) ->
 value(#c_literal{anno = Anno, val = Atom}, State) when is_atom(Atom) ->
     String = node(~"string", Anno, #{~"value" => atom_to_binary(Atom, utf8)}),
     {apply_node(~"Lynx.Term.«atom»", [String], Anno), State};
+%% The compiler folds constant lists such as [1, a] into a single literal.
+%% Translate them element by element, exactly like the equivalent c_cons nodes.
+value(#c_literal{anno = Anno, val = [Head | Tail]}, State0) ->
+    {Args, State1} = lists:mapfoldl(fun value/2, State0,
+        [#c_literal{anno = Anno, val = Head}, #c_literal{anno = Anno, val = Tail}]),
+    {apply_node(~"Lynx.Term.«cons»", Args, Anno), State1};
 value(#c_cons{anno = Anno, hd = Head, tl = Tail}, State0) ->
     {Args, State1} = lists:mapfoldl(fun value/2, State0, [Head, Tail]),
     {apply_node(~"Lynx.Term.«cons»", Args, Anno), State1};
@@ -175,6 +208,10 @@ quote_identifier(Name) ->
 ident_node(Name, Anno) ->
     node(~"ident", Anno, #{~"name" => Name}).
 
+%% A call without arguments, such as zero() or self(), is just a reference to the
+%% zero-parameter Lean definition. The runner rejects applications without arguments.
+apply_node(Name, [], Anno) ->
+    ident_node(Name, Anno);
 apply_node(Name, Args, Anno) ->
     node(~"apply", Anno, #{~"function" => ident_node(Name, []), ~"args" => Args}).
 
