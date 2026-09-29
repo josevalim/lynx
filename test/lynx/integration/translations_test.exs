@@ -10,7 +10,6 @@ defmodule Lynx.Integration.TranslationTest do
     assert fixtures != []
 
     Enum.each(fixtures, fn fixture ->
-      IO.puts("Rendering #{Path.basename(fixture)}")
       source = "../test/fixtures/translations/#{Path.basename(fixture)}"
 
       {module, core} = core(fixture, source)
@@ -37,7 +36,7 @@ defmodule Lynx.Integration.TranslationTest do
           {file["file"], File.read!(Path.rootname(fixture) <> suffix)}
         end)
 
-      rendered = Lynx.RunnerPool.command(@lean_dir, Map.put(request, "command", "render"))
+      rendered = Lynx.Commands.runner!(@lean_dir, Map.put(request, "command", "render"))
 
       assert rendered == %{"status" => "ok", "files" => expected},
              "rendered output does not match #{fixture}"
