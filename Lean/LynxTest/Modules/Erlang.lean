@@ -1,15 +1,15 @@
 module
 
 meta import LynxTest.ProofAudit
-import Erlang.erlang
+import all Erlang.erlang
 import LynxTest.Term.Compare
 import all Lynx.Term
 import all Lynx.Term.DataTypes
 import all Lynx.Term.FiniteFloat
 import all Lynx.Term.Compare
+import all Lynx.Term.Dispatch
 import all Lynx.Term.Runner
 import all Erlang.erlang.Guards
-import all Erlang.erlang.Fun
 import all Erlang.erlang.Process
 import all Std
 import all Init.Data.List.Basic
@@ -21,12 +21,14 @@ open Lynx
 open Erlang.erlang
 open LynxTest.Term.Compare (orderedTerms ordered_terms)
 
-private def identityFun : Term.Fun
-  | #[value] => .ok value
+private def identityFun (args : Array Term) : Result :=
+  match args.toList with
+  | [value] => .ok value
   | _ => .error (.error (.atom "unexpected_arguments"))
 
-private def firstFun : Term.Fun
-  | #[left, _] => .ok left
+private def firstFun (args : Array Term) : Result :=
+  match args.toList with
+  | [left, _] => .ok left
   | _ => .error (.error (.atom "unexpected_arguments"))
 
 private def rememberSelf : Result := do
@@ -34,11 +36,12 @@ private def rememberSelf : Result := do
   let _ ← «put/2» (.atom "pid") pid
   .ok pid
 
-private def rememberSelfFun : Term.Fun
-  | #[] => rememberSelf
+private def rememberSelfFun (args : Array Term) : Result :=
+  match args.toList with
+  | [] => rememberSelf
   | _ => .error (.error (.atom "unexpected_arguments"))
 
-private def functions : Term.FunTable := #[identityFun, firstFun, rememberSelfFun]
+private def functions : Term.FunTable := #[fun _ => identityFun, fun _ => firstFun, fun _ => rememberSelfFun]
 
 private def floatOne : Term.FiniteFloat :=
   ⟨false, 1023, 0⟩
@@ -177,28 +180,56 @@ private theorem floatOne_toRat : floatOne.toRat = 1 := by
   change (2 : Rat) ^ (52 : Nat) * ((2 : Rat) ^ (52 : Nat))⁻¹ = 1
   exact Rat.mul_inv_cancel _ (by decide)
 
-theorem fetch_fun :
-    (Term.fetchFun functions (.function 0 1)).map Prod.snd = some 1 ∧
-    Term.fetchFun functions (.function 3 0) = none ∧
-    Term.fetchFun functions .nil = none := by
-  exact ⟨rfl, rfl, rfl⟩
+private def applyWith (table : Term.FunTable) (function arguments : Term) : Result :=
+  Result.resolve table 1 («apply/2» function arguments)
 
 theorem dynamic_apply_2 :
-    «apply/2» functions (.function 0 1) (.cons (.integer 7) .nil) = .ok (.integer 7) ∧
-    «apply/2» functions (.function 1 2)
+    applyWith functions (.function 0 1 #[]) (.cons (.integer 7) .nil) = .ok (.integer 7) ∧
+    applyWith functions (.function 1 2 #[])
       (.cons (.atom "left") (.cons (.atom "right") .nil)) = .ok (.atom "left") ∧
-    «apply/2» functions (.function 0 1) (.cons (.integer 7) (.atom "improper")) =
+    applyWith functions (.function 0 1 #[]) (.cons (.integer 7) (.atom "improper")) =
       .error (.error (.atom "badarg")) := by
-  exact ⟨rfl, rfl, rfl⟩
+  repeat' apply And.intro
+  all_goals first | exact rfl | (cbv <;> rfl)
+
+/-- Native argument arrays preserve both the dispatch result and error payloads. -/
+theorem dynamic_apply_array :
+    Result.resolve functions 1 (Term.apply (.function 0 1 #[]) #[.integer 7]) =
+      .ok (.integer 7) ∧
+    Term.apply (.atom "not_a_fun") #[] =
+      .error (.error (.tuple #[.atom "badfun", .atom "not_a_fun"])) ∧
+    Term.apply (.function 0 0 #[]) #[.integer 7, .atom "last"] =
+      .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 0 #[],
+        .cons (.integer 7) (.cons (.atom "last") .nil)]])) ∧
+    «apply/2» (.function 0 0 #[]) (.cons (.integer 7) (.atom "improper")) =
+      .error (.error (.atom "badarg")) := by
+  repeat' apply And.intro
+  all_goals cbv
+
+private def closureFunctions : Term.FunTable := #[
+  Term.FunTable.entry 1 1 fun captures args =>
+    «+/2» (captures.getD 0 .nil) (args.getD 0 .nil)
+]
+
+theorem dynamic_apply_captures :
+    applyWith closureFunctions (.function 0 1 #[.integer 10]) (.cons (.integer 7) .nil) =
+      .ok (.integer 17) ∧
+    applyWith closureFunctions (.function 0 1 #[.integer 20]) (.cons (.integer 7) .nil) =
+      .ok (.integer 27) ∧
+    applyWith closureFunctions (.function 0 1 #[]) (.cons (.integer 7) .nil) =
+      .error (.error (.atom "badarg")) := by
+  repeat' apply And.intro
+  all_goals first | exact rfl | (cbv <;> rfl)
 
 theorem dynamic_apply_2_errors :
-    «apply/2» functions (.atom "not_a_fun") .nil =
+    applyWith functions (.atom "not_a_fun") .nil =
         .error (.error (.tuple #[.atom "badfun", .atom "not_a_fun"])) ∧
-    «apply/2» functions (.function 9 0) .nil =
-        .error (.error (.tuple #[.atom "badfun", .function 9 0])) ∧
-    «apply/2» functions (.function 0 1) .nil =
-        .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 1, .nil]])) := by
-  exact ⟨rfl, rfl, rfl⟩
+    applyWith functions (.function 9 0 #[]) .nil =
+        .error (.error (.tuple #[.atom "badfun", .function 9 0 #[]])) ∧
+    applyWith functions (.function 0 1 #[]) .nil =
+        .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 1 #[], .nil]])) := by
+  repeat' apply And.intro
+  all_goals first | exact rfl | (cbv <;> rfl)
 
 theorem float_equality_guards :
     «is_float/1» (.float floatOneAndHalf) = .ok Term.true ∧
@@ -239,7 +270,7 @@ theorem reflexive_operators (a : Term) :
 
 /-- Callers remain in direct style even when the helper they invoke spawns. -/
 private def spawnFromHelper : Result :=
-  «spawn/1» functions (.function 2 0)
+  «spawn/1» (.function 2 0 #[])
 
 private def spawnCaller : Result := do
   let childPid ← spawnFromHelper
@@ -250,38 +281,39 @@ theorem spawn_schedules_child_or_parent_first :
     let final : Environment := {
       pidCounter := 2
       currentProcess := { pdict := [(.atom "pid", .pid 1)] } }
-    Lynx.run spawnCaller [.swap 2] =
+    Lynx.run spawnCaller [.swap 2] functions 1 =
       .ok (.tuple #[.pid 2, .pid 1]) final ∧
-    Lynx.run spawnCaller [.current] =
+    Lynx.run spawnCaller [.current] functions 1 =
       .ok (.tuple #[.pid 2, .pid 1]) final := by
-  rw [show spawnCaller = Result.spawn rememberSelf (fun childPid => do
-    let parentPid ← rememberSelf
-    pure (.tuple #[.pid childPid, parentPid])) from rfl]
   cbv
 
-private def nestedSpawnFun : Term.Fun
-  | #[] => «spawn/1» functions (.function 2 0)
+private def nestedSpawnFun (args : Array Term) : Result :=
+  match args.toList with
+  | [] => «spawn/1» (.function 2 0 #[])
   | _ => .error (.error (.atom "unexpected_arguments"))
 
 private def nestedSpawnCaller : Result :=
-  «spawn/1» #[nestedSpawnFun] (.function 0 0)
+  «spawn/1» (.function 3 0 #[])
+
+private def nestedFunctions : Term.FunTable := functions.push (fun _ => nestedSpawnFun)
 
 theorem completed_nested_processes_are_removed :
     let final : Environment := { pidCounter := 3 }
-    Lynx.run nestedSpawnCaller [.swap 2, .swap 3] =
+    Lynx.run nestedSpawnCaller [.swap 2, .swap 3] nestedFunctions 2 =
       .ok (.pid 2) final ∧
-    Lynx.run nestedSpawnCaller [.current, .current] =
+    Lynx.run nestedSpawnCaller [.current, .current] nestedFunctions 2 =
       .ok (.pid 2) final := by
-  rw [show nestedSpawnCaller =
-    Result.spawn (Result.spawn rememberSelf (fun pid => .ok (.pid pid)))
-      (fun pid => .ok (.pid pid)) from rfl]
   cbv
 
 theorem spawn_rejects_invalid_fun :
-    «spawn/1» functions (.atom "not_a_fun") = .error (.error (.atom "badarg")) ∧
-    «spawn/1» functions (.function 9 0) = .error (.error (.atom "badarg")) ∧
-    «spawn/1» functions (.function 0 1) = .error (.error (.atom "badarg")) := by
-  exact ⟨rfl, rfl, rfl⟩
+    Lynx.run («spawn/1» (.atom "not_a_fun")) [] functions =
+      .error (.error (.atom "badarg")) {} ∧
+    Lynx.run («spawn/1» (.function 9 0 #[])) [] functions =
+      .error (.error (.atom "badarg")) {} ∧
+    Lynx.run («spawn/1» (.function 0 1 #[])) [] functions =
+      .error (.error (.atom "badarg")) {} := by
+  repeat' apply And.intro
+  all_goals cbv
 
 theorem tuple_equality :
     «==/2» (.tuple #[]) (.tuple #[]) = .ok Term.true ∧
@@ -363,6 +395,6 @@ end LynxTest.Modules.Erlang
 
 run_cmd do
   LynxTest.ProofAudit.checkModule `LynxTest.Modules.Erlang
-  LynxTest.ProofAudit.checkModule `Erlang.erlang.Fun
+  LynxTest.ProofAudit.checkModule `Erlang.erlang
   LynxTest.ProofAudit.checkModule `Erlang.erlang.Guards
   LynxTest.ProofAudit.checkModule `Erlang.erlang.Process

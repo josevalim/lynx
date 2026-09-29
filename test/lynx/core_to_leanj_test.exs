@@ -1,6 +1,33 @@
 defmodule Lynx.CoreToLeanjTest do
   use ExUnit.Case, async: true
 
+  test "translates Core values into separate match expressions and patterns" do
+    body =
+      :cerl.c_case(:cerl.c_values([:cerl.c_var(0), :cerl.c_nil()]), [
+        :cerl.c_clause([:cerl.c_var(:X), :cerl.c_nil()], :cerl.c_var(:X))
+      ])
+
+    assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
+
+    assert %{
+             "body" => %{
+               "kind" => "match",
+               "expressions" => [
+                 %{"kind" => "ident", "name" => "«_0»"},
+                 %{"kind" => "ident", "name" => "Lynx.Term.nil"}
+               ],
+               "cases" => [
+                 %{
+                   "patterns" => [
+                     %{"kind" => "ident", "name" => "«vX»"},
+                     %{"kind" => "ident", "name" => "Lynx.Term.nil"}
+                   ]
+                 }
+               ]
+             }
+           } = functions[{:entry, 1}].translation
+  end
+
   test "recursively translates reachable callees and keeps each function's calls separate" do
     body =
       :cerl.c_let(
@@ -25,13 +52,16 @@ defmodule Lynx.CoreToLeanjTest do
 
     assert Enum.sort(Map.keys(functions)) == [{:entry, 1}, {:even, 1}, {:helper, 1}, {:odd, 1}]
     assert Enum.sort(functions[{:entry, 1}].local_calls) == [{:even, 1}, {:helper, 1}, {:odd, 1}]
-    assert functions[{:odd, 1}].local_calls == [{:even, 1}]
-    assert functions[{:even, 1}].local_calls == [{:odd, 1}]
-    assert functions[{:helper, 1}].local_calls == []
+
+    assert %{
+             {:odd, 1} => %{local_calls: [{:even, 1}]},
+             {:even, 1} => %{local_calls: [{:odd, 1}]},
+             {:helper, 1} => %{local_calls: []}
+           } = functions
 
     for {{name, 1}, %{translation: translation}} <- functions do
-      assert %{"kind" => "def", "name" => translated_name} = translation
-      assert translated_name == "«#{name}/1»"
+      expected = "«#{name}/1»"
+      assert %{"kind" => "def", "name" => ^expected} = translation
     end
   end
 
@@ -51,8 +81,11 @@ defmodule Lynx.CoreToLeanjTest do
 
     assert calls == [{:two, :entry, 1, []}, {:one, :entry, 1, []}]
     assert Enum.sort(functions[{:entry, 1}].local_calls) == [{:first, 1}, {:second, 1}]
-    assert functions[{:first, 1}].local_calls == []
-    assert functions[{:second, 1}].local_calls == []
+
+    assert %{
+             {:first, 1} => %{local_calls: []},
+             {:second, 1} => %{local_calls: []}
+           } = functions
 
     assert {:ok, ^functions, []} = translate(definitions, functions)
   end
@@ -64,11 +97,15 @@ defmodule Lynx.CoreToLeanjTest do
     assert {:ok, functions, []} = translate(definitions)
 
     assert Enum.sort(Map.keys(functions)) == [{:entry, 1}, {:helper, 1}]
-    assert functions[{:entry, 1}].local_calls == [{:helper, 1}]
-    assert functions[{:helper, 1}].local_calls == []
+
+    assert %{
+             {:entry, 1} => %{local_calls: [{:helper, 1}]},
+             {:helper, 1} => %{local_calls: []}
+           } = functions
 
     for name <- [:entry, :helper] do
-      assert functions[{name, 1}].translation["body"]["function"]["name"] == "«helper/1»"
+      assert %{"body" => %{"function" => %{"name" => "«helper/1»"}}} =
+               functions[{name, 1}].translation
     end
   end
 
@@ -81,10 +118,8 @@ defmodule Lynx.CoreToLeanjTest do
         [:cerl.c_var(0)]
       )
 
-    assert {:ok, _, [{:other, :entry, 1, span_anno}]} =
+    assert {:ok, _, [{:other, :entry, 1, [{:file, ~c"foo"}, {7, 3}]}]} =
              translate(definitions([definition(:entry, body)]))
-
-    assert span_anno == [{:file, ~c"foo"}, {7, 3}]
   end
 
   test "qualifies remote function names with Erlang and Elixir namespaces" do
@@ -97,7 +132,8 @@ defmodule Lynx.CoreToLeanjTest do
       assert {:ok, functions, [{^module, :entry, 1, []}]} =
                translate(definitions([definition(:entry, body)]))
 
-      assert functions[{:entry, 1}].translation["body"]["function"]["name"] == expected
+      assert %{"body" => %{"function" => %{"name" => ^expected}}} =
+               functions[{:entry, 1}].translation
     end
   end
 
@@ -113,8 +149,12 @@ defmodule Lynx.CoreToLeanjTest do
       ])
 
     assert {:ok, functions, calls} = translate(defs, %{}, %{{:impure, :entry, 1} => false})
-    refute functions[{:entry, 1}].pure
-    assert functions[{:helper, 1}].pure
+
+    assert %{
+             {:entry, 1} => %{pure: false},
+             {:helper, 1} => %{pure: true}
+           } = functions
+
     assert calls == [{:pure, :entry, 1, []}, {:impure, :entry, 1, []}]
   end
 
@@ -172,23 +212,44 @@ defmodule Lynx.CoreToLeanjTest do
     end
   end
 
-  defp translate(definitions, translated \\ %{}, purity \\ %{}) do
-    callback = fn calls, module, function, arity, span_anno ->
+  test "reports missing named definitions and mismatched arities as unsupported Core" do
+    for body <- [call(:missing), :cerl.c_apply(:cerl.c_fname(:entry, 1), [])] do
+      assert {:unsupported_core, [], core} =
+               :lynx_core_to_leanj.translate(
+                 :example,
+                 definitions([definition(:entry, body)]),
+                 [{:entry, 1}],
+                 %{},
+                 %{},
+                 {[], fn _, _, _, _, _, _ -> flunk("unexpected remote call") end}
+               )
+
+      assert is_binary(core)
+      assert core =~ if(body == call(:missing), do: "missing", else: "apply")
+    end
+  end
+
+  defp translate(definitions, translated \\ %{}, pure \\ %{}) do
+    callback = fn calls, module, function, arity, span_anno, funs ->
       if module == :example do
         :local
       else
-        pure = Map.get(purity, {module, function, arity}, true)
-        {pure, [{module, function, arity, span_anno} | calls]}
+        pure = Map.get(pure, {module, function, arity}, true)
+        {pure, funs, [{module, function, arity, span_anno} | calls]}
       end
     end
 
-    :lynx_core_to_leanj.translate(
-      :example,
-      definitions,
-      [{:entry, 1}],
-      translated,
-      {[], callback}
-    )
+    {:ok, functions, _funs, calls} =
+      :lynx_core_to_leanj.translate(
+        :example,
+        definitions,
+        [{:entry, 1}],
+        translated,
+        %{},
+        {[], callback}
+      )
+
+    {:ok, functions, calls}
   end
 
   defp definitions(defs) do

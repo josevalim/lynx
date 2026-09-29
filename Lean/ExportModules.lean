@@ -15,8 +15,9 @@ open Lean
 /-- Number of explicit `Lynx.Term` parameters when `type` has the shape
 `Lynx.Term → ... → Lynx.Result`, the only calling convention the translator
 emits (`Module.«name/arity» arg₁ ... argₙ`). Functions that take anything else,
-such as the function table of `spawn/1` and `apply/2` or the thunks of
-`andalso/2`, would produce ill-typed Lean if the translator called them. -/
+such as the computation and thunk of `andalso/2`, would produce ill-typed
+Lean if the translator called them. `spawn/1` and `apply/2` now take only
+terms; the runtime resolves their function table separately. -/
 private def termArity? : Expr → Option Nat
   | .forallE _ (.const `Lynx.Term []) body .default =>
       if body.hasLooseBVars then none else (termArity? body).map (· + 1)

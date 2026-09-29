@@ -7,6 +7,19 @@ public import Erlang.erlang
 public import Erlang.lists
 public import Erlang.maps
 
+-- Keep the closure environment and table adapter signatures part of the API check.
+example : Nat → Nat → Array Lynx.Term → Lynx.Term := Lynx.Term.function
+example (entry : Array Lynx.Term → Array Lynx.Term → Lynx.Result) :
+    Lynx.Term.FunTable := #[entry]
+
+example : Lynx.Result → Lynx.Term.FunTable → Nat → Lynx.Environment → Lynx.Outcome Lynx.Term :=
+  Lynx.Result.runWith
+example : Lynx.Term → Lynx.Term → Lynx.Result := Erlang.erlang.«apply/2»
+example : Lynx.Term → Array Lynx.Term → Lynx.Result := Lynx.Term.apply
+example : Lynx.Term → Lynx.Result := Erlang.erlang.«spawn/1»
+example : Lynx.Term → (Except Lynx.Exception Lynx.Term → Lynx.Result α) → Lynx.Result α :=
+  Lynx.Result.spawn
+
 meta section
 
 /-! Snapshot of public types and executable declarations available through `Lynx`,
@@ -72,6 +85,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Outcome",
   "Lynx.Outcome.deadlock",
   "Lynx.Outcome.error",
+  "Lynx.Outcome.exhausted",
   "Lynx.Outcome.ok",
   "Lynx.PID",
   "Lynx.ProcessState",
@@ -81,8 +95,10 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Property",
   "Lynx.Result",
   "Lynx.Result.IsPure",
+  "Lynx.Result.apply",
   "Lynx.Result.bind",
   "Lynx.Result.error",
+  "Lynx.Result.exhausted",
   "Lynx.Result.get",
   "Lynx.Result.handle",
   "Lynx.Result.instMonad",
@@ -90,7 +106,10 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.instMonadStateOfEnvironment",
   "Lynx.Result.ok",
   "Lynx.Result.receive",
+  "Lynx.Result.resolve",
   "Lynx.Result.run",
+  "Lynx.Result.runWith",
+  "Lynx.Result.schedule",
   "Lynx.Result.send",
   "Lynx.Result.set",
   "Lynx.Result.spawn",
@@ -116,10 +135,12 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.FiniteFloat.toRat",
   "Lynx.Term.Fun",
   "Lynx.Term.FunTable",
+  "Lynx.Term.FunTable.entry",
   "Lynx.Term.Map.Entries",
   "Lynx.Term.Map.find",
   "Lynx.Term.Map.merge",
   "Lynx.Term.Map.put",
+  "Lynx.Term.apply",
   "Lynx.Term.atom",
   "Lynx.Term.bitstring",
   "Lynx.Term.compare",
@@ -127,7 +148,6 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.emptyMap",
   "Lynx.Term.exactCompare",
   "Lynx.Term.false",
-  "Lynx.Term.fetchFun",
   "Lynx.Term.float",
   "Lynx.Term.function",
   "Lynx.Term.instDecidableEqFiniteFloat",
@@ -158,8 +178,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.instReprTerm",
   "Lynx.instToStringSourceLabel",
   "Lynx.run",
-  "main",
-
+  "main"
 ]
 
 private def sorted (items : List String) : Array String :=

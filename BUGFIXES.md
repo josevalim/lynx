@@ -63,15 +63,18 @@ previous failures; positive checks also protect behavior that already worked.
 * **Bug:** `F(X)` has the Core form `apply F(X)` with a variable operator. The
   translator treated every variable operator as a module function name and
   crashed with an internal `badkey` error.
-* **Fix:** only `{Name, Arity}` function names with matching argument counts
-  are translated. Other applications are reported as unsupported Core with
-  their source line. Looking up a missing function definition also reports
-  unsupported Core instead of crashing.
-* **Test:** "reports applications of fun variables as unsupported Core".
+* **Fix:** distinguish named module calls from calls through function values.
+  Named calls require a `{Name, Arity}` operator with a matching argument count;
+  a missing definition or malformed named call reports unsupported Core.
+  Upstream now translates `F(X)` through `Lynx.Term.apply` and a generated
+  function table, replacing this PR's original unsupported-call diagnostic.
+* **Tests:** "dynamic application makes local, remote, and recursive callers
+  impure", "reports missing named definitions and mismatched arities as
+  unsupported Core", and the `functions` translation fixture.
 
 ## 5. Qualified calls to undefined functions of the same module crashed (Elixir side)
 
-* **Where:** `lib/lynx/translation.ex`, `remote_call/5`.
+* **Where:** `lib/lynx/translation.ex`, `remote_call/6`.
 * **Bug:** `?MODULE:missing(X)` compiles in Erlang (it fails with `undef` when
   run). The translator treated it as a local call without checking that
   `missing/1` exists, and crashed with an internal `badkey` error.
@@ -86,7 +89,8 @@ previous failures; positive checks also protect behavior that already worked.
   by pretty-printing the whole clause. The Core pretty printer cannot print a
   bare clause, so the translator crashed with a `FunctionClauseError` instead
   of reporting unsupported Core.
-* **Fix:** report the guard, or the list of patterns when a clause has several.
+* **Fix:** report the unsupported guard itself. Upstream now supports clauses
+  with several patterns, so those use the normal translation path.
 * **Test:** "reports unsupported guards without crashing".
 
 ## 7. The runtime manifest listed functions the translator cannot call (manifest)
@@ -94,19 +98,21 @@ previous failures; positive checks also protect behavior that already worked.
 * **Where:** `Lean/ExportModules.lean` and the generated `Lean/modules.json`.
 * **Bug:** every public `Erlang.*` definition whose name ends in an arity was
   exported. The translator calls exported functions with Erlang terms only, but
-  `spawn/1` and `apply/2` also take the program's function table, and
+  the old `spawn/1` and `apply/2` took an extra function-table argument, while
   `andalso/2` takes unevaluated operands. Calls to them produced ill-typed Lean.
   `andalso/2` was also marked pure only because a theorem named
   `«andalso/2_pure»` exists, although that theorem has extra conditions.
 * **Fix:** only functions of type `Lynx.Term → … → Lynx.Result`, with one term
-  argument per arity, are exported. `modules.json` was regenerated with
-  `lake env lean --run ExportModules.lean > modules.json`, which removed exactly
-  these three entries.
+  argument per arity, are exported. After the upstream sync, `spawn/1` and
+  `apply/2` have compatible signatures: the runtime resolves the table separately.
+  Regenerating `modules.json` restores both as impure builtins. `andalso/2`
+  remains excluded because its signature still does not fit.
 * **Proof:** a check in `Regressions.lean` runs during the build. It reads
   `modules.json` and fails unless every listed function has the term signature
   and every function marked pure has an unconditional purity theorem. It also
-  checks that the three functions are no longer listed. ExUnit test: "does not
-  call runtime functions that need more than terms". Lake does not track
+  checks that `andalso/2` is absent and `spawn/1` and `apply/2` are present and
+  impure. ExUnit test: "does not call runtime functions that need more than terms".
+  Lake does not track
   `modules.json` as an input, so after editing it by hand, re-check with
   `lake env lean LynxTest/Regressions.lean` from `Lean/`.
 
@@ -347,8 +353,14 @@ runtime call such as `self/0`; its lack of arguments does not make it pure.
 function, represented by `{Name, Arity}`, from a variable containing a function.
 The direct-call path can translate only the former. Checking the operator shape
 and argument count avoids trying to look up an ordinary variable as a module
-function. The new behavior is a useful unsupported-Core diagnostic. It is not
-an implementation of general higher-order Erlang calls.
+function. Upstream now provides a second path: `F(X)` becomes `Term.apply`,
+which requests a dynamic call. A function term carries an ID, its arity, and
+captured values. The generated `Erlang.program.fun_table` maps IDs to Lean
+implementations. Pass that table to `Lynx.run` to execute the call. The runtime
+checks the function and arity and uses `callDepth` to bound nested dynamic
+calls; exhausting that bound produces `Outcome.exhausted`, not an Erlang
+exception. Dynamic calls remain conservatively impure even when a particular
+function body has no effects.
 
 **Qualified calls to the current module.** `?MODULE:missing(X)` enters the
 remote-call path even though the named module is the current one. Before handing
@@ -360,8 +372,10 @@ and the scope of the fix easier to understand.
 
 **Unsupported guards.** A Core clause contains patterns, a guard, and a body.
 The Core pretty-printer cannot print a bare clause as an expression. Passing it
-the guard, or a Core values node containing the patterns, gives it an object it
-can print. This repairs error reporting; it does not add guard translation.
+the guard gives it an expression it can print. Multiple patterns now translate
+normally; guarded clauses still report the offending guard, whether they have
+one pattern or several. This repairs error reporting; it does not add guard
+translation.
 The ExUnit tests check the diagnostic text and source line because these are
 properties of the translator running on the BEAM VM.
 
@@ -373,7 +387,7 @@ exporter now checks both this shape and the arity in the function's name.
 | --- | --- |
 | `+/2` | Two `Term` arguments and a `Result`; it fits the calling convention. |
 | `self/0` | No arguments and a `Result`; it fits, although it is impure. |
-| `spawn/1`, `apply/2` | Need the program's function table in addition to Erlang arguments. |
+| `spawn/1`, `apply/2` | Now take only terms and return a `Result`; exported as impure. The runtime resolves the table later. |
 | `andalso/2` | Takes a computation and a thunk, rather than two term arguments. |
 
 A function's Erlang-looking name is therefore not enough to make it callable by
@@ -436,10 +450,11 @@ file reads and inspection of declarations. Those checks are useful, but should
 not be described as formal proofs that the entire translation pipeline is
 correct.
 
-Some boundaries remain deliberate: general fun-variable calls and guards are
-unsupported, and module components containing Lean's closing quote delimiter
-`»` are explicitly rejected. These fixes cover the supported translation paths;
-they do not remove the project's broader semantic limitations.
+Some boundaries remain deliberate: guarded clauses are unsupported, and module
+components containing Lean's closing quote delimiter `»` are explicitly rejected.
+Function-variable calls are now supported through the generated table, with a
+bound on nested dispatch. These fixes do not remove the project's broader
+semantic limitations.
 
 ### 7. Reproduce the checks and extend them safely
 
@@ -489,7 +504,9 @@ Erlang execution speed. A passing benchmark proof is still a proof check; its
 elapsed time is a separate measurement and needs repeated runs and a comparable
 baseline before drawing a performance conclusion.
 
-### 8. Review and validation record — 2026-09-29
+### 8. Review and validation record before the upstream sync — 2026-09-29
+
+This record describes commit `d3098aa`, before the upstream sync described below.
 
 The review followed the changed paths from Core translation through JSON,
 Lean syntax construction, manifest exports, and regression statements. It found
@@ -530,3 +547,95 @@ All **140 timed proof checks** passed. Translated proof medians ranged from
 (+0.7%). Native control medians varied from 10.4% faster to 10.0% slower. These
 measurements show no substantial slowdown in this suite, but do not establish a
 general speedup or replace the correctness checks above.
+
+### 9. Upstream compatibility update — 2026-09-29
+
+PR #2 now includes upstream `main` through
+[`eaa0fd3`](https://github.com/josevalim/lynx/commit/eaa0fd37121dc42179c6e6c2680b815000bc2973).
+The preceding upstream commit, `9ca5a34`, adds anonymous functions, captured
+values, dynamic dispatch, and a generated function table. This changes two of
+the original fixes' expected outcomes: function-variable calls now translate
+successfully, and `spawn/1` and `apply/2` are callable runtime exports.
+
+For a Lean beginner, the key distinction is between **describing a call** and
+**executing its implementation**. A translated `F(X)` creates a `Result.apply`
+request. The `Term.function` value identifies the implementation and carries
+captured values, such as `X` in `fun(Y) -> X + Y end`. The generated
+`Erlang.program.fun_table` stores adapters that combine those captures with the
+new arguments. `Lynx.run computation [] Erlang.program.fun_table` resolves these
+requests and runs the computation; the empty list selects the default schedule.
+Its default `callDepth` is 100. A nested dynamic call consumes depth, and reaching
+zero produces `Outcome.exhausted`. This outcome is a modeling limit, separate
+from an Erlang exception or a successful return.
+
+The merge preserves upstream's implementation and adjusts these boundaries:
+
+- Named local calls still validate their operator and argument count, and a
+  missing definition reports unsupported Core. Function values follow the new
+  dynamic path. The obsolete test expecting `F(X)` to fail was replaced by
+  upstream's broader dynamic-call and purity tests; a new test protects missing
+  named definitions and mismatched arities.
+- Generated anonymous helpers use `translate_def/3` with their actual body.
+  Ordinary named functions use the checked lookup in `translate_def/2`. Both
+  paths retain the evolving function table, so discovering one function does
+  not discard previously discovered functions.
+- Multiple match inputs and patterns use JSON arrays named `expressions` and
+  `patterns`. The `literals` JSON fixture was regenerated for that format. Its
+  rendered Lean definitions are unchanged, so the existing proofs still apply
+  to exactly the generated code.
+- Guard diagnostics report the guard expression itself for both one-pattern
+  and multiple-pattern clauses. A supported multiple-pattern clause is no longer
+  mistaken for an unsupported construct.
+- Upstream removes `Erlang/erlang/Fun.lean`, places `apply/2` in
+  `Erlang/erlang.lean`, and places `spawn/1` in `Erlang/erlang/Process.lean`.
+  Both functions now take only term arguments. The regenerated manifest includes both with
+  `pure: false`, while `andalso/2` remains excluded. The build check now asserts
+  these current expectations as well as checking all signatures and purity
+  claims.
+
+The earlier validation record above is historical: its 42-test count and its
+exclusion of `spawn/1` describe the pre-sync revision, not this runtime.
+
+Validation after resolving the merge, with the same Lean 4.33.1, Elixir 1.20.4,
+and Erlang/OTP 29 toolchains:
+
+- A clean `lake build` followed by `lake test` passed all 46 build jobs,
+  including the existing and new upstream theorems, proof audits, runtime
+  dispatch tests, regression proofs, and public API snapshot.
+- All **45 ExUnit tests** passed. Compilation with `--warnings-as-errors`,
+  formatting, and Git whitespace checks passed.
+- The exporter reproduced the tracked manifest. Temporarily removing `spawn/1`
+  made the new required-export check fail; adding `andalso/2` made the signature
+  check fail. The original manifest was restored and the direct regression
+  check passed afterward.
+- Extra translation/render/verification probes passed for seven module-name
+  shapes, a negative integer beyond 128-bit magnitude, zero-arity calls, and
+  nested/improper lists. The four concrete equations appended to the generated
+  literal code still compiled, as did the guide's `FirstProof.lean` example.
+- A separate generated program combined a quoted module name, a captured
+  variable, a dynamic call with `-5`, and a zero-arity anonymous function passed
+  to `spawn/1`. Both generated files verified. Evaluation with the generated
+  table returned `5` for a captured `10` plus `-5`, and returned the child PID
+  for the spawn. These are concrete execution checks, separate from the
+  project's general runtime theorems.
+
+The runtime changes were also measured against the preceding PR commit,
+`d3098aa`, using five alternating benchmark runs per revision on the same
+machine. Each revision's libraries were built from its own source tree; only
+final proof elaboration was timed. All **140 timed proof checks** passed.
+
+| Translated proof | Before (median ms) | After (median ms) | Change |
+| --- | ---: | ---: | ---: |
+| Sum contract | 345.02 | 336.63 | -2.4% |
+| Sum append | 1481.44 | 1558.01 | +5.2% |
+| Reverse contract | 26.35 | 27.48 | +4.3% |
+| Reverse involution | 21.27 | 21.31 | +0.2% |
+| Reverse append | 178.22 | 181.20 | +1.7% |
+| Sets union contract | 253.99 | 208.80 | -17.8% |
+| Sets union commutativity | 160.08 | 138.06 | -13.8% |
+| Sets union empty identity | 42.14 | 41.61 | -1.3% |
+
+The largest measured translated-proof slowdown was `sum-append`, about 77 ms
+(+5.2%). Native control medians ranged from 10.2% faster to 14.6% slower. These
+runs found no proof failures and no large translated-proof slowdown; the timing
+variation does not establish a general performance improvement.

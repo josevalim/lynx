@@ -98,6 +98,10 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   let info ← span map j parent
   let kind ← str j "kind"
   let result ← match kind with
+  | "wildcard" => do
+    fields j ["kind", "span"]
+    unless pattern do throw "wildcard is only valid in patterns"
+    pure (Unhygienic.run `(_))
   | "ident" => do
     fields j ["kind", "name", "span"]
     pure ⟨(← identifier (← str j "name")).raw⟩
@@ -115,6 +119,10 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   | "string" => do
     fields j ["kind", "value", "span"]
     pure ⟨Syntax.mkStrLit (← str j "value")⟩
+  | "array" => do
+    fields j ["kind", "elements", "span"]
+    let elements ← (← arr j "elements").mapM (term map info pattern)
+    pure (Unhygienic.run `(#[$elements,*]))
   | "apply" => do
     fields j ["kind", "function", "args", "span"]
     let fnJson ← field j "function"
@@ -133,16 +141,18 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     pure (Unhygienic.run `(fun $params:ident* => $body))
   | "match" => do
     if pattern then throw "match is not valid in patterns"
-    fields j ["kind", "expression", "cases", "span"]
-    let expr ← term map info false (← field j "expression")
+    fields j ["kind", "expressions", "cases", "span"]
+    let exprs ← (← arr j "expressions").mapM (term map info false)
+    if exprs.isEmpty then throw "match requires at least one expression"
     let cases ← (← arr j "cases").mapM fun c => do
-      fields c ["pattern", "body", "span"]
+      fields c ["patterns", "body", "span"]
       let ci ← span map c info
-      let pat ← term map ci true (← field c "pattern")
+      let pats ← (← arr c "patterns").mapM (term map ci true)
+      unless pats.size == exprs.size do throw "match case must have one pattern per expression"
       let body ← term map ci false (← field c "body")
-      pure (withSpan ci.info (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $pat => $body)))
+      pure (withSpan ci.info (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $pats,* => $body)))
     if cases.isEmpty then throw "match requires at least one case"
-    pure (Unhygienic.run `(match $expr:term with $cases:matchAlt*))
+    pure (Unhygienic.run `(match $[$exprs:term],* with $cases:matchAlt*))
   | _ => throw s!"unsupported {if pattern then "pattern" else "term"} kind '{kind}'"
   return withSpan info.info result
 
@@ -152,11 +162,19 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) : D
   let result ← match kind with
   | "command" => do
     fields j ["kind", "name", "expr", "span"]
-    unless (← str j "name") == "lynx_pure" do throw "unsupported command name"
+    let name ← str j "name"
+    unless name == "lynx_pure" do throw "unsupported command name"
     let inner ← field j "expr"
     unless (← str inner "kind") ∈ ["def", "mutual"] do throw "lynx_pure must wrap def or mutual"
     let decl ← command map inner info
     pure (Unhygienic.run `(#lynx_pure $decl:command))
+  | "fun_table" => do
+    fields j ["kind", "name", "body", "span"]
+    let name ← identifier (← str j "name")
+    unless name.getId.getPrefix == .anonymous do throw "table name must be unqualified"
+    let body ← term map info false (← field j "body")
+    let tableType := mkIdent ``Lynx.Term.FunTable
+    pure (Unhygienic.run `(public def $name : $tableType := $body))
   | "mutual" => do
     fields j ["kind", "defs", "span"]
     let defs ← arr j "defs"
@@ -227,10 +245,11 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
   files.mapM fun entry => do
     let file ← IO.ofExcept (str entry "file")
     try
-      let map := FileMap.ofString (← IO.FS.readFile file)
+      let moduleName ← IO.ofExcept (str entry "module")
+      let source ← if moduleName == "Erlang.program" then pure "" else IO.FS.readFile file
+      let map := FileMap.ofString source
       let (moduleName, imports, commands, spans) ← IO.ofExcept do
         fields entry ["file", "module", "imports", "contents"]
-        let moduleName ← str entry "module"
         let namespaceId ← (identifier moduleName).run env |>.run' #[]
         let imports ← (← arr entry "imports").mapM fun j => do
           let name ← j.getStr?

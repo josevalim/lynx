@@ -217,10 +217,11 @@ end Literals
 
 `Lean/modules.json` tells the translator which Erlang functions are implemented
 in Lean. The translator calls each of them as `Module.«name/arity» arg₁ … argₙ`
-with Erlang terms. `spawn/1` and `apply/2` also need the program's function
-table and `andalso/2` takes unevaluated operands, so calling them that way
-produced ill-typed Lean. The manifest also claimed that `andalso/2` is pure only
-because a theorem named `«andalso/2_pure»` exists, although that theorem is
+with Erlang terms. Previously `spawn/1` and `apply/2` also took the program's
+function table, so calling them that way produced ill-typed Lean. The runtime
+now resolves that table separately: both functions take only terms and can be
+exported. `andalso/2` still takes unevaluated operands and must be excluded.
+The manifest also claimed that `andalso/2` is pure only because a theorem named `«andalso/2_pure»` exists, although that theorem is
 conditional.
 
 The check below runs while this file is compiled. It reads `modules.json` and
@@ -231,7 +232,8 @@ fails the build unless every listed function
 * and, when marked pure, has a `_pure` theorem stating unconditionally that
   every call is pure (`Lynx.Result.IsPure`).
 
-It also checks that the three functions above are no longer listed. -/
+It also checks that `andalso/2` is excluded while `spawn/1` and `apply/2`
+remain available with their new signatures and are marked impure. -/
 
 open Lean Meta in
 run_meta do
@@ -266,10 +268,15 @@ run_meta do
             (← mkAppM ``Lynx.Result.IsPure #[mkAppN (mkConst name) arguments])
           unless ← isDefEq proof.type expected do
             throwError "{proofName} does not state unconditional purity"
-  for excluded in [``Erlang.erlang.«spawn/1», ``Erlang.erlang.«apply/2»,
-      ``Erlang.erlang.«andalso/2»] do
-    if listed.contains excluded then
-      throwError "{excluded} must not be listed in modules.json"
+  if listed.contains ``Erlang.erlang.«andalso/2» then
+    throwError "andalso/2 must not be listed in modules.json"
+  for function in ["spawn/1", "apply/2"] do
+    let name := Name.str `Erlang.erlang function
+    unless listed.contains name do
+      throwError "{name} must be listed with its term-only signature"
+    let entry ← IO.ofExcept ((← IO.ofExcept (manifest.getObjVal? "erlang")).getObjVal? function)
+    if ← IO.ofExcept (entry.getObjValAs? Bool "pure") then
+      throwError "{name} must be marked impure"
 
 end LynxTest.Regressions
 
