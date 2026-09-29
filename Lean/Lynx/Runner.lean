@@ -107,7 +107,8 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     pure ⟨(← identifier (← str j "name")).raw⟩
   | "integer" => do
     fields j ["kind", "value", "span"]
-    pure ⟨Syntax.mkNumLit (toString (← (← field j "value").getNat?))⟩
+    let value ← (← field j "value").getInt?
+    pure ⟨← Parser.runParserCategory (← read) `term (toString value)⟩
   | "string" => do
     fields j ["kind", "value", "span"]
     pure ⟨Syntax.mkStrLit (← str j "value")⟩
