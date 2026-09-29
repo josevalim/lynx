@@ -61,15 +61,4 @@ jobs:
       - run: mix compile --warnings-as-errors
         if: ${{matrix.lint}}
 
-      - name: Run tests with resource samples
-        run: |
-          while true; do
-            echo "::group::Runner resources $(date -u +%H:%M:%S)"
-            free -m
-            ps -eo pid,ppid,rss,%cpu,comm --sort=-rss | sed -n '1,12p'
-            echo "::endgroup::"
-            sleep 10
-          done &
-          monitor_pid=$!
-          trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
-          mix test --trace
+      - run: mix test --trace

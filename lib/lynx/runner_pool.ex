@@ -110,8 +110,8 @@ defmodule Lynx.RunnerPool do
   end
 
   @impl NimblePool
-  # Lean retains imported environments across requests. Release each process before
-  # its heap can exhaust the memory available to a CI runner.
+  # Extension-loaded imports cannot safely free their compacted regions. Recycle
+  # the process so each request starts with an independent Lean environment.
   def handle_checkin(:ok, _from, _port, pool_state), do: {:remove, :completed, pool_state}
   def handle_checkin(:close, _from, _port, pool_state), do: {:remove, :closed, pool_state}
 
