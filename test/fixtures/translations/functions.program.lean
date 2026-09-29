@@ -12,6 +12,10 @@ public def fun_table : Lynx.Term.FunTable :=
     | _, _ => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "badarg")),
     fun captures args =>
     match captures, args with
+    | #[], #[] => Erlang.functions.«zero/0»
+    | _, _ => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "badarg")),
+    fun captures args =>
+    match captures, args with
     | #[], #[arg1] => Erlang.functions.«inc/1» arg1
     | _, _ => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))]
 

@@ -3,8 +3,8 @@ defmodule Lynx.RunnerTest do
 
   @lean_dir Path.expand("../../Lean", __DIR__)
   @translations_dir Path.expand("../fixtures/translations", __DIR__)
-  @sum_erl "../test/fixtures/translations/sum.erl"
-  @sum_json Path.join(@translations_dir, "sum.json")
+  @literal_erl "../test/fixtures/translations/literal.erl"
+  @literal_json Path.join(@translations_dir, "literal.json")
   @moduletag timeout: to_timeout(minute: 10)
 
   test "runs successive commands in independent processes" do
@@ -52,9 +52,9 @@ defmodule Lynx.RunnerTest do
 
     test "reports verification errors with source diagnostics" do
       request =
-        @sum_json
+        @literal_json
         |> File.read!()
-        |> String.replace("Erlang.erlang.«+/2»", "Erlang.erlang.«unknown/2»")
+        |> String.replace("Lynx.Term.integer", "Lynx.Term.unknown")
         |> JSON.decode!()
         |> Map.put("command", "verify")
 
@@ -62,8 +62,8 @@ defmodule Lynx.RunnerTest do
                Lynx.Commands.runner!(@lean_dir, request)
 
       assert Enum.any?(diagnostics, fn diagnostic ->
-               diagnostic["file"] == @sum_erl and diagnostic["kind"] == "error" and
-                 diagnostic["line"] == 4 and diagnostic["column"] == 20
+               diagnostic["file"] == @literal_erl and diagnostic["kind"] == "error" and
+                 diagnostic["line"] == 4 and diagnostic["column"] == 15
              end)
     end
 
@@ -96,7 +96,7 @@ defmodule Lynx.RunnerTest do
     invalid = %{
       "command" => "render",
       "version" => "1.0",
-      "files" => [file(@sum_erl, "sum", [%{"kind" => "unknown", "span" => []}])]
+      "files" => [file(@literal_erl, "literal", [%{"kind" => "unknown", "span" => []}])]
     }
 
     error =
@@ -104,7 +104,7 @@ defmodule Lynx.RunnerTest do
         Lynx.Commands.runner!(@lean_dir, invalid)
       end
 
-    assert error.message =~ @sum_erl
+    assert error.message =~ @literal_erl
     assert error.message =~ "unsupported command kind 'unknown'"
   end
 
