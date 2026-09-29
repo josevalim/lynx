@@ -110,7 +110,9 @@ defmodule Lynx.RunnerPool do
   end
 
   @impl NimblePool
-  def handle_checkin(:ok, _from, port, pool_state), do: {:ok, port, pool_state}
+  # Lean retains imported environments across requests. Release each process before
+  # its heap can exhaust the memory available to a CI runner.
+  def handle_checkin(:ok, _from, _port, pool_state), do: {:remove, :completed, pool_state}
   def handle_checkin(:close, _from, _port, pool_state), do: {:remove, :closed, pool_state}
 
   @impl NimblePool
