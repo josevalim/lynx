@@ -19,9 +19,17 @@ module_name(Module) ->
 %% identifier, such as the Erlang module 'my-mod', must be quoted as «my-mod».
 %% An Erlang module name is one flat component even when it contains dots.
 module_component(Name) ->
-    case re:run(Name, ~"^[A-Za-z_][A-Za-z0-9_]*$", [unicode]) of
+    %% Without dollar_endonly, $ also matches before a trailing newline, which
+    %% Lean would ignore as whitespace instead of preserving it in the name.
+    case re:run(Name, ~"^[A-Za-z_][A-Za-z0-9_]*$", [unicode, dollar_endonly]) of
         {match, _} -> Name;
-        nomatch -> quote_identifier(Name)
+        nomatch ->
+            %% Lean has no escape for a closing identifier quote. Reject it so
+            %% source text cannot close the name and append qualifiers or comments.
+            case binary:match(Name, ~"»") of
+                nomatch -> quote_identifier(Name);
+                _ -> erlang:error({unsupported_lean_module_name, Name})
+            end
     end.
 
 -spec to_definitions(cerl:c_module()) -> #{{atom(), arity()} => cerl:c_fun()}.

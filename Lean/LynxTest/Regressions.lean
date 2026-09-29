@@ -213,7 +213,7 @@ theorem one_two_longer :
 
 end Literals
 
-/-! ## Bug 4: the runtime manifest exported functions the translator cannot call
+/-! ## Bug 7: the runtime manifest exported functions the translator cannot call
 
 `Lean/modules.json` tells the translator which Erlang functions are implemented
 in Lean. The translator calls each of them as `Module.«name/arity» arg₁ … argₙ`

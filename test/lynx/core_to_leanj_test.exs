@@ -159,6 +159,19 @@ defmodule Lynx.CoreToLeanjTest do
     assert :lynx_core_to_leanj.module_name(:"Elixir.Foo.Bar?") == "Elixir.Foo.«Bar?»"
   end
 
+  test "quotes trailing newlines instead of aliasing module names" do
+    assert :lynx_core_to_leanj.module_name(:"demo\n") == "Erlang.«demo\n»"
+    assert :lynx_core_to_leanj.module_name(:"Elixir.Demo\n") == "Elixir.«Demo\n»"
+  end
+
+  test "rejects module names that can escape Lean identifier quotes" do
+    for name <- [:"demo»tail", :"erlang» -- ", :"Elixir.Demo»"] do
+      assert_raise ErlangError, ~r/unsupported_lean_module_name/, fn ->
+        :lynx_core_to_leanj.module_name(name)
+      end
+    end
+  end
+
   defp translate(definitions, translated \\ %{}, purity \\ %{}) do
     callback = fn calls, module, function, arity, span_anno ->
       if module == :example do
