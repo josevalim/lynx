@@ -15,7 +15,9 @@ inductive Term where
   | integer : Int → Term
   | float : _root_.Lynx.Term.FiniteFloat → Term
   | atom : String → Term
-  | function : Nat → Nat → Term
+  /-- Program function index, source arity, and captured values.
+  Comparison uses the index followed by the captured values. -/
+  | function (id arity : Nat) (captures : Array Term) : Term
   | pid : PID → Term
   | tuple : Array Term → Term
   | map : List (Term × Term) → Term
@@ -84,16 +86,26 @@ inductive Outcome (α : Type) where
   | error : Exception → Environment → Outcome α
   /-- No modeled process can proceed. This is not an Erlang exception. -/
   | deadlock : Environment → Outcome α
+  /-- The dynamic-call depth budget was exhausted. -/
+  | exhausted : Environment → Outcome α
 deriving Repr
 
 /-- A resumable process computation. Bind stores continuations so scheduling
 does not require translated functions to use continuation-passing style. -/
 inductive Result : (α : Type := Term) → Type 1 where
+  | exhausted {α : Type} : Result α
   | ok {α : Type} : α → Result α
   | error {α : Type} : Exception → Result α
+  /-- Request a call through the program table. Both returns and exceptions resume
+  the caller so surrounding exception handlers also cover dispatched code. -/
+  | apply {α : Type} : Term → Array Term → (Except Exception Term → Result α) → Result α
   | get {α : Type} : (Environment → Result α) → Result α
   | set {α : Type} : Environment → Result α → Result α
-  | spawn {α : Type} : Result Term → (PID → Result α) → Result α
+  /-- Request a zero-arity function spawn through the program table. Validation
+  errors resume the caller; execution of the function belongs to the child. -/
+  | spawn {α : Type} : Term → (Except Exception Term → Result α) → Result α
+  /-- Internal scheduled child, produced after resolving a function value. -/
+  | schedule {α : Type} : Result Term → (PID → Result α) → Result α
   /-- Local asynchronous send. The continuation receives control after delivery. -/
   | send {α : Type} : PID → Term → Result α → Result α
   /-- Select the oldest matching message. The pure selector checks clauses in
@@ -105,11 +117,16 @@ namespace Result
 
 @[expose] protected def bind (computation : Result α) (next : α → Result β) : Result β :=
   match computation with
+  | .exhausted => .exhausted
   | .ok value => next value
   | .error exception => .error exception
+  | .apply function arguments continuation =>
+      .apply function arguments fun result => Result.bind (continuation result) next
   | .get continuation => .get fun env => Result.bind (continuation env) next
   | .set env continuation => .set env (Result.bind continuation next)
-  | .spawn child continuation => .spawn child fun pid => Result.bind (continuation pid) next
+  | .spawn child continuation =>
+      .spawn child fun result => Result.bind (continuation result) next
+  | Result.schedule child continuation => Result.schedule child fun pid => Result.bind (continuation pid) next
   | .send pid message continuation => .send pid message (Result.bind continuation next)
   | .receive select continuation => .receive select fun value => Result.bind (continuation value) next
 
@@ -126,11 +143,16 @@ instance : MonadStateOf Environment @Result where
 
 protected def handle (computation : Result α) (handler : Exception → Result α) : Result α :=
   match computation with
+  | .exhausted => .exhausted
   | .ok value => .ok value
   | .error exception => handler exception
+  | .apply function arguments continuation =>
+      .apply function arguments fun result => Result.handle (continuation result) handler
   | .get continuation => .get fun env => Result.handle (continuation env) handler
   | .set env continuation => .set env (Result.handle continuation handler)
-  | .spawn child continuation => .spawn child fun pid => Result.handle (continuation pid) handler
+  | .spawn child continuation =>
+      .spawn child fun result => Result.handle (continuation result) handler
+  | Result.schedule child continuation => Result.schedule child fun pid => Result.handle (continuation pid) handler
   | .send pid message continuation => .send pid message (Result.handle continuation handler)
   | .receive select continuation => .receive select fun value => Result.handle (continuation value) handler
 
@@ -141,14 +163,19 @@ instance : MonadExceptOf Exception @Result where
 private theorem bind_ok (computation : Result α) :
     Result.bind computation .ok = computation := by
   induction computation with
-  | ok | error => rfl
+  | exhausted | ok | error => rfl
+  | apply function arguments continuation ih | spawn function continuation ih =>
+      simp only [Result.bind]
+      congr
+      funext result
+      exact ih result
   | get continuation ih =>
       simp only [Result.bind]
       congr
       funext env
       exact ih env
   | set env continuation ih => simp [Result.bind, ih]
-  | spawn child continuation childIh continuationIh =>
+  | schedule child continuation childIh continuationIh =>
       simp only [Result.bind]
       congr
       funext pid
@@ -165,14 +192,19 @@ private theorem bind_assoc_proof (computation : Result α)
     Result.bind (Result.bind computation next) final =
       Result.bind computation fun value => Result.bind (next value) final := by
   induction computation with
-  | ok | error => rfl
+  | exhausted | ok | error => rfl
+  | apply function arguments continuation ih | spawn function continuation ih =>
+      simp only [Result.bind]
+      congr
+      funext result
+      exact ih result next
   | get continuation ih =>
       simp only [Result.bind]
       congr
       funext env
       exact ih env next
   | set env continuation ih => simp [Result.bind, ih next]
-  | spawn child continuation childIh continuationIh =>
+  | schedule child continuation childIh continuationIh =>
       simp only [Result.bind]
       congr
       funext pid
@@ -196,12 +228,19 @@ instance : LawfulMonad @Result := LawfulMonad.mk' _
 
 @[simp] theorem isPure_ok (value : α) : IsPure (.ok value) := trivial
 @[simp] theorem isPure_error (exception : Exception) : IsPure (.error exception : Result α) := trivial
+@[simp] theorem not_isPure_apply (function : Term) (arguments : Array Term)
+    (next : Except Exception Term → Result α) :
+    ¬ IsPure (.apply function arguments next) := by simp [IsPure]
+
 @[simp] theorem not_isPure_get (next : Environment → Result α) :
     ¬ IsPure (.get next) := by simp [IsPure]
 @[simp] theorem not_isPure_set (env : Environment) (next : Result α) :
     ¬ IsPure (.set env next) := by simp [IsPure]
-@[simp] theorem not_isPure_spawn (child : Result Term) (next : PID → Result α) :
+@[simp] theorem not_isPure_spawn (child : Term) (next : Except Exception Term → Result α) :
     ¬ IsPure (.spawn child next) := by simp [IsPure]
+
+@[simp] theorem not_isPure_schedule (child : Result Term) (next : PID → Result α) :
+    ¬ IsPure (Result.schedule child next) := by simp [IsPure]
 
 @[simp] theorem not_isPure_send (pid : PID) (message : Term) (next : Result α) :
     ¬ IsPure (.send pid message next) := by simp [IsPure]
@@ -218,6 +257,14 @@ theorem IsPure.terminal (computation : Result α) (pure : IsPure computation) :
     IsPure (computation >>= next) := by
   change IsPure (Result.bind computation next)
   cases computation <;> simp_all [IsPure, Result.bind]
+
+/-- The explicit bind spelling emitted by the translator has a separate simp index. -/
+@[simp↓] theorem IsPure.bind_explicit (computation : Result α) (next : α → Result β)
+    (computationPure : IsPure computation) (nextPure : ∀ value, IsPure (next value)) :
+    IsPure (Result.bind computation next) :=
+  IsPure.bind computation next computationPure nextPure
+
+@[simp] theorem not_isPure_exhausted : ¬ IsPure (.exhausted : Result α) := by simp [IsPure]
 
 @[simp] theorem ok_inj (a b : α) : (Result.ok a : Result α) = .ok b ↔ a = b := by
   constructor
@@ -241,16 +288,29 @@ theorem IsPure.terminal (computation : Result α) (pure : IsPure computation) :
 @[simp] theorem error_bind (exception : Exception) (next : α → Result β) :
     (Result.error exception >>= next) = .error exception := by rfl
 
+@[simp] theorem exhausted_bind (next : α → Result β) :
+    (Result.exhausted >>= next) = .exhausted := rfl
+
+@[simp] theorem apply_bind (function : Term) (arguments : Array Term)
+    (continuation : Except Exception Term → Result α) (next : α → Result β) :
+    (Result.apply function arguments continuation >>= next) =
+      .apply function arguments (fun result => continuation result >>= next) := rfl
+
 @[simp] theorem get_bind (continuation : Environment → Result α) (next : α → Result β) :
     (Result.get continuation >>= next) =
       .get (fun env => continuation env >>= next) := by rfl
 @[simp] theorem set_bind (env : Environment) (continuation : Result α)
     (next : α → Result β) :
     (Result.set env continuation >>= next) = .set env (continuation >>= next) := by rfl
-@[simp] theorem spawn_bind (child : Result Term) (continuation : PID → Result α)
+@[simp] theorem spawn_bind (child : Term) (continuation : Except Exception Term → Result α)
     (next : α → Result β) :
     (Result.spawn child continuation >>= next) =
-      .spawn child (fun pid => continuation pid >>= next) := by rfl
+      .spawn child (fun result => continuation result >>= next) := rfl
+
+@[simp] theorem schedule_bind (child : Result Term) (continuation : PID → Result α)
+    (next : α → Result β) :
+    (Result.schedule child continuation >>= next) =
+      Result.schedule child (fun pid => continuation pid >>= next) := by rfl
 
 @[simp] theorem send_bind (pid : PID) (message : Term) (continuation : Result α)
     (next : α → Result β) :
@@ -268,3 +328,23 @@ theorem IsPure.terminal (computation : Result α) (pure : IsPure computation) :
 end Result
 
 end Lynx
+
+namespace Lynx.Term
+
+/-- Executable implementation of a function term. Arguments use a Lean array,
+avoiding Erlang-list encoding at internal call sites. -/
+public abbrev Fun := Array Term → Result
+
+/-- Program-local function implementations indexed by `Term.function` IDs.
+Each entry receives the captured values before the invocation arguments. -/
+public abbrev FunTable := Array (Array Term → Fun)
+
+/-- Adapt a lifted closure body, rejecting malformed capture or argument arrays. -/
+public def FunTable.entry (captureCount arity : Nat)
+    (body : Array Term → Array Term → Result) (captures arguments : Array Term) : Result :=
+  if captures.size = captureCount ∧ arguments.size = arity then
+    body captures arguments
+  else
+    .error (.error (.atom "badarg"))
+
+end Lynx.Term

@@ -30,7 +30,7 @@ private def returned (outcome : Outcome Term) : Option Term :=
 
 private def mailbox (outcome : Outcome Term) : List Term :=
   match outcome with
-  | .ok _ env | .error _ env | .deadlock env => env.currentProcess.mailbox
+  | .ok _ env | .error _ env | .deadlock env | .exhausted env => env.currentProcess.mailbox
 
 /-- Sending returns its argument and appends behind existing messages. -/
 theorem send_to_self :
@@ -66,7 +66,7 @@ theorem receive_bindings_and_clause_priority :
       .ok (.integer 8) {} := by cbv
 
 private def handshake : Result := do
-  let child ← Result.spawn (do
+  let child ← Result.schedule (do
     let _ ← receiveAtom "start"
     «send/2» (.pid 1) (.atom "done")) (fun pid => .ok (Term.pid pid))
   let _ ← «send/2» child (.atom "start")
@@ -79,7 +79,7 @@ theorem blocked_processes_resume :
   cbv
 
 private def interleavedSends : Result := do
-  let _ ← Result.spawn («send/2» (.pid 1) (.atom "child")) (fun pid => .ok (Term.pid pid))
+  let _ ← Result.schedule («send/2» (.pid 1) (.atom "child")) (fun pid => .ok (Term.pid pid))
   let _ ← «send/2» (.pid 1) (.atom "first")
   let _ ← «send/2» (.pid 1) (.atom "second")
   let first ← receiveAny
@@ -97,8 +97,8 @@ theorem send_is_a_scheduling_boundary :
   cbv
 
 private def twoSenders : Result := do
-  let _ ← Result.spawn («send/2» (.pid 1) (.atom "left")) (fun pid => .ok (Term.pid pid))
-  let _ ← Result.spawn («send/2» (.pid 1) (.atom "right")) (fun pid => .ok (Term.pid pid))
+  let _ ← Result.schedule («send/2» (.pid 1) (.atom "left")) (fun pid => .ok (Term.pid pid))
+  let _ ← Result.schedule («send/2» (.pid 1) (.atom "right")) (fun pid => .ok (Term.pid pid))
   let first ← receiveAny
   let second ← receiveAny
   pure (.tuple #[first, second])
@@ -125,7 +125,7 @@ theorem nonmatching_receive_deadlocks :
 
 /-- Whole-tree completion cannot hide a child that is still waiting. -/
 theorem blocked_child_prevents_completion :
-    Lynx.run (Result.spawn receiveAny (fun _ => .ok (Term.atom "done"))) =
+    Lynx.run (Result.schedule receiveAny (fun _ => .ok (Term.atom "done"))) =
       .deadlock { pidCounter := 2, processes := [(2, {})] } := by cbv
 
 /-- A receive cannot be recovered by an exception handler when no message matches. -/
@@ -142,24 +142,24 @@ theorem receive_body_exception_is_caught :
 /-- A child finishing first disappears; sending to its old PID creates no state. -/
 theorem terminated_child_is_not_revived :
     Lynx.run (do
-      let child ← Result.spawn (.ok .nil) (fun pid => .ok (Term.pid pid))
+      let child ← Result.schedule (.ok .nil) (fun pid => .ok (Term.pid pid))
       «send/2» child (.atom "ignored")) [.swap 2] =
       .ok (.atom "ignored") { pidCounter := 2 } := by cbv
 
 /-- Root termination also closes its mailbox while the remaining children finish. -/
 theorem terminated_root_discards_late_messages :
-    mailbox (Lynx.run (Result.spawn («send/2» (.pid 1) (.atom "late"))
+    mailbox (Lynx.run (Result.schedule («send/2» (.pid 1) (.atom "late"))
       (fun _ => .ok .nil))) = [] := by cbv
 
 /-- Child exceptions do not become exceptions in the unlinked parent. -/
 theorem child_exception_is_isolated :
-    Lynx.run (Result.spawn (.error (.error (.atom "failure")))
+    Lynx.run (Result.schedule (.error (.error (.atom "failure")))
       (fun _ => .ok (Term.atom "done"))) [.swap 2] =
       .ok (.atom "done") { pidCounter := 2 } := by cbv
 
 private def isolatedDictionaries : Result := do
   let _ ← «put/2» (.atom "key") (.atom "parent")
-  let child ← Result.spawn (do
+  let child ← Result.schedule (do
     let _ ← «put/2» (.atom "key") (.atom "child")
     let _ ← receiveAtom "start"
     «send/2» (.pid 1) (← «get/1» (.atom "key"))) (fun pid => .ok (Term.pid pid))
@@ -173,7 +173,7 @@ theorem suspended_processes_keep_their_dictionaries :
       some (.tuple #[.atom "parent", .atom "child"]) := by cbv
 
 private def receiveBoundary : Result := do
-  let _ ← Result.spawn (do
+  let _ ← Result.schedule (do
     let _ ← receiveAtom "start"
     «send/2» (.pid 1) (.atom "child")) (fun pid => .ok (Term.pid pid))
   let _ ← «send/2» (.pid 2) (.atom "start")

@@ -10,25 +10,31 @@ namespace Lynx
 /-- Run a complete process tree from a fresh runtime using the supplied
 scheduler choices.
 An `ok` or `error` outcome means every spawned process has finished.
-`deadlock` means the modeled process tree is stuck. -/
-public def run (computation : Result α) (schedule : List ScheduleChoice := []) : Outcome α :=
-  computation.run { schedule }
+`deadlock` means the modeled process tree is stuck. `exhausted` means a dynamic
+call exceeded `callDepth`; it is not an Erlang exception. The immutable table
+is separate from process state. -/
+public def run (computation : Result α) (schedule : List ScheduleChoice := [])
+    (table : Term.FunTable := #[]) (callDepth : Nat := 100) : Outcome α :=
+  if table.isEmpty then computation.run { schedule }
+  else computation.runWith table callDepth { schedule }
 
 end Lynx
 
 namespace Lynx.Term
 
-/-- Executable implementation of a function term. Arguments use a Lean array,
-avoiding Erlang-list encoding at internal call sites. -/
-public abbrev Fun := Array Term → Result
-
-/-- Program-local function implementations indexed by `Term.function` IDs. -/
-public abbrev FunTable := Array Fun
-
-/-- Resolve a function term to its implementation and declared arity. -/
-@[expose] public def fetchFun (table : FunTable) : Term → Option (Fun × Nat)
-  | .function id arity => table[id]?.map (·, arity)
-  | _ => none
+/-- Apply a function to native arguments. Build an Erlang argument list only
+when reporting an arity mismatch. -/
+public def apply (function : Term) (arguments : Array Term) : Result :=
+  match function with
+  | .function _ arity _ =>
+      if arguments.size = arity then
+        .apply function arguments fun
+          | .ok value => .ok value
+          | .error exception => .error exception
+      else
+        .error (.error (.tuple #[.atom "badarity", .tuple #[function,
+          arguments.toList.foldr Term.cons Term.nil]]))
+  | _ => .error (.error (.tuple #[.atom "badfun", function]))
 
 /-- Empty Erlang map literal. -/
 @[expose, simp] public def emptyMap : Term := .map []
