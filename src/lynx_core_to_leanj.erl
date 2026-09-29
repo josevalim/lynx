@@ -1,13 +1,13 @@
 -module(lynx_core_to_leanj).
 
--export([module_name/1, to_definitions/1, translate/6, join_purity/2]).
+-export([module_name/1, to_definitions/1, translate/6]).
 
 -include_lib("compiler/src/core_parse.hrl").
 
 %% Anonymous functions use integer keys; named functions use {Module, {Name, Arity}}.
 %% Every entry carries a global integer ID for ordering and dispatch.
 -record(state, {module, name, defs, translated, funs = #{},
-                local_calls = #{}, purity = pure, remote}).
+                local_calls = #{}, pure = true, remote}).
 
 -spec module_name(module()) -> binary().
 module_name(Module) ->
@@ -26,7 +26,7 @@ to_definitions(#c_module{defs = Defs}) ->
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
 -spec translate(module(), #{{atom(), arity()} => cerl:c_fun()}, [{atom(), arity()}], map(), map(),
                 {term(), fun((term(), module(), atom(), arity(), list(), map()) ->
-                    {pure | impure | neutral, map(), term()} | local)}) ->
+                    {boolean(), map(), term()} | local)}) ->
     {ok, map(), map(), term()} | {unsupported_core, list(), binary()}.
 translate(Module, Definitions, Names, Translated, Funs, Remote) ->
     try
@@ -58,7 +58,7 @@ translate_def(Name, #state{translated = Translated} = State) ->
     end.
 
 translate_def(Name, #c_fun{anno = Anno, vars = Vars, body = Body}, State0) ->
-    State1 = State0#state{name = Name, local_calls = #{}, purity = pure,
+    State1 = State0#state{name = Name, local_calls = #{}, pure = true,
                           translated = (State0#state.translated)#{Name => pending}},
     {TranslatedBody, State2} = expression(Body, State1),
     Def = node(~"def", Anno, #{
@@ -67,7 +67,7 @@ translate_def(Name, #c_fun{anno = Anno, vars = Vars, body = Body}, State0) ->
         ~"body" => TranslatedBody
     }),
     Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls),
-              purity => State2#state.purity},
+              pure => State2#state.pure},
     State0#state{translated = (State2#state.translated)#{Name => Entry},
                  funs = State2#state.funs, remote = State2#state.remote}.
 
@@ -109,7 +109,7 @@ expression(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->
     {Function, State1} = value(Op, State0),
     {TranslatedArgs, State2} = lists:mapfoldl(fun value/2, State1, Args),
     {apply_node(~"Lynx.Term.apply", [Function, array_node(TranslatedArgs, Anno)], Anno),
-     State2#state{purity = join_purity(State2#state.purity, neutral)}};
+     State2#state{pure = false}};
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX
 %% Erlang: ?MODULE:f(X) (non-builtin)
@@ -123,11 +123,11 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
         local when Module =:= State0#state.module ->
             expression(#c_apply{anno = Anno, op = #c_var{name = {Name, Arity}}, args = Args},
                 State0);
-        {Purity, NewFuns, NewContext} ->
+        {Pure, NewFuns, NewContext} ->
             {TranslatedArgs, State1} = lists:mapfoldl(fun value/2,
                 State0#state{funs = NewFuns, remote = {NewContext, Callback}}, Args),
             Function = <<(module_name(Module))/binary, ".", (function_name({Name, Arity}))/binary>>,
-            {apply_node(Function, TranslatedArgs, Anno), State1#state{purity = join_purity(State1#state.purity, Purity)}}
+            {apply_node(Function, TranslatedArgs, Anno), State1#state{pure = State1#state.pure andalso Pure}}
     end;
 %% Erlang: f([]) -> ok.
 %% Core inserts match_fail for arguments that match no function clause.
@@ -256,13 +256,6 @@ span([_ | Rest]) ->
     span(Rest);
 span([]) ->
     [].
-
--spec join_purity(pure | impure | neutral, pure | impure | neutral) -> pure | impure | neutral.
-join_purity(impure, _) -> impure;
-join_purity(_, impure) -> impure;
-join_purity(neutral, _) -> neutral;
-join_purity(_, neutral) -> neutral;
-join_purity(pure, pure) -> pure.
 
 unsupported(Core) ->
     throw({unsupported_core, Core}).

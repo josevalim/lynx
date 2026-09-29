@@ -9,19 +9,12 @@ defmodule Lynx.Translation do
     [arity | parts] = name |> String.split("/") |> Enum.reverse()
     function = parts |> Enum.reverse() |> Enum.join("/") |> String.to_atom()
 
-    purity =
-      cond do
-        module == "erlang" and name == "apply/2" -> :neutral
-        pure -> :pure
-        true -> :impure
-      end
-
     defp lean_bif(
            unquote(String.to_atom(module)),
            unquote(function),
            unquote(String.to_integer(arity))
          ),
-         do: {:ok, unquote(purity)}
+         do: {:ok, unquote(pure)}
   end
 
   defp lean_bif(_, _, _), do: :error
@@ -87,10 +80,10 @@ defmodule Lynx.Translation do
       end
 
     case lean_bif(module, function, arity) do
-      {:ok, purity} ->
+      {:ok, pure} ->
         translation = put_in(translation.builtin_modules[module], true)
 
-        {purity, translation.funs, translation}
+        {pure, translation.funs, translation}
 
       :error when module == caller ->
         :local
@@ -123,8 +116,8 @@ defmodule Lynx.Translation do
     end
 
     translation = add(translation, module, [{function, arity}])
-    purity = translation.modules[module].translations[{function, arity}].purity
-    {purity, translation.funs, translation}
+    pure = translation.modules[module].translations[{function, arity}].pure
+    {pure, translation.funs, translation}
   end
 
   defp source_location(annotations, default_file) do
@@ -332,13 +325,12 @@ defmodule Lynx.Translation do
   defp propagate_purity(functions) do
     {functions, changed?} =
       Enum.reduce(functions, {functions, false}, fn {name, definition}, {functions, changed?} ->
-        purity =
-          Enum.reduce(definition.local_calls, definition.purity, fn callee, purity ->
-            :lynx_core_to_leanj.join_purity(purity, Map.fetch!(functions, callee).purity)
-          end)
+        pure =
+          definition.pure and
+            Enum.all?(definition.local_calls, fn callee -> Map.fetch!(functions, callee).pure end)
 
-        if purity != definition.purity do
-          {Map.put(functions, name, %{definition | purity: purity}), true}
+        if pure != definition.pure do
+          {Map.put(functions, name, %{definition | pure: pure}), true}
         else
           {functions, changed?}
         end
@@ -351,8 +343,8 @@ defmodule Lynx.Translation do
     graph = :digraph.new()
 
     try do
-      for {name, %{translation: translation, purity: purity}} <- functions do
-        :digraph.add_vertex(graph, name, {translation, purity})
+      for {name, %{translation: translation, pure: pure}} <- functions do
+        :digraph.add_vertex(graph, name, {translation, pure})
       end
 
       # Edges point from callees to callers, so dependencies are emitted first.
@@ -401,9 +393,9 @@ defmodule Lynx.Translation do
 
   defp emit_group(names, graph) do
     {defs, pure} =
-      Enum.map_reduce(names, :pure, fn name, pure ->
+      Enum.map_reduce(names, true, fn name, pure ->
         {^name, {translation, definition_pure}} = :digraph.vertex(graph, name)
-        {translation, :lynx_core_to_leanj.join_purity(pure, definition_pure)}
+        {translation, pure and definition_pure}
       end)
 
     [first | _] = defs
@@ -415,7 +407,7 @@ defmodule Lynx.Translation do
         _ -> %{"kind" => "mutual", "span" => span, "defs" => defs}
       end
 
-    if pure == :pure do
+    if pure do
       %{"kind" => "command", "span" => span, "name" => "lynx_pure", "expr" => declaration}
     else
       declaration

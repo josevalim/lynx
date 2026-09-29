@@ -121,23 +121,23 @@ defmodule Lynx.CoreToLeanjTest do
         definition(:helper, remote.(:pure))
       ])
 
-    assert {:ok, functions, calls} = translate(defs, %{}, %{{:impure, :entry, 1} => :impure})
+    assert {:ok, functions, calls} = translate(defs, %{}, %{{:impure, :entry, 1} => false})
 
     assert %{
-             {:entry, 1} => %{purity: :impure},
-             {:helper, 1} => %{purity: :pure}
+             {:entry, 1} => %{pure: false},
+             {:helper, 1} => %{pure: true}
            } = functions
 
     assert calls == [{:pure, :entry, 1, []}, {:impure, :entry, 1, []}]
   end
 
-  defp translate(definitions, translated \\ %{}, purity \\ %{}) do
+  defp translate(definitions, translated \\ %{}, pure \\ %{}) do
     callback = fn calls, module, function, arity, span_anno, funs ->
       if module == :example do
         :local
       else
-        purity = Map.get(purity, {module, function, arity}, :pure)
-        {purity, funs, [{module, function, arity, span_anno} | calls]}
+        pure = Map.get(pure, {module, function, arity}, true)
+        {pure, funs, [{module, function, arity, span_anno} | calls]}
       end
     end
 
