@@ -1,0 +1,7 @@
+.build/
+.benchmarks/
+*.checked
+*.checked.lax
+*.hints
+*.cm[ioxat]*
+*.o

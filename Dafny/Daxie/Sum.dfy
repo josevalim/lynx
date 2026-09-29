@@ -26,9 +26,7 @@ module TermSum {
     match list
     case Nil => Ok(Integer(0))
     case Cons(head, tail) =>
-      (match sum_1(tail)
-      case Error(reason) => Error(reason)
-      case Ok(subtotal) => add_2(head, subtotal))
+      Bind(sum_1(tail), subtotal => add_2(head, subtotal))
     case _ => Error(Atom("function_clause"))
   }
 
@@ -38,9 +36,7 @@ module TermSum {
     match left
     case Nil => Ok(right)
     case Cons(head, tail) =>
-      (match append_2(tail, right)
-      case Error(reason) => Error(reason)
-      case Ok(rest) => Ok(Cons(head, rest)))
+      Bind(append_2(tail, right), rest => Ok(Cons(head, rest)))
     case _ => Error(Atom("badarg"))
   }
 

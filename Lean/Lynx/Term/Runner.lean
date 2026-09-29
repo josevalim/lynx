@@ -92,61 +92,10 @@ private theorem accParallel (a b : Pool α) (ha : Acc Progress a) (hb : Acc Prog
 private theorem accProcess {β : Type} (computation : Result β) :
     ∀ (processId : PID) (finish : Except Exception β → Option (Except Exception α)),
       Acc Progress (.process processId computation finish) := by
-  induction computation with
-  | exhausted =>
-    intro processId finish
-    constructor
-    intro p h
-    cases h
-    exact accEmpty
-  | apply callee arguments next ih | spawn child next ih =>
-    intro processId finish
-    constructor
-    intro p h
-    cases h
-    apply ih
-  | ok value =>
-    intro processId finish
-    constructor
-    intro p h
-    cases h
-    exact accEmpty
-  | error exception =>
-    intro processId finish
-    constructor
-    intro p h
-    cases h
-    exact accEmpty
-  | get next ih =>
-    intro processId finish
-    constructor
-    intro p h
-    cases h with
-    | get => apply ih
-  | set env next ih =>
-    intro processId finish
-    constructor
-    intro p h
-    cases h
-    apply ih
-  | send dest message next ih =>
-    intro processId finish
-    constructor
-    intro p h
-    cases h
-    apply ih
-  | receive select next ih =>
-    intro processId finish
-    constructor
-    intro p h
-    cases h with
-    | receive => apply ih
-  | schedule child next childIH nextIH =>
-    intro processId finish
-    constructor
-    intro p h
-    cases h with
-    | schedule => exact accParallel _ _ (nextIH _ _ _) (childIH _ _)
+  induction computation <;>
+    intro processId finish <;> constructor <;> intro p h <;> cases h
+  case schedule => apply accParallel <;> apply_assumption
+  all_goals first | exact accEmpty | apply_assumption
 
 private theorem wf : WellFounded (@Progress α) := by
   constructor

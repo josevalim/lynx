@@ -1,5 +1,10 @@
 # Benchmark results
 
+For the 2026-09-30 cross-project rerun measuring **whole CLI wall time**, including
+supporting proofs and matched association-list native controls, see the
+[comparison report](../../Comparison/WholeCli/REPORT.md). The declaration times
+below measure a different boundary.
+
 Captured on 2026-09-29 with Lean 4.33.1 on macOS arm64.
 
 ```sh
@@ -22,7 +27,40 @@ may reuse earlier results and cached summaries.
 | Sets union commutativity | 52.41 | 165.67 |
 | Sets union empty identity | 16.56 | 6.26 |
 
-## Captured output
+## Internal proof simplification check (2026-09-29)
+
+Compared commit `a6b79bc` against the working tree with shorter proofs of
+`Result.bind_ok`, `Result.bind_assoc_proof`, and the runner's `accProcess`.
+These three private proof bodies shrink from 103 lines to six; their statements,
+runtime definitions, public API, and registered simplification rules are unchanged.
+The monad laws use induction followed by `simp_all only [Result.bind]`.
+The termination proof shares constructor setup and retains an explicit
+parallel-scheduling case. Purity wrappers and tactic search machinery remain.
+
+The baseline was extracted from the commit into a separate directory and built
+from its own source. Both revisions ran one discarded warm-up and five measured
+repetitions on the same machine, sequentially without concurrent verifier jobs.
+All 70 measured declarations passed for each revision; `lake test` also passed
+for the changed version, including API and proof audits. Test-build timings are
+excluded. [All Term/native samples](proof-simplification-samples.tsv).
+
+| Translated proof | Baseline median (ms) | Simplified median (ms) |
+| --- | ---: | ---: |
+| Sum result contract | 126.65 | 128.22 |
+| Sum append | 575.52 | 575.65 |
+| Reverse return contract | 11.65 | 12.58 |
+| Reverse involution | 9.47 | 9.47 |
+| Reverse append | 77.92 | 77.61 |
+| Sets union contract | 80.62 | 80.09 |
+| Sets union commutativity | 53.59 | 52.63 |
+| Sets union empty identity | 17.48 | 16.72 |
+
+This supports keeping the shorter proofs for maintenance, not a speedup claim.
+Sum-append is effectively unchanged. Reverse-contract increased 0.93 ms (8%);
+unchanged native timings also varied, including reverse-append by 7.6%.
+The simplified supporting proofs remain outside the timed declarations.
+
+## Original captured output
 
 Each consecutive group of 14 lines is one run.
 

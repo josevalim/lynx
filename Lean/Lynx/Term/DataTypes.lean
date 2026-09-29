@@ -162,59 +162,13 @@ instance : MonadExceptOf Exception @Result where
 
 private theorem bind_ok (computation : Result α) :
     Result.bind computation .ok = computation := by
-  induction computation with
-  | exhausted | ok | error => rfl
-  | apply function arguments continuation ih | spawn function continuation ih =>
-      simp only [Result.bind]
-      congr
-      funext result
-      exact ih result
-  | get continuation ih =>
-      simp only [Result.bind]
-      congr
-      funext env
-      exact ih env
-  | set env continuation ih => simp [Result.bind, ih]
-  | schedule child continuation childIh continuationIh =>
-      simp only [Result.bind]
-      congr
-      funext pid
-      exact continuationIh pid
-  | send pid message continuation ih => simp [Result.bind, ih]
-  | receive select continuation ih =>
-      simp only [Result.bind]
-      congr
-      funext value
-      exact ih value
+  induction computation <;> simp_all only [Result.bind]
 
 private theorem bind_assoc_proof (computation : Result α)
     (next : α → Result β) (final : β → Result γ) :
     Result.bind (Result.bind computation next) final =
       Result.bind computation fun value => Result.bind (next value) final := by
-  induction computation with
-  | exhausted | ok | error => rfl
-  | apply function arguments continuation ih | spawn function continuation ih =>
-      simp only [Result.bind]
-      congr
-      funext result
-      exact ih result next
-  | get continuation ih =>
-      simp only [Result.bind]
-      congr
-      funext env
-      exact ih env next
-  | set env continuation ih => simp [Result.bind, ih next]
-  | schedule child continuation childIh continuationIh =>
-      simp only [Result.bind]
-      congr
-      funext pid
-      exact continuationIh pid next
-  | send pid message continuation ih => simp [Result.bind, ih next]
-  | receive select continuation ih =>
-      simp only [Result.bind]
-      congr
-      funext value
-      exact ih value next
+  induction computation <;> simp_all only [Result.bind]
 
 instance : LawfulMonad @Result := LawfulMonad.mk' _
   (id_map := fun computation => bind_ok computation)

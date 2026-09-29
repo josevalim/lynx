@@ -1,6 +1,8 @@
 include "../Daxie/Compare.dfy"
 include "../Daxie/Sum.dfy"
 include "../Benchmarks/NativeSum.dfy"
+include "Processes.dfy"
+include "Maps.dfy"
 
 module SemanticsTests {
   import opened Terms
@@ -8,6 +10,8 @@ module SemanticsTests {
   import opened Arithmetic
   import opened TermSum
   import N = NativeSum
+  import P = ProcessExamples
+  import M = MapTests
 
   lemma IntegerArithmetic(a: int, b: int)
     ensures add_2(Integer(a), Integer(b)) == Ok(Integer(a + b))
@@ -141,6 +145,8 @@ module SemanticsTests {
     expect !IsProperIntegerList(Cons(one, Nil));
     expect !IsProperIntegerList(Cons(Integer(1), Integer(2)));
     NumericEdges();
+    P.Tests();
+    M.Tests();
     print "Semantic checks passed\n";
   }
 }

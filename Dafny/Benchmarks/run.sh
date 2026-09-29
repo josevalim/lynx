@@ -15,15 +15,18 @@ cat "$output/environment.txt"
 printf 'run\tname\tms\tresources\n' > "$output/samples.tsv"
 run=0
 while [ "$run" -le "$runs" ]; do
-  if [ $((run % 2)) -eq 0 ]; then suites='term native'; else suites='native term'; fi
+  if [ $((run % 2)) -eq 0 ]; then suites='term native term-sets native-sets'; else suites='native-sets term-sets native term'; fi
   for suite in $suites; do
-    if [ "$suite" = term ]; then
-      source=Benchmarks/TermSum.dfy
-      symbol=TermBenchmarks
-    else
-      source=Benchmarks/NativeSum.dfy
-      symbol=NativeSum.SumAppend.
-    fi
+    case "$suite" in
+      term) source=Benchmarks/TermSum.dfy; symbol=TermBenchmarks; count=2
+        names='TermBenchmarks.SumContract TermBenchmarks.SumAppend' ;;
+      native) source=Benchmarks/NativeSum.dfy; symbol=NativeSum.SumAppend.; count=1
+        names='NativeSum.SumAppend' ;;
+      term-sets) source=Benchmarks/TermSets.dfy; symbol=TermSets.Union; count=3
+        names='TermSets.UnionContract TermSets.UnionCommutative TermSets.UnionEmpty' ;;
+      native-sets) source=Benchmarks/NativeSets.dfy; symbol=NativeSets.Union; count=3
+        names='NativeSets.UnionContract NativeSets.UnionCommutative NativeSets.UnionEmpty' ;;
+    esac
     log="$output/$run-$suite.csv"
     if ! "$DAFNY" verify "$source" --cores 1 --verification-time-limit 30 \
       --filter-symbol "$symbol" --log-format "csv;LogFileName=$log" \
@@ -31,21 +34,19 @@ while [ "$run" -le "$runs" ]; do
       cat "$output/$run-$suite.txt" >&2
       exit 1
     fi
-    awk -F, -v run="$run" -v suite="$suite" '
+    awk -F, -v run="$run" -v names="$names" -v expectedCount="$count" '
+      BEGIN { split(names, list, " "); for (i in list) expected[list[i]] = 1 }
       NR == 1 { next }
       {
         name = $1; sub(/ \(.*/, "", name)
-        if (suite == "term")
-          expected = (name == "TermBenchmarks.SumContract" || name == "TermBenchmarks.SumAppend")
-        else expected = name == "NativeSum.SumAppend"
-        if (!expected || $2 != "Passed") { bad = 1; next }
+        if (!(name in expected) || $2 != "Passed") { bad = 1; next }
         split($3, t, ":")
         ms[name] += (t[1] * 3600 + t[2] * 60 + t[3]) * 1000
         resources[name] += $4
       }
       END {
         for (name in ms) count++
-        if (bad || count != (suite == "term" ? 2 : 1)) exit 1
+        if (bad || count != expectedCount) exit 1
         for (name in ms) printf "%d\t%s\t%.4f\t%d\n", run, name, ms[name], resources[name]
       }
     ' "$log" > "$output/$run-$suite.tsv"
