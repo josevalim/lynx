@@ -1,5 +1,5 @@
 defmodule Lynx.RunnerPoolTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case
 
   @lean_dir Path.expand("../../Lean", __DIR__)
   @translations_dir Path.expand("../fixtures/translations", __DIR__)
@@ -45,17 +45,13 @@ defmodule Lynx.RunnerPoolTest do
       fixtures = Path.wildcard(Path.join(@translations_dir, "*.json"))
       assert fixtures != []
 
-      fixtures
-      |> Task.async_stream(
-        fn fixture ->
-          assert Lynx.RunnerPool.command(@lean_dir, fixture_request(fixture, "verify")) ==
-                   %{"status" => "ok", "diagnostics" => []},
-                 "verification failed for #{fixture}"
-        end,
-        ordered: false,
-        timeout: :infinity
-      )
-      |> Stream.run()
+      Enum.each(fixtures, fn fixture ->
+        IO.puts("Verifying #{Path.basename(fixture)}")
+
+        assert Lynx.RunnerPool.command(@lean_dir, fixture_request(fixture, "verify")) ==
+                 %{"status" => "ok", "diagnostics" => []},
+               "verification failed for #{fixture}"
+      end)
     end
 
     test "reports verification errors with source diagnostics" do
