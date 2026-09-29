@@ -124,14 +124,6 @@ open Lynx
       .ok (.cons head rest)
   | _, _ => throw (.error (.atom "badarg"))
 
-/-- Short-circuit conjunction `Left andalso Right`.
-
-The right operand is a thunk (`Unit → Result`), so it only runs when the left
-operand evaluates to `true`. A non-boolean left operand `V` raises
-`error({badarg, V})`, exactly like the Core Erlang that the Erlang compiler
-generates for `andalso` (a `case` whose fallback clause calls
-`erlang:error({badarg, V})`). Earlier versions raised the bare atom `badarg`,
-which dropped the offending value and did not match Erlang. -/
 -- Keep short-circuit branching behind its specification during proof search.
 @[expose, lynx_opaque] def «andalso/2»
     (left : Result)
@@ -139,7 +131,7 @@ which dropped the offending value and did not match Erlang. -/
   match ← left with
   | .atom "true" => right ()
   | .atom "false" => .ok Term.false
-  | value => .error (.error (.tuple #[.atom "badarg", value]))
+  | _ => .error (.error (.atom "badarg"))
 
 /-- Successful short-circuit conjunction records the actual intermediate state.
 The right operand may return any term, not just a boolean. For acceptance goals
