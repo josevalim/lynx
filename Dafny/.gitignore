@@ -1,0 +1,6 @@
+.benchmarks/
+.build/
+*.doo
+*.dtr
+bin/
+obj/

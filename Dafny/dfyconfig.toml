@@ -1,0 +1,6 @@
+includes = ["Daxie/**/*.dfy", "Tests/**/*.dfy", "Benchmarks/**/*.dfy"]
+
+[options]
+cores = 1
+verification-time-limit = 30
+verify-included-files = true
