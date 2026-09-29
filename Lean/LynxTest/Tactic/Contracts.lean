@@ -81,7 +81,7 @@ theorem andalso_raises (right : Unit → Result) (exception : Exception) :
 
 theorem andalso_non_boolean (right : Unit → Result) (value : Int) :
     Erlang.erlang.«andalso/2» (.ok (.integer value)) right =
-      .error (.error (.atom "badarg")) := by
+      .error (.error (.tuple #[.atom "badarg", .integer value])) := by
   lynx_solve
 
 /-- Acceptance eliminates the non-nil branch. -/
