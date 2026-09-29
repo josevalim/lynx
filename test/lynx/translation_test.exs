@@ -428,7 +428,7 @@ defmodule Lynx.TranslationTest do
     files = Translation.assemble(updated)
 
     assert %{
-             "module" => "Lynx.Program",
+             "module" => "Erlang.program",
              "contents" => [
                %{"kind" => "fun_table", "body" => %{"kind" => "array", "elements" => entries}} =
                  table

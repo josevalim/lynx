@@ -32,7 +32,7 @@ defmodule Lynx.Integration.TranslationTest do
 
       expected =
         Map.new(files, fn file ->
-          suffix = if file["generated"], do: ".program.lean", else: ".lean"
+          suffix = if file["module"] == "Erlang.program", do: ".program.lean", else: ".lean"
           {file["file"], File.read!(Path.rootname(fixture) <> suffix)}
         end)
 

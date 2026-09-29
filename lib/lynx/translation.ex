@@ -262,15 +262,14 @@ defmodule Lynx.Translation do
         files ++
           [
             %{
-              "module" => "Lynx.Program",
-              "file" => "Lynx/Program.lean",
-              "generated" => true,
+              "module" => "Erlang.program",
+              "file" => "Erlang/program.lean",
               "imports" => Enum.map(files, & &1["module"]),
               "contents" => [
                 %{
                   "kind" => "fun_table",
                   "span" => [],
-                  "name" => "functions",
+                  "name" => "fun_table",
                   "body" => table
                 }
               ]

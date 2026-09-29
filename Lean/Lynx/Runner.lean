@@ -231,12 +231,11 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
   files.mapM fun entry => do
     let file ← IO.ofExcept (str entry "file")
     try
-      let generated := (entry.getObjValAs? Bool "generated").toOption.getD false
-      let source ← if generated then pure "" else IO.FS.readFile file
+      let moduleName ← IO.ofExcept (str entry "module")
+      let source ← if moduleName == "Erlang.program" then pure "" else IO.FS.readFile file
       let map := FileMap.ofString source
       let (moduleName, imports, commands, spans) ← IO.ofExcept do
-        fields entry ["file", "module", "imports", "contents", "generated"]
-        let moduleName ← str entry "module"
+        fields entry ["file", "module", "imports", "contents"]
         let namespaceId ← (identifier moduleName).run env |>.run' #[]
         let imports ← (← arr entry "imports").mapM fun j => do
           let name ← j.getStr?
