@@ -1,7 +1,7 @@
 defmodule Lynx.Translation do
   @moduledoc false
 
-  defstruct modules: %{}, external_calls: %{}, builtin_modules: %{}, stack: []
+  defstruct modules: %{}, funs: %{}, external_calls: %{}, builtin_modules: %{}, stack: []
 
   @external_resource Path.expand("../../Lean/modules.json", __DIR__)
   for {module, functions} <- JSON.decode!(File.read!(@external_resource)),
@@ -37,13 +37,20 @@ defmodule Lynx.Translation do
       validate_function!(module, name, function, arity, fn -> [file: module.file] end)
     end
 
-    context = {%{translation | stack: [name | stack]}, &remote_call/5}
+    context = {%{translation | stack: [name | stack]}, &remote_call/6}
     %{definitions: definitions, translations: translations} = module
+    %{funs: funs} = translation
 
-    case :lynx_core_to_leanj.translate(name, definitions, names, translations, context) do
-      {:ok, functions, translation} ->
+    case :lynx_core_to_leanj.translate(name, definitions, names, translations, funs, context) do
+      {:ok, functions, funs, translation} ->
         updated = %{module | translations: propagate_purity(functions)}
-        %{translation | modules: Map.put(translation.modules, name, updated), stack: stack}
+
+        %{
+          translation
+          | modules: Map.put(translation.modules, name, updated),
+            funs: funs,
+            stack: stack
+        }
 
       {:unsupported_core, span_anno, core} ->
         raise CompileError,
@@ -57,8 +64,11 @@ defmodule Lynx.Translation do
          module,
          function,
          arity,
-         span_anno
+         span_anno,
+         funs
        ) do
+    translation = %{translation | funs: funs}
+
     translation =
       if module == caller do
         translation
@@ -73,7 +83,7 @@ defmodule Lynx.Translation do
       {:ok, pure} ->
         translation = put_in(translation.builtin_modules[module], true)
 
-        {pure, translation}
+        {pure, translation.funs, translation}
 
       :error when module == caller ->
         :local
@@ -107,7 +117,7 @@ defmodule Lynx.Translation do
 
     translation = add(translation, module, [{function, arity}])
     pure = translation.modules[module].translations[{function, arity}].pure
-    {pure, translation}
+    {pure, translation.funs, translation}
   end
 
   defp source_location(annotations, default_file) do
@@ -186,7 +196,11 @@ defmodule Lynx.Translation do
   end
 
   defp module_data(file, core) do
-    %{definitions: :lynx_core_to_leanj.to_definitions(core), translations: %{}, file: file}
+    %{
+      definitions: :lynx_core_to_leanj.to_definitions(core),
+      translations: %{},
+      file: file
+    }
   end
 
   defp validate_function!(target, module, function, arity, location) do
@@ -200,6 +214,7 @@ defmodule Lynx.Translation do
   @doc "Assembles translated modules in dependency order."
   def assemble(%__MODULE__{
         modules: modules,
+        funs: funs,
         external_calls: external_calls,
         builtin_modules: builtin_modules
       }) do
@@ -214,20 +229,42 @@ defmodule Lynx.Translation do
         :digraph.add_edge(graph, [dependency], [name])
       end
 
-      for [name] <- topsort(graph) do
-        module = Map.fetch!(modules, name)
-        imports = Map.get(external_calls, name, MapSet.new())
-        imports = if builtin_modules[name], do: MapSet.put(imports, name), else: imports
+      files =
+        for [name] <- topsort(graph) do
+          module = Map.fetch!(modules, name)
+          imports = Map.get(external_calls, name, MapSet.new())
+          imports = if builtin_modules[name], do: MapSet.put(imports, name), else: imports
 
-        %{
-          "module" => :lynx_core_to_leanj.module_name(name),
-          "file" => module.file,
-          "imports" =>
-            imports
-            |> Enum.sort()
-            |> Enum.map(&:lynx_core_to_leanj.module_name/1),
-          "contents" => assemble_module(module.translations)
-        }
+          %{
+            "module" => :lynx_core_to_leanj.module_name(name),
+            "file" => module.file,
+            "imports" =>
+              imports
+              |> Enum.sort()
+              |> Enum.map(&:lynx_core_to_leanj.module_name/1),
+            "contents" => assemble_module(module.translations)
+          }
+        end
+
+      if map_size(funs) == 0 do
+        files
+      else
+        files ++
+          [
+            %{
+              "module" => "Erlang.program",
+              "file" => "Erlang/program.lean",
+              "imports" => Enum.map(files, & &1["module"]),
+              "contents" => [
+                %{
+                  "kind" => "fun_table",
+                  "span" => [],
+                  "name" => "fun_table",
+                  "body" => :lynx_core_to_leanj.fun_table(funs, modules)
+                }
+              ]
+            }
+          ]
       end
     after
       :digraph.delete(graph)
@@ -237,11 +274,12 @@ defmodule Lynx.Translation do
   defp propagate_purity(functions) do
     {functions, changed?} =
       Enum.reduce(functions, {functions, false}, fn {name, definition}, {functions, changed?} ->
-        if definition.pure and
-             Enum.any?(definition.local_calls, fn callee ->
-               not Map.fetch!(functions, callee).pure
-             end) do
-          {Map.put(functions, name, %{definition | pure: false}), true}
+        pure =
+          definition.pure and
+            Enum.all?(definition.local_calls, fn callee -> Map.fetch!(functions, callee).pure end)
+
+        if pure != definition.pure do
+          {Map.put(functions, name, %{definition | pure: pure}), true}
         else
           {functions, changed?}
         end
@@ -259,7 +297,9 @@ defmodule Lynx.Translation do
       end
 
       # Edges point from callees to callers, so dependencies are emitted first.
-      for {name, %{local_calls: calls}} <- functions, callee <- calls do
+      for {name, definition} <- functions,
+          callee <- definition.local_calls,
+          callee != name do
         :digraph.add_edge(graph, callee, name)
       end
 

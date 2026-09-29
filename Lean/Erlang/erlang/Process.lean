@@ -10,6 +10,15 @@ namespace Erlang.erlang
 
 open Lynx
 
+/-- Request a zero-arity function spawn. The dispatcher validates the table entry
+before creating the child; the function body executes in the child's process. -/
+def «spawn/1» (child : Term) : Result :=
+  match child with
+  | .function _ 0 _ => .spawn child fun
+      | .ok pid => .ok pid
+      | .error exception => .error exception
+  | _ => .error (.error (.atom "badarg"))
+
 /-- Return the PID of the process running the current computation. -/
 def «self/0» : Result := do
   let env ← get

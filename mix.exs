@@ -7,7 +7,7 @@ defmodule Lynx.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
-      deps: deps(),
+      deps: [],
       aliases: [
         setup: ["deps.get", "cmd --cd Lean lake build"],
         precommit: ["format", "test.all"],
@@ -23,14 +23,7 @@ defmodule Lynx.MixProject do
 
   def application do
     [
-      mod: {Lynx.Application, []},
       extra_applications: [:logger]
-    ]
-  end
-
-  defp deps do
-    [
-      {:nimble_pool, "~> 1.0"}
     ]
   end
 end

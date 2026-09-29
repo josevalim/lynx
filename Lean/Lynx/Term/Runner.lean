@@ -1,6 +1,6 @@
 module
 
-public import Lynx.Term.DataTypes
+public import Lynx.Term.Dispatch
 
 /-! Finite local-process execution. Sends insert directly into the destination
 mailbox; message transit, remote processes, timers, links, and monitors are not
@@ -56,14 +56,19 @@ private inductive Pool (α : Type) where
 /-- Each step replaces a computation by its continuations, possibly in either
 parallel branch. This relation ignores scheduler and mailbox contents. -/
 private inductive Progress : Pool α → Pool α → Prop where
+  | exhausted : Progress .empty (.process processId .exhausted finish)
+  | apply : Progress (.process processId (next (.error (.error (.tuple #[.atom "badfun", callee])))) finish)
+      (.process processId (.apply callee arguments next) finish)
+  | spawn : Progress (.process processId (next (.error (.error (.atom "badarg")))) finish)
+      (.process processId (.spawn child next) finish)
   | ok : Progress .empty (.process processId (.ok value) finish)
   | error : Progress .empty (.process processId (.error exception) finish)
   | get : Progress (.process processId (next env) finish) (.process processId (.get next) finish)
   | set : Progress (.process processId next finish) (.process processId (.set env next) finish)
   | send : Progress (.process processId next finish) (.process processId (.send dest message next) finish)
   | receive : Progress (.process processId (next value) finish) (.process processId (.receive select next) finish)
-  | spawn : Progress (.parallel (.process processId (next childPid) finish)
-      (.process childPid child (fun _ => none))) (.process processId (.spawn child next) finish)
+  | schedule : Progress (.parallel (.process processId (next childPid) finish)
+      (.process childPid child (fun _ => none))) (.process processId (Result.schedule child next) finish)
   | left : Progress a' a → Progress (.parallel a' b) (.parallel a b)
   | right : Progress b' b → Progress (.parallel a b') (.parallel a b)
 
@@ -88,6 +93,18 @@ private theorem accProcess {β : Type} (computation : Result β) :
     ∀ (processId : PID) (finish : Except Exception β → Option (Except Exception α)),
       Acc Progress (.process processId computation finish) := by
   induction computation with
+  | exhausted =>
+    intro processId finish
+    constructor
+    intro p h
+    cases h
+    exact accEmpty
+  | apply callee arguments next ih | spawn child next ih =>
+    intro processId finish
+    constructor
+    intro p h
+    cases h
+    apply ih
   | ok value =>
     intro processId finish
     constructor
@@ -124,12 +141,12 @@ private theorem accProcess {β : Type} (computation : Result β) :
     intro p h
     cases h with
     | receive => apply ih
-  | spawn child next childIH nextIH =>
+  | schedule child next childIH nextIH =>
     intro processId finish
     constructor
     intro p h
     cases h with
-    | spawn => exact accParallel _ _ (nextIH _ _ _) (childIH _ _)
+    | schedule => exact accParallel _ _ (nextIH _ _ _) (childIH _ _)
 
 private theorem wf : WellFounded (@Progress α) := by
   constructor
@@ -176,6 +193,7 @@ private structure Transition (before : Pool α) where
   environment : Environment
   finished : Finished α := none
   boundary : Bool := false
+  exhausted : Bool := false
 
 /-- Execute one structural step of the selected process. A blocked receive
 returns no step; unmatched messages and the continuation remain intact. -/
@@ -197,6 +215,15 @@ private def step (pool : Pool α) (env : Environment) (chosen : PID) : Option (T
         currentProcess := (findProcess processId env.processes).getD {}
         processes := removeProcess processId env.processes }
       match computation with
+      | .exhausted => some {
+          next := .empty, decreases := .exhausted, environment := active, exhausted := true }
+      | .apply callee _ next => some {
+          next := .process processId
+            (next (.error (.error (.tuple #[.atom "badfun", callee])))) finish
+          decreases := .apply, environment := save active }
+      | .spawn _ next => some {
+          next := .process processId (next (.error (.error (.atom "badarg")))) finish
+          decreases := .spawn, environment := save active }
       | .ok value => some {
           next := .empty, decreases := .ok, environment := active
           finished := (finish (.ok value)).map (·, active.currentProcess) }
@@ -209,7 +236,7 @@ private def step (pool : Pool α) (env : Environment) (chosen : PID) : Option (T
       | .set updated next => some {
           next := .process processId next finish
           decreases := .set, environment := save updated }
-      | .spawn child next =>
+      | Result.schedule child next =>
           let childPid := active.pidCounter + 1
           let active := { active with
             pidCounter := childPid
@@ -217,7 +244,7 @@ private def step (pool : Pool α) (env : Environment) (chosen : PID) : Option (T
           some {
             next := .parallel (.process processId (next childPid) finish)
               (.process childPid child (fun _ => none))
-            decreases := .spawn, environment := save active
+            decreases := .schedule, environment := save active
             boundary := true }
       | .send destination message next => some {
           next := .process processId next finish
@@ -249,6 +276,7 @@ private def execute (root : PID) (env : Environment) (pool : Pool α)
       | true, some (.error exception, _) => .error exception final
       | _, _ => .deadlock final
   | some transition =>
+      if transition.exhausted then .exhausted (restore root finished (save transition.environment)) else
       let finished := transition.finished.orElse fun _ => finished
       let (scheduled, preferred) := if transition.boundary then
           schedule transition.environment
@@ -261,11 +289,15 @@ decreasing_by exact transition.decreases
 through the process tree, without an execution budget. -/
 def run (computation : Result α) (env : Environment) : Outcome α :=
   match computation with
+  | .exhausted => .exhausted env
+  | .apply callee _ next =>
+      run (next (.error (.error (.tuple #[.atom "badfun", callee])))) env
+  | .spawn _ next => run (next (.error (.error (.atom "badarg")))) env
   | .ok value => .ok value env
   | .error exception => .error exception env
   | .get next => run (next env) env
   | .set next continuation => run continuation next
-  | .spawn _ _ | .send _ _ _ | .receive _ _ =>
+  | Result.schedule _ _ | .send _ _ _ | .receive _ _ =>
       execute env.currentPid (save env) (.process env.currentPid computation some) none env.currentPid
 
 end Lynx.Term.Runner
@@ -276,9 +308,15 @@ namespace Lynx
 
 /-- Execute a computation in an existing environment. Use `Lynx.run` to start
 from a fresh runtime. The implementation is hidden; the application lemmas
-below describe its behavior. -/
+below describe its behavior. Without a program table, dynamic calls report
+`badfun`; use `runWith` for programs containing function values. -/
 def Result.run (computation : Result α) (env : Environment) : Outcome α :=
   Term.Runner.run computation env
+
+/-- Execute with the immutable program table and an explicit dynamic-call depth. -/
+def Result.runWith (computation : Result α) (table : Term.FunTable)
+    (callDepth : Nat) (env : Environment) : Outcome α :=
+  Term.Runner.run (Result.resolve table callDepth computation) env
 
 instance : CoeFun (Result α) fun _ => Environment → Outcome α :=
   ⟨Result.run⟩
@@ -343,7 +381,8 @@ the left side to completion could schedule a child before the continuation. -/
       match computation env with
       | .ok value updated => next value updated
       | .error exception updated => .error exception updated
-      | .deadlock updated => .deadlock updated := by
+      | .deadlock updated => .deadlock updated
+      | .exhausted updated => .exhausted updated := by
   change Term.Runner.run (Result.bind computation next) env = _
   cases computation <;> simp_all [Result.bind, Term.Runner.run]
   rfl
