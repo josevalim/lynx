@@ -35,12 +35,12 @@ end
 theorem requested_example :
     is_integer_list_1
       (.cons (.integer 1) (.cons (.integer 2) (.cons (.integer 3) .nil))) = .ok Term.true := by
-  simp [is_integer_list_1, Erlang.erlang.«is_integer/1», Term.true]
+  simp [is_integer_list_1, Erlang.erlang.«is_integer/1»]
 
 theorem rejected_inputs :
     is_integer_list_1 (.cons (.atom "no") .nil) = .ok Term.false ∧
     is_integer_list_1 (.cons (.integer 1) (.integer 2)) = .ok Term.false := by
-  simp [is_integer_list_1, Erlang.erlang.«is_integer/1», Term.true, Term.false]
+  simp [is_integer_list_1, Erlang.erlang.«is_integer/1»]
 
 #lynx_pure def sum_1 : Term → Result
   | .nil => .ok (.integer 0)
@@ -63,11 +63,11 @@ theorem sum_result (input : Term)
     cases head
     case integer value =>
       have tailValid : is_integer_list_1 tail = .ok Term.true := by
-        simpa [is_integer_list_1, Erlang.erlang.«is_integer/1», Term.true] using valid
+        simpa [is_integer_list_1, Erlang.erlang.«is_integer/1»] using valid
       obtain ⟨subtotal, returned⟩ := ih tailValid
       exact ⟨value + subtotal, by simp [sum_1, returned]⟩
-    all_goals simp [is_integer_list_1, Erlang.erlang.«is_integer/1», Term.true, Term.false] at valid
-  | _ => simp [is_integer_list_1, Term.true, Term.false] at valid
+    all_goals simp [is_integer_list_1, Erlang.erlang.«is_integer/1»] at valid
+  | _ => simp [is_integer_list_1] at valid
 
 /- law sum_append(l, r),
      requires: is_integer_list(l) and is_integer_list(r),
@@ -98,14 +98,14 @@ theorem sum_append (left right : Term)
       cases head
       case integer value =>
         have tailValid : is_integer_list_1 tail = .ok Term.true := by
-          simpa [is_integer_list_1, Erlang.erlang.«is_integer/1», Term.true] using valid
+          simpa [is_integer_list_1, Erlang.erlang.«is_integer/1»] using valid
         obtain ⟨subtotal, joined, returned, appended, combined⟩ := ih tailValid
         refine ⟨value + subtotal, .cons (.integer value) joined, ?_, ?_, ?_⟩
         · simp [sum_1, returned]
         · simp [Erlang.erlang.«++/2», appended]
         · simp [sum_1, combined, Int.add_assoc]
-      all_goals simp [is_integer_list_1, Erlang.erlang.«is_integer/1», Term.true, Term.false] at valid
-    | _ => simp [is_integer_list_1, Term.true, Term.false] at valid
+      all_goals simp [is_integer_list_1, Erlang.erlang.«is_integer/1»] at valid
+    | _ => simp [is_integer_list_1] at valid
   obtain ⟨leftSum, joined, leftReturned, appended, combined⟩ := append_ok left leftValid
   simp [appendExpression, leftReturned, rightReturned, appended, combined,
     Erlang.erlang.«==/2»]

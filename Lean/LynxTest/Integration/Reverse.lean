@@ -28,7 +28,7 @@ private theorem append_success (left right : Term)
     (accepted : is_reversible_list_1 left = .ok Term.true) :
     ∃ joined, Erlang.erlang.«++/2» left right = .ok joined := by
   have reject : (Result.ok Term.false : Result) ≠ .ok Term.true := by
-    simp [Term.true, Term.false]
+    simp
   induction left with
   | nil => exact ⟨right, rfl⟩
   | cons head tail _ ih =>
@@ -40,7 +40,7 @@ private theorem append_success (left right : Term)
     (accepted : is_reversible_list_1 input = .ok Term.true) :
     Erlang.erlang.«++/2» input .nil = .ok input := by
   have reject : (Result.ok Term.false : Result) ≠ .ok Term.true := by
-    simp [Term.true, Term.false]
+    simp
   induction input with
   | nil => rfl
   | cons head tail _ ih => simp only [Erlang.erlang.«++/2», ih accepted, Result.ok_bind]
@@ -51,7 +51,7 @@ private theorem append_assoc (left right suffix : Term)
     (Erlang.erlang.«++/2» left right >>= fun joined => Erlang.erlang.«++/2» joined suffix) =
       (Erlang.erlang.«++/2» right suffix >>= Erlang.erlang.«++/2» left) := by
   have reject : (Result.ok Term.false : Result) ≠ .ok Term.true := by
-    simp [Term.true, Term.false]
+    simp
   induction left with
   | nil =>
     simp only [Erlang.erlang.«++/2», Result.ok_bind]
