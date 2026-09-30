@@ -124,48 +124,4 @@ open Lynx
       .ok (.cons head rest)
   | _, _ => throw (.error (.atom "badarg"))
 
--- Keep short-circuit branching behind its specification during proof search.
-@[expose, lynx_opaque] def «andalso/2»
-    (left : Result)
-    (right : Unit → Result) : Result := do
-  match ← left with
-  | .atom "true" => right ()
-  | .atom "false" => .ok Term.false
-  | _ => .error (.error (.atom "badarg"))
-
-/-- Successful short-circuit conjunction records the actual intermediate state.
-The right operand may return any term, not just a boolean. For acceptance goals
-(`value = true`), simplification also eliminates the false-left branch. -/
-@[simp low] theorem «andalso/2_run_ok_iff» (left : Result) (right : Unit → Result)
-    (env final : Environment) (value : Term) (pure : Result.IsPure left) :
-    «andalso/2» left right env = .ok value final ↔
-      (left env = .ok (.atom "false") final ∧ value = .atom "false") ∨
-      ∃ next, left env = .ok (.atom "true") next ∧
-        right () next = .ok value final := by
-  unfold «andalso/2»
-  cases left <;> simp_all [Result.IsPure, Term.false, eq_comm, and_comm]
-  split <;> simp_all [eq_comm, and_comm]
-
-@[simp low] theorem «andalso/2_ok_iff» (left : Result) (right : Unit → Result)
-    (value : Term) :
-    «andalso/2» left right = .ok value ↔
-      (left = .ok (.atom "false") ∧ value = .atom "false") ∨
-      (left = .ok (.atom "true") ∧ right () = .ok value) := by
-  cases left <;> simp_all [«andalso/2», Term.false, eq_comm, and_comm]
-  split <;> simp_all [eq_comm, and_comm]
-
-@[simp] theorem «andalso/2_pure» (left : Result) (right : Unit → Result)
-    (leftPure : Result.IsPure left) (rightPure : Result.IsPure (right ())) :
-    Result.IsPure («andalso/2» left right) := by
-  unfold «andalso/2»
-  apply Result.IsPure.bind left _ leftPure
-  intro value
-  cases value <;> simp [Result.IsPure]
-  rename_i name
-  by_cases isTrue : name = "true"
-  · subst name; exact rightPure
-  · by_cases isFalse : name = "false"
-    · subst name; simp
-    · simp [isTrue, isFalse]
-
 end Erlang.erlang

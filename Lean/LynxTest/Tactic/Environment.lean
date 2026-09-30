@@ -66,9 +66,12 @@ theorem higher_order_threads_state (env : Environment) (a b : Term) :
         (env.setPdict ((.nil, b) :: (.nil, a) :: env.pdict)) := rfl
 
 theorem short_circuit_retains_state (env : Environment) (value : Term) :
-    (Erlang.erlang.«andalso/2»
-      (do let _ ← record .nil value; pure Term.false)
-      (fun _ => record .nil (.atom "unreachable"))) env =
+    (do
+      let left ← do let _ ← record .nil value; pure Term.false
+      match left with
+      | .atom "true" => record .nil (.atom "unreachable")
+      | .atom "false" => pure Term.false
+      | _ => throw (.error (.atom "badarg")) : Result) env =
       .ok Term.false (env.setPdict ((.nil, value) :: env.pdict)) := rfl
 
 private def rememberList : Term → Result
@@ -85,9 +88,13 @@ theorem stateful_recursive_contract : Satisfies rememberList properList
 
 private def anyInput (_ : Term) : Result := pure Term.true
 
-/-- Abstracting short-circuit guards must not restrict the right result to booleans. -/
+/-- Short-circuit branches may return any term. -/
 theorem short_circuit_nonboolean_contract :
-    Satisfies (fun value => Erlang.erlang.«andalso/2» (.ok Term.true) (fun _ => record .nil value))
+    Satisfies (fun value => do
+      match ← (Result.ok Term.true) with
+      | .atom "true" => record .nil value
+      | .atom "false" => pure Term.false
+      | _ => throw (.error (.atom "badarg")))
       anyInput (fun input result => Erlang.erlang.«==/2» input result) := by
   lynx_verify
 
