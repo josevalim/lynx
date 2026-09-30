@@ -4,10 +4,10 @@ meta import LynxTest.ProofAudit
 import Lynx
 import all Lynx.Term
 import all Lynx.Term.DataTypes
-import all Lynx.Term.Dispatch
+import all Lynx.Term.Apply
 import all Lynx.Term.Runner
 
-namespace LynxTest.Term.Dispatch
+namespace LynxTest.Term.Apply
 open Lynx
 
 private def call (id : Nat) (args : Array Term := #[]) : Result :=
@@ -139,8 +139,8 @@ theorem recursive_spawn_exhausts :
     | .exhausted env => env.pidCounter = 4
     | _ => False := by cbv
 
-end LynxTest.Term.Dispatch
+end LynxTest.Term.Apply
 
 run_cmd do
-  LynxTest.ProofAudit.checkModule `Lynx.Term.Dispatch
-  LynxTest.ProofAudit.checkModule `LynxTest.Term.Dispatch
+  LynxTest.ProofAudit.checkModule `Lynx.Term.Apply
+  LynxTest.ProofAudit.checkModule `LynxTest.Term.Apply

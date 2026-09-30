@@ -19,7 +19,7 @@ import all Erlang.erlang
 import all Erlang.erlang.Process
 import all Lynx.Term
 import all Lynx.Term.Runner
-import all Lynx.Term.Dispatch
+import all Lynx.Term.Apply
 import LynxTest.Bench
 
 namespace LynxTest.Integration.ProcessDeadlock

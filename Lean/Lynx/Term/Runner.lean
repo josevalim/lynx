@@ -1,6 +1,6 @@
 module
 
-public import Lynx.Term.Dispatch
+public import Lynx.Term.Apply
 
 /-! Finite local-process execution. Sends insert directly into the destination
 mailbox; message transit, remote processes, timers, links, and monitors are not

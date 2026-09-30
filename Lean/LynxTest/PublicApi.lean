@@ -22,6 +22,24 @@ example : Lynx.Term → Lynx.Result := Erlang.erlang.«spawn/1»
 example : Lynx.Term → (Except Lynx.Exception Lynx.Term → Lynx.Result α) → Lynx.Result α :=
   Lynx.Result.spawn
 
+-- Conversion cancellation works through ordinary public imports without unfolding.
+example (computation : Lynx.Result α) (pure : Lynx.Result.IsPure computation) :
+    Lynx.Result.ofExcept (Lynx.Result.toExcept computation pure) = computation := by
+  simp
+
+example (table : Lynx.Term.FunTable) (depth : Nat) (computation : Lynx.Result α)
+    (pure : Lynx.Result.IsPure computation) :
+    Lynx.Result.resolve table depth computation = computation := by
+  simp [pure]
+
+example (table : Lynx.Term.FunTable) (depth id arity : Nat)
+    (captures arguments : Array Lynx.Term) (body : Array Lynx.Term → Lynx.Term.PureFun)
+    (next : Lynx.Term → Lynx.Result α)
+    (entry : table[id]? = some (.pure body)) (size : arguments.size = arity) :
+    Lynx.Result.resolve table depth (Lynx.Term.apply (.function id arity captures) arguments >>= next) =
+      Lynx.Result.resolve table depth (Lynx.Result.ofExcept (body captures arguments) >>= next) :=
+  Lynx.Result.resolve_apply_pure table depth id arity captures arguments body next entry size
+
 meta section
 
 /-! Snapshot of public types and executable declarations available through `Lynx`,
