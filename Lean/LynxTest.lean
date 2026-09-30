@@ -1,15 +1,11 @@
+module
+
 import LynxTest.Integration
 import LynxTest.PublicApi
-import LynxTest.Tactic.Environment
-import LynxTest.Tactic.Summaries
 import LynxTest.Term
 import LynxTest.Term.Compare
 import LynxTest.Term.Map
-import LynxTest.Tactic.Contracts
-import LynxTest.Tactic.Recursive
-import LynxTest.Tactic.Opaque
-import LynxTest.Tactic.Pure
-import LynxTest.Tactic.Failures
 import LynxTest.Modules.Erlang
 import LynxTest.Modules.Maps
 import LynxTest.Modules.Process
+import LynxTest.Pure

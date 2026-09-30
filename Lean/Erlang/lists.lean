@@ -1,7 +1,7 @@
 module
 
 public import Lynx.Term
-public import Lynx.Tactic
+public import Lynx.Pure
 
 public section
 

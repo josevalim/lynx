@@ -5,65 +5,69 @@ Do not change the README.md unless asked to do so.
 
 All package paths below are relative to `Lean/`.
 
+The Erlang Term definition and its general properties are defined
+in `Lynx/Term.lean` and within the `Lynx/Term/` directory.
+
 Use Lean's `module` system with explicit `public` declarations and deliberate
 `public import` re-exports. Update `LynxTest/PublicApi.lean` for exported API
 changes. Its snapshot must check actual public declarations without excluding
-modules by name. Keep other implementation details private and use
-`import all` where needed.
+modules by name. Keep implementation details private.
 
-The Erlang Term definition and its general properties are defined
-in Lynx/Term.lean and within the Lynx/Term/ directory.
+Client code, translated programs, integration proofs, and benchmarks must use
+ordinary imports of the public Lynx and Erlang entry points. Do not use
+`import all` on runtime library modules to bypass their public proof interface.
+If a proof needs to unfold a public operation, deliberately expose its body with
+`@[expose]` or provide a useful public lemma. Keep private helpers private.
+`import all` is reserved for intentional dependencies within the implementation
+and for proof audits that inspect private declarations in test modules.
 
-The implementation of Erlang NIFs goes to Lynx/Modules/.
-Functions follow their Erlang name with the arity followed
-by underscore, such as `is_integer_1`. The translator may also
-emit generated, program-local helper functions. Functions that
-are pure from Elixir's point of view (they don't spawn messages
-or use pdict, albeit they can raise) should be tagged with #lynx_pure.
+Functions that neither inspect nor change the environment and perform no process
+effects should be tagged with `#lynx_pure`. They may still raise exceptions.
+`Lynx/Pure.lean` generates ordinary kernel-checked `<name>_pure` lemmas,
+registered for simplification, without a contract verification tactic.
 
-Prefer unfolding over lemmas that merely restate definitions.
-Keep lemmas needed for useful simplification or mathematical properties,
-use `lynx_opaque` only when tests or benchmarks justify specification-based
-proof search.
+Proofs must not introduce untrusted axioms or `sorry`
 
-Integration tests go in LynxTest/Integration and they all
-have the same shape: they have a version of the Elixir module
-at the top and their manual translation in LEAN, including the
-implementation, ensures, and expects. Preferrably verifications
-are then done with the `lynx_verify` tactic instead of custom
-theorems.
+### Proofs and integration examples
 
-Whenever a new integration example is added, you must also add
-a Benchmarks/Native equivalent example, using the same data types
-but without the Term wrapping, so we can compare them. Add the
-relevant #bench annotations to both native and integration.
-Read Benchmarks/README.md for context around benchmarks.
-Update RESULTS.md on new benchmarks but only change the minimum
-amount of text necessary. The overall goal is to facilitate proofs,
-which is more valuable than proof performance. Runtime performance
-itself is not an important metric (the code is not meant to run at
-speed).
+Integration tests go in `LynxTest/Integration`. Start each example with an Elixir
+module comment containing only the implementation, followed by its faithful
+Erlang/Term translation. Keep the implementation separate from its properties.
+For each final theorem, include a separate source comment such as:
+
+```lean
+/- law sum_append(l, r),
+     requires: is_proper_list(l, &is_integer/1) and is_proper_list(r, &is_integer/1),
+     expects: sum(l) + sum(r) == sum(l ++ r) -/
+```
+
+Use `requires:` for input assumptions and `expects:` for an expression to prove
+or a return guarantee written as `(result -> ...)`, as applicable. These are
+illustrative source comments, not an implemented law DSL. Follow them with the
+translated computation or predicate and an explicit Lean theorem and handwritten
+proof. A successful Boolean property is an equation to `Result.ok Term.true`.
+A return guarantee establishes a successful result and the stated predicate.
+
+Whenever a new integration example is added, also add a `Benchmarks/Native`
+equivalent using corresponding native data types without Term wrapping. Use the
+same implementation-comment and separate law-comment layout. Add relevant
+`#bench` annotations to native and integration theorems.
+Read `Benchmarks/README.md` for the benchmark execution and measurement workflow.
+Update `Benchmarks/RESULTS.md` on new benchmarks, changing only the minimum text
+necessary. Proof performance is more important than executable runtime performance.
 
 ## Benchmarks
 
-When changing `Result`, `Outcome`, or the runtime, run the existing verification
+When changing `Result`, `Outcome`, or the runtime, run the existing proof
 benchmarks even if their examples do not use the new operation. New constructors
-can add branches to `lynx_verify` proofs. Compare medians from repeated runs
-against the preceding commit on the same machine, with each revision built from
-its own source. The measured sections exclude imports and supporting lemmas;
-also run `lake test` to check those proofs.
+can change case analyses and simplification in handwritten proofs. Compare medians
+from repeated runs against the preceding commit on the same machine, with each
+revision built from its own source. The measured sections exclude imports and
+separately declared supporting lemmas. Local lemmas within a timed theorem are
+included. Also run `lake test` to check supporting proofs and axiom audits.
 
-Keep the tactic's search focused on useful proof states. Simplify or close
-impossible branches immediately after splitting a computation; do not spend
-another search round on an outcome contradicted by a local equation. Preserve
-shared binds until their result is needed, and retain input variables needed
-for induction. Normalize expectation constraints before implementation results,
-and avoid repeatedly simplifying quantified induction hypotheses.
-
-Reuse a simplification context within a search, install known declarations
-directly instead of elaborating the same `simp_all` syntax in every goal, and
-try definitional evaluation before building a context for coverage. Use proved
-specifications and `lynx_opaque` for expensive abstractions when benchmarks
-justify the boundary. Check that new simp rules or proof search shortcuts help
-representative contracts and properties, including `sum-append`; a faster
-single proof can still slow the rest of the suite.
+Simplify or close impossible branches promptly after a case split. Preserve input
+variables needed for induction and avoid unnecessarily expanding shared binds.
+When adding simp rules or changing public proof interfaces, check representative
+guarantees and properties, including `sum-append`. Improving one proof can slow
+another. Keep the proof structure explicit and readable.

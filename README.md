@@ -8,25 +8,30 @@ An experimental Erlang/Elixir-to-Lean translation and verification project.
 
 ## Proposal
 
-Contracts and properties would be written as ordinary Elixir expressions
-immediately before a function definition:
+You define a set of laws in Erlang/Elixir and prove them in Lean:
 
 ```elixir
-expects is_proper_list(list, &is_number/1)
-ensures (result -> is_number(result))
-property sum(l) + sum(r) == sum(l ++ r)
-def sum(list)
+defmodule SumProofs do
+  use Lynx
+
+  import :lists, only: [sum: 1]
+
+  # by rfl
+  law sum_empty, expects: sum([]) == 0
+
+  law sum_append(l, r),
+          requires: is_integer_list(l) and is_integer_list(r),
+          expects: sum(l) + sum(r) == sum(l ++ r) do
+    ~LEAN"""
+    PROOF GOES HERE
+    """
+  end
+
+  defp is_integer_list([h | t]), do: is_integer(h) and is_integer_list(t)
+  defp is_integer_list([]), do: true
+  defp is_integer_list(_), do: false
+end
 ```
-
-- `expects` restricts the inputs for which Lynx verifies the function.
-- `ensures` states a guarantee about a successful return. The name to the left
-  of `->` is a local binding for the returned value, not a reserved name.
-- `property` states an additional expression that Lynx must prove. It can call
-  the function directly and does not have an implicit result binding.
-
-Proofs are done over dynamic Erlang terms. For programs that need
-additional proofs, a proposed `~LEAN"..."` sigil would embed Lean source
-within each module. The sigil is not implemented yet.
 
 Automatic translation from Erlang/Elixir to Lean is work in progress.
 For now, you can find manual translations within the
@@ -37,20 +42,19 @@ implementations.
 ## Implementation
 
 This project models Erlang terms with an inductive type (see [`Lynx.Term`](Lean/Lynx/Term.lean))
-and implements Erlang NIFs in Lean (see [Lynx/Modules](Lean/Lynx/Modules)).
+and implements Erlang NIFs in Lean (see [Lean/Erlang](Lean/Erlang)).
 Only some terms and NIFs are implemented in the current proof of concept.
 
-Expectations, assurances, and properties are then shaped into a contract,
-which is verified by [`Lynx.Tactic`](Lean/Lynx/Tactic.lean).
+Modules are translated following a clear rule:
 
-Everything in this project has been human verified, except for the tactic and
-theorems, which are written with coding agents. In particular, `Lynx.Tactic`
-constructs proof terms that Lean's kernel independently checks. Proofs must not
-introduce untrusted axioms or sorry. Read that module source and documentation
-for more information.
+* Erlang modules become `Erlang.module_name` in Lean
+* Elixir modules become `Elixir.ModuleName` in Lean
+* Function names are have the shape `«fun/arity»`
 
-Note the operational semantics of translating Erlang/Elixir to Lean has not
-been verified and the translation mechanism may have bugs.
+The Elixir/Erlang code has been fully verified by humans as well as the
+modeling of the Erlang runtime in Lean. Note the operational semantics of
+translating Erlang/Elixir to Lean has not been verified and the translation
+mechanism may have bugs.
 
 ## Contributing
 

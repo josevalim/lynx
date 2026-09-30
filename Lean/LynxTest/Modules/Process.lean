@@ -196,8 +196,11 @@ theorem waiting_schedule_choice_falls_back :
 /-- The solver must treat the added outcomes as known constructors rather than
 repeatedly splitting them as if they were unevaluated computations. -/
 theorem deadlock_cannot_accept (computation : Result) (env final : Environment)
-    (stuck : computation env = .deadlock final) : ¬ Accepted computation env := by
-  lynx_solve
+    (stuck : computation env = .deadlock final) :
+    ¬ ∃ value returnedEnv, computation env = .ok value returnedEnv := by
+  rintro ⟨value, returnedEnv, returned⟩
+  rw [stuck] at returned
+  cases returned
 
 private def sends : Nat → Result
   | 0 => .ok .nil

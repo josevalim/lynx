@@ -1,31 +1,21 @@
-import LynxTest.ProofAudit
-import LynxTest.Integration.Sum
-import LynxTest.Integration.Reverse
-import LynxTest.Integration.Sets
-import LynxTest.Integration.ProcessDeadlock
+module
+
+meta import LynxTest.ProofAudit
+import all LynxTest.Integration.Sum
+import all LynxTest.Integration.Reverse
+import all LynxTest.Integration.Sets
+import all LynxTest.Integration.ProcessDeadlock
 
 /-! Integration audits are separate from the files compiled by the benchmark runner. -/
 run_cmd do
   LynxTest.ProofAudit.checkModule `LynxTest.Integration.Sum
   LynxTest.ProofAudit.checkModule `LynxTest.Integration.Reverse
   LynxTest.ProofAudit.checkModule `LynxTest.Integration.Sets
-  -- The expected verification failure intentionally leaves an incomplete declaration.
-  LynxTest.ProofAudit.checkDeclaration
-    ``LynxTest.Integration.ProcessDeadlock.run_deadlocks
-  LynxTest.ProofAudit.checkDeclaration
-    ``LynxTest.Integration.ProcessDeadlock.deadlock_violates_contract
-  let sumDeclarations ← LynxTest.ProofAudit.moduleDeclarations `LynxTest.Integration.Sum
-  let sumTargets ← #[
-    `LynxTest.Integration.Sum.sum_append_property,
-    `LynxTest.Integration.Sum.sum_satisfies_contract].mapM fun target => do
-      let some name := sumDeclarations.find? (Lean.privateToUserName · == target)
-        | throwError "missing integration theorem: {target}"
-      pure name
-  LynxTest.ProofAudit.checkNoDependencies sumTargets[0]! #[sumTargets[1]!]
+  LynxTest.ProofAudit.checkModule `LynxTest.Integration.ProcessDeadlock
   -- These internal examples need not export their declarations for auditing.
   let declarations ← LynxTest.ProofAudit.moduleDeclarations `LynxTest.Integration.Sets
   let targets ← #[
-    `LynxTest.Integration.Sets.union_satisfies_contract,
+    `LynxTest.Integration.Sets.union_result,
     `LynxTest.Integration.Sets.union_commutative,
     `LynxTest.Integration.Sets.union_empty].mapM fun target => do
       let some name := declarations.find? (Lean.privateToUserName · == target)

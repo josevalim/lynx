@@ -1,8 +1,7 @@
+module
+
 /-
 defmodule ProcessDeadlock do
-  expects true
-  ensures (result -> result == :ok)
-
   def run do
     spawn(fn ->
       receive do
@@ -16,7 +15,11 @@ defmodule ProcessDeadlock do
   end
 end
 -/
-import Erlang.erlang
+import all Erlang.erlang
+import all Erlang.erlang.Process
+import all Lynx.Term
+import all Lynx.Term.Runner
+import all Lynx.Term.Dispatch
 import LynxTest.Bench
 
 namespace LynxTest.Integration.ProcessDeadlock
@@ -44,38 +47,21 @@ def run_0 : Result := do
   let _ ← receiveAtom "pong"
   .ok (.atom "ok")
 
-def runExpects (_ : Unit) : Result := .ok Term.true
-
-def runEnsures (_ : Unit) (result : Term) : Result :=
-  Erlang.erlang.«==/2» result (.atom "ok")
-
-private def runFunction (_ : Unit) : Result := Result.resolve functions 1 run_0
-
-/- The guarded diagnostic asserts that verification reaches and rejects the
-deadlock outcome, rather than merely failing for an unspecified reason. -/
-/--
-case «process_deadlock.ex:5».deadlock
--/
-#guard_msgs (error, substring := true) in
-theorem verifier_rejects_deadlocking_contract :
-    WithSourceLabel { file := "process_deadlock.ex", line := 5 }
-      (Satisfies runFunction runExpects runEnsures) := by
-  lynx_verify
+private def runFunction : Result := Result.resolve functions 1 run_0
 
 /-- The parent waits for `pong` while its child waits for `ping`; neither process
 sends a message, so the whole process tree is stuck. -/
 theorem run_deadlocks :
-    Lynx.run (runFunction ()) = .deadlock { pidCounter := 2, processes := [(2, {})] } := by
+    Lynx.run runFunction = .deadlock { pidCounter := 2, processes := [(2, {})] } := by
   cbv
 
-/-- The deadlock is a counterexample to the translated function contract. -/
-theorem deadlock_violates_contract :
-    ¬ Satisfies runFunction runExpects runEnsures := by
-  intro contract
-  obtain ⟨result, final, returned, _⟩ := contract.2 () {} ⟨{}, rfl⟩
+/- law run_returns(), expects: (result -> result == :ok)
+   The execution below is a counterexample: it deadlocks. -/
+theorem deadlock_prevents_return :
+    ¬ ∃ result final, runFunction {} = .ok result final := by
+  intro ⟨result, final, returned⟩
   have stuck := run_deadlocks
-  change runFunction () {} = _ at returned
-  change runFunction () {} = _ at stuck
+  change runFunction {} = _ at stuck
   rw [stuck] at returned
   cases returned
 
