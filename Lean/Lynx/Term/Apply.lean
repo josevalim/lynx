@@ -2,6 +2,25 @@ module
 
 public import Lynx.Term.DataTypes
 
+namespace Lynx.Term
+
+/-- Apply a function to native arguments. Build an Erlang argument list only
+when reporting an arity mismatch. -/
+public def apply (function : Term) (arguments : Array Term) : Result :=
+  match function with
+  | .function _ arity _ =>
+      if arguments.size = arity then
+        .apply function arguments fun
+          | .ok value => .ok value
+          | .error exception => .error exception
+      else
+        .error (.error (.tuple #[.atom "badarity", .tuple #[function,
+          arguments.toList.foldr Term.cons Term.nil]]))
+  | _ => .error (.error (.tuple #[.atom "badfun", function]))
+
+
+end Lynx.Term
+
 namespace Lynx.Result
 
 /-- Continue with either the returned value or exception. Unlike `bind`, this
@@ -66,5 +85,27 @@ public def resolve (table : Term.FunTable) (depth : Nat) (computation : Result �
                   if spawn then Result.schedule resolved (fun pid => .ok (.pid pid)) else resolved
     | _ => .error invalid) computation
 termination_by depth
+
+/-- Resolving calls leaves an already completed computation unchanged. -/
+@[simp] public theorem resolve_of_isPure (table : Term.FunTable) (depth : Nat)
+    (computation : Result α) (pure : IsPure computation) :
+    resolve table depth computation = computation := by
+  cases computation <;> first | (rw [resolve]; rfl) | exact False.elim pure
+
+/-- A pure table entry executes before its caller's continuation, without using
+call depth. Table dispatch belongs to the runtime, rather than translated code. -/
+public theorem resolve_apply_pure (table : Term.FunTable) (depth id arity : Nat)
+    (captures arguments : Array Term) (body : Array Term → Term.PureFun)
+    (next : Term → Result α)
+    (entry : table[id]? = some (.pure body)) (size : arguments.size = arity) :
+    resolve table depth (Term.apply (.function id arity captures) arguments >>= next) =
+      resolve table depth (ofExcept (body captures arguments) >>= next) := by
+  simp only [Term.apply, size, ite_true, Result.apply_bind]
+  conv => lhs; rw [resolve]
+  cases reply : body captures arguments <;>
+    simp only [expand, entry, size, bne_self_eq_false, Bool.false_eq_true, ite_false,
+      reply, ofExcept, resume, Result.ok_bind, Result.error_bind]
+  all_goals rw [resolve]; rfl
+
 
 end Lynx.Result

@@ -7,7 +7,7 @@ import all Lynx.Term
 import all Lynx.Term.DataTypes
 import all Lynx.Term.FiniteFloat
 import all Lynx.Term.Compare
-import all Lynx.Term.Dispatch
+import all Lynx.Term.Apply
 import all Lynx.Term.Runner
 import all Erlang.erlang.Guards
 import all Erlang.erlang.Process

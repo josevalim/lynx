@@ -343,4 +343,9 @@ namespace Lynx.Result
   | .exhausted | .apply .. | .get .. | .set .. | .spawn .. | .schedule ..
     | .send .. | .receive .. => False.elim pure
 
+/-- Embedding a completed pure call preserves its result, including exceptions. -/
+@[simp] public theorem ofExcept_toExcept (computation : Result α) (pure : IsPure computation) :
+    ofExcept (toExcept computation pure) = computation := by
+  cases computation <;> first | rfl | exact False.elim pure
+
 end Lynx.Result

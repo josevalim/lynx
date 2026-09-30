@@ -15,32 +15,24 @@ namespace LynxTest.Integration.Sum
 open Lynx
 set_option Elab.async false
 
-@[simp] private def integerFunctions : Term.FunTable := #[
-  .pure fun _ args =>
-    match args.toList with
-    | [value] => Result.toExcept (Erlang.erlang.«is_integer/1» value) (by simp)
-    | _ => .error (.error (.atom "badarg"))
-]
+private def integerPredicate (_ : Array Term) (args : Array Term) : Except Exception Term :=
+  match args.toList with
+  | [value] => Result.toExcept (Erlang.erlang.«is_integer/1» value) (by simp)
+  | _ => .error (.error (.atom "badarg"))
 
-attribute [local simp] Result.toExcept Result.ofExcept Erlang.erlang.«is_integer/1»
+private def integerFunctions : Term.FunTable := #[.pure integerPredicate]
 
-def is_proper_list_2 (table : Term.FunTable) (predicate : Term) : Term → Result
+def is_proper_list_2 (predicate : Term) : Term → Result
   | .nil => .ok Term.true
   | .cons head tail => do
-      match ← (match predicate with
-        | .function id arity captures =>
-          if arity = 1 then
-            match table[id]? with
-            | some (.pure body) => Result.ofExcept (body captures #[head])
-            | some (.effectful _) => Term.apply predicate #[head]
-            | none => .error (.error (.tuple #[.atom "badfun", predicate]))
-          else Term.apply predicate #[head]
-        | _ => Term.apply predicate #[head]) with
-      | .atom "true" => is_proper_list_2 table predicate tail
+      match ← Term.apply predicate #[head] with
+      | .atom "true" => is_proper_list_2 predicate tail
       | _ => .ok Term.false
   | _ => .ok Term.false
 
-attribute [local simp] is_proper_list_2
+section
+-- Purity generation inspects the guard result to follow the recursive branch.
+attribute [local simp] Erlang.erlang.«is_integer/1»
 
 #lynx_pure def isProperIntegerList : Term → Result
   | .nil => .ok Term.true
@@ -50,21 +42,37 @@ attribute [local simp] is_proper_list_2
       | _ => .ok Term.false
   | _ => .ok Term.false
 
-/-- Specializing the generic callback traversal preserves its semantics. -/
-theorem integer_callback_specialization (xs : Term) :
-    is_proper_list_2 integerFunctions (.function 0 1 #[]) xs =
+end
+
+/-- The runtime resolves the callback using the generated program table. -/
+private theorem resolve_integer_callback (head : Term) (depth : Nat) (next : Term → Result α) :
+    Result.resolve integerFunctions depth (Term.apply (.function 0 1 #[]) #[head] >>= next) =
+      Result.resolve integerFunctions depth (Erlang.erlang.«is_integer/1» head >>= next) := by
+  rw [Result.resolve_apply_pure integerFunctions depth 0 1 #[] #[head] integerPredicate next
+    (by simp [integerFunctions]) (by simp)]
+  simp [integerPredicate]
+
+/-- Resolving the generic traversal agrees with its direct-call specialization,
+even at depth zero, because its callback is pure. -/
+theorem integer_callback_specialization (xs : Term) (depth : Nat) :
+    Result.resolve integerFunctions depth (is_proper_list_2 (.function 0 1 #[]) xs) =
       isProperIntegerList xs := by
-  induction xs using Term.induct <;> simp_all [isProperIntegerList]
+  induction xs using Term.induct with
+  | cons head tail _ ih =>
+    simp only [is_proper_list_2, resolve_integer_callback]
+    cases head <;> simp [Erlang.erlang.«is_integer/1», isProperIntegerList, Term.true, Term.false, ih]
+  | _ => simp [is_proper_list_2, isProperIntegerList]
 
 theorem requested_example :
-    is_proper_list_2 integerFunctions (.function 0 1 #[])
-      (.cons (.integer 1) (.cons (.integer 2) (.cons (.integer 3) .nil))) = .ok Term.true := by
-  simp [Term.true]
+    Result.resolve integerFunctions 0 (is_proper_list_2 (.function 0 1 #[])
+      (.cons (.integer 1) (.cons (.integer 2) (.cons (.integer 3) .nil)))) = .ok Term.true := by
+  rw [integer_callback_specialization]
+  simp [isProperIntegerList, Erlang.erlang.«is_integer/1», Term.true]
 
 theorem rejected_inputs :
     isProperIntegerList (.cons (.atom "no") .nil) = .ok Term.false ∧
     isProperIntegerList (.cons (.integer 1) (.integer 2)) = .ok Term.false := by
-  simp [isProperIntegerList, Term.true, Term.false]
+  simp [isProperIntegerList, Erlang.erlang.«is_integer/1», Term.true, Term.false]
 
 #lynx_pure def sum_1 : Term → Result
   | .nil => .ok (.integer 0)
@@ -87,10 +95,10 @@ theorem sum_result (input : Term)
     cases head
     case integer value =>
       have tailValid : isProperIntegerList tail = .ok Term.true := by
-        simpa [isProperIntegerList, Term.true] using valid
+        simpa [isProperIntegerList, Erlang.erlang.«is_integer/1», Term.true] using valid
       obtain ⟨subtotal, returned⟩ := ih tailValid
       exact ⟨value + subtotal, by simp [sum_1, returned]⟩
-    all_goals simp [isProperIntegerList, Term.true, Term.false] at valid
+    all_goals simp [isProperIntegerList, Erlang.erlang.«is_integer/1», Term.true, Term.false] at valid
   | _ => simp [isProperIntegerList, Term.true, Term.false] at valid
 
 /- law sum_append(l, r),
@@ -122,13 +130,13 @@ theorem sum_append (left right : Term)
       cases head
       case integer value =>
         have tailValid : isProperIntegerList tail = .ok Term.true := by
-          simpa [isProperIntegerList, Term.true] using valid
+          simpa [isProperIntegerList, Erlang.erlang.«is_integer/1», Term.true] using valid
         obtain ⟨subtotal, joined, returned, appended, combined⟩ := ih tailValid
         refine ⟨value + subtotal, .cons (.integer value) joined, ?_, ?_, ?_⟩
         · simp [sum_1, returned]
         · simp [Erlang.erlang.«++/2», appended]
         · simp [sum_1, combined, Int.add_assoc]
-      all_goals simp [isProperIntegerList, Term.true, Term.false] at valid
+      all_goals simp [isProperIntegerList, Erlang.erlang.«is_integer/1», Term.true, Term.false] at valid
     | _ => simp [isProperIntegerList, Term.true, Term.false] at valid
   obtain ⟨leftSum, joined, leftReturned, appended, combined⟩ := append_ok left leftValid
   simp [appendExpression, leftReturned, rightReturned, appended, combined,
