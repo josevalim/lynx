@@ -18,7 +18,9 @@ Each verification diagnostic has `file`, `kind` (error/warning/info), and `messa
 Input files are an ordered array of {file, module, imports, contents} objects.
 Function tables carry entry metadata: body, captures, args, pure, and span.
 The decoder builds typed pure/effectful callables; a pure entry must prove
-the translated body's purity during elaboration.
+the translated body's purity during elaboration. Each entry also generates checked
+application equations for standalone calls and binds. Pure calls preserve depth;
+effectful calls consume one level and retain the caller's depth in continuations.
 Files are elaborated in the supplied dependency order, sharing declarations but
 not local scopes or messages. Each file's definitions live in its module namespace.
 Imports may name other input modules or compiled Lean modules loaded from disk.
@@ -152,6 +154,41 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   | _ => throw s!"unsupported {if pattern then "pattern" else "term"} kind '{kind}'"
   return withSpan info.info result
 
+private structure TableEntry where
+  captures : Array (TSyntax `ident)
+  arguments : Array (TSyntax `ident)
+  body : TSyntax `term
+  adapter : TSyntax `term
+  isPure : Bool
+
+private def tableEntry (map : FileMap) (info : Span) (entry : Json) : DecodeM TableEntry := do
+  fields entry ["body", "captures", "args", "pure", "span"]
+  let entryInfo ← span map entry info
+  let captureIds ← (← arr entry "captures").mapM (param map entryInfo)
+  let argumentIds ← (← arr entry "args").mapM (param map entryInfo)
+  let captures := captureIds.map fun id => (⟨id.raw⟩ : TSyntax `term)
+  let arguments := argumentIds.map fun id => (⟨id.raw⟩ : TSyntax `term)
+  let body ← term map entryInfo false (← field entry "body")
+  let isPure ← (← field entry "pure").getBool?
+  let toExcept := mkIdent ``Lynx.Result.toExcept
+  let exceptError := mkIdent ``Except.error
+  let resultError := mkIdent ``Lynx.Result.error
+  let exceptionError := mkIdent ``Lynx.Exception.error
+  let atom := mkIdent ``Lynx.Term.atom
+  let capturesId := mkIdent `captures
+  let argsId := mkIdent `args
+  let adapter ← if isPure then
+    pure (Unhygienic.run `(fun $capturesId:ident $argsId:ident =>
+      match $capturesId:ident, $argsId:ident with
+      | #[$captures,*], #[$arguments,*] => $toExcept $body (by simp)
+      | _, _ => $exceptError ($exceptionError ($atom "badarg"))))
+  else
+    pure (Unhygienic.run `(fun $capturesId:ident $argsId:ident =>
+      match $capturesId:ident, $argsId:ident with
+      | #[$captures,*], #[$arguments,*] => $body
+      | _, _ => $resultError ($exceptionError ($atom "badarg"))))
+  return ⟨captureIds, argumentIds, body, withSpan entryInfo.info adapter, isPure⟩
+
 private partial def command (map : FileMap) (j : Json) (parent : Span := {}) : DecodeM (TSyntax `command) := do
   let info ← span map j parent
   let kind ← str j "kind"
@@ -169,38 +206,9 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) : D
     let name ← identifier (← str j "name")
     unless name.getId.getPrefix == .anonymous do throw "table name must be unqualified"
     let entries ← (← arr j "entries").mapM fun entry => do
-      fields entry ["body", "captures", "args", "pure", "span"]
-      let entryInfo ← span map entry info
-      let captures := (← (← arr entry "captures").mapM (param map entryInfo)).map
-        fun id => (⟨id.raw⟩ : TSyntax `term)
-      let arguments := (← (← arr entry "args").mapM (param map entryInfo)).map
-        fun id => (⟨id.raw⟩ : TSyntax `term)
-      let body ← term map entryInfo false (← field entry "body")
-      let isPure ← (← field entry "pure").getBool?
-      let capturesId := mkIdent `captures
-      let argsId := mkIdent `args
-      let capturesTerm : TSyntax `term := ⟨capturesId.raw⟩
-      let argsTerm : TSyntax `term := ⟨argsId.raw⟩
-      let inputs := #[capturesTerm, argsTerm]
-      let pureCtor := mkIdent ``Lynx.Term.FunEntry.pure
-      let effectfulCtor := mkIdent ``Lynx.Term.FunEntry.effectful
-      let toExcept := mkIdent ``Lynx.Result.toExcept
-      let exceptError := mkIdent ``Except.error
-      let resultError := mkIdent ``Lynx.Result.error
-      let exceptionError := mkIdent ``Lynx.Exception.error
-      let atom := mkIdent ``Lynx.Term.atom
-      if isPure then
-        pure (withSpan entryInfo.info (Unhygienic.run `(
-          $pureCtor (fun $capturesId:ident $argsId:ident =>
-            match $[$inputs:term],* with
-            | #[$captures,*], #[$arguments,*] => $toExcept $body (by simp)
-            | _, _ => $exceptError ($exceptionError ($atom "badarg"))))))
-      else
-        pure (withSpan entryInfo.info (Unhygienic.run `(
-          $effectfulCtor (fun $capturesId:ident $argsId:ident =>
-            match $[$inputs:term],* with
-            | #[$captures,*], #[$arguments,*] => $body
-            | _, _ => $resultError ($exceptionError ($atom "badarg"))))))
+      let entry ← tableEntry map info entry
+      let ctor := mkIdent (if entry.isPure then ``Lynx.Term.FunEntry.pure else ``Lynx.Term.FunEntry.effectful)
+      pure (Unhygienic.run `($ctor $(entry.adapter)))
     let body := Unhygienic.run `(#[$entries,*])
     let tableType := mkIdent ``Lynx.Term.FunTable
     pure (Unhygienic.run `(public def $name : $tableType := $body))
@@ -225,6 +233,100 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) : D
     pure (Unhygienic.run `(public def $name $binders:bracketedBinder* : $resultType := $body))
   | _ => throw s!"unsupported command kind '{kind}'"
   return withSpan info.info result
+
+/-- Table metadata also gives kernel-checked application equations for both pure
+and effectful entries, so proofs can simplify translated `Term.apply` calls
+without inspecting the table or duplicating callback implementations. Pure calls
+preserve depth; effectful bodies consume one level while their caller's
+continuation retains its original depth. -/
+private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `command)) := do
+  let declaration ← command map j
+  if (← str j "kind") != "fun_table" then return #[declaration]
+  let info ← span map j
+  let table ← identifier (← str j "name")
+  let entries ← arr j "entries"
+  let mut result := #[declaration]
+  for index in [:entries.size] do
+    let entry ← tableEntry map info entries[index]!
+    let name := mkIdent (Name.mkSimple s!"{table.getId.getString!}_apply_{index}_bind")
+    let callName := mkIdent (Name.mkSimple s!"{table.getId.getString!}_apply_{index}")
+    let termType := mkIdent ``Lynx.Term
+    let resultType := mkIdent ``Lynx.Result
+    let resolve := mkIdent ``Lynx.Result.resolve
+    let apply := mkIdent ``Lynx.Term.apply
+    let function := mkIdent ``Lynx.Term.function
+    let binders := (entry.captures ++ entry.arguments).map fun id =>
+      Unhygienic.run `(bracketedBinder| ($id : $termType))
+    let captures := entry.captures.map fun id => (⟨id.raw⟩ : TSyntax `term)
+    let arguments := entry.arguments.map fun id => (⟨id.raw⟩ : TSyntax `term)
+    let parameters := captures ++ arguments
+    let bindOk := mkIdent ``Lynx.Result.bind_ok
+    let resolvePure := mkIdent ``Lynx.Result.resolve_of_isPure
+    let pureOk := mkIdent ``Lynx.Result.isPure_ok
+    let id : TSyntax `term := ⟨Syntax.mkNumLit (toString index)⟩
+    let arity : TSyntax `term := ⟨Syntax.mkNumLit (toString arguments.size)⟩
+    let body := entry.body
+    let adapter := entry.adapter
+    let alpha := mkIdent `α
+    let depth := mkIdent `depth
+    let next := mkIdent `next
+    let value := mkIdent `value
+    let natType := mkIdent ``Nat
+    let ok := mkIdent ``Lynx.Result.ok
+    let lemma ← if entry.isPure then
+      let reduce := mkIdent ``Lynx.Result.resolve_apply_pure
+      let ofExcept := mkIdent ``Lynx.Result.ofExcept
+      let toExcept := mkIdent ``Lynx.Result.toExcept
+      let cancel := mkIdent ``Lynx.Result.ofExcept_toExcept
+      pure (Unhygienic.run `(@[simp↓] public theorem $name {$alpha:ident : Type} ($depth:ident : $natType)
+        $binders:bracketedBinder* ($next:ident : $termType → $resultType $alpha:ident) :
+        $resolve $table $depth:ident ($apply ($function $id $arity #[$captures,*]) #[$arguments,*] >>= $next:ident) =
+          $resolve $table $depth:ident ($body >>= $next:ident) := by
+        rw [$reduce $table $depth:ident $id $arity #[$captures,*] #[$arguments,*] $adapter $next:ident
+          (by rfl) (by rfl)]
+        change $resolve $table $depth:ident ($ofExcept ($toExcept $body (by simp)) >>= $next:ident) = _
+        rw [$cancel $body]))
+    else
+      let reduce := mkIdent ``Lynx.Result.resolve_apply_effectful
+      let resolveBind := mkIdent ``Lynx.Result.resolve_bind
+      pure (Unhygienic.run `(@[simp↓] public theorem $name {$alpha:ident : Type} ($depth:ident : $natType)
+        $binders:bracketedBinder* ($next:ident : $termType → $resultType $alpha:ident) :
+        $resolve $table ($depth:ident + 1) ($apply ($function $id $arity #[$captures,*]) #[$arguments,*] >>= $next:ident) =
+          ($resolve $table $depth:ident $body >>= fun $value:ident => $resolve $table ($depth:ident + 1) ($next:ident $value:ident)) := by
+        rw [$resolveBind $table ($depth:ident + 1)
+          ($apply ($function $id $arity #[$captures,*]) #[$arguments,*]) $next:ident, $reduce $table $depth:ident $id $arity #[$captures,*] #[$arguments,*] $adapter
+          (by rfl) (by rfl)]
+        rfl))
+    result := result.push (withSpan info.info lemma)
+    -- Simp indexes explicit Result.bind separately from the monadic notation.
+    let explicitName := mkIdent (Name.mkSimple s!"{table.getId.getString!}_apply_{index}_bind_explicit")
+    let bind := mkIdent ``Lynx.Result.bind
+    let explicitLemma ← if entry.isPure then
+      pure (Unhygienic.run `(@[simp↓] public theorem $explicitName {$alpha:ident : Type} ($depth:ident : $natType)
+        $binders:bracketedBinder* ($next:ident : $termType → $resultType $alpha:ident) :
+        $resolve $table $depth:ident ($bind ($apply ($function $id $arity #[$captures,*]) #[$arguments,*]) $next:ident) =
+          $resolve $table $depth:ident ($bind $body $next:ident) := by
+        exact $name $depth:ident $parameters* $next:ident))
+    else
+      pure (Unhygienic.run `(@[simp↓] public theorem $explicitName {$alpha:ident : Type} ($depth:ident : $natType)
+        $binders:bracketedBinder* ($next:ident : $termType → $resultType $alpha:ident) :
+        $resolve $table ($depth:ident + 1) ($bind ($apply ($function $id $arity #[$captures,*]) #[$arguments,*]) $next:ident) =
+          $bind ($resolve $table $depth:ident $body) (fun $value:ident => $resolve $table ($depth:ident + 1) ($next:ident $value:ident)) := by
+        exact $name $depth:ident $parameters* $next:ident))
+    result := result.push (withSpan info.info explicitLemma)
+    let reduction ← if entry.isPure then
+      pure (Unhygienic.run `(@[simp] public theorem $callName ($depth:ident : $natType)
+        $binders:bracketedBinder* :
+        $resolve $table $depth:ident ($apply ($function $id $arity #[$captures,*]) #[$arguments,*]) = $body := by
+        simpa only [($bindOk), ($resolvePure $table $depth:ident $body (by simp))] using $name $depth:ident $parameters* (fun $value:ident => $ok $value:ident)))
+    else
+      pure (Unhygienic.run `(@[simp] public theorem $callName ($depth:ident : $natType)
+        $binders:bracketedBinder* :
+        $resolve $table ($depth:ident + 1) ($apply ($function $id $arity #[$captures,*]) #[$arguments,*]) =
+          $resolve $table $depth:ident $body := by
+        simpa only [($bindOk), ($resolvePure), ($pureOk)] using $name $depth:ident $parameters* (fun $value:ident => $ok $value:ident)))
+    result := result.push (withSpan info.info reduction)
+  return result
 
 private def diagnostic (file kind message : String) (location : Location := .unknown) : Json :=
   Json.mkObj <| [("file", toJson file), ("kind", toJson kind), ("message", toJson message)] ++
@@ -268,6 +370,7 @@ structure DecodedFile where
   fileMap : FileMap
   commands : Array (TSyntax `command)
   private spans : Array Span
+  private reexportImports : Bool
 
 /-- Decode input files after the selected command requests them. -/
 private def decode (files : Array Json) (env : Lean.Environment) : IO (Array DecodedFile) := do
@@ -277,18 +380,23 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
       let moduleName ← IO.ofExcept (str entry "module")
       let source ← if moduleName == "Erlang.program" then pure "" else IO.FS.readFile file
       let map := FileMap.ofString source
-      let (moduleName, imports, commands, spans) ← IO.ofExcept do
+      let (moduleName, imports, commands, spans, reexportImports) ← IO.ofExcept do
         fields entry ["file", "module", "imports", "contents"]
         let namespaceId ← (identifier moduleName).run env |>.run' #[]
         let imports ← (← arr entry "imports").mapM fun j => do
           let name ← j.getStr?
           let _ ← (identifier name).run env |>.run' #[]
           pure name
-        let (commands, spans) ← (← arr entry "contents").mapM (command map) |>.run env |>.run #[]
+        let contents ← arr entry "contents"
+        let reexportImports := contents.any fun j =>
+          match str j "kind" with
+          | .ok kind => kind == "fun_table"
+          | .error _ => false
+        let (commands, spans) ← contents.mapM (commands map) |>.run env |>.run #[]
         let start := Unhygienic.run `(namespace $namespaceId)
         let stop := Unhygienic.run `(end $namespaceId)
-        pure (moduleName, imports, #[start] ++ commands ++ #[stop], spans)
-      return ⟨file, moduleName, imports, map, commands, spans⟩
+        pure (moduleName, imports, #[start] ++ commands.flatten ++ #[stop], spans, reexportImports)
+      return ⟨file, moduleName, imports, map, commands, spans, reexportImports⟩
     catch err => throw (IO.userError s!"{file}: {err}")
 
 /-- Render syntax without elaborating the input declarations. -/
@@ -297,7 +405,9 @@ private def render (files : Array DecodedFile) (env : Lean.Environment) : IO (UI
     let action : CoreM String := do
       let commands ← file.commands.mapM fun cmd => do
         return (← PrettyPrinter.ppCommand cmd).pretty 100
-      let imports := file.imports.toList.map ("import " ++ ·)
+      -- Public application equations mention the entry bodies in their types.
+      let importPrefix := if file.reexportImports then "public import " else "import "
+      let imports := file.imports.toList.map (importPrefix ++ ·)
       return "module\n\n" ++ String.intercalate "\n" ("public import Lynx" :: imports) ++
         "\n\n" ++ String.intercalate "\n\n" commands.toList ++ "\n"
     let source ← (action.run' { fileName := file.fileName, fileMap := file.fileMap }

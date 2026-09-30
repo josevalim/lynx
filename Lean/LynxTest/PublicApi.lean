@@ -40,6 +40,23 @@ example (table : Lynx.Term.FunTable) (depth id arity : Nat)
       Lynx.Result.resolve table depth (Lynx.Result.ofExcept (body captures arguments) >>= next) :=
   Lynx.Result.resolve_apply_pure table depth id arity captures arguments body next entry size
 
+example (table : Lynx.Term.FunTable) (depth : Nat) (computation : Lynx.Result α)
+    (next : α → Lynx.Result β) :
+    Lynx.Result.resolve table depth (computation >>= next) =
+      (Lynx.Result.resolve table depth computation >>= fun value =>
+        Lynx.Result.resolve table depth (next value)) :=
+  Lynx.Result.resolve_bind table depth computation next
+
+example (table : Lynx.Term.FunTable) (depth id arity : Nat)
+    (captures arguments : Array Lynx.Term) (body : Array Lynx.Term → Lynx.Term.Fun)
+    (entry : table[id]? = some (.effectful body)) (size : arguments.size = arity) :
+    Lynx.Result.resolve table (depth + 1) (Lynx.Term.apply (.function id arity captures) arguments) =
+      Lynx.Result.resolve table depth (body captures arguments) :=
+  Lynx.Result.resolve_apply_effectful table depth id arity captures arguments body entry size
+
+example (computation : Lynx.Result α) : (computation >>= Lynx.Result.ok) = computation := by
+  simp
+
 meta section
 
 /-! Snapshot of public types and executable declarations available through `Lynx`,
