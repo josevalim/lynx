@@ -404,31 +404,23 @@ end Lynx.Term.Compare
 
 namespace Lynx.Term
 
-@[simp] theorem exactCompare_self (a : Term) : exactCompare a a = .eq := by
-  rw [Compare.exactCompare_eq_approximation (sizeOf a) a a (by simp)]
-  exact Std.ReflCmp.compare_self
-
-theorem exactCompare_swap (a b : Term) : exactCompare a b = (exactCompare b a).swap := by
-  let n := max (sizeOf a) (sizeOf b)
-  rw [Compare.exactCompare_eq_approximation n a b (by omega),
-    Compare.exactCompare_eq_approximation n b a (by omega)]
-  exact Std.OrientedCmp.eq_swap
-
-theorem exactCompare_le_trans (a b c : Term)
-    (ab : (exactCompare a b).isLE) (bc : (exactCompare b c).isLE) : (exactCompare a c).isLE := by
-  let n := max (max (sizeOf a) (sizeOf b)) (sizeOf c)
-  rw [Compare.exactCompare_eq_approximation n a b (by omega)] at ab
-  rw [Compare.exactCompare_eq_approximation n b c (by omega)] at bc
-  rw [Compare.exactCompare_eq_approximation n a c (by omega)]
-  exact Std.TransCmp.isLE_trans ab bc
-
-theorem exactCompare_le_total (a b : Term) : (exactCompare a b).isLE ∨ (exactCompare b a).isLE := by
-  rw [exactCompare_swap b a]
-  cases exactCompare a b <;> decide
-
 instance : Std.TransCmp exactCompare where
-  eq_swap := exactCompare_swap _ _
-  isLE_trans := exactCompare_le_trans _ _ _
+  eq_swap := by
+    intro a b
+    let n := max (sizeOf a) (sizeOf b)
+    rw [Compare.exactCompare_eq_approximation n a b (by omega),
+      Compare.exactCompare_eq_approximation n b a (by omega)]
+    exact Std.OrientedCmp.eq_swap
+  isLE_trans := by
+    intro a b c ab bc
+    let n := max (max (sizeOf a) (sizeOf b)) (sizeOf c)
+    rw [Compare.exactCompare_eq_approximation n a b (by omega)] at ab
+    rw [Compare.exactCompare_eq_approximation n b c (by omega)] at bc
+    rw [Compare.exactCompare_eq_approximation n a c (by omega)]
+    exact Std.TransCmp.isLE_trans ab bc
+
+@[simp] theorem exactCompare_self (a : Term) : exactCompare a a = .eq :=
+  Std.ReflCmp.compare_self
 
 end Lynx.Term
 
@@ -486,31 +478,23 @@ end Lynx.Term.Compare
 
 namespace Lynx.Term
 
-@[simp] theorem compare_self (a : Term) : compare a a = .eq := by
-  rw [Compare.compare_eq_approximation (sizeOf a) a a (by simp)]
-  exact Std.ReflCmp.compare_self
-
-theorem compare_swap (a b : Term) : compare a b = (compare b a).swap := by
-  let n := max (sizeOf a) (sizeOf b)
-  rw [Compare.compare_eq_approximation n a b (by omega),
-    Compare.compare_eq_approximation n b a (by omega)]
-  exact Std.OrientedCmp.eq_swap
-
-theorem compare_le_trans (a b c : Term)
-    (ab : (compare a b).isLE) (bc : (compare b c).isLE) : (compare a c).isLE := by
-  let n := max (max (sizeOf a) (sizeOf b)) (sizeOf c)
-  rw [Compare.compare_eq_approximation n a b (by omega)] at ab
-  rw [Compare.compare_eq_approximation n b c (by omega)] at bc
-  rw [Compare.compare_eq_approximation n a c (by omega)]
-  exact Std.TransCmp.isLE_trans ab bc
-
-theorem compare_le_total (a b : Term) : (compare a b).isLE ∨ (compare b a).isLE := by
-  rw [compare_swap b a]
-  cases compare a b <;> decide
-
 instance : Std.TransCmp compare where
-  eq_swap := compare_swap _ _
-  isLE_trans := compare_le_trans _ _ _
+  eq_swap := by
+    intro a b
+    let n := max (sizeOf a) (sizeOf b)
+    rw [Compare.compare_eq_approximation n a b (by omega),
+      Compare.compare_eq_approximation n b a (by omega)]
+    exact Std.OrientedCmp.eq_swap
+  isLE_trans := by
+    intro a b c ab bc
+    let n := max (max (sizeOf a) (sizeOf b)) (sizeOf c)
+    rw [Compare.compare_eq_approximation n a b (by omega)] at ab
+    rw [Compare.compare_eq_approximation n b c (by omega)] at bc
+    rw [Compare.compare_eq_approximation n a c (by omega)]
+    exact Std.TransCmp.isLE_trans ab bc
+
+@[simp] theorem compare_self (a : Term) : compare a a = .eq :=
+  Std.ReflCmp.compare_self
 
 end Lynx.Term
 
@@ -518,39 +502,13 @@ end Lynx.Term
 
 namespace Lynx.Term
 
-@[simp] theorem exactCompare_eq_nil (a : Term) : exactCompare a .nil = .eq ↔ a = .nil := by
-  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
-@[simp] theorem nil_exactCompare_eq (a : Term) : exactCompare .nil a = .eq ↔ a = .nil := by
-  rw [exactCompare_swap, Ordering.swap_eq_eq]
-  exact exactCompare_eq_nil a
-@[simp] theorem exactCompare_eq_integer (a : Term) (n : Int) :
-    exactCompare a (.integer n) = .eq ↔ a = .integer n := by
-  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
-@[simp] theorem integer_exactCompare_eq (n : Int) (a : Term) :
-    exactCompare (.integer n) a = .eq ↔ a = .integer n := by
-  rw [exactCompare_swap, Ordering.swap_eq_eq]
-  exact exactCompare_eq_integer a n
 @[simp] theorem exactCompare_eq_float (a : Term) (n : FiniteFloat) :
     exactCompare a (.float n) = .eq ↔ a = .float n := by
   cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
 @[simp] theorem float_exactCompare_eq (n : FiniteFloat) (a : Term) :
     exactCompare (.float n) a = .eq ↔ a = .float n := by
-  rw [exactCompare_swap, Ordering.swap_eq_eq]
+  rw [Std.OrientedCmp.eq_swap (cmp := exactCompare), Ordering.swap_eq_eq]
   exact exactCompare_eq_float a n
-@[simp] theorem exactCompare_eq_atom (a : Term) (s : String) :
-    exactCompare a (.atom s) = .eq ↔ a = .atom s := by
-  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
-@[simp] theorem atom_exactCompare_eq (s : String) (a : Term) :
-    exactCompare (.atom s) a = .eq ↔ a = .atom s := by
-  rw [exactCompare_swap, Ordering.swap_eq_eq]
-  exact exactCompare_eq_atom a s
-@[simp] theorem exactCompare_eq_pid (a : Term) (pid : PID) :
-    exactCompare a (.pid pid) = .eq ↔ a = .pid pid := by
-  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
-@[simp] theorem pid_exactCompare_eq (pid : PID) (a : Term) :
-    exactCompare (.pid pid) a = .eq ↔ a = .pid pid := by
-  rw [exactCompare_swap, Ordering.swap_eq_eq]
-  exact exactCompare_eq_pid a pid
 
 end Lynx.Term
 
@@ -561,58 +519,25 @@ namespace Lynx.Term
 @[simp] theorem compare_eq_nil (a : Term) : compare a .nil = .eq ↔ a = .nil := by
   cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
 @[simp] theorem nil_compare_eq (a : Term) : compare .nil a = .eq ↔ a = .nil := by
-  rw [compare_swap, Ordering.swap_eq_eq]
+  rw [Std.OrientedCmp.eq_swap (cmp := compare), Ordering.swap_eq_eq]
   exact compare_eq_nil a
-theorem compare_eq_integer (a : Term) (n : Int) :
-    compare a (.integer n) = .eq ↔
-      a = .integer n ∨ ∃ float, a = .float float ∧ float.toRat = n := by
-  cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
-theorem integer_compare_eq (n : Int) (a : Term) :
-    compare (.integer n) a = .eq ↔
-      a = .integer n ∨ ∃ float, a = .float float ∧ float.toRat = n := by
-  rw [compare_swap, Ordering.swap_eq_eq]
-  exact compare_eq_integer a n
-theorem compare_eq_float (a : Term) (n : FiniteFloat) :
-    compare a (.float n) = .eq ↔
-      (∃ float, a = .float float ∧ float.toRat = n.toRat) ∨
-      ∃ integer : Int, a = .integer integer ∧ integer = n.toRat := by
-  cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
-theorem float_compare_eq (n : FiniteFloat) (a : Term) :
-    compare (.float n) a = .eq ↔
-      (∃ float, a = .float float ∧ float.toRat = n.toRat) ∨
-      ∃ integer : Int, a = .integer integer ∧ integer = n.toRat := by
-  rw [compare_swap, Ordering.swap_eq_eq]
-  exact compare_eq_float a n
+
 @[simp] theorem integer_compare_integer_eq (a b : Int) :
     compare (.integer a) (.integer b) = .eq ↔ a = b := by
-  rw [integer_compare_eq]
-  simp [eq_comm]
+  rw [compare_eq_step]
+  simp [Compare.compareStep]
 @[simp] theorem integer_compare_float_eq (integer : Int) (float : FiniteFloat) :
     compare (.integer integer) (.float float) = .eq ↔ integer = float.toRat := by
-  rw [integer_compare_eq]
-  simp [eq_comm]
+  rw [compare_eq_step]
+  simp [Compare.compareStep]
 @[simp] theorem float_compare_integer_eq (float : FiniteFloat) (integer : Int) :
     compare (.float float) (.integer integer) = .eq ↔ float.toRat = integer := by
-  rw [compare_eq_integer]
-  simp
+  rw [compare_eq_step]
+  simp [Compare.compareStep]
 @[simp] theorem float_compare_float_eq (a b : FiniteFloat) :
     compare (.float a) (.float b) = .eq ↔ a.toRat = b.toRat := by
-  rw [float_compare_eq]
-  simp [eq_comm]
-@[simp] theorem compare_eq_atom (a : Term) (s : String) :
-    compare a (.atom s) = .eq ↔ a = .atom s := by
-  cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
-@[simp] theorem atom_compare_eq (s : String) (a : Term) :
-    compare (.atom s) a = .eq ↔ a = .atom s := by
-  rw [compare_swap, Ordering.swap_eq_eq]
-  exact compare_eq_atom a s
-@[simp] theorem compare_eq_pid (a : Term) (pid : PID) :
-    compare a (.pid pid) = .eq ↔ a = .pid pid := by
-  cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
-@[simp] theorem pid_compare_eq (pid : PID) (a : Term) :
-    compare (.pid pid) a = .eq ↔ a = .pid pid := by
-  rw [compare_swap, Ordering.swap_eq_eq]
-  exact compare_eq_pid a pid
+  rw [compare_eq_step]
+  simp [Compare.compareStep]
 
 end Lynx.Term
 
@@ -639,18 +564,6 @@ instance : EquivBEq Term where
         ((Term.beq_iff_compare_eq b c).mp h'))
 
 end Lynx
-
-namespace Lynx.Term
-
-theorem compare_congr {a b c d : Term}
-    (ha : compare a b = .eq) (hb : compare c d = .eq) :
-    compare a c = compare b d :=
-  (Std.TransCmp.congr_left ha).trans (Std.TransCmp.congr_right hb)
-
-/-- Non-strict Erlang term order, used in mathematical specifications. -/
-abbrev le (a b : Term) : Prop := (compare a b).isLE
-
-end Lynx.Term
 
 /-! ## Map extensionality through first-binding lookups -/
 
@@ -807,12 +720,6 @@ end Lynx.Term.Compare
 
 namespace Lynx.Term
 
-/-- Constructor order places every integer before every map. -/
-theorem exactCompare_integer_map (n : Int) (entries : List (Term × Term)) :
-    exactCompare (.integer n) (.map entries) = .lt := by
-  rw [exactCompare_eq_step]
-  rfl
-
 /-- Exact comparison keeps integer and float representations distinct. -/
 @[simp] theorem exactCompare_integer_float (integer : Int) (float : FiniteFloat) :
     exactCompare (.integer integer) (.float float) = .lt := by
@@ -830,26 +737,6 @@ theorem exactCompare_tuple (a b : Array Term) :
       (Ord.compare a.size b.size).then (List.compareLex exactCompare a.toList b.toList) := by
   rw [exactCompare_eq_step]
   rfl
-
-/-- Lists exactCompare their heads before their tails. -/
-theorem exactCompare_cons (a as b bs : Term) :
-    exactCompare (.cons a as) (.cons b bs) = (exactCompare a b).then (exactCompare as bs) := by
-  rw [exactCompare_eq_step]
-  rfl
-
-/-- A singleton map is larger than the empty map, regardless of its binding. -/
-theorem exactCompare_singleton_map_empty (k v : Term) :
-    exactCompare (.map [(k,v)]) (.map []) = .gt := by
-  rw [exactCompare_eq_step]
-  rfl
-
-/-- Singleton maps exactCompare their keys before their values. -/
-theorem exactCompare_singleton_map (k v l w : Term) :
-    exactCompare (.map [(k,v)]) (.map [(l,w)]) = (exactCompare k l).then (exactCompare v w) := by
-  rw [exactCompare_eq_step]
-  simp [Compare.compareStep, Compare.mapView, Compare.mapViewInsert, Compare.compareMapViews,
-    compareLex, Compare.compareOn,
-    List.compareLex_cons_cons, List.compareLex_nil_nil]
 
 /-- Every number precedes every map under ordinary comparison. -/
 theorem compare_integer_map (n : Int) (entries : List (Term × Term)) :

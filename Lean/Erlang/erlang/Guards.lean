@@ -37,11 +37,6 @@ open Lynx
   | .bitstring bytes _ => .ok (.integer bytes.size)
   | _ => throw (.error (.atom "badarg"))
 
-/-- Expose the state-preserving callback even when passed without its argument. -/
-@[simp] theorem «is_integer/1_function» :
-    «is_integer/1» = fun input => Result.ok
-      (match input with | .integer _ => Term.true | _ => Term.false) := rfl
-
 #lynx_pure @[expose] def «is_list/1» : Term → Result
   | .nil => .ok Term.true
   | .cons _ _ => .ok Term.true

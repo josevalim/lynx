@@ -16,88 +16,88 @@ assumptions. The theorem statements do not use contract wrappers.
 
 | Target | Translated (ms) | Native (ms) |
 | --- | ---: | ---: |
-| Sum result guarantee | 213.25 | — |
-| Sum append | 257.57 | 13.11 |
-| Reverse return guarantee | 1.48 | — |
-| Reverse involution | 4.62 | 0.74 |
-| Reverse append | 29.45 | 5.54 |
-| Sets union guarantee | 5.30 | 9.55 |
-| Sets union commutativity | 18.01 | 156.35 |
-| Sets union empty identity | 5.62 | 5.06 |
+| Sum result guarantee | 72.11 | — |
+| Sum append | 114.61 | 12.73 |
+| Reverse return guarantee | 1.42 | — |
+| Reverse involution | 4.24 | 0.75 |
+| Reverse append | 27.44 | 4.83 |
+| Sets union guarantee | 5.18 | 9.14 |
+| Sets union commutativity | 17.98 | 150.32 |
+| Sets union empty identity | 4.92 | 4.97 |
 
 ## Captured output
 
 Each consecutive group of 14 lines is one run.
 
 ```text
-LYNX_BENCH erlang/sum-result 215.12ms
-LYNX_BENCH erlang/sum-append 257.57ms
-LYNX_BENCH native/sum-append 13.41ms
+LYNX_BENCH erlang/sum-result 72.12ms
+LYNX_BENCH erlang/sum-append 115.01ms
+LYNX_BENCH native/sum-append 12.91ms
+LYNX_BENCH erlang/reverse-result 1.39ms
+LYNX_BENCH erlang/reverse-involution 4.21ms
+LYNX_BENCH erlang/reverse-append 27.44ms
+LYNX_BENCH native/reverse-involution 0.73ms
+LYNX_BENCH native/reverse-append 4.87ms
+LYNX_BENCH erlang/sets-union-result 5.05ms
+LYNX_BENCH erlang/sets-union-commutative 17.98ms
+LYNX_BENCH erlang/sets-union-empty 5.01ms
+LYNX_BENCH native/sets-union-result 8.88ms
+LYNX_BENCH native/sets-union-commutative 149.11ms
+LYNX_BENCH native/sets-union-empty 4.86ms
+LYNX_BENCH erlang/sum-result 71.45ms
+LYNX_BENCH erlang/sum-append 115.48ms
+LYNX_BENCH native/sum-append 12.27ms
 LYNX_BENCH erlang/reverse-result 1.42ms
-LYNX_BENCH erlang/reverse-involution 4.82ms
-LYNX_BENCH erlang/reverse-append 29.45ms
-LYNX_BENCH native/reverse-involution 0.74ms
-LYNX_BENCH native/reverse-append 4.84ms
-LYNX_BENCH erlang/sets-union-result 5.30ms
-LYNX_BENCH erlang/sets-union-commutative 17.84ms
-LYNX_BENCH erlang/sets-union-empty 5.62ms
-LYNX_BENCH native/sets-union-result 9.46ms
-LYNX_BENCH native/sets-union-commutative 149.39ms
-LYNX_BENCH native/sets-union-empty 4.85ms
-LYNX_BENCH erlang/sum-result 204.16ms
-LYNX_BENCH erlang/sum-append 251.81ms
-LYNX_BENCH native/sum-append 12.39ms
-LYNX_BENCH erlang/reverse-result 1.48ms
-LYNX_BENCH erlang/reverse-involution 4.43ms
-LYNX_BENCH erlang/reverse-append 27.77ms
+LYNX_BENCH erlang/reverse-involution 4.24ms
+LYNX_BENCH erlang/reverse-append 27.68ms
 LYNX_BENCH native/reverse-involution 0.75ms
-LYNX_BENCH native/reverse-append 5.10ms
-LYNX_BENCH erlang/sets-union-result 5.33ms
-LYNX_BENCH erlang/sets-union-commutative 17.45ms
-LYNX_BENCH erlang/sets-union-empty 5.58ms
-LYNX_BENCH native/sets-union-result 9.12ms
-LYNX_BENCH native/sets-union-commutative 156.35ms
-LYNX_BENCH native/sets-union-empty 5.06ms
-LYNX_BENCH erlang/sum-result 205.40ms
-LYNX_BENCH erlang/sum-append 255.30ms
-LYNX_BENCH native/sum-append 13.11ms
-LYNX_BENCH erlang/reverse-result 1.46ms
-LYNX_BENCH erlang/reverse-involution 4.25ms
-LYNX_BENCH erlang/reverse-append 29.86ms
-LYNX_BENCH native/reverse-involution 0.74ms
-LYNX_BENCH native/reverse-append 5.54ms
-LYNX_BENCH erlang/sets-union-result 5.21ms
-LYNX_BENCH erlang/sets-union-commutative 18.01ms
-LYNX_BENCH erlang/sets-union-empty 5.30ms
-LYNX_BENCH native/sets-union-result 9.55ms
-LYNX_BENCH native/sets-union-commutative 150.73ms
-LYNX_BENCH native/sets-union-empty 4.85ms
-LYNX_BENCH erlang/sum-result 215.02ms
-LYNX_BENCH erlang/sum-append 266.48ms
-LYNX_BENCH native/sum-append 12.65ms
-LYNX_BENCH erlang/reverse-result 1.57ms
-LYNX_BENCH erlang/reverse-involution 4.62ms
-LYNX_BENCH erlang/reverse-append 29.20ms
-LYNX_BENCH native/reverse-involution 0.75ms
-LYNX_BENCH native/reverse-append 5.59ms
-LYNX_BENCH erlang/sets-union-result 5.21ms
-LYNX_BENCH erlang/sets-union-commutative 18.34ms
-LYNX_BENCH erlang/sets-union-empty 5.66ms
-LYNX_BENCH native/sets-union-result 10.75ms
-LYNX_BENCH native/sets-union-commutative 157.63ms
-LYNX_BENCH native/sets-union-empty 5.19ms
-LYNX_BENCH erlang/sum-result 213.25ms
-LYNX_BENCH erlang/sum-append 273.64ms
-LYNX_BENCH native/sum-append 14.28ms
+LYNX_BENCH native/reverse-append 4.83ms
+LYNX_BENCH erlang/sets-union-result 5.41ms
+LYNX_BENCH erlang/sets-union-commutative 18.10ms
+LYNX_BENCH erlang/sets-union-empty 4.92ms
+LYNX_BENCH native/sets-union-result 9.14ms
+LYNX_BENCH native/sets-union-commutative 150.32ms
+LYNX_BENCH native/sets-union-empty 5.01ms
+LYNX_BENCH erlang/sum-result 72.11ms
+LYNX_BENCH erlang/sum-append 114.61ms
+LYNX_BENCH native/sum-append 12.73ms
+LYNX_BENCH erlang/reverse-result 1.47ms
+LYNX_BENCH erlang/reverse-involution 4.24ms
+LYNX_BENCH erlang/reverse-append 27.76ms
+LYNX_BENCH native/reverse-involution 0.87ms
+LYNX_BENCH native/reverse-append 4.80ms
+LYNX_BENCH erlang/sets-union-result 5.18ms
+LYNX_BENCH erlang/sets-union-commutative 17.72ms
+LYNX_BENCH erlang/sets-union-empty 5.20ms
+LYNX_BENCH native/sets-union-result 9.05ms
+LYNX_BENCH native/sets-union-commutative 152.94ms
+LYNX_BENCH native/sets-union-empty 5.09ms
+LYNX_BENCH erlang/sum-result 71.04ms
+LYNX_BENCH erlang/sum-append 114.33ms
+LYNX_BENCH native/sum-append 12.27ms
+LYNX_BENCH erlang/reverse-result 1.38ms
+LYNX_BENCH erlang/reverse-involution 4.13ms
+LYNX_BENCH erlang/reverse-append 27.41ms
+LYNX_BENCH native/reverse-involution 0.72ms
+LYNX_BENCH native/reverse-append 4.83ms
+LYNX_BENCH erlang/sets-union-result 5.27ms
+LYNX_BENCH erlang/sets-union-commutative 17.90ms
+LYNX_BENCH erlang/sets-union-empty 4.82ms
+LYNX_BENCH native/sets-union-result 9.88ms
+LYNX_BENCH native/sets-union-commutative 150.55ms
+LYNX_BENCH native/sets-union-empty 4.97ms
+LYNX_BENCH erlang/sum-result 74.57ms
+LYNX_BENCH erlang/sum-append 114.19ms
+LYNX_BENCH native/sum-append 13.13ms
 LYNX_BENCH erlang/reverse-result 1.48ms
-LYNX_BENCH erlang/reverse-involution 4.82ms
-LYNX_BENCH erlang/reverse-append 30.28ms
-LYNX_BENCH native/reverse-involution 0.74ms
-LYNX_BENCH native/reverse-append 6.18ms
-LYNX_BENCH erlang/sets-union-result 5.55ms
-LYNX_BENCH erlang/sets-union-commutative 18.29ms
-LYNX_BENCH erlang/sets-union-empty 5.70ms
-LYNX_BENCH native/sets-union-result 10.20ms
-LYNX_BENCH native/sets-union-commutative 160.07ms
-LYNX_BENCH native/sets-union-empty 5.07ms
+LYNX_BENCH erlang/reverse-involution 4.34ms
+LYNX_BENCH erlang/reverse-append 27.40ms
+LYNX_BENCH native/reverse-involution 0.84ms
+LYNX_BENCH native/reverse-append 4.93ms
+LYNX_BENCH erlang/sets-union-result 5.16ms
+LYNX_BENCH erlang/sets-union-commutative 18.41ms
+LYNX_BENCH erlang/sets-union-empty 4.82ms
+LYNX_BENCH native/sets-union-result 9.99ms
+LYNX_BENCH native/sets-union-commutative 150.07ms
+LYNX_BENCH native/sets-union-empty 4.96ms
 ```

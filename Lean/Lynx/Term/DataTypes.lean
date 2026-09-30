@@ -247,11 +247,6 @@ instance : LawfulMonad @Result := LawfulMonad.mk' _
 @[simp] theorem not_isPure_receive (select : Term → Option β) (next : β → Result α) :
     ¬ IsPure (.receive select next) := by simp [IsPure]
 
-theorem IsPure.terminal (computation : Result α) (pure : IsPure computation) :
-    (∃ value, computation = .ok value) ∨
-      ∃ exception, computation = .error exception := by
-  cases computation <;> simp_all [IsPure]
-
 @[simp↓] theorem IsPure.bind (computation : Result α) (next : α → Result β)
     (computationPure : IsPure computation) (nextPure : ∀ value, IsPure (next value)) :
     IsPure (computation >>= next) := by
@@ -265,23 +260,6 @@ theorem IsPure.terminal (computation : Result α) (pure : IsPure computation) :
   IsPure.bind computation next computationPure nextPure
 
 @[simp] theorem not_isPure_exhausted : ¬ IsPure (.exhausted : Result α) := by simp [IsPure]
-
-@[simp] theorem ok_inj (a b : α) : (Result.ok a : Result α) = .ok b ↔ a = b := by
-  constructor
-  · intro h; exact Result.ok.inj h
-  · rintro rfl; rfl
-
-@[simp] theorem ok_ne_error (value : α) (exception : Exception) :
-    (Result.ok value : Result α) ≠ .error exception := by simp
-
-@[simp] theorem error_ne_ok (exception : Exception) (value : α) :
-    (Result.error exception : Result α) ≠ .ok value := by simp
-
-@[simp] theorem error_inj (a b : Exception) :
-    (Result.error a : Result α) = .error b ↔ a = b := by
-  constructor
-  · intro h; exact Result.error.inj h
-  · rintro rfl; rfl
 
 @[simp] theorem ok_bind (value : α) (next : α → Result β) :
     (Result.ok value >>= next) = next value := by rfl
@@ -347,38 +325,22 @@ public inductive FunEntry where
 Each entry receives the captured values before the invocation arguments. -/
 public abbrev FunTable := Array FunEntry
 
-/-- Adapt a lifted closure body, rejecting malformed capture or argument arrays. -/
-public def FunTable.entry (captureCount arity : Nat)
-    (body : Array Term → Array Term → Result) : FunEntry :=
-  .effectful fun captures arguments =>
-    if captures.size = captureCount ∧ arguments.size = arity then
-      body captures arguments
-    else
-      .error (.error (.atom "badarg"))
-
 end Lynx.Term
 
 namespace Lynx.Result
 
 /-- Embed a completed call in a resumable computation. -/
-public def ofExcept (reply : Except Exception α) : Result α :=
+@[expose] public def ofExcept (reply : Except Exception α) : Result α :=
   match reply with
   | .ok value => .ok value
   | .error exception => .error exception
 
 /-- Extract a completed call using a kernel-checked purity proof. -/
-public def toExcept (computation : Result α) (pure : IsPure computation) : Except Exception α :=
+@[expose] public def toExcept (computation : Result α) (pure : IsPure computation) : Except Exception α :=
   match computation with
   | .ok value => .ok value
   | .error exception => .error exception
   | .exhausted | .apply .. | .get .. | .set .. | .spawn .. | .schedule ..
     | .send .. | .receive .. => False.elim pure
-
-/-- Converting a proved pure implementation preserves its value or exception. -/
-public theorem ofExcept_toExcept (computation : Result α) (pure : IsPure computation) :
-    ofExcept (toExcept computation pure) = computation := by
-  cases computation with
-  | ok _ | error _ => rfl
-  | _ => exact False.elim pure
 
 end Lynx.Result

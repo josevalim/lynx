@@ -207,8 +207,10 @@ theorem dynamic_apply_array :
   all_goals cbv
 
 private def closureFunctions : Term.FunTable := #[
-  Term.FunTable.entry 1 1 fun captures args =>
-    «+/2» (captures.getD 0 .nil) (args.getD 0 .nil)
+  .effectful fun captures args =>
+    match captures.toList, args.toList with
+    | [captured], [argument] => «+/2» captured argument
+    | _, _ => .error (.error (.atom "badarg"))
 ]
 
 theorem dynamic_apply_captures :
@@ -257,16 +259,14 @@ theorem ordered_operators :
       «>=/2» b a = .ok (.atom "true")) := by
   apply List.Pairwise.imp (R := fun a b => Term.compare a b = .lt ∧ Term.compare b a = .gt)
     (fun {a b} h => ?_) ordered_terms
-  simp [«</2», «>/2», «=</2», «>=/2»,
-    h.1, h.2, Term.true, Term.false]
+  simp [Term.true, Term.false, «</2», «>/2», «=</2», «>=/2», h.1, h.2]
 
 theorem reflexive_operators (a : Term) :
     «</2» a a = .ok (.atom "false") ∧
     «>/2» a a = .ok (.atom "false") ∧
     «=</2» a a = .ok (.atom "true") ∧
     «>=/2» a a = .ok (.atom "true") := by
-  simp [«</2», «>/2», «=</2», «>=/2»,
-    Term.true, Term.false]
+  simp [Term.true, Term.false, «</2», «>/2», «=</2», «>=/2»]
 
 /-- Callers remain in direct style even when the helper they invoke spawns. -/
 private def spawnFromHelper : Result :=
@@ -322,19 +322,19 @@ theorem tuple_equality :
       (.tuple #[.atom "a", .integer 1]) = .ok Term.false ∧
     «==/2» (.tuple #[.tuple #[.nil], .cons (.atom "a") .nil])
       (.tuple #[.tuple #[.nil], .cons (.atom "a") .nil]) = .ok Term.true ∧
-    «==/2» (.tuple #[]) Term.emptyMap = .ok Term.false := by
+    «==/2» (.tuple #[]) (Term.map []) = .ok Term.false := by
   repeat' first | apply And.intro | rfl
 
 theorem map_equality :
-    «==/2» Term.emptyMap (Term.map []) = .ok Term.true ∧
+    «==/2» (Term.map []) (Term.map []) = .ok Term.true ∧
     «==/2» (Term.map [(.atom "a", .integer 1), (.atom "b", .integer 2)])
       (Term.map [(.atom "b", .integer 2), (.atom "a", .integer 1)]) = .ok Term.true ∧
     «==/2» (Term.map [(.atom "a", .integer 1)])
       (Term.map [(.atom "a", .integer 2)]) = .ok Term.false ∧
     «==/2» (Term.map [(.atom "a", .integer 1)])
       (Term.map [(.atom "b", .integer 1)]) = .ok Term.false ∧
-    «==/2» Term.emptyMap (Term.map [(.atom "a", .nil)]) = .ok Term.false ∧
-    «==/2» (Term.map [(.tuple #[Term.emptyMap], .tuple #[.nil])])
+    «==/2» (Term.map []) (Term.map [(.atom "a", .nil)]) = .ok Term.false ∧
+    «==/2» (Term.map [(.tuple #[(Term.map [])], .tuple #[.nil])])
       (Term.map [(.tuple #[Term.map []], .tuple #[.nil])]) = .ok Term.true := by
   repeat' first | apply And.intro | rfl
 

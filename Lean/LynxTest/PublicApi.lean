@@ -13,8 +13,6 @@ example (entry : Array Lynx.Term → Array Lynx.Term → Lynx.Result) :
     Lynx.Term.FunTable := #[.effectful entry]
 example (entry : Array Lynx.Term → Array Lynx.Term → Except Lynx.Exception Lynx.Term) :
     Lynx.Term.FunTable := #[.pure entry]
-example : Lynx.Term.FunTable → Lynx.Term → Array Lynx.Term → Lynx.Result :=
-  Lynx.Term.pureApply
 
 example : Lynx.Result → Lynx.Term.FunTable → Nat → Lynx.Environment → Lynx.Outcome Lynx.Term :=
   Lynx.Result.runWith
@@ -134,18 +132,12 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.FunEntry.effectful",
   "Lynx.Term.FunEntry.pure",
   "Lynx.Term.FunTable",
-  "Lynx.Term.FunTable.entry",
-  "Lynx.Term.Map.Entries",
-  "Lynx.Term.Map.find",
-  "Lynx.Term.Map.merge",
-  "Lynx.Term.Map.put",
   "Lynx.Term.PureFun",
   "Lynx.Term.apply",
   "Lynx.Term.atom",
   "Lynx.Term.bitstring",
   "Lynx.Term.compare",
   "Lynx.Term.cons",
-  "Lynx.Term.emptyMap",
   "Lynx.Term.exactCompare",
   "Lynx.Term.false",
   "Lynx.Term.float",
@@ -153,14 +145,9 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.instDecidableEqFiniteFloat",
   "Lynx.Term.instReprFiniteFloat",
   "Lynx.Term.integer",
-  "Lynx.Term.isFalse",
-  "Lynx.Term.isMap",
-  "Lynx.Term.isTrue",
-  "Lynx.Term.le",
   "Lynx.Term.map",
   "Lynx.Term.nil",
   "Lynx.Term.pid",
-  "Lynx.Term.pureApply",
   "Lynx.Term.true",
   "Lynx.Term.tuple",
   "Lynx.instBEqTerm",
