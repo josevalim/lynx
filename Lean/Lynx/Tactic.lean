@@ -131,7 +131,16 @@ re-enabled when its hypothesis is retained, even if simplification did not
 change that hypothesis. An unchanged hypothesis also reuses its existing rule
 instead of rebuilding its simp-theorem entries.
 Rejected input branches usually close before the implementation's possible
-results are explored.
+results are explored. Runtime bind application is withheld so shared computations
+remain available until their results are needed.
+
+Matcher splitting tries the complete patterns before constructor cases, preserving
+literal alternatives such as `true` and `false`. Lean may revert and reintroduce
+the affected hypothesis, so the solver gives it a fresh tracking name and finds its
+new identifier in each branch. It simplifies that fact with the branch equations
+immediately, closing rejected alternatives without another search round. Runtime
+outcomes are split through their shared computation equations, including during
+expectation normalization, rather than generalizing only one match occurrence.
 
 ## Propagating acceptance requirements
 
@@ -378,13 +387,16 @@ private def mkSolver (unfoldOpaque? : Option Name := none) : TacticM Solver := w
   -- is especially expensive in files using the module system.
   let mut thms ← getSimpTheorems
   for name in #[``and_assoc, ``Result.IsPure.ok_iff, ``Result.IsPure.error_iff,
-      ``Result.IsPure.bind_apply, ``Result.get_continuation_apply,
+      ``Result.get_continuation_apply,
       ``Result.set_continuation_apply, ``Result.ok_bind, ``Result.error_bind,
       ``Result.get_bind, ``Result.set_bind, ``Result.state_get_bind_apply,
       ``Result.state_set_bind_apply, ``Result.state_modify_bind_apply,
       ``Result.state_get_bind_bind_apply, ``Result.state_set_bind_bind_apply,
       ``Result.state_modify_bind_bind_apply] do
     thms ← (thms.unerase (.decl name)).addConst name
+  -- Keep shared binds intact. Expanding a pure left operand into an Outcome
+  -- match duplicates continuations before their result constraints are known.
+  thms ← thms.erase (.decl ``Result.IsPure.bind_apply)
   thms ← thms.erase (.decl ``bind_assoc)
   thms ← thms.erase (.decl ``bind_pure_comp)
   for name in #[``Accepted, ``Term.true, ``Term.false, ``Pure.pure] do
@@ -528,6 +540,18 @@ private def destructFacts (reduce : Bool := true) : TacticM Bool := withMainCont
         return true
   return false
 
+/-- Splitting can revert and reintroduce a fact, changing its identifier.
+Find it in the branch context and use the new outcome equations immediately. -/
+private def pruneFact (solver : Solver) (branch : MVarId) (name : Name) : MetaM (Option MVarId) :=
+    branch.withContext do
+  let some affected := (← getLCtx).findFromUserName? name | return some branch
+  let mut context := solver.context
+  for fact in ← getPropHyps do
+    if fact != affected.fvarId && !(← fact.getType).isForall then
+      context ← addFact context fact
+  let (result, _) ← simpLocalDecl branch affected.fvarId context solver.simprocs
+  return result.map (·.2)
+
 /-- Built-in splitting and simplification, including compound computations.
 Early calls protect bare induction inputs, not computations containing them;
 later calls prioritize recursive results. -/
@@ -542,6 +566,7 @@ private def splitHypothesis (solver : Solver) (protectedInputs : Array FVarId :=
   for decl in declarations do
     unless decl.isImplementationDetail || decl.type.isForall do
       if constraintsOnly && decl.userName.toString.startsWith "recursive_result" then continue
+      let some candidate ← findSplit? decl.type | continue
       let discriminants ← IO.mkRef (#[] : Array FVarId)
       decl.type.forEach fun e => do
         if e.hasLooseBVars then return
@@ -549,6 +574,31 @@ private def splitHypothesis (solver : Solver) (protectedInputs : Array FVarId :=
           for discr in matcher.discrs do
             if discr.isFVar && !protectedInputs.contains discr.fvarId! then
               discriminants.modify (·.push discr.fvarId!)
+      if let some matcher ← matchMatcherApp? candidate then
+        if ← matcher.discrs.anyM fun discr => return (← inferType discr).isAppOf ``Outcome then
+          continue
+        -- A compound discriminant can be generalized without choosing the
+        -- constructor of the recursive input it depends on.
+        if matcher.discrs.any (fun d => d.isFVar && protectedInputs.contains d.fvarId!) then
+          continue
+      let saved ← saveState
+      try
+        let trackedName ← mkFreshUserName decl.userName
+        let tracked ← goal.rename decl.fvarId trackedName
+        if let some branches ← splitLocalDecl? tracked decl.fvarId then
+          let mut remaining := []
+          for branch in branches do
+            -- A split outcome can contradict this very hypothesis. Close it
+            -- before entering another search round over the whole goal.
+            let result ← pruneFact solver branch trackedName
+            if let some next := result then remaining := remaining ++ [next]
+          replaceBranches remaining
+          return true
+      catch error =>
+        trace[lynx] "hypothesis split failed: {error.toMessageData}"
+        saved.restore
+      -- Renaming assigns the original goal even when no matcher can split.
+      saved.restore
       for discr in ← discriminants.get do
         let branches ← goal.cases discr
         let mut remaining := []
@@ -564,25 +614,6 @@ private def splitHypothesis (solver : Solver) (protectedInputs : Array FVarId :=
             remaining := remaining ++ [branch.mvarId]
         replaceBranches remaining
         return true
-      if let some candidate ← findSplit? decl.type then
-        if let some matcher ← matchMatcherApp? candidate then
-          -- A compound discriminant can be generalized without choosing the
-          -- constructor of the recursive input it depends on.
-          if matcher.discrs.any (fun d => d.isFVar && protectedInputs.contains d.fvarId!) then
-            continue
-      let saved ← saveState
-      try
-        if let some branches ← splitLocalDecl? goal decl.fvarId then
-          let mut remaining := []
-          for branch in branches do
-            -- A split outcome can contradict this very hypothesis. Close it
-            -- before entering another search round over the whole goal.
-            let (result, _) ← simpLocalDecl branch decl.fvarId
-              solver.context solver.simprocs
-            if let some (_, next) := result then remaining := remaining ++ [next]
-          replaceBranches remaining
-          return true
-      catch _ => saved.restore
   return false
 
 private def inductInput (solver : Solver) : TacticM (Option Solver) := withMainContext do
@@ -627,14 +658,15 @@ private def inductInput (solver : Solver) : TacticM (Option Solver) := withMainC
 
 /-- Inspect one shared computation at a time. Keeping binds intact until this
 point avoids expanding all continuations into nested matches during simp. -/
-private def splitComputation (solver : Solver) : TacticM Bool := withMainContext do
+private def splitComputation (solver : Solver) (constraintsOnly : Bool := false) : TacticM Bool := withMainContext do
   let goal ← getMainGoal
   let mut expressions := #[]
   for decl in ← getLCtx do
-    if !decl.isImplementationDetail && !decl.type.isForall then
-      expressions := expressions.push decl.type
-  expressions := expressions.push (← goal.getType)
-  for expression in expressions do
+    if !decl.isImplementationDetail && !decl.type.isForall &&
+        (!constraintsOnly || !decl.userName.toString.startsWith "recursive_result") then
+      expressions := expressions.push (decl.type, some decl.fvarId)
+  unless constraintsOnly do expressions := expressions.push ((← goal.getType), none)
+  for (expression, source?) in expressions do
     let bindCandidates ← IO.mkRef (#[] : Array Expr)
     let candidates ← IO.mkRef (#[] : Array Expr)
     expression.forEach fun e => do
@@ -666,6 +698,11 @@ private def splitComputation (solver : Solver) : TacticM Bool := withMainContext
       let saved ← saveState
       try
         let mut next := goal
+        let mut sourceName? := none
+        if let some source := source? then
+          let name ← mkFreshUserName (← source.getDecl).userName
+          next ← next.rename source name
+          sourceName? := some name
         if resultComputation then
           let purity ← mkAppM ``Result.IsPure #[computation]
           let mut proof? : Option Expr := none
@@ -688,6 +725,8 @@ private def splitComputation (solver : Solver) : TacticM Bool := withMainContext
           for choice in choices do
             let alternatives ← choice.mvarId.cases choice.fields[0]!.fvarId!
             remaining := remaining ++ alternatives.toList.map (·.mvarId)
+          if let some source := sourceName? then
+            remaining ← remaining.filterMapM fun branch => pruneFact solver branch source
           replaceBranches remaining
           return true
         let hypotheses ← next.withContext getPropHyps
@@ -696,7 +735,10 @@ private def splitComputation (solver : Solver) : TacticM Bool := withMainContext
             #[{ expr := computation, xName? := some `outcome, hName? := some `evaluated }]
             hypotheses
         let branches ← generalized.cases variables[0]!
-        replaceBranches (branches.toList.map (·.mvarId))
+        let mut remaining := branches.toList.map (·.mvarId)
+        if let some source := sourceName? then
+          remaining ← remaining.filterMapM fun branch => pruneFact solver branch source
+        replaceBranches remaining
         return true
       catch _ => saved.restore
   return false
@@ -860,7 +902,7 @@ private def applyHypothesis (solver : Solver) : TacticM (Option Solver) := withM
     declarations.filter (fun decl =>
       !decl.userName.toString.startsWith "recursive_result")
   for decl in declarations do
-    unless decl.isImplementationDetail do
+    unless decl.isImplementationDetail || !(← isProp decl.type) do
       let type ← whnf decl.type
       let .forallE _ domain _ _ := type | continue
       let mut candidates := #[decl.toExpr]
@@ -1046,7 +1088,11 @@ private partial def search (solver : Solver) (fuel : Nat) : TacticM Unit := do
   if ← destructFacts then
     allGoals (search solver (fuel - 1))
     return
-  if ← splitHypothesis solver solver.inputs true then
+  let protectedInputs := if solver.recursive.isEmpty then #[] else solver.inputs
+  if ← splitHypothesis solver protectedInputs true then
+    allGoals (search solver (fuel - 1))
+    return
+  if ← splitComputation solver true then
     allGoals (search solver (fuel - 1))
     return
   if ← applySummary solver then

@@ -20,8 +20,11 @@ theorem structure_contract : Satisfies identity always unchanged := by
 
 def addPair (args : Term × Term) : Result := Erlang.erlang.«+/2» args.1 args.2
 
-def twoIntegers (args : Term × Term) : Result :=
-  Erlang.erlang.«andalso/2» (Erlang.erlang.«is_integer/1» args.1) (fun _ => Erlang.erlang.«is_integer/1» args.2)
+def twoIntegers (args : Term × Term) : Result := do
+  match ← Erlang.erlang.«is_integer/1» args.1 with
+  | .atom "true" => Erlang.erlang.«is_integer/1» args.2
+  | .atom "false" => .ok Term.false
+  | _ => throw (.error (.atom "badarg"))
 
 def numberResult (_ : Term × Term) (result : Term) : Result :=
   Erlang.erlang.«is_integer/1» result
@@ -70,18 +73,47 @@ theorem assumed_coverage (expects : Term → Result)
     (accepted : Accepted (expects (.integer 0))) : Covered expects := by
   lynx_solve
 
+private def shortCircuit (left : Result) (right : Unit → Result) : Result := do
+  match ← left with
+  | .atom "true" => right ()
+  | .atom "false" => .ok Term.false
+  | _ => throw (.error (.atom "badarg"))
+
 /-- Match reasoning retains the executable short-circuit rules. -/
-theorem andalso_short_circuit (right : Unit → Result) :
-    Erlang.erlang.«andalso/2» (.ok Term.false) right = .ok Term.false := by
+theorem short_circuit_false (right : Unit → Result) :
+    shortCircuit (.ok Term.false) right = .ok Term.false := by
   lynx_solve
 
-theorem andalso_raises (right : Unit → Result) (exception : Exception) :
-    Erlang.erlang.«andalso/2» (.error exception) right = .error exception := by
+theorem short_circuit_raises (right : Unit → Result) (exception : Exception) :
+    shortCircuit (.error exception) right = .error exception := by
   lynx_solve
 
-theorem andalso_non_boolean (right : Unit → Result) (value : Int) :
-    Erlang.erlang.«andalso/2» (.ok (.integer value)) right =
+theorem short_circuit_non_boolean (right : Unit → Result) (value : Int) :
+    shortCircuit (.ok (.integer value)) right =
       .error (.error (.atom "badarg")) := by
+  lynx_solve
+
+/-- Literal matches retain the left constraint and reject every unsuccessful branch.
+The right computation may change state; acceptance observes its actual outcome. -/
+theorem accepted_short_circuit (left right : Result) (env : Environment)
+    (leftPure : Result.IsPure left)
+    (accepted : Accepted (do
+      match ← left with
+      | .atom "true" => right
+      | .atom "false" => .ok Term.false
+      | _ => throw (.error (.atom "badarg"))) env) :
+    left = .ok Term.true ∧ Accepted right env := by
+  lynx_solve
+
+/-- Splitting a literal match recreates the affected hypothesis; rejected
+alternatives must still close when another hypothesis depends on it. -/
+theorem dependent_match (input : Term)
+    (accepted : Accepted (match input with
+      | .atom "allowed" => Result.ok Term.true
+      | .atom "denied" => .ok Term.false
+      | _ => throw (.error (.atom "badarg"))))
+    (predicate : (accepted = accepted) → Prop)
+    (_dependent : predicate rfl) : input = .atom "allowed" := by
   lynx_solve
 
 /-- Acceptance eliminates the non-nil branch. -/

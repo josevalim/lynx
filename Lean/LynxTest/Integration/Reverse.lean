@@ -122,8 +122,11 @@ theorem reverse_involution : Property properList reverseInvolution := by
     simp [Accepted, computation, Erlang.erlang.«==/2»]
 
 /-- Both lists must satisfy the reverse expectation. -/
-def reverseAppendExpects (args : Term × Term) : Result :=
-  Erlang.erlang.«andalso/2» (properList args.1) (fun _ => properList args.2)
+def reverseAppendExpects (args : Term × Term) : Result := do
+  match ← properList args.1 with
+  | .atom "true" => properList args.2
+  | .atom "false" => .ok Term.false
+  | _ => throw (.error (.atom "badarg"))
 
 def reverseAppend (args : Term × Term) : Result := do
   let joined ← Erlang.erlang.«++/2» args.1 args.2
@@ -155,7 +158,7 @@ theorem reverse_append : Property reverseAppendExpects reverseAppend := by
   · intro ⟨left, right⟩ env accepted
     have both : properList left = .ok (.atom "true") ∧
         properList right = .ok (.atom "true") := by
-      change Accepted (Erlang.erlang.«andalso/2» (properList left) (fun _ => properList right)) env at accepted
+      change Accepted (reverseAppendExpects (left, right)) env at accepted
       lynx_solve
     obtain ⟨reversedRight, rightReturned, rightProper⟩ := reverse_aux_proper right .nil both.2 rfl
     have step (head tail : Term) :

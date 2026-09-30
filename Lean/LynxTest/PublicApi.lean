@@ -46,7 +46,6 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«==/2»",
   "Erlang.erlang.«>/2»",
   "Erlang.erlang.«>=/2»",
-  "Erlang.erlang.«andalso/2»",
   "Erlang.erlang.«apply/2»",
   "Erlang.erlang.«bit_size/1»",
   "Erlang.erlang.«byte_size/1»",

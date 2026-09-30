@@ -101,9 +101,12 @@ def sumExpects (arg : Term) : Result :=
 def sumEnsures (_arg result : Term) : Result :=
   Erlang.erlang.«is_integer/1» result
 
-/-- Both operands of the property must satisfy the function's expectation. -/
-def appendExpects (args : Term × Term) : Result :=
-  Erlang.erlang.«andalso/2» (sumExpects args.1) (fun _ => sumExpects args.2)
+/-- Both operands must satisfy the function's expectation. -/
+def appendExpects (args : Term × Term) : Result := do
+  match ← sumExpects args.1 with
+  | .atom "true" => sumExpects args.2
+  | .atom "false" => .ok Term.false
+  | _ => throw (.error (.atom "badarg"))
 
 /-- Translated `sum(l) + sum(r) == sum(l ++ r)`. -/
 def appendExpression (args : Term × Term) : Result := do

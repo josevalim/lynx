@@ -134,8 +134,11 @@ def union_2 (left right : Term) : Result := Erlang.maps.«merge/2» left right
 def setExpects (input : Term) : Result :=
   isSet input
 
-def unionExpects (args : Term × Term) : Result :=
-  Erlang.erlang.«andalso/2» (setExpects args.1) (fun _ => setExpects args.2)
+def unionExpects (args : Term × Term) : Result := do
+  match ← setExpects args.1 with
+  | .atom "true" => setExpects args.2
+  | .atom "false" => .ok Term.false
+  | _ => throw (.error (.atom "badarg"))
 
 def unionEnsures (_args : Term × Term) (result : Term) : Result := setExpects result
 
