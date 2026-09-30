@@ -38,18 +38,18 @@ private def pureFunctions : Term.FunTable := #[
   .effectful fun _ _ => .get fun env => .ok (.pid env.currentPid)
 ]
 
-/-- Pure closures execute directly, including captures and exceptions. -/
-theorem direct_pure_calls :
-    Term.pureApply pureFunctions (.function 0 1 #[.integer 10]) #[.integer 7] =
-      .ok (.integer 17) ∧
-    Term.pureApply pureFunctions (.function 0 1 #[]) #[.integer 7] =
-      .error (.throw (.atom "bad_input")) ∧
-    Term.pureApply pureFunctions (.function 0 1 #[]) #[] =
-      .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 1 #[], .nil]])) ∧
-    Term.pureApply pureFunctions (.function 9 0 #[]) #[] =
-      .error (.error (.tuple #[.atom "badfun", .function 9 0 #[]])) ∧
-    Term.pureApply pureFunctions (.atom "not_a_fun") #[] =
-      .error (.error (.tuple #[.atom "badfun", .atom "not_a_fun"])) := by
+/-- Ordinary application dispatches pure closures, including captures and exceptions. -/
+theorem pure_calls :
+    (Term.apply (.function 0 1 #[.integer 10]) #[.integer 7]).runWith pureFunctions 0 {} =
+      .ok (.integer 17) {} ∧
+    (Term.apply (.function 0 1 #[]) #[.integer 7]).runWith pureFunctions 0 {} =
+      .error (.throw (.atom "bad_input")) {} ∧
+    (Term.apply (.function 0 1 #[]) #[]).runWith pureFunctions 0 {} =
+      .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 1 #[], .nil]])) {} ∧
+    (Term.apply (.function 9 0 #[]) #[]).runWith pureFunctions 0 {} =
+      .error (.error (.tuple #[.atom "badfun", .function 9 0 #[]])) {} ∧
+    (Term.apply (.atom "not_a_fun") #[]).runWith pureFunctions 0 {} =
+      .error (.error (.tuple #[.atom "badfun", .atom "not_a_fun"])) {} := by
   repeat' apply And.intro
   all_goals cbv
 
@@ -63,14 +63,12 @@ theorem pure_dispatch_without_depth :
   constructor <;> cbv
 
 /-- An effectful entry remains a request until executed by the runner. -/
-theorem direct_effectful_call :
-    Term.pureApply pureFunctions (.function 1 0 #[]) #[] = Term.apply (.function 1 0 #[]) #[] ∧
-    (Term.pureApply pureFunctions (.function 1 0 #[]) #[]).runWith pureFunctions 1 {} =
+theorem effectful_call :
+    (Term.apply (.function 1 0 #[]) #[]).runWith pureFunctions 1 {} =
       .ok (.pid 1) {} ∧
-    (Term.pureApply pureFunctions (.function 1 0 #[]) #[]).runWith pureFunctions 0 {} =
+    (Term.apply (.function 1 0 #[]) #[]).runWith pureFunctions 0 {} =
       .exhausted {} := by
-  repeat' apply And.intro
-  all_goals cbv
+  constructor <;> cbv
 
 /-- Sequential calls reuse the depth budget after returning. -/
 theorem sequential_dispatch :

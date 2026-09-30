@@ -22,6 +22,10 @@ end Lynx
 
 namespace Lynx.Term
 
+@[expose] public def «true» : Term := .atom "true"
+
+@[expose] public def «false» : Term := .atom "false"
+
 /-- Apply a function to native arguments. Build an Erlang argument list only
 when reporting an arity mismatch. -/
 public def apply (function : Term) (arguments : Array Term) : Result :=
@@ -35,49 +39,5 @@ public def apply (function : Term) (arguments : Array Term) : Result :=
         .error (.error (.tuple #[.atom "badarity", .tuple #[function,
           arguments.toList.foldr Term.cons Term.nil]]))
   | _ => .error (.error (.tuple #[.atom "badfun", function]))
-
-/-- Call typed pure entries directly; effectful calls remain runtime requests.
-The immutable table is supplied by generated program code. -/
-public def pureApply (table : FunTable) (function : Term) (arguments : Array Term) : Result :=
-  match function with
-  | .function id arity captures =>
-      if arguments.size = arity then
-        match table[id]? with
-        | some (.pure body) => Result.ofExcept (body captures arguments)
-        | some (.effectful _) => apply function arguments
-        | none => .error (.error (.tuple #[.atom "badfun", function]))
-      else apply function arguments
-  | _ => apply function arguments
-
-/-- Empty Erlang map literal. -/
-@[expose, simp] public def emptyMap : Term := .map []
-
-@[expose] public def «true» : Term := .atom "true"
-@[expose] public def «false» : Term := .atom "false"
-
-/-- Recognize the Erlang boolean atom `true`. -/
-@[expose] public def isTrue : Term → Bool
-  | .atom name => name == "true"
-  | _ => .false
-
-/-- Recognize the Erlang boolean atom `false`. -/
-@[expose] public def isFalse : Term → Bool
-  | .atom name => name == "false"
-  | _ => .false
-
-/-- Recognize Erlang maps. -/
-@[expose] public def isMap : Term → Bool
-  | .map _ => .true
-  | _ => .false
-
-@[simp] public theorem isTrue_iff (value : Term) : isTrue value = .true ↔ value = Term.true := by
-  cases value <;> simp [isTrue, Term.true]
-
-@[simp] public theorem isFalse_iff (value : Term) : isFalse value = .true ↔ value = Term.false := by
-  cases value <;> simp [isFalse, Term.false]
-
-@[simp] public theorem isMap_iff (value : Term) :
-    isMap value = .true ↔ ∃ entries, value = .map entries := by
-  cases value <;> simp [isMap]
 
 end Lynx.Term

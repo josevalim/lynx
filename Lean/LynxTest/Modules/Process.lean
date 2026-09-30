@@ -193,8 +193,7 @@ theorem waiting_schedule_choice_falls_back :
     Lynx.run handshake [.swap 2, .swap 1] =
       .ok (.atom "done") { pidCounter := 2 } := by cbv
 
-/-- The solver must treat the added outcomes as known constructors rather than
-repeatedly splitting them as if they were unevaluated computations. -/
+/-- A deadlocked computation cannot have a successful return. -/
 theorem deadlock_cannot_accept (computation : Result) (env final : Environment)
     (stuck : computation env = .deadlock final) :
     ¬ ∃ value returnedEnv, computation env = .ok value returnedEnv := by

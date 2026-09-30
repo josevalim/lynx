@@ -35,3 +35,5 @@ run_cmd do
   LynxTest.ProofAudit.checkModule `Lynx.Term.FiniteFloat
   LynxTest.ProofAudit.checkModule `Lynx.Term.Bitstring
   LynxTest.ProofAudit.checkModule `Lynx.Term.Induction
+  -- This structural proof needs only these standard kernel axioms.
+  LynxTest.ProofAudit.checkDeclaration ``Lynx.Term.induct #[``propext, ``Quot.sound]

@@ -7,10 +7,8 @@ defmodule Sum do
   def sum([x | xs]), do: x + sum(xs)
 end
 -/
-import all Erlang.erlang
-import all Erlang.erlang.Guards
-import all Lynx.Term
-import all Lynx.Term.DataTypes
+import Erlang.erlang
+import Lynx.Term
 import LynxTest.Bench
 
 namespace LynxTest.Integration.Sum
@@ -24,12 +22,20 @@ set_option Elab.async false
     | _ => .error (.error (.atom "badarg"))
 ]
 
-attribute [local simp] Term.pureApply Result.toExcept Result.ofExcept
+attribute [local simp] Result.toExcept Result.ofExcept Erlang.erlang.«is_integer/1»
 
 def is_proper_list_2 (table : Term.FunTable) (predicate : Term) : Term → Result
   | .nil => .ok Term.true
   | .cons head tail => do
-      match ← Term.pureApply table predicate #[head] with
+      match ← (match predicate with
+        | .function id arity captures =>
+          if arity = 1 then
+            match table[id]? with
+            | some (.pure body) => Result.ofExcept (body captures #[head])
+            | some (.effectful _) => Term.apply predicate #[head]
+            | none => .error (.error (.tuple #[.atom "badfun", predicate]))
+          else Term.apply predicate #[head]
+        | _ => Term.apply predicate #[head]) with
       | .atom "true" => is_proper_list_2 table predicate tail
       | _ => .ok Term.false
   | _ => .ok Term.false
@@ -39,7 +45,7 @@ attribute [local simp] is_proper_list_2
 #lynx_pure def isProperIntegerList : Term → Result
   | .nil => .ok Term.true
   | .cons head tail => do
-      match ← Term.pureApply integerFunctions (.function 0 1 #[]) #[head] with
+      match ← Erlang.erlang.«is_integer/1» head with
       | .atom "true" => isProperIntegerList tail
       | _ => .ok Term.false
   | _ => .ok Term.false

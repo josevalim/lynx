@@ -157,13 +157,13 @@ theorem union_commutative (left right : Term)
 
 /- law union_empty(set), requires: is_set(set), expects: union(set, %{}) == set -/
 def unionEmpty (input : Term) : Result := do
-  let result ← union_2 input Term.emptyMap
+  let result ← union_2 input (Term.map [])
   Erlang.erlang.«==/2» result input
 
 #bench "erlang/sets-union-empty"
 theorem union_empty (input : Term) (valid : isSet input = .ok Term.true) :
     unionEmpty input = .ok Term.true := by
   obtain ⟨entries, rfl, _⟩ := (isSet_iff input).mp valid
-  simp [unionEmpty, union_2, Term.emptyMap, Erlang.maps.«merge/2», Erlang.erlang.«==/2»]
+  simp [unionEmpty, union_2, Erlang.maps.«merge/2», Erlang.erlang.«==/2»]
 
 end LynxTest.Integration.Sets

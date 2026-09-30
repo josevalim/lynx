@@ -7,6 +7,10 @@ All package paths below are relative to `Lean/`.
 
 The Erlang Term definition and its general properties are defined
 in `Lynx/Term.lean` and within the `Lynx/Term/` directory.
+`Lynx.Term` re-exports `Term.induct` for structural proofs over nested term fields.
+Keep `Lynx.Term` focused on runtime definitions and foundational comparison,
+monad, and purity facts. Put laws about Erlang operations in the corresponding
+`Erlang.*` module.
 
 Use Lean's `module` system with explicit `public` declarations and deliberate
 `public import` re-exports. Update `LynxTest/PublicApi.lean` for exported API

@@ -4,7 +4,9 @@ public import Lynx.Term.DataTypes
 
 namespace Lynx
 
-/-- Structural induction with elementwise hypotheses for tuples and map bindings. -/
+/-- Structural induction derived from `Term.rec`, with hypotheses for cons heads
+and tails, closure captures, tuple elements, and both keys and values of every
+stored map binding. Map hypotheses concern raw entries, including shadowed ones. -/
 @[induction_eliminator] public protected theorem Term.induct {motive : Term → Prop} (t : Term)
     (integer : ∀ n, motive (.integer n))
     (float : ∀ n, motive (.float n))

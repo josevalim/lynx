@@ -50,9 +50,6 @@ Positive and negative zero have the same value but remain distinct structures. -
 @[expose] public def toRat (value : FiniteFloat) : Rat :=
   if value.negative then -value.magnitude else value.magnitude
 
-@[simp] theorem magnitude_zero (negative : Bool) :
-    magnitude ⟨negative, 0, 0⟩ = 0 := rfl
-
 @[simp] theorem toRat_zero (negative : Bool) :
     toRat ⟨negative, 0, 0⟩ = 0 := by
   cases negative <;> rfl
