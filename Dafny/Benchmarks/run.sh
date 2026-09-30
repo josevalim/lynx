@@ -13,6 +13,7 @@ uname -sm >> "$output/environment.txt"
 cat "$output/environment.txt"
 "$DAFNY" verify dfyconfig.toml
 printf 'run\tname\tms\tresources\n' > "$output/samples.tsv"
+printf 'run\tsuite\tseconds\n' > "$output/cli-samples.tsv"
 run=0
 while [ "$run" -le "$runs" ]; do
   if [ $((run % 2)) -eq 0 ]; then suites='term native term-sets native-sets'; else suites='native-sets term-sets native term'; fi
@@ -28,7 +29,7 @@ while [ "$run" -le "$runs" ]; do
         names='NativeSets.UnionContract NativeSets.UnionCommutative NativeSets.UnionEmpty' ;;
     esac
     log="$output/$run-$suite.csv"
-    if ! "$DAFNY" verify "$source" --cores 1 --verification-time-limit 30 \
+    if ! /usr/bin/time -p -o "$output/$run-$suite.time" "$DAFNY" verify "$source" --cores 1 --verification-time-limit 30 \
       --filter-symbol "$symbol" --log-format "csv;LogFileName=$log" \
       > "$output/$run-$suite.txt" 2>&1; then
       cat "$output/$run-$suite.txt" >&2
@@ -51,7 +52,11 @@ while [ "$run" -le "$runs" ]; do
       }
     ' "$log" > "$output/$run-$suite.tsv"
     cat "$output/$run-$suite.tsv"
-    if [ "$run" -ne 0 ]; then cat "$output/$run-$suite.tsv" >> "$output/samples.tsv"; fi
+    if [ "$run" -ne 0 ]; then
+      cat "$output/$run-$suite.tsv" >> "$output/samples.tsv"
+      awk -v run="$run" -v suite="$suite" '$1 == "real" { printf "%d\t%s\t%.2f\n", run, suite, $2 }' \
+        "$output/$run-$suite.time" >> "$output/cli-samples.tsv"
+    fi
   done
   run=$((run + 1))
 done
@@ -79,4 +84,22 @@ awk -F '\t' '
   }
 ' "$output/samples.tsv" > "$output/summary.tsv"
 cat "$output/summary.tsv"
+awk -F '\t' '
+  NR==1 { next }
+  { n[$2]++; values[$2,n[$2]]=$3 }
+  END {
+    print "Suite\tMedian whole-CLI seconds"
+    for (name in n) {
+      count=n[name]
+      for (i=2;i<=count;i++) {
+        v=values[name,i];j=i-1
+        while (j>=1 && values[name,j]>v) { values[name,j+1]=values[name,j];j-- }
+        values[name,j+1]=v
+      }
+      m=(count%2) ? values[name,(count+1)/2] : (values[name,count/2]+values[name,count/2+1])/2
+      printf "%s\t%.2f\n", name,m
+    }
+  }
+' "$output/cli-samples.tsv" > "$output/cli-summary.tsv"
+cat "$output/cli-summary.tsv"
 printf 'Raw logs: %s\n' "$output"

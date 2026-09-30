@@ -4,14 +4,37 @@ module Runner {
   import opened Terms
   import opened Processes
 
-  // A generated whole-program dispatcher and its declared arities. Only the
-  // runner receives this context; translated functions emit Apply requests.
-  datatype Program = Program(arities: map<nat, nat>, dispatch: (nat, seq<Term>, seq<Term>) -> Result)
+  // Whole-program typed function table and declared arities. Effectful bodies
+  // emit requests; pureApply receives the table only where a pure call is needed.
+  datatype FunEntry = Pure(body: (seq<Term>, seq<Term>) -> Reply)
+    | Effectful(effectfulBody: (seq<Term>, seq<Term>) -> Result)
+  datatype Program = Program(arities: map<nat, nat>, entries: map<nat, FunEntry>)
   datatype Process = Process(pid: nat, computation: Result, frames: seq<Reply -> Result>, mailbox: seq<Term>)
   datatype Completion = Completion(reply: Reply, mailbox: seq<Term>)
   datatype Runtime = Runtime(nextPid: nat, runnable: seq<Process>, finished: map<nat, Completion>)
   datatype Outcome = Completed(state: Runtime) | Exhausted(state: Runtime)
   datatype Transition = Transition(state: Runtime, boundary: bool)
+
+  // Pure entries cannot return Apply or any process request: their type is Reply.
+  function Invoke(entry: FunEntry, captures: seq<Term>, args: seq<Term>): Result {
+    match entry
+    case Pure(body) => Resume(body(captures, args))
+    case Effectful(body) => body(captures, args)
+  }
+
+  // Same fast path as Lean pureApply; effectful/invalid-arity calls stay requests.
+  function pureApply(program: Program, callee: Term, args: seq<Term>): Result {
+    match callee
+    case Function(id, arity, captures) =>
+      if |args| == arity then
+        if id in program.entries then
+          match program.entries[id]
+          case Pure(body) => Resume(body(captures, args))
+          case Effectful(_) => apply_2(callee, args)
+        else Error(Tuple([Atom("badfun"), callee]))
+      else apply_2(callee, args)
+    case _ => apply_2(callee, args)
+  }
 
   function Continue(reply: Reply, next: Term -> Result): Result {
     match reply
@@ -52,7 +75,7 @@ module Runner {
   {}
 
   function Known(program: Program, id: nat, arity: nat): bool {
-    id in program.arities && program.arities[id] == arity
+    id in program.entries && id in program.arities && program.arities[id] == arity
   }
 
   function Step(program: Program, state: Runtime): Transition
@@ -73,7 +96,7 @@ module Runner {
            resume(Raised(Tuple([Atom("badfun"), callee]))), current.frames), false)
          else if |args| != arity then Transition(SetComputation(state,
            resume(Raised(BadArity(callee, args))), current.frames), false)
-         else Transition(SetComputation(state, program.dispatch(id, captures, args),
+         else Transition(SetComputation(state, Invoke(program.entries[id], captures, args),
            [resume] + current.frames), false)
        case _ => Transition(SetComputation(state,
          resume(Raised(Tuple([Atom("badfun"), callee]))), current.frames), false))
@@ -83,7 +106,7 @@ module Runner {
          if Known(program, id, 0) then
            var pid := state.nextPid;
            var parent := current.(computation := resume(Returned(Pid(pid))));
-           var child := Process(pid, program.dispatch(id, captures, []), [], []);
+           var child := Process(pid, Invoke(program.entries[id], captures, []), [], []);
            Transition(Runtime(pid + 1, [parent] + state.runnable[1..] + [child], state.finished), true)
          else Transition(SetComputation(state, resume(Raised(Atom("badarg"))), current.frames), false)
        case _ => Transition(SetComputation(state, resume(Raised(Atom("badarg"))), current.frames), false))
@@ -123,35 +146,5 @@ module Runner {
 
   function Run(program: Program, computation: Result, schedule: seq<nat>, fuel: nat): Outcome {
     RunFrom(program, Runtime(2, [Process(1, computation, [], [])], map[]), schedule, fuel)
-  }
-  datatype OptionReply = NoReply | HasReply(reply: Reply)
-
-  // Interpret the pure requests used by expectations. Fuel bounds dispatch and
-  // sequencing; unsupported process effects are not successful expectations.
-  function EvaluatePure(program: Program, computation: Result, fuel: nat): OptionReply
-    decreases fuel
-  {
-    if fuel == 0 then NoReply else
-    match computation
-    case Ok(value) => HasReply(Returned(value))
-    case Error(reason) => HasReply(Raised(reason))
-    case Then(source, next) =>
-      (match EvaluatePure(program, source, fuel - 1)
-       case NoReply => NoReply
-       case HasReply(Raised(reason)) => HasReply(Raised(reason))
-       case HasReply(Returned(value)) => EvaluatePure(program, next(value), fuel - 1))
-    case Apply(callee, arguments, resume) =>
-      (match callee
-       case Function(id, arity, captures) =>
-         if !Known(program, id, arity) then EvaluatePure(program,
-           resume(Raised(Tuple([Atom("badfun"), callee]))), fuel - 1)
-         else if |arguments| != arity then EvaluatePure(program,
-           resume(Raised(BadArity(callee, arguments))), fuel - 1)
-         else (match EvaluatePure(program, program.dispatch(id, captures, arguments), fuel - 1)
-           case NoReply => NoReply
-           case HasReply(reply) => EvaluatePure(program, resume(reply), fuel - 1))
-       case _ => EvaluatePure(program,
-         resume(Raised(Tuple([Atom("badfun"), callee]))), fuel - 1))
-    case _ => NoReply
   }
 }

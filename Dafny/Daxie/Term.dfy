@@ -23,6 +23,19 @@ module Terms {
     | Self(resume: Reply -> Result)
     | Then(source: Result, next: Term -> Result)
 
+  predicate IsPure(computation: Result) {
+    match computation case Ok(_) => true case Error(_) => true case _ => false
+  }
+  function ToReply(computation: Result): Reply
+    requires IsPure(computation)
+    ensures Resume(ToReply(computation)) == computation
+  {
+    match computation
+    case Ok(value) => Returned(value)
+    case Error(reason) => Raised(reason)
+    case _ => Raised(Atom("unreachable"))
+  }
+
   function Resume(reply: Reply): Result {
     match reply
     case Returned(value) => Ok(value)

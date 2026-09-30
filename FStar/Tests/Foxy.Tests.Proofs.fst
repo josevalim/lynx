@@ -26,3 +26,13 @@ let captured_adder (offset:int) (arg:int) : Lemma
 #pop-options
 let empty_set_witness () : Lemma
   (Foxy.Sets.is_set (Map []) /\ Foxy.Bench.NativeSets.is_set Foxy.Bench.NativeSets.empty) = ()
+let pure_callback_checks (n:int) : Lemma
+  (pureApply Foxy.ListPredicates.integer_program Foxy.ListPredicates.integer_closure [Integer n] == Ok (boolean true) /\
+   Foxy.ListPredicates.integer_expectation Nil == Ok (boolean true) /\
+   Foxy.ListPredicates.is_proper_list_2 Foxy.ListPredicates.integer_program
+     (Cons (Integer 1) (Cons (Integer 2) (Cons (Integer 3) Nil)))
+     Foxy.ListPredicates.integer_closure == Ok (boolean true) /\
+   Foxy.ListPredicates.integer_expectation (Cons (Atom "no") Nil) == Ok (boolean false) /\
+   Foxy.ListPredicates.integer_expectation (Cons (Integer 1) (Integer 2)) == Ok (boolean false)) = ()
+let direct_captured_pure_call (offset arg:int) : Lemma
+  (pureApply context (Function 0 1 [Integer offset]) [Integer arg] == Ok (Integer (offset+arg))) = ()

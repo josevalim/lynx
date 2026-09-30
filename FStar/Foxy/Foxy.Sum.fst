@@ -1,8 +1,9 @@
 module Foxy.Sum
 open Foxy.Term
 open Foxy.Arithmetic
-let rec is_integer_list (xs:term) : Tot bool = match xs with
-  | Nil -> true | Cons (Integer _) tl -> is_integer_list tl | _ -> false
+open Foxy.ListPredicates
+let is_integer_list (xs:term) : Tot bool =
+  match integer_expectation xs with | Ok (Atom "true") -> true | _ -> false
 let rec sum_1 (xs:term) : Tot result = match xs with
   | Nil -> Ok (Integer 0)
   | Cons h tl -> bind (sum_1 tl) (fun v -> add_2 h v)

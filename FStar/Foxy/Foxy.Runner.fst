@@ -2,15 +2,40 @@ module Foxy.Runner
 open Foxy.Term
 open Foxy.Process
 module L = FStar.List.Tot.Base
-noeq type program = { arities:list (nat & nat); dispatch:nat -> list term -> list term -> Tot result }
+noeq type fun_entry =
+| Pure : (list term -> list term -> Tot reply) -> fun_entry
+| Effectful : (list term -> list term -> Tot result) -> fun_entry
+noeq type program = { arities:list (nat & nat); entries:list (nat & fun_entry) }
 noeq type process = { pid:nat; computation:result; frames:list (reply -> Tot result); mailbox:list term }
 type completion = { finished_pid:nat; returned:reply; messages:list term }
 noeq type runtime = { next_pid:nat; runnable:list process; finished:list completion }
 noeq type outcome = | Completed : runtime -> outcome | Exhausted : runtime -> outcome
 
+let rec entry (entries:list (nat & fun_entry)) (id:nat) : Tot (option fun_entry) =
+  match entries with | [] -> None | (i,f)::tl -> if i=id then Some f else entry tl id
+let invoke (f:fun_entry) (captures args:list term) : result =
+  match f with | Pure body -> resume (body captures args) | Effectful body -> body captures args
+let dispatch (program:program) (id:nat) (captures args:list term) : result =
+  match entry program.entries id with
+  | Some f -> invoke f captures args | None -> Error (Atom "undef")
+// A pure callable returns only a value/error; effectful calls remain requests.
+let pureApply (program:program) (callee:term) (args:list term) : result =
+  match callee with
+  | Function id arity captures ->
+    if L.length args = arity then
+      match entry program.entries id with
+      | Some (Pure body) -> resume (body captures args)
+      | Some (Effectful _) -> apply_2 callee args
+      | None -> Error (Tuple [Atom "badfun";callee])
+    else apply_2 callee args
+  | _ -> apply_2 callee args
+
 let continue_with reply next = match reply with | Returned v -> next v | Raised e -> Error e
 let rec known (xs:list (nat & nat)) (id:nat) (arity:nat) : Tot bool = match xs with
   | [] -> false | (i,a)::tl -> if i=id then a=arity else known tl id arity
+let known_program (program:program) (id:nat) (arity:nat) : Tot bool =
+  match entry program.entries id with
+  | None -> false | Some _ -> known program.arities id arity
 let rec deliver (xs:list process) (pid:nat) (message:term) : Tot (list process) = match xs with
   | [] -> []
   | p::tl -> (if p.pid=pid then {p with mailbox=L.append p.mailbox [message]} else p)::deliver tl pid message
@@ -31,17 +56,17 @@ let step (program:program) (state:runtime) : Tot (runtime & bool) =
     | Apply callee args resume ->
       (match callee with
        | Function id arity captures ->
-         if not (known program.arities id arity) then update (resume (Raised (Tuple [Atom "badfun";callee]))) p.frames,false
+         if not (known_program program id arity) then update (resume (Raised (Tuple [Atom "badfun";callee]))) p.frames,false
          else if L.length args <> arity then update (resume (Raised (bad_arity callee args))) p.frames,false
-         else update (program.dispatch id captures args) (resume::p.frames),false
+         else update (dispatch program id captures args) (resume::p.frames),false
        | _ -> update (resume (Raised (Tuple [Atom "badfun";callee]))) p.frames,false)
     | Spawn callee resume ->
       (match callee with
        | Function id 0 captures ->
-         if known program.arities id 0 then
+         if known_program program id 0 then
            let pid=state.next_pid in
            let parent={p with computation=resume (Returned (Pid pid))} in
-           let child={pid;computation=program.dispatch id captures [];frames=[];mailbox=[]} in
+           let child={pid;computation=dispatch program id captures [];frames=[];mailbox=[]} in
            {state with next_pid=pid+1;runnable=parent::L.append rest [child]},true
          else update (resume (Raised (Atom "badarg"))) p.frames,false
        | _ -> update (resume (Raised (Atom "badarg"))) p.frames,false)
@@ -67,27 +92,3 @@ let rec run_from (program:program) (state:runtime) (schedule:list nat) (fuel:nat
     | _ -> run_from program next schedule (fuel-1)
 let run program computation schedule fuel =
   run_from program {next_pid=2;runnable=[{pid=1;computation;frames=[];mailbox=[]}];finished=[]} schedule fuel
-
-// Pure request evaluation for translated expectations; no process effects.
-let rec evaluate_pure (program:program) (computation:result) (fuel:nat)
-  : Tot (option reply) (decreases fuel) =
-  match fuel with
-  | 0 -> None
-  | _ -> match computation with
-    | Ok v -> Some (Returned v)
-    | Error e -> Some (Raised e)
-    | Then source next ->
-      (match evaluate_pure program source (fuel-1) with
-       | None -> None | Some (Raised e) -> Some (Raised e)
-       | Some (Returned v) -> evaluate_pure program (next v) (fuel-1))
-    | Apply callee args resume ->
-      (match callee with
-       | Function id arity captures ->
-         if not (known program.arities id arity) then
-           evaluate_pure program (resume (Raised (Tuple [Atom "badfun";callee]))) (fuel-1)
-         else if L.length args <> arity then
-           evaluate_pure program (resume (Raised (bad_arity callee args))) (fuel-1)
-         else (match evaluate_pure program (program.dispatch id captures args) (fuel-1) with
-           | None -> None | Some reply -> evaluate_pure program (resume reply) (fuel-1))
-       | _ -> evaluate_pure program (resume (Raised (Tuple [Atom "badfun";callee]))) (fuel-1))
-    | _ -> None

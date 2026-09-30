@@ -23,6 +23,12 @@ noeq type result =
 | Self : (reply -> Tot result) -> result
 | Then : result -> (term -> Tot result) -> result
 
+let is_pure (r:result) : Tot bool = match r with | Ok _ | Error _ -> true | _ -> false
+// Constructing a Pure entry requires this checked refinement, not a flag/cast.
+type pure_result = r:result{is_pure r}
+let to_reply (r:pure_result) : reply = match r with
+  | Ok v -> Returned v | Error e -> Raised e
+
 let resume (r:reply) : result = match r with | Returned v -> Ok v | Raised e -> Error e
 let bind (r:result) (next:term -> Tot result) : result =
   match r with | Ok v -> next v | Error e -> Error e | _ -> Then r next

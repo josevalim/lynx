@@ -5,35 +5,48 @@ module ListPredicates {
   import opened Runner
 
   // Elixir: is_proper_list(xs, fn x -> is_integer(x) end).
-  // The traversal accepts an ordinary Term closure, not a host callback.
-  function is_proper_list_2(xs: Term, callback: Term): Result
+  function is_proper_list_2(program: Program, xs: Term, callback: Term): Result
     decreases xs
   {
     match xs
     case Nil => Ok(Boolean(true))
-    case Cons(head, tail) => Bind(apply_2(callback, [head]), (answer: Term) =>
+    case Cons(head, tail) => Bind(pureApply(program, callback, [head]), (answer: Term) =>
       match answer
-      case Atom("true") => is_proper_list_2(tail, callback)
+      case Atom("true") => is_proper_list_2(program, tail, callback)
       case _ => Ok(Boolean(false)))
     case _ => Ok(Boolean(false))
   }
+  function IntegerBody(captures: seq<Term>, args: seq<Term>): Reply {
+    if |args| == 1 then
+      Returned(match args[0] case Integer(_) => Boolean(true) case _ => Boolean(false))
+    else Raised(Atom("badarg"))
+  }
+  function IntegerProgram(): Program { Program(map[0 := 1], map[0 := Pure(IntegerBody)]) }
+  function IntegerClosure(): Term { Function(0, 1, []) }
 
-  function SpineDepth(xs: Term): nat
+  // Verified callback summary keeps table lookup out of repeated SMT unfolding.
+  opaque function IntegerCallback(x: Term): (answer: Result)
+    ensures answer == Ok(match x case Integer(_) => Boolean(true) case _ => Boolean(false))
+  {
+    pureApply(IntegerProgram(), IntegerClosure(), [x])
+  }
+
+  // Specialize the traversal for the known table, retaining Term application.
+  function IntegerExpectation(xs: Term): Result
     decreases xs
   {
-    match xs case Cons(_, tail) => 1 + SpineDepth(tail) case _ => 0
+    match xs
+    case Nil => Ok(Boolean(true))
+    case Cons(head, tail) => Bind(IntegerCallback(head), (answer: Term) =>
+      match answer
+      case Atom("true") => IntegerExpectation(tail)
+      case _ => Ok(Boolean(false)))
+    case _ => Ok(Boolean(false))
   }
-  function is_integer_1(x: Term): Result {
-    match x case Integer(_) => Ok(Boolean(true)) case _ => Ok(Boolean(false))
-  }
-  function IntegerDispatch(id: nat, captures: seq<Term>, args: seq<Term>): Result {
-    match id
-    case 0 => if |args| == 1 then is_integer_1(args[0]) else Error(Atom("function_clause"))
-    case _ => Error(Atom("function_clause"))
-  }
-  function IntegerProgram(): Program { Program(map[0 := 1], IntegerDispatch) }
-  function IntegerClosure(): Term { Function(0, 1, []) }
-  opaque function IntegerExpectation(xs: Term): OptionReply {
-    EvaluatePure(IntegerProgram(), is_proper_list_2(xs, IntegerClosure()), SpineDepth(xs) + 4)
+  lemma IntegerCallbackSpecialization(xs: Term)
+    ensures is_proper_list_2(IntegerProgram(), xs, IntegerClosure()) == IntegerExpectation(xs)
+    decreases xs
+  {
+    match xs { case Cons(_, tail) => IntegerCallbackSpecialization(tail); case _ => }
   }
 }

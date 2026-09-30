@@ -29,7 +29,14 @@ module ProcessExamples {
   }
 
   function ProgramContext(): Program {
-    Program(map[0 := 1, 1 := 0, 2 := 1, 3 := 0, 4 := 0], Dispatch)
+    Program(map[0 := 1, 1 := 0, 2 := 1, 3 := 0, 4 := 0],
+      map[0 := Pure((captures, args) =>
+            if |captures| == 1 && |args| == 1 then ToReply(add_2(captures[0], args[0]))
+            else Raised(Atom("function_clause"))),
+          1 := Effectful((captures, args) => Dispatch(1, captures, args)),
+          2 := Effectful((captures, args) => Dispatch(2, captures, args)),
+          3 := Effectful((captures, args) => Dispatch(3, captures, args)),
+          4 := Pure((captures, args) => Raised(Atom("child_error")))])
   }
 
   function StartWorker(): Result {

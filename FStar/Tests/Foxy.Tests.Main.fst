@@ -9,6 +9,7 @@ open Foxy.Tests.Program
 module F = Foxy.Float
 module M = Foxy.Maps
 module S = Foxy.Sum
+module LP = Foxy.ListPredicates
 module L = FStar.List.Tot.Base
 
 let check (name:string) (accepted:bool) : ML unit =
@@ -157,8 +158,17 @@ let native_tests () : ML unit =
   let replaced=Foxy.Bench.NativeSets.union_2 ab (FStar.FiniteMap.Base.insert 1 [9] Foxy.Bench.NativeSets.empty) in
   check "native right precedence" (FStar.FiniteMap.Base.elements replaced 1 = Some [9])
 
+let pure_callback_tests () : ML unit =
+  check_result "Term callback list" (LP.is_proper_list_2 LP.integer_program
+    (Cons (Integer 1) (Cons (Integer 2) (Cons (Integer 3) Nil))) LP.integer_closure) (Ok (boolean true));
+  check_result "callback rejects head" (LP.integer_expectation (Cons (Atom "no") Nil)) (Ok (boolean false));
+  check_result "callback rejects improper tail" (LP.integer_expectation (Cons (Integer 1) (Integer 2))) (Ok (boolean false));
+  check_result "direct captured pure call" (pureApply context (Function 0 1 [Integer 10]) [Integer 5]) (Ok (Integer 15));
+  check_result "pure exception" (pureApply context (Function 4 0 []) []) (Error (Atom "child_error"));
+  check "effectful fallback" (match pureApply context (Function 1 0 [Pid 1]) [] with | Apply _ _ _ -> true | _ -> false)
+
 let main () : ML unit =
-  numeric_tests (); map_tests (); process_tests (); native_tests ();
+  numeric_tests (); map_tests (); process_tests (); native_tests (); pure_callback_tests ();
   FStar.IO.print_string "Foxy semantic checks passed\n"
 // Entry-point execution is intentionally in ML; the model above remains total.
 #push-options "--warn_error -272"

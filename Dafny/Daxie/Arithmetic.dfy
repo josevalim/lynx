@@ -19,6 +19,7 @@ module Arithmetic {
   // Integer-list proofs use this verified specification without expanding
   // floating-point arithmetic into their SMT context.
   opaque function add_2(left: Term, right: Term): (result: Result)
+    ensures IsPure(result)
     ensures left.Integer? && right.Integer? ==>
       result == Ok(Integer(left.integer + right.integer))
   {

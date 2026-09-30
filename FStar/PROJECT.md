@@ -41,7 +41,7 @@ needed.
 | Maps | `list (term & term)`, with first-binding precedence and exact key comparison. Native F* maps require an `eqtype` key, but structural Term equality would distinguish reordered nested maps. It does not implement our key semantics. |
 | Anonymous functions | `Function id arity captures`. Embedding `list term -> Tot term` inside `term` fails strict positivity, just as the analogous Lean/Dafny representations fail. Function bodies therefore live in a dispatcher. |
 | Function comparison | Order by ID, then exact captured terms. The program table owns the arity for an ID. F* logical function equality is not decidable runtime equality; comparing native functions is rejected. |
-| Cross-module calls | One whole-program ID/arity table and dispatcher. Only the runner receives this `program`; generated bodies receive captures and arguments. Static calls can remain ordinary F* calls. |
+| Cross-module calls | One whole-program ID/arity table with typed `Pure`/`Effectful` bodies. The runner receives `program` for requests; `pureApply` receives it at pure call sites. Static calls can remain ordinary F* calls. |
 | Effects and processes | Pure request data plus callbacks, interpreted by an immutable runner. Bodies do not explicitly thread runtime, PID, or mailboxes through every call. |
 | Sequencing | `bind` simplifies `Ok`/`Error`, otherwise emits `Then`. The runner maintains frames, avoiding recursive rewriting of callbacks and preserving a simple totality argument. |
 | Contracts | F* `Lemma (requires ...) (ensures ...)`, refinement types, and `Pure` pre/post types. Recursive proofs use ordinary F* recursion and SMT. There is no custom verification tactic. |
@@ -104,8 +104,17 @@ map library's `equal` compares domains and values within them.
 
 ### Anonymous functions and processes
 
+`Foxy.ListPredicates` implements the generic Term-callback list traversal.
+Sum uses its specialization for a `Function 0 1 []` integer predicate, with a
+short equivalence induction. A verified opaque callback summary prevents
+repeated table expansion; it contains no sum theorem. Pure expectations need
+no fuel or request interpreter.
+
 `Foxy.Process` implements `apply_2`, `spawn_1`, `send_2`, and `self_0` as
-requests. `Foxy.Runner` checks IDs and arities, dispatches bodies, allocates
+requests. `Foxy.Runner` distinguishes `Pure` bodies returning `reply` from
+`Effectful` bodies returning `result`. `pureApply` completes pure calls directly
+and leaves effectful calls as requests. `to_reply` accepts only the verified
+`pure_result` refinement. The runner checks IDs and arities, dispatches bodies, allocates
 fresh PIDs, maintains FIFO mailboxes and continuation frames, and records
 process results. Errors propagate through `bind`; low-level Apply callbacks
 can handle them. A child error does not terminate its parent.
@@ -158,11 +167,13 @@ all sources, then uses one discarded warm-up and five measured runs by default,
 alternating suite order. Each suite runs in a fresh F* process with `--force`;
 only already-verified supporting imports are cached. It records F*'s
 `process_one_decl` time for the nine named final proofs, excluding imports and
-supporting declarations, plus raw SMT query statistics.
+supporting declarations, plus raw SMT query statistics. `cli-samples.tsv` also
+records each fresh CLI invocation’s wall time, including startup and imports
+from verified support caches; library verification is a separate prerequisite.
 
 Term sum's result contract and append property each perform their induction
 inside the measured declaration, as in Lean and Daxie. The only imported sum
-lemma proves integer-list preservation and successful append; it proves no
+lemma proves callback-list preservation and successful append; it proves no
 sum-value law. There is no imported exact-sum theorem. Native sum likewise
 performs its induction inside the measured append lemma. Set lookup and
 extensional-equality helpers remain excluded, matching Daxie's proof boundary.
@@ -170,3 +181,6 @@ extensional-equality helpers remain excluded, matching Daxie's proof boundary.
 F* declaration times include elaboration and proof checking and have millisecond
 resolution. They are not the same metric as Daxie's SMT-batch times. See
 [Benchmarks/RESULTS.md](Benchmarks/RESULTS.md) for measured results and scope.
+
+Update benchmark results in place; do not prepend historical reports or add
+benchmark evidence files to git.

@@ -12,6 +12,17 @@ module SemanticsTests {
   import N = NativeSum
   import P = ProcessExamples
   import M = MapTests
+  import LP = ListPredicates
+  import R = Runner
+
+  lemma PureCallbackChecks(n: int)
+    ensures R.pureApply(LP.IntegerProgram(), LP.IntegerClosure(), [Integer(n)]) == Ok(Boolean(true))
+    ensures LP.IntegerExpectation(Nil) == Ok(Boolean(true))
+    ensures LP.is_proper_list_2(LP.IntegerProgram(),
+      Cons(Integer(1), Cons(Integer(2), Cons(Integer(3), Nil))), LP.IntegerClosure()) == Ok(Boolean(true))
+    ensures LP.IntegerExpectation(Cons(Atom("no"), Nil)) == Ok(Boolean(false))
+    ensures LP.IntegerExpectation(Cons(Integer(1), Integer(2))) == Ok(Boolean(false))
+  {}
 
   lemma IntegerArithmetic(a: int, b: int)
     ensures add_2(Integer(a), Integer(b)) == Ok(Integer(a + b))
@@ -145,7 +156,15 @@ module SemanticsTests {
     expect !IsProperIntegerList(Cons(one, Nil));
     expect !IsProperIntegerList(Cons(Integer(1), Integer(2)));
     NumericEdges();
+    Check(LP.is_proper_list_2(LP.IntegerProgram(),
+      Cons(Integer(1), Cons(Integer(2), Cons(Integer(3), Nil))), LP.IntegerClosure()), Ok(Boolean(true)));
+    Check(LP.IntegerExpectation(Cons(Atom("no"), Nil)), Ok(Boolean(false)));
+    Check(LP.IntegerExpectation(Cons(Integer(1), Integer(2))), Ok(Boolean(false)));
+    Check(R.pureApply(P.ProgramContext(), Function(0, 1, [Integer(10)]), [Integer(5)]), Ok(Integer(15)));
+    Check(R.pureApply(P.ProgramContext(), Function(4, 0, []), []), Error(Atom("child_error")));
+    expect R.pureApply(P.ProgramContext(), Function(1, 0, [Pid(1)]), []).Apply?;
     P.Tests();
+
     M.Tests();
     print "Semantic checks passed\n";
   }

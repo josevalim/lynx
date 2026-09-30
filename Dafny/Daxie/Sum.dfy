@@ -1,8 +1,10 @@
 include "Arithmetic.dfy"
+include "ListPredicates.dfy"
 
 module TermSum {
   import opened Terms
   import opened Arithmetic
+  import opened ListPredicates
 
   /*
   expects is_proper_list(list, &is_integer/1)
@@ -14,9 +16,8 @@ module TermSum {
   predicate IsProperIntegerList(list: Term)
     decreases list
   {
-    match list
-    case Nil => true
-    case Cons(Integer(_), tail) => IsProperIntegerList(tail)
+    match IntegerExpectation(list)
+    case Ok(Atom("true")) => true
     case _ => false
   }
 

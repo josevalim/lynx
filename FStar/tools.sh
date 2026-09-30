@@ -8,6 +8,11 @@ if [ -z "${Z3:-}" ]; then
 fi
 Z3_VERSION=$("$Z3" --version | awk '{print $3}')
 foxy_check() {
-  "$FSTAR" --smt "$Z3" --z3version "$Z3_VERSION" --cache_dir .build/cache \
+  set -- "$FSTAR" --smt "$Z3" --z3version "$Z3_VERSION" --cache_dir .build/cache \
     --include Foxy --include Tests --include Benchmarks "$@"
+  if [ -n "${FOXY_TIME_OUTPUT:-}" ]; then
+    /usr/bin/time -p -o "$FOXY_TIME_OUTPUT" "$@"
+  else
+    "$@"
+  fi
 }

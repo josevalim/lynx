@@ -59,7 +59,11 @@ needed in a checkout. No shell configuration changes are needed.
   merge prepends the right operand's entries. Equality ignores entry order
   and shadowed bindings. Ordering uses a sorted, deduplicated view without
   changing storage. Integer/float keys and signed-zero keys remain distinct.
-- `Daxie/Sum.dfy`: Term sum, integer-list expectation, and append.
+- `Daxie/Sum.dfy`: Term sum, callback-based integer-list expectation, and append.
+  `Daxie/ListPredicates.dfy` traverses a Term list using a Term closure and
+  `pureApply`; a short induction proves the specialized expectation agrees
+  with the generic traversal. A verified opaque callback summary avoids
+  repeatedly expanding table lookup. No expectation interpreter or fuel remains.
   Invalid tails return `function_clause`; invalid elements return `badarith`
   after the recursive tail computation succeeds.
 - `Benchmarks/NativeSum.dfy`: the same recursive shape using an inductive list
@@ -76,10 +80,15 @@ Functions return `Result`, which carries values, errors, or requests for the
 runner. `Bind` composes computations and propagates errors. Its deferred
 `Then` node lets the runner maintain the continuation stack explicitly.
 
-`Daxie/Runner.dfy` uses immutable state. Only the runner takes `Program`, whose
-arity table and dispatcher cover all generated modules. Function bodies receive
+`Daxie/Runner.dfy` uses immutable state. `Program` contains whole-program
+arity metadata and typed `Pure`/`Effectful` entries. Pure bodies return `Reply`
+(value or error); effectful bodies return `Result` (including requests). Function bodies receive
 their captures and arguments and emit requests; they do not thread `Program`
-or `Runtime` through every call. `Tests/Processes.dfy` shows captured adders,
+or `Runtime` through every effectful call. `pureApply` takes the table at pure
+call sites, returns a pure entry’s completed reply directly, and falls back to
+`apply_2` for effectful entries. `ToReply` requires a verified `IsPure` proof;
+purity is not an unchecked boolean. Spawn executes either entry kind through
+the runner. `Tests/Processes.dfy` shows captured adders,
 calls between generated bodies, recursive apply, and a spawned worker.
 
 The root PID is 1; spawn allocates increasing PIDs and starts zero-arity
@@ -138,7 +147,10 @@ order and reports medians from the requested number of runs.
 
 Only final sum and set lemmas are measured. Each time sums Dafny CSV correctness and
 contract well-formedness batches; imports, parsing, process startup, and
-supporting lemmas are excluded. The native return type already guarantees an
+supporting lemmas are excluded. `cli-samples.tsv` additionally records each
+fresh CLI invocation’s wall time, including startup and imports, with the same
+proof filter. Library verification is a separate prerequisite. The native return
+type already guarantees an
 integer, so it has no separate return-contract proof. SMT resource counts are
 recorded alongside durations.
 
@@ -146,3 +158,6 @@ Each run creates a fresh log directory containing CSV batches, verifier output,
 `samples.tsv`, `summary.tsv`, and the toolchain version. See
 [Benchmarks/RESULTS.md](Benchmarks/RESULTS.md) for captured results. These Dafny
 SMT batch timings are not directly comparable to Lean theorem-elaboration times.
+
+Update benchmark results in place; do not prepend historical reports or add
+benchmark evidence files to git.
