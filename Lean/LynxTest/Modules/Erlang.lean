@@ -259,14 +259,14 @@ theorem ordered_operators :
       «>=/2» b a = .ok (.atom "true")) := by
   apply List.Pairwise.imp (R := fun a b => Term.compare a b = .lt ∧ Term.compare b a = .gt)
     (fun {a b} h => ?_) ordered_terms
-  simp [Term.true, Term.false, «</2», «>/2», «=</2», «>=/2», h.1, h.2]
+  simp [«</2», «>/2», «=</2», «>=/2», h.1, h.2]
 
 theorem reflexive_operators (a : Term) :
     «</2» a a = .ok (.atom "false") ∧
     «>/2» a a = .ok (.atom "false") ∧
     «=</2» a a = .ok (.atom "true") ∧
     «>=/2» a a = .ok (.atom "true") := by
-  simp [Term.true, Term.false, «</2», «>/2», «=</2», «>=/2»]
+  simp [«</2», «>/2», «=</2», «>=/2»]
 
 /-- Callers remain in direct style even when the helper they invoke spawns. -/
 private def spawnFromHelper : Result :=

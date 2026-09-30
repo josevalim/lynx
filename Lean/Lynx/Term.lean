@@ -22,8 +22,8 @@ end Lynx
 
 namespace Lynx.Term
 
-@[expose] public def «true» : Term := .atom "true"
+@[simp, expose] public def «true» : Term := .atom "true"
 
-@[expose] public def «false» : Term := .atom "false"
+@[simp, expose] public def «false» : Term := .atom "false"
 
 end Lynx.Term

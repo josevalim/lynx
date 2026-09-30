@@ -121,7 +121,7 @@ private theorem all_get (value : Term) {xs : List (Term × Term)}
       ∃ entries, input = .map entries ∧
         All (fun _ value => value = .nil) entries := by
   cases input <;>
-    simp [isSet, Term.true, Term.false, Term.beq_iff_compare_eq]
+    simp [isSet, Term.beq_iff_compare_eq]
 
 /-- Translation of the map-backed set union. -/
 #lynx_pure def union_2 (left right : Term) : Result := Erlang.maps.«merge/2» left right
