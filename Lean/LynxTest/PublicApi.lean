@@ -10,7 +10,11 @@ public import Erlang.maps
 -- Keep the closure environment and table adapter signatures part of the API check.
 example : Nat → Nat → Array Lynx.Term → Lynx.Term := Lynx.Term.function
 example (entry : Array Lynx.Term → Array Lynx.Term → Lynx.Result) :
-    Lynx.Term.FunTable := #[entry]
+    Lynx.Term.FunTable := #[.effectful entry]
+example (entry : Array Lynx.Term → Array Lynx.Term → Except Lynx.Exception Lynx.Term) :
+    Lynx.Term.FunTable := #[.pure entry]
+example : Lynx.Term.FunTable → Lynx.Term → Array Lynx.Term → Lynx.Result :=
+  Lynx.Term.pureApply
 
 example : Lynx.Result → Lynx.Term.FunTable → Nat → Lynx.Environment → Lynx.Outcome Lynx.Term :=
   Lynx.Result.runWith
@@ -104,6 +108,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.instMonad",
   "Lynx.Result.instMonadExceptOfException",
   "Lynx.Result.instMonadStateOfEnvironment",
+  "Lynx.Result.ofExcept",
   "Lynx.Result.ok",
   "Lynx.Result.receive",
   "Lynx.Result.resolve",
@@ -113,6 +118,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.send",
   "Lynx.Result.set",
   "Lynx.Result.spawn",
+  "Lynx.Result.toExcept",
   "Lynx.Satisfies",
   "Lynx.ScheduleChoice",
   "Lynx.ScheduleChoice.current",
@@ -134,12 +140,16 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.FiniteFloat.ofInt",
   "Lynx.Term.FiniteFloat.toRat",
   "Lynx.Term.Fun",
+  "Lynx.Term.FunEntry",
+  "Lynx.Term.FunEntry.effectful",
+  "Lynx.Term.FunEntry.pure",
   "Lynx.Term.FunTable",
   "Lynx.Term.FunTable.entry",
   "Lynx.Term.Map.Entries",
   "Lynx.Term.Map.find",
   "Lynx.Term.Map.merge",
   "Lynx.Term.Map.put",
+  "Lynx.Term.PureFun",
   "Lynx.Term.apply",
   "Lynx.Term.atom",
   "Lynx.Term.bitstring",
@@ -160,6 +170,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.map",
   "Lynx.Term.nil",
   "Lynx.Term.pid",
+  "Lynx.Term.pureApply",
   "Lynx.Term.true",
   "Lynx.Term.tuple",
   "Lynx.WithSourceLabel",

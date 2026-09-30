@@ -37,7 +37,7 @@ private def workerFun (args : Array Term) : Result :=
   | [] => worker_0
   | _ => .error (.error (.atom "unexpected_arguments"))
 
-private def functions : Term.FunTable := #[fun _ => workerFun]
+private def functions : Term.FunTable := #[.effectful fun _ => workerFun]
 
 def run_0 : Result := do
   let _ ← Erlang.erlang.«spawn/1» (.function 0 0 #[])

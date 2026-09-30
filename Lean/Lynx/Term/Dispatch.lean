@@ -37,8 +37,8 @@ private def expand (dispatch : Bool → Term → Array Term → Result Term) : R
       resume (dispatch false function arguments) fun result => expand dispatch (next result)
 
 /-- Resolve dynamic calls against one immutable program table. The budget bounds
-nested dispatch, including function-based spawning, not ordinary evaluation or
-sequential calls. Recursive spawn chains therefore also consume the budget. Expansion preserves
+nested effectful dispatch, including function-based spawning, not pure calls,
+ordinary evaluation or sequential calls. Recursive spawn chains therefore also consume the budget. Expansion preserves
 state operations and scheduling boundaries for the process runner. -/
 public def resolve (table : Term.FunTable) (depth : Nat) (computation : Result α) : Result α :=
   expand (fun spawn function arguments =>
@@ -54,11 +54,16 @@ public def resolve (table : Term.FunTable) (depth : Nat) (computation : Result �
             .error (.tuple #[.atom "badarity", .tuple #[function,
               arguments.toList.foldr Term.cons Term.nil]]))
         else
-          match depth with
-          | 0 => .exhausted
-          | depth + 1 =>
-            let body := resolve table depth (implementation captures arguments)
-            if spawn then Result.schedule body (fun pid => .ok (.pid pid)) else body
+          match implementation with
+          | .pure implementation =>
+              let body := ofExcept (implementation captures arguments)
+              if spawn then Result.schedule body (fun pid => .ok (.pid pid)) else body
+          | .effectful body =>
+              match depth with
+              | 0 => .exhausted
+              | depth + 1 =>
+                  let resolved := resolve table depth (body captures arguments)
+                  if spawn then Result.schedule resolved (fun pid => .ok (.pid pid)) else resolved
     | _ => .error invalid) computation
 termination_by depth
 

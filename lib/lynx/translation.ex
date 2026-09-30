@@ -260,7 +260,7 @@ defmodule Lynx.Translation do
                   "kind" => "fun_table",
                   "span" => [],
                   "name" => "fun_table",
-                  "body" => :lynx_core_to_leanj.fun_table(funs, modules)
+                  "entries" => :lynx_core_to_leanj.fun_table(funs, modules)
                 }
               ]
             }

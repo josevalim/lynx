@@ -36,6 +36,19 @@ public def apply (function : Term) (arguments : Array Term) : Result :=
           arguments.toList.foldr Term.cons Term.nil]]))
   | _ => .error (.error (.tuple #[.atom "badfun", function]))
 
+/-- Call typed pure entries directly; effectful calls remain runtime requests.
+The immutable table is supplied by generated program code. -/
+public def pureApply (table : FunTable) (function : Term) (arguments : Array Term) : Result :=
+  match function with
+  | .function id arity captures =>
+      if arguments.size = arity then
+        match table[id]? with
+        | some (.pure body) => Result.ofExcept (body captures arguments)
+        | some (.effectful _) => apply function arguments
+        | none => .error (.error (.tuple #[.atom "badfun", function]))
+      else apply function arguments
+  | _ => apply function arguments
+
 /-- Empty Erlang map literal. -/
 @[expose, simp] public def emptyMap : Term := .map []
 

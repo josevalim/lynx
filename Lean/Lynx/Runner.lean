@@ -16,6 +16,9 @@ Invalid input and runner failures return `{"status": "failure", "message": "..."
 Each verification diagnostic has `file`, `kind` (error/warning/info), and `message`, with `line` and
 `column` included only when known.
 Input files are an ordered array of {file, module, imports, contents} objects.
+Function tables carry entry metadata: body, captures, args, pure, and span.
+The decoder builds typed pure/effectful callables; a pure entry must prove
+the translated body's purity during elaboration.
 Files are elaborated in the supplied dependency order, sharing declarations but
 not local scopes or messages. Each file's definitions live in its module namespace.
 Imports may name other input modules or compiled Lean modules loaded from disk.
@@ -162,10 +165,43 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) : D
     let decl ← command map inner info
     pure (Unhygienic.run `(#lynx_pure $decl:command))
   | "fun_table" => do
-    fields j ["kind", "name", "body", "span"]
+    fields j ["kind", "name", "entries", "span"]
     let name ← identifier (← str j "name")
     unless name.getId.getPrefix == .anonymous do throw "table name must be unqualified"
-    let body ← term map info false (← field j "body")
+    let entries ← (← arr j "entries").mapM fun entry => do
+      fields entry ["body", "captures", "args", "pure", "span"]
+      let entryInfo ← span map entry info
+      let captures := (← (← arr entry "captures").mapM (param map entryInfo)).map
+        fun id => (⟨id.raw⟩ : TSyntax `term)
+      let arguments := (← (← arr entry "args").mapM (param map entryInfo)).map
+        fun id => (⟨id.raw⟩ : TSyntax `term)
+      let body ← term map entryInfo false (← field entry "body")
+      let isPure ← (← field entry "pure").getBool?
+      let capturesId := mkIdent `captures
+      let argsId := mkIdent `args
+      let capturesTerm : TSyntax `term := ⟨capturesId.raw⟩
+      let argsTerm : TSyntax `term := ⟨argsId.raw⟩
+      let inputs := #[capturesTerm, argsTerm]
+      let pureCtor := mkIdent ``Lynx.Term.FunEntry.pure
+      let effectfulCtor := mkIdent ``Lynx.Term.FunEntry.effectful
+      let toExcept := mkIdent ``Lynx.Result.toExcept
+      let exceptError := mkIdent ``Except.error
+      let resultError := mkIdent ``Lynx.Result.error
+      let exceptionError := mkIdent ``Lynx.Exception.error
+      let atom := mkIdent ``Lynx.Term.atom
+      if isPure then
+        pure (withSpan entryInfo.info (Unhygienic.run `(
+          $pureCtor (fun $capturesId:ident $argsId:ident =>
+            match $[$inputs:term],* with
+            | #[$captures,*], #[$arguments,*] => $toExcept $body (by simp)
+            | _, _ => $exceptError ($exceptionError ($atom "badarg"))))))
+      else
+        pure (withSpan entryInfo.info (Unhygienic.run `(
+          $effectfulCtor (fun $capturesId:ident $argsId:ident =>
+            match $[$inputs:term],* with
+            | #[$captures,*], #[$arguments,*] => $body
+            | _, _ => $resultError ($exceptionError ($atom "badarg"))))))
+    let body := Unhygienic.run `(#[$entries,*])
     let tableType := mkIdent ``Lynx.Term.FunTable
     pure (Unhygienic.run `(public def $name : $tableType := $body))
   | "mutual" => do

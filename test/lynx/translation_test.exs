@@ -430,7 +430,7 @@ defmodule Lynx.TranslationTest do
     assert %{
              "module" => "Erlang.program",
              "contents" => [
-               %{"kind" => "fun_table", "body" => %{"kind" => "array", "elements" => entries}} =
+               %{"kind" => "fun_table", "entries" => entries} =
                  table
              ]
            } = List.last(files)
@@ -445,12 +445,7 @@ defmodule Lynx.TranslationTest do
            )
 
     assert Enum.map(entries, fn %{
-                                  "body" => %{
-                                    "cases" => [
-                                      %{"body" => %{"function" => %{"name" => name}}},
-                                      _
-                                    ]
-                                  }
+                                  "body" => %{"function" => %{"name" => name}}
                                 } ->
              name
            end) == [
@@ -460,6 +455,8 @@ defmodule Lynx.TranslationTest do
              "Erlang.caller.«$lynx_fun_3/3»",
              "Erlang.caller.«$lynx_fun_4/1»"
            ]
+
+    assert Enum.map(entries, & &1["pure"]) == [true, true, false, false, false]
   end
 
   test "imports a module BIF if used" do
