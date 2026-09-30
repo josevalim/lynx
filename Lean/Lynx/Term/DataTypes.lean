@@ -160,8 +160,9 @@ instance : MonadExceptOf Exception @Result where
   throw := .error
   tryCatch := Result.handle
 
-private theorem bind_ok (computation : Result α) :
-    Result.bind computation .ok = computation := by
+@[simp] theorem bind_ok (computation : Result α) :
+    (computation >>= Result.ok) = computation := by
+  change Result.bind computation .ok = computation
   induction computation with
   | exhausted | ok | error => rfl
   | apply function arguments continuation ih | spawn function continuation ih =>

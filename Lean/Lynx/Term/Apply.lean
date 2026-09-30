@@ -18,7 +18,6 @@ public def apply (function : Term) (arguments : Array Term) : Result :=
           arguments.toList.foldr Term.cons Term.nil]]))
   | _ => .error (.error (.tuple #[.atom "badfun", function]))
 
-
 end Lynx.Term
 
 namespace Lynx.Result
@@ -55,6 +54,22 @@ private def expand (dispatch : Bool → Term → Array Term → Result Term) : R
   | .apply function arguments next =>
       resume (dispatch false function arguments) fun result => expand dispatch (next result)
 
+private theorem resume_bind (computation : Result β) (next : Except Exception β → Result α)
+    (following : α → Result γ) :
+    resume computation next >>= following =
+      resume computation (fun reply => next reply >>= following) := by
+  induction computation <;> simp_all [resume]
+
+private theorem resume_identity (computation : Result α) :
+    resume computation ofExcept = computation := by
+  induction computation <;> simp_all [resume, ofExcept]
+
+private theorem expand_bind (dispatch : Bool → Term → Array Term → Result Term)
+    (computation : Result α) (next : α → Result β) :
+    expand dispatch (computation >>= next) =
+      (expand dispatch computation >>= fun value => expand dispatch (next value)) := by
+  induction computation <;> simp_all [expand, resume_bind]
+
 /-- Resolve dynamic calls against one immutable program table. The budget bounds
 nested effectful dispatch, including function-based spawning, not pure calls,
 ordinary evaluation or sequential calls. Recursive spawn chains therefore also consume the budget. Expansion preserves
@@ -86,6 +101,33 @@ public def resolve (table : Term.FunTable) (depth : Nat) (computation : Result �
     | _ => .error invalid) computation
 termination_by depth
 
+/-- Resolve a sequence compositionally, retaining the caller's depth in its continuation. -/
+public theorem resolve_bind (table : Term.FunTable) (depth : Nat)
+    (computation : Result α) (next : α → Result β) :
+    resolve table depth (computation >>= next) =
+      (resolve table depth computation >>= fun value => resolve table depth (next value)) := by
+  conv => lhs; rw [resolve]
+  conv => rhs; lhs; rw [resolve]
+  rw [expand_bind]
+  congr 1
+  funext value
+  rw [resolve]
+
+/-- An effectful entry consumes one level of call depth before running its body. -/
+public theorem resolve_apply_effectful (table : Term.FunTable) (depth id arity : Nat)
+    (captures arguments : Array Term) (body : Array Term → Term.Fun)
+    (entry : table[id]? = some (.effectful body)) (size : arguments.size = arity) :
+    resolve table (depth + 1) (Term.apply (.function id arity captures) arguments) =
+      resolve table depth (body captures arguments) := by
+  simp only [Term.apply, size, ite_true]
+  conv => lhs; rw [resolve]
+  simp only [expand, entry, size, bne_self_eq_false, Bool.false_eq_true, ite_false]
+  apply Eq.trans (b := resume (resolve table depth (body captures arguments)) ofExcept)
+  · congr 1
+    funext reply
+    cases reply <;> rfl
+  · exact resume_identity _
+
 /-- Resolving calls leaves an already completed computation unchanged. -/
 @[simp] public theorem resolve_of_isPure (table : Term.FunTable) (depth : Nat)
     (computation : Result α) (pure : IsPure computation) :
@@ -106,6 +148,5 @@ public theorem resolve_apply_pure (table : Term.FunTable) (depth id arity : Nat)
     simp only [expand, entry, size, bne_self_eq_false, Bool.false_eq_true, ite_false,
       reply, ofExcept, resume, Result.ok_bind, Result.error_bind]
   all_goals rw [resolve]; rfl
-
 
 end Lynx.Result
