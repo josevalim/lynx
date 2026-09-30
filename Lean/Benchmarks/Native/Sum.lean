@@ -5,6 +5,10 @@ defmodule Sum do
   def sum(list)
   def sum([]), do: 0
   def sum([x | xs]), do: x + sum(xs)
+
+  defp is_integer_list([h | t]), do: is_integer(h) and is_integer_list(t)
+  defp is_integer_list([]), do: true
+  defp is_integer_list(_), do: false
 end
 -/
 
