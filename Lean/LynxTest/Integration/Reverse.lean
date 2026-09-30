@@ -6,6 +6,10 @@ defmodule Reverse do
 
   defp reverse_aux([], acc), do: acc
   defp reverse_aux([head | tail], acc), do: reverse_aux(tail, [head | acc])
+
+  defp is_reversible_list([]), do: true
+  defp is_reversible_list([_ | tail]), do: is_reversible_list(tail)
+  defp is_reversible_list(_), do: false
 end
 -/
 import Erlang.erlang
@@ -15,13 +19,13 @@ namespace LynxTest.Integration.Reverse
 open Lynx
 set_option Elab.async false
 
-#lynx_pure def properList : Term → Result
+#lynx_pure def is_reversible_list_1 : Term → Result
   | .nil => .ok Term.true
-  | .cons _ tail => properList tail
+  | .cons _ tail => is_reversible_list_1 tail
   | _ => .ok Term.false
 
 private theorem append_success (left right : Term)
-    (accepted : properList left = .ok Term.true) :
+    (accepted : is_reversible_list_1 left = .ok Term.true) :
     ∃ joined, Erlang.erlang.«++/2» left right = .ok joined := by
   have reject : (Result.ok Term.false : Result) ≠ .ok Term.true := by
     simp [Term.true, Term.false]
@@ -33,7 +37,7 @@ private theorem append_success (left right : Term)
   | _ => exact False.elim (reject accepted)
 
 @[simp] private theorem append_nil (input : Term)
-    (accepted : properList input = .ok Term.true) :
+    (accepted : is_reversible_list_1 input = .ok Term.true) :
     Erlang.erlang.«++/2» input .nil = .ok input := by
   have reject : (Result.ok Term.false : Result) ≠ .ok Term.true := by
     simp [Term.true, Term.false]
@@ -43,7 +47,7 @@ private theorem append_success (left right : Term)
   | _ => exact False.elim (reject accepted)
 
 private theorem append_assoc (left right suffix : Term)
-    (accepted : properList left = .ok Term.true) :
+    (accepted : is_reversible_list_1 left = .ok Term.true) :
     (Erlang.erlang.«++/2» left right >>= fun joined => Erlang.erlang.«++/2» joined suffix) =
       (Erlang.erlang.«++/2» right suffix >>= Erlang.erlang.«++/2» left) := by
   have reject : (Result.ok Term.false : Result) ≠ .ok Term.true := by
@@ -67,9 +71,9 @@ private theorem append_assoc (left right suffix : Term)
 
 -- Handwritten Lean support, using the standard simp attribute.
 @[simp] theorem reverse_aux_proper (input acc : Term)
-    (accepted : properList input = .ok (.atom "true"))
-    (accAccepted : properList acc = .ok (.atom "true")) :
-    ∃ result, reverse_aux_2 input acc = .ok result ∧ properList result = .ok (.atom "true") := by
+    (accepted : is_reversible_list_1 input = .ok (.atom "true"))
+    (accAccepted : is_reversible_list_1 acc = .ok (.atom "true")) :
+    ∃ result, reverse_aux_2 input acc = .ok result ∧ is_reversible_list_1 result = .ok (.atom "true") := by
   have reject : (Result.ok (.atom "false") : Result) ≠ .ok (.atom "true") := by simp
   induction input generalizing acc with
   | nil => exact ⟨acc, rfl, accAccepted⟩
@@ -77,7 +81,7 @@ private theorem append_assoc (left right suffix : Term)
   | _ => exact False.elim (reject accepted)
 
 @[simp] theorem reverse_aux_reverse (input acc : Term)
-    (next : Term → Result α) (accepted : properList input = .ok (.atom "true")) :
+    (next : Term → Result α) (accepted : is_reversible_list_1 input = .ok (.atom "true")) :
     (do let result ← reverse_aux_2 input acc; let restored ← reverse_aux_2 result .nil; next restored) =
       (reverse_aux_2 acc input >>= next) := by
   have reject : (Result.ok (.atom "false") : Result) ≠ .ok (.atom "true") := by simp
@@ -86,14 +90,14 @@ private theorem append_assoc (left right suffix : Term)
   | cons head tail _ ih => exact ih (.cons head acc) accepted
   | _ => exact False.elim (reject accepted)
 
-/- law reverse_result(list), requires: is_proper_list(list),
-     expects: (result -> is_proper_list(result)) -/
+/- law reverse_result(list), requires: is_reversible_list(list),
+     expects: (result -> is_reversible_list(result)) -/
 #bench "erlang/reverse-result"
-theorem reverse_result (input : Term) (valid : properList input = .ok Term.true) :
-    ∃ result, reverse_1 input = .ok result ∧ properList result = .ok Term.true := by
+theorem reverse_result (input : Term) (valid : is_reversible_list_1 input = .ok Term.true) :
+    ∃ result, reverse_1 input = .ok result ∧ is_reversible_list_1 result = .ok Term.true := by
   exact reverse_aux_proper input .nil valid rfl
 
-/- law reverse_involution(list), requires: is_proper_list(list),
+/- law reverse_involution(list), requires: is_reversible_list(list),
      expects: reverse(reverse(list)) == list -/
 def reverseInvolution (input : Term) : Result := do
   let reversed ← reverse_1 input
@@ -101,7 +105,7 @@ def reverseInvolution (input : Term) : Result := do
   Erlang.erlang.«==/2» restored input
 
 #bench "erlang/reverse-involution"
-theorem reverse_involution (input : Term) (valid : properList input = .ok Term.true) :
+theorem reverse_involution (input : Term) (valid : is_reversible_list_1 input = .ok Term.true) :
     reverseInvolution input = .ok Term.true := by
   unfold reverseInvolution reverse_1
   rw [reverse_aux_reverse input .nil _ valid]
@@ -123,7 +127,7 @@ theorem reverse_aux_acc (input acc : Term) :
   | _ => intros; rfl
 
 /- law reverse_append(left, right),
-     requires: is_proper_list(left) and is_proper_list(right),
+     requires: is_reversible_list(left) and is_reversible_list(right),
      expects: reverse(left ++ right) == reverse(right) ++ reverse(left) -/
 def reverseAppend (left right : Term) : Result := do
   let joined ← Erlang.erlang.«++/2» left right
@@ -135,15 +139,15 @@ def reverseAppend (left right : Term) : Result := do
 
 #bench "erlang/reverse-append"
 theorem reverse_append (left right : Term)
-    (leftValid : properList left = .ok Term.true)
-    (rightValid : properList right = .ok Term.true) :
+    (leftValid : is_reversible_list_1 left = .ok Term.true)
+    (rightValid : is_reversible_list_1 right = .ok Term.true) :
     reverseAppend left right = .ok Term.true := by
   obtain ⟨reversedRight, rightReturned, rightProper⟩ := reverse_aux_proper right .nil rightValid rfl
   have step (head tail : Term) :
       reverse_1 (.cons head tail) =
         (reverse_1 tail >>= fun result => Erlang.erlang.«++/2» result (.cons head .nil)) :=
     reverse_aux_acc tail (.cons head .nil)
-  have law (input : Term) (inputAccepted : properList input = .ok (.atom "true")) :
+  have law (input : Term) (inputAccepted : is_reversible_list_1 input = .ok (.atom "true")) :
       (Erlang.erlang.«++/2» input right >>= reverse_1) =
         (reverse_1 input >>= Erlang.erlang.«++/2» reversedRight) := by
     have reject : (Result.ok (.atom "false") : Result) ≠ .ok (.atom "true") := by simp

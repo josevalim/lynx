@@ -37,11 +37,14 @@ Proofs must not introduce untrusted axioms or `sorry`
 Integration tests go in `LynxTest/Integration`. Start each example with an Elixir
 module comment containing only the implementation, followed by its faithful
 Erlang/Term translation. Keep the implementation separate from its properties.
+Use direct local input helpers, such as the README's `is_integer_list`, rather than
+an `is_proper_list`
+abstraction in benchmarks.
 For each final theorem, include a separate source comment such as:
 
 ```lean
 /- law sum_append(l, r),
-     requires: is_proper_list(l, &is_integer/1) and is_proper_list(r, &is_integer/1),
+     requires: is_integer_list(l) and is_integer_list(r),
      expects: sum(l) + sum(r) == sum(l ++ r) -/
 ```
 

@@ -6,6 +6,10 @@ defmodule Reverse do
 
   defp reverse_aux([], acc), do: acc
   defp reverse_aux([head | tail], acc), do: reverse_aux(tail, [head | acc])
+
+  defp is_reversible_list([]), do: true
+  defp is_reversible_list([_ | tail]), do: is_reversible_list(tail)
+  defp is_reversible_list(_), do: false
 end
 -/
 
