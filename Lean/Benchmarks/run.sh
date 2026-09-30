@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 runs="${1:-5}"
-lake build LynxTest.Bench >/dev/null
+lake build Lynx Erlang LynxTest.Bench >/dev/null
 run=1
 while [ "$run" -le "$runs" ]; do
   for suite in Sum Reverse Sets; do

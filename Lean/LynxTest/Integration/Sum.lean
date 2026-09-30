@@ -2,9 +2,6 @@ module
 
 /-
 defmodule Sum do
-  expects is_proper_list(list, &is_integer/1)
-  ensures (result -> is_integer(result))
-  property sum(l) + sum(r) == sum(l ++ r)
   def sum(list)
   def sum([]), do: 0
   def sum([x | xs]), do: x + sum(xs)
@@ -70,59 +67,65 @@ theorem rejected_inputs :
       Erlang.erlang.«+/2» x subtotal
   | _ => throw (.error (.atom "function_clause"))
 
-@[grind →] private theorem append_preserves_isProperIntegerList
-    (left right joined : Term)
-    (leftProper : isProperIntegerList left = .ok Term.true)
-    (rightProper : isProperIntegerList right = .ok Term.true)
-    (appended : Erlang.erlang.«++/2» left right = .ok joined) :
-    isProperIntegerList joined = .ok Term.true := by
-  induction left using Term.induct generalizing joined with
-  | cons head tail _ tailIh =>
-    have appendPure := Erlang.erlang.«++/2_pure» tail right
-    cases returned : Erlang.erlang.«++/2» tail right
-    case ok rest =>
-      cases head
-      case integer value =>
-        simp [isProperIntegerList, Erlang.erlang.«++/2»,
-          returned, Term.true, Term.false] at leftProper appended
-        subst joined
-        have restProper := tailIh rest leftProper returned
-        simpa [isProperIntegerList, Term.true, Term.false]
-          using restProper
-      all_goals simp_all [isProperIntegerList,
-        Erlang.erlang.«++/2», Term.true, Term.false]
-    all_goals simp_all [Erlang.erlang.«++/2»]
-  | _ => simp_all [isProperIntegerList, Erlang.erlang.«++/2», Term.true, Term.false]
+/- law sum_result(list),
+     requires: is_proper_list(list, &is_integer/1),
+     expects: (result -> is_integer(result)) -/
+#bench "erlang/sum-result"
+theorem sum_result (input : Term)
+    (valid : isProperIntegerList input = .ok Term.true) :
+    ∃ value : Int, sum_1 input = .ok (.integer value) := by
+  induction input using Term.induct with
+  | nil => exact ⟨0, rfl⟩
+  | cons head tail headIh ih =>
+    clear headIh
+    cases head
+    case integer value =>
+      have tailValid : isProperIntegerList tail = .ok Term.true := by
+        simpa [isProperIntegerList, Term.true] using valid
+      obtain ⟨subtotal, returned⟩ := ih tailValid
+      exact ⟨value + subtotal, by simp [sum_1, returned]⟩
+    all_goals simp [isProperIntegerList, Term.true, Term.false] at valid
+  | _ => simp [isProperIntegerList, Term.true, Term.false] at valid
 
-/-! Translated integer-list expectation and integer-result guarantee. -/
-def sumExpects (arg : Term) : Result :=
-  isProperIntegerList arg
-
-def sumEnsures (_arg result : Term) : Result :=
-  Erlang.erlang.«is_integer/1» result
-
-/-- Both operands must satisfy the function's expectation. -/
-def appendExpects (args : Term × Term) : Result := do
-  match ← sumExpects args.1 with
-  | .atom "true" => sumExpects args.2
-  | .atom "false" => .ok Term.false
-  | _ => throw (.error (.atom "badarg"))
-
-/-- Translated `sum(l) + sum(r) == sum(l ++ r)`. -/
-def appendExpression (args : Term × Term) : Result := do
-  let left ← sum_1 args.1
-  let right ← sum_1 args.2
-  let total ← Erlang.erlang.«+/2» left right
-  let joined ← Erlang.erlang.«++/2» args.1 args.2
+/- law sum_append(l, r),
+     requires: is_proper_list(l, &is_integer/1) and is_proper_list(r, &is_integer/1),
+     expects: sum(l) + sum(r) == sum(l ++ r) -/
+def appendExpression (left right : Term) : Result := do
+  let l ← sum_1 left
+  let r ← sum_1 right
+  let total ← Erlang.erlang.«+/2» l r
+  let joined ← Erlang.erlang.«++/2» left right
   let combined ← sum_1 joined
   Erlang.erlang.«==/2» total combined
 
-#bench "erlang/sum-contract"
-theorem sum_satisfies_contract : Satisfies sum_1 sumExpects sumEnsures := by
-  lynx_verify
-
 #bench "erlang/sum-append"
-theorem sum_append_property : Property appendExpects appendExpression := by
-  lynx_verify
+theorem sum_append (left right : Term)
+    (leftValid : isProperIntegerList left = .ok Term.true)
+    (rightValid : isProperIntegerList right = .ok Term.true) :
+    appendExpression left right = .ok Term.true := by
+  obtain ⟨rightSum, rightReturned⟩ := sum_result right rightValid
+  have append_ok (input : Term) (valid : isProperIntegerList input = .ok Term.true) :
+      ∃ leftSum joined,
+        sum_1 input = .ok (.integer leftSum) ∧
+        Erlang.erlang.«++/2» input right = .ok joined ∧
+        sum_1 joined = .ok (.integer (leftSum + rightSum)) := by
+    induction input using Term.induct with
+    | nil => exact ⟨0, right, rfl, rfl, by simpa using rightReturned⟩
+    | cons head tail headIh ih =>
+      clear headIh
+      cases head
+      case integer value =>
+        have tailValid : isProperIntegerList tail = .ok Term.true := by
+          simpa [isProperIntegerList, Term.true] using valid
+        obtain ⟨subtotal, joined, returned, appended, combined⟩ := ih tailValid
+        refine ⟨value + subtotal, .cons (.integer value) joined, ?_, ?_, ?_⟩
+        · simp [sum_1, returned]
+        · simp [Erlang.erlang.«++/2», appended]
+        · simp [sum_1, combined, Int.add_assoc]
+      all_goals simp [isProperIntegerList, Term.true, Term.false] at valid
+    | _ => simp [isProperIntegerList, Term.true, Term.false] at valid
+  obtain ⟨leftSum, joined, leftReturned, appended, combined⟩ := append_ok left leftValid
+  simp [appendExpression, leftReturned, rightReturned, appended, combined,
+    Erlang.erlang.«==/2»]
 
 end LynxTest.Integration.Sum

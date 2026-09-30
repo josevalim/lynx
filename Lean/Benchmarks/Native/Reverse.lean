@@ -1,3 +1,14 @@
+module
+
+/-
+defmodule Reverse do
+  def reverse(list), do: reverse_aux(list, [])
+
+  defp reverse_aux([], acc), do: acc
+  defp reverse_aux([head | tail], acc), do: reverse_aux(tail, [head | acc])
+end
+-/
+
 import LynxTest.Bench
 
 set_option Elab.async false
@@ -20,6 +31,7 @@ end LynxBench
 
 open LynxBench
 
+/- law reverse_involution(list), expects: reverse(reverse(list)) == list -/
 #bench "native/reverse-involution"
 theorem native_reverse_involution {α : Type} (xs : List α) :
     reverse_1 (reverse_1 xs) = xs := by
@@ -39,6 +51,8 @@ theorem native_reverse_aux_acc {α : Type} (input acc : List α) :
 
 end LynxBench
 
+/- law reverse_append(left, right),
+     expects: reverse(left ++ right) == reverse(right) ++ reverse(left) -/
 #bench "native/reverse-append"
 theorem native_reverse_append {α : Type} (left right : List α) :
     reverse_1 (left ++ right) = reverse_1 right ++ reverse_1 left := by

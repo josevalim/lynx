@@ -2,7 +2,7 @@ module
 
 public import Lynx.Term
 public import Lynx.Term.Bitstring
-public import Lynx.Tactic
+public import Lynx.Pure
 
 public section
 
@@ -47,8 +47,8 @@ open Lynx
   | .cons _ _ => .ok Term.true
   | _ => .ok Term.false
 
--- Keep binary64 rounding out of proof search over Erlang result shapes.
-#lynx_pure @[lynx_opaque] private def floatResult (value : Option Term.FiniteFloat) : Result :=
+-- Convert a successful binary64 operation or raise badarith.
+#lynx_pure private def floatResult (value : Option Term.FiniteFloat) : Result :=
   match value with
   | some value => .ok (.float value)
   | none => throw (.error (.atom "badarith"))
@@ -57,9 +57,7 @@ open Lynx
     floatResult value = .ok result ↔ ∃ f, value = some f ∧ result = .float f := by
   cases value <;> simp [floatResult, eq_comm]
 
--- Preserve unknown operands until their numeric types are known. In particular,
--- integer-list proofs should not split the float cases before applying induction.
-#lynx_pure @[lynx_opaque] def «+/2» : Term → Term → Result
+#lynx_pure def «+/2» : Term → Term → Result
   | .integer x, .integer y => .ok (.integer (x + y))
   | .float x, .float y => floatResult (x.add y)
   | .integer x, .float y => floatResult (Term.FiniteFloat.ofInt x >>= (·.add y))

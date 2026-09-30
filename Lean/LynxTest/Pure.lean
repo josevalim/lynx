@@ -1,10 +1,11 @@
 module
 
-import Erlang.erlang
+import all Erlang.erlang
+import all Erlang.erlang.Guards
 import Lynx
 meta import LynxTest.ProofAudit
 
-namespace LynxTest.Tactic.Pure
+namespace LynxTest.Pure
 open Lynx
 
 -- The coercion exposes only the named operation, not the scheduler body.
@@ -25,38 +26,40 @@ theorem float_zero_value :
 theorem float_addition (left right result : Term.FiniteFloat)
     (sum : left.add right = some result) :
     Erlang.erlang.«+/2» (.float left) (.float right) = .ok (.float result) := by
-  lynx_solve
+  simp [Erlang.erlang.«+/2», Erlang.erlang.floatResult, sum]
 
 theorem mixed_addition (integer : Int) (converted right result : Term.FiniteFloat)
     (conversion : Term.FiniteFloat.ofInt integer = some converted)
     (sum : converted.add right = some result) :
     Erlang.erlang.«+/2» (.integer integer) (.float right) = .ok (.float result) := by
-  lynx_solve
+  simp [Erlang.erlang.«+/2», Erlang.erlang.floatResult, conversion, sum]
 
 theorem mixed_addition_reversed (integer : Int) (converted left result : Term.FiniteFloat)
     (conversion : Term.FiniteFloat.ofInt integer = some converted)
     (sum : left.add converted = some result) :
     Erlang.erlang.«+/2» (.float left) (.integer integer) = .ok (.float result) := by
-  lynx_solve
+  simp [Erlang.erlang.«+/2», Erlang.erlang.floatResult, conversion, sum]
+
 
 theorem binary_is_bitstring (input : Term)
-    (accepted : Accepted (Erlang.erlang.«is_binary/1» input)) :
-    Accepted (Erlang.erlang.«is_bitstring/1» input) := by
-  lynx_solve
+    (accepted : Erlang.erlang.«is_binary/1» input = .ok Term.true) :
+    Erlang.erlang.«is_bitstring/1» input = .ok Term.true := by
+  cases input <;> simp_all [Erlang.erlang.«is_binary/1»,
+    Erlang.erlang.«is_bitstring/1», Term.true, Term.false]
 
 theorem bitstring_size_is_integer (input : Term)
-    (accepted : Accepted (Erlang.erlang.«is_bitstring/1» input)) :
-    Accepted (do
-      let size ← Erlang.erlang.«bit_size/1» input
-      Erlang.erlang.«is_integer/1» size) := by
-  lynx_solve
+    (accepted : Erlang.erlang.«is_bitstring/1» input = .ok Term.true) :
+    (do let size ← Erlang.erlang.«bit_size/1» input
+        Erlang.erlang.«is_integer/1» size) = .ok Term.true := by
+  cases input <;> simp_all [Erlang.erlang.«is_bitstring/1»,
+    Erlang.erlang.«bit_size/1», Erlang.erlang.«is_integer/1», Term.true, Term.false]
 
 theorem bitstring_byte_size_is_integer (input : Term)
-    (accepted : Accepted (Erlang.erlang.«is_bitstring/1» input)) :
-    Accepted (do
-      let size ← Erlang.erlang.«byte_size/1» input
-      Erlang.erlang.«is_integer/1» size) := by
-  lynx_solve
+    (accepted : Erlang.erlang.«is_bitstring/1» input = .ok Term.true) :
+    (do let size ← Erlang.erlang.«byte_size/1» input
+        Erlang.erlang.«is_integer/1» size) = .ok Term.true := by
+  cases input <;> simp_all [Erlang.erlang.«is_bitstring/1»,
+    Erlang.erlang.«byte_size/1», Erlang.erlang.«is_integer/1», Term.true, Term.false]
 
 #lynx_pure def classify (input : Term) : Result :=
   .ok (match input with | .integer _ => Term.true | _ => Term.false)
@@ -100,11 +103,30 @@ theorem execution_reuses_purity (input : Term) (env final : Environment) :
   simp
 
 run_cmd do
-  let some doc ← Lean.findSimpleDocString? (← Lean.getEnv) ``LynxTest.Tactic.Pure.classifyTwice
+  let some doc ← Lean.findSimpleDocString? (← Lean.getEnv) ``LynxTest.Pure.classifyTwice
     | throwError "classifyTwice documentation was not registered"
   unless doc.startsWith "Purity composes through calls already checked by `#lynx_pure`." do
     throwError "unexpected classifyTwice documentation: {doc}"
 
-end LynxTest.Tactic.Pure
+-- Failed purity checks must never register an incomplete purity theorem.
+/--
+error: unsolved goals
+⊢ False
+---
+error: #lynx_pure could not prove purity; refusing an incomplete proof
+-/
+#guard_msgs in
+#lynx_pure def readsEnvironment : Result := .get fun _ => .ok .nil
 
-run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Tactic.Pure
+/--
+error: unsolved goals
+⊢ False
+---
+error: #lynx_pure could not prove purity; refusing an incomplete proof
+-/
+#guard_msgs in
+#lynx_pure def writesEnvironment : Result := .set {} (.ok .nil)
+
+end LynxTest.Pure
+
+run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Pure
