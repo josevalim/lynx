@@ -20,33 +20,22 @@ module_name(Module) ->
 to_definitions(#c_module{defs = Defs}) ->
     maps:from_list([{Name, Fun} || {#c_var{name = Name}, Fun} <- Defs]).
 
--spec fun_table(map(), map()) -> map().
+-spec fun_table(map(), map()) -> [map()].
 fun_table(Funs, Modules) ->
     Entries = [begin
-        #{Module := #{translations := #{Name := #{translation := Definition}}}} = Modules,
-        {Id, Module, Fun, Definition}
+        #{Module := #{translations := #{Name := #{translation := Definition, pure := Pure}}}} = Modules,
+        {Id, Module, Fun, Definition, Pure}
     end || _ := #{id := Id, module := Module, name := Name} = Fun <- Funs],
-    array_node([fun_entry(Entry) || Entry <- lists:sort(Entries)], []).
+    [fun_entry(Entry) || Entry <- lists:sort(Entries)].
 
-fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Name}}) ->
+fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Name}, Pure}) ->
     Captures = [ident_node(<<"cap", (integer_to_binary(I))/binary>>, [])
                 || I <- lists:seq(1, length(Params) - Arity)],
     Args = [ident_node(<<"arg", (integer_to_binary(I))/binary>>, [])
             || I <- lists:seq(1, Arity)],
     Body = apply_node(<<(module_name(Module))/binary, ".", Name/binary>>, Captures ++ Args, []),
-    Inputs = [ident_node(~"captures", []), ident_node(~"args", [])],
-    node(~"fun", [], #{
-        ~"params" => Inputs,
-        ~"body" => node(~"match", [], #{
-            ~"expressions" => Inputs,
-            ~"cases" => [
-                #{~"patterns" => [array_node(Captures, []), array_node(Args, [])],
-                  ~"body" => Body, ~"span" => []},
-                #{~"patterns" => [node(~"wildcard", [], #{}), node(~"wildcard", [], #{})],
-                  ~"body" => error_node(badarg, []), ~"span" => []}
-            ]
-        })
-    }).
+    #{~"body" => Body, ~"captures" => Captures, ~"args" => Args,
+      ~"pure" => Pure, ~"span" => []}.
 
 %% Translate the requested functions and their reachable local callees.
 %% The supplied maps contain this module's definitions and the program-wide function registry.

@@ -1,6 +1,11 @@
+module
+
 import Erlang.erlang
-import LynxTest.ProofAudit
-import LynxTest.Integration.Sum
+public meta import LynxTest.ProofAudit
+import all Lynx.Term.Runner
+import all Lynx.Term.DataTypes
+import all Lynx.Term.Compare
+import all LynxTest.Integration.Sum
 
 namespace LynxTest.Tactic.Failures
 open Lynx LynxTest.Integration.Sum
@@ -43,7 +48,8 @@ theorem reports_unsupported_coverage : Satisfies zero onlySpecial sumEnsures := 
 /-- Lean integrations can discharge an unsupported coverage condition directly. -/
 theorem manual_coverage : Satisfies zero onlySpecial sumEnsures := by
   lynx_vcgen
-  case coverage => exact ⟨(.atom "special", {}), {}, rfl⟩
+  case coverage =>
+    exact ⟨(.atom "special", {}), {}, by simp [onlySpecial, Erlang.erlang.«==/2», Term.true]⟩
   case ensures => lynx_solve
 
 def badCall (_ : Term) : Result := do

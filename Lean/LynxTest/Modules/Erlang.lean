@@ -41,7 +41,7 @@ private def rememberSelfFun (args : Array Term) : Result :=
   | [] => rememberSelf
   | _ => .error (.error (.atom "unexpected_arguments"))
 
-private def functions : Term.FunTable := #[fun _ => identityFun, fun _ => firstFun, fun _ => rememberSelfFun]
+private def functions : Term.FunTable := #[.effectful fun _ => identityFun, .effectful fun _ => firstFun, .effectful fun _ => rememberSelfFun]
 
 private def floatOne : Term.FiniteFloat :=
   ⟨false, 1023, 0⟩
@@ -295,7 +295,7 @@ private def nestedSpawnFun (args : Array Term) : Result :=
 private def nestedSpawnCaller : Result :=
   «spawn/1» (.function 3 0 #[])
 
-private def nestedFunctions : Term.FunTable := functions.push (fun _ => nestedSpawnFun)
+private def nestedFunctions : Term.FunTable := functions.push (.effectful fun _ => nestedSpawnFun)
 
 theorem completed_nested_processes_are_removed :
     let final : Environment := { pidCounter := 3 }

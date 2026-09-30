@@ -8,6 +8,10 @@ sh Benchmarks/run.sh 5
 
 See [RESULTS.md](RESULTS.md) for the latest captured output and median timings.
 
+Update benchmark results in place: replace the existing numbers and captured
+output with the latest measurements. Do not prepend run summaries, historical
+sections, or comparisons, and do not add benchmark evidence files or directories.
+
 Each file runs in a separate Lean process. `LYNX_BENCH` measures theorem
 elaboration, including tactic execution, after imports have loaded, in
 milliseconds. These are proof times, not executable runtime measurements.

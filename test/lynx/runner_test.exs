@@ -67,6 +67,30 @@ defmodule Lynx.RunnerTest do
              end)
     end
 
+    test "function table purity metadata is checked rather than trusted" do
+      request = fixture_request(Path.join(@translations_dir, "functions.json"), "verify")
+      table_file = List.last(request["files"])
+      [table] = table_file["contents"]
+      entries = table["entries"]
+      assert Enum.frequencies_by(entries, & &1["pure"]) == %{true => 3, false => 2}
+
+      for {entry, index} <- Enum.with_index(entries), entry["pure"] == false do
+        wrong_entries = List.update_at(entries, index, &Map.put(&1, "pure", true))
+        wrong_table = Map.put(table, "entries", wrong_entries)
+        wrong_file = Map.put(table_file, "contents", [wrong_table])
+        wrong_request = Map.put(request, "files", Enum.drop(request["files"], -1) ++ [wrong_file])
+
+        assert %{"status" => "error", "diagnostics" => diagnostics} =
+                 Lynx.Commands.runner!(@lean_dir, wrong_request)
+
+        assert Enum.any?(diagnostics, fn diagnostic ->
+                 diagnostic["kind"] == "error" and
+                   (diagnostic["message"] =~ "IsPure" or
+                      diagnostic["message"] =~ "simp` made no progress")
+               end)
+      end
+    end
+
     test "rejects missing files" do
       error =
         assert_raise RuntimeError, fn ->

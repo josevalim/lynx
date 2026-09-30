@@ -1,3 +1,5 @@
+module
+
 /-
 defmodule Sum do
   expects is_proper_list(list, &is_integer/1)
@@ -8,20 +10,58 @@ defmodule Sum do
   def sum([x | xs]), do: x + sum(xs)
 end
 -/
-import Erlang.erlang
+import all Erlang.erlang
+import all Erlang.erlang.Guards
+import all Lynx.Term
+import all Lynx.Term.DataTypes
 import LynxTest.Bench
 
 namespace LynxTest.Integration.Sum
 open Lynx
 set_option Elab.async false
 
+@[simp] private def integerFunctions : Term.FunTable := #[
+  .pure fun _ args =>
+    match args.toList with
+    | [value] => Result.toExcept (Erlang.erlang.«is_integer/1» value) (by simp)
+    | _ => .error (.error (.atom "badarg"))
+]
+
+attribute [local simp] Term.pureApply Result.toExcept Result.ofExcept
+
+def is_proper_list_2 (table : Term.FunTable) (predicate : Term) : Term → Result
+  | .nil => .ok Term.true
+  | .cons head tail => do
+      match ← Term.pureApply table predicate #[head] with
+      | .atom "true" => is_proper_list_2 table predicate tail
+      | _ => .ok Term.false
+  | _ => .ok Term.false
+
+attribute [local simp] is_proper_list_2
+
 #lynx_pure def isProperIntegerList : Term → Result
   | .nil => .ok Term.true
   | .cons head tail => do
-      match ← Erlang.erlang.«is_integer/1» head with
+      match ← Term.pureApply integerFunctions (.function 0 1 #[]) #[head] with
       | .atom "true" => isProperIntegerList tail
       | _ => .ok Term.false
   | _ => .ok Term.false
+
+/-- Specializing the generic callback traversal preserves its semantics. -/
+theorem integer_callback_specialization (xs : Term) :
+    is_proper_list_2 integerFunctions (.function 0 1 #[]) xs =
+      isProperIntegerList xs := by
+  induction xs using Term.induct <;> simp_all [isProperIntegerList]
+
+theorem requested_example :
+    is_proper_list_2 integerFunctions (.function 0 1 #[])
+      (.cons (.integer 1) (.cons (.integer 2) (.cons (.integer 3) .nil))) = .ok Term.true := by
+  simp [Term.true]
+
+theorem rejected_inputs :
+    isProperIntegerList (.cons (.atom "no") .nil) = .ok Term.false ∧
+    isProperIntegerList (.cons (.integer 1) (.integer 2)) = .ok Term.false := by
+  simp [isProperIntegerList, Term.true, Term.false]
 
 #lynx_pure def sum_1 : Term → Result
   | .nil => .ok (.integer 0)
@@ -43,13 +83,13 @@ set_option Elab.async false
     case ok rest =>
       cases head
       case integer value =>
-        simp [isProperIntegerList, Erlang.erlang.«is_integer/1», Erlang.erlang.«++/2»,
+        simp [isProperIntegerList, Erlang.erlang.«++/2»,
           returned, Term.true, Term.false] at leftProper appended
         subst joined
         have restProper := tailIh rest leftProper returned
-        simpa [isProperIntegerList, Erlang.erlang.«is_integer/1», Term.true, Term.false]
+        simpa [isProperIntegerList, Term.true, Term.false]
           using restProper
-      all_goals simp_all [isProperIntegerList, Erlang.erlang.«is_integer/1»,
+      all_goals simp_all [isProperIntegerList,
         Erlang.erlang.«++/2», Term.true, Term.false]
     all_goals simp_all [Erlang.erlang.«++/2»]
   | _ => simp_all [isProperIntegerList, Erlang.erlang.«++/2», Term.true, Term.false]

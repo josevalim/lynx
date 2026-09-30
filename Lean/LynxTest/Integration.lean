@@ -14,9 +14,14 @@ run_cmd do
     ``LynxTest.Integration.ProcessDeadlock.run_deadlocks
   LynxTest.ProofAudit.checkDeclaration
     ``LynxTest.Integration.ProcessDeadlock.deadlock_violates_contract
-  LynxTest.ProofAudit.checkNoDependencies
-    ``LynxTest.Integration.Sum.sum_append_property
-    #[``LynxTest.Integration.Sum.sum_satisfies_contract]
+  let sumDeclarations ← LynxTest.ProofAudit.moduleDeclarations `LynxTest.Integration.Sum
+  let sumTargets ← #[
+    `LynxTest.Integration.Sum.sum_append_property,
+    `LynxTest.Integration.Sum.sum_satisfies_contract].mapM fun target => do
+      let some name := sumDeclarations.find? (Lean.privateToUserName · == target)
+        | throwError "missing integration theorem: {target}"
+      pure name
+  LynxTest.ProofAudit.checkNoDependencies sumTargets[0]! #[sumTargets[1]!]
   -- These internal examples need not export their declarations for auditing.
   let declarations ← LynxTest.ProofAudit.moduleDeclarations `LynxTest.Integration.Sets
   let targets ← #[
