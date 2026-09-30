@@ -54,8 +54,8 @@ defmodule Lynx.RunnerTest do
       request =
         @literal_json
         |> File.read!()
-        |> String.replace("Lynx.Term.integer", "Lynx.Term.unknown")
         |> JSON.decode!()
+        |> replace_integers()
         |> Map.put("command", "verify")
 
       assert %{"status" => "error", "diagnostics" => diagnostics} =
@@ -104,7 +104,7 @@ defmodule Lynx.RunnerTest do
       missing = %{
         "command" => "verify",
         "version" => "1.0",
-        "files" => [file("../test/fixtures/translations/missing.erl", "missing", [])]
+        "files" => [file("../test/fixtures/translations/missing.erl", "Erlang.missing", [])]
       }
 
       error =
@@ -120,7 +120,7 @@ defmodule Lynx.RunnerTest do
     invalid = %{
       "command" => "render",
       "version" => "1.0",
-      "files" => [file(@literal_erl, "literal", [%{"kind" => "unknown", "span" => []}])]
+      "files" => [file(@literal_erl, "Erlang.literal", [%{"kind" => "unknown", "span" => []}])]
     }
 
     error =
@@ -131,6 +131,16 @@ defmodule Lynx.RunnerTest do
     assert error.message =~ @literal_erl
     assert error.message =~ "unsupported command kind 'unknown'"
   end
+
+  defp replace_integers(%{"kind" => "integer"} = node) do
+    node |> Map.delete("value") |> Map.put("kind", "var") |> Map.put("name", "missing")
+  end
+
+  defp replace_integers(map) when is_map(map),
+    do: Map.new(map, fn {key, value} -> {key, replace_integers(value)} end)
+
+  defp replace_integers(list) when is_list(list), do: Enum.map(list, &replace_integers/1)
+  defp replace_integers(value), do: value
 
   defp file(path, module, contents, imports \\ []) do
     %{"file" => path, "module" => module, "contents" => contents, "imports" => imports}
