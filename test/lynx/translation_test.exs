@@ -33,7 +33,7 @@ defmodule Lynx.TranslationTest do
              |> Translation.assemble()
 
     groups =
-      Enum.map(commands, fn %{"expr" => expr} ->
+      Enum.map(commands, fn expr ->
         case expr do
           %{"kind" => "mutual", "defs" => defs} -> Enum.map(defs, & &1["name"])
           %{"kind" => "def", "name" => name} -> [name]
@@ -41,16 +41,16 @@ defmodule Lynx.TranslationTest do
       end)
 
     assert Enum.sort(groups) == [
-             ["«caller/1»"],
-             ["«even/1»", "«odd/1»"],
-             ["«first/1»", "«second/1»", "«third/1»"],
-             ["«identity/1»"],
-             ["«self/1»"]
+             ["caller"],
+             ["even", "odd"],
+             ["first", "second", "third"],
+             ["identity"],
+             ["self"]
            ]
 
-    caller = Enum.find_index(groups, &("«caller/1»" in &1))
-    assert Enum.find_index(groups, &("«odd/1»" in &1)) < caller
-    assert Enum.find_index(groups, &("«first/1»" in &1)) < caller
+    caller = Enum.find_index(groups, &("caller" in &1))
+    assert Enum.find_index(groups, &("odd" in &1)) < caller
+    assert Enum.find_index(groups, &("first" in &1)) < caller
   end
 
   test "only translates requested roots" do
@@ -99,7 +99,7 @@ defmodule Lynx.TranslationTest do
                "module" => "Erlang.z_dependency",
                "file" => "dependency.erl",
                "imports" => [],
-               "contents" => [%{"expr" => %{"name" => "«entry/1»"}}]
+               "contents" => [%{"name" => "entry", "pure" => true}]
              },
              %{
                "module" => "Erlang.a_caller",
@@ -181,8 +181,12 @@ defmodule Lynx.TranslationTest do
       assert Translation.add(translation, :example, roots) == translation
 
       assert [%{"contents" => contents}] = Translation.assemble(translation)
-      assert Enum.count(contents, &(&1["kind"] == "command")) == 1
+      assert Enum.count(contents, & &1["pure"]) == 1
       assert Enum.any?(contents, &(&1["kind"] == "mutual"))
+
+      for %{"kind" => "mutual", "pure" => pure, "defs" => defs} <- contents do
+        assert Enum.all?(defs, &(&1["pure"] == pure))
+      end
     end
   end
 
@@ -231,10 +235,10 @@ defmodule Lynx.TranslationTest do
     for %{"contents" => contents} <- Translation.assemble(translation) do
       assert Enum.any?(
                contents,
-               &match?(%{"name" => "lynx_pure", "expr" => %{"name" => "«pure/1»"}}, &1)
+               &match?(%{"kind" => "def", "name" => "pure", "pure" => true}, &1)
              )
 
-      assert Enum.any?(contents, &match?(%{"kind" => "def", "name" => "«impure/1»"}, &1))
+      assert Enum.any?(contents, &match?(%{"kind" => "def", "name" => "impure"}, &1))
     end
   end
 
@@ -302,40 +306,28 @@ defmodule Lynx.TranslationTest do
                functions[{:dynamic, 1}].translation
 
       assert %{
-               "function" => %{"name" => "Lynx.Term.apply"},
-               "args" => [
-                 %{"name" => "«vF»"},
-                 %{"kind" => "array", "elements" => args}
-               ]
+               "kind" => "fun_call",
+               "function" => %{"kind" => "var", "name" => "F"},
+               "args" => [%{"kind" => "integer", "value" => 7}, %{"kind" => "var", "name" => "F"}]
              } = dynamic
-
-      assert [
-               %{
-                 "function" => %{"name" => "Lynx.Term.integer"},
-                 "args" => [%{"kind" => "integer", "value" => 7}]
-               },
-               %{"name" => "«vF»"}
-             ] = args
 
       assert %{"body" => %{"cases" => [%{"body" => explicit} | _]}} =
                functions[{:explicit, 1}].translation
 
       assert %{
-               "function" => %{"name" => "Erlang.erlang.«apply/2»"},
+               "kind" => "remote_call",
+               "module" => "Erlang.erlang",
+               "name" => "apply",
                "args" => [
-                 %{"name" => "«vF»"},
+                 %{"kind" => "var", "name" => "F"},
                  %{
-                   "function" => %{"name" => "Lynx.Term.cons"},
-                   "args" => [
-                     %{
-                       "function" => %{"name" => "Lynx.Term.integer"},
-                       "args" => [%{"kind" => "integer", "value" => 7}]
-                     },
-                     %{
-                       "function" => %{"name" => "Lynx.Term.cons"},
-                       "args" => [%{"name" => "«vF»"}, %{"name" => "Lynx.Term.nil"}]
-                     }
-                   ]
+                   "kind" => "cons",
+                   "head" => %{"kind" => "integer", "value" => 7},
+                   "tail" => %{
+                     "kind" => "cons",
+                     "head" => %{"kind" => "var", "name" => "F"},
+                     "tail" => %{"kind" => "nil"}
+                   }
                  }
                ]
              } = explicit
@@ -344,21 +336,19 @@ defmodule Lynx.TranslationTest do
                functions[{:zero, 1}].translation
 
       assert %{
-               "function" => %{"name" => "Lynx.Term.apply"},
-               "args" => [
-                 %{"name" => "«vF»"},
-                 %{"kind" => "array", "elements" => []}
-               ]
+               "kind" => "fun_call",
+               "function" => %{"kind" => "var", "name" => "F"},
+               "args" => []
              } = zero
 
       files = Translation.assemble(translation)
 
       commands =
         for %{"contents" => contents} <- files,
-            %{"kind" => "command"} = command <- contents,
+            %{"pure" => true} = command <- contents,
             do: command
 
-      assert [%{"name" => "lynx_pure", "expr" => %{"name" => "«pure/1»"}}] = commands
+      assert [%{"kind" => "def", "name" => "pure", "pure" => true}] = commands
     end
   end
 
@@ -413,17 +403,12 @@ defmodule Lynx.TranslationTest do
     assert %{pure: false} = updated.modules.caller.translations[{:"$lynx_fun_4", 1}]
     assert %{pure: false} = updated.modules.dependency.translations[{:"$lynx_fun_2", 3}]
 
-    assert %{"body" => %{"cases" => [%{"body" => %{"args" => [function]}} | _]}} =
+    assert %{
+             "body" => %{"cases" => [%{"body" => %{"kind" => "return", "value" => function}} | _]}
+           } =
              updated.modules.caller.translations[{:again, 0}].translation
 
-    assert %{
-             "function" => %{"name" => "Lynx.Term.function"},
-             "args" => [
-               %{"value" => 0},
-               %{"value" => 1},
-               %{"kind" => "array", "elements" => []}
-             ]
-           } = function
+    assert %{"kind" => "function", "id" => 0, "arity" => 1, "captures" => []} = function
 
     files = Translation.assemble(updated)
 
@@ -441,19 +426,23 @@ defmodule Lynx.TranslationTest do
 
     assert Enum.any?(
              contents,
-             &match?(%{"name" => "lynx_pure", "expr" => %{"name" => "«extra/1»"}}, &1)
+             &match?(%{"kind" => "def", "name" => "extra", "pure" => true}, &1)
            )
 
     assert Enum.map(entries, fn %{
-                                  "body" => %{"function" => %{"name" => name}}
+                                  "body" => %{
+                                    "kind" => "remote_call",
+                                    "module" => module,
+                                    "name" => name
+                                  }
                                 } ->
-             name
+             {module, name}
            end) == [
-             "Erlang.caller.«local/1»",
-             "Erlang.dependency.«local/1»",
-             "Erlang.dependency.«$lynx_fun_2/3»",
-             "Erlang.caller.«$lynx_fun_3/3»",
-             "Erlang.caller.«$lynx_fun_4/1»"
+             {"Erlang.caller", "local"},
+             {"Erlang.dependency", "local"},
+             {"Erlang.dependency", "$lynx_fun_2"},
+             {"Erlang.caller", "$lynx_fun_3"},
+             {"Erlang.caller", "$lynx_fun_4"}
            ]
 
     assert Enum.map(entries, & &1["pure"]) == [true, true, false, false, false]
@@ -498,7 +487,7 @@ defmodule Lynx.TranslationTest do
                %{
                  "module" => "Erlang.lists",
                  "imports" => ["Erlang.erlang", "Erlang.lists"],
-                 "contents" => [%{"expr" => %{"name" => "«sum/1»"}}]
+                 "contents" => [%{"name" => "sum", "pure" => true}]
                },
                %{"module" => "Erlang.caller", "imports" => ["Erlang.lists"]}
              ] = Translation.assemble(mixed)
@@ -527,8 +516,8 @@ defmodule Lynx.TranslationTest do
     assert [%{"imports" => ["Erlang.lists"], "contents" => [definition]}] =
              Translation.assemble(translation)
 
-    assert %{"expr" => %{"body" => %{"cases" => [%{"body" => call} | _]}}} = definition
-    assert %{"function" => %{"name" => "Erlang.lists.«reverse/2»"}} = call
+    assert %{"body" => %{"cases" => [%{"body" => call} | _]}} = definition
+    assert %{"kind" => "remote_call", "module" => "Erlang.lists", "name" => "reverse"} = call
   end
 
   @tag :tmp_dir

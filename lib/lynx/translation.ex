@@ -344,22 +344,15 @@ defmodule Lynx.Translation do
     {defs, pure} =
       Enum.map_reduce(names, true, fn name, pure ->
         {^name, {translation, definition_pure}} = :digraph.vertex(graph, name)
-        {translation, pure and definition_pure}
+        {Map.put(translation, "pure", definition_pure), pure and definition_pure}
       end)
 
     [first | _] = defs
     span = first["span"]
 
-    declaration =
-      case defs do
-        [definition] -> definition
-        _ -> %{"kind" => "mutual", "span" => span, "defs" => defs}
-      end
-
-    if pure do
-      %{"kind" => "command", "span" => span, "name" => "lynx_pure", "expr" => declaration}
-    else
-      declaration
+    case defs do
+      [definition] -> definition
+      _ -> %{"kind" => "mutual", "span" => span, "defs" => defs, "pure" => pure}
     end
   end
 end

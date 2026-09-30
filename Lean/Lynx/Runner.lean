@@ -6,7 +6,8 @@ import Lean
 /-! JSON runner for verification and Lean source rendering. Positions are one-based Unicode character positions.
 Every syntax node requires `span`: `[]`, `[line]`, or `[line, column]`.
 Nodes without a location inherit the enclosing location, if any. Line-only spans
-never imply a diagnostic column. Names use Lean identifiers, including quoted components such as `«+/2»`.
+never imply a diagnostic column. Function and variable names retain their Erlang spelling; the decoder
+constructs and escapes their Lean identifiers.
 
 `verify` returns `{"status": "ok" | "error", "diagnostics": [...]}`.
 `render` returns `{"status": "ok", "files": {...}}`, mapping original source paths to Lean source.
@@ -23,6 +24,8 @@ application equations for standalone calls and binds. Pure calls preserve depth;
 effectful calls consume one level and retain the caller's depth in continuations.
 Files are elaborated in the supplied dependency order, sharing declarations but
 not local scopes or messages. Each file's definitions live in its module namespace.
+Module names arrive qualified by the producer, such as `Erlang.foo` or `Elixir.Foo`;
+functions acquire `/arity` here.
 Imports may name other input modules or compiled Lean modules loaded from disk.
 Verification elaborates decoded syntax directly. Rendering pretty-prints that syntax as Lean source. -/
 namespace Lynx.Runner
@@ -90,66 +93,116 @@ private partial def located (info : SourceInfo) (stx : Syntax) : Syntax :=
 private def withSpan (info : SourceInfo) (stx : TSyntax k) : TSyntax k :=
   ⟨(located info stx.raw).setInfo info⟩
 
+private def functionName (name : String) (arity : Nat) : TSyntax `ident :=
+  mkIdent (Name.mkSimple s!"{name}/{arity}")
+
+private def variableName (j : Json) : DecodeM (TSyntax `ident) := do
+  let value ← field j "name"
+  let name ← match value.getNat? with
+    | .ok index => pure s!"_{index}"
+    | .error _ => do
+      let name ← value.getStr?
+      pure (if name.startsWith "_" then "_v" ++ name else "v" ++ name)
+  return mkIdent (Name.mkSimple name)
+
 private def param (map : FileMap) (info : Span) (j : Json) : DecodeM (TSyntax `ident) := do
   fields j ["kind", "name", "span"]
-  unless (← str j "kind") == "ident" do throw "parameter must be an identifier"
-  let name ← str j "name"
-  let name ← identifier name
-  unless name.getId.getPrefix == .anonymous do throw "parameter must be an unqualified identifier"
-  return withSpan (← span map j info).info name
+  unless (← str j "kind") == "var" do throw "parameter must be a variable"
+  return withSpan (← span map j info).info (← variableName j)
 
 private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     (j : Json) : DecodeM (TSyntax `term) := do
   let info ← span map j parent
   let kind ← str j "kind"
+  if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "match"] then
+    throw s!"{kind} is not valid in patterns"
   let result ← match kind with
   | "wildcard" => do
     fields j ["kind", "span"]
     unless pattern do throw "wildcard is only valid in patterns"
     pure (Unhygienic.run `(_))
-  | "ident" => do
+  | "var" => do
     fields j ["kind", "name", "span"]
-    pure ⟨(← identifier (← str j "name")).raw⟩
+    pure ⟨(← variableName j).raw⟩
   | "integer" => do
     fields j ["kind", "value", "span"]
     let value ← (← field j "value").getInt?
-    pure ⟨← Parser.runParserCategory (← read) `term (toString value)⟩
-  | "string" => do
+    let literal : TSyntax `term := ⟨← Parser.runParserCategory (← read) `term (toString value)⟩
+    let ctor := mkIdent ``Lynx.Term.integer
+    pure (Unhygienic.run `($ctor $literal))
+  | "atom" => do
     fields j ["kind", "value", "span"]
-    pure ⟨Syntax.mkStrLit (← str j "value")⟩
-  | "array" => do
-    fields j ["kind", "elements", "span"]
-    let elements ← (← arr j "elements").mapM (term map info pattern)
-    pure (Unhygienic.run `(#[$elements,*]))
-  | "apply" => do
+    let literal : TSyntax `term := ⟨Syntax.mkStrLit (← str j "value")⟩
+    let ctor := mkIdent ``Lynx.Term.atom
+    pure (Unhygienic.run `($ctor $literal))
+  | "nil" => do
+    fields j ["kind", "span"]
+    pure ⟨(mkIdent ``Lynx.Term.nil).raw⟩
+  | "cons" => do
+    fields j ["kind", "head", "tail", "span"]
+    let head ← term map info pattern (← field j "head")
+    let tail ← term map info pattern (← field j "tail")
+    let ctor := mkIdent ``Lynx.Term.cons
+    pure (Unhygienic.run `($ctor $head $tail))
+  | "function" => do
+    fields j ["kind", "id", "arity", "captures", "span"]
+    let id : TSyntax `term := ⟨Syntax.mkNumLit (toString (← (← field j "id").getNat?))⟩
+    let arity : TSyntax `term := ⟨Syntax.mkNumLit (toString (← (← field j "arity").getNat?))⟩
+    let captures ← (← arr j "captures").mapM (term map info pattern)
+    let ctor := mkIdent ``Lynx.Term.function
+    pure (Unhygienic.run `($ctor $id $arity #[$captures,*]))
+  | "local_call" | "remote_call" => do
+    fields j (if kind == "local_call" then ["kind", "name", "args", "span"]
+      else ["kind", "module", "name", "args", "span"])
+    let args ← (← arr j "args").mapM (term map info false)
+    let name := functionName (← str j "name") args.size
+    let fn ← if kind == "local_call" then pure name else do
+      let namespaceId ← identifier (← str j "module")
+      pure (mkIdent (namespaceId.getId ++ name.getId))
+    if args.isEmpty then pure ⟨fn.raw⟩
+    else pure (Unhygienic.run `($fn $args*))
+  | "fun_call" => do
     fields j ["kind", "function", "args", "span"]
-    let fnJson ← field j "function"
-    if pattern && (← str fnJson "kind") != "ident" then
-      throw "pattern application requires a constructor identifier"
-    let fn ← term map info pattern fnJson
-    let args ← (← arr j "args").mapM (term map info pattern)
-    if args.isEmpty then throw "application requires at least one argument"
-    pure (Unhygienic.run `($fn $args*))
-  | "fun" => do
-    if pattern then throw "fun is not valid in patterns"
-    fields j ["kind", "params", "body", "span"]
-    let params ← (← arr j "params").mapM (param map info)
-    if params.isEmpty then throw "fun requires at least one parameter"
+    let fn ← term map info false (← field j "function")
+    let args ← (← arr j "args").mapM (term map info false)
+    let apply := mkIdent ``Lynx.Term.apply
+    pure (Unhygienic.run `($apply $fn #[$args,*]))
+  | "bind" => do
+    fields j ["kind", "var", "computation", "body", "span"]
+    let var ← param map info (← field j "var")
+    let computation ← term map info false (← field j "computation")
     let body ← term map info false (← field j "body")
-    pure (Unhygienic.run `(fun $params:ident* => $body))
+    let bind := mkIdent ``Lynx.Result.bind
+    pure (Unhygienic.run `($bind $computation (fun $var:ident => $body)))
+  | "return" => do
+    fields j ["kind", "value", "span"]
+    let value ← term map info false (← field j "value")
+    let ok := mkIdent ``Lynx.Result.ok
+    pure (Unhygienic.run `($ok $value))
+  | "raise" => do
+    fields j ["kind", "class", "reason", "span"]
+    let ctor ← match ← str j "class" with
+      | "error" => pure (mkIdent ``Lynx.Exception.error)
+      | "throw" => pure (mkIdent ``Lynx.Exception.throw)
+      | "exit" => pure (mkIdent ``Lynx.Exception.exit)
+      | other => throw s!"unsupported exception class '{other}'"
+    let reason ← term map info false (← field j "reason")
+    let error := mkIdent ``Lynx.Result.error
+    pure (Unhygienic.run `($error ($ctor $reason)))
   | "match" => do
-    if pattern then throw "match is not valid in patterns"
     fields j ["kind", "expressions", "cases", "span"]
     let exprs ← (← arr j "expressions").mapM (term map info false)
-    if exprs.isEmpty then throw "match requires at least one expression"
+    let unit : TSyntax `term := ⟨(mkIdent ``Unit.unit).raw⟩
     let cases ← (← arr j "cases").mapM fun c => do
       fields c ["patterns", "body", "span"]
       let ci ← span map c info
       let pats ← (← arr c "patterns").mapM (term map ci true)
       unless pats.size == exprs.size do throw "match case must have one pattern per expression"
+      let pats := if pats.isEmpty then #[unit] else pats
       let body ← term map ci false (← field c "body")
       pure (withSpan ci.info (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $pats,* => $body)))
     if cases.isEmpty then throw "match requires at least one case"
+    let exprs := if exprs.isEmpty then #[unit] else exprs
     pure (Unhygienic.run `(match $[$exprs:term],* with $cases:matchAlt*))
   | _ => throw s!"unsupported {if pattern then "pattern" else "term"} kind '{kind}'"
   return withSpan info.info result
@@ -189,18 +242,11 @@ private def tableEntry (map : FileMap) (info : Span) (entry : Json) : DecodeM Ta
       | _, _ => $resultError ($exceptionError ($atom "badarg"))))
   return ⟨captureIds, argumentIds, body, withSpan entryInfo.info adapter, isPure⟩
 
-private partial def command (map : FileMap) (j : Json) (parent : Span := {}) : DecodeM (TSyntax `command) := do
+private partial def command (map : FileMap) (j : Json) (parent : Span := {})
+    (wrapPurity : Bool := true) : DecodeM (TSyntax `command) := do
   let info ← span map j parent
   let kind ← str j "kind"
   let result ← match kind with
-  | "command" => do
-    fields j ["kind", "name", "expr", "span"]
-    let name ← str j "name"
-    unless name == "lynx_pure" do throw "unsupported command name"
-    let inner ← field j "expr"
-    unless (← str inner "kind") ∈ ["def", "mutual"] do throw "lynx_pure must wrap def or mutual"
-    let decl ← command map inner info
-    pure (Unhygienic.run `(#lynx_pure $decl:command))
   | "fun_table" => do
     fields j ["kind", "name", "entries", "span"]
     let name ← identifier (← str j "name")
@@ -213,25 +259,30 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) : D
     let tableType := mkIdent ``Lynx.Term.FunTable
     pure (Unhygienic.run `(public def $name : $tableType := $body))
   | "mutual" => do
-    fields j ["kind", "defs", "span"]
+    fields j ["kind", "defs", "pure", "span"]
     let defs ← arr j "defs"
     if defs.isEmpty then throw "mutual requires at least one definition"
     let decls ← defs.mapM fun decl => do
       unless (← str decl "kind") == "def" do throw "mutual requires def declarations"
-      command map decl info
+      unless (← (← field decl "pure").getBool?) == (← (← field j "pure").getBool?) do
+        throw "mutual definitions must agree with the group purity"
+      command map decl info false
     pure (Unhygienic.run `(mutual $decls:command* end))
   | "def" => do
-    fields j ["kind", "name", "params", "body", "span"]
-    let name ← str j "name"
-    let name ← identifier name
-    unless name.getId.getPrefix == .anonymous do throw "definition name must be unqualified"
+    fields j ["kind", "name", "params", "body", "pure", "span"]
     let params ← (← arr j "params").mapM (param map info)
+    let name := functionName (← str j "name") params.size
     let termType := mkIdent ``Lynx.Term
     let resultType := mkIdent ``Lynx.Result
     let binders := params.map fun p => Unhygienic.run `(bracketedBinder| ($p : $termType))
     let body ← term map info false (← field j "body")
     pure (Unhygienic.run `(public def $name $binders:bracketedBinder* : $resultType := $body))
   | _ => throw s!"unsupported command kind '{kind}'"
+  let isPure ← if kind ∈ ["def", "mutual"] then (← field j "pure").getBool? else pure false
+  -- A mutual group gets one joint purity proof, rather than wrapping its members.
+  let result := if wrapPurity && isPure then
+    Unhygienic.run `(#lynx_pure $result:command)
+    else result
   return withSpan info.info result
 
 /-- Table metadata also gives kernel-checked application equations for both pure
@@ -385,8 +436,8 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
         let namespaceId ← (identifier moduleName).run env |>.run' #[]
         let imports ← (← arr entry "imports").mapM fun j => do
           let name ← j.getStr?
-          let _ ← (identifier name).run env |>.run' #[]
-          pure name
+          let id ← (identifier name).run env |>.run' #[]
+          pure id.getId.toString
         let contents ← arr entry "contents"
         let reexportImports := contents.any fun j =>
           match str j "kind" with
@@ -395,7 +446,7 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
         let (commands, spans) ← contents.mapM (commands map) |>.run env |>.run #[]
         let start := Unhygienic.run `(namespace $namespaceId)
         let stop := Unhygienic.run `(end $namespaceId)
-        pure (moduleName, imports, #[start] ++ commands.flatten ++ #[stop], spans, reexportImports)
+        pure (namespaceId.getId.toString, imports, #[start] ++ commands.flatten ++ #[stop], spans, reexportImports)
       return ⟨file, moduleName, imports, map, commands, spans, reexportImports⟩
     catch err => throw (IO.userError s!"{file}: {err}")
 

@@ -13,14 +13,14 @@ defmodule Lynx.CoreToLeanjTest do
              "body" => %{
                "kind" => "match",
                "expressions" => [
-                 %{"kind" => "ident", "name" => "«_0»"},
-                 %{"kind" => "ident", "name" => "Lynx.Term.nil"}
+                 %{"kind" => "var", "name" => 0},
+                 %{"kind" => "nil"}
                ],
                "cases" => [
                  %{
                    "patterns" => [
-                     %{"kind" => "ident", "name" => "«vX»"},
-                     %{"kind" => "ident", "name" => "Lynx.Term.nil"}
+                     %{"kind" => "var", "name" => "X"},
+                     %{"kind" => "nil"}
                    ]
                  }
                ]
@@ -60,7 +60,7 @@ defmodule Lynx.CoreToLeanjTest do
            } = functions
 
     for {{name, 1}, %{translation: translation}} <- functions do
-      expected = "«#{name}/1»"
+      expected = Atom.to_string(name)
       assert %{"kind" => "def", "name" => ^expected} = translation
     end
   end
@@ -104,7 +104,7 @@ defmodule Lynx.CoreToLeanjTest do
            } = functions
 
     for name <- [:entry, :helper] do
-      assert %{"body" => %{"function" => %{"name" => "«helper/1»"}}} =
+      assert %{"body" => %{"kind" => "local_call", "name" => "helper"}} =
                functions[{name, 1}].translation
     end
   end
@@ -122,17 +122,17 @@ defmodule Lynx.CoreToLeanjTest do
              translate(definitions([definition(:entry, body)]))
   end
 
-  test "qualifies remote function names with Erlang and Elixir namespaces" do
+  test "qualifies remote modules and preserves raw function names" do
     for {module, expected} <- [
-          {:other, "Erlang.other.«entry/1»"},
-          {Foo.Bar, "Elixir.Foo.Bar.«entry/1»"}
+          {:other, "Erlang.other"},
+          {Foo.Bar, "Elixir.Foo.Bar"}
         ] do
       body = :cerl.c_call(:cerl.c_atom(module), :cerl.c_atom(:entry), [:cerl.c_var(0)])
 
       assert {:ok, functions, [{^module, :entry, 1, []}]} =
                translate(definitions([definition(:entry, body)]))
 
-      assert %{"body" => %{"function" => %{"name" => ^expected}}} =
+      assert %{"body" => %{"kind" => "remote_call", "module" => ^expected, "name" => "entry"}} =
                functions[{:entry, 1}].translation
     end
   end

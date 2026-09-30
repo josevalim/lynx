@@ -29,11 +29,11 @@ fun_table(Funs, Modules) ->
     [fun_entry(Entry) || Entry <- lists:sort(Entries)].
 
 fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Name}, Pure}) ->
-    Captures = [ident_node(<<"cap", (integer_to_binary(I))/binary>>, [])
+    Captures = [var_node(<<"cap", (integer_to_binary(I))/binary>>, [])
                 || I <- lists:seq(1, length(Params) - Arity)],
-    Args = [ident_node(<<"arg", (integer_to_binary(I))/binary>>, [])
+    Args = [var_node(<<"arg", (integer_to_binary(I))/binary>>, [])
             || I <- lists:seq(1, Arity)],
-    Body = apply_node(<<(module_name(Module))/binary, ".", Name/binary>>, Captures ++ Args, []),
+    Body = remote_call_node(module_name(Module), Name, Captures ++ Args, []),
     #{~"body" => Body, ~"captures" => Captures, ~"args" => Args,
       ~"pure" => Pure, ~"span" => []}.
 
@@ -98,7 +98,7 @@ expression(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
     {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Values),
     {TranslatedClauses, State2} = lists:mapfoldl(fun clause/2, State1, Clauses),
     {node(~"match", Anno, #{
-        ~"expressions" => match_values(TranslatedArgs, Anno),
+        ~"expressions" => TranslatedArgs,
         ~"cases" => TranslatedClauses
     }), State2};
 %% Erlang: Y = f(X), g(Y)
@@ -106,10 +106,8 @@ expression(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
 expression(#c_let{anno = Anno, vars = [Var], arg = Arg, body = Body}, State0) ->
     {TranslatedArg, State1} = expression(Arg, State0),
     {TranslatedBody, State2} = expression(Body, State1),
-    Continuation = node(~"fun", Anno, #{
-        ~"params" => [variable(Var)], ~"body" => TranslatedBody
-    }),
-    {apply_node(~"Lynx.Result.bind", [TranslatedArg, Continuation], Anno), State2};
+    {node(~"bind", Anno, #{~"var" => variable(Var),
+        ~"computation" => TranslatedArg, ~"body" => TranslatedBody}), State2};
 %% Erlang: f(X, Y)
 %% Lean: «f/2» vX vY
 expression(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args}, State0) ->
@@ -119,14 +117,14 @@ expression(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args}
         Name -> State2#state.local_calls;
         _ -> (State2#state.local_calls)#{Name => true}
     end,
-    {apply_node(function_name(Name), TranslatedArgs, Anno),
+    {local_call_node(function_name(Name), TranslatedArgs, Anno),
      State2#state{local_calls = Calls}};
 %% Erlang: F(X, Y)
 %% Lean: Lynx.Term.apply vF #[vX, vY]
 expression(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->
     {Function, State1} = value(Op, State0),
     {TranslatedArgs, State2} = lists:mapfoldl(fun value/2, State1, Args),
-    {apply_node(~"Lynx.Term.apply", [Function, array_node(TranslatedArgs, Anno)], Anno),
+    {node(~"fun_call", Anno, #{~"function" => Function, ~"args" => TranslatedArgs}),
      State2#state{pure = false}};
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX
@@ -144,8 +142,7 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
         {Pure, NewFuns, NewContext} ->
             {TranslatedArgs, State1} = lists:mapfoldl(fun value/2,
                 State0#state{funs = NewFuns, remote = {NewContext, Callback}}, Args),
-            Function = <<(module_name(Module))/binary, ".", (function_name({Name, Arity}))/binary>>,
-            {apply_node(Function, TranslatedArgs, Anno), State1#state{pure = State1#state.pure andalso Pure}}
+            {remote_call_node(module_name(Module), atom_to_binary(Name, utf8), TranslatedArgs, Anno), State1#state{pure = State1#state.pure andalso Pure}}
     end;
 %% Erlang: f([]) -> ok.
 %% Core inserts match_fail for arguments that match no function clause.
@@ -161,12 +158,12 @@ expression(#c_primop{anno = Anno, name = #c_literal{val = match_fail},
 %% Lean: Lynx.Result.ok (Lynx.Term.integer 0)
 expression(Value, State0) ->
     {Translated, State1} = value(Value, State0),
-    {apply_node(~"Lynx.Result.ok", [Translated], cerl:get_ann(Value)), State1}.
+    {node(~"return", cerl:get_ann(Value), #{~"value" => Translated}), State1}.
 
 clause(#c_clause{anno = Anno, pats = Patterns, guard = #c_literal{val = true}, body = Body}, State0) ->
     {Pats, State1} = lists:mapfoldl(fun value/2, State0, Patterns),
     {TranslatedBody, State2} = expression(Body, State1),
-    {#{~"span" => span(Anno), ~"patterns" => match_values(Pats, Anno), ~"body" => TranslatedBody}, State2};
+    {#{~"span" => span(Anno), ~"patterns" => Pats, ~"body" => TranslatedBody}, State2};
 clause(Core, _State) ->
     unsupported(Core).
 
@@ -195,67 +192,51 @@ value(#c_var{anno = Anno, name = {_, Arity} = Name}, State0) ->
 value(#c_var{} = Var, State) ->
     {variable(Var), State};
 value(#c_literal{anno = Anno, val = []}, State) ->
-    {ident_node(~"Lynx.Term.nil", Anno), State};
+    {node(~"nil", Anno, #{}), State};
 value(#c_literal{anno = Anno, val = [Head | Tail]}, State0) ->
     {TranslatedHead, State1} = value(#c_literal{anno = Anno, val = Head}, State0),
     {TranslatedTail, State2} = value(#c_literal{anno = Anno, val = Tail}, State1),
-    {apply_node(~"Lynx.Term.cons", [TranslatedHead, TranslatedTail], Anno), State2};
+    {node(~"cons", Anno, #{~"head" => TranslatedHead, ~"tail" => TranslatedTail}), State2};
 value(#c_literal{anno = Anno, val = N}, State) when is_integer(N) ->
-    {apply_node(~"Lynx.Term.integer", [node(~"integer", Anno, #{~"value" => N})], Anno), State};
+    {node(~"integer", Anno, #{~"value" => N}), State};
 value(#c_literal{anno = Anno, val = Atom}, State) when is_atom(Atom) ->
-    String = node(~"string", Anno, #{~"value" => atom_to_binary(Atom, utf8)}),
-    {apply_node(~"Lynx.Term.atom", [String], Anno), State};
+    {node(~"atom", Anno, #{~"value" => atom_to_binary(Atom, utf8)}), State};
 value(#c_cons{anno = Anno, hd = Head, tl = Tail}, State0) ->
-    {Args, State1} = lists:mapfoldl(fun value/2, State0, [Head, Tail]),
-    {apply_node(~"Lynx.Term.cons", Args, Anno), State1};
+    {TranslatedHead, State1} = value(Head, State0),
+    {TranslatedTail, State2} = value(Tail, State1),
+    {node(~"cons", Anno, #{~"head" => TranslatedHead, ~"tail" => TranslatedTail}), State2};
 value(Core, _State) ->
     unsupported(Core).
 
 %% The table contains code; every function value carries its own capture values.
 function_node(#{id := Id, arity := Arity, captures := Captures}, Anno, State0) ->
     {Values, State1} = lists:mapfoldl(fun value/2, State0, Captures),
-    {apply_node(~"Lynx.Term.function", [node(~"integer", [], #{~"value" => Id}),
-                                      node(~"integer", [], #{~"value" => Arity}),
-                                      array_node(Values, Anno)], Anno), State1}.
+    {node(~"function", Anno, #{~"id" => Id, ~"arity" => Arity, ~"captures" => Values}), State1}.
 
-match_values([], Anno) -> [ident_node(~"Unit.unit", Anno)];
-match_values(Values, _Anno) -> Values.
-
-array_node(Values, Anno) ->
-    node(~"array", Anno, #{~"elements" => Values}).
-
-%% Keep compiler temporaries and source variables in distinct name spaces.
-%% Preserve the underscore prefix for source names that start with one.
+%% Preserve Core names. Lean owns identifier escaping and separates integer
+%% compiler temporaries from atom-named source variables.
 variable(#c_var{anno = Anno, name = Name}) when is_integer(Name), Name >= 0 ->
-    ident_node(quote_identifier(<<"_", (integer_to_binary(Name))/binary>>), Anno);
+    var_node(Name, Anno);
 variable(#c_var{anno = Anno, name = Name}) when is_atom(Name) ->
-    Binary = atom_to_binary(Name, utf8),
-    case Binary of
-        <<"_", _/binary>> -> ident_node(quote_identifier(<<"_v", Binary/binary>>), Anno);
-        _ -> ident_node(quote_identifier(<<"v", Binary/binary>>), Anno)
-    end;
+    var_node(atom_to_binary(Name, utf8), Anno);
 variable(Core) ->
     unsupported(Core).
 
 function_name({Name, Arity}) when is_atom(Name), is_integer(Arity), Arity >= 0 ->
-    quote_identifier(<<(atom_to_binary(Name, utf8))/binary, "/", (integer_to_binary(Arity))/binary>>).
+    atom_to_binary(Name, utf8).
 
-quote_identifier(Name) ->
-    <<$«/utf8, Name/binary, $»/utf8>>.
-
-ident_node(Name, Anno) ->
-    node(~"ident", Anno, #{~"name" => Name}).
+var_node(Name, Anno) ->
+    node(~"var", Anno, #{~"name" => Name}).
 
 error_node(Reason, Anno) ->
-    String = node(~"string", Anno, #{~"value" => atom_to_binary(Reason, utf8)}),
-    Atom = apply_node(~"Lynx.Term.atom", [String], Anno),
-    Exception = apply_node(~"Lynx.Exception.error", [Atom], Anno),
-    apply_node(~"Lynx.Result.error", [Exception], Anno).
+    node(~"raise", Anno, #{~"class" => ~"error",
+        ~"reason" => node(~"atom", Anno, #{~"value" => atom_to_binary(Reason, utf8)})}).
 
-apply_node(Name, [], Anno) ->
-    ident_node(Name, Anno);
-apply_node(Name, Args, Anno) ->
-    node(~"apply", Anno, #{~"function" => ident_node(Name, []), ~"args" => Args}).
+local_call_node(Name, Args, Anno) ->
+    node(~"local_call", Anno, #{~"name" => Name, ~"args" => Args}).
+
+remote_call_node(Module, Name, Args, Anno) ->
+    node(~"remote_call", Anno, #{~"module" => Module, ~"name" => Name, ~"args" => Args}).
 
 node(Kind, Anno, Fields) ->
     Fields#{~"kind" => Kind, ~"span" => span(Anno)}.
