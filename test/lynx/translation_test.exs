@@ -159,7 +159,7 @@ defmodule Lynx.TranslationTest do
       cerl(~S"""
       -module(example).
       -export([allowed/1, identity_ensures/1]).
-      -law #{name => {identity_law, 1}, requires => allowed, ensures => identity_ensures}.
+      -law #{name => {identity_law, [value]}, requires => allowed, ensures => identity_ensures}.
       -proof <<"rfl">>.
       identity_ensures(X) -> identity(X) == X.
       allowed(_) -> true.
@@ -184,7 +184,7 @@ defmodule Lynx.TranslationTest do
                  %{
                    "kind" => "theorem",
                    "name" => "identity_law",
-                   "arity" => 1,
+                   "params" => ["value"],
                    "requires" => "allowed",
                    "ensures" => "identity_ensures",
                    "proof" => %{"source" => "rfl", "indentation" => 0, "span" => [5]}
@@ -200,7 +200,7 @@ defmodule Lynx.TranslationTest do
     core =
       cerl(~S"""
       -module(example).
-      -law #{name => {entry, 1}, ensures => expected}.
+      -law #{name => {entry, [x]}, ensures => expected}.
       -other value.
       -export([expected/1]).
       expected(_) -> true.
@@ -215,7 +215,7 @@ defmodule Lynx.TranslationTest do
     core =
       cerl(~S"""
       -module(example).
-      -law #{name => {entry, 1}, ensures => expected}.
+      -law #{name => {entry, [x]}, ensures => expected}.
       -proof "rfl".
       -export([expected/1]).
       expected(_) -> true.
@@ -230,7 +230,7 @@ defmodule Lynx.TranslationTest do
     core =
       cerl(~S"""
       -module(example).
-      -law #{name => {entry, 1}, ensures => expected}.
+      -law #{name => {entry, [x]}, ensures => expected}.
       -proof <<"rfl">>.
       -export([expected/1]).
       expected(_) -> true.
@@ -244,7 +244,7 @@ defmodule Lynx.TranslationTest do
     assert law == %{
              "kind" => "theorem",
              "name" => "entry",
-             "arity" => 1,
+             "params" => ["x"],
              "ensures" => "expected",
              "proof" => %{"source" => "rfl", "indentation" => 0, "span" => [4]},
              "span" => [2, 2]

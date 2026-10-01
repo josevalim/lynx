@@ -166,7 +166,7 @@ defmodule Lynx.CoreToLeanjTest do
         [
           {:cerl.c_atom(:law),
            :cerl.ann_abstract([10], [
-             %{name: {:entry, 1}, requires: :requirement, ensures: :expected, indentation: 4}
+             %{name: {:entry, [:x]}, requires: :requirement, ensures: :expected, indentation: 4}
            ])},
           {:cerl.c_atom(:proof), :cerl.ann_abstract([11], ["rfl"])}
         ],
@@ -183,7 +183,7 @@ defmodule Lynx.CoreToLeanjTest do
              "kind" => "theorem",
              "name" => "entry",
              "span" => [10],
-             "arity" => 1,
+             "params" => ["x"],
              "requires" => "requirement",
              "ensures" => "expected",
              "proof" => %{"source" => "rfl", "indentation" => 4, "span" => [12]}
@@ -199,7 +199,7 @@ defmodule Lynx.CoreToLeanjTest do
     end
 
     test "extracts a law with optional requires and a binary proof" do
-      core = law_core(%{name: {:entry, 1}, ensures: :expected}, ["exact hé"])
+      core = law_core(%{name: {:entry, [:x]}, ensures: :expected}, ["exact hé"])
 
       assert %{
                {:entry, 1} => {:law, law},
@@ -207,7 +207,7 @@ defmodule Lynx.CoreToLeanjTest do
              } = :lynx_core_to_leanj.to_definitions(core)
 
       assert law == %{
-               name: {:entry, 1},
+               name: {:entry, [:x]},
                ensures: :expected,
                anno: [10],
                proof: %{"source" => "exact hé", "indentation" => 0, "span" => [12]}
@@ -215,13 +215,13 @@ defmodule Lynx.CoreToLeanjTest do
     end
 
     test "extracts multiple paired laws with a binary proof and explicit indentation" do
-      law = %{name: {:entry, 1}, requires: :requirement, ensures: :expected, indentation: 4}
+      law = %{name: {:entry, [:x]}, requires: :requirement, ensures: :expected, indentation: 4}
       core = law_core(law, ["rfl"])
 
       attrs =
         :cerl.module_attrs(core) ++
           [
-            attribute(:law, [%{name: {:second, 1}, ensures: :expected}], [14]),
+            attribute(:law, [%{name: {:second, [:b, :a]}, ensures: :expected}], [14]),
             attribute(:proof, ["rfl"], [{15, 8}])
           ]
 
@@ -234,12 +234,12 @@ defmodule Lynx.CoreToLeanjTest do
                     requires: :requirement,
                     proof: %{"source" => "rfl", "indentation" => 4, "span" => [12]}
                   }},
-               {:second, 1} => {:law, %{proof: %{"span" => [16]}}}
+               {:second, 2} => {:law, %{name: {:second, [:b, :a]}, proof: %{"span" => [16]}}}
              } = :lynx_core_to_leanj.to_definitions(core)
     end
 
     test "reports missing or misplaced proofs at the offending attribute" do
-      law = attribute(:law, [%{name: {:entry, 1}, ensures: :expected}], [10])
+      law = attribute(:law, [%{name: {:entry, [:x]}, ensures: :expected}], [10])
       proof = attribute(:proof, ["rfl"], [11])
       other = attribute(:other, [:value], [12])
 
@@ -254,17 +254,30 @@ defmodule Lynx.CoreToLeanjTest do
 
     test "reports malformed law descriptors with their original annotations" do
       anno = [{:file, ~c"law.erl"}, {10, 2}]
-      reason = "law must contain name {atom, arity} and ensures function name"
+      reason = "law must contain name {atom, parameters} and ensures function name"
 
       for law <- [
             %{},
-            %{name: {:entry, 1}},
+            %{name: {:entry, [:x]}},
             %{name: {:entry, -1}, ensures: :expected},
-            %{name: {"entry", 1}, ensures: :expected},
-            %{name: {:entry, 1}, ensures: "expected"}
+            %{name: {:entry, 1}, ensures: :expected},
+            %{name: {"entry", [:x]}, ensures: :expected},
+            %{name: {:entry, [:x]}, ensures: "expected"}
           ] do
         core = core([attribute(:law, [law], anno), attribute(:proof, ["rfl"], [11])])
         assert {:error, ^anno, ^reason} = :lynx_core_to_leanj.to_definitions(core)
+      end
+    end
+
+    test "requires unique atom parameter names" do
+      for {params, reason} <- [
+            {["x"], "law parameters must be atoms"},
+            {[:x, :x], "law parameters must be unique"}
+          ] do
+        assert {:error, [10], ^reason} =
+                 :lynx_core_to_leanj.to_definitions(
+                   law_core(%{name: {:entry, params}, ensures: :expected})
+                 )
       end
     end
 
@@ -274,7 +287,7 @@ defmodule Lynx.CoreToLeanjTest do
             {%{indentation: -1}, "law indentation must be a nonnegative integer"},
             {%{indentation: 1.5}, "law indentation must be a nonnegative integer"}
           ] do
-        law = Map.merge(%{name: {:entry, 1}, ensures: :expected}, extra)
+        law = Map.merge(%{name: {:entry, [:x]}, ensures: :expected}, extra)
         assert {:error, [10], ^reason} = :lynx_core_to_leanj.to_definitions(law_core(law))
       end
     end
@@ -283,13 +296,13 @@ defmodule Lynx.CoreToLeanjTest do
       for proof <- [~c"rfl", [:not_text], [42]] do
         assert {:error, [11], "proof must be a binary"} ==
                  :lynx_core_to_leanj.to_definitions(
-                   law_core(%{name: {:entry, 1}, ensures: :expected}, proof)
+                   law_core(%{name: {:entry, [:x]}, ensures: :expected}, proof)
                  )
       end
     end
 
     test "a law replaces an ordinary function with the same name and arity" do
-      original = law_core(%{name: {:entry, 1}, ensures: :expected})
+      original = law_core(%{name: {:entry, [:x]}, ensures: :expected})
 
       core =
         core(
@@ -312,7 +325,7 @@ defmodule Lynx.CoreToLeanjTest do
 
   test "translates laws without a requires helper" do
     definitions =
-      :lynx_core_to_leanj.to_definitions(law_core(%{name: {:entry, 1}, ensures: :expected}))
+      :lynx_core_to_leanj.to_definitions(law_core(%{name: {:entry, [:x]}, ensures: :expected}))
 
     assert {:ok, %{{:entry, 1} => %{local_calls: [{:expected, 1}], translation: law}}, []} =
              translate(definitions)
@@ -320,7 +333,7 @@ defmodule Lynx.CoreToLeanjTest do
     assert law == %{
              "kind" => "theorem",
              "name" => "entry",
-             "arity" => 1,
+             "params" => ["x"],
              "span" => [10],
              "ensures" => "expected",
              "proof" => %{"source" => "rfl", "indentation" => 0, "span" => [12]}

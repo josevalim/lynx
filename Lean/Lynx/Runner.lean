@@ -17,7 +17,7 @@ Invalid input and runner failures return `{"status": "failure", "message": "..."
 Each verification diagnostic has `file`, `kind` (error/warning/info), and `message`, with `line` and
 `column` included only when known.
 Input files are an ordered array of {file, module, imports, contents} objects.
-Theorem nodes contain name, arity, an optional requires helper, an ensures helper,
+Theorem nodes contain name, named params, an optional requires helper, an ensures helper,
 and a proof object. Helpers are ordinary Result computations called with the theorem's
 parameters. An absent requires helper means no assumption.
 A proof object contains tactic source, nonnegative indentation, and a span locating
@@ -347,9 +347,10 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       command map decl info false
     pure (Unhygienic.run `(mutual $decls:command* end))
   | "theorem" => do
-    fields j ["kind", "name", "arity", "requires", "ensures", "proof", "span"]
-    let arity ← (← field j "arity").getNat?
-    let params := (Array.range arity).map fun i => mkIdent (Name.mkSimple s!"_{i}")
+    fields j ["kind", "name", "params", "requires", "ensures", "proof", "span"]
+    let params ← (← arr j "params").mapM fun p => do
+      pure (mkIdent (Name.mkSimple (← p.getStr?)))
+    let arity := params.size
     let args := params.map fun p => (⟨p.raw⟩ : TSyntax `term)
     let name := functionName (← str j "name") arity
     let termType := mkIdent ``Lynx.Term

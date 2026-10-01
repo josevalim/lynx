@@ -115,7 +115,7 @@ defmodule Lynx.RunnerTest do
             %{
               "kind" => "theorem",
               "name" => "example",
-              "arity" => 0,
+              "params" => [],
               "span" => [2, 3],
               "ensures" => "ensures",
               "proof" => %{
