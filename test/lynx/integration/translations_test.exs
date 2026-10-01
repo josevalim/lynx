@@ -34,19 +34,23 @@ defmodule Lynx.Integration.TranslationTest do
     assert length(files) == length(expected_files)
 
     for {left_file, right_file} <- Enum.zip(files, expected_files) do
+      # OTP dependencies have version-specific source locations.
+      {left_file, right_file} =
+        if left_file["file"] == source do
+          {left_file, right_file}
+        else
+          {without_spans(left_file), without_spans(right_file)}
+        end
+
+      left_file = Map.delete(left_file, "file")
+      right_file = Map.delete(right_file, "file")
       assert left_file == right_file
     end
 
     expected =
       Map.new(files, fn file ->
-        suffix =
-          if file["module"] == "Erlang." <> Path.basename(fixture, Path.extname(fixture)) do
-            ".lean"
-          else
-            "." <> file["module"] <> ".lean"
-          end
-
-        {file["file"], File.read!(Path.rootname(fixture) <> suffix)}
+        path = Path.rootname(fixture) <> "." <> file["module"] <> ".lean"
+        {file["file"], File.read!(path)}
       end)
 
     request = %{"command" => "render", "version" => "1.0", "files" => files}
@@ -58,6 +62,17 @@ defmodule Lynx.Integration.TranslationTest do
       assert left_file == right_file
     end
   end
+
+  defp without_spans(value) when is_map(value) do
+    value
+    |> Map.delete("span")
+    |> Map.new(fn {key, value} -> {key, without_spans(value)} end)
+  end
+
+  defp without_spans(value) when is_list(value),
+    do: Enum.map(value, &without_spans/1)
+
+  defp without_spans(value), do: value
 
   defp core(fixture, source) do
     assert {:ok, module, beam} =
