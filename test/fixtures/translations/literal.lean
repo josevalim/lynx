@@ -6,17 +6,17 @@ namespace Erlang.literal
 
 #lynx_pure
   public def «atoms/0» : Lynx.Result :=
-    Lynx.Result.ok
+    pure
       (Lynx.Term.cons (Lynx.Term.atom "foo")
         (Lynx.Term.cons (Lynx.Term.atom "bar baz") Lynx.Term.nil))
 
 #lynx_pure
   public def «empty_list/0» : Lynx.Result :=
-    Lynx.Result.ok Lynx.Term.nil
+    pure Lynx.Term.nil
 
 #lynx_pure
   public def «integers/0» : Lynx.Result :=
-    Lynx.Result.ok
+    pure
       (Lynx.Term.cons (Lynx.Term.integer (-1))
         (Lynx.Term.cons (Lynx.Term.integer 0)
           (Lynx.Term.cons (Lynx.Term.integer 1)

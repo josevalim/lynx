@@ -46,7 +46,10 @@ Calls acquire their `/arity` suffix from the number of arguments, including zero
 The producer qualifies module names as `Erlang.foo` or `Elixir.Foo`.
 The decoder uses those names directly.
 Explicit `erlang:apply/2` remains a remote call; dynamic application is a distinct
-node. Only the decoder chooses `Result.bind`, `Result.ok`, and exception constructors.
+node. The decoder assembles binds into `do` blocks with `let … ←`, emits successful
+values with `pure`, and chooses the exception constructors. Consecutive binds share
+one block. Using `pure` keeps a returned value local to its computation, including
+when that computation is nested inside another block.
 
 ## Declarations
 

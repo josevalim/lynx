@@ -30,6 +30,7 @@ Imports may name other input modules or compiled Lean modules loaded from disk.
 Verification elaborates decoded syntax directly. Rendering pretty-prints that syntax as Lean source. -/
 namespace Lynx.Runner
 open Lean
+open Lean.Parser.Term (doSeqItem)
 
 private def fields (j : Json) (allowed : List String) : Except String Unit := do
   let obj ← j.getObj?
@@ -172,13 +173,19 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let var ← param map info (← field j "var")
     let computation ← term map info false (← field j "computation")
     let body ← term map info false (← field j "body")
-    let bind := mkIdent ``Lynx.Result.bind
-    pure (Unhygienic.run `($bind $computation (fun $var:ident => $body)))
+    let item := withSpan info.info (Unhygienic.run `(doSeqItem| let $var:ident ← $computation:term))
+    -- Consecutive Core binds share one block; preserve locations on each statement.
+    match body with
+    | `(do $items:doSeqItem*) => pure (Unhygienic.run `(do $item:doSeqItem $items:doSeqItem*))
+    | _ =>
+      let last := Unhygienic.run `(doSeqItem| $body:term)
+      pure (Unhygienic.run `(do $item:doSeqItem $last:doSeqItem))
   | "return" => do
     fields j ["kind", "value", "span"]
     let value ← term map info false (← field j "value")
-    let ok := mkIdent ``Lynx.Result.ok
-    pure (Unhygienic.run `($ok $value))
+    -- `pure` remains local to this computation, including inside a bind's RHS.
+    let pureId := mkIdent `pure
+    pure (Unhygienic.run `($pureId $value))
   | "raise" => do
     fields j ["kind", "class", "reason", "span"]
     let ctor ← match ← str j "class" with
