@@ -69,7 +69,7 @@ private structure Span where
 private instance : Inhabited Span := ⟨{}⟩
 
 private structure ProofDiagnostic where
-  theoremName : Name
+  declarationName : Name
   message : String
   location : Location
 
@@ -492,11 +492,11 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
     result := result.push (withSpan info.info reduction)
   return result
 
-private def diagnostic (file moduleName kind message : String)
-    (location : Location := .unknown) (theoremName : Option Name := none) : Json :=
+private def diagnostic (file moduleName severity message : String)
+    (location : Location := .unknown) (declarationName : Option Name := none) : Json :=
   Json.mkObj <| [("file", toJson file), ("module", toJson moduleName),
-    ("theorem", toJson (theoremName.map Name.getString!)),
-    ("kind", toJson kind), ("message", toJson message)] ++
+    ("declaration", toJson (declarationName.map Name.getString!)),
+    ("severity", toJson severity), ("message", toJson message)] ++
     match location with
     | .unknown => []
     | .line line => [("line", toJson line)]
@@ -516,15 +516,27 @@ private def messageLocation (map : FileMap) (spans : Array Span) (msg : Message)
         | .column pos => result := .column pos
   return result
 
+/-- Read declaration identifiers from generated syntax, including purity wrappers.
+A command containing several declarations has no single declaration name. -/
+private partial def declarationNames (stx : Syntax) : Array Name :=
+  if stx.isOfKind ``Lean.Parser.Command.declaration then
+    let id := stx[1][1]
+    let id := if id.isIdent then id else id[0]
+    if id.isIdent then #[id.getId] else #[]
+  else
+    stx.getArgs.foldl (fun names child => names ++ declarationNames child) #[]
+
 private def elaborateFile (env : Lean.Environment) (file : String) (map : FileMap)
-    (commands : Array (TSyntax `command)) (theorems : Array (Option Name))
+    (commands : Array (TSyntax `command))
     : IO (Elab.Command.State × Array (Message × Option Name)) := do
   let action : Elab.Command.CommandElabM (Array (Message × Option Name)) := do
     let mut messages := #[]
-    for (cmd, theoremName) in commands.zip theorems do
+    for cmd in commands do
+      let names := declarationNames cmd.raw
+      let declarationName := if names.size == 1 then names[0]? else none
       Elab.Command.elabCommandTopLevel cmd
       for msg in (← get).messages.toList do
-        messages := messages.push (msg, theoremName)
+        messages := messages.push (msg, declarationName)
     return messages
   let (messages, state) ← (action.run { fileName := file, fileMap := map, snap? := none, cancelTk? := none }).run
     (Elab.Command.mkState env {} (Options.empty.setBool `Elab.async false)) |>.toIO
@@ -538,7 +550,6 @@ structure DecodedFile where
   imports : Array String
   fileMap : FileMap
   commands : Array (TSyntax `command)
-  private commandTheorems : Array (Option Name)
   private spans : Array Span
   private proofDiagnostics : Array ProofDiagnostic
   private theorems : Array (Name × Span)
@@ -604,7 +615,7 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
     try
       let moduleName ← IO.ofExcept (str entry "module")
       let map := sourceMap entry
-      let (moduleName, imports, commands, commandTheorems, state, reexportImports) ← IO.ofExcept do
+      let (moduleName, imports, commands, state, reexportImports) ← IO.ofExcept do
         fields entry ["file", "module", "imports", "contents"]
         let namespaceId ← (identifier moduleName).run env |>.run' {}
         let imports ← (← arr entry "imports").mapM fun j => do
@@ -613,28 +624,20 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
           pure id.getId.toString
         let contents ← arr entry "contents"
         let reexportImports := !contents.isEmpty
-        let (decoded, state) ← contents.mapM (fun entry => do
-          let cmds ← commands map entry
-          let theoremName ← if (← str entry "kind") == "theorem" then do
-            let name ← str entry "name"
-            let params ← arr entry "params"
-            pure (some (functionName name params.size).getId)
-          else pure none
-          pure (cmds, cmds.map fun _ => theoremName)) |>.run env |>.run {}
+        let (commands, state) ← contents.mapM (commands map) |>.run env |>.run {}
         let visibility := Unhygienic.run `(@[expose] public section)
         let start := Unhygienic.run `(namespace $namespaceId)
         let stop := Unhygienic.run `(end $namespaceId)
         pure (namespaceId.getId.toString, imports,
-          #[visibility, start] ++ (decoded.map (·.1)).flatten ++ #[stop],
-          #[none, none] ++ (decoded.map (·.2)).flatten ++ #[none], state, reexportImports)
-      return ⟨file, moduleName, imports, map, commands, commandTheorems,
+          #[visibility, start] ++ commands.flatten ++ #[stop], state, reexportImports)
+      return ⟨file, moduleName, imports, map, commands,
         state.spans, state.diagnostics, state.theorems, reexportImports⟩
     catch err => throw (IO.userError s!"{file}: {err}")
 
 private def parsingDiagnostics (file : DecodedFile) : Array Json :=
   file.proofDiagnostics.map fun error =>
     diagnostic file.fileName file.moduleName "error"
-      error.message error.location (some error.theoremName)
+      error.message error.location (some error.declarationName)
 
 private def renderFile (file : DecodedFile) (env : Lean.Environment) : IO String := do
   let action : CoreM String := do
@@ -681,12 +684,12 @@ private def verify (files : Array DecodedFile) (runtime : Runtime) (emit : Json 
         -- can import their runtime counterparts (e.g. additional Erlang.lists operations).
         let mainModule := `Lynx.Generated ++ Name.mkSimple s!"File{index}"
         let (state, messages) ← elaborateFile (env.setMainModule mainModule)
-          file.fileName file.fileMap file.commands file.commandTheorems
-        for (msg, theoremName) in messages do
+          file.fileName file.fileMap file.commands
+        for (msg, declarationName) in messages do
           if msg.severity == .error then fileFailed := true
           diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName
-            (match msg.severity with | .error => "error" | .warning => "warning" | .information => "info")
-            (← msg.data.toString) (messageLocation file.fileMap file.spans msg) theoremName)
+            msg.severity.toString
+            (← msg.data.toString) (messageLocation file.fileMap file.spans msg) declarationName)
         -- Audit local laws and the precomputed axiom dependencies of imported declarations.
         unless fileFailed do
           let audit : CoreM (Array Json) := do
