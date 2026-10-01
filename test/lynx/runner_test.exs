@@ -30,8 +30,17 @@ defmodule Lynx.RunnerTest do
              %{"status" => "ok", "diagnostics" => []}
            ] = Lynx.Commands.runner!(@lean_dir, request)
 
-    assert %{"file" => @literal_erl, "kind" => "error", "line" => 4, "column" => 15} = source
+    assert %{
+             "file" => @literal_erl,
+             "module" => "Elixir.Undeclared",
+             "declaration" => "source/0",
+             "severity" => "error",
+             "line" => 4,
+             "column" => 15
+           } = source
+
     assert source["message"] =~ "Unknown identifier `Elixir.Source.«value/0»`"
+    assert %{"module" => "Elixir.Undeclared", "declaration" => "runtime/0"} = runtime
     assert runtime["message"] =~ "Unknown identifier `Erlang.maps.«new/0»`"
   end
 
@@ -107,8 +116,8 @@ defmodule Lynx.RunnerTest do
     assert dependent == %{
              "file" => @literal_erl,
              "module" => "Elixir.Dependent",
-             "theorem" => nil,
-             "kind" => "error",
+             "declaration" => nil,
+             "severity" => "error",
              "message" => "import 'Elixir.Failed' must precede this file and verify successfully"
            }
   end
@@ -132,7 +141,9 @@ defmodule Lynx.RunnerTest do
            ] = Lynx.Commands.runner!(@lean_dir, wrong_request)
 
     assert Enum.any?(diagnostics, fn diagnostic ->
-             diagnostic["kind"] == "error" and
+             diagnostic["severity"] == "error" and
+               diagnostic["module"] == table_file["module"] and
+               diagnostic["declaration"] == "fun_table_apply_2_bind" and
                (diagnostic["message"] =~ "IsPure" or
                   diagnostic["message"] =~ "simp` made no progress")
            end)
@@ -167,8 +178,8 @@ defmodule Lynx.RunnerTest do
       assert diagnostic == %{
                "file" => @literal_erl,
                "module" => "Erlang.literal",
-               "theorem" => nil,
-               "kind" => "error",
+               "declaration" => "broken/0",
+               "severity" => "error",
                "line" => 4,
                "column" => 15,
                "message" => "Unknown identifier `vmissing`"
@@ -221,8 +232,8 @@ defmodule Lynx.RunnerTest do
       assert %{
                "file" => ^path,
                "module" => "Erlang.invalid_match",
-               "theorem" => nil,
-               "kind" => "error",
+               "declaration" => "broken/0",
+               "severity" => "error",
                "line" => 4,
                "column" => 5,
                "message" => message
@@ -274,8 +285,8 @@ defmodule Lynx.RunnerTest do
                %{
                  "file" => path,
                  "module" => "Elixir.Precision",
-                 "theorem" => "columns/0",
-                 "kind" => "error",
+                 "declaration" => "columns/0",
+                 "severity" => "error",
                  "line" => 11,
                  "column" => 28,
                  "message" => "Unknown identifier `missing`"
@@ -283,16 +294,16 @@ defmodule Lynx.RunnerTest do
                %{
                  "file" => path,
                  "module" => "Elixir.Precision",
-                 "theorem" => "line/0",
-                 "kind" => "error",
+                 "declaration" => "line/0",
+                 "severity" => "error",
                  "line" => 21,
                  "message" => "Unknown identifier `missing`"
                },
                %{
                  "file" => path,
                  "module" => "Elixir.Precision",
-                 "theorem" => "unknown/0",
-                 "kind" => "error",
+                 "declaration" => "unknown/0",
+                 "severity" => "error",
                  "message" => "Unknown identifier `missing`"
                }
              ]
@@ -325,26 +336,26 @@ defmodule Lynx.RunnerTest do
       assert diagnostics == [
                %{
                  "file" => path,
-                 "kind" => "error",
+                 "severity" => "error",
                  "line" => 10,
                  "column" => 13,
                  "module" => "Elixir.Syntax",
-                 "theorem" => "columns/0",
+                 "declaration" => "columns/0",
                  "message" => "expected term"
                },
                %{
                  "file" => path,
-                 "kind" => "error",
+                 "severity" => "error",
                  "line" => 20,
                  "module" => "Elixir.Syntax",
-                 "theorem" => "line/0",
+                 "declaration" => "line/0",
                  "message" => "expected term"
                },
                %{
                  "file" => path,
-                 "kind" => "error",
+                 "severity" => "error",
                  "module" => "Elixir.Syntax",
-                 "theorem" => "unknown/0",
+                 "declaration" => "unknown/0",
                  "message" => "expected term"
                }
              ]
@@ -370,22 +381,22 @@ defmodule Lynx.RunnerTest do
                  "status" => "error",
                  "diagnostics" => [
                    %{
-                     "kind" => "warning",
+                     "severity" => "warning",
                      "module" => "Elixir.Axioms",
-                     "theorem" => "untrusted/0"
+                     "declaration" => "untrusted/0"
                    },
-                   %{"kind" => "error"} = diagnostic
+                   %{"severity" => "error"} = diagnostic
                  ]
                }
              ] = Lynx.Commands.runner!(@lean_dir, request)
 
       assert diagnostic == %{
                "file" => path,
-               "kind" => "error",
+               "severity" => "error",
                "line" => 4,
                "column" => 15,
                "module" => "Elixir.Axioms",
-               "theorem" => "untrusted/0",
+               "declaration" => "untrusted/0",
                "message" => "unexpected axiom: sorryAx"
              }
     end
