@@ -12,20 +12,18 @@ You define a set of laws in Erlang/Elixir and prove them in Lean:
 
 ```elixir
 defmodule SumProofs do
-  use Lynx
+  use Lynx.Laws
 
   import :lists, only: [sum: 1]
 
-  # by rfl
   law sum_empty, expects: sum([]) == 0
 
   law sum_append(l, r),
-          requires: is_integer_list(l) and is_integer_list(r),
-          expects: sum(l) + sum(r) == sum(l ++ r) do
-    ~LEAN"""
+    requires: is_integer_list(l) and is_integer_list(r),
+    expects: sum(l) + sum(r) == sum(l ++ r),
+    proof: ~LEAN"""
     PROOF GOES HERE
     """
-  end
 
   defp is_integer_list([h | t]), do: is_integer(h) and is_integer_list(t)
   defp is_integer_list([]), do: true
@@ -33,8 +31,8 @@ defmodule SumProofs do
 end
 ```
 
-In Erlang, each `-law` attribute names ordinary predicate functions and must be
-immediately followed by a binary `-proof` attribute:
+In Erlang, each `-law` attribute names ordinary predicate functions. A separate
+binary `-proof` attribute must immediately follow its law:
 
 ```erlang
 -module(sum_proofs).

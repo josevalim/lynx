@@ -251,6 +251,30 @@ defmodule Lynx.TranslationTest do
            }
   end
 
+  test "verify selects all declared laws and skips unrelated exports" do
+    core =
+      cerl(~S"""
+      -module(example).
+      -export([unused/1]).
+      -law #{name => {first, [x]}, ensures => expected}.
+      -proof <<"rfl">>.
+      -law #{name => {second, [y]}, ensures => expected}.
+      -proof <<"rfl">>.
+      expected(_) -> true.
+      unused(X) -> {unsupported, X}.
+      """)
+
+    translation = Translation.new([{"example.erl", core}]) |> Translation.verify(:example)
+
+    assert %{
+             {:expected, 1} => %{},
+             {:first, 1} => %{},
+             {:second, 1} => %{}
+           } = translation.modules.example.translations
+
+    refute Map.has_key?(translation.modules.example.translations, {:unused, 1})
+  end
+
   test "keeps explicit apply when its argument list is dynamic" do
     core =
       cerl("""

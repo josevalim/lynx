@@ -28,9 +28,12 @@ to_definitions(#c_module{defs = Defs, attrs = Attrs}) ->
 
 definitions([{#c_var{name = Name}, #c_fun{} = Fun} | Rest], Definitions) ->
     definitions(Rest, Definitions#{Name => {function, Fun}});
+definitions([{#c_literal{val = law}, #c_literal{val = [#{proof := _}]} = LawNode} | Rest], Definitions) ->
+    {Name, Law} = law(LawNode, embedded_proof(LawNode)),
+    definitions(Rest, Definitions#{Name => {law, Law}});
 definitions([{#c_literal{val = law}, LawNode},
              {#c_literal{val = proof}, ProofNode} | Rest], Definitions) ->
-    {Name, Law} = law(LawNode, ProofNode),
+    {Name, Law} = law(LawNode, attribute_proof(ProofNode)),
     definitions(Rest, Definitions#{Name => {law, Law}});
 definitions([{#c_literal{val = law}, Core} | _], _) ->
     core_error(Core, ~"proof must immediately follow law");
@@ -39,7 +42,7 @@ definitions([{#c_literal{val = proof}, Core} | _], _) ->
 definitions([_ | Rest], Definitions) -> definitions(Rest, Definitions);
 definitions([], Definitions) -> Definitions.
 
-law(#c_literal{val = [#{name := {Name, Params}, ensures := Ensures} = Law]} = Core, ProofNode)
+law(#c_literal{val = [#{name := {Name, Params}, ensures := Ensures} = Law]} = Core, Proof)
         when is_atom(Name), is_list(Params), is_atom(Ensures) ->
     case lists:all(fun erlang:is_atom/1, Params) of
         true -> ok;
@@ -55,24 +58,34 @@ law(#c_literal{val = [#{name := {Name, Params}, ensures := Ensures} = Law]} = Co
         {ok, Requires} when is_atom(Requires) -> ok;
         _ -> core_error(Core, ~"law requires must be a function name")
     end,
-    Indentation = maps:get(indentation, Law, 0),
-    case is_integer(Indentation) andalso Indentation >= 0 of
-        true -> ok;
-        false -> core_error(Core, ~"law indentation must be a nonnegative integer")
+    Anno = case maps:find(span, Law) of
+        error -> cerl:get_ann(Core);
+        {ok, Span} ->
+            case span([Span]) of
+                [] -> core_error(Core, ~"law span must be a line or {line, column}");
+                _ -> [Span | cerl:get_ann(Core)]
+            end
     end,
-    %% Attribute values are literals, so the proof has no separate annotation.
+    {{Name, Arity}, Law#{anno => Anno, proof => Proof}};
+law(Core, _) -> core_error(Core, ~"law must contain name {atom, parameters} and ensures function name").
+
+embedded_proof(#c_literal{val = [#{proof := #{source := Proof, indentation := Indentation, span := Span}}]} = Core)
+        when is_binary(Proof), is_integer(Indentation), Indentation >= 0 ->
+    case span([Span]) of
+        [] -> core_error(Core, ~"embedded proof span must be a line or {line, column}");
+        ProofSpan -> #{~"source" => Proof, ~"indentation" => Indentation, ~"span" => ProofSpan}
+    end;
+embedded_proof(Core) ->
+    core_error(Core, ~"embedded proof requires a binary, nonnegative indentation and span").
+
+attribute_proof(#c_literal{val = [Proof]} = Core) when is_binary(Proof) ->
     %% Erlang multiline strings begin on the line after the proof attribute.
-    ProofSpan = case span(cerl:get_ann(ProofNode)) of
+    ProofSpan = case span(cerl:get_ann(Core)) of
         [Line | _] -> [Line + 1];
         [] -> []
     end,
-    {{Name, Arity}, Law#{anno => cerl:get_ann(Core),
-        proof => #{~"source" => proof_source(ProofNode), ~"indentation" => Indentation,
-                   ~"span" => ProofSpan}}};
-law(Core, _) -> core_error(Core, ~"law must contain name {atom, parameters} and ensures function name").
-
-proof_source(#c_literal{val = [Proof]}) when is_binary(Proof) -> Proof;
-proof_source(Core) -> core_error(Core, ~"proof must be a binary").
+    #{~"source" => Proof, ~"indentation" => 0, ~"span" => ProofSpan};
+attribute_proof(Core) -> core_error(Core, ~"proof must be a binary").
 
 -spec fun_table(map(), map()) -> [map()].
 fun_table(Funs, Modules) ->

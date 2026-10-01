@@ -29,6 +29,13 @@ defmodule Lynx.Translation do
     %__MODULE__{modules: modules}
   end
 
+  @doc "Translates all laws declared by a module and their reachable predicate helpers."
+  def verify(%__MODULE__{} = translation, name) do
+    {module, translation} = fetch_module!(translation, name, fn -> [] end)
+    laws = for {name, {:law, _}} <- module.definitions, do: name
+    add(translation, name, laws)
+  end
+
   @doc "Translates the requested functions and their local and remote callees."
   def add(%__MODULE__{stack: stack} = translation, name, names) do
     {module, translation} = fetch_module!(translation, name, fn -> [] end)
