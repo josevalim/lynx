@@ -54,7 +54,8 @@ example (table : Lynx.Term.FunTable) (depth id arity : Nat)
       Lynx.Result.resolve table depth (body captures arguments) :=
   Lynx.Result.resolve_apply_effectful table depth id arity captures arguments body entry size
 
-example (computation : Lynx.Result α) : (computation >>= Lynx.Result.ok) = computation := by
+example (computation : Lynx.Result α) :
+    (do let value ← computation; pure value) = computation := by
   simp
 
 meta section

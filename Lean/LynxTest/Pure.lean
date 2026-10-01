@@ -62,7 +62,7 @@ theorem bitstring_byte_size_is_integer (input : Term)
     Erlang.erlang.«byte_size/1», Erlang.erlang.«is_integer/1», Term.true, Term.false]
 
 #lynx_pure def classify (input : Term) : Result :=
-  .ok (match input with | .integer _ => Term.true | _ => Term.false)
+  pure (match input with | .integer _ => Term.true | _ => Term.false)
 
 /-- Purity composes through calls already checked by `#lynx_pure`. -/
 #lynx_pure def classifyTwice (input : Term) : Result := do
