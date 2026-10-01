@@ -2,23 +2,27 @@ defmodule Lynx.Commands do
   @moduledoc false
 
   @doc """
-  Runs one Runner request and returns the decoded response.
+  Runs one verification request and collects its per-file JSON updates in order.
 
-  Returns verification errors with their diagnostics. Raises on failure responses,
+  Each update includes rendered source, elapsed milliseconds, and diagnostics.
+  Returns verification errors as updates. Raises on failure responses,
   invalid JSON output, or unexpected exit statuses.
   The command is included in the request map.
   """
-  @spec runner!(String.t(), map()) :: map()
+  @spec runner!(String.t(), map()) :: [map()]
   def runner!(project_dir, request) do
     port = open_lake(project_dir, ["--quiet", "exe", "Lynx/Lynx.Runner"], [{:line, 1_000_000}])
 
-    output =
-      try do
-        Port.command(port, JSON.encode!(request) <> "\n")
-        collect_response(port, "")
-      after
-        Port.close(port)
-      end
+    try do
+      Port.command(port, JSON.encode!(request) <> "\n")
+      collect_responses(port, [])
+    after
+      Port.close(port)
+    end
+  end
+
+  defp collect_responses(port, responses) do
+    output = collect_response(port, [])
 
     response =
       case JSON.decode(output) do
@@ -33,11 +37,11 @@ defmodule Lynx.Commands do
       %{"status" => "failure", "message" => message} ->
         raise message
 
-      %{"status" => "ok"} ->
-        response
+      %{"status" => "done"} ->
+        Enum.reverse(responses)
 
-      %{"status" => "error"} ->
-        response
+      %{"status" => status} when status in ["ok", "error"] ->
+        collect_responses(port, [response | responses])
 
       _ ->
         raise "lynx runner returned an unexpected response: #{output}"
@@ -51,10 +55,10 @@ defmodule Lynx.Commands do
   defp collect_response(port, chunks) do
     receive do
       {^port, {:data, {:eol, data}}} ->
-        chunks <> data
+        [data | chunks] |> Enum.reverse() |> IO.iodata_to_binary()
 
       {^port, {:data, {:noeol, data}}} ->
-        collect_response(port, chunks <> data)
+        collect_response(port, [data | chunks])
 
       {^port, {:exit_status, status}} ->
         raise "lynx runner exited with status #{status} before responding"

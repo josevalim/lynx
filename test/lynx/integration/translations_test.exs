@@ -21,7 +21,11 @@ defmodule Lynx.Integration.TranslationTest do
       |> Enum.map(&:cerl.var_name/1)
       |> Kernel.--([{:module_info, 0}, {:module_info, 1}])
 
-    laws = for {name, {:law, _}} <- :lynx_core_to_leanj.to_definitions(core), do: name
+    laws =
+      for {key, value} <- :cerl.module_attrs(core),
+          :cerl.atom_val(key) == :law,
+          %{name: {name, params}} <- :cerl.concrete(value),
+          do: {name, length(params)}
 
     files =
       Lynx.Translation.new([{source, core}])
@@ -47,18 +51,23 @@ defmodule Lynx.Integration.TranslationTest do
       assert left_file == right_file
     end
 
-    expected =
-      Map.new(files, fn file ->
-        path = Path.rootname(fixture) <> "." <> file["module"] <> ".lean"
-        {file["file"], File.read!(path)}
-      end)
+    request = %{"command" => "verify", "version" => "1.0", "files" => files}
+    updates = Lynx.Commands.runner!(@lean_dir, request)
+    assert length(updates) == length(files)
 
-    request = %{"command" => "render", "version" => "1.0", "files" => files}
-    assert %{"status" => "ok", "files" => rendered} = Lynx.Commands.runner!(@lean_dir, request)
-    assert map_size(rendered) == map_size(expected)
+    for {file, update} <- Enum.zip(files, updates) do
+      assert %{
+               "status" => "ok",
+               "module" => module,
+               "source" => left_file,
+               "time_ms" => elapsed,
+               "diagnostics" => []
+             } = update
 
-    for {path, right_file} <- expected do
-      assert %{^path => left_file} = rendered
+      assert module == file["module"]
+      assert is_integer(elapsed) and elapsed >= 0
+      path = Path.rootname(fixture) <> "." <> module <> ".lean"
+      right_file = File.read!(path)
       assert left_file == right_file
     end
   end

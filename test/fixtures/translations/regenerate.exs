@@ -15,7 +15,11 @@ defmodule Lynx.Fixtures.Regenerate do
         |> Enum.map(&:cerl.var_name/1)
         |> Kernel.--([{:module_info, 0}, {:module_info, 1}])
 
-      laws = for {name, {:law, _}} <- :lynx_core_to_leanj.to_definitions(core), do: name
+      laws =
+        for {key, value} <- :cerl.module_attrs(core),
+            :cerl.atom_val(key) == :law,
+            %{name: {name, params}} <- :cerl.concrete(value),
+            do: {name, length(params)}
 
       files =
         Lynx.Translation.new([{source, core}])
@@ -36,12 +40,16 @@ defmodule Lynx.Fixtures.Regenerate do
     end
 
     for fixture <- Path.wildcard(Path.join(__DIR__, "*.json")) do
-      request = fixture |> File.read!() |> JSON.decode!() |> Map.put("command", "render")
-      %{"status" => "ok", "files" => sources} = Lynx.Commands.runner!(@lean_dir, request)
+      request = fixture |> File.read!() |> JSON.decode!() |> Map.put("command", "verify")
+      updates = Lynx.Commands.runner!(@lean_dir, request)
 
-      for file <- request["files"] do
-        path = Path.rootname(fixture) <> "." <> file["module"] <> ".lean"
-        write(path, Map.fetch!(sources, file["file"]))
+      unless Enum.all?(updates, &(&1["status"] == "ok")) do
+        Mix.raise("cannot verify #{fixture}: #{inspect(updates)}")
+      end
+
+      for %{"module" => module, "source" => source} <- updates do
+        path = Path.rootname(fixture) <> "." <> module <> ".lean"
+        write(path, source)
       end
     end
   end
