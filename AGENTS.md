@@ -1,13 +1,19 @@
 Start with the README.md to understand the general project scope.
 Do not change the README.md unless asked to do so.
 
-## Lean
+## Translation
+
+The translation code is done by `lib/lynx/translation.ex` and `src/lynx_core_to_leanj.erl`.
 
 When changing the translator or Lean syntax decoder, regenerate the existing
 translation fixtures from the repository root as appropriate:
-`mix run test/fixtures/translations/regenerate.exs json` for JSON changes and
-`mix run test/fixtures/translations/regenerate.exs lean` for rendered Lean changes.
+
+    mix run test/fixtures/translations/regenerate.exs json
+    mix run test/fixtures/translations/regenerate.exs lean
+
 If both change, regenerate JSON first, then Lean.
+
+## Lean
 
 All package paths below are relative to `Lean/`.
 
