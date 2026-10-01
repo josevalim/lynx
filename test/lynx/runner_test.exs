@@ -70,7 +70,7 @@ defmodule Lynx.RunnerTest do
            ] = Lynx.Commands.runner!(@lean_dir, request)
   end
 
-  test "does not publish failed modules and continues verifying unrelated files" do
+  test "skips dependents of failed modules and continues verifying unrelated files" do
     request = %{
       "command" => "verify",
       "version" => "1.0",
@@ -96,7 +96,7 @@ defmodule Lynx.RunnerTest do
              %{"status" => "error", "module" => "Elixir.Failed", "diagnostics" => [failed]},
              %{"status" => "ok", "module" => "Elixir.Unrelated", "diagnostics" => []},
              %{
-               "status" => "error",
+               "status" => "skipped",
                "module" => "Elixir.Dependent",
                "diagnostics" => [dependent]
              }
@@ -209,28 +209,27 @@ defmodule Lynx.RunnerTest do
     table_file = List.last(request["files"])
     [table] = table_file["contents"]
     entries = table["entries"]
-    assert Enum.frequencies_by(entries, & &1["pure"]) == %{true => 3, false => 2}
+    index = Enum.find_index(entries, &(&1["body"]["name"] == "remember"))
+    assert %{"pure" => false} = Enum.at(entries, index)
 
-    for {entry, index} <- Enum.with_index(entries), entry["pure"] == false do
-      wrong_entries = List.update_at(entries, index, &Map.put(&1, "pure", true))
-      wrong_table = Map.put(table, "entries", wrong_entries)
-      wrong_file = Map.put(table_file, "contents", [wrong_table])
-      wrong_request = Map.put(request, "files", Enum.drop(request["files"], -1) ++ [wrong_file])
+    wrong_entries = List.update_at(entries, index, &Map.put(&1, "pure", true))
+    wrong_table = Map.put(table, "entries", wrong_entries)
+    wrong_file = Map.put(table_file, "contents", [wrong_table])
+    wrong_request = Map.put(request, "files", Enum.drop(request["files"], -1) ++ [wrong_file])
 
-      assert [
-               %{"status" => "ok", "diagnostics" => []},
-               %{"status" => "error", "diagnostics" => diagnostics}
-             ] = Lynx.Commands.runner!(@lean_dir, wrong_request)
+    assert [
+             %{"status" => "ok", "diagnostics" => []},
+             %{"status" => "error", "diagnostics" => diagnostics}
+           ] = Lynx.Commands.runner!(@lean_dir, wrong_request)
 
-      assert Enum.any?(diagnostics, fn diagnostic ->
-               diagnostic["kind"] == "error" and
-                 (diagnostic["message"] =~ "IsPure" or
-                    diagnostic["message"] =~ "simp` made no progress")
-             end)
-    end
+    assert Enum.any?(diagnostics, fn diagnostic ->
+             diagnostic["kind"] == "error" and
+               (diagnostic["message"] =~ "IsPure" or
+                  diagnostic["message"] =~ "simp` made no progress")
+           end)
   end
 
-  test "verifies without source files and identifies unavailable source in errors" do
+  test "verifies without source files" do
     path = "../test/fixtures/translations/missing.erl"
 
     request = %{
@@ -241,6 +240,10 @@ defmodule Lynx.RunnerTest do
 
     assert [%{"status" => "ok", "file" => ^path, "diagnostics" => []}] =
              Lynx.Commands.runner!(@lean_dir, request)
+  end
+
+  test "reports unavailable source in verification diagnostics" do
+    path = "../test/fixtures/translations/missing.erl"
 
     broken = %{
       "kind" => "def",
@@ -255,13 +258,22 @@ defmodule Lynx.RunnerTest do
       }
     }
 
-    request = Map.put(request, "files", [file(path, "Erlang.missing", [broken])])
+    request = %{
+      "command" => "verify",
+      "version" => "1.0",
+      "files" => [file(path, "Erlang.missing", [broken])]
+    }
 
     assert [%{"status" => "error", "diagnostics" => [diagnostic]}] =
              Lynx.Commands.runner!(@lean_dir, request)
 
-    assert %{"line" => 20, "column" => 7, "kind" => "error"} = diagnostic
-    assert diagnostic["message"] =~ "source not available"
+    assert diagnostic == %{
+             "file" => path,
+             "line" => 20,
+             "column" => 7,
+             "kind" => "error",
+             "message" => "Unknown identifier `vmissing`\n(source not available)"
+           }
   end
 
   describe "errors" do
