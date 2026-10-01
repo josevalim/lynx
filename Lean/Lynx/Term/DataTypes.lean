@@ -134,6 +134,9 @@ instance : Monad @Result where
   pure := .ok
   bind := Result.bind
 
+/-- Normalize a successful monadic return without unfolding the `Monad` instance. -/
+@[simp] theorem pure_eq_ok (value : α) : (pure value : Result α) = .ok value := rfl
+
 instance : MonadStateOf Environment @Result where
   get := .get .ok
   set env := .set env (.ok .unit)

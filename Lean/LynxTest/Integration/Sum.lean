@@ -56,18 +56,19 @@ theorem rejected_inputs :
 theorem sum_result (input : Term)
     (valid : is_integer_list_1 input = .ok Term.true) :
     ∃ value : Int, sum_1 input = .ok (.integer value) := by
-  induction input using Term.induct with
-  | nil => exact ⟨0, rfl⟩
-  | cons head tail headIh ih =>
-    clear headIh
-    cases head
-    case integer value =>
+  -- Follow recursion on the list tail, rather than every nested Term field.
+  induction input using sum_1.induct with
+  | case1 => exact ⟨0, rfl⟩
+  | case2 head tail ih =>
+    simp only [is_integer_list_1, Erlang.erlang.«is_integer/1»] at valid
+    split at valid
+    next value =>
       have tailValid : is_integer_list_1 tail = .ok Term.true := by
-        simpa [is_integer_list_1, Erlang.erlang.«is_integer/1»] using valid
+        simpa only [Result.ok_bind, Term.true] using valid
       obtain ⟨subtotal, returned⟩ := ih tailValid
       exact ⟨value + subtotal, by simp [sum_1, returned]⟩
-    all_goals simp [is_integer_list_1, Erlang.erlang.«is_integer/1»] at valid
-  | _ => simp [is_integer_list_1] at valid
+    next => simp at valid
+  | case3 input notNil notCons => simp [is_integer_list_1] at valid
 
 /- law sum_append(l, r),
      requires: is_integer_list(l) and is_integer_list(r),
@@ -91,21 +92,21 @@ theorem sum_append (left right : Term)
         sum_1 input = .ok (.integer leftSum) ∧
         Erlang.erlang.«++/2» input right = .ok joined ∧
         sum_1 joined = .ok (.integer (leftSum + rightSum)) := by
-    induction input using Term.induct with
-    | nil => exact ⟨0, right, rfl, rfl, by simpa using rightReturned⟩
-    | cons head tail headIh ih =>
-      clear headIh
-      cases head
-      case integer value =>
+    induction input using sum_1.induct with
+    | case1 => exact ⟨0, right, rfl, rfl, by simpa using rightReturned⟩
+    | case2 head tail ih =>
+      simp only [is_integer_list_1, Erlang.erlang.«is_integer/1»] at valid
+      split at valid
+      next value =>
         have tailValid : is_integer_list_1 tail = .ok Term.true := by
-          simpa [is_integer_list_1, Erlang.erlang.«is_integer/1»] using valid
+          simpa only [Result.ok_bind, Term.true] using valid
         obtain ⟨subtotal, joined, returned, appended, combined⟩ := ih tailValid
         refine ⟨value + subtotal, .cons (.integer value) joined, ?_, ?_, ?_⟩
         · simp [sum_1, returned]
         · simp [Erlang.erlang.«++/2», appended]
         · simp [sum_1, combined, Int.add_assoc]
-      all_goals simp [is_integer_list_1, Erlang.erlang.«is_integer/1»] at valid
-    | _ => simp [is_integer_list_1] at valid
+      next => simp at valid
+    | case3 input notNil notCons => simp [is_integer_list_1] at valid
   obtain ⟨leftSum, joined, leftReturned, appended, combined⟩ := append_ok left leftValid
   simp [appendExpression, leftReturned, rightReturned, appended, combined,
     Erlang.erlang.«==/2»]
