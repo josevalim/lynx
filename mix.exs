@@ -8,6 +8,7 @@ defmodule Lynx.MixProject do
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: [],
+      test_ignore_filters: ["test/fixtures/translations/regenerate.exs"],
       aliases: [
         setup: ["deps.get", "cmd --cd Lean lake build"],
         precommit: ["format", "test.all"],
