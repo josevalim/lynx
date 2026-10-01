@@ -40,16 +40,8 @@ defmodule Lynx.Fixtures.Regenerate do
       %{"status" => "ok", "files" => sources} = Lynx.Commands.runner!(@lean_dir, request)
 
       for file <- request["files"] do
-        suffix =
-          cond do
-            file["module"] == "Erlang." <> Path.basename(fixture, Path.extname(fixture)) ->
-              ".lean"
-
-            true ->
-              "." <> file["module"] <> ".lean"
-          end
-
-        write(Path.rootname(fixture) <> suffix, Map.fetch!(sources, file["file"]))
+        path = Path.rootname(fixture) <> "." <> file["module"] <> ".lean"
+        write(path, Map.fetch!(sources, file["file"]))
       end
     end
   end
