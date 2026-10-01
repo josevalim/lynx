@@ -534,6 +534,32 @@ structure DecodedFile where
   private reexportImports : Bool
   private sourceAvailable : Bool
 
+/-- Immutable runtime imports, reused without retaining translated declarations. -/
+private structure Runtime where
+  env : Lean.Environment
+  imports : ImportState
+
+private def runtimeImports : Array Import := #[{ module := `Lynx, isExported := true }]
+
+private def getRuntime (cache : IO.Ref (Option Runtime)) : IO Runtime := do
+  if let some runtime ← cache.get then return runtime
+  unsafe enableInitializersExecution
+  let runtime ← withImporting do
+    let (_, state) ← (importModulesCore runtimeImports (globalLevel := .exported)).run
+    let env ← finalizeImport state runtimeImports {} 0 false true (level := .exported)
+    pure ({ env, imports := state } : Runtime)
+  cache.set (some runtime)
+  return runtime
+
+private def importFile (runtime : Runtime) (imports : Array Import)
+    (artifacts : NameMap ImportArtifacts) : IO Lean.Environment := do
+  if imports == runtimeImports then return runtime.env
+  unsafe enableInitializersExecution
+  withImporting do
+    -- Each file extends the runtime's import state, never a preceding file's state.
+    let (_, state) ← (importModulesCore imports (globalLevel := .exported) (arts := artifacts)).run runtime.imports
+    finalizeImport state imports {} 0 false true (level := .exported)
+
 /-- A source file is optional (BEAM debug information often names a build
 machine path). Reserve offsets for supplied locations even without its text. -/
 private partial def sourceExtent (j : Json) : Nat × Nat := Id.run do
@@ -596,7 +622,8 @@ private def parsingDiagnostics (file : DecodedFile) : Array Json :=
       (error.message ++ if file.sourceAvailable then "" else "\n(source not available)") error.location
 
 /-- Render syntax without elaborating the input declarations. -/
-private def render (files : Array DecodedFile) (env : Lean.Environment) : IO (UInt32 × Json) := do
+private def render (files : Array DecodedFile) (runtime : Runtime) : IO (UInt32 × Json) := do
+  let env := runtime.env
   let diagnostics := files.flatMap parsingDiagnostics
   unless diagnostics.isEmpty do
     return (1, Json.mkObj [("status", toJson "error"), ("diagnostics", .arr diagnostics)])
@@ -616,7 +643,7 @@ private def render (files : Array DecodedFile) (env : Lean.Environment) : IO (UI
 
 /-- Verify each file against its declared imports, exporting successful files as modules.
 Artifacts live only for this request; they are not a persistent verification cache. -/
-private def verify (files : Array DecodedFile) (baseEnv : Lean.Environment) : IO (UInt32 × Json) :=
+private def verify (files : Array DecodedFile) (runtime : Runtime) : IO (UInt32 × Json) :=
   IO.FS.withTempDir fun directory => do
     let mut artifacts : NameMap ImportArtifacts := {}
     let mut verified : Std.HashMap String Name := {}
@@ -625,10 +652,10 @@ private def verify (files : Array DecodedFile) (baseEnv : Lean.Environment) : IO
     for (file, index) in files.zipIdx do
       let mut fileFailed := !file.proofDiagnostics.isEmpty
       diagnostics := diagnostics ++ parsingDiagnostics file
-      let mut imports : Array Import := #[{ module := `Lynx, isExported := true }]
+      let mut imports := runtimeImports
       let mut missingImport := false
       for name in file.imports do
-        let moduleName ← IO.ofExcept <| (identifier name).run baseEnv |>.run' {}
+        let moduleName ← IO.ofExcept <| (identifier name).run runtime.env |>.run' {}
         let moduleName := moduleName.getId
         let moduleName ← if name != file.moduleName && files.any (·.moduleName == name) then do
           if let some verifiedName := verified[name]? then
@@ -644,8 +671,7 @@ private def verify (files : Array DecodedFile) (baseEnv : Lean.Environment) : IO
       if missingImport then
         failed := true
         continue
-      unsafe enableInitializersExecution
-      let env ← importModules imports {} (loadExts := true) (level := .exported) (arts := artifacts)
+      let env ← importFile runtime imports artifacts
       -- Keep artifact names distinct from source namespaces so translated modules
       -- can import their runtime counterparts (e.g. additional Erlang.lists operations).
       let mainModule := `Lynx.Generated ++ Name.mkSimple s!"File{index}"
@@ -683,25 +709,26 @@ private def verify (files : Array DecodedFile) (baseEnv : Lean.Environment) : IO
     return (if failed then 1 else 0, Json.mkObj [
       ("status", toJson (if failed then "error" else "ok")), ("diagnostics", .arr diagnostics)])
 
-private def runFiles (j : Json)
-    (action : Array DecodedFile → Lean.Environment → IO (UInt32 × Json)) : IO Json := do
+private def runFiles (j : Json) (cache : IO.Ref (Option Runtime))
+    (action : Array DecodedFile → Runtime → IO (UInt32 × Json)) : IO Json := do
   let files ← IO.ofExcept do
     fields j ["command", "version", "files"]
     arr j "files"
-  unsafe enableInitializersExecution
-  let env ← importModules #[{ module := `Lynx }] {} (loadExts := true)
-  let decoded ← decode files env
-  return (← action decoded env).2
+  let runtime ← if files.isEmpty then
+    pure ({ env := ← mkEmptyEnvironment, imports := default } : Runtime)
+  else getRuntime cache
+  let decoded ← decode files runtime.env
+  return (← action decoded runtime).2
 
-private def run (request : String) : IO Json := do
+private def run (request : String) (cache : IO.Ref (Option Runtime)) : IO Json := do
   try
     let j ← IO.ofExcept (Json.parse request)
     let command ← IO.ofExcept (str j "command")
     let version ← IO.ofExcept (str j "version")
     unless version == "1.0" do throw (IO.userError "unsupported version")
     match command with
-    | "verify" => runFiles j verify
-    | "render" => runFiles j render
+    | "verify" => runFiles j cache verify
+    | "render" => runFiles j cache render
     | _ => throw (IO.userError s!"unsupported runner command '{command}'")
   catch err =>
     return Json.mkObj [("status", toJson "failure"), ("message", toJson err.toString)]
@@ -712,12 +739,14 @@ end Lynx.Runner
 public def main (args : List String) : IO UInt32 := do
   match args with
   | [] =>
+    Lean.initSearchPath (← Lean.findSysroot)
+    let cache ← IO.mkRef (none : Option Lynx.Runner.Runtime)
     let stdin ← IO.getStdin
     let stdout ← IO.getStdout
     repeat
       let request ← stdin.getLine
       if request.isEmpty then break
-      stdout.putStrLn (← Lynx.Runner.run request).compress
+      stdout.putStrLn (← Lynx.Runner.run request cache).compress
       stdout.flush
     return 0
   | _ =>
