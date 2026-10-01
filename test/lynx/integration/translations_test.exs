@@ -4,53 +4,59 @@ defmodule Lynx.Integration.TranslationTest do
   @lean_dir Path.expand("../../../Lean", __DIR__)
   @translations_dir Path.expand("../../fixtures/translations", __DIR__)
 
-  @tag timeout: to_timeout(minute: 10)
-  test "translates all Erlang fixtures to verified Lean source" do
-    fixtures = Path.wildcard(Path.join(@translations_dir, "*.erl"))
-    assert fixtures != []
+  for fixture <- Path.wildcard(Path.join(@translations_dir, "*.erl")) do
+    @tag timeout: to_timeout(minute: 10)
+    test "translates #{Path.basename(fixture)}" do
+      check_translation(unquote(fixture))
+    end
+  end
 
-    Enum.each(fixtures, fn fixture ->
-      source = "../test/fixtures/translations/#{Path.basename(fixture)}"
+  defp check_translation(fixture) do
+    source = "../test/fixtures/translations/#{Path.basename(fixture)}"
+    {module, core} = core(fixture, source)
 
-      {module, core} = core(fixture, source)
+    exports =
+      core
+      |> :cerl.module_exports()
+      |> Enum.map(&:cerl.var_name/1)
+      |> Kernel.--([{:module_info, 0}, {:module_info, 1}])
 
-      exports =
-        core
-        |> :cerl.module_exports()
-        |> Enum.map(&:cerl.var_name/1)
-        |> Kernel.--([{:module_info, 0}, {:module_info, 1}])
+    laws = for {name, {:law, _}} <- :lynx_core_to_leanj.to_definitions(core), do: name
 
-      laws = for {name, {:law, _}} <- :lynx_core_to_leanj.to_definitions(core), do: name
+    files =
+      Lynx.Translation.new([{source, core}])
+      |> Lynx.Translation.add(module, exports ++ laws)
+      |> Lynx.Translation.assemble()
 
-      files =
-        Lynx.Translation.new([{source, core}])
-        |> Lynx.Translation.add(module, exports ++ laws)
-        |> Lynx.Translation.assemble()
+    assert %{"version" => "1.0", "files" => expected_files} =
+             JSON.decode!(File.read!(Path.rootname(fixture) <> ".json"))
 
-      request = %{"version" => "1.0", "files" => files}
+    assert length(files) == length(expected_files)
 
-      assert request == JSON.decode!(File.read!(Path.rootname(fixture) <> ".json")),
-             "translated output does not match #{fixture}"
+    for {left_file, right_file} <- Enum.zip(files, expected_files) do
+      assert left_file == right_file
+    end
 
-      expected =
-        Map.new(files, fn file ->
-          suffix =
-            cond do
-              file["module"] == "Erlang." <> Path.basename(fixture, Path.extname(fixture)) ->
-                ".lean"
+    expected =
+      Map.new(files, fn file ->
+        suffix =
+          if file["module"] == "Erlang." <> Path.basename(fixture, Path.extname(fixture)) do
+            ".lean"
+          else
+            "." <> file["module"] <> ".lean"
+          end
 
-              true ->
-                "." <> file["module"] <> ".lean"
-            end
+        {file["file"], File.read!(Path.rootname(fixture) <> suffix)}
+      end)
 
-          {file["file"], File.read!(Path.rootname(fixture) <> suffix)}
-        end)
+    request = %{"command" => "render", "version" => "1.0", "files" => files}
+    assert %{"status" => "ok", "files" => rendered} = Lynx.Commands.runner!(@lean_dir, request)
+    assert map_size(rendered) == map_size(expected)
 
-      rendered = Lynx.Commands.runner!(@lean_dir, Map.put(request, "command", "render"))
-
-      assert rendered == %{"status" => "ok", "files" => expected},
-             "rendered output does not match #{fixture}"
-    end)
+    for {path, right_file} <- expected do
+      assert %{^path => left_file} = rendered
+      assert left_file == right_file
+    end
   end
 
   defp core(fixture, source) do
