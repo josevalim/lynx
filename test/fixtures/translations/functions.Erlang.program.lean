@@ -3,9 +3,11 @@ module
 public import Lynx
 public import Erlang.functions
 
+@[expose] public section
+
 namespace Erlang.program
 
-public def fun_table : Lynx.Term.FunTable :=
+def fun_table : Lynx.Term.FunTable :=
   #[Lynx.Term.FunEntry.pure fun captures args =>
       match captures, args with
       | #[vcap1], #[varg1] =>
@@ -29,8 +31,8 @@ public def fun_table : Lynx.Term.FunTable :=
       | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))]
 
 @[simp↓]
-public theorem fun_table_apply_0_bind {α : Type} (depth : Nat) (vcap1 : Lynx.Term)
-    (varg1 : Lynx.Term) (next : Lynx.Term → Lynx.Result α) :
+theorem fun_table_apply_0_bind {α : Type} (depth : Nat) (vcap1 : Lynx.Term) (varg1 : Lynx.Term)
+    (next : Lynx.Term → Lynx.Result α) :
     Lynx.Result.resolve fun_table depth
         (Lynx.Term.apply (Lynx.Term.function 0 1 #[vcap1]) #[varg1] >>= next) =
       Lynx.Result.resolve fun_table depth (Erlang.functions.«$lynx_fun_0/2» vcap1 varg1 >>= next) :=
@@ -51,7 +53,7 @@ public theorem fun_table_apply_0_bind {α : Type} (depth : Nat) (vcap1 : Lynx.Te
   rw [Lynx.Result.ofExcept_toExcept (Erlang.functions.«$lynx_fun_0/2» vcap1 varg1)]
 
 @[simp↓]
-public theorem fun_table_apply_0_bind_explicit {α : Type} (depth : Nat) (vcap1 : Lynx.Term)
+theorem fun_table_apply_0_bind_explicit {α : Type} (depth : Nat) (vcap1 : Lynx.Term)
     (varg1 : Lynx.Term) (next : Lynx.Term → Lynx.Result α) :
     Lynx.Result.resolve fun_table depth
         (Lynx.Result.bind (Lynx.Term.apply (Lynx.Term.function 0 1 #[vcap1]) #[varg1]) next) =
@@ -60,7 +62,7 @@ public theorem fun_table_apply_0_bind_explicit {α : Type} (depth : Nat) (vcap1 
   by exact fun_table_apply_0_bind depth vcap1 varg1 next
 
 @[simp]
-public theorem fun_table_apply_0 (depth : Nat) (vcap1 : Lynx.Term) (varg1 : Lynx.Term) :
+theorem fun_table_apply_0 (depth : Nat) (vcap1 : Lynx.Term) (varg1 : Lynx.Term) :
     Lynx.Result.resolve fun_table depth
         (Lynx.Term.apply (Lynx.Term.function 0 1 #[vcap1]) #[varg1]) =
       Erlang.functions.«$lynx_fun_0/2» vcap1 varg1 :=
@@ -71,7 +73,7 @@ public theorem fun_table_apply_0 (depth : Nat) (vcap1 : Lynx.Term) (varg1 : Lynx
     fun_table_apply_0_bind depth vcap1 varg1 (fun value => Lynx.Result.ok value)
 
 @[simp↓]
-public theorem fun_table_apply_1_bind {α : Type} (depth : Nat) (varg1 : Lynx.Term)
+theorem fun_table_apply_1_bind {α : Type} (depth : Nat) (varg1 : Lynx.Term)
     (next : Lynx.Term → Lynx.Result α) :
     Lynx.Result.resolve fun_table depth
         (Lynx.Term.apply (Lynx.Term.function 1 1 #[]) #[varg1] >>= next) =
@@ -91,7 +93,7 @@ public theorem fun_table_apply_1_bind {α : Type} (depth : Nat) (varg1 : Lynx.Te
   rw [Lynx.Result.ofExcept_toExcept (Erlang.functions.«inc/1» varg1)]
 
 @[simp↓]
-public theorem fun_table_apply_1_bind_explicit {α : Type} (depth : Nat) (varg1 : Lynx.Term)
+theorem fun_table_apply_1_bind_explicit {α : Type} (depth : Nat) (varg1 : Lynx.Term)
     (next : Lynx.Term → Lynx.Result α) :
     Lynx.Result.resolve fun_table depth
         (Lynx.Result.bind (Lynx.Term.apply (Lynx.Term.function 1 1 #[]) #[varg1]) next) =
@@ -100,7 +102,7 @@ public theorem fun_table_apply_1_bind_explicit {α : Type} (depth : Nat) (varg1 
   by exact fun_table_apply_1_bind depth varg1 next
 
 @[simp]
-public theorem fun_table_apply_1 (depth : Nat) (varg1 : Lynx.Term) :
+theorem fun_table_apply_1 (depth : Nat) (varg1 : Lynx.Term) :
     Lynx.Result.resolve fun_table depth (Lynx.Term.apply (Lynx.Term.function 1 1 #[]) #[varg1]) =
       Erlang.functions.«inc/1» varg1 :=
   by
@@ -110,7 +112,7 @@ public theorem fun_table_apply_1 (depth : Nat) (varg1 : Lynx.Term) :
     fun_table_apply_1_bind depth varg1 (fun value => Lynx.Result.ok value)
 
 @[simp↓]
-public theorem fun_table_apply_2_bind {α : Type} (depth : Nat) (varg1 : Lynx.Term)
+theorem fun_table_apply_2_bind {α : Type} (depth : Nat) (varg1 : Lynx.Term)
     (next : Lynx.Term → Lynx.Result α) :
     Lynx.Result.resolve fun_table (depth + 1)
         (Lynx.Term.apply (Lynx.Term.function 2 1 #[]) #[varg1] >>= next) =
@@ -128,7 +130,7 @@ public theorem fun_table_apply_2_bind {α : Type} (depth : Nat) (varg1 : Lynx.Te
   rfl
 
 @[simp↓]
-public theorem fun_table_apply_2_bind_explicit {α : Type} (depth : Nat) (varg1 : Lynx.Term)
+theorem fun_table_apply_2_bind_explicit {α : Type} (depth : Nat) (varg1 : Lynx.Term)
     (next : Lynx.Term → Lynx.Result α) :
     Lynx.Result.resolve fun_table (depth + 1)
         (Lynx.Result.bind (Lynx.Term.apply (Lynx.Term.function 2 1 #[]) #[varg1]) next) =
@@ -137,7 +139,7 @@ public theorem fun_table_apply_2_bind_explicit {α : Type} (depth : Nat) (varg1 
   by exact fun_table_apply_2_bind depth varg1 next
 
 @[simp]
-public theorem fun_table_apply_2 (depth : Nat) (varg1 : Lynx.Term) :
+theorem fun_table_apply_2 (depth : Nat) (varg1 : Lynx.Term) :
     Lynx.Result.resolve fun_table (depth + 1)
         (Lynx.Term.apply (Lynx.Term.function 2 1 #[]) #[varg1]) =
       Lynx.Result.resolve fun_table depth (Erlang.functions.«remember/1» varg1) :=
@@ -146,8 +148,8 @@ public theorem fun_table_apply_2 (depth : Nat) (varg1 : Lynx.Term) :
     fun_table_apply_2_bind depth varg1 (fun value => Lynx.Result.ok value)
 
 @[simp↓]
-public theorem fun_table_apply_3_bind {α : Type} (depth : Nat) (vcap1 : Lynx.Term)
-    (varg1 : Lynx.Term) (next : Lynx.Term → Lynx.Result α) :
+theorem fun_table_apply_3_bind {α : Type} (depth : Nat) (vcap1 : Lynx.Term) (varg1 : Lynx.Term)
+    (next : Lynx.Term → Lynx.Result α) :
     Lynx.Result.resolve fun_table (depth + 1)
         (Lynx.Term.apply (Lynx.Term.function 3 1 #[vcap1]) #[varg1] >>= next) =
       (Lynx.Result.resolve fun_table depth (Erlang.functions.«$lynx_fun_3/2» vcap1 varg1) >>=
@@ -164,7 +166,7 @@ public theorem fun_table_apply_3_bind {α : Type} (depth : Nat) (vcap1 : Lynx.Te
   rfl
 
 @[simp↓]
-public theorem fun_table_apply_3_bind_explicit {α : Type} (depth : Nat) (vcap1 : Lynx.Term)
+theorem fun_table_apply_3_bind_explicit {α : Type} (depth : Nat) (vcap1 : Lynx.Term)
     (varg1 : Lynx.Term) (next : Lynx.Term → Lynx.Result α) :
     Lynx.Result.resolve fun_table (depth + 1)
         (Lynx.Result.bind (Lynx.Term.apply (Lynx.Term.function 3 1 #[vcap1]) #[varg1]) next) =
@@ -174,7 +176,7 @@ public theorem fun_table_apply_3_bind_explicit {α : Type} (depth : Nat) (vcap1 
   by exact fun_table_apply_3_bind depth vcap1 varg1 next
 
 @[simp]
-public theorem fun_table_apply_3 (depth : Nat) (vcap1 : Lynx.Term) (varg1 : Lynx.Term) :
+theorem fun_table_apply_3 (depth : Nat) (vcap1 : Lynx.Term) (varg1 : Lynx.Term) :
     Lynx.Result.resolve fun_table (depth + 1)
         (Lynx.Term.apply (Lynx.Term.function 3 1 #[vcap1]) #[varg1]) =
       Lynx.Result.resolve fun_table depth (Erlang.functions.«$lynx_fun_3/2» vcap1 varg1) :=
@@ -183,7 +185,7 @@ public theorem fun_table_apply_3 (depth : Nat) (vcap1 : Lynx.Term) (varg1 : Lynx
     fun_table_apply_3_bind depth vcap1 varg1 (fun value => Lynx.Result.ok value)
 
 @[simp↓]
-public theorem fun_table_apply_4_bind {α : Type} (depth : Nat) (next : Lynx.Term → Lynx.Result α) :
+theorem fun_table_apply_4_bind {α : Type} (depth : Nat) (next : Lynx.Term → Lynx.Result α) :
     Lynx.Result.resolve fun_table depth
         (Lynx.Term.apply (Lynx.Term.function 4 0 #[]) #[] >>= next) =
       Lynx.Result.resolve fun_table depth (Erlang.functions.«zero/0» >>= next) :=
@@ -201,7 +203,7 @@ public theorem fun_table_apply_4_bind {α : Type} (depth : Nat) (next : Lynx.Ter
   rw [Lynx.Result.ofExcept_toExcept Erlang.functions.«zero/0»]
 
 @[simp↓]
-public theorem fun_table_apply_4_bind_explicit {α : Type} (depth : Nat)
+theorem fun_table_apply_4_bind_explicit {α : Type} (depth : Nat)
     (next : Lynx.Term → Lynx.Result α) :
     Lynx.Result.resolve fun_table depth
         (Lynx.Result.bind (Lynx.Term.apply (Lynx.Term.function 4 0 #[]) #[]) next) =
@@ -209,7 +211,7 @@ public theorem fun_table_apply_4_bind_explicit {α : Type} (depth : Nat)
   by exact fun_table_apply_4_bind depth next
 
 @[simp]
-public theorem fun_table_apply_4 (depth : Nat) :
+theorem fun_table_apply_4 (depth : Nat) :
     Lynx.Result.resolve fun_table depth (Lynx.Term.apply (Lynx.Term.function 4 0 #[]) #[]) =
       Erlang.functions.«zero/0» :=
   by

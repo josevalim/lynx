@@ -52,10 +52,10 @@ defmodule Lynx.Translation do
             stack: stack
         }
 
-      {:unsupported_core, span_anno, core} ->
+      {:error, span_anno, reason} ->
         raise CompileError,
               source_location(span_anno, module.file) ++
-                [description: "unsupported Core expression:\n#{core}"]
+                [description: reason]
     end
   end
 
@@ -196,11 +196,13 @@ defmodule Lynx.Translation do
   end
 
   defp module_data(file, core) do
-    %{
-      definitions: :lynx_core_to_leanj.to_definitions(core),
-      translations: %{},
-      file: file
-    }
+    case :lynx_core_to_leanj.to_definitions(core) do
+      {:error, span_anno, reason} ->
+        raise CompileError, source_location(span_anno, file) ++ [description: reason]
+
+      definitions ->
+        %{definitions: definitions, translations: %{}, file: file}
+    end
   end
 
   defp validate_function!(target, module, function, arity, location) do
@@ -344,7 +346,13 @@ defmodule Lynx.Translation do
     {defs, pure} =
       Enum.map_reduce(names, true, fn name, pure ->
         {^name, {translation, definition_pure}} = :digraph.vertex(graph, name)
-        {Map.put(translation, "pure", definition_pure), pure and definition_pure}
+
+        definition =
+          if translation["kind"] == "def",
+            do: Map.put(translation, "pure", definition_pure),
+            else: translation
+
+        {definition, pure and definition_pure}
       end)
 
     [first | _] = defs

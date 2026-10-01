@@ -17,6 +17,13 @@ Invalid input and runner failures return `{"status": "failure", "message": "..."
 Each verification diagnostic has `file`, `kind` (error/warning/info), and `message`, with `line` and
 `column` included only when known.
 Input files are an ordered array of {file, module, imports, contents} objects.
+Theorem nodes contain name, arity, an optional requires helper, an ensures helper,
+and a proof object. Helpers are ordinary Result computations called with the theorem's
+parameters. An absent requires helper means no assumption.
+A proof object contains tactic source, nonnegative indentation, and a span locating
+the first character of that source. The producer handles host delimiters and line offsets. Proof syntax keeps
+its own source ranges, mapped into the host file. Missing original source is
+normal for BEAM dependencies; diagnostics say "source not available".
 Function tables carry entry metadata: body, captures, args, pure, and span.
 The decoder builds typed pure/effectful callables; a pure entry must prove
 the translated body's purity during elaboration. Each entry also generates checked
@@ -56,12 +63,21 @@ private structure Span where
 
 private instance : Inhabited Span := ⟨{}⟩
 
-private abbrev DecodeM := ReaderT Lean.Environment (StateT (Array Span) (Except String))
+private structure ProofDiagnostic where
+  message : String
+  location : Location
+
+private structure DecodeState where
+  spans : Array Span := #[]
+  diagnostics : Array ProofDiagnostic := #[]
+  theorems : Array (Name × Span) := #[]
+
+private abbrev DecodeM := ReaderT Lean.Environment (StateT DecodeState (Except String))
 
 private def span (map : FileMap) (j : Json) (parent : Span := {}) : DecodeM Span := do
   let xs ← arr j "span"
   if xs.isEmpty then
-    modify (·.push parent)
+    modify fun s => { s with spans := s.spans.push parent }
     return parent
   unless xs.size ≤ 2 do throw "span must be [], [line], or [line, column]"
   let line ← xs[0]!.getNat?
@@ -75,7 +91,7 @@ private def span (map : FileMap) (j : Json) (parent : Span := {}) : DecodeM Span
   let stop := if xs.size == 1 || pos.atEnd map.source then pos else pos.next map.source
   let result : Span := ⟨.synthetic pos stop true,
     if xs.size == 1 then .line line else .column ⟨line, column - 1⟩⟩
-  modify (·.push result)
+  modify fun s => { s with spans := s.spans.push result }
   return result
 
 private def identifier (value : String) : DecodeM (TSyntax `ident) := do
@@ -217,6 +233,58 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   | _ => throw s!"unsupported {if pattern then "pattern" else "term"} kind '{kind}'"
   return withSpan info.info result
 
+private def proofPosition (proofMap : FileMap) (start : Position) (indentation : Nat)
+    (pos : String.Pos.Raw) : Position :=
+  let p := proofMap.toPosition pos
+  if p.line < 2 then start
+  else ⟨start.line + p.line - 2, p.column + if p.line == 2 then start.column else indentation⟩
+
+/-- Parsed proof nodes retain their individual ranges in the original file map,
+including Unicode columns, relative to the supplied proof origin. -/
+private partial def locateProof (map proofMap : FileMap) (start : Position)
+    (indentation : Nat) (anchor : Span) (stx : Syntax) : DecodeM Syntax := do
+  let pos? := stx.getPos?
+  let stop? := stx.getTailPos?
+  let mut stx := stx
+  if let .node info kind args := stx then
+    stx := .node info kind (← args.mapM (locateProof map proofMap start indentation anchor))
+  let some pos := pos? | return stx
+  let stop := stop?.getD pos
+  let location := match anchor.location with
+    | .unknown => Location.unknown
+    | .line _ => .line (proofPosition proofMap start indentation pos).line
+    | .column _ => .column (proofPosition proofMap start indentation pos)
+  let info := SourceInfo.synthetic
+    (map.ofPosition (proofPosition proofMap start indentation pos))
+    (map.ofPosition (proofPosition proofMap start indentation stop)) true
+  modify fun s => { s with spans := s.spans.push ⟨info, location⟩ }
+  return stx.setInfo info
+
+private def leanProof (map : FileMap) (parent : Span) (j : Json) : DecodeM (TSyntax `term × Span) := do
+  fields j ["source", "indentation", "span"]
+  let info ← span map j parent
+  let indentation ← (← field j "indentation").getNat?
+  let input := "by\n" ++ (← str j "source")
+  let ctx := Parser.mkInputContext input "<proof>" (normalizeLineEndings := false)
+  let parser := Parser.andthenFn Parser.whitespace (Parser.categoryParserFnImpl `term)
+  let env ← read
+  let parsed := parser.run ctx { env, options := {} } (Parser.getTokenTable env) (Parser.mkParserState input)
+  let parsed := if parsed.allErrors.isEmpty && !ctx.atEnd parsed.pos then
+    parsed.mkError "end of input" else parsed
+  let start := match info.location with
+    | .column p => p
+    | .line line => ⟨line, 0⟩
+    | .unknown => ⟨1, 0⟩
+  for (pos, _, error) in parsed.allErrors do
+    let p := proofPosition ctx.fileMap start indentation pos
+    let location := match info.location with
+      | .unknown => Location.unknown
+      | .line _ => .line p.line
+      | .column _ => .column p
+    modify fun s => { s with diagnostics := s.diagnostics.push ⟨toString error, location⟩ }
+  if !parsed.allErrors.isEmpty then return (⟨.missing⟩, info)
+  return (⟨← locateProof map ctx.fileMap start indentation info parsed.stxStack.back⟩, info)
+
 private structure TableEntry where
   captures : Array (TSyntax `ident)
   arguments : Array (TSyntax `ident)
@@ -267,7 +335,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       pure (Unhygienic.run `($ctor $(entry.adapter)))
     let body := Unhygienic.run `(#[$entries,*])
     let tableType := mkIdent ``Lynx.Term.FunTable
-    pure (Unhygienic.run `(public def $name : $tableType := $body))
+    pure (Unhygienic.run `(def $name : $tableType := $body))
   | "mutual" => do
     fields j ["kind", "defs", "pure", "span"]
     let defs ← arr j "defs"
@@ -278,6 +346,32 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
         throw "mutual definitions must agree with the group purity"
       command map decl info false
     pure (Unhygienic.run `(mutual $decls:command* end))
+  | "theorem" => do
+    fields j ["kind", "name", "arity", "requires", "ensures", "proof", "span"]
+    let arity ← (← field j "arity").getNat?
+    let params := (Array.range arity).map fun i => mkIdent (Name.mkSimple s!"_{i}")
+    let args := params.map fun p => (⟨p.raw⟩ : TSyntax `term)
+    let name := functionName (← str j "name") arity
+    let termType := mkIdent ``Lynx.Term
+    let binders := params.map fun p => Unhygienic.run `(bracketedBinder| ($p : $termType))
+    let requirement ← match field j "requires" with
+      | .error _ => pure none
+      | .ok value => do
+        let callee := functionName (← value.getStr?) arity
+        pure (some (Unhygienic.run `($callee $args*)))
+    let ensuresName := functionName (← str j "ensures") arity
+    let ensures := Unhygienic.run `($ensuresName $args*)
+    let (proof, proofInfo) ← leanProof map info (← field j "proof")
+    modify fun s => { s with theorems := s.theorems.push (name.getId, proofInfo) }
+    let ok := mkIdent ``Lynx.Result.ok
+    let trueTerm := mkIdent ``Lynx.Term.true
+    let hypothesis := mkIdent `requires
+    let binders := match requirement with
+      | none => binders
+      | some requires =>
+        binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $requires = $ok $trueTerm)))
+    pure (Unhygienic.run `(theorem $name $binders:bracketedBinder*
+      : $ensures = $ok $trueTerm := $proof))
   | "def" => do
     fields j ["kind", "name", "params", "body", "pure", "span"]
     let params ← (← arr j "params").mapM (param map info)
@@ -286,7 +380,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     let resultType := mkIdent ``Lynx.Result
     let binders := params.map fun p => Unhygienic.run `(bracketedBinder| ($p : $termType))
     let body ← term map info false (← field j "body")
-    pure (Unhygienic.run `(public def $name $binders:bracketedBinder* : $resultType := $body))
+    pure (Unhygienic.run `(def $name $binders:bracketedBinder* : $resultType := $body))
   | _ => throw s!"unsupported command kind '{kind}'"
   let isPure ← if kind ∈ ["def", "mutual"] then (← field j "pure").getBool? else pure false
   -- A mutual group gets one joint purity proof, rather than wrapping its members.
@@ -301,7 +395,9 @@ without inspecting the table or duplicating callback implementations. Pure calls
 preserve depth; effectful bodies consume one level while their caller's
 continuation retains its original depth. -/
 private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `command)) := do
+  let errors := (← get).diagnostics.size
   let declaration ← command map j
+  if (← get).diagnostics.size != errors then return #[]
   if (← str j "kind") != "fun_table" then return #[declaration]
   let info ← span map j
   let table ← identifier (← str j "name")
@@ -339,7 +435,7 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
       let ofExcept := mkIdent ``Lynx.Result.ofExcept
       let toExcept := mkIdent ``Lynx.Result.toExcept
       let cancel := mkIdent ``Lynx.Result.ofExcept_toExcept
-      pure (Unhygienic.run `(@[simp↓] public theorem $name {$alpha:ident : Type} ($depth:ident : $natType)
+      pure (Unhygienic.run `(@[simp↓] theorem $name {$alpha:ident : Type} ($depth:ident : $natType)
         $binders:bracketedBinder* ($next:ident : $termType → $resultType $alpha:ident) :
         $resolve $table $depth:ident ($apply ($function $id $arity #[$captures,*]) #[$arguments,*] >>= $next:ident) =
           $resolve $table $depth:ident ($body >>= $next:ident) := by
@@ -350,7 +446,7 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
     else
       let reduce := mkIdent ``Lynx.Result.resolve_apply_effectful
       let resolveBind := mkIdent ``Lynx.Result.resolve_bind
-      pure (Unhygienic.run `(@[simp↓] public theorem $name {$alpha:ident : Type} ($depth:ident : $natType)
+      pure (Unhygienic.run `(@[simp↓] theorem $name {$alpha:ident : Type} ($depth:ident : $natType)
         $binders:bracketedBinder* ($next:ident : $termType → $resultType $alpha:ident) :
         $resolve $table ($depth:ident + 1) ($apply ($function $id $arity #[$captures,*]) #[$arguments,*] >>= $next:ident) =
           ($resolve $table $depth:ident $body >>= fun $value:ident => $resolve $table ($depth:ident + 1) ($next:ident $value:ident)) := by
@@ -363,25 +459,25 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
     let explicitName := mkIdent (Name.mkSimple s!"{table.getId.getString!}_apply_{index}_bind_explicit")
     let bind := mkIdent ``Lynx.Result.bind
     let explicitLemma ← if entry.isPure then
-      pure (Unhygienic.run `(@[simp↓] public theorem $explicitName {$alpha:ident : Type} ($depth:ident : $natType)
+      pure (Unhygienic.run `(@[simp↓] theorem $explicitName {$alpha:ident : Type} ($depth:ident : $natType)
         $binders:bracketedBinder* ($next:ident : $termType → $resultType $alpha:ident) :
         $resolve $table $depth:ident ($bind ($apply ($function $id $arity #[$captures,*]) #[$arguments,*]) $next:ident) =
           $resolve $table $depth:ident ($bind $body $next:ident) := by
         exact $name $depth:ident $parameters* $next:ident))
     else
-      pure (Unhygienic.run `(@[simp↓] public theorem $explicitName {$alpha:ident : Type} ($depth:ident : $natType)
+      pure (Unhygienic.run `(@[simp↓] theorem $explicitName {$alpha:ident : Type} ($depth:ident : $natType)
         $binders:bracketedBinder* ($next:ident : $termType → $resultType $alpha:ident) :
         $resolve $table ($depth:ident + 1) ($bind ($apply ($function $id $arity #[$captures,*]) #[$arguments,*]) $next:ident) =
           $bind ($resolve $table $depth:ident $body) (fun $value:ident => $resolve $table ($depth:ident + 1) ($next:ident $value:ident)) := by
         exact $name $depth:ident $parameters* $next:ident))
     result := result.push (withSpan info.info explicitLemma)
     let reduction ← if entry.isPure then
-      pure (Unhygienic.run `(@[simp] public theorem $callName ($depth:ident : $natType)
+      pure (Unhygienic.run `(@[simp] theorem $callName ($depth:ident : $natType)
         $binders:bracketedBinder* :
         $resolve $table $depth:ident ($apply ($function $id $arity #[$captures,*]) #[$arguments,*]) = $body := by
         simpa only [($bindOk), ($resolvePure $table $depth:ident $body (by simp))] using $name $depth:ident $parameters* (fun $value:ident => $ok $value:ident)))
     else
-      pure (Unhygienic.run `(@[simp] public theorem $callName ($depth:ident : $natType)
+      pure (Unhygienic.run `(@[simp] theorem $callName ($depth:ident : $natType)
         $binders:bracketedBinder* :
         $resolve $table ($depth:ident + 1) ($apply ($function $id $arity #[$captures,*]) #[$arguments,*]) =
           $resolve $table $depth:ident $body := by
@@ -431,7 +527,42 @@ structure DecodedFile where
   fileMap : FileMap
   commands : Array (TSyntax `command)
   private spans : Array Span
+  private proofDiagnostics : Array ProofDiagnostic
+  private theorems : Array (Name × Span)
   private reexportImports : Bool
+  private sourceAvailable : Bool
+
+/-- A source file is optional (BEAM debug information often names a build
+machine path). Reserve offsets for supplied locations even without its text. -/
+private partial def sourceExtent (j : Json) : Nat × Nat := Id.run do
+  let mut lines := 1
+  let mut columns := 1
+  if let .ok xs := arr j "span" then
+    if let some line := xs[0]? then
+      lines := max lines (line.getNat?.toOption.getD 1)
+    if let some column := xs[1]? then
+      columns := max columns (column.getNat?.toOption.getD 1)
+  if let .ok source := str j "source" then
+    lines := lines + (source.splitOn "\n").length + 1
+    columns := columns + source.length + (field j "indentation" >>= Json.getNat?).toOption.getD 0
+  let children : Array Json := match j with
+    | .arr xs => xs
+    | .obj xs => xs.toArray.map (·.2)
+    | _ => #[]
+  for child in children do
+    let (l, c) := sourceExtent child
+    lines := max lines l
+    columns := max columns c
+  return (lines, columns)
+
+private def sourceMap (file moduleName : String) (entry : Json) : IO (FileMap × Bool) := do
+  if moduleName == "Erlang.program" then return (FileMap.ofString "", true)
+  try
+    return (FileMap.ofString (← IO.FS.readFile file), true)
+  catch _ =>
+    let (lines, columns) := sourceExtent entry
+    let line := String.ofList (List.replicate columns ' ')
+    return (FileMap.ofString (String.intercalate "\n" (List.replicate lines line)), false)
 
 /-- Decode input files after the selected command requests them. -/
 private def decode (files : Array Json) (env : Lean.Environment) : IO (Array DecodedFile) := do
@@ -439,25 +570,22 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
     let file ← IO.ofExcept (str entry "file")
     try
       let moduleName ← IO.ofExcept (str entry "module")
-      let source ← if moduleName == "Erlang.program" then pure "" else IO.FS.readFile file
-      let map := FileMap.ofString source
-      let (moduleName, imports, commands, spans, reexportImports) ← IO.ofExcept do
+      let (map, sourceAvailable) ← sourceMap file moduleName entry
+      let (moduleName, imports, commands, state, reexportImports) ← IO.ofExcept do
         fields entry ["file", "module", "imports", "contents"]
-        let namespaceId ← (identifier moduleName).run env |>.run' #[]
+        let namespaceId ← (identifier moduleName).run env |>.run' {}
         let imports ← (← arr entry "imports").mapM fun j => do
           let name ← j.getStr?
-          let id ← (identifier name).run env |>.run' #[]
+          let id ← (identifier name).run env |>.run' {}
           pure id.getId.toString
         let contents ← arr entry "contents"
-        let reexportImports := contents.any fun j =>
-          match str j "kind" with
-          | .ok kind => kind == "fun_table"
-          | .error _ => false
-        let (commands, spans) ← contents.mapM (commands map) |>.run env |>.run #[]
+        let reexportImports := !contents.isEmpty
+        let (commands, state) ← contents.mapM (commands map) |>.run env |>.run {}
+        let visibility := Unhygienic.run `(@[expose] public section)
         let start := Unhygienic.run `(namespace $namespaceId)
         let stop := Unhygienic.run `(end $namespaceId)
-        pure (namespaceId.getId.toString, imports, #[start] ++ commands.flatten ++ #[stop], spans, reexportImports)
-      return ⟨file, moduleName, imports, map, commands, spans, reexportImports⟩
+        pure (namespaceId.getId.toString, imports, #[visibility, start] ++ commands.flatten ++ #[stop], state, reexportImports)
+      return ⟨file, moduleName, imports, map, commands, state.spans, state.diagnostics, state.theorems, reexportImports, sourceAvailable⟩
     catch err => throw (IO.userError s!"{file}: {err}")
 
 /-- Render syntax without elaborating the input declarations. -/
@@ -466,7 +594,7 @@ private def render (files : Array DecodedFile) (env : Lean.Environment) : IO (UI
     let action : CoreM String := do
       let commands ← file.commands.mapM fun cmd => do
         return (← PrettyPrinter.ppCommand cmd).pretty 100
-      -- Public application equations mention the entry bodies in their types.
+      -- Exposed definitions and public law types mention imported operations.
       let importPrefix := if file.reexportImports then "public import " else "import "
       let imports := file.imports.toList.map (importPrefix ++ ·)
       return "module\n\n" ++ String.intercalate "\n" ("public import Lynx" :: imports) ++
@@ -482,7 +610,7 @@ private def verify (files : Array DecodedFile) (env : Lean.Environment) : IO (UI
   for file in files do
     for name in file.imports do
       if name == file.moduleName || !files.any (·.moduleName == name) then
-        let id ← IO.ofExcept <| (identifier name).run env |>.run' #[]
+        let id ← IO.ofExcept <| (identifier name).run env |>.run' {}
         unless imports.any (·.module == id.getId) do
           imports := imports.push { module := id.getId }
   unsafe enableInitializersExecution
@@ -491,13 +619,33 @@ private def verify (files : Array DecodedFile) (env : Lean.Environment) : IO (UI
   let mut failed := false
   let mut env := env
   for file in files do
+    for error in file.proofDiagnostics do
+      failed := true
+      diagnostics := diagnostics.push (diagnostic file.fileName "error" (error.message ++ if file.sourceAvailable then "" else "\n(source not available)") error.location)
     let state ← elaborateFile env file.fileName file.fileMap file.commands
     env := state.env
     for msg in state.messages.toList do
       if msg.severity == .error then failed := true
       diagnostics := diagnostics.push (diagnostic file.fileName
         (match msg.severity with | .error => "error" | .warning => "warning" | .information => "info")
-        (← msg.data.toString) (messageLocation file.fileMap file.spans msg))
+        ((← msg.data.toString) ++ if file.sourceAvailable then "" else "\n(source not available)") (messageLocation file.fileMap file.spans msg))
+    -- A parsed tactic may still elaborate to sorryAx (for example `admit`).
+    -- Audit successful laws and their transitive dependencies in the kernel.
+    unless state.messages.hasErrors do
+      let audit : CoreM (Array Json) := do
+        let mut errors := #[]
+        let namespaceId ← IO.ofExcept <| (identifier file.moduleName).run (← getEnv) |>.run' {}
+        for (name, info) in file.theorems do
+          let name := namespaceId.getId ++ name
+          for axiomName in ← collectAxioms name do
+            unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
+              errors := errors.push (diagnostic file.fileName "error"
+                s!"unexpected axiom in {name}: {axiomName}" info.location)
+        return errors
+      let errors ← (audit.run' { fileName := file.fileName, fileMap := file.fileMap }
+        { env := env }).toIO (fun _ => IO.userError "law axiom audit failed")
+      if !errors.isEmpty then failed := true
+      diagnostics := diagnostics ++ errors
   return (if failed then 1 else 0, Json.mkObj [
     ("status", toJson (if failed then "error" else "ok")), ("diagnostics", .arr diagnostics)])
 
@@ -508,7 +656,10 @@ private def runFiles (j : Json)
     arr j "files"
   unsafe enableInitializersExecution
   let env ← importModules #[{ module := `Lynx }] {} (loadExts := true)
-  return (← action (← decode files env) env).2
+  let decoded ← decode files env
+  if decoded.any (! ·.proofDiagnostics.isEmpty) then
+    return (← verify decoded env).2
+  return (← action decoded env).2
 
 private def run (request : String) : IO Json := do
   try
