@@ -5,7 +5,7 @@ defmodule Lynx.Commands do
   Runs one verification request and collects its per-file JSON updates in order.
 
   Each update includes rendered source, elapsed milliseconds, and diagnostics.
-  Returns verification errors as updates. Raises on failure responses,
+  Returns verification errors and skipped files as updates. Raises on failure responses,
   invalid JSON output, or unexpected exit statuses.
   The command is included in the request map.
   """
@@ -40,7 +40,7 @@ defmodule Lynx.Commands do
       %{"status" => "done"} ->
         Enum.reverse(responses)
 
-      %{"status" => status} when status in ["ok", "error"] ->
+      %{"status" => status} when status in ["ok", "error", "skipped"] ->
         collect_responses(port, [response | responses])
 
       _ ->

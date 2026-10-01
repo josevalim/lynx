@@ -4,14 +4,16 @@ import Lynx
 import Lean
 
 /-! JSON runner for verification and Lean source rendering. Positions are one-based Unicode character positions.
+See `Runner.schema.json` for the request and response schemas.
 Every syntax node requires `span`: `[]`, `[line]`, or `[line, column]`.
 Nodes without a location inherit the enclosing location, if any. Line-only spans
 never imply a diagnostic column. Function and variable names retain their Erlang spelling; the decoder
 constructs and escapes their Lean identifiers.
 
-Each verified file emits `{"status": "ok" | "error", "file": ..., "module": ...,
+Each verified file emits `{"status": "ok" | "error" | "skipped", "file": ..., "module": ...,
 "source": ..., "time_ms": ..., "diagnostics": [...]}`. Time includes rendering, imports,
 elaboration, auditing, and artifact writing; shared runtime loading is excluded.
+Files blocked by an unsuccessful input import are skipped without elaboration.
 A `{"status": "done"}` message terminates each completed request.
 Each newline-delimited request includes `"command": "verify"`.
 Updates are flushed as each file finishes. The runner continues until stdin closes.
@@ -662,9 +664,7 @@ private def verify (files : Array DecodedFile) (runtime : Runtime) (emit : Json 
         else pure moduleName
         unless imports.any (·.module == moduleName) do
           imports := imports.push { module := moduleName, isExported := file.reexportImports }
-      if missingImport then
-        fileFailed := true
-      else
+      unless missingImport do
         let env ← importFile runtime imports artifacts
         -- Keep artifact names distinct from source namespaces so translated modules
         -- can import their runtime counterparts (e.g. additional Erlang.lists operations).
@@ -699,8 +699,9 @@ private def verify (files : Array DecodedFile) (runtime : Runtime) (emit : Json 
             #[path.withExtension "ir.sig", path.withExtension "ir"]])
           verified := verified.insert file.moduleName mainModule
       let elapsed := (← IO.monoMsNow) - started
+      let status := if missingImport then "skipped" else if fileFailed then "error" else "ok"
       emit (Json.mkObj [
-        ("status", toJson (if fileFailed then "error" else "ok")),
+        ("status", toJson status),
         ("file", toJson file.fileName), ("module", toJson file.moduleName),
         ("source", toJson source), ("time_ms", toJson elapsed), ("diagnostics", .arr diagnostics)])
 
