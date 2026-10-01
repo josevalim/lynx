@@ -170,10 +170,13 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     pure (Unhygienic.run `($apply $fn #[$args,*]))
   | "bind" => do
     fields j ["kind", "var", "computation", "body", "span"]
-    let var ← param map info (← field j "var")
+    let binder ← field j "var"
+    let var : TSyntax `term ← if (← str binder "kind") == "wildcard" then
+      term map info true binder
+    else pure ⟨(← param map info binder).raw⟩
     let computation ← term map info false (← field j "computation")
     let body ← term map info false (← field j "body")
-    let item := withSpan info.info (Unhygienic.run `(doSeqItem| let $var:ident ← $computation:term))
+    let item := withSpan info.info (Unhygienic.run `(doSeqItem| let $var:term ← $computation:term))
     -- Consecutive Core binds share one block; preserve locations on each statement.
     match body with
     | `(do $items:doSeqItem*) => pure (Unhygienic.run `(do $item:doSeqItem $items:doSeqItem*))

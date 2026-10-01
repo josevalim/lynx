@@ -108,6 +108,13 @@ expression(#c_let{anno = Anno, vars = [Var], arg = Arg, body = Body}, State0) ->
     {TranslatedBody, State2} = expression(Body, State1),
     {node(~"bind", Anno, #{~"var" => variable(Var),
         ~"computation" => TranslatedArg, ~"body" => TranslatedBody}), State2};
+%% Erlang: f(X), g(X)
+%% Lean: do let _ ← «f/1» vX; «g/1» vX
+expression(#c_seq{anno = Anno, arg = Arg, body = Body}, State0) ->
+    {TranslatedArg, State1} = expression(Arg, State0),
+    {TranslatedBody, State2} = expression(Body, State1),
+    {node(~"bind", Anno, #{~"var" => node(~"wildcard", Anno, #{}),
+        ~"computation" => TranslatedArg, ~"body" => TranslatedBody}), State2};
 %% Erlang: f(X, Y)
 %% Lean: «f/2» vX vY
 expression(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args}, State0) ->
