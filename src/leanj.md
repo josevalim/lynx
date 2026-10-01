@@ -19,7 +19,7 @@ location. Match cases and table entries carry spans too.
 | `nil` | — | Empty Erlang list. |
 | `cons` | `head`, `tail` | List cell; both fields are value nodes. Improper tails are preserved. |
 | `function` | `id`, `arity`, `captures` | Closure with a program-wide ID, source arity, and captured value nodes. |
-| `wildcard` | — | Anonymous pattern, accepted only in patterns. |
+| `wildcard` | — | Anonymous pattern or discarded result in a `bind`. |
 
 The decoder constructs `Term` values. Integer variable names become `_N`; string
 names become `vName`, or `_vName` when the original name starts with `_`. This
@@ -33,7 +33,7 @@ escaping, including names containing punctuation or reserved words.
 | `local_call` | `name`, `args` | Direct call in the current module; arguments are value nodes. |
 | `remote_call` | `module`, `name`, `args` | Direct call to a qualified module and raw function name. |
 | `fun_call` | `function`, `args` | Apply a function value using `Term.apply` and a native argument array. |
-| `bind` | `var`, `computation`, `body` | Bind a computation's successful result to a `var` node, then execute the body. |
+| `bind` | `var`, `computation`, `body` | Bind a computation's successful result to a `var` node, or discard it with `wildcard`, then execute the body. |
 | `return` | `value` | Successful computation returning a value node. |
 | `raise` | `class`, `reason` | Exception; class is `error`, `throw`, or `exit`, and reason is a value node. |
 | `match` | `expressions`, `cases` | Match value nodes against cases with `patterns`, `body`, and `span`. |
@@ -41,6 +41,8 @@ escaping, including names containing punctuation or reserved words.
 Each match case has one pattern per expression. Zero expressions and zero patterns
 are valid: the decoder supplies Lean's unit match for a zero-argument Core case.
 Computation nodes are rejected in patterns.
+Core `c_seq` uses a `bind` with a wildcard binder, rendered as `let _ ←`.
+The first computation still runs and propagates exceptions or effects.
 
 Calls acquire their `/arity` suffix from the number of arguments, including zero.
 The producer qualifies module names as `Erlang.foo` or `Elixir.Foo`.
