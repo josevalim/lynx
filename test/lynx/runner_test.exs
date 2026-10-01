@@ -1,5 +1,5 @@
 defmodule Lynx.RunnerTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   @lean_dir Path.expand("../../Lean", __DIR__)
   @translations_dir Path.expand("../fixtures/translations", __DIR__)
@@ -38,15 +38,95 @@ defmodule Lynx.RunnerTest do
   end
 
   describe "verify" do
-    test "verifies all translation fixtures" do
-      fixtures = Path.wildcard(Path.join(@translations_dir, "*.json"))
-      assert fixtures != []
+    test "only exposes declared imports and their dependencies" do
+      calls = [
+        definition("source", call("Elixir.Source", "value")),
+        definition("runtime", call("Erlang.maps", "new"))
+      ]
 
-      Enum.each(fixtures, fn fixture ->
-        assert Lynx.Commands.runner!(@lean_dir, fixture_request(fixture, "verify")) ==
-                 %{"status" => "ok", "diagnostics" => []},
-               "verification failed for #{fixture}"
-      end)
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "files" => [
+          file(@literal_erl, "Elixir.Source", [definition("value", call("Erlang.maps", "new"))], [
+            "Erlang.maps"
+          ]),
+          file(@literal_erl, "Elixir.Undeclared", calls),
+          file(@literal_erl, "Elixir.Declared", calls, ["Elixir.Source"])
+        ]
+      }
+
+      assert %{"status" => "error", "diagnostics" => [source, runtime]} =
+               Lynx.Commands.runner!(@lean_dir, request)
+
+      assert %{"file" => @literal_erl, "kind" => "error", "line" => 4, "column" => 15} = source
+      assert source["message"] =~ "Unknown identifier `Elixir.Source.«value/0»`"
+      assert runtime["message"] =~ "Unknown identifier `Erlang.maps.«new/0»`"
+    end
+
+    test "imports both dependency branches and theorems from their shared dependency" do
+      contents = [definition("ensures", success()), theorem("law", "exact Elixir.Source.«law/0»")]
+
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "files" => [
+          file(@literal_erl, "Elixir.Source", [
+            definition("ensures", success()),
+            theorem("law", "rfl")
+          ]),
+          file(@literal_erl, "Elixir.Left", contents, ["Elixir.Source"]),
+          file(@literal_erl, "Elixir.Right", contents, ["Elixir.Source"]),
+          file(
+            @literal_erl,
+            "Elixir.Join",
+            [
+              definition("ensures", success()),
+              theorem("left", "exact Elixir.Left.«law/0»"),
+              theorem("right", "exact Elixir.Right.«law/0»"),
+              theorem("source", "exact Elixir.Source.«law/0»")
+            ],
+            ["Elixir.Left", "Elixir.Right"]
+          )
+        ]
+      }
+
+      assert Lynx.Commands.runner!(@lean_dir, request) == %{"status" => "ok", "diagnostics" => []}
+    end
+
+    test "does not publish failed modules and continues verifying unrelated files" do
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "files" => [
+          file(@literal_erl, "Elixir.Failed", [
+            definition("value", %{
+              "kind" => "return",
+              "span" => [4, 15],
+              "value" => %{"kind" => "var", "name" => "missing", "span" => [4, 15]}
+            })
+          ]),
+          file(@literal_erl, "Elixir.Unrelated", [definition("value", success())]),
+          file(
+            @literal_erl,
+            "Elixir.Dependent",
+            [definition("value", call("Elixir.Failed", "value"))],
+            ["Elixir.Failed"]
+          )
+        ]
+      }
+
+      assert %{"status" => "error", "diagnostics" => [failed, dependent]} =
+               Lynx.Commands.runner!(@lean_dir, request)
+
+      assert failed["message"] =~ "Unknown identifier `vmissing`"
+
+      assert dependent == %{
+               "file" => @literal_erl,
+               "kind" => "error",
+               "message" =>
+                 "import 'Elixir.Failed' must precede this file and verify successfully"
+             }
     end
 
     test "reports verification errors with source diagnostics" do
@@ -223,6 +303,46 @@ defmodule Lynx.RunnerTest do
 
     assert error.message =~ @literal_erl
     assert error.message =~ "unsupported command kind 'unknown'"
+  end
+
+  defp definition(name, body) do
+    %{
+      "kind" => "def",
+      "name" => name,
+      "params" => [],
+      "pure" => false,
+      "span" => [4, 1],
+      "body" => body
+    }
+  end
+
+  defp success do
+    %{
+      "kind" => "return",
+      "span" => [],
+      "value" => %{"kind" => "atom", "value" => "true", "span" => []}
+    }
+  end
+
+  defp call(module, name) do
+    %{
+      "kind" => "remote_call",
+      "module" => module,
+      "name" => name,
+      "args" => [],
+      "span" => [4, 15]
+    }
+  end
+
+  defp theorem(name, proof) do
+    %{
+      "kind" => "theorem",
+      "name" => name,
+      "params" => [],
+      "ensures" => "ensures",
+      "span" => [4, 1],
+      "proof" => %{"source" => proof, "indentation" => 0, "span" => [4, 15]}
+    }
   end
 
   defp file(path, module, contents, imports \\ []) do

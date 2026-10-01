@@ -29,8 +29,9 @@ The decoder builds typed pure/effectful callables; a pure entry must prove
 the translated body's purity during elaboration. Each entry also generates checked
 application equations for standalone calls and binds. Pure calls preserve depth;
 effectful calls consume one level and retain the caller's depth in continuations.
-Files are elaborated in the supplied dependency order, sharing declarations but
-not local scopes or messages. Each file's definitions live in its module namespace.
+Files are elaborated in the supplied dependency order against their declared imports.
+Verified files are exported to temporary modules for importing by later files.
+Each file's definitions live in its module namespace.
 Module names arrive qualified by the producer, such as `Erlang.foo` or `Elixir.Foo`;
 functions acquire `/arity` here.
 Imports may name other input modules or compiled Lean modules loaded from disk.
@@ -589,8 +590,16 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
       return ⟨file, moduleName, imports, map, commands, state.spans, state.diagnostics, state.theorems, reexportImports, sourceAvailable⟩
     catch err => throw (IO.userError s!"{file}: {err}")
 
+private def parsingDiagnostics (file : DecodedFile) : Array Json :=
+  file.proofDiagnostics.map fun error =>
+    diagnostic file.fileName "error"
+      (error.message ++ if file.sourceAvailable then "" else "\n(source not available)") error.location
+
 /-- Render syntax without elaborating the input declarations. -/
 private def render (files : Array DecodedFile) (env : Lean.Environment) : IO (UInt32 × Json) := do
+  let diagnostics := files.flatMap parsingDiagnostics
+  unless diagnostics.isEmpty do
+    return (1, Json.mkObj [("status", toJson "error"), ("diagnostics", .arr diagnostics)])
   let sources ← files.mapM fun file => do
     let action : CoreM String := do
       let commands ← file.commands.mapM fun cmd => do
@@ -605,50 +614,74 @@ private def render (files : Array DecodedFile) (env : Lean.Environment) : IO (UI
     return (file.fileName, toJson source)
   return (0, Json.mkObj [("status", toJson "ok"), ("files", Json.mkObj sources.toList)])
 
-/-- Verify in input order, retaining declarations while resetting per-file state. -/
-private def verify (files : Array DecodedFile) (env : Lean.Environment) : IO (UInt32 × Json) := do
-  let mut imports : Array Import := #[{ module := `Lynx }]
-  for file in files do
-    for name in file.imports do
-      if name == file.moduleName || !files.any (·.moduleName == name) then
-        let id ← IO.ofExcept <| (identifier name).run env |>.run' {}
-        unless imports.any (·.module == id.getId) do
-          imports := imports.push { module := id.getId }
-  unsafe enableInitializersExecution
-  let env ← importModules imports {} (loadExts := true)
-  let mut diagnostics := #[]
-  let mut failed := false
-  let mut env := env
-  for file in files do
-    for error in file.proofDiagnostics do
-      failed := true
-      diagnostics := diagnostics.push (diagnostic file.fileName "error" (error.message ++ if file.sourceAvailable then "" else "\n(source not available)") error.location)
-    let state ← elaborateFile env file.fileName file.fileMap file.commands
-    env := state.env
-    for msg in state.messages.toList do
-      if msg.severity == .error then failed := true
-      diagnostics := diagnostics.push (diagnostic file.fileName
-        (match msg.severity with | .error => "error" | .warning => "warning" | .information => "info")
-        ((← msg.data.toString) ++ if file.sourceAvailable then "" else "\n(source not available)") (messageLocation file.fileMap file.spans msg))
-    -- A parsed tactic may still elaborate to sorryAx (for example `admit`).
-    -- Audit successful laws and their transitive dependencies in the kernel.
-    unless state.messages.hasErrors do
-      let audit : CoreM (Array Json) := do
-        let mut errors := #[]
-        let namespaceId ← IO.ofExcept <| (identifier file.moduleName).run (← getEnv) |>.run' {}
-        for (name, info) in file.theorems do
-          let name := namespaceId.getId ++ name
-          for axiomName in ← collectAxioms name do
-            unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
-              errors := errors.push (diagnostic file.fileName "error"
-                s!"unexpected axiom in {name}: {axiomName}" info.location)
-        return errors
-      let errors ← (audit.run' { fileName := file.fileName, fileMap := file.fileMap }
-        { env := env }).toIO (fun _ => IO.userError "law axiom audit failed")
-      if !errors.isEmpty then failed := true
-      diagnostics := diagnostics ++ errors
-  return (if failed then 1 else 0, Json.mkObj [
-    ("status", toJson (if failed then "error" else "ok")), ("diagnostics", .arr diagnostics)])
+/-- Verify each file against its declared imports, exporting successful files as modules.
+Artifacts live only for this request; they are not a persistent verification cache. -/
+private def verify (files : Array DecodedFile) (baseEnv : Lean.Environment) : IO (UInt32 × Json) :=
+  IO.FS.withTempDir fun directory => do
+    let mut artifacts : NameMap ImportArtifacts := {}
+    let mut verified : Std.HashMap String Name := {}
+    let mut diagnostics := #[]
+    let mut failed := false
+    for (file, index) in files.zipIdx do
+      let mut fileFailed := !file.proofDiagnostics.isEmpty
+      diagnostics := diagnostics ++ parsingDiagnostics file
+      let mut imports : Array Import := #[{ module := `Lynx, isExported := true }]
+      let mut missingImport := false
+      for name in file.imports do
+        let moduleName ← IO.ofExcept <| (identifier name).run baseEnv |>.run' {}
+        let moduleName := moduleName.getId
+        let moduleName ← if name != file.moduleName && files.any (·.moduleName == name) then do
+          if let some verifiedName := verified[name]? then
+            pure verifiedName
+          else
+            missingImport := true
+            diagnostics := diagnostics.push (diagnostic file.fileName "error"
+              s!"import '{name}' must precede this file and verify successfully")
+            pure moduleName
+        else pure moduleName
+        unless imports.any (·.module == moduleName) do
+          imports := imports.push { module := moduleName, isExported := file.reexportImports }
+      if missingImport then
+        failed := true
+        continue
+      unsafe enableInitializersExecution
+      let env ← importModules imports {} (loadExts := true) (level := .exported) (arts := artifacts)
+      -- Keep artifact names distinct from source namespaces so translated modules
+      -- can import their runtime counterparts (e.g. additional Erlang.lists operations).
+      let mainModule := `Lynx.Generated ++ Name.mkSimple s!"File{index}"
+      let state ← elaborateFile (env.setMainModule mainModule) file.fileName file.fileMap file.commands
+      for msg in state.messages.toList do
+        if msg.severity == .error then fileFailed := true
+        diagnostics := diagnostics.push (diagnostic file.fileName
+          (match msg.severity with | .error => "error" | .warning => "warning" | .information => "info")
+          ((← msg.data.toString) ++ if file.sourceAvailable then "" else "\n(source not available)") (messageLocation file.fileMap file.spans msg))
+      -- Audit local laws and the precomputed axiom dependencies of imported declarations.
+      unless fileFailed do
+        let audit : CoreM (Array Json) := do
+          let mut errors := #[]
+          let namespaceId ← IO.ofExcept <| (identifier file.moduleName).run (← getEnv) |>.run' {}
+          for (name, info) in file.theorems do
+            let name := namespaceId.getId ++ name
+            for axiomName in ← collectAxioms name do
+              unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
+                errors := errors.push (diagnostic file.fileName "error"
+                  s!"unexpected axiom in {name}: {axiomName}" info.location)
+          return errors
+        let errors ← (audit.run' { fileName := file.fileName, fileMap := file.fileMap }
+          { env := state.env }).toIO (fun _ => IO.userError "law axiom audit failed")
+        if !errors.isEmpty then fileFailed := true
+        diagnostics := diagnostics ++ errors
+      if fileFailed then
+        failed := true
+      else
+        let path := directory / s!"File{index}.olean"
+        writeModule state.env path
+        artifacts := artifacts.insert mainModule (.ofArrays #[
+          #[path, path.withExtension "olean.server", path.withExtension "olean.private"],
+          #[path.withExtension "ir.sig", path.withExtension "ir"]])
+        verified := verified.insert file.moduleName mainModule
+    return (if failed then 1 else 0, Json.mkObj [
+      ("status", toJson (if failed then "error" else "ok")), ("diagnostics", .arr diagnostics)])
 
 private def runFiles (j : Json)
     (action : Array DecodedFile → Lean.Environment → IO (UInt32 × Json)) : IO Json := do
@@ -658,8 +691,6 @@ private def runFiles (j : Json)
   unsafe enableInitializersExecution
   let env ← importModules #[{ module := `Lynx }] {} (loadExts := true)
   let decoded ← decode files env
-  if decoded.any (! ·.proofDiagnostics.isEmpty) then
-    return (← verify decoded env).2
   return (← action decoded env).2
 
 private def run (request : String) : IO Json := do

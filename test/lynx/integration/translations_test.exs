@@ -1,5 +1,5 @@
 defmodule Lynx.Integration.TranslationTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   @lean_dir Path.expand("../../../Lean", __DIR__)
   @translations_dir Path.expand("../../fixtures/translations", __DIR__)
