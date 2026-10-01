@@ -106,6 +106,8 @@ defmodule Lynx.RunnerTest do
 
     assert dependent == %{
              "file" => @literal_erl,
+             "module" => "Elixir.Dependent",
+             "theorem" => nil,
              "kind" => "error",
              "message" => "import 'Elixir.Failed' must precede this file and verify successfully"
            }
@@ -164,6 +166,8 @@ defmodule Lynx.RunnerTest do
 
       assert diagnostic == %{
                "file" => @literal_erl,
+               "module" => "Erlang.literal",
+               "theorem" => nil,
                "kind" => "error",
                "line" => 4,
                "column" => 15,
@@ -216,6 +220,8 @@ defmodule Lynx.RunnerTest do
 
       assert %{
                "file" => ^path,
+               "module" => "Erlang.invalid_match",
+               "theorem" => nil,
                "kind" => "error",
                "line" => 4,
                "column" => 5,
@@ -267,6 +273,8 @@ defmodule Lynx.RunnerTest do
       assert diagnostics == [
                %{
                  "file" => path,
+                 "module" => "Elixir.Precision",
+                 "theorem" => "columns/0",
                  "kind" => "error",
                  "line" => 11,
                  "column" => 28,
@@ -274,11 +282,19 @@ defmodule Lynx.RunnerTest do
                },
                %{
                  "file" => path,
+                 "module" => "Elixir.Precision",
+                 "theorem" => "line/0",
                  "kind" => "error",
                  "line" => 21,
                  "message" => "Unknown identifier `missing`"
                },
-               %{"file" => path, "kind" => "error", "message" => "Unknown identifier `missing`"}
+               %{
+                 "file" => path,
+                 "module" => "Elixir.Precision",
+                 "theorem" => "unknown/0",
+                 "kind" => "error",
+                 "message" => "Unknown identifier `missing`"
+               }
              ]
     end
 
@@ -312,11 +328,66 @@ defmodule Lynx.RunnerTest do
                  "kind" => "error",
                  "line" => 10,
                  "column" => 13,
+                 "module" => "Elixir.Syntax",
+                 "theorem" => "columns/0",
                  "message" => "expected term"
                },
-               %{"file" => path, "kind" => "error", "line" => 20, "message" => "expected term"},
-               %{"file" => path, "kind" => "error", "message" => "expected term"}
+               %{
+                 "file" => path,
+                 "kind" => "error",
+                 "line" => 20,
+                 "module" => "Elixir.Syntax",
+                 "theorem" => "line/0",
+                 "message" => "expected term"
+               },
+               %{
+                 "file" => path,
+                 "kind" => "error",
+                 "module" => "Elixir.Syntax",
+                 "theorem" => "unknown/0",
+                 "message" => "expected term"
+               }
              ]
+    end
+
+    test "identifies the theorem and unexpected axiom when proof auditing fails" do
+      path = "axioms.ex"
+
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "files" => [
+          file(path, "Elixir.Axioms", [
+            definition("ensures", success()),
+            theorem("valid", "rfl"),
+            theorem("untrusted", "sorry")
+          ])
+        ]
+      }
+
+      assert [
+               %{
+                 "status" => "error",
+                 "diagnostics" => [
+                   %{
+                     "kind" => "warning",
+                     "module" => "Elixir.Axioms",
+                     "theorem" => "untrusted/0"
+                   },
+                   %{"kind" => "error"} = diagnostic
+                 ]
+               }
+             ] = Lynx.Commands.runner!(@lean_dir, request)
+
+      assert diagnostic == %{
+               "file" => path,
+               "kind" => "error",
+               "line" => 4,
+               "column" => 15,
+               "module" => "Elixir.Axioms",
+               "theorem" => "untrusted/0",
+               "message" => "unexpected axiom: sorryAx"
+             }
     end
   end
 
