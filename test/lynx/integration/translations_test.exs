@@ -20,9 +20,11 @@ defmodule Lynx.Integration.TranslationTest do
         |> Enum.map(&:cerl.var_name/1)
         |> Kernel.--([{:module_info, 0}, {:module_info, 1}])
 
+      laws = for {name, {:law, _}} <- :lynx_core_to_leanj.to_definitions(core), do: name
+
       files =
         Lynx.Translation.new([{source, core}])
-        |> Lynx.Translation.add(module, exports)
+        |> Lynx.Translation.add(module, exports ++ laws)
         |> Lynx.Translation.assemble()
 
       request = %{"version" => "1.0", "files" => files}
@@ -32,7 +34,15 @@ defmodule Lynx.Integration.TranslationTest do
 
       expected =
         Map.new(files, fn file ->
-          suffix = if file["module"] == "Erlang.program", do: ".program.lean", else: ".lean"
+          suffix =
+            cond do
+              file["module"] == "Erlang." <> Path.basename(fixture, Path.extname(fixture)) ->
+                ".lean"
+
+              true ->
+                "." <> file["module"] <> ".lean"
+            end
+
           {file["file"], File.read!(Path.rootname(fixture) <> suffix)}
         end)
 

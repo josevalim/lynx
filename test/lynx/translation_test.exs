@@ -140,7 +140,7 @@ defmodule Lynx.TranslationTest do
       cerl("""
       -module(example).
       -export([entry/1]).
-      entry(X) -> maps:put(key, X + 1, maps:new()).
+      entry(X) -> maps:put(key, X + 1, maps:merge(X, X)).
       """)
 
     translation =
@@ -152,6 +152,129 @@ defmodule Lynx.TranslationTest do
 
     assert [%{"imports" => ["Erlang.erlang", "Erlang.maps"], "contents" => [_]}] =
              Translation.assemble(translation)
+  end
+
+  test "translates laws and recursively includes both predicates' callees" do
+    core =
+      cerl(~S"""
+      -module(example).
+      -export([allowed/1, identity_ensures/1]).
+      -law #{name => {identity_law, 1}, requires => allowed, ensures => identity_ensures}.
+      -proof <<"rfl">>.
+      identity_ensures(X) -> identity(X) == X.
+      allowed(_) -> true.
+      identity(X) -> X.
+      """)
+
+    translation =
+      Translation.new([{"example.erl", core}])
+      |> Translation.add(:example, [{:identity_law, 1}])
+
+    assert {:law, _} = translation.modules.example.definitions[{:identity_law, 1}]
+
+    assert Enum.sort(Map.keys(translation.modules.example.translations)) ==
+             [{:allowed, 1}, {:identity, 1}, {:identity_ensures, 1}, {:identity_law, 1}]
+
+    assert [
+             %{
+               "contents" => [
+                 %{"name" => "allowed"},
+                 %{"name" => "identity"},
+                 %{"name" => "identity_ensures"},
+                 %{
+                   "kind" => "theorem",
+                   "name" => "identity_law",
+                   "arity" => 1,
+                   "requires" => "allowed",
+                   "ensures" => "identity_ensures",
+                   "proof" => %{"source" => "rfl", "indentation" => 0, "span" => [5]}
+                 } = law
+               ]
+             }
+           ] = Translation.assemble(translation)
+
+    refute Map.has_key?(law, "pure")
+  end
+
+  test "raises CompileError with source annotations for invalid law attributes" do
+    core =
+      cerl(~S"""
+      -module(example).
+      -law #{name => {entry, 1}, ensures => expected}.
+      -other value.
+      -export([expected/1]).
+      expected(_) -> true.
+      """)
+
+    assert_raise CompileError, "example.erl:2: proof must immediately follow law", fn ->
+      Translation.new([{"example.erl", core}])
+    end
+  end
+
+  test "raises CompileError at a non-binary proof attribute" do
+    core =
+      cerl(~S"""
+      -module(example).
+      -law #{name => {entry, 1}, ensures => expected}.
+      -proof "rfl".
+      -export([expected/1]).
+      expected(_) -> true.
+      """)
+
+    assert_raise CompileError, "example.erl:3: proof must be a binary", fn ->
+      Translation.new([{"example.erl", core}])
+    end
+  end
+
+  test "translates a law with omitted requires" do
+    core =
+      cerl(~S"""
+      -module(example).
+      -law #{name => {entry, 1}, ensures => expected}.
+      -proof <<"rfl">>.
+      -export([expected/1]).
+      expected(_) -> true.
+      """)
+
+    translation =
+      Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
+
+    assert [%{"contents" => [%{"name" => "expected"}, law]}] = Translation.assemble(translation)
+
+    assert law == %{
+             "kind" => "theorem",
+             "name" => "entry",
+             "arity" => 1,
+             "ensures" => "expected",
+             "proof" => %{"source" => "rfl", "indentation" => 0, "span" => [4]},
+             "span" => [2, 2]
+           }
+  end
+
+  test "keeps explicit apply when its argument list is dynamic" do
+    core =
+      cerl("""
+      -module(example).
+      -export([entry/2]).
+      entry(F, Args) -> erlang:apply(F, Args).
+      """)
+
+    translation =
+      Translation.new([{"example.erl", core}])
+      |> Translation.add(:example, [{:entry, 2}])
+
+    assert %{
+             pure: false,
+             translation: %{
+               "body" => %{
+                 "kind" => "remote_call",
+                 "module" => "Erlang.erlang",
+                 "name" => "apply"
+               }
+             }
+           } = translation.modules.example.translations[{:entry, 2}]
+
+    assert translation.builtin_modules == %{erlang: true}
   end
 
   test "propagates impurity through recursive groups and their callers only" do
@@ -289,12 +412,10 @@ defmodule Lynx.TranslationTest do
         assert %{pure: false} = definition
       end
 
-      assert translation.builtin_modules == %{erlang: true}
+      assert translation.builtin_modules ==
+               if(:erlang in caller_imports, do: %{erlang: true}, else: %{})
 
-      assert translation.external_calls == %{
-               caller: MapSet.new(caller_imports),
-               dependency: MapSet.new([:erlang])
-             }
+      assert translation.external_calls == %{caller: MapSet.new(caller_imports)}
 
       functions = translation.modules.dependency.translations
 
@@ -302,44 +423,26 @@ defmodule Lynx.TranslationTest do
         assert %{local_calls: []} = functions[{name, 1}]
       end
 
-      assert %{"body" => %{"cases" => [%{"body" => dynamic} | _]}} =
-               functions[{:dynamic, 1}].translation
-
-      assert %{
-               "kind" => "fun_call",
-               "function" => %{"kind" => "var", "name" => "F"},
-               "args" => [%{"kind" => "integer", "value" => 7}, %{"kind" => "var", "name" => "F"}]
-             } = dynamic
-
-      assert %{"body" => %{"cases" => [%{"body" => explicit} | _]}} =
-               functions[{:explicit, 1}].translation
-
-      assert %{
-               "kind" => "remote_call",
-               "module" => "Erlang.erlang",
-               "name" => "apply",
-               "args" => [
-                 %{"kind" => "var", "name" => "F"},
-                 %{
-                   "kind" => "cons",
-                   "head" => %{"kind" => "integer", "value" => 7},
-                   "tail" => %{
-                     "kind" => "cons",
-                     "head" => %{"kind" => "var", "name" => "F"},
-                     "tail" => %{"kind" => "nil"}
-                   }
+      for name <- [:dynamic, :explicit] do
+        assert %{
+                 "body" => %{
+                   "kind" => "fun_call",
+                   "function" => %{"kind" => "var", "name" => 0},
+                   "args" => [
+                     %{"kind" => "integer", "value" => 7},
+                     %{"kind" => "var", "name" => 0}
+                   ]
                  }
-               ]
-             } = explicit
-
-      assert %{"body" => %{"cases" => [%{"body" => zero} | _]}} =
-               functions[{:zero, 1}].translation
+               } = functions[{name, 1}].translation
+      end
 
       assert %{
-               "kind" => "fun_call",
-               "function" => %{"kind" => "var", "name" => "F"},
-               "args" => []
-             } = zero
+               "body" => %{
+                 "kind" => "fun_call",
+                 "function" => %{"kind" => "var", "name" => 0},
+                 "args" => []
+               }
+             } = functions[{:zero, 1}].translation
 
       files = Translation.assemble(translation)
 
@@ -404,7 +507,7 @@ defmodule Lynx.TranslationTest do
     assert %{pure: false} = updated.modules.dependency.translations[{:"$lynx_fun_2", 3}]
 
     assert %{
-             "body" => %{"cases" => [%{"body" => %{"kind" => "return", "value" => function}} | _]}
+             "body" => %{"kind" => "return", "value" => function}
            } =
              updated.modules.caller.translations[{:again, 0}].translation
 
@@ -516,7 +619,7 @@ defmodule Lynx.TranslationTest do
     assert [%{"imports" => ["Erlang.lists"], "contents" => [definition]}] =
              Translation.assemble(translation)
 
-    assert %{"body" => %{"cases" => [%{"body" => call} | _]}} = definition
+    assert %{"body" => call} = definition
     assert %{"kind" => "remote_call", "module" => "Erlang.lists", "name" => "reverse"} = call
   end
 
@@ -736,7 +839,9 @@ defmodule Lynx.TranslationTest do
       end)
       |> Enum.to_list()
 
-    assert {:ok, core, _warnings} = :v3_core.module(forms, [])
+    assert {:ok, _module, core, _warnings} =
+             :compile.forms(forms, [:to_core, :return_errors, :return_warnings])
+
     core
   end
 end

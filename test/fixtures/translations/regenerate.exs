@@ -15,9 +15,11 @@ defmodule Lynx.Fixtures.Regenerate do
         |> Enum.map(&:cerl.var_name/1)
         |> Kernel.--([{:module_info, 0}, {:module_info, 1}])
 
+      laws = for {name, {:law, _}} <- :lynx_core_to_leanj.to_definitions(core), do: name
+
       files =
         Lynx.Translation.new([{source, core}])
-        |> Lynx.Translation.add(module, exports)
+        |> Lynx.Translation.add(module, exports ++ laws)
         |> Lynx.Translation.assemble()
 
       write(
@@ -38,7 +40,15 @@ defmodule Lynx.Fixtures.Regenerate do
       %{"status" => "ok", "files" => sources} = Lynx.Commands.runner!(@lean_dir, request)
 
       for file <- request["files"] do
-        suffix = if file["module"] == "Erlang.program", do: ".program.lean", else: ".lean"
+        suffix =
+          cond do
+            file["module"] == "Erlang." <> Path.basename(fixture, Path.extname(fixture)) ->
+              ".lean"
+
+            true ->
+              "." <> file["module"] <> ".lean"
+          end
+
         write(Path.rootname(fixture) <> suffix, Map.fetch!(sources, file["file"]))
       end
     end

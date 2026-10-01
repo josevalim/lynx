@@ -2,20 +2,22 @@ module
 
 public import Lynx
 
+@[expose] public section
+
 namespace Erlang.literal
 
 #lynx_pure
-  public def «atoms/0» : Lynx.Result :=
+  def «atoms/0» : Lynx.Result :=
     pure
       (Lynx.Term.cons (Lynx.Term.atom "foo")
         (Lynx.Term.cons (Lynx.Term.atom "bar baz") Lynx.Term.nil))
 
 #lynx_pure
-  public def «empty_list/0» : Lynx.Result :=
+  def «empty_list/0» : Lynx.Result :=
     pure Lynx.Term.nil
 
 #lynx_pure
-  public def «integers/0» : Lynx.Result :=
+  def «integers/0» : Lynx.Result :=
     pure
       (Lynx.Term.cons (Lynx.Term.integer (-1))
         (Lynx.Term.cons (Lynx.Term.integer 0)

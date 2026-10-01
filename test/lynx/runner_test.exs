@@ -4,7 +4,6 @@ defmodule Lynx.RunnerTest do
   @lean_dir Path.expand("../../Lean", __DIR__)
   @translations_dir Path.expand("../fixtures/translations", __DIR__)
   @literal_erl "../test/fixtures/translations/literal.erl"
-  @literal_json Path.join(@translations_dir, "literal.json")
   @moduletag timeout: to_timeout(minute: 10)
 
   test "runs successive commands in independent processes" do
@@ -51,20 +50,96 @@ defmodule Lynx.RunnerTest do
     end
 
     test "reports verification errors with source diagnostics" do
-      request =
-        @literal_json
-        |> File.read!()
-        |> JSON.decode!()
-        |> replace_integers()
-        |> Map.put("command", "verify")
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "files" => [
+          file(@literal_erl, "Erlang.literal", [
+            %{
+              "kind" => "def",
+              "name" => "broken",
+              "params" => [],
+              "pure" => false,
+              "span" => [4, 1],
+              "body" => %{
+                "kind" => "return",
+                "span" => [4, 15],
+                "value" => %{"kind" => "var", "name" => "missing", "span" => [4, 15]}
+              }
+            }
+          ])
+        ]
+      }
 
-      assert %{"status" => "error", "diagnostics" => diagnostics} =
+      assert %{"status" => "error", "diagnostics" => [diagnostic]} =
                Lynx.Commands.runner!(@lean_dir, request)
 
-      assert Enum.any?(diagnostics, fn diagnostic ->
-               diagnostic["file"] == @literal_erl and diagnostic["kind"] == "error" and
-                 diagnostic["line"] == 4 and diagnostic["column"] == 15
-             end)
+      assert %{"file" => @literal_erl, "kind" => "error", "line" => 4, "column" => 15} =
+               diagnostic
+
+      assert diagnostic["message"] =~ "Unknown identifier"
+    end
+
+    @tag :tmp_dir
+    test "reports embedded proof errors with source diagnostics", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "law.ex")
+
+      File.write!(path, ~S'''
+      defmodule Example do
+        law example do
+          ~LEAN"""
+          have hé : True := by trivial
+          exact missing
+          """
+        end
+      end
+      ''')
+
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "files" => [
+          file(path, "Elixir.Example", [
+            %{
+              "kind" => "def",
+              "name" => "ensures",
+              "params" => [],
+              "pure" => true,
+              "span" => [],
+              "body" => %{
+                "kind" => "return",
+                "span" => [],
+                "value" => %{"kind" => "atom", "value" => "true", "span" => []}
+              }
+            },
+            %{
+              "kind" => "theorem",
+              "name" => "example",
+              "arity" => 0,
+              "span" => [2, 3],
+              "ensures" => "ensures",
+              "proof" => %{
+                "span" => [4, 5],
+                "indentation" => 4,
+                "source" => "have hé : True := by trivial\nexact missing\n"
+              }
+            }
+          ])
+        ]
+      }
+
+      assert Lynx.Commands.runner!(@lean_dir, request) == %{
+               "status" => "error",
+               "diagnostics" => [
+                 %{
+                   "file" => path,
+                   "kind" => "error",
+                   "line" => 5,
+                   "column" => 11,
+                   "message" => "Unknown identifier `missing`"
+                 }
+               ]
+             }
     end
 
     test "function table purity metadata is checked rather than trusted" do
@@ -100,19 +175,37 @@ defmodule Lynx.RunnerTest do
       assert error.message =~ "files"
     end
 
-    test "rejects missing source files" do
-      missing = %{
+    test "verifies without source files and identifies unavailable source in errors" do
+      path = "../test/fixtures/translations/missing.erl"
+
+      request = %{
         "command" => "verify",
         "version" => "1.0",
-        "files" => [file("../test/fixtures/translations/missing.erl", "Erlang.missing", [])]
+        "files" => [file(path, "Erlang.missing", [])]
       }
 
-      error =
-        assert_raise RuntimeError, fn ->
-          Lynx.Commands.runner!(@lean_dir, missing)
-        end
+      assert Lynx.Commands.runner!(@lean_dir, request) == %{"status" => "ok", "diagnostics" => []}
 
-      assert error.message =~ "missing.erl"
+      broken = %{
+        "kind" => "def",
+        "name" => "broken",
+        "params" => [],
+        "pure" => false,
+        "span" => [20, 7],
+        "body" => %{
+          "kind" => "return",
+          "span" => [],
+          "value" => %{"kind" => "var", "name" => "missing", "span" => []}
+        }
+      }
+
+      request = Map.put(request, "files", [file(path, "Erlang.missing", [broken])])
+
+      assert %{"status" => "error", "diagnostics" => [diagnostic]} =
+               Lynx.Commands.runner!(@lean_dir, request)
+
+      assert %{"line" => 20, "column" => 7, "kind" => "error"} = diagnostic
+      assert diagnostic["message"] =~ "source not available"
     end
   end
 
@@ -131,16 +224,6 @@ defmodule Lynx.RunnerTest do
     assert error.message =~ @literal_erl
     assert error.message =~ "unsupported command kind 'unknown'"
   end
-
-  defp replace_integers(%{"kind" => "integer"} = node) do
-    node |> Map.delete("value") |> Map.put("kind", "var") |> Map.put("name", "missing")
-  end
-
-  defp replace_integers(map) when is_map(map),
-    do: Map.new(map, fn {key, value} -> {key, replace_integers(value)} end)
-
-  defp replace_integers(list) when is_list(list), do: Enum.map(list, &replace_integers/1)
-  defp replace_integers(value), do: value
 
   defp file(path, module, contents, imports \\ []) do
     %{"file" => path, "module" => module, "contents" => contents, "imports" => imports}

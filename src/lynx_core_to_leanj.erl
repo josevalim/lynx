@@ -16,9 +16,54 @@ module_name(Module) ->
         Name -> <<"Erlang.", Name/binary>>
     end.
 
--spec to_definitions(cerl:c_module()) -> #{{atom(), arity()} => cerl:c_fun()}.
-to_definitions(#c_module{defs = Defs}) ->
-    maps:from_list([{Name, Fun} || {#c_var{name = Name}, Fun} <- Defs]).
+-spec to_definitions(cerl:c_module()) ->
+    #{{atom(), arity()} => {function, cerl:c_fun()} | {law, map()}} |
+    {error, list(), binary()}.
+to_definitions(#c_module{defs = Defs, attrs = Attrs}) ->
+    try
+        definitions(Defs ++ Attrs, #{})
+    catch
+        throw:{error, Core, Reason} -> {error, cerl:get_ann(Core), Reason}
+    end.
+
+definitions([{#c_var{name = Name}, #c_fun{} = Fun} | Rest], Definitions) ->
+    definitions(Rest, Definitions#{Name => {function, Fun}});
+definitions([{#c_literal{val = law}, LawNode},
+             {#c_literal{val = proof}, ProofNode} | Rest], Definitions) ->
+    {Name, Law} = law(LawNode, ProofNode),
+    definitions(Rest, Definitions#{Name => {law, Law}});
+definitions([{#c_literal{val = law}, Core} | _], _) ->
+    core_error(Core, ~"proof must immediately follow law");
+definitions([{#c_literal{val = proof}, Core} | _], _) ->
+    core_error(Core, ~"proof without preceding law");
+definitions([_ | Rest], Definitions) -> definitions(Rest, Definitions);
+definitions([], Definitions) -> Definitions.
+
+law(#c_literal{val = [#{name := {Name, Arity}, ensures := Ensures} = Law]} = Core, ProofNode)
+        when is_atom(Name), is_integer(Arity), Arity >= 0, is_atom(Ensures) ->
+    case maps:find(requires, Law) of
+        error -> ok;
+        {ok, Requires} when is_atom(Requires) -> ok;
+        _ -> core_error(Core, ~"law requires must be a function name")
+    end,
+    Indentation = maps:get(indentation, Law, 0),
+    case is_integer(Indentation) andalso Indentation >= 0 of
+        true -> ok;
+        false -> core_error(Core, ~"law indentation must be a nonnegative integer")
+    end,
+    %% Attribute values are literals, so the proof has no separate annotation.
+    %% Erlang multiline strings begin on the line after the proof attribute.
+    ProofSpan = case span(cerl:get_ann(ProofNode)) of
+        [Line | _] -> [Line + 1];
+        [] -> []
+    end,
+    {{Name, Arity}, Law#{anno => cerl:get_ann(Core),
+        proof => #{~"source" => proof_source(ProofNode), ~"indentation" => Indentation,
+                   ~"span" => ProofSpan}}};
+law(Core, _) -> core_error(Core, ~"law must contain name {atom, arity} and ensures function name").
+
+proof_source(#c_literal{val = [Proof]}) when is_binary(Proof) -> Proof;
+proof_source(Core) -> core_error(Core, ~"proof must be a binary").
 
 -spec fun_table(map(), map()) -> [map()].
 fun_table(Funs, Modules) ->
@@ -41,10 +86,10 @@ fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Nam
 %% The supplied maps contain this module's definitions and the program-wide function registry.
 %% The callback returns remote callee purity. Local purity is propagated by Lynx.Translation.
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
--spec translate(module(), #{{atom(), arity()} => cerl:c_fun()}, [{atom(), arity()}], map(), map(),
+-spec translate(module(), #{{atom(), arity()} => {function, cerl:c_fun()} | {law, map()}}, [{atom(), arity()}], map(), map(),
                 {term(), fun((term(), module(), atom(), arity(), list(), map()) ->
                     {boolean(), map(), term()} | local)}) ->
-    {ok, map(), map(), term()} | {unsupported_core, list(), binary()}.
+    {ok, map(), map(), term()} | {error, list(), binary()}.
 translate(Module, Definitions, Names, Translated, Funs, Remote) ->
     try
         State = #state{
@@ -63,9 +108,7 @@ translate(Module, Definitions, Names, Translated, Funs, Remote) ->
 
         {ok, NewTranslated, NewFuns, NewContext}
     catch
-        throw:{unsupported_core, Core} ->
-            {unsupported_core, cerl:get_ann(Core),
-             unicode:characters_to_binary(core_pp:format(Core))}
+        throw:{error, Core, Reason} -> {error, cerl:get_ann(Core), Reason}
     end.
 
 translate_def(Name, #state{translated = Translated} = State) ->
@@ -74,19 +117,45 @@ translate_def(Name, #state{translated = Translated} = State) ->
         false -> translate_def(Name, maps:get(Name, State#state.defs), State)
     end.
 
-translate_def(Name, #c_fun{anno = Anno, vars = Vars, body = Body}, State0) ->
+translate_def(Name, {function, #c_fun{anno = Anno, vars = Vars, body = Body}}, State) ->
+    translate_definition(Name, Anno, Vars, {function, Body}, State);
+translate_def(Name, {law, #{anno := Anno, ensures := Ensures, proof := Proof} = Law}, State) ->
+    translate_definition(Name, Anno, [], {law, maps:find(requires, Law), Ensures, Proof}, State).
+
+translate_definition(Name, Anno, Vars, Definition, State0) ->
     State1 = State0#state{name = Name, local_calls = #{}, pure = true,
                           translated = (State0#state.translated)#{Name => pending}},
-    {TranslatedBody, State2} = expression(Body, State1),
-    Def = node(~"def", Anno, #{
-        ~"name" => function_name(Name),
-        ~"params" => [variable(Var) || Var <- Vars],
-        ~"body" => TranslatedBody
-    }),
+    {Def, State2} = case Definition of
+        {function, Body} ->
+            {TranslatedBody, Next} = expression(Body, State1),
+            {node(~"def", Anno, #{
+                ~"name" => function_name(Name),
+                ~"params" => [variable(Var) || Var <- Vars],
+                ~"body" => TranslatedBody
+            }), Next};
+        {law, Requires, Ensures, Proof} ->
+            {_, Arity} = Name,
+            {Requirement, Next1} = case Requires of
+                error -> {#{}, State1};
+                {ok, Helper} ->
+                    Next = translate_law_helper(Helper, Arity, State1),
+                    {#{~"requires" => atom_to_binary(Helper, utf8)}, Next}
+            end,
+            Next2 = translate_law_helper(Ensures, Arity, Next1),
+            {node(~"theorem", Anno, Requirement#{
+                ~"name" => function_name(Name), ~"arity" => Arity,
+                ~"ensures" => atom_to_binary(Ensures, utf8), ~"proof" => Proof
+            }), Next2}
+    end,
     Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls),
               pure => State2#state.pure},
     State0#state{translated = (State2#state.translated)#{Name => Entry},
                  funs = State2#state.funs, remote = State2#state.remote}.
+
+translate_law_helper(Name, Arity, State) ->
+    Callee = {Name, Arity},
+    Next = translate_def(Callee, State),
+    Next#state{local_calls = (Next#state.local_calls)#{Callee => true}}.
 
 %% Erlang: case X of [] -> 0; Other -> 1 end
 %% Lean:
@@ -183,7 +252,7 @@ value(#c_fun{vars = Vars} = Fun, State0) ->
     Entry = #{id => Id, module => State0#state.module,
               name => Name, arity => length(Vars), captures => Captures},
     State1 = State0#state{funs = (State0#state.funs)#{Id => Entry}},
-    State2 = translate_def(Name, Fun#c_fun{vars = Captures ++ Vars}, State1),
+    State2 = translate_def(Name, {function, Fun#c_fun{vars = Captures ++ Vars}}, State1),
     function_node(Entry, cerl:get_ann(Fun), State2);
 value(#c_var{anno = Anno, name = {_, Arity} = Name}, State0) ->
     Key = {State0#state.module, Name},
@@ -258,4 +327,8 @@ span([]) ->
     [].
 
 unsupported(Core) ->
-    throw({unsupported_core, Core}).
+    core_error(Core, <<"unsupported Core expression:\n",
+                       (unicode:characters_to_binary(core_pp:format(Core)))/binary>>).
+
+core_error(Core, Reason) ->
+    throw({error, Core, Reason}).
