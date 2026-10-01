@@ -1,8 +1,6 @@
 defmodule Lynx.Commands do
   @moduledoc false
 
-  @runner Path.expand("../../Lean/Lynx/Runner.lean", __DIR__)
-
   @doc """
   Runs one Runner request and returns the decoded response.
 
@@ -12,7 +10,7 @@ defmodule Lynx.Commands do
   """
   @spec runner!(String.t(), map()) :: map()
   def runner!(project_dir, request) do
-    port = open_lake(project_dir, ["env", "lean", "--run", @runner], [{:line, 1_000_000}])
+    port = open_lake(project_dir, ["--quiet", "exe", "Lynx/Lynx.Runner"], [{:line, 1_000_000}])
 
     output =
       try do
