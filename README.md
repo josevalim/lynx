@@ -63,6 +63,11 @@ sum_singleton_requires(X) -> is_integer(X).
 sum_singleton_ensures(X) -> sum([X]) == X.
 ```
 
+The argument names in `name` become Lean theorem parameters; the arity is inferred
+from their number. The predicate helpers receive those arguments in order and remain
+callable from Erlang. `ensures` is required, while `requires` may be omitted for an
+unconditional law. The law name does not need a matching Erlang function.
+
 Automatic translation from Erlang/Elixir to Lean is work in progress,
 see the [fixtures folder](test/fixtures/translations/) for examples.
 
