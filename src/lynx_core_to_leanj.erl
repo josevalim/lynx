@@ -39,8 +39,17 @@ definitions([{#c_literal{val = proof}, Core} | _], _) ->
 definitions([_ | Rest], Definitions) -> definitions(Rest, Definitions);
 definitions([], Definitions) -> Definitions.
 
-law(#c_literal{val = [#{name := {Name, Arity}, ensures := Ensures} = Law]} = Core, ProofNode)
-        when is_atom(Name), is_integer(Arity), Arity >= 0, is_atom(Ensures) ->
+law(#c_literal{val = [#{name := {Name, Params}, ensures := Ensures} = Law]} = Core, ProofNode)
+        when is_atom(Name), is_list(Params), is_atom(Ensures) ->
+    case lists:all(fun erlang:is_atom/1, Params) of
+        true -> ok;
+        false -> core_error(Core, ~"law parameters must be atoms")
+    end,
+    case length(lists:usort(Params)) =:= length(Params) of
+        true -> ok;
+        false -> core_error(Core, ~"law parameters must be unique")
+    end,
+    Arity = length(Params),
     case maps:find(requires, Law) of
         error -> ok;
         {ok, Requires} when is_atom(Requires) -> ok;
@@ -60,7 +69,7 @@ law(#c_literal{val = [#{name := {Name, Arity}, ensures := Ensures} = Law]} = Cor
     {{Name, Arity}, Law#{anno => cerl:get_ann(Core),
         proof => #{~"source" => proof_source(ProofNode), ~"indentation" => Indentation,
                    ~"span" => ProofSpan}}};
-law(Core, _) -> core_error(Core, ~"law must contain name {atom, arity} and ensures function name").
+law(Core, _) -> core_error(Core, ~"law must contain name {atom, parameters} and ensures function name").
 
 proof_source(#c_literal{val = [Proof]}) when is_binary(Proof) -> Proof;
 proof_source(Core) -> core_error(Core, ~"proof must be a binary").
@@ -119,8 +128,8 @@ translate_def(Name, #state{translated = Translated} = State) ->
 
 translate_def(Name, {function, #c_fun{anno = Anno, vars = Vars, body = Body}}, State) ->
     translate_definition(Name, Anno, Vars, {function, Body}, State);
-translate_def(Name, {law, #{anno := Anno, ensures := Ensures, proof := Proof} = Law}, State) ->
-    translate_definition(Name, Anno, [], {law, maps:find(requires, Law), Ensures, Proof}, State).
+translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensures, proof := Proof} = Law}, State) ->
+    translate_definition(Name, Anno, Params, {law, maps:find(requires, Law), Ensures, Proof}, State).
 
 translate_definition(Name, Anno, Vars, Definition, State0) ->
     State1 = State0#state{name = Name, local_calls = #{}, pure = true,
@@ -143,7 +152,7 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
             end,
             Next2 = translate_law_helper(Ensures, Arity, Next1),
             {node(~"theorem", Anno, Requirement#{
-                ~"name" => function_name(Name), ~"arity" => Arity,
+                ~"name" => function_name(Name), ~"params" => [atom_to_binary(Param, utf8) || Param <- Vars],
                 ~"ensures" => atom_to_binary(Ensures, utf8), ~"proof" => Proof
             }), Next2}
     end,
