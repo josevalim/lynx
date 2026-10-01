@@ -166,7 +166,7 @@ defmodule Lynx.CoreToLeanjTest do
         [
           {:cerl.c_atom(:law),
            :cerl.ann_abstract([10], [
-             %{name: {:entry, [:x]}, requires: :requirement, ensures: :expected, indentation: 4}
+             %{name: {:entry, [:x]}, requires: :requirement, ensures: :expected}
            ])},
           {:cerl.c_atom(:proof), :cerl.ann_abstract([11], ["rfl"])}
         ],
@@ -186,8 +186,21 @@ defmodule Lynx.CoreToLeanjTest do
              "params" => ["x"],
              "requires" => "requirement",
              "ensures" => "expected",
-             "proof" => %{"source" => "rfl", "indentation" => 4, "span" => [12]}
+             "proof" => %{"source" => "rfl", "indentation" => 0, "span" => [12]}
            } == functions[{:entry, 1}].translation
+  end
+
+  test "uses the law's explicit span instead of the Core attribute's annotations" do
+    for {span, expected} <- [{40, [40]}, {{40, 9}, [40, 9]}] do
+      definitions =
+        law_core(%{name: {:entry, [:x]}, ensures: :expected, span: span})
+        |> :lynx_core_to_leanj.to_definitions()
+
+      assert {:ok, functions, []} = translate(definitions)
+
+      assert %{"span" => ^expected, "proof" => %{"span" => [12]}} =
+               functions[{:entry, 1}].translation
+    end
   end
 
   describe "to_definition" do
@@ -214,8 +227,8 @@ defmodule Lynx.CoreToLeanjTest do
              }
     end
 
-    test "extracts multiple paired laws with a binary proof and explicit indentation" do
-      law = %{name: {:entry, [:x]}, requires: :requirement, ensures: :expected, indentation: 4}
+    test "extracts multiple paired laws with binary proofs" do
+      law = %{name: {:entry, [:x]}, requires: :requirement, ensures: :expected}
       core = law_core(law, ["rfl"])
 
       attrs =
@@ -232,7 +245,7 @@ defmodule Lynx.CoreToLeanjTest do
                  {:law,
                   %{
                     requires: :requirement,
-                    proof: %{"source" => "rfl", "indentation" => 4, "span" => [12]}
+                    proof: %{"source" => "rfl", "indentation" => 0, "span" => [12]}
                   }},
                {:second, 2} => {:law, %{name: {:second, [:b, :a]}, proof: %{"span" => [16]}}}
              } = :lynx_core_to_leanj.to_definitions(core)
@@ -281,15 +294,62 @@ defmodule Lynx.CoreToLeanjTest do
       end
     end
 
-    test "validates requires names and indentation" do
-      for {extra, reason} <- [
-            {%{requires: "requirement"}, "law requires must be a function name"},
-            {%{indentation: -1}, "law indentation must be a nonnegative integer"},
-            {%{indentation: 1.5}, "law indentation must be a nonnegative integer"}
-          ] do
-        law = Map.merge(%{name: {:entry, [:x]}, ensures: :expected}, extra)
-        assert {:error, [10], ^reason} = :lynx_core_to_leanj.to_definitions(law_core(law))
+    test "validates requires names" do
+      law = %{name: {:entry, [:x]}, ensures: :expected, requires: "requirement"}
+
+      assert {:error, [10], "law requires must be a function name"} =
+               :lynx_core_to_leanj.to_definitions(law_core(law))
+    end
+
+    test "reports invalid law spans at the Core attribute" do
+      law = %{name: {:entry, [:x]}, ensures: :expected, span: {40, 0}}
+
+      assert {:error, [10], "law span must be a line or {line, column}"} =
+               :lynx_core_to_leanj.to_definitions(law_core(law))
+    end
+
+    test "extracts embedded proof metadata with tuple and integer spans" do
+      for {span, expected} <- [{{12, 9}, [12, 9]}, {12, [12]}] do
+        law = %{
+          name: {:entry, [:x]},
+          ensures: :expected,
+          proof: %{source: "rfl", indentation: 4, span: span}
+        }
+
+        core = core([attribute(:law, [law], [10])])
+
+        assert %{
+                 {:entry, 1} =>
+                   {:law, %{proof: %{"source" => "rfl", "indentation" => 4, "span" => ^expected}}}
+               } =
+                 :lynx_core_to_leanj.to_definitions(core)
       end
+    end
+
+    test "reports invalid embedded proof metadata at the law attribute" do
+      for {extra, reason} <- [
+            {%{source: ~c"rfl"},
+             "embedded proof requires a binary, nonnegative indentation and span"},
+            {%{indentation: -1},
+             "embedded proof requires a binary, nonnegative indentation and span"},
+            {%{span: {12, 0}}, "embedded proof span must be a line or {line, column}"}
+          ] do
+        law = %{
+          name: {:entry, [:x]},
+          ensures: :expected,
+          proof: Map.merge(%{source: "rfl", indentation: 0, span: 12}, extra)
+        }
+
+        assert {:error, [10], ^reason} =
+                 :lynx_core_to_leanj.to_definitions(core([attribute(:law, [law], [10])]))
+      end
+    end
+
+    test "rejects embedded proof metadata at the law root" do
+      law = %{name: {:entry, [:x]}, ensures: :expected, proof: "rfl", indentation: 0, span: 12}
+
+      assert {:error, [10], "embedded proof requires a binary, nonnegative indentation and span"} =
+               :lynx_core_to_leanj.to_definitions(core([attribute(:law, [law], [10])]))
     end
 
     test "requires binary proofs and reports errors at the proof attribute" do
