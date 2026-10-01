@@ -111,99 +111,6 @@ defmodule Lynx.RunnerTest do
            }
   end
 
-  test "reports verification errors with source diagnostics" do
-    request = %{
-      "command" => "verify",
-      "version" => "1.0",
-      "files" => [
-        file(@literal_erl, "Erlang.literal", [
-          %{
-            "kind" => "def",
-            "name" => "broken",
-            "params" => [],
-            "pure" => false,
-            "span" => [4, 1],
-            "body" => %{
-              "kind" => "return",
-              "span" => [4, 15],
-              "value" => %{"kind" => "var", "name" => "missing", "span" => [4, 15]}
-            }
-          }
-        ])
-      ]
-    }
-
-    assert [%{"status" => "error", "diagnostics" => [diagnostic]}] =
-             Lynx.Commands.runner!(@lean_dir, request)
-
-    assert %{"file" => @literal_erl, "kind" => "error", "line" => 4, "column" => 15} =
-             diagnostic
-
-    assert diagnostic["message"] =~ "Unknown identifier"
-  end
-
-  @tag :tmp_dir
-  test "reports embedded proof errors with source diagnostics", %{tmp_dir: tmp_dir} do
-    path = Path.join(tmp_dir, "law.ex")
-
-    File.write!(path, ~S'''
-    defmodule Example do
-      law example do
-        ~LEAN"""
-        have hé : True := by trivial
-        exact missing
-        """
-      end
-    end
-    ''')
-
-    request = %{
-      "command" => "verify",
-      "version" => "1.0",
-      "files" => [
-        file(path, "Elixir.Example", [
-          %{
-            "kind" => "def",
-            "name" => "ensures",
-            "params" => [],
-            "pure" => true,
-            "span" => [],
-            "body" => %{
-              "kind" => "return",
-              "span" => [],
-              "value" => %{"kind" => "atom", "value" => "true", "span" => []}
-            }
-          },
-          %{
-            "kind" => "theorem",
-            "name" => "example",
-            "params" => [],
-            "span" => [2, 3],
-            "ensures" => "ensures",
-            "proof" => %{
-              "span" => [4, 5],
-              "indentation" => 4,
-              "source" => "have hé : True := by trivial\nexact missing\n"
-            }
-          }
-        ])
-      ]
-    }
-
-    assert [%{"status" => "error", "diagnostics" => diagnostics}] =
-             Lynx.Commands.runner!(@lean_dir, request)
-
-    assert diagnostics == [
-             %{
-               "file" => path,
-               "kind" => "error",
-               "line" => 5,
-               "column" => 11,
-               "message" => "Unknown identifier `missing`"
-             }
-           ]
-  end
-
   test "function table purity metadata is checked rather than trusted" do
     request = fixture_request(Path.join(@translations_dir, "functions.json"), "verify")
     table_file = List.last(request["files"])
@@ -229,51 +136,188 @@ defmodule Lynx.RunnerTest do
            end)
   end
 
-  test "verifies without source files" do
-    path = "../test/fixtures/translations/missing.erl"
-
-    request = %{
-      "command" => "verify",
-      "version" => "1.0",
-      "files" => [file(path, "Erlang.missing", [])]
-    }
-
-    assert [%{"status" => "ok", "file" => ^path, "diagnostics" => []}] =
-             Lynx.Commands.runner!(@lean_dir, request)
-  end
-
-  test "reports unavailable source in verification diagnostics" do
-    path = "../test/fixtures/translations/missing.erl"
-
-    broken = %{
-      "kind" => "def",
-      "name" => "broken",
-      "params" => [],
-      "pure" => false,
-      "span" => [20, 7],
-      "body" => %{
-        "kind" => "return",
-        "span" => [],
-        "value" => %{"kind" => "var", "name" => "missing", "span" => []}
+  describe "diagnostics" do
+    test "reports function elaboration errors at the inherited node location" do
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "files" => [
+          file(@literal_erl, "Erlang.literal", [
+            %{
+              "kind" => "def",
+              "name" => "broken",
+              "params" => [],
+              "pure" => false,
+              "span" => [4, 1],
+              "body" => %{
+                "kind" => "return",
+                "span" => [4, 15],
+                "value" => %{"kind" => "var", "name" => "missing", "span" => []}
+              }
+            }
+          ])
+        ]
       }
-    }
 
-    request = %{
-      "command" => "verify",
-      "version" => "1.0",
-      "files" => [file(path, "Erlang.missing", [broken])]
-    }
+      assert [%{"status" => "error", "diagnostics" => [diagnostic]}] =
+               Lynx.Commands.runner!(@lean_dir, request)
 
-    assert [%{"status" => "error", "diagnostics" => [diagnostic]}] =
-             Lynx.Commands.runner!(@lean_dir, request)
+      assert diagnostic == %{
+               "file" => @literal_erl,
+               "kind" => "error",
+               "line" => 4,
+               "column" => 15,
+               "message" => "Unknown identifier `vmissing`"
+             }
+    end
 
-    assert diagnostic == %{
-             "file" => path,
-             "line" => 20,
-             "column" => 7,
-             "kind" => "error",
-             "message" => "Unknown identifier `vmissing`\n(source not available)"
-           }
+    test "reports type errors when generated match patterns do not match the expression type" do
+      path = "invalid_match.erl"
+
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "files" => [
+          file(
+            path,
+            "Erlang.invalid_match",
+            [
+              definition("broken", %{
+                "kind" => "match",
+                "span" => [3, 1],
+                "expressions" => [
+                  %{
+                    "kind" => "remote_call",
+                    "module" => "Erlang.erlang",
+                    "name" => "+",
+                    "args" => [
+                      %{"kind" => "integer", "value" => 1, "span" => [3, 10]},
+                      %{"kind" => "integer", "value" => 2, "span" => [3, 14]}
+                    ],
+                    "span" => [3, 8]
+                  }
+                ],
+                "cases" => [
+                  %{
+                    "patterns" => [%{"kind" => "integer", "value" => 3, "span" => [4, 5]}],
+                    "body" => success(),
+                    "span" => [4, 1]
+                  }
+                ]
+              })
+            ],
+            ["Erlang.erlang"]
+          )
+        ]
+      }
+
+      assert [%{"status" => "error", "diagnostics" => [diagnostic]}] =
+               Lynx.Commands.runner!(@lean_dir, request)
+
+      assert %{
+               "file" => ^path,
+               "kind" => "error",
+               "line" => 4,
+               "column" => 5,
+               "message" => message
+             } =
+               diagnostic
+
+      assert message ==
+               String.trim_trailing("""
+               Type mismatch
+                 Lynx.Term.integer 3
+               has type
+                 Lynx.Term
+               of sort `Type` but is expected to have type
+                 Lynx.Result
+               of sort `Type 1`
+               """)
+    end
+
+    test "reports proof elaboration errors with Unicode and the supplied location precision" do
+      path = "proofs.ex"
+      proof = "have h₀ : True := by trivial\nexact (let hé := True; missing)\n"
+
+      laws =
+        for {name, span} <- [
+              {"columns", [10, 7]},
+              {"line", [20]},
+              {"unknown", []}
+            ] do
+          %{
+            "kind" => "theorem",
+            "name" => name,
+            "params" => [],
+            "ensures" => "ensures",
+            "span" => [],
+            "proof" => %{"source" => proof, "indentation" => 4, "span" => span}
+          }
+        end
+
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "files" => [file(path, "Elixir.Precision", [definition("ensures", success()) | laws])]
+      }
+
+      assert [%{"status" => "error", "diagnostics" => diagnostics}] =
+               Lynx.Commands.runner!(@lean_dir, request)
+
+      assert diagnostics == [
+               %{
+                 "file" => path,
+                 "kind" => "error",
+                 "line" => 11,
+                 "column" => 28,
+                 "message" => "Unknown identifier `missing`"
+               },
+               %{
+                 "file" => path,
+                 "kind" => "error",
+                 "line" => 21,
+                 "message" => "Unknown identifier `missing`"
+               },
+               %{"file" => path, "kind" => "error", "message" => "Unknown identifier `missing`"}
+             ]
+    end
+
+    test "reports proof parsing errors with the supplied location precision" do
+      path = "syntax.ex"
+
+      laws =
+        for {name, span} <- [{"columns", [10, 7]}, {"line", [20]}, {"unknown", []}] do
+          %{
+            "kind" => "theorem",
+            "name" => name,
+            "params" => [],
+            "ensures" => "ensures",
+            "span" => [],
+            "proof" => %{"source" => "exact )", "indentation" => 4, "span" => span}
+          }
+        end
+
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "files" => [file(path, "Elixir.Syntax", [definition("ensures", success()) | laws])]
+      }
+
+      assert [%{"status" => "error", "diagnostics" => diagnostics}] =
+               Lynx.Commands.runner!(@lean_dir, request)
+
+      assert diagnostics == [
+               %{
+                 "file" => path,
+                 "kind" => "error",
+                 "line" => 10,
+                 "column" => 13,
+                 "message" => "expected term"
+               },
+               %{"file" => path, "kind" => "error", "line" => 20, "message" => "expected term"},
+               %{"file" => path, "kind" => "error", "message" => "expected term"}
+             ]
+    end
   end
 
   describe "errors" do

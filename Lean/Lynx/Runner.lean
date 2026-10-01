@@ -26,8 +26,8 @@ and a proof object. Helpers are ordinary Result computations called with the the
 parameters. An absent requires helper means no assumption.
 A proof object contains tactic source, nonnegative indentation, and a span locating
 the first character of that source. The producer handles host delimiters and line offsets. Proof syntax keeps
-its own source ranges, mapped into the host file. Missing original source is
-normal for BEAM dependencies; diagnostics say "source not available".
+its own source ranges, mapped to the supplied host locations using a synthetic file map.
+Original source files are not read.
 Function tables carry entry metadata: body, captures, args, pure, and span.
 The decoder builds typed pure/effectful callables; a pure entry must prove
 the translated body's purity during elaboration. Each entry also generates checked
@@ -536,7 +536,6 @@ structure DecodedFile where
   private proofDiagnostics : Array ProofDiagnostic
   private theorems : Array (Name × Span)
   private reexportImports : Bool
-  private sourceAvailable : Bool
 
 /-- Immutable runtime imports, reused without retaining translated declarations. -/
 private structure Runtime where
@@ -564,8 +563,7 @@ private def importFile (runtime : Runtime) (imports : Array Import)
     let (_, state) ← (importModulesCore imports (globalLevel := .exported) (arts := artifacts)).run runtime.imports
     finalizeImport state imports {} 0 false true (level := .exported)
 
-/-- A source file is optional (BEAM debug information often names a build
-machine path). Reserve offsets for supplied locations even without its text. -/
+/-- Reserve synthetic offsets for supplied spans and embedded proof locations. -/
 private partial def sourceExtent (j : Json) : Nat × Nat := Id.run do
   let mut lines := 1
   let mut columns := 1
@@ -587,14 +585,10 @@ private partial def sourceExtent (j : Json) : Nat × Nat := Id.run do
     columns := max columns c
   return (lines, columns)
 
-private def sourceMap (file moduleName : String) (entry : Json) : IO (FileMap × Bool) := do
-  if moduleName == "Erlang.program" then return (FileMap.ofString "", true)
-  try
-    return (FileMap.ofString (← IO.FS.readFile file), true)
-  catch _ =>
-    let (lines, columns) := sourceExtent entry
-    let line := String.ofList (List.replicate columns ' ')
-    return (FileMap.ofString (String.intercalate "\n" (List.replicate lines line)), false)
+private def sourceMap (entry : Json) : FileMap :=
+  let (lines, columns) := sourceExtent entry
+  let line := String.ofList (List.replicate columns ' ')
+  FileMap.ofString (String.intercalate "\n" (List.replicate lines line))
 
 /-- Decode input files after the selected command requests them. -/
 private def decode (files : Array Json) (env : Lean.Environment) : IO (Array DecodedFile) := do
@@ -602,7 +596,7 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
     let file ← IO.ofExcept (str entry "file")
     try
       let moduleName ← IO.ofExcept (str entry "module")
-      let (map, sourceAvailable) ← sourceMap file moduleName entry
+      let map := sourceMap entry
       let (moduleName, imports, commands, state, reexportImports) ← IO.ofExcept do
         fields entry ["file", "module", "imports", "contents"]
         let namespaceId ← (identifier moduleName).run env |>.run' {}
@@ -617,13 +611,12 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
         let start := Unhygienic.run `(namespace $namespaceId)
         let stop := Unhygienic.run `(end $namespaceId)
         pure (namespaceId.getId.toString, imports, #[visibility, start] ++ commands.flatten ++ #[stop], state, reexportImports)
-      return ⟨file, moduleName, imports, map, commands, state.spans, state.diagnostics, state.theorems, reexportImports, sourceAvailable⟩
+      return ⟨file, moduleName, imports, map, commands, state.spans, state.diagnostics, state.theorems, reexportImports⟩
     catch err => throw (IO.userError s!"{file}: {err}")
 
 private def parsingDiagnostics (file : DecodedFile) : Array Json :=
   file.proofDiagnostics.map fun error =>
-    diagnostic file.fileName "error"
-      (error.message ++ if file.sourceAvailable then "" else "\n(source not available)") error.location
+    diagnostic file.fileName "error" error.message error.location
 
 private def renderFile (file : DecodedFile) (env : Lean.Environment) : IO String := do
   let action : CoreM String := do
@@ -674,7 +667,7 @@ private def verify (files : Array DecodedFile) (runtime : Runtime) (emit : Json 
           if msg.severity == .error then fileFailed := true
           diagnostics := diagnostics.push (diagnostic file.fileName
             (match msg.severity with | .error => "error" | .warning => "warning" | .information => "info")
-            ((← msg.data.toString) ++ if file.sourceAvailable then "" else "\n(source not available)") (messageLocation file.fileMap file.spans msg))
+            (← msg.data.toString) (messageLocation file.fileMap file.spans msg))
         -- Audit local laws and the precomputed axiom dependencies of imported declarations.
         unless fileFailed do
           let audit : CoreM (Array Json) := do
