@@ -38,7 +38,9 @@ Verified files are exported to temporary modules for importing by later files.
 Each file's definitions live in its module namespace.
 Module names arrive qualified by the producer, such as `Erlang.foo` or `Elixir.Foo`;
 functions acquire `/arity` here.
-Imports may name other input modules or compiled Lean modules loaded from disk.
+Imports name other input modules or compiled Lean modules loaded from disk.
+Erlang imports without a distinct input file resolve to Lynx.Modules.Erlang.* runtime modules.
+Runtime module identities differ from their Erlang.* declaration namespaces.
 Verification elaborates decoded syntax directly. Rendering pretty-prints that syntax as Lean source. -/
 namespace Lynx.Runner
 open Lean
@@ -620,6 +622,10 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
         let namespaceId ← (identifier moduleName).run env |>.run' {}
         let imports ← (← arr entry "imports").mapM fun j => do
           let name ← j.getStr?
+          let name := if name.startsWith "Erlang." &&
+              (name == moduleName || !files.any (fun file => (str file "module").toOption == some name)) then
+            "Lynx.Modules." ++ name
+            else name
           let id ← (identifier name).run env |>.run' {}
           pure id.getId.toString
         let contents ← arr entry "contents"
@@ -656,7 +662,7 @@ Artifacts live only for this request; they are not a persistent verification cac
 private def verify (files : Array DecodedFile) (runtime : Runtime) (emit : Json → IO Unit) : IO Unit :=
   IO.FS.withTempDir fun directory => do
     let mut artifacts : NameMap ImportArtifacts := {}
-    let mut verified : Std.HashMap String Name := {}
+    let mut verified : Std.HashSet String := {}
     for (file, index) in files.zipIdx do
       let started ← IO.monoMsNow
       let source ← renderFile file runtime.env
@@ -667,22 +673,16 @@ private def verify (files : Array DecodedFile) (runtime : Runtime) (emit : Json 
       for name in file.imports do
         let moduleName ← IO.ofExcept <| (identifier name).run runtime.env |>.run' {}
         let moduleName := moduleName.getId
-        let moduleName ← if name != file.moduleName && files.any (·.moduleName == name) then do
-          if let some verifiedName := verified[name]? then
-            pure verifiedName
-          else
-            missingImport := true
-            diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName "error"
-              s!"import '{name}' must precede this file and verify successfully")
-            pure moduleName
-        else pure moduleName
+        if files.any (·.moduleName == name) && !verified.contains name then
+          missingImport := true
+          diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName "error"
+            s!"import '{name}' must precede this file and verify successfully")
         unless imports.any (·.module == moduleName) do
           imports := imports.push { module := moduleName, isExported := file.reexportImports }
       unless missingImport do
         let env ← importFile runtime imports artifacts
-        -- Keep artifact names distinct from source namespaces so translated modules
-        -- can import their runtime counterparts (e.g. additional Erlang.lists operations).
-        let mainModule := `Lynx.Generated ++ Name.mkSimple s!"File{index}"
+        let moduleName ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
+        let mainModule := moduleName.getId
         let (state, messages) ← elaborateFile (env.setMainModule mainModule)
           file.fileName file.fileMap file.commands
         for (msg, declarationName) in messages do
@@ -711,7 +711,7 @@ private def verify (files : Array DecodedFile) (runtime : Runtime) (emit : Json 
           artifacts := artifacts.insert mainModule (.ofArrays #[
             #[path, path.withExtension "olean.server", path.withExtension "olean.private"],
             #[path.withExtension "ir.sig", path.withExtension "ir"]])
-          verified := verified.insert file.moduleName mainModule
+          verified := verified.insert file.moduleName
       let elapsed := (← IO.monoMsNow) - started
       let status := if missingImport then "skipped" else if fileFailed then "error" else "ok"
       emit (Json.mkObj [

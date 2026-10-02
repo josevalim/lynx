@@ -8,7 +8,7 @@ defmodule Lynx.RunnerTest do
 
   test "only exposes declared imports and their dependencies" do
     calls = [
-      definition("source", call("Elixir.Source", "value")),
+      definition("source", call("Erlang.maps", "value")),
       definition("runtime", call("Erlang.maps", "new"))
     ]
 
@@ -16,19 +16,22 @@ defmodule Lynx.RunnerTest do
       "command" => "verify",
       "version" => "1.0",
       "files" => [
-        file(@literal_erl, "Elixir.Source", [definition("value", call("Erlang.maps", "new"))], [
+        file(@literal_erl, "Erlang.maps", [definition("value", call("Erlang.maps", "new"))], [
           "Erlang.maps"
         ]),
         file(@literal_erl, "Elixir.Undeclared", calls),
-        file(@literal_erl, "Elixir.Declared", calls, ["Elixir.Source"])
+        file(@literal_erl, "Elixir.Declared", calls, ["Erlang.maps"])
       ]
     }
 
     assert [
-             %{"status" => "ok", "diagnostics" => []},
+             %{"status" => "ok", "source" => runtime_source, "diagnostics" => []},
              %{"status" => "error", "diagnostics" => [source, runtime]},
-             %{"status" => "ok", "diagnostics" => []}
+             %{"status" => "ok", "source" => translated_source, "diagnostics" => []}
            ] = Lynx.Commands.runner!(@lean_dir, request)
+
+    assert runtime_source =~ "public import Lynx.Modules.Erlang.maps"
+    assert translated_source =~ "public import Erlang.maps"
 
     assert %{
              "file" => @literal_erl,
@@ -39,7 +42,7 @@ defmodule Lynx.RunnerTest do
              "column" => 15
            } = source
 
-    assert source["message"] =~ "Unknown identifier `Elixir.Source.«value/0»`"
+    assert source["message"] =~ "Unknown identifier `Erlang.maps.«value/0»`"
     assert %{"module" => "Elixir.Undeclared", "declaration" => "runtime/0"} = runtime
     assert runtime["message"] =~ "Unknown identifier `Erlang.maps.«new/0»`"
   end

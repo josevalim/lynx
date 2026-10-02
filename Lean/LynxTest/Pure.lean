@@ -1,7 +1,7 @@
 module
 
-import all Erlang.erlang
-import all Erlang.erlang.Guards
+import all Lynx.Modules.Erlang.erlang
+import all Lynx.Modules.Erlang.erlang.Guards
 import Lynx
 meta import LynxTest.ProofAudit
 

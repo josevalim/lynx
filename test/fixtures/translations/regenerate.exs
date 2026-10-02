@@ -34,7 +34,7 @@ defmodule Lynx.Fixtures.Regenerate do
   end
 
   def run(["lean"]) do
-    case Lynx.Commands.lake(@lean_dir, ["build", "Lynx", "Erlang"]) do
+    case Lynx.Commands.lake(@lean_dir, ["build", "Lynx"]) do
       {0, _output} -> :ok
       {_status, output} -> Mix.raise("cannot build the Lean runtime:\n#{output}")
     end

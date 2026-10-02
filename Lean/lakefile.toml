@@ -1,14 +1,11 @@
 name = "Lynx"
 version = "0.1.0"
-defaultTargets = ["Lynx", "Erlang", "Lynx.Runner"]
+defaultTargets = ["Lynx", "Lynx.Runner"]
 testDriver = "LynxTest"
 
 [[lean_lib]]
 name = "Lynx"
-
-[[lean_lib]]
-name = "Erlang"
-globs = ["Erlang.+"]
+globs = ["Lynx", "Lynx.Modules.+"]
 
 [[lean_lib]]
 name = "LynxTest"
