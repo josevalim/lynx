@@ -15,8 +15,8 @@ defmodule ProcessDeadlock do
   end
 end
 -/
-import all Erlang.erlang
-import all Erlang.erlang.Process
+import all Lynx.Modules.Erlang.erlang
+import all Lynx.Modules.Erlang.erlang.Process
 import all Lynx.Term
 import all Lynx.Term.Runner
 import all Lynx.Term.Apply

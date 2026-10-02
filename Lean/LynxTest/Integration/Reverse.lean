@@ -12,7 +12,7 @@ defmodule Reverse do
   defp is_reversible_list(_), do: false
 end
 -/
-import Erlang.erlang
+import Lynx.Modules.Erlang.erlang
 import LynxTest.Bench
 
 namespace LynxTest.Integration.Reverse

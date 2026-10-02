@@ -1,6 +1,6 @@
 module
 
-import Erlang.lists
+import Lynx.Modules.Erlang.lists
 meta import LynxTest.ProofAudit
 
 namespace LynxTest.Modules.Lists
@@ -20,7 +20,7 @@ theorem reverse_non_list (tail : Term) :
     «reverse/2» (.integer 1) tail = .error (.error (.atom "badarg")) := rfl
 
 run_cmd do
-  LynxTest.ProofAudit.checkModule `Erlang.lists
+  LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.lists
   LynxTest.ProofAudit.checkModule `LynxTest.Modules.Lists
 
 end LynxTest.Modules.Lists

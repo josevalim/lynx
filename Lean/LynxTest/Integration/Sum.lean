@@ -11,7 +11,7 @@ defmodule Sum do
   defp is_integer_list(_), do: false
 end
 -/
-import Erlang.erlang
+import Lynx.Modules.Erlang.erlang
 import Lynx.Term
 import LynxTest.Bench
 

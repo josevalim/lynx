@@ -1,6 +1,6 @@
 module
 
-import Erlang.maps
+import Lynx.Modules.Erlang.maps
 meta import LynxTest.ProofAudit
 import Lynx
 import all Lynx.Term.Compare
@@ -68,5 +68,5 @@ theorem bad_maps : ∀ bad ∈ [one, .nil, .tuple #[]],
 end LynxTest.Modules.Maps
 
 run_cmd do
-  LynxTest.ProofAudit.checkModule `Erlang.maps
+  LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.maps
   LynxTest.ProofAudit.checkModule `LynxTest.Modules.Maps

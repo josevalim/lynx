@@ -3,9 +3,9 @@ module
 meta import Lean
 public import Lynx.Runner
 public import Lynx
-public import Erlang.erlang
-public import Erlang.lists
-public import Erlang.maps
+public import Lynx.Modules.Erlang.erlang
+public import Lynx.Modules.Erlang.lists
+public import Lynx.Modules.Erlang.maps
 
 -- Keep the closure environment and table adapter signatures part of the API check.
 example : Nat → Nat → Array Lynx.Term → Lynx.Term := Lynx.Term.function
@@ -213,7 +213,7 @@ private def actualDeclarations : MetaM (Array String) := do
         let moduleName := env.header.moduleNames[moduleIdx.toNat]!.toString
         let isGenerated := (← Lean.isAutoDeclOrPrivate_Internal name) ||
           Lean.isRecCore env name || Lean.Meta.isInstanceCore env name.getPrefix
-        if (moduleName == "Lynx" || moduleName.startsWith "Lynx." || moduleName.startsWith "Erlang.") &&
+        if (moduleName == "Lynx" || moduleName.startsWith "Lynx.") &&
             (env.find? name).isSome && !isMarkedMeta env name &&
             !isPrivateName name && !isGenerated then
           if ← Meta.isProp info.type then pure none else pure (some name.toString)

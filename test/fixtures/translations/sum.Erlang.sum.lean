@@ -1,7 +1,7 @@
 module
 
 public import Lynx
-public import Erlang.erlang
+public import Lynx.Modules.Erlang.erlang
 public import Erlang.lists
 
 @[expose] public section
