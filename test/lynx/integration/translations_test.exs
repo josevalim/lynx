@@ -46,8 +46,8 @@ defmodule Lynx.Integration.TranslationTest do
           {without_spans(left_file), without_spans(right_file)}
         end
 
-      left_file = Map.delete(left_file, "file")
-      right_file = Map.delete(right_file, "file")
+      left_file = Map.drop(left_file, ["file", "cache_key"])
+      right_file = Map.drop(right_file, ["file", "cache_key"])
       assert left_file == right_file
     end
 

@@ -28,7 +28,7 @@ defmodule Lynx.RunnerTest do
              %{"status" => "ok", "source" => runtime_source, "diagnostics" => []},
              %{"status" => "error", "diagnostics" => [source, runtime]},
              %{"status" => "ok", "source" => translated_source, "diagnostics" => []}
-           ] = Lynx.Commands.runner!(@lean_dir, request)
+           ] = runner!(request)
 
     assert runtime_source =~ "public import Lynx.Modules.Erlang.maps"
     assert translated_source =~ "public import Erlang.maps"
@@ -79,7 +79,7 @@ defmodule Lynx.RunnerTest do
              %{"status" => "ok", "module" => "Elixir.Left", "diagnostics" => []},
              %{"status" => "ok", "module" => "Elixir.Right", "diagnostics" => []},
              %{"status" => "ok", "module" => "Elixir.Join", "diagnostics" => []}
-           ] = Lynx.Commands.runner!(@lean_dir, request)
+           ] = runner!(request)
   end
 
   test "skips dependents of failed modules and continues verifying unrelated files" do
@@ -112,7 +112,7 @@ defmodule Lynx.RunnerTest do
                "module" => "Elixir.Dependent",
                "diagnostics" => [dependent]
              }
-           ] = Lynx.Commands.runner!(@lean_dir, request)
+           ] = runner!(request)
 
     assert failed["message"] =~ "Unknown identifier `vmissing`"
 
@@ -141,7 +141,7 @@ defmodule Lynx.RunnerTest do
     assert [
              %{"status" => "ok", "diagnostics" => []},
              %{"status" => "error", "diagnostics" => diagnostics}
-           ] = Lynx.Commands.runner!(@lean_dir, wrong_request)
+           ] = runner!(wrong_request)
 
     assert Enum.any?(diagnostics, fn diagnostic ->
              diagnostic["severity"] == "error" and
@@ -176,7 +176,7 @@ defmodule Lynx.RunnerTest do
       }
 
       assert [%{"status" => "error", "diagnostics" => [diagnostic]}] =
-               Lynx.Commands.runner!(@lean_dir, request)
+               runner!(request)
 
       assert diagnostic == %{
                "file" => @literal_erl,
@@ -230,7 +230,7 @@ defmodule Lynx.RunnerTest do
       }
 
       assert [%{"status" => "error", "diagnostics" => [diagnostic]}] =
-               Lynx.Commands.runner!(@lean_dir, request)
+               runner!(request)
 
       assert %{
                "file" => ^path,
@@ -282,7 +282,7 @@ defmodule Lynx.RunnerTest do
       }
 
       assert [%{"status" => "error", "diagnostics" => diagnostics}] =
-               Lynx.Commands.runner!(@lean_dir, request)
+               runner!(request)
 
       assert diagnostics == [
                %{
@@ -334,7 +334,7 @@ defmodule Lynx.RunnerTest do
       }
 
       assert [%{"status" => "error", "diagnostics" => diagnostics}] =
-               Lynx.Commands.runner!(@lean_dir, request)
+               runner!(request)
 
       assert diagnostics == [
                %{
@@ -391,7 +391,7 @@ defmodule Lynx.RunnerTest do
                    %{"severity" => "error"} = diagnostic
                  ]
                }
-             ] = Lynx.Commands.runner!(@lean_dir, request)
+             ] = runner!(request)
 
       assert diagnostic == %{
                "file" => path,
@@ -405,11 +405,75 @@ defmodule Lynx.RunnerTest do
     end
   end
 
+  describe "cache" do
+    @describetag :cache
+    @describetag :tmp_dir
+
+    test "reuses verified imports and invalidates dependents when their input changes", %{
+      tmp_dir: cache_dir
+    } do
+      source = file("cached.ex", "Elixir.CachedSource", [definition("value", success())])
+
+      dependent =
+        file(
+          "dependent.ex",
+          "Elixir.CachedDependent",
+          [
+            definition("ensures", call("Elixir.CachedSource", "value")),
+            theorem("law", "rfl")
+          ],
+          ["Elixir.CachedSource"]
+        )
+
+      unrelated = file("unrelated.ex", "Elixir.CachedUnrelated", [definition("value", success())])
+
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "cache_dir" => cache_dir,
+        "files" => [source, dependent, unrelated]
+      }
+
+      cold = runner!(request)
+      assert Enum.all?(cold, &match?(%{"status" => "ok", "cached" => false}, &1))
+      warm = runner!(request)
+      assert Enum.all?(warm, &match?(%{"status" => "ok", "cached" => true}, &1))
+
+      assert Enum.map(cold, &Map.drop(&1, ["cached", "time_ms"])) ==
+               Enum.map(warm, &Map.drop(&1, ["cached", "time_ms"]))
+
+      changed =
+        file("cached.ex", "Elixir.CachedSource", [
+          definition("value", %{
+            "kind" => "return",
+            "span" => [],
+            "value" => %{"kind" => "atom", "value" => "false", "span" => []}
+          })
+        ])
+
+      request = Map.put(request, "files", [changed, dependent, unrelated])
+
+      assert [
+               %{"status" => "ok", "cached" => false},
+               %{"status" => "error", "cached" => false},
+               %{"status" => "ok", "cached" => true}
+             ] = runner!(request)
+
+      assert [
+               %{"status" => "ok", "cached" => true},
+               %{"status" => "error", "cached" => false},
+               %{"status" => "ok", "cached" => true}
+             ] = runner!(request)
+
+      assert [_ | _] = Path.wildcard(Path.join(cache_dir, "lean-*/**/module.olean"))
+    end
+  end
+
   describe "errors" do
     test "rejects unsupported versions before reading files" do
       error =
         assert_raise RuntimeError, fn ->
-          Lynx.Commands.runner!(@lean_dir, %{"command" => "verify", "version" => "2.0"})
+          runner!(%{"command" => "verify", "version" => "2.0"})
         end
 
       assert error.message == "unsupported version"
@@ -418,7 +482,7 @@ defmodule Lynx.RunnerTest do
     test "rejects missing files" do
       error =
         assert_raise RuntimeError, fn ->
-          Lynx.Commands.runner!(@lean_dir, %{"command" => "verify", "version" => "1.0"})
+          runner!(%{"command" => "verify", "version" => "1.0"})
         end
 
       assert error.message =~ "files"
@@ -433,12 +497,22 @@ defmodule Lynx.RunnerTest do
 
       error =
         assert_raise RuntimeError, fn ->
-          Lynx.Commands.runner!(@lean_dir, invalid)
+          runner!(invalid)
         end
 
       assert error.message =~ @literal_erl
       assert error.message =~ "unsupported command kind 'unknown'"
     end
+  end
+
+  defp runner!(request) do
+    request =
+      case request do
+        %{"files" => files} -> Map.put(request, "files", Lynx.Translation.assemble(files))
+        _ -> request
+      end
+
+    Lynx.Commands.runner!(@lean_dir, request)
   end
 
   defp definition(name, body) do

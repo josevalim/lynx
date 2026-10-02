@@ -18,9 +18,12 @@ A `{"status": "done"}` message terminates each completed request.
 Each newline-delimited request includes `"command": "verify"`.
 Updates are flushed as each file finishes. The runner continues until stdin closes.
 Invalid input and runner failures return `{"status": "failure", "message": "..."}`.
-Each verification diagnostic has `file`, `kind` (error/warning/info), and `message`, with `line` and
-`column` included only when known.
-Input files are an ordered array of {file, module, imports, contents} objects.
+Each verification diagnostic has `file`, `module`, nullable `declaration`, `severity`
+(error/warning/information), and `message`, with `line` and `column` included only when known.
+Requests include `cache_dir`; input files include a SHA-256 `cache_key` incorporating dependencies.
+Verified artifacts are cached below `cache_dir/lean-VERSION-HASH`, using Lake’s compiled artifact hashes.
+Only successful elaboration and axiom audits are cached; updates include a `cached` Boolean.
+Input files are an ordered array of {file, module, imports, contents, cache_key} objects.
 Theorem nodes contain name, named params, an optional requires helper, an ensures helper,
 and a proof object. Helpers are ordinary Result computations called with the theorem's
 parameters. An absent requires helper means no assumption.
@@ -552,6 +555,7 @@ structure DecodedFile where
   imports : Array String
   fileMap : FileMap
   commands : Array (TSyntax `command)
+  private cacheKey : String
   private spans : Array Span
   private proofDiagnostics : Array ProofDiagnostic
   private theorems : Array (Name × Span)
@@ -616,9 +620,12 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
     let file ← IO.ofExcept (str entry "file")
     try
       let moduleName ← IO.ofExcept (str entry "module")
+      let key ← IO.ofExcept (str entry "cache_key")
+      unless key.length == 64 && key.toList.all (fun c => c.isDigit || ('a' ≤ c && c ≤ 'f')) do
+        throw (IO.userError "cache_key must be a SHA-256 hex digest")
       let map := sourceMap entry
       let (moduleName, imports, commands, state, reexportImports) ← IO.ofExcept do
-        fields entry ["file", "module", "imports", "contents"]
+        fields entry ["file", "module", "imports", "contents", "cache_key"]
         let namespaceId ← (identifier moduleName).run env |>.run' {}
         let imports ← (← arr entry "imports").mapM fun j => do
           let name ← j.getStr?
@@ -636,7 +643,7 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
         let stop := Unhygienic.run `(end $namespaceId)
         pure (namespaceId.getId.toString, imports,
           #[visibility, start] ++ commands.flatten ++ #[stop], state, reexportImports)
-      return ⟨file, moduleName, imports, map, commands,
+      return ⟨file, moduleName, imports, map, commands, key,
         state.spans, state.diagnostics, state.theorems, reexportImports⟩
     catch err => throw (IO.userError s!"{file}: {err}")
 
@@ -657,32 +664,87 @@ private def renderFile (file : DecodedFile) (env : Lean.Environment) : IO String
   (action.run' { fileName := file.fileName, fileMap := file.fileMap }
     { env := env }).toIO (fun _ => IO.userError s!"{file.fileName}: Lean source rendering failed")
 
-/-- Verify each file against its declared imports, exporting successful files as modules.
-Artifacts live only for this request; they are not a persistent verification cache. -/
-private def verify (files : Array DecodedFile) (runtime : Runtime) (emit : Json → IO Unit) : IO Unit :=
-  IO.FS.withTempDir fun directory => do
-    let mut artifacts : NameMap ImportArtifacts := {}
-    let mut verified : Std.HashSet String := {}
-    for (file, index) in files.zipIdx do
-      let started ← IO.monoMsNow
-      let source ← renderFile file runtime.env
-      let mut fileFailed := !file.proofDiagnostics.isEmpty
-      let mut diagnostics := parsingDiagnostics file
-      let mut imports := runtimeImports
-      let mut missingImport := false
-      for name in file.imports do
-        let moduleName ← IO.ofExcept <| (identifier name).run runtime.env |>.run' {}
-        let moduleName := moduleName.getId
-        if files.any (·.moduleName == name) && !verified.contains name then
-          missingImport := true
-          diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName "error"
-            s!"import '{name}' must precede this file and verify successfully")
-        unless imports.any (·.module == moduleName) do
-          imports := imports.push { module := moduleName, isExported := file.reexportImports }
-      unless missingImport do
-        let env ← importFile runtime imports artifacts
-        let moduleName ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
-        let mainModule := moduleName.getId
+private def cachedArtifacts (directory : System.FilePath) : ImportArtifacts :=
+  let path := directory / "module.olean"
+  .ofArrays #[#[path, path.withExtension "olean.server", path.withExtension "olean.private"],
+    #[path.withExtension "ir.sig", path.withExtension "ir"]]
+
+private def cachedDiagnostics (directory : System.FilePath) : IO (Option (Array Json)) := do
+  try
+    let metadata ← IO.ofExcept <| Json.parse (← IO.FS.readFile (directory / "result.json"))
+    unless (← IO.ofExcept (str metadata "version")) == "1" do return none
+    return some (← IO.ofExcept (arr metadata "diagnostics"))
+  catch _ => return none
+
+/-- Lake's artifact hashes identify the compiled runner and runtime, including local changes. -/
+private def runtimeFingerprint : IO UInt64 := do
+  let runner ← findOLean `Lynx.Runner
+  let directory := runner.parent.get!
+  let root := directory.parent.get!
+  -- Include Lynx's root-module hashes beside the Lynx/ directory.
+  let rootHashes := (← root.readDir).filter (·.fileName.startsWith "Lynx.")
+  let paths := (← directory.walkDir) ++ rootHashes.map (·.path)
+  let paths := paths.filter (·.toString.endsWith ".hash")
+    |>.qsort (fun a b => a.toString < b.toString)
+  let mut result := hash ("lynx-cache-1" : String)
+  for path in paths do
+    result := mixHash result (hash (path.toString.drop (root.toString.length + 1) |>.toString,
+      ← IO.FS.readFile path))
+  return result
+
+/-- Publish complete, successfully audited entries atomically on the cache filesystem. -/
+private def writeCached (directory : System.FilePath) (env : Lean.Environment)
+    (diagnostics : Array Json) : IO Unit := do
+  let parent := directory.parent.getD directory
+  IO.FS.createDirAll parent
+  let temporary := parent / s!".tmp-{hash (← IO.getRandomBytes 16)}"
+  IO.FS.createDir temporary
+  try
+    writeModule env (temporary / "module.olean")
+    IO.FS.writeFile (temporary / "result.json")
+      (Json.mkObj [("version", toJson ("1" : String)), ("diagnostics", .arr diagnostics)]).compress
+    if (← cachedDiagnostics directory).isSome then return
+    if ← directory.pathExists then
+      if (← cachedDiagnostics directory).isSome then return
+      IO.FS.removeDirAll directory
+    IO.FS.rename temporary directory
+  catch error =>
+    -- Another verifier may have published the same entry concurrently.
+    unless (← cachedDiagnostics directory).isSome do throw error
+  finally
+    if ← temporary.pathExists then IO.FS.removeDirAll temporary
+
+/-- Verify against explicit imports, reusing only successfully audited module artifacts. -/
+private def verify (files : Array DecodedFile) (runtime : Runtime)
+    (cacheDirectory : System.FilePath) (emit : Json → IO Unit) : IO Unit := do
+  let mut artifacts : NameMap ImportArtifacts := {}
+  let mut verified : Std.HashSet String := {}
+  for file in files do
+    let started ← IO.monoMsNow
+    let source ← renderFile file runtime.env
+    let mut fileFailed := !file.proofDiagnostics.isEmpty
+    let mut diagnostics := parsingDiagnostics file
+    let mut imports := runtimeImports
+    let mut missingImport := false
+    let mut cacheHit := false
+    for name in file.imports do
+      let moduleName ← IO.ofExcept <| (identifier name).run runtime.env |>.run' {}
+      let moduleName := moduleName.getId
+      if files.any (·.moduleName == name) && !verified.contains name then
+        missingImport := true
+        diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName "error"
+          s!"import '{name}' must precede this file and verify successfully")
+      unless imports.any (·.module == moduleName) do
+        imports := imports.push { module := moduleName, isExported := file.reexportImports }
+    unless missingImport do
+      let env ← importFile runtime imports artifacts
+      let moduleName ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
+      let mainModule := moduleName.getId
+      let directory := cacheDirectory / file.cacheKey
+      if let some saved ← if fileFailed then pure none else cachedDiagnostics directory then
+        diagnostics := saved
+        cacheHit := true
+      else
         let (state, messages) ← elaborateFile (env.setMainModule mainModule)
           file.fileName file.fileMap file.commands
         for (msg, declarationName) in messages do
@@ -706,27 +768,28 @@ private def verify (files : Array DecodedFile) (runtime : Runtime) (emit : Json 
           if !errors.isEmpty then fileFailed := true
           diagnostics := diagnostics ++ errors
         unless fileFailed do
-          let path := directory / s!"File{index}.olean"
-          writeModule state.env path
-          artifacts := artifacts.insert mainModule (.ofArrays #[
-            #[path, path.withExtension "olean.server", path.withExtension "olean.private"],
-            #[path.withExtension "ir.sig", path.withExtension "ir"]])
-          verified := verified.insert file.moduleName
-      let elapsed := (← IO.monoMsNow) - started
-      let status := if missingImport then "skipped" else if fileFailed then "error" else "ok"
-      emit (Json.mkObj [
-        ("status", toJson status),
-        ("file", toJson file.fileName), ("module", toJson file.moduleName),
-        ("source", toJson source), ("time_ms", toJson elapsed), ("diagnostics", .arr diagnostics)])
+          writeCached directory state.env diagnostics
+      unless fileFailed do
+        artifacts := artifacts.insert mainModule (cachedArtifacts directory)
+        verified := verified.insert file.moduleName
+    let elapsed := (← IO.monoMsNow) - started
+    let status := if missingImport then "skipped" else if fileFailed then "error" else "ok"
+    emit (Json.mkObj [
+      ("status", toJson status),
+      ("file", toJson file.fileName), ("module", toJson file.moduleName),
+      ("source", toJson source), ("time_ms", toJson elapsed),
+      ("cached", toJson cacheHit), ("diagnostics", .arr diagnostics)])
 
 private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
   let files ← IO.ofExcept do
-    fields j ["command", "version", "files"]
+    fields j ["command", "version", "files", "cache_dir"]
     arr j "files"
+  let directory := System.FilePath.mk (← IO.ofExcept (str j "cache_dir"))
   unless files.isEmpty do
     let runtime ← getRuntime cache
     let decoded ← decode files runtime.env
-    verify decoded runtime emit
+    let directory := directory / s!"lean-{Lean.versionString}-{← runtimeFingerprint}"
+    verify decoded runtime directory emit
 
 private def run (request : String) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
   try
