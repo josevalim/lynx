@@ -7,7 +7,6 @@ import all Lynx.Term
 import all Lynx.Term.DataTypes
 import all Lynx.Term.Compare
 import all Lynx.Term.Runner
-import all Lynx.Modules.Erlang.erlang.Process
 import all Std
 import all Init.Data.List.Basic
 import all Init.Data.List.Control
