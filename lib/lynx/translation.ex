@@ -220,7 +220,11 @@ defmodule Lynx.Translation do
     end
   end
 
-  @doc "Assembles translated modules in dependency order."
+  @doc """
+  Assembles translated modules in dependency order and assigns file cache keys.
+
+  Also accepts JSON files already ordered by their dependencies.
+  """
   def assemble(%__MODULE__{
         modules: modules,
         funs: funs,
@@ -255,29 +259,55 @@ defmodule Lynx.Translation do
           }
         end
 
-      if map_size(funs) == 0 do
-        files
-      else
-        files ++
-          [
-            %{
-              "module" => "Erlang.program",
-              "file" => "Erlang/program.lean",
-              "imports" => Enum.map(files, & &1["module"]),
-              "contents" => [
-                %{
-                  "kind" => "fun_table",
-                  "span" => [],
-                  "name" => "fun_table",
-                  "entries" => :lynx_core_to_leanj.fun_table(funs, modules)
-                }
-              ]
-            }
-          ]
-      end
+      files =
+        if map_size(funs) == 0 do
+          files
+        else
+          files ++
+            [
+              %{
+                "module" => "Erlang.program",
+                "file" => "Erlang/program.lean",
+                "imports" => Enum.map(files, & &1["module"]),
+                "contents" => [
+                  %{
+                    "kind" => "fun_table",
+                    "span" => [],
+                    "name" => "fun_table",
+                    "entries" => :lynx_core_to_leanj.fun_table(funs, modules)
+                  }
+                ]
+              }
+            ]
+        end
+
+      assemble(files)
     after
       :digraph.delete(graph)
     end
+  end
+
+  def assemble(files) when is_list(files) do
+    modules = MapSet.new(files, & &1["module"])
+
+    {files, _keys} =
+      Enum.map_reduce(files, %{}, fn file, keys ->
+        imports =
+          for name <- file["imports"],
+              name != file["module"] and MapSet.member?(modules, name),
+              do: {name, Map.get(keys, name, :pending)}
+
+        key =
+          :crypto.hash(
+            :sha256,
+            :erlang.term_to_binary({Map.delete(file, "cache_key"), imports}, [:deterministic])
+          )
+          |> Base.encode16(case: :lower)
+
+        {Map.put(file, "cache_key", key), Map.put(keys, file["module"], key)}
+      end)
+
+    files
   end
 
   defp propagate_purity(functions) do

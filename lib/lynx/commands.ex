@@ -11,6 +11,7 @@ defmodule Lynx.Commands do
   """
   @spec runner!(String.t(), map()) :: [map()]
   def runner!(project_dir, request) do
+    request = cache_request(request)
     port = open_lake(project_dir, ["--quiet", "exe", "Lynx/Lynx.Runner"], [{:line, 1_000_000}])
 
     try do
@@ -19,6 +20,22 @@ defmodule Lynx.Commands do
     after
       Port.close(port)
     end
+  end
+
+  defp cache_request(request) do
+    request
+    |> Map.put_new_lazy("cache_dir", fn ->
+      build_path =
+        try do
+          Mix.Project.build_path()
+        rescue
+          _ -> "_build/dev"
+        catch
+          _, _ -> "_build/dev"
+        end
+
+      Path.join(build_path, "lynx") |> Path.expand()
+    end)
   end
 
   defp collect_responses(port, responses) do
