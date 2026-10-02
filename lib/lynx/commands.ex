@@ -1,17 +1,18 @@
 defmodule Lynx.Commands do
-  @moduledoc false
+  @moduledoc "Invokes the Lean runner and Lake."
+
+  @protocol_version "1.0"
 
   @doc """
-  Runs one verification request and collects its per-file JSON updates in order.
+  Runs a protocol request and collects its per-file JSON updates in order.
 
   Each update includes rendered source, elapsed milliseconds, and diagnostics.
   Returns verification errors and skipped files as updates. Raises on failure responses,
   invalid JSON output, or unexpected exit statuses.
-  The command is included in the request map.
+  The caller supplies the complete request, including its command and version.
   """
   @spec runner!(String.t(), map()) :: [map()]
   def runner!(project_dir, request) do
-    request = cache_request(request)
     port = open_lake(project_dir, ["--quiet", "exe", "Lynx/Lynx.Runner"], [{:line, 1_000_000}])
 
     try do
@@ -22,20 +23,33 @@ defmodule Lynx.Commands do
     end
   end
 
-  defp cache_request(request) do
-    request
-    |> Map.put_new_lazy("cache_dir", fn ->
-      build_path =
-        try do
-          Mix.Project.build_path()
-        rescue
-          _ -> "_build/dev"
-        catch
-          _, _ -> "_build/dev"
-        end
+  @doc """
+  Verifies assembled files and returns their source, timings, and diagnostics.
 
-      Path.join(build_path, "lynx") |> Path.expand()
-    end)
+  Verification errors and skipped files are returned as updates. Runner failures raise.
+  Uses the current Mix build directory for cached artifacts, falling back to `_build/dev`.
+  """
+  @spec verify!(String.t(), [map()]) :: [map()]
+  def verify!(project_dir, files) when is_list(files) do
+    runner!(project_dir, %{
+      "command" => "verify",
+      "version" => @protocol_version,
+      "cache_dir" => cache_dir(),
+      "files" => files
+    })
+  end
+
+  defp cache_dir do
+    build_path =
+      try do
+        Mix.Project.build_path()
+      rescue
+        _ -> "_build/dev"
+      catch
+        _, _ -> "_build/dev"
+      end
+
+    Path.join(build_path, "lynx") |> Path.expand()
   end
 
   defp collect_responses(port, responses) do

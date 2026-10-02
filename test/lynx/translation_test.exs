@@ -828,6 +828,86 @@ defmodule Lynx.TranslationTest do
     end
   end
 
+  describe "cache" do
+    @describetag :cache
+    @describetag :tmp_dir
+
+    test "reuses verified files and invalidates dependents when their input changes", %{
+      tmp_dir: cache_dir
+    } do
+      dependent =
+        cerl("""
+        -module(cached_dependent).
+        -export([ensures/0]).
+        -law \#{name => {law, []}, ensures => ensures}.
+        -proof ~"rfl".
+        ensures() -> cached_source:value().
+        """)
+
+      unrelated =
+        cerl("""
+        -module(cached_unrelated).
+        -export([value/0]).
+        value() -> true.
+        """)
+
+      assemble = fn value ->
+        source =
+          cerl("""
+          -module(cached_source).
+          -export([value/0]).
+          value() -> #{value}.
+          """)
+
+        Translation.new([
+          {"source.erl", source},
+          {"dependent.erl", dependent},
+          {"unrelated.erl", unrelated}
+        ])
+        |> Translation.verify(:cached_dependent)
+        |> Translation.add(:cached_unrelated, [{:value, 0}])
+        |> Translation.assemble()
+      end
+
+      files = assemble.(true)
+
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "cache_dir" => cache_dir,
+        "files" => files
+      }
+
+      lean_dir = Path.expand("../../Lean", __DIR__)
+      cold = Lynx.Commands.runner!(lean_dir, request)
+      assert Enum.all?(cold, &match?(%{"status" => "ok", "cached" => false}, &1))
+      warm = Lynx.Commands.runner!(lean_dir, request)
+      assert Enum.all?(warm, &match?(%{"status" => "ok", "cached" => true}, &1))
+
+      assert Enum.map(cold, &Map.drop(&1, ["cached", "time_ms"])) ==
+               Enum.map(warm, &Map.drop(&1, ["cached", "time_ms"]))
+
+      changed = assemble.(false)
+      assert [source, unrelated, dependent] = files
+      assert [changed_source, ^unrelated, changed_dependent] = changed
+      refute source["cache_key"] == changed_source["cache_key"]
+      refute dependent["cache_key"] == changed_dependent["cache_key"]
+      request = Map.put(request, "files", changed)
+
+      assert [
+               %{"status" => "ok", "cached" => false},
+               %{"status" => "ok", "cached" => true},
+               %{"status" => "error", "cached" => false}
+             ] = Lynx.Commands.runner!(lean_dir, request)
+
+      assert [
+               %{"status" => "ok", "cached" => true},
+               %{"status" => "ok", "cached" => true},
+               %{"status" => "error", "cached" => false}
+             ] = Lynx.Commands.runner!(lean_dir, request)
+    end
+  end
+
   defp write_beam(module, body, directory, options \\ [:debug_info]) do
     source = Path.join(directory, "#{module}.erl")
     beam = Path.join(directory, "#{module}.beam")
