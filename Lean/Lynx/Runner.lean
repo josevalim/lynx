@@ -20,7 +20,8 @@ Updates are flushed as each file finishes. The runner continues until stdin clos
 Invalid input and runner failures return `{"status": "failure", "message": "..."}`.
 Each verification diagnostic has `file`, `module`, nullable `declaration`, `severity`
 (error/warning/information), and `message`, with `line` and `column` included only when known.
-Requests include `cache_dir`; input files include a SHA-256 `cache_key` incorporating dependencies.
+Requests include `cache_dir`; input files may include a SHA-256 `cache_key` incorporating dependencies.
+Files without a key and their dependents are verified without persistent caching.
 Verified artifacts are cached below `cache_dir/lean-VERSION-HASH`, using Lake’s compiled artifact hashes.
 Only successful elaboration and axiom audits are cached; updates include a `cached` Boolean.
 Input files are an ordered array of {file, module, imports, contents, cache_key} objects.
@@ -555,7 +556,7 @@ structure DecodedFile where
   imports : Array String
   fileMap : FileMap
   commands : Array (TSyntax `command)
-  private cacheKey : String
+  private cacheKey : Option String
   private spans : Array Span
   private proofDiagnostics : Array ProofDiagnostic
   private theorems : Array (Name × Span)
@@ -620,9 +621,11 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
     let file ← IO.ofExcept (str entry "file")
     try
       let moduleName ← IO.ofExcept (str entry "module")
-      let key ← IO.ofExcept (str entry "cache_key")
-      unless key.length == 64 && key.toList.all (fun c => c.isDigit || ('a' ≤ c && c ≤ 'f')) do
-        throw (IO.userError "cache_key must be a SHA-256 hex digest")
+      let key ← (entry.getObjVal? "cache_key").toOption.mapM fun value => do
+        let key ← IO.ofExcept value.getStr?
+        unless key.length == 64 && key.toList.all (fun c => c.isDigit || ('a' ≤ c && c ≤ 'f')) do
+          throw (IO.userError "cache_key must be a SHA-256 hex digest")
+        pure key
       let map := sourceMap entry
       let (moduleName, imports, commands, state, reexportImports) ← IO.ofExcept do
         fields entry ["file", "module", "imports", "contents", "cache_key"]
@@ -717,68 +720,76 @@ private def writeCached (directory : System.FilePath) (env : Lean.Environment)
 /-- Verify against explicit imports, reusing only successfully audited module artifacts. -/
 private def verify (files : Array DecodedFile) (runtime : Runtime)
     (cacheDirectory : System.FilePath) (emit : Json → IO Unit) : IO Unit := do
-  let mut artifacts : NameMap ImportArtifacts := {}
-  let mut verified : Std.HashSet String := {}
-  for file in files do
-    let started ← IO.monoMsNow
-    let source ← renderFile file runtime.env
-    let mut fileFailed := !file.proofDiagnostics.isEmpty
-    let mut diagnostics := parsingDiagnostics file
-    let mut imports := runtimeImports
-    let mut missingImport := false
-    let mut cacheHit := false
-    for name in file.imports do
-      let moduleName ← IO.ofExcept <| (identifier name).run runtime.env |>.run' {}
-      let moduleName := moduleName.getId
-      if files.any (·.moduleName == name) && !verified.contains name then
-        missingImport := true
-        diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName "error"
-          s!"import '{name}' must precede this file and verify successfully")
-      unless imports.any (·.module == moduleName) do
-        imports := imports.push { module := moduleName, isExported := file.reexportImports }
-    unless missingImport do
-      let env ← importFile runtime imports artifacts
-      let moduleName ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
-      let mainModule := moduleName.getId
-      let directory := cacheDirectory / file.cacheKey
-      if let some saved ← if fileFailed then pure none else cachedDiagnostics directory then
-        diagnostics := saved
-        cacheHit := true
-      else
-        let (state, messages) ← elaborateFile (env.setMainModule mainModule)
-          file.fileName file.fileMap file.commands
-        for (msg, declarationName) in messages do
-          if msg.severity == .error then fileFailed := true
-          diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName
-            msg.severity.toString
-            (← msg.data.toString) (messageLocation file.fileMap file.spans msg) declarationName)
-        -- Audit local laws and the precomputed axiom dependencies of imported declarations.
+  IO.FS.withTempDir fun temporary => do
+    let mut artifacts : NameMap ImportArtifacts := {}
+    let mut verified : Std.HashSet String := {}
+    let mut uncached : Std.HashSet String := {}
+    for file in files do
+      let started ← IO.monoMsNow
+      let source ← renderFile file runtime.env
+      let mut fileFailed := !file.proofDiagnostics.isEmpty
+      let mut diagnostics := parsingDiagnostics file
+      let mut imports := runtimeImports
+      let mut missingImport := false
+      let mut cacheHit := false
+      for name in file.imports do
+        let moduleName ← IO.ofExcept <| (identifier name).run runtime.env |>.run' {}
+        let moduleName := moduleName.getId
+        if files.any (·.moduleName == name) && !verified.contains name then
+          missingImport := true
+          diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName "error"
+            s!"import '{name}' must precede this file and verify successfully")
+        unless imports.any (·.module == moduleName) do
+          imports := imports.push { module := moduleName, isExported := file.reexportImports }
+      unless missingImport do
+        let env ← importFile runtime imports artifacts
+        let moduleName ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
+        let mainModule := moduleName.getId
+        let key := if file.imports.any uncached.contains then none else file.cacheKey
+        let directory := key.map (cacheDirectory / ·) |>.getD (temporary / toString (hash mainModule))
+        if let some saved ← if fileFailed || key.isNone then pure none else cachedDiagnostics directory then
+          diagnostics := saved
+          cacheHit := true
+        else
+          let (state, messages) ← elaborateFile (env.setMainModule mainModule)
+            file.fileName file.fileMap file.commands
+          for (msg, declarationName) in messages do
+            if msg.severity == .error then fileFailed := true
+            diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName
+              msg.severity.toString
+              (← msg.data.toString) (messageLocation file.fileMap file.spans msg) declarationName)
+          -- Audit local laws and the precomputed axiom dependencies of imported declarations.
+          unless fileFailed do
+            let audit : CoreM (Array Json) := do
+              let mut errors := #[]
+              let namespaceId ← IO.ofExcept <| (identifier file.moduleName).run (← getEnv) |>.run' {}
+              for (name, info) in file.theorems do
+                for axiomName in ← collectAxioms (namespaceId.getId ++ name) do
+                  unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
+                    errors := errors.push (diagnostic file.fileName file.moduleName "error"
+                      s!"unexpected axiom: {axiomName}" info.location (some name))
+              return errors
+            let errors ← (audit.run' { fileName := file.fileName, fileMap := file.fileMap }
+              { env := state.env }).toIO (fun _ => IO.userError "law axiom audit failed")
+            if !errors.isEmpty then fileFailed := true
+            diagnostics := diagnostics ++ errors
+          unless fileFailed do
+            if key.isSome then
+              writeCached directory state.env diagnostics
+            else
+              IO.FS.createDirAll directory
+              writeModule state.env (directory / "module.olean")
         unless fileFailed do
-          let audit : CoreM (Array Json) := do
-            let mut errors := #[]
-            let namespaceId ← IO.ofExcept <| (identifier file.moduleName).run (← getEnv) |>.run' {}
-            for (name, info) in file.theorems do
-              for axiomName in ← collectAxioms (namespaceId.getId ++ name) do
-                unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
-                  errors := errors.push (diagnostic file.fileName file.moduleName "error"
-                    s!"unexpected axiom: {axiomName}" info.location (some name))
-            return errors
-          let errors ← (audit.run' { fileName := file.fileName, fileMap := file.fileMap }
-            { env := state.env }).toIO (fun _ => IO.userError "law axiom audit failed")
-          if !errors.isEmpty then fileFailed := true
-          diagnostics := diagnostics ++ errors
-        unless fileFailed do
-          writeCached directory state.env diagnostics
-      unless fileFailed do
-        artifacts := artifacts.insert mainModule (cachedArtifacts directory)
-        verified := verified.insert file.moduleName
-    let elapsed := (← IO.monoMsNow) - started
-    let status := if missingImport then "skipped" else if fileFailed then "error" else "ok"
-    emit (Json.mkObj [
-      ("status", toJson status),
-      ("file", toJson file.fileName), ("module", toJson file.moduleName),
-      ("source", toJson source), ("time_ms", toJson elapsed),
-      ("cached", toJson cacheHit), ("diagnostics", .arr diagnostics)])
+          artifacts := artifacts.insert mainModule (cachedArtifacts directory)
+          verified := verified.insert file.moduleName
+          if key.isNone then uncached := uncached.insert file.moduleName
+      let elapsed := (← IO.monoMsNow) - started
+      let status := if missingImport then "skipped" else if fileFailed then "error" else "ok"
+      emit (Json.mkObj [
+        ("status", toJson status),
+        ("file", toJson file.fileName), ("module", toJson file.moduleName),
+        ("source", toJson source), ("time_ms", toJson elapsed),
+        ("cached", toJson cacheHit), ("diagnostics", .arr diagnostics)])
 
 private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
   let files ← IO.ofExcept do
@@ -788,7 +799,9 @@ private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json �
   unless files.isEmpty do
     let runtime ← getRuntime cache
     let decoded ← decode files runtime.env
-    let directory := directory / s!"lean-{Lean.versionString}-{← runtimeFingerprint}"
+    let directory ← if decoded.any (·.cacheKey.isSome) then
+      pure (directory / s!"lean-{Lean.versionString}-{← runtimeFingerprint}")
+      else pure directory
     verify decoded runtime directory emit
 
 private def run (request : String) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do

@@ -51,8 +51,7 @@ defmodule Lynx.Integration.TranslationTest do
       assert left_file == right_file
     end
 
-    request = %{"command" => "verify", "version" => "1.0", "files" => files}
-    updates = Lynx.Commands.runner!(@lean_dir, request)
+    updates = Lynx.Commands.verify!(@lean_dir, files)
     assert length(updates) == length(files)
 
     for {file, update} <- Enum.zip(files, updates) do

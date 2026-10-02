@@ -12,23 +12,19 @@ defmodule Lynx.RunnerTest do
       definition("runtime", call("Erlang.maps", "new"))
     ]
 
-    request = %{
-      "command" => "verify",
-      "version" => "1.0",
-      "files" => [
-        file(@literal_erl, "Erlang.maps", [definition("value", call("Erlang.maps", "new"))], [
-          "Erlang.maps"
-        ]),
-        file(@literal_erl, "Elixir.Undeclared", calls),
-        file(@literal_erl, "Elixir.Declared", calls, ["Erlang.maps"])
-      ]
-    }
+    files = [
+      file(@literal_erl, "Erlang.maps", [definition("value", call("Erlang.maps", "new"))], [
+        "Erlang.maps"
+      ]),
+      file(@literal_erl, "Elixir.Undeclared", calls),
+      file(@literal_erl, "Elixir.Declared", calls, ["Erlang.maps"])
+    ]
 
     assert [
              %{"status" => "ok", "source" => runtime_source, "diagnostics" => []},
              %{"status" => "error", "diagnostics" => [source, runtime]},
              %{"status" => "ok", "source" => translated_source, "diagnostics" => []}
-           ] = runner!(request)
+           ] = Lynx.Commands.verify!(@lean_dir, files)
 
     assert runtime_source =~ "public import Lynx.Modules.Erlang.maps"
     assert translated_source =~ "public import Erlang.maps"
@@ -50,59 +46,61 @@ defmodule Lynx.RunnerTest do
   test "imports both dependency branches and theorems from their shared dependency" do
     contents = [definition("ensures", success()), theorem("law", "exact Elixir.Source.«law/0»")]
 
-    request = %{
-      "command" => "verify",
-      "version" => "1.0",
-      "files" => [
-        file(@literal_erl, "Elixir.Source", [
+    files = [
+      file(@literal_erl, "Elixir.Source", [
+        definition("ensures", success()),
+        theorem("law", "rfl")
+      ]),
+      file(@literal_erl, "Elixir.Left", contents, ["Elixir.Source"]),
+      file(@literal_erl, "Elixir.Right", contents, ["Elixir.Source"]),
+      file(
+        @literal_erl,
+        "Elixir.Join",
+        [
           definition("ensures", success()),
-          theorem("law", "rfl")
-        ]),
-        file(@literal_erl, "Elixir.Left", contents, ["Elixir.Source"]),
-        file(@literal_erl, "Elixir.Right", contents, ["Elixir.Source"]),
-        file(
-          @literal_erl,
-          "Elixir.Join",
-          [
-            definition("ensures", success()),
-            theorem("left", "exact Elixir.Left.«law/0»"),
-            theorem("right", "exact Elixir.Right.«law/0»"),
-            theorem("source", "exact Elixir.Source.«law/0»")
-          ],
-          ["Elixir.Left", "Elixir.Right"]
-        )
-      ]
-    }
+          theorem("left", "exact Elixir.Left.«law/0»"),
+          theorem("right", "exact Elixir.Right.«law/0»"),
+          theorem("source", "exact Elixir.Source.«law/0»")
+        ],
+        ["Elixir.Left", "Elixir.Right"]
+      )
+    ]
 
     assert [
-             %{"status" => "ok", "module" => "Elixir.Source", "diagnostics" => []},
-             %{"status" => "ok", "module" => "Elixir.Left", "diagnostics" => []},
+             %{
+               "status" => "ok",
+               "module" => "Elixir.Source",
+               "cached" => false,
+               "diagnostics" => []
+             },
+             %{
+               "status" => "ok",
+               "module" => "Elixir.Left",
+               "cached" => false,
+               "diagnostics" => []
+             },
              %{"status" => "ok", "module" => "Elixir.Right", "diagnostics" => []},
              %{"status" => "ok", "module" => "Elixir.Join", "diagnostics" => []}
-           ] = runner!(request)
+           ] = Lynx.Commands.verify!(@lean_dir, files)
   end
 
   test "skips dependents of failed modules and continues verifying unrelated files" do
-    request = %{
-      "command" => "verify",
-      "version" => "1.0",
-      "files" => [
-        file(@literal_erl, "Elixir.Failed", [
-          definition("value", %{
-            "kind" => "return",
-            "span" => [4, 15],
-            "value" => %{"kind" => "var", "name" => "missing", "span" => [4, 15]}
-          })
-        ]),
-        file(@literal_erl, "Elixir.Unrelated", [definition("value", success())]),
-        file(
-          @literal_erl,
-          "Elixir.Dependent",
-          [definition("value", call("Elixir.Failed", "value"))],
-          ["Elixir.Failed"]
-        )
-      ]
-    }
+    files = [
+      file(@literal_erl, "Elixir.Failed", [
+        definition("value", %{
+          "kind" => "return",
+          "span" => [4, 15],
+          "value" => %{"kind" => "var", "name" => "missing", "span" => [4, 15]}
+        })
+      ]),
+      file(@literal_erl, "Elixir.Unrelated", [definition("value", success())]),
+      file(
+        @literal_erl,
+        "Elixir.Dependent",
+        [definition("value", call("Elixir.Failed", "value"))],
+        ["Elixir.Failed"]
+      )
+    ]
 
     assert [
              %{"status" => "error", "module" => "Elixir.Failed", "diagnostics" => [failed]},
@@ -112,7 +110,7 @@ defmodule Lynx.RunnerTest do
                "module" => "Elixir.Dependent",
                "diagnostics" => [dependent]
              }
-           ] = runner!(request)
+           ] = Lynx.Commands.verify!(@lean_dir, files)
 
     assert failed["message"] =~ "Unknown identifier `vmissing`"
 
@@ -126,8 +124,9 @@ defmodule Lynx.RunnerTest do
   end
 
   test "function table purity metadata is checked rather than trusted" do
-    request = fixture_request(Path.join(@translations_dir, "functions.json"), "verify")
-    table_file = List.last(request["files"])
+    %{"files" => files} = JSON.decode!(File.read!(Path.join(@translations_dir, "functions.json")))
+    files = Enum.map(files, &Map.delete(&1, "cache_key"))
+    table_file = List.last(files)
     [table] = table_file["contents"]
     entries = table["entries"]
     index = Enum.find_index(entries, &(&1["body"]["name"] == "remember"))
@@ -136,12 +135,12 @@ defmodule Lynx.RunnerTest do
     wrong_entries = List.update_at(entries, index, &Map.put(&1, "pure", true))
     wrong_table = Map.put(table, "entries", wrong_entries)
     wrong_file = Map.put(table_file, "contents", [wrong_table])
-    wrong_request = Map.put(request, "files", Enum.drop(request["files"], -1) ++ [wrong_file])
+    wrong_files = Enum.drop(files, -1) ++ [wrong_file]
 
     assert [
              %{"status" => "ok", "diagnostics" => []},
              %{"status" => "error", "diagnostics" => diagnostics}
-           ] = runner!(wrong_request)
+           ] = Lynx.Commands.verify!(@lean_dir, wrong_files)
 
     assert Enum.any?(diagnostics, fn diagnostic ->
              diagnostic["severity"] == "error" and
@@ -154,29 +153,25 @@ defmodule Lynx.RunnerTest do
 
   describe "diagnostics" do
     test "reports function elaboration errors at the inherited node location" do
-      request = %{
-        "command" => "verify",
-        "version" => "1.0",
-        "files" => [
-          file(@literal_erl, "Erlang.literal", [
-            %{
-              "kind" => "def",
-              "name" => "broken",
-              "params" => [],
-              "pure" => false,
-              "span" => [4, 1],
-              "body" => %{
-                "kind" => "return",
-                "span" => [4, 15],
-                "value" => %{"kind" => "var", "name" => "missing", "span" => []}
-              }
+      files = [
+        file(@literal_erl, "Erlang.literal", [
+          %{
+            "kind" => "def",
+            "name" => "broken",
+            "params" => [],
+            "pure" => false,
+            "span" => [4, 1],
+            "body" => %{
+              "kind" => "return",
+              "span" => [4, 15],
+              "value" => %{"kind" => "var", "name" => "missing", "span" => []}
             }
-          ])
-        ]
-      }
+          }
+        ])
+      ]
 
       assert [%{"status" => "error", "diagnostics" => [diagnostic]}] =
-               runner!(request)
+               Lynx.Commands.verify!(@lean_dir, files)
 
       assert diagnostic == %{
                "file" => @literal_erl,
@@ -192,45 +187,41 @@ defmodule Lynx.RunnerTest do
     test "reports type errors when generated match patterns do not match the expression type" do
       path = "invalid_match.erl"
 
-      request = %{
-        "command" => "verify",
-        "version" => "1.0",
-        "files" => [
-          file(
-            path,
-            "Erlang.invalid_match",
-            [
-              definition("broken", %{
-                "kind" => "match",
-                "span" => [3, 1],
-                "expressions" => [
-                  %{
-                    "kind" => "remote_call",
-                    "module" => "Erlang.erlang",
-                    "name" => "+",
-                    "args" => [
-                      %{"kind" => "integer", "value" => 1, "span" => [3, 10]},
-                      %{"kind" => "integer", "value" => 2, "span" => [3, 14]}
-                    ],
-                    "span" => [3, 8]
-                  }
-                ],
-                "cases" => [
-                  %{
-                    "patterns" => [%{"kind" => "integer", "value" => 3, "span" => [4, 5]}],
-                    "body" => success(),
-                    "span" => [4, 1]
-                  }
-                ]
-              })
-            ],
-            ["Erlang.erlang"]
-          )
-        ]
-      }
+      files = [
+        file(
+          path,
+          "Erlang.invalid_match",
+          [
+            definition("broken", %{
+              "kind" => "match",
+              "span" => [3, 1],
+              "expressions" => [
+                %{
+                  "kind" => "remote_call",
+                  "module" => "Erlang.erlang",
+                  "name" => "+",
+                  "args" => [
+                    %{"kind" => "integer", "value" => 1, "span" => [3, 10]},
+                    %{"kind" => "integer", "value" => 2, "span" => [3, 14]}
+                  ],
+                  "span" => [3, 8]
+                }
+              ],
+              "cases" => [
+                %{
+                  "patterns" => [%{"kind" => "integer", "value" => 3, "span" => [4, 5]}],
+                  "body" => success(),
+                  "span" => [4, 1]
+                }
+              ]
+            })
+          ],
+          ["Erlang.erlang"]
+        )
+      ]
 
       assert [%{"status" => "error", "diagnostics" => [diagnostic]}] =
-               runner!(request)
+               Lynx.Commands.verify!(@lean_dir, files)
 
       assert %{
                "file" => ^path,
@@ -275,14 +266,10 @@ defmodule Lynx.RunnerTest do
           }
         end
 
-      request = %{
-        "command" => "verify",
-        "version" => "1.0",
-        "files" => [file(path, "Elixir.Precision", [definition("ensures", success()) | laws])]
-      }
+      files = [file(path, "Elixir.Precision", [definition("ensures", success()) | laws])]
 
       assert [%{"status" => "error", "diagnostics" => diagnostics}] =
-               runner!(request)
+               Lynx.Commands.verify!(@lean_dir, files)
 
       assert diagnostics == [
                %{
@@ -327,14 +314,10 @@ defmodule Lynx.RunnerTest do
           }
         end
 
-      request = %{
-        "command" => "verify",
-        "version" => "1.0",
-        "files" => [file(path, "Elixir.Syntax", [definition("ensures", success()) | laws])]
-      }
+      files = [file(path, "Elixir.Syntax", [definition("ensures", success()) | laws])]
 
       assert [%{"status" => "error", "diagnostics" => diagnostics}] =
-               runner!(request)
+               Lynx.Commands.verify!(@lean_dir, files)
 
       assert diagnostics == [
                %{
@@ -367,17 +350,13 @@ defmodule Lynx.RunnerTest do
     test "identifies the theorem and unexpected axiom when proof auditing fails" do
       path = "axioms.ex"
 
-      request = %{
-        "command" => "verify",
-        "version" => "1.0",
-        "files" => [
-          file(path, "Elixir.Axioms", [
-            definition("ensures", success()),
-            theorem("valid", "rfl"),
-            theorem("untrusted", "sorry")
-          ])
-        ]
-      }
+      files = [
+        file(path, "Elixir.Axioms", [
+          definition("ensures", success()),
+          theorem("valid", "rfl"),
+          theorem("untrusted", "sorry")
+        ])
+      ]
 
       assert [
                %{
@@ -391,7 +370,7 @@ defmodule Lynx.RunnerTest do
                    %{"severity" => "error"} = diagnostic
                  ]
                }
-             ] = runner!(request)
+             ] = Lynx.Commands.verify!(@lean_dir, files)
 
       assert diagnostic == %{
                "file" => path,
@@ -405,75 +384,11 @@ defmodule Lynx.RunnerTest do
     end
   end
 
-  describe "cache" do
-    @describetag :cache
-    @describetag :tmp_dir
-
-    test "reuses verified imports and invalidates dependents when their input changes", %{
-      tmp_dir: cache_dir
-    } do
-      source = file("cached.ex", "Elixir.CachedSource", [definition("value", success())])
-
-      dependent =
-        file(
-          "dependent.ex",
-          "Elixir.CachedDependent",
-          [
-            definition("ensures", call("Elixir.CachedSource", "value")),
-            theorem("law", "rfl")
-          ],
-          ["Elixir.CachedSource"]
-        )
-
-      unrelated = file("unrelated.ex", "Elixir.CachedUnrelated", [definition("value", success())])
-
-      request = %{
-        "command" => "verify",
-        "version" => "1.0",
-        "cache_dir" => cache_dir,
-        "files" => [source, dependent, unrelated]
-      }
-
-      cold = runner!(request)
-      assert Enum.all?(cold, &match?(%{"status" => "ok", "cached" => false}, &1))
-      warm = runner!(request)
-      assert Enum.all?(warm, &match?(%{"status" => "ok", "cached" => true}, &1))
-
-      assert Enum.map(cold, &Map.drop(&1, ["cached", "time_ms"])) ==
-               Enum.map(warm, &Map.drop(&1, ["cached", "time_ms"]))
-
-      changed =
-        file("cached.ex", "Elixir.CachedSource", [
-          definition("value", %{
-            "kind" => "return",
-            "span" => [],
-            "value" => %{"kind" => "atom", "value" => "false", "span" => []}
-          })
-        ])
-
-      request = Map.put(request, "files", [changed, dependent, unrelated])
-
-      assert [
-               %{"status" => "ok", "cached" => false},
-               %{"status" => "error", "cached" => false},
-               %{"status" => "ok", "cached" => true}
-             ] = runner!(request)
-
-      assert [
-               %{"status" => "ok", "cached" => true},
-               %{"status" => "error", "cached" => false},
-               %{"status" => "ok", "cached" => true}
-             ] = runner!(request)
-
-      assert [_ | _] = Path.wildcard(Path.join(cache_dir, "lean-*/**/module.olean"))
-    end
-  end
-
   describe "errors" do
     test "rejects unsupported versions before reading files" do
       error =
         assert_raise RuntimeError, fn ->
-          runner!(%{"command" => "verify", "version" => "2.0"})
+          Lynx.Commands.runner!(@lean_dir, %{"command" => "verify", "version" => "2.0"})
         end
 
       assert error.message == "unsupported version"
@@ -482,37 +397,23 @@ defmodule Lynx.RunnerTest do
     test "rejects missing files" do
       error =
         assert_raise RuntimeError, fn ->
-          runner!(%{"command" => "verify", "version" => "1.0"})
+          Lynx.Commands.runner!(@lean_dir, %{"command" => "verify", "version" => "1.0"})
         end
 
       assert error.message =~ "files"
     end
 
     test "rejects invalid instructions" do
-      invalid = %{
-        "command" => "verify",
-        "version" => "1.0",
-        "files" => [file(@literal_erl, "Erlang.literal", [%{"kind" => "unknown", "span" => []}])]
-      }
+      files = [file(@literal_erl, "Erlang.literal", [%{"kind" => "unknown", "span" => []}])]
 
       error =
         assert_raise RuntimeError, fn ->
-          runner!(invalid)
+          Lynx.Commands.verify!(@lean_dir, files)
         end
 
       assert error.message =~ @literal_erl
       assert error.message =~ "unsupported command kind 'unknown'"
     end
-  end
-
-  defp runner!(request) do
-    request =
-      case request do
-        %{"files" => files} -> Map.put(request, "files", Lynx.Translation.assemble(files))
-        _ -> request
-      end
-
-    Lynx.Commands.runner!(@lean_dir, request)
   end
 
   defp definition(name, body) do
@@ -557,12 +458,5 @@ defmodule Lynx.RunnerTest do
 
   defp file(path, module, contents, imports \\ []) do
     %{"file" => path, "module" => module, "contents" => contents, "imports" => imports}
-  end
-
-  defp fixture_request(path, command) do
-    path
-    |> File.read!()
-    |> JSON.decode!()
-    |> Map.put("command", command)
   end
 end

@@ -40,8 +40,8 @@ defmodule Lynx.Fixtures.Regenerate do
     end
 
     for fixture <- Path.wildcard(Path.join(__DIR__, "*.json")) do
-      request = fixture |> File.read!() |> JSON.decode!() |> Map.put("command", "verify")
-      updates = Lynx.Commands.runner!(@lean_dir, request)
+      %{"files" => files} = fixture |> File.read!() |> JSON.decode!()
+      updates = Lynx.Commands.verify!(@lean_dir, files)
 
       unless Enum.all?(updates, &(&1["status"] == "ok")) do
         Mix.raise("cannot verify #{fixture}: #{inspect(updates)}")
