@@ -1,6 +1,7 @@
 module
 
 meta import LynxTest.ProofAudit
+-- Import implementation modules here to audit their private declarations as well.
 import all Lynx.Modules.Erlang.erlang
 import LynxTest.Term.Compare
 import all Lynx.Term

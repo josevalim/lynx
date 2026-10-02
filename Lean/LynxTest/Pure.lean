@@ -1,7 +1,6 @@
 module
 
-import all Lynx.Modules.Erlang.erlang
-import all Lynx.Modules.Erlang.erlang.Guards
+import Lynx.Modules.Erlang.erlang
 import Lynx
 meta import LynxTest.ProofAudit
 
@@ -26,19 +25,19 @@ theorem float_zero_value :
 theorem float_addition (left right result : Term.FiniteFloat)
     (sum : left.add right = some result) :
     Erlang.erlang.«+/2» (.float left) (.float right) = .ok (.float result) := by
-  simp [Erlang.erlang.«+/2», Erlang.erlang.floatResult, sum]
+  simp [Erlang.erlang.«+/2_floats», sum]
 
 theorem mixed_addition (integer : Int) (converted right result : Term.FiniteFloat)
     (conversion : Term.FiniteFloat.ofInt integer = some converted)
     (sum : converted.add right = some result) :
     Erlang.erlang.«+/2» (.integer integer) (.float right) = .ok (.float result) := by
-  simp [Erlang.erlang.«+/2», Erlang.erlang.floatResult, conversion, sum]
+  simp [conversion, sum]
 
 theorem mixed_addition_reversed (integer : Int) (converted left result : Term.FiniteFloat)
     (conversion : Term.FiniteFloat.ofInt integer = some converted)
     (sum : left.add converted = some result) :
     Erlang.erlang.«+/2» (.float left) (.integer integer) = .ok (.float result) := by
-  simp [Erlang.erlang.«+/2», Erlang.erlang.floatResult, conversion, sum]
+  simp [conversion, sum]
 
 
 theorem binary_is_bitstring (input : Term)
