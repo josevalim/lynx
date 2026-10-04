@@ -125,27 +125,32 @@ defmodule Lynx.RunnerTest do
 
   test "function table purity metadata is checked rather than trusted" do
     %{"files" => files} = JSON.decode!(File.read!(Path.join(@translations_dir, "functions.json")))
-    files = Enum.map(files, &Map.delete(&1, "cache_key"))
-    table_file = List.last(files)
+    [source_file, table_file] = Enum.map(files, &Map.delete(&1, "cache_key"))
     [table] = table_file["contents"]
     entries = table["entries"]
-    index = Enum.find_index(entries, &(&1["body"]["name"] == "remember"))
-    assert %{"pure" => false} = Enum.at(entries, index)
+    entry = Enum.find(entries, &(&1["body"]["name"] == "remember"))
+    assert %{"pure" => false} = entry
 
-    wrong_entries = List.update_at(entries, index, &Map.put(&1, "pure", true))
-    wrong_table = Map.put(table, "entries", wrong_entries)
-    wrong_file = Map.put(table_file, "contents", [wrong_table])
-    wrong_files = Enum.drop(files, -1) ++ [wrong_file]
+    # Only the effectful callee and its falsely pure entry are needed here;
+    # the translation integration test verifies the complete function table.
+    source_file =
+      Map.update!(
+        source_file,
+        "contents",
+        &Enum.filter(&1, fn defn -> defn["name"] == "remember" end)
+      )
+
+    wrong_table = Map.put(table, "entries", [Map.put(entry, "pure", true)])
+    wrong_file = Map.update!(source_file, "contents", &(&1 ++ [wrong_table]))
 
     assert [
-             %{status: :ok, diagnostics: []},
              %{status: :error, diagnostics: diagnostics}
-           ] = Lynx.Commands.verify!(@lean_dir, wrong_files)
+           ] = Lynx.Commands.verify!(@lean_dir, [wrong_file])
 
     assert Enum.any?(diagnostics, fn diagnostic ->
              diagnostic.severity == :error and
-               diagnostic.module == table_file["module"] and
-               diagnostic.declaration == "fun_table_apply_2_bind" and
+               diagnostic.module == source_file["module"] and
+               diagnostic.declaration == "fun_table_apply_0_bind" and
                (diagnostic.message =~ "IsPure" or
                   diagnostic.message =~ "simp` made no progress")
            end)
