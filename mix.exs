@@ -10,12 +10,22 @@ defmodule Lynx.MixProject do
       deps: [],
       test_ignore_filters: ["test/fixtures/translations/regenerate.exs"],
       aliases: [
-        compile: ["cmd --cd Lean lake build", "compile"],
+        compile: [&build_lean/1, "compile"],
         precommit: ["format", "test.all"],
         "test.lean": ["cmd --cd Lean lake test"],
         "test.all": ["test", "test.lean"]
       ]
     ]
+  end
+
+  defp build_lean(_args) do
+    lean_dir = Path.join(__DIR__, "Lean")
+    lock_dir = Mix.Project.config()[:lockfile] |> Path.expand() |> Path.dirname()
+
+    case Mix.shell().cmd({"lake", ["--dir", lean_dir, "build"]}, cd: lock_dir) do
+      0 -> :ok
+      status -> Mix.raise("Lake build failed with status #{status}")
+    end
   end
 
   def cli do

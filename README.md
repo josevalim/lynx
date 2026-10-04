@@ -87,18 +87,13 @@ defmodule SumProofsTest do
       """
   end
 
-  test "laws are callable with concrete inputs" do
-    assert sum_empty()
-    assert sum_append([1, 2], [3, 4])
-  end
-
   defp is_integer_list([h | t]), do: is_integer(h) and is_integer_list(t)
   defp is_integer_list([]), do: true
   defp is_integer_list(_), do: false
 end
 ```
 
-`requires:` states the input assumptions; `expects:` must evaluate to `true`
+`requires:` states the input assumptions and `expects:` must evaluate to `true`
 under those assumptions. Each `laws` block registers one ExUnit test and verifies
 all its laws together. The `~LEAN` sigils contain the proofs checked by Lean.
 Laws also remain callable from ordinary tests, as shown above.
@@ -152,12 +147,12 @@ predicate names replaced by their Erlang equivalents.
 The argument names in `name` become Lean theorem parameters. The predicate
 helpers receive those arguments in order and remain callable from Erlang.
 `ensures` is required, while `requires` may be omitted for an unconditional
-law. The law name does not need a matching Erlang function.
+law. Then call `Lynx.verify!/1` with the module name to validate the proofs.
 
 ## Installation
 
 Install Elixir 1.18+ and Elan, Lean's toolchain manager, with `lake` available on
-`PATH`. The project's `Lean/lean-toolchain` selects Lean 4.33.1.
+`PATH`. The project's `lean-toolchain` selects Lean 4.33.1.
 
 Add Lynx to your application's `mix.exs` dependencies:
 
@@ -173,10 +168,9 @@ Fetch and compile the dependency:
 
 ```console
 mix deps.get
-MIX_ENV=test mix deps.compile lynx
 ```
 
-Ensure `test/test_helper.exs` calls `ExUnit.start()`, then add the example above.
+Ensure `test/test_helper.exs` calls `ExUnit.start()` then add the example above.
 
 ## Contributing
 

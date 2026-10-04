@@ -103,7 +103,7 @@ defmodule Lynx.Commands do
   @doc """
   Runs Lake and returns `{exit_status, stdout}`. Stderr is inherited.
 
-  Starts in `project_dir`, so Elan selects that project's toolchain.
+  Uses the caller's active toolchain and selects `project_dir` with Lake's `--dir` option.
   Arguments are passed directly to the executable.
 
   Commands reading stdin must use framing (such as a terminating newline),
@@ -124,9 +124,17 @@ defmodule Lynx.Commands do
           "lake command line executable could not be found, make sure it is installed and available in $PATH"
         )
 
+    project_dir = Path.expand(project_dir)
+
     Port.open(
       {:spawn_executable, String.to_charlist(executable)},
-      [:binary, :exit_status, :use_stdio, :hide, cd: project_dir, args: args] ++ options
+      [
+        :binary,
+        :exit_status,
+        :use_stdio,
+        :hide,
+        args: ["--dir", project_dir | args]
+      ] ++ options
     )
   end
 
