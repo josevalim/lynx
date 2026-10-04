@@ -24,4 +24,23 @@ namespace Erlang.literal
   def «empty_list/0» : Lynx.Result :=
     pure Lynx.Term.nil
 
+#lynx_pure
+  def «tuples/0» : Lynx.Result :=
+    pure
+      (Lynx.Term.cons (Lynx.Term.tuple #[])
+        (Lynx.Term.cons (Lynx.Term.tuple #[Lynx.Term.atom "ok"])
+          (Lynx.Term.cons (Lynx.Term.tuple #[Lynx.Term.atom "ok", Lynx.Term.integer 1])
+            (Lynx.Term.cons
+              (Lynx.Term.tuple
+                #[Lynx.Term.atom "nested",
+                  Lynx.Term.tuple
+                    #[Lynx.Term.integer 1, Lynx.Term.cons (Lynx.Term.atom "foo") Lynx.Term.nil]])
+              Lynx.Term.nil))))
+
+#lynx_pure
+  def «computed_tuples/1» (_0 : Lynx.Term) : Lynx.Result :=
+    pure
+      (Lynx.Term.tuple
+        #[Lynx.Term.atom "ok", _0, Lynx.Term.tuple #[_0, Lynx.Term.cons _0 Lynx.Term.nil]])
+
 end Erlang.literal

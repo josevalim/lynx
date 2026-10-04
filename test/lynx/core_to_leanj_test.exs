@@ -65,6 +65,39 @@ defmodule Lynx.CoreToLeanjTest do
     end
   end
 
+  test "lowers a case input computation to a bind followed by a match" do
+    input = :cerl.c_call(:cerl.c_atom(:other), :cerl.c_atom(:entry), [:cerl.c_var(0)])
+
+    body =
+      :cerl.c_case(input, [
+        :cerl.c_clause([:cerl.c_atom(true)], :cerl.c_var(0)),
+        :cerl.c_clause([:cerl.c_var(:Other)], :cerl.c_atom(false))
+      ])
+
+    defs = definitions([definition(:entry, body)])
+
+    assert {:ok, functions, [{:other, :entry, 1, []}]} =
+             translate(defs, %{}, %{{:other, :entry, 1} => false})
+
+    assert %{pure: false, local_calls: [], translation: translation} =
+             functions[{:entry, 1}]
+
+    assert %{
+             "body" => %{
+               "kind" => "bind",
+               "var" => %{"kind" => "var", "name" => name},
+               "computation" => %{"kind" => "remote_call", "name" => "entry"},
+               "body" => %{
+                 "kind" => "match",
+                 "expressions" => [%{"kind" => "var", "name" => name}],
+                 "cases" => [_, _]
+               }
+             }
+           } = translation
+
+    assert name == %{"generated" => 0}
+  end
+
   test "threads the remote callback context through local functions and reuses translations" do
     remote = fn module ->
       :cerl.c_call(:cerl.c_atom(module), :cerl.c_atom(:entry), [:cerl.c_var(0)])
@@ -377,10 +410,10 @@ defmodule Lynx.CoreToLeanjTest do
 
   test "returns annotated binary reasons for unsupported Core during translation" do
     anno = [{:file, ~c"example.erl"}, {7, 3}]
-    body = :cerl.ann_c_tuple(anno, [:cerl.c_atom(:ok), :cerl.c_var(0)])
+    body = :cerl.ann_abstract(anno, 1.5)
     assert {:error, ^anno, reason} = translate(definitions([definition(:entry, body)]))
     assert reason =~ "unsupported Core expression:"
-    assert reason =~ "'ok'"
+    assert reason =~ "1.5"
   end
 
   test "translates laws without a requires helper" do
