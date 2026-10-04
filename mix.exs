@@ -10,7 +10,7 @@ defmodule Lynx.MixProject do
       deps: [],
       test_ignore_filters: ["test/fixtures/translations/regenerate.exs"],
       aliases: [
-        setup: ["deps.get", "cmd --cd Lean lake build"],
+        compile: ["cmd --cd Lean lake build", "compile"],
         precommit: ["format", "test.all"],
         "test.lean": ["cmd --cd Lean lake test"],
         "test.all": ["test", "test.lean"]
