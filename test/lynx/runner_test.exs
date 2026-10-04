@@ -156,239 +156,6 @@ defmodule Lynx.RunnerTest do
            end)
   end
 
-  describe "diagnostics" do
-    test "reports function elaboration errors at the inherited node location" do
-      files = [
-        file(@literal_erl, "Erlang.literal", [
-          %{
-            "kind" => "def",
-            "name" => "broken",
-            "params" => [],
-            "pure" => false,
-            "span" => [4, 1],
-            "body" => %{
-              "kind" => "return",
-              "span" => [4, 15],
-              "value" => %{"kind" => "var", "name" => "missing", "span" => []}
-            }
-          }
-        ])
-      ]
-
-      assert [%{status: :error, diagnostics: [diagnostic]}] =
-               Lynx.Commands.verify!(@lean_dir, files)
-
-      assert diagnostic == %{
-               file: @literal_erl,
-               module: "Erlang.literal",
-               declaration: "broken/0",
-               severity: :error,
-               line: 4,
-               column: 15,
-               message: "Unknown identifier `vmissing`"
-             }
-    end
-
-    test "reports type errors when generated match patterns do not match the expression type" do
-      path = "invalid_match.erl"
-
-      files = [
-        file(
-          path,
-          "Erlang.invalid_match",
-          [
-            definition("broken", %{
-              "kind" => "match",
-              "span" => [3, 1],
-              "expressions" => [
-                %{
-                  "kind" => "remote_call",
-                  "module" => "Erlang.erlang",
-                  "name" => "+",
-                  "args" => [
-                    %{"kind" => "integer", "value" => 1, "span" => [3, 10]},
-                    %{"kind" => "integer", "value" => 2, "span" => [3, 14]}
-                  ],
-                  "span" => [3, 8]
-                }
-              ],
-              "cases" => [
-                %{
-                  "patterns" => [%{"kind" => "integer", "value" => 3, "span" => [4, 5]}],
-                  "body" => success(),
-                  "span" => [4, 1]
-                }
-              ]
-            })
-          ],
-          ["Erlang.erlang"]
-        )
-      ]
-
-      assert [%{status: :error, diagnostics: [diagnostic]}] =
-               Lynx.Commands.verify!(@lean_dir, files)
-
-      assert %{
-               file: ^path,
-               module: "Erlang.invalid_match",
-               declaration: "broken/0",
-               severity: :error,
-               line: 4,
-               column: 5,
-               message: message
-             } =
-               diagnostic
-
-      assert message ==
-               String.trim_trailing("""
-               Type mismatch
-                 Lynx.Term.integer 3
-               has type
-                 Lynx.Term
-               of sort `Type` but is expected to have type
-                 Lynx.Result
-               of sort `Type 1`
-               """)
-    end
-
-    test "reports proof elaboration errors with Unicode and the supplied location precision" do
-      path = "proofs.ex"
-      proof = "have h₀ : True := by trivial\nexact (let hé := True; missing)\n"
-
-      laws =
-        for {name, span} <- [
-              {"columns", [10, 7]},
-              {"line", [20]},
-              {"unknown", []}
-            ] do
-          %{
-            "kind" => "theorem",
-            "name" => name,
-            "params" => [],
-            "ensures" => "ensures",
-            "span" => [],
-            "proof" => %{"source" => proof, "indentation" => 4, "span" => span}
-          }
-        end
-
-      files = [file(path, "Elixir.Precision", [definition("ensures", success()) | laws])]
-
-      assert [%{status: :error, diagnostics: diagnostics}] =
-               Lynx.Commands.verify!(@lean_dir, files)
-
-      assert diagnostics == [
-               %{
-                 file: path,
-                 module: "Elixir.Precision",
-                 declaration: "columns/0",
-                 severity: :error,
-                 line: 11,
-                 column: 28,
-                 message: "Unknown identifier `missing`"
-               },
-               %{
-                 file: path,
-                 module: "Elixir.Precision",
-                 declaration: "line/0",
-                 severity: :error,
-                 line: 21,
-                 message: "Unknown identifier `missing`"
-               },
-               %{
-                 file: path,
-                 module: "Elixir.Precision",
-                 declaration: "unknown/0",
-                 severity: :error,
-                 message: "Unknown identifier `missing`"
-               }
-             ]
-    end
-
-    test "reports proof parsing errors with the supplied location precision" do
-      path = "syntax.ex"
-
-      laws =
-        for {name, span} <- [{"columns", [10, 7]}, {"line", [20]}, {"unknown", []}] do
-          %{
-            "kind" => "theorem",
-            "name" => name,
-            "params" => [],
-            "ensures" => "ensures",
-            "span" => [],
-            "proof" => %{"source" => "exact )", "indentation" => 4, "span" => span}
-          }
-        end
-
-      files = [file(path, "Elixir.Syntax", [definition("ensures", success()) | laws])]
-
-      assert [%{status: :error, diagnostics: diagnostics}] =
-               Lynx.Commands.verify!(@lean_dir, files)
-
-      assert diagnostics == [
-               %{
-                 file: path,
-                 severity: :error,
-                 line: 10,
-                 column: 13,
-                 module: "Elixir.Syntax",
-                 declaration: "columns/0",
-                 message: "expected term"
-               },
-               %{
-                 file: path,
-                 severity: :error,
-                 line: 20,
-                 module: "Elixir.Syntax",
-                 declaration: "line/0",
-                 message: "expected term"
-               },
-               %{
-                 file: path,
-                 severity: :error,
-                 module: "Elixir.Syntax",
-                 declaration: "unknown/0",
-                 message: "expected term"
-               }
-             ]
-    end
-
-    test "identifies the theorem and unexpected axiom when proof auditing fails" do
-      path = "axioms.ex"
-
-      files = [
-        file(path, "Elixir.Axioms", [
-          definition("ensures", success()),
-          theorem("valid", "rfl"),
-          theorem("untrusted", "sorry")
-        ])
-      ]
-
-      assert [
-               %{
-                 status: :error,
-                 diagnostics: [
-                   %{
-                     severity: :warning,
-                     module: "Elixir.Axioms",
-                     declaration: "untrusted/0"
-                   },
-                   %{severity: :error} = diagnostic
-                 ]
-               }
-             ] = Lynx.Commands.verify!(@lean_dir, files)
-
-      assert diagnostic == %{
-               file: path,
-               severity: :error,
-               line: 4,
-               column: 15,
-               module: "Elixir.Axioms",
-               declaration: "untrusted/0",
-               message: "unexpected axiom: sorryAx"
-             }
-    end
-  end
-
   describe "errors" do
     test "rejects unsupported versions before reading files" do
       error =
@@ -447,6 +214,279 @@ defmodule Lynx.RunnerTest do
       "name" => name,
       "args" => [],
       "span" => [4, 15]
+    }
+  end
+
+  defp theorem(name, proof) do
+    %{
+      "kind" => "theorem",
+      "name" => name,
+      "params" => [],
+      "ensures" => "ensures",
+      "span" => [4, 1],
+      "proof" => %{"source" => proof, "indentation" => 0, "span" => [4, 15]}
+    }
+  end
+
+  defp file(path, module, contents, imports \\ []) do
+    %{"file" => path, "module" => module, "contents" => contents, "imports" => imports}
+  end
+end
+
+defmodule Lynx.RunnerDiagnosticsTest do
+  use ExUnit.Case, async: true
+
+  @lean_dir Path.expand("../../Lean", __DIR__)
+  @literal_erl "../test/fixtures/translations/literal.erl"
+  @moduletag timeout: to_timeout(minute: 10)
+
+  test "reports function elaboration errors at the inherited node location" do
+    files = [
+      file(@literal_erl, "Erlang.literal", [
+        %{
+          "kind" => "def",
+          "name" => "broken",
+          "params" => [],
+          "pure" => false,
+          "span" => [4, 1],
+          "body" => %{
+            "kind" => "return",
+            "span" => [4, 15],
+            "value" => %{"kind" => "var", "name" => "missing", "span" => []}
+          }
+        }
+      ])
+    ]
+
+    assert [%{status: :error, diagnostics: [diagnostic]}] =
+             Lynx.Commands.verify!(@lean_dir, files)
+
+    assert diagnostic == %{
+             file: @literal_erl,
+             module: "Erlang.literal",
+             declaration: "broken/0",
+             severity: :error,
+             line: 4,
+             column: 15,
+             message: "Unknown identifier `vmissing`"
+           }
+  end
+
+  test "reports type errors when generated match patterns do not match the expression type" do
+    path = "invalid_match.erl"
+
+    files = [
+      file(
+        path,
+        "Erlang.invalid_match",
+        [
+          definition("broken", %{
+            "kind" => "match",
+            "span" => [3, 1],
+            "expressions" => [
+              %{
+                "kind" => "remote_call",
+                "module" => "Erlang.erlang",
+                "name" => "+",
+                "args" => [
+                  %{"kind" => "integer", "value" => 1, "span" => [3, 10]},
+                  %{"kind" => "integer", "value" => 2, "span" => [3, 14]}
+                ],
+                "span" => [3, 8]
+              }
+            ],
+            "cases" => [
+              %{
+                "patterns" => [%{"kind" => "integer", "value" => 3, "span" => [4, 5]}],
+                "body" => success(),
+                "span" => [4, 1]
+              }
+            ]
+          })
+        ],
+        ["Erlang.erlang"]
+      )
+    ]
+
+    assert [%{status: :error, diagnostics: [diagnostic]}] =
+             Lynx.Commands.verify!(@lean_dir, files)
+
+    assert %{
+             file: ^path,
+             module: "Erlang.invalid_match",
+             declaration: "broken/0",
+             severity: :error,
+             line: 4,
+             column: 5,
+             message: message
+           } =
+             diagnostic
+
+    assert message ==
+             String.trim_trailing("""
+             Type mismatch
+               Lynx.Term.integer 3
+             has type
+               Lynx.Term
+             of sort `Type` but is expected to have type
+               Lynx.Result
+             of sort `Type 1`
+             """)
+  end
+
+  test "reports proof elaboration errors with Unicode and the supplied location precision" do
+    path = "proofs.ex"
+    proof = "have h₀ : True := by trivial\nexact (let hé := True; missing)\n"
+
+    laws =
+      for {name, span} <- [
+            {"columns", [10, 7]},
+            {"line", [20]},
+            {"unknown", []}
+          ] do
+        %{
+          "kind" => "theorem",
+          "name" => name,
+          "params" => [],
+          "ensures" => "ensures",
+          "span" => [],
+          "proof" => %{"source" => proof, "indentation" => 4, "span" => span}
+        }
+      end
+
+    files = [file(path, "Elixir.Precision", [definition("ensures", success()) | laws])]
+
+    assert [%{status: :error, diagnostics: diagnostics}] =
+             Lynx.Commands.verify!(@lean_dir, files)
+
+    assert diagnostics == [
+             %{
+               file: path,
+               module: "Elixir.Precision",
+               declaration: "columns/0",
+               severity: :error,
+               line: 11,
+               column: 28,
+               message: "Unknown identifier `missing`"
+             },
+             %{
+               file: path,
+               module: "Elixir.Precision",
+               declaration: "line/0",
+               severity: :error,
+               line: 21,
+               message: "Unknown identifier `missing`"
+             },
+             %{
+               file: path,
+               module: "Elixir.Precision",
+               declaration: "unknown/0",
+               severity: :error,
+               message: "Unknown identifier `missing`"
+             }
+           ]
+  end
+
+  test "reports proof parsing errors with the supplied location precision" do
+    path = "syntax.ex"
+
+    laws =
+      for {name, span} <- [{"columns", [10, 7]}, {"line", [20]}, {"unknown", []}] do
+        %{
+          "kind" => "theorem",
+          "name" => name,
+          "params" => [],
+          "ensures" => "ensures",
+          "span" => [],
+          "proof" => %{"source" => "exact )", "indentation" => 4, "span" => span}
+        }
+      end
+
+    files = [file(path, "Elixir.Syntax", [definition("ensures", success()) | laws])]
+
+    assert [%{status: :error, diagnostics: diagnostics}] =
+             Lynx.Commands.verify!(@lean_dir, files)
+
+    assert diagnostics == [
+             %{
+               file: path,
+               severity: :error,
+               line: 10,
+               column: 13,
+               module: "Elixir.Syntax",
+               declaration: "columns/0",
+               message: "expected term"
+             },
+             %{
+               file: path,
+               severity: :error,
+               line: 20,
+               module: "Elixir.Syntax",
+               declaration: "line/0",
+               message: "expected term"
+             },
+             %{
+               file: path,
+               severity: :error,
+               module: "Elixir.Syntax",
+               declaration: "unknown/0",
+               message: "expected term"
+             }
+           ]
+  end
+
+  test "identifies the theorem and unexpected axiom when proof auditing fails" do
+    path = "axioms.ex"
+
+    files = [
+      file(path, "Elixir.Axioms", [
+        definition("ensures", success()),
+        theorem("valid", "rfl"),
+        theorem("untrusted", "sorry")
+      ])
+    ]
+
+    assert [
+             %{
+               status: :error,
+               diagnostics: [
+                 %{
+                   severity: :warning,
+                   module: "Elixir.Axioms",
+                   declaration: "untrusted/0"
+                 },
+                 %{severity: :error} = diagnostic
+               ]
+             }
+           ] = Lynx.Commands.verify!(@lean_dir, files)
+
+    assert diagnostic == %{
+             file: path,
+             severity: :error,
+             line: 4,
+             column: 15,
+             module: "Elixir.Axioms",
+             declaration: "untrusted/0",
+             message: "unexpected axiom: sorryAx"
+           }
+  end
+
+  defp definition(name, body) do
+    %{
+      "kind" => "def",
+      "name" => name,
+      "params" => [],
+      "pure" => false,
+      "span" => [4, 1],
+      "body" => body
+    }
+  end
+
+  defp success do
+    %{
+      "kind" => "return",
+      "span" => [],
+      "value" => %{"kind" => "atom", "value" => "true", "span" => []}
     }
   end
 
