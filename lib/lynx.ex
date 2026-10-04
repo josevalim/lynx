@@ -1,58 +1,48 @@
 defmodule Lynx do
   @moduledoc """
-  Translate and verify laws declared in Elixir and Erlang modules.
+  Lynx allows you to write proofs about Erlang/Elixir programs using Lean.
+
+  This is done by writing laws, in Erlang/Elixir, with a Lean proof
+  that guarantees your Erlang/Elixir code obey those laws. This is done
+  by implementing a model of the Erlang runtime in Lean and automatically
+  translating your Erlang/Elixir code to Lean.
+
+  ## Usage
+
+  There are two ways of using this project:
+
+    * via `Lynx.Case` - the recommended usage for most Elixir projects,
+      as it leverages ExUnit's runner and conveniences. See `Lynx.Case`
+      for more information
+
+    * via `Lynx.Laws` and module attributes - the recommended API for Erlang
+      users and those who want to control when the laws are verified.
+      See `Lynx.Laws` to get started
+
+  ## Writing proofs
+
+  When you write a law, Lynx will translate all functions and all of its dependencies
+  to Lean. Modules are translated following a clear rule:
+
+  * Erlang modules become `Erlang.module_name` in Lean
+  * Elixir modules become `Elixir.ModuleName` in Lean
+  * Function names are have the shape `«fun/arity»`
+
+  Each argument is an Erlang term which is modelled as `Lynx.Term`. Each function
+  returns a `Lynx.Result`, which returns `ok`, `error` (in case of exceptions),
+  and other possible statuses code.
+
+  For example, `:lists.sum/1` will become `Erlang.lists.«sum/1»` in Lean with the
+  following signature:
+
+      def «sum/1» (_0 : Lynx.Term) : Lynx.Result
+
+  The Lean source code is present in the "Lean" folder of the Lynx project. Besides
+  the basic definition of Erlang terms, it also contains the implementation of Erlang
+  NIFs within `Lynx/Modules/Erlang`. It may be necessary to navigate the source code
+  in order to best understand the constructs when writing proofs.
+
+  Furthermore, when running proofs with ExUnit, the error reports include the path to
+  folder with all `.lean` files. Use this to debug and guide your proofs.
   """
-
-  @lean_dir Path.expand("../Lean", __DIR__)
-
-  @typedoc "A verification diagnostic, with source location when available."
-  @type diagnostic :: %{
-          optional(:line) => pos_integer(),
-          optional(:column) => pos_integer(),
-          file: String.t(),
-          module: String.t(),
-          declaration: String.t() | nil,
-          severity: :error | :warning | :information,
-          message: String.t()
-        }
-
-  @typedoc "The verification result for a translated module."
-  @type report :: %{
-          status: :ok | :error | :skipped,
-          file: String.t(),
-          module: String.t(),
-          source: String.t(),
-          time_ms: non_neg_integer(),
-          cached: boolean(),
-          diagnostics: [diagnostic()]
-        }
-
-  @doc """
-  Verifies all laws in the given `modules`.
-
-  All of the functions invoked by the laws and their callees are translated into
-  Lean and verified together within a single Lean execution. Modules must be compiled
-  with debug information. Pass module atoms available on the code path, or
-  BEAM binaries for modules compiled in memory. Source paths come from BEAM metadata.
-
-  This function will raise if any requested module declares no laws or if the
-  code being translated has functionality not yet supported by Lynx.
-
-  Returns one report per translated module, in dependency order, including
-  dependencies. See the associated typespecs.
-  """
-  @spec verify!([module() | binary()]) :: [report()]
-  def verify!(modules) when is_list(modules) do
-    {names, source} = Enum.split_with(modules, &is_atom/1)
-    translation = Enum.reduce(source, Lynx.Translation.new(), &Lynx.Translation.add(&2, &1))
-
-    files =
-      (names ++ Map.keys(translation.modules))
-      |> Enum.reduce(translation, fn module, translation ->
-        Lynx.Translation.verify(translation, module)
-      end)
-      |> Lynx.Translation.assemble()
-
-    Lynx.Commands.verify!(@lean_dir, files)
-  end
 end

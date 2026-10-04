@@ -1,11 +1,127 @@
 defmodule Lynx.Laws do
-  @moduledoc """
-  Define executable laws and their Lean proofs.
+  @moduledoc ~S'''
+  Define executable laws, their Lean proofs, and verify them.
 
-  Add `use Lynx.Laws`, then `law name(arguments), expects: expression, proof: ~LEAN"..."` to declare
-  a law. An optional `requires: expression` supplies its precondition. Calling
-  the law checks both predicates and returns `true` when they succeed.
+  ## Elixir example
+
+  These examples omit Lean proofs. See the README for complete proofs.
+
+      defmodule Sum do
+        use Lynx.Laws
+
+        def sum([]), do: 0
+        def sum([x | xs]), do: x + sum(xs)
+
+        law sum_empty,
+            expects: sum([]) == 0,
+            proof: ~LEAN"""
+            PROOF GOES HERE
+            """
+      end
+
+  Call `Sum.sum_empty/0` to check the law at runtime. Add a `proof: ~LEAN"..."`
+  option to verify it with `Lynx.Laws.verify!([Sum])`.
+
+  ## Erlang example
+
+  Each `-law` attribute names an ordinary predicate function:
+
+  ```erlang
+  -module(sum).
+  -export([sum/1, sum_empty_ensures/0]).
+
+  -law #{name => {sum_empty, []}, ensures => sum_empty_ensures}.
+  -proof ~"""
+  GOES HERE
+  """.
+
+  sum([]) -> 0;
+  sum([X | Xs]) -> X + sum(Xs).
+
+  sum_empty_ensures() -> sum([]) == 0.
+  ```
+
+  Add a binary `-proof` attribute immediately after the `-law` attribute, then
+  call `Lynx.Laws.verify!([:sum])` to verify the law.
+
+  The `-law` map accepts these keys:
+
+    * `name` (required) — `{law_name, argument_names}`, where the argument names
+      become Lean theorem parameters.
+    * `ensures` (required) — the name of the predicate function to prove.
+    * `requires` (optional) — the name of the precondition function. Omit it for
+      an unconditional law.
+
+  Both predicate functions receive the law's arguments in order. Their results
+  must be `true` for the precondition to hold or the law to succeed. The predicate
+  functions remain callable from Erlang; `-law` does not generate a wrapper.
+  '''
+
+  @lean_dir Path.expand("../../Lean", __DIR__)
+
+  @typedoc "A verification diagnostic, with source location when available."
+  @type diagnostic :: %{
+          optional(:line) => pos_integer(),
+          optional(:column) => pos_integer(),
+          file: String.t(),
+          module: String.t(),
+          declaration: String.t() | nil,
+          severity: :error | :warning | :information,
+          message: String.t()
+        }
+
+  @typedoc "The verification result for a translated module."
+  @type report :: %{
+          status: :ok | :error | :skipped,
+          file: String.t(),
+          module: String.t(),
+          source: String.t(),
+          time_ms: non_neg_integer(),
+          cached: boolean(),
+          diagnostics: [diagnostic()]
+        }
+
+  @doc """
+  Verifies all laws in the given `modules`.
+
+  This is useful for verifying laws in Erlang modules or those using `Lynx.Laws`
+  directly. For ExUnit integration, see `Lynx.Case`.
+
+  The laws and proofs for all modules given are verified together within a single
+  Lean execution. You must either pass module atoms available on the code path or
+  BEAM binaries for modules compiled in memory. Modules must be compiled with debug
+  info in all cases.
+
+  Returns one report per translated module, in dependency order, including
+  dependencies. Each report contains its Lean source, which is useful
+  to understand the translated code, especially when writing proofs.
+
+  A report's `:status` is `:ok` when verification succeeds, `:error` when it fails,
+  or `:skipped` when a dependency failed. Lean verification failures are returned
+  as reports with `:diagnostics`; they do not raise. Check that every report has
+  `status: :ok` to establish successful verification.
+
+  Reports also include the source `:file`, translated `:module` name, `:time_ms`,
+  and whether a cached result was used (`:cached`). See `t:report/0` and
+  `t:diagnostic/0` for the complete structure.
+
+  Raises on translation failures, including modules without laws or unsupported
+  code, and on failures to run Lean or read its response.
   """
+  @spec verify!([module() | binary()]) :: [report()]
+  def verify!(modules) when is_list(modules) do
+    {names, source} = Enum.split_with(modules, &is_atom/1)
+    translation = Enum.reduce(source, Lynx.Translation.new(), &Lynx.Translation.add(&2, &1))
+
+    files =
+      (names ++ Map.keys(translation.modules))
+      |> Enum.reduce(translation, fn module, translation ->
+        Lynx.Translation.verify(translation, module)
+      end)
+      |> Lynx.Translation.assemble()
+
+    Lynx.Commands.verify!(@lean_dir, files)
+  end
 
   defmacro __using__(_opts) do
     quote do
@@ -19,7 +135,40 @@ defmodule Lynx.Laws do
     Module.register_attribute(module, :law, accumulate: true, persist: true)
   end
 
-  @doc "Defines a callable law with an optional precondition and a Lean proof."
+  @doc """
+  Defines a callable law with an optional precondition and a Lean proof.
+
+  The first argument is a local function declaration, such as `checked(x)` or
+  `sum_empty`. Arguments must be distinct named variables: patterns, literals,
+  and `_` are not accepted. Those names become the Lean theorem parameters.
+
+  ## Options
+
+    * `:requires` (optional) — an Elixir expression describing the precondition.
+      It must evaluate to exactly `true` for the expected expression to be
+      evaluated. Defaults to `true`.
+
+    * `:expects` (required) — the Elixir expression to prove. It must evaluate to
+      exactly `true` whenever the precondition holds.
+
+    * `:proof` (optional) — a literal `~LEAN` sigil containing the Lean tactic
+      proof, without sigil modifiers. Both inline and heredoc sigils are accepted.
+      Defaults to `rfl`, which only proves goals that hold by definitional equality.
+
+  ## Example
+
+      law checked(value),
+        requires: value,
+        expects: value,
+        proof: ~LEAN"exact requires"
+
+  ## Executable definition
+
+  Besides defining a law, this macro also defines a public function that you can
+  invoke passing Elixir values. Elixir will then validate said values against the
+  given `:requires`, the given `:expects`, and return true when both predicates
+  succeed, otherwise it will raise. This is useful to provide counter examples.
+  """
   defmacro law(call, opts) do
     {_name, definition} = __law__(__CALLER__, call, opts)
     definition

@@ -32,7 +32,7 @@ defmodule Lynx.Commands do
   Module names, declarations, source, paths, and messages remain strings.
   Uses the current Mix build directory for cached artifacts, falling back to `_build/dev`.
   """
-  @spec verify!(String.t(), [map()]) :: [Lynx.report()]
+  @spec verify!(String.t(), [map()]) :: [Lynx.Laws.report()]
   def verify!(project_dir, files) when is_list(files) do
     runner!(project_dir, %{
       "command" => "verify",

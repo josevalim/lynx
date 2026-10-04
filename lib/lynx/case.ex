@@ -12,9 +12,8 @@ defmodule Lynx.Case do
           proof: ~LEAN"exact requires"
       end
 
-  Each group registers one ExUnit test of type `:laws`. Its laws and their
-  callees are translated together, with theorems verified in source order.
-  Laws remain callable from regular tests. Run groups with `mix test --only laws`.
+  Each group registers one ExUnit test of type `:laws`. Run groups with
+  `mix test --only laws`.
   """
 
   @lean_dir Path.expand("../../Lean", __DIR__)
@@ -38,7 +37,24 @@ defmodule Lynx.Case do
     Lynx.Laws.__register__(module)
   end
 
-  @doc "Defines a callable law and includes it in the current laws group."
+  @doc """
+  Defines a callable law and includes it in the current laws group.
+
+  The must be explicitly declared in a `laws/2` block.
+
+  ## Options
+
+    * `:requires` (optional) — the precondition expression. Defaults to `true`.
+    * `:expects` (required) — the expression to prove.
+    * `:proof` (optional) — a literal `~LEAN` sigil. Defaults to `rfl`.
+
+  ## Executable definition
+
+  Besides defining a law, `law/2` also defines a public function that you can
+  invoke passing Elixir values. Elixir will then validate said values against the
+  given `:requires`, the given `:expects`, and return true when both predicates
+  succeed, otherwise it will raise. This is useful to provide counter examples.
+  """
   defmacro law(call, opts) do
     {name, definition} = Lynx.Laws.__law__(__CALLER__, call, opts)
 
@@ -59,7 +75,27 @@ defmodule Lynx.Case do
     end
   end
 
-  @doc "Registers a group of laws as one ExUnit test."
+  @doc """
+  Registers a group of laws as one ExUnit test.
+
+  The test translates the laws and their callees, verifies their proofs,
+  and fails if they do not pass.
+
+  Each group has the `:laws` test type and tag. Run only law groups with
+  `mix test --only laws`.
+
+  ## Example
+
+      laws "checked" do
+        law checked(value),
+          requires: value,
+          expects: value,
+          proof: ~LEAN"exact requires"
+      end
+
+  If verifying the laws fail, the error report includes the path to folder with
+  all `.lean` files. Use this to debug and guide your proofs.
+  """
   defmacro laws(description, do: block) do
     definition =
       quote unquote: false do
