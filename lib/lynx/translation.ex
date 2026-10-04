@@ -19,25 +19,35 @@ defmodule Lynx.Translation do
 
   defp lean_bif(_, _, _), do: :error
 
-  def new(cores) do
-    modules =
-      Map.new(cores, fn {file, core} ->
-        name = core |> :cerl.module_name() |> :cerl.atom_val()
-        {name, module_data(file, core)}
-      end)
+  def new, do: %__MODULE__{}
 
-    %__MODULE__{modules: modules}
+  @doc "Adds a BEAM binary or {file, Core Erlang module} as source to avoid disk lookup."
+  def add(%__MODULE__{} = translation, {file, core}) when is_binary(file) do
+    name = core |> :cerl.module_name() |> :cerl.atom_val()
+    put_in(translation.modules[name], module_data(file, core))
   end
 
-  @doc "Translates all laws declared by a module and their reachable predicate helpers."
-  def verify(%__MODULE__{} = translation, name) do
+  def add(%__MODULE__{} = translation, beam) when is_binary(beam) do
+    {name, module} = load_beam!(beam, fn -> [] end)
+    put_in(translation.modules[name], module)
+  end
+
+  @doc "Translates all declared laws and their reachable helpers; raises if there are no laws."
+  def verify(%__MODULE__{} = translation, name) when is_atom(name) do
     {module, translation} = fetch_module!(translation, name, fn -> [] end)
     laws = for {name, {:law, _}} <- module.definitions, do: name
-    add(translation, name, laws)
+
+    if laws == [] do
+      raise CompileError,
+        file: module.file,
+        description: "module #{inspect(name)} declares no laws"
+    end
+
+    translate(translation, name, laws)
   end
 
   @doc "Translates the requested functions and their local and remote callees."
-  def add(%__MODULE__{stack: stack} = translation, name, names) do
+  def translate(%__MODULE__{stack: stack} = translation, name, names) do
     {module, translation} = fetch_module!(translation, name, fn -> [] end)
 
     for {function, arity} <- names do
@@ -122,7 +132,7 @@ defmodule Lynx.Translation do
               ]
     end
 
-    translation = add(translation, module, [{function, arity}])
+    translation = translate(translation, module, [{function, arity}])
     pure = translation.modules[module].translations[{function, arity}].pure
     {pure, translation.funs, translation}
   end
@@ -170,12 +180,19 @@ defmodule Lynx.Translation do
                   [description: "cannot locate BEAM for #{inspect(module)}: #{inspect(reason)}"]
       end
 
+    {^module, data} = load_beam!(beam, location, module)
+    data
+  end
+
+  defp load_beam!(beam, location, expected_module \\ nil) do
     case :beam_lib.chunks(beam, [:debug_info, :compile_info]) do
-      {:ok, {^module, [debug_info: {:debug_info_v1, backend, data}, compile_info: info]}} ->
+      {:ok, {module, [debug_info: {:debug_info_v1, backend, data}, compile_info: info]}} ->
         case backend.debug_info(:core_v1, module, data, []) do
           {:ok, core} ->
-            file = info |> Keyword.get(:source, beam) |> :unicode.characters_to_binary()
-            module_data(file, core)
+            default_file = if is_list(beam), do: beam, else: "nofile"
+            file = info |> Keyword.get(:source, default_file) |> :unicode.characters_to_binary()
+
+            {module, module_data(file, core)}
 
           {:error, reason} ->
             raise CompileError,
@@ -188,11 +205,12 @@ defmodule Lynx.Translation do
 
       {:error, :beam_lib, _} = error ->
         message = error |> :beam_lib.format_error() |> IO.chardata_to_string()
+        context = if expected_module, do: " for #{inspect(expected_module)}", else: ""
 
         raise CompileError,
-              location.() ++ [description: "cannot read BEAM for #{inspect(module)}: #{message}"]
+              location.() ++ [description: "cannot read BEAM#{context}: #{message}"]
 
-      {:ok, _} ->
+      {:ok, {module, _}} ->
         raise CompileError,
               location.() ++
                 [

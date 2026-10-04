@@ -28,8 +28,9 @@ defmodule Lynx.Integration.TranslationTest do
           do: {name, length(params)}
 
     files =
-      Lynx.Translation.new([{source, core}])
-      |> Lynx.Translation.add(module, exports ++ laws)
+      Lynx.Translation.new()
+      |> Lynx.Translation.add({source, core})
+      |> Lynx.Translation.translate(module, exports ++ laws)
       |> Lynx.Translation.assemble()
 
     assert %{"version" => "1.0", "files" => expected_files} =
@@ -56,11 +57,11 @@ defmodule Lynx.Integration.TranslationTest do
 
     for {file, update} <- Enum.zip(files, updates) do
       assert %{
-               "status" => "ok",
-               "module" => module,
-               "source" => left_file,
-               "time_ms" => elapsed,
-               "diagnostics" => []
+               status: :ok,
+               module: module,
+               source: left_file,
+               time_ms: elapsed,
+               diagnostics: []
              } = update
 
       assert module == file["module"]

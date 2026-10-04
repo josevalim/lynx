@@ -22,8 +22,9 @@ defmodule Lynx.Fixtures.Regenerate do
             do: {name, length(params)}
 
       files =
-        Lynx.Translation.new([{source, core}])
-        |> Lynx.Translation.add(module, exports ++ laws)
+        Lynx.Translation.new()
+        |> Lynx.Translation.add({source, core})
+        |> Lynx.Translation.translate(module, exports ++ laws)
         |> Lynx.Translation.assemble()
 
       write(
@@ -43,11 +44,11 @@ defmodule Lynx.Fixtures.Regenerate do
       %{"files" => files} = fixture |> File.read!() |> JSON.decode!()
       updates = Lynx.Commands.verify!(@lean_dir, files)
 
-      unless Enum.all?(updates, &(&1["status"] == "ok")) do
+      unless Enum.all?(updates, &(&1.status == :ok)) do
         Mix.raise("cannot verify #{fixture}: #{inspect(updates)}")
       end
 
-      for %{"module" => module, "source" => source} <- updates do
+      for %{module: module, source: source} <- updates do
         path = Path.rootname(fixture) <> "." <> module <> ".lean"
         write(path, source)
       end

@@ -28,8 +28,9 @@ defmodule Lynx.TranslationTest do
       """)
 
     assert [%{"module" => "Erlang.example", "contents" => commands}] =
-             Translation.new([{"example.erl", core}])
-             |> Translation.add(:example, [{:caller, 1}, {:identity, 1}, {:self, 1}])
+             Translation.new()
+             |> Translation.add({"example.erl", core})
+             |> Translation.translate(:example, [{:caller, 1}, {:identity, 1}, {:self, 1}])
              |> Translation.assemble()
 
     groups =
@@ -62,8 +63,9 @@ defmodule Lynx.TranslationTest do
       """)
 
     assert [%{"module" => "Erlang.example", "contents" => []}] =
-             Translation.new([{"example.erl", core}])
-             |> Translation.add(:example, [])
+             Translation.new()
+             |> Translation.add({"example.erl", core})
+             |> Translation.translate(:example, [])
              |> Translation.assemble()
   end
 
@@ -85,11 +87,13 @@ defmodule Lynx.TranslationTest do
       """)
 
     translation =
-      Translation.new([{"caller.erl", caller}, {"dependency.erl", dependency}])
-      |> Translation.add(:a_caller, [{:identity, 1}])
-      |> Translation.add(:a_caller, [{:entry, 1}])
+      Translation.new()
+      |> Translation.add({"caller.erl", caller})
+      |> Translation.add({"dependency.erl", dependency})
+      |> Translation.translate(:a_caller, [{:identity, 1}])
+      |> Translation.translate(:a_caller, [{:entry, 1}])
 
-    assert Translation.add(translation, :a_caller, [{:entry, 1}]) == translation
+    assert Translation.translate(translation, :a_caller, [{:entry, 1}]) == translation
     assert Map.keys(translation.modules.z_dependency.translations) == [{:entry, 1}]
     assert translation.external_calls == %{a_caller: MapSet.new([:z_dependency])}
     assert translation.stack == []
@@ -127,8 +131,10 @@ defmodule Lynx.TranslationTest do
       """)
 
     files =
-      Translation.new([{"caller.erl", caller}, {"bar.ex", dependency}])
-      |> Translation.add(:caller, [{:entry, 1}])
+      Translation.new()
+      |> Translation.add({"caller.erl", caller})
+      |> Translation.add({"bar.ex", dependency})
+      |> Translation.translate(:caller, [{:entry, 1}])
       |> Translation.assemble()
 
     assert [
@@ -146,8 +152,9 @@ defmodule Lynx.TranslationTest do
       """)
 
     translation =
-      Translation.new([{"example.erl", core}])
-      |> Translation.add(:example, [{:entry, 1}])
+      Translation.new()
+      |> Translation.add({"example.erl", core})
+      |> Translation.translate(:example, [{:entry, 1}])
 
     assert Map.keys(translation.modules) == [:example]
     assert translation.external_calls == %{example: MapSet.new([:erlang, :maps])}
@@ -169,8 +176,9 @@ defmodule Lynx.TranslationTest do
       """)
 
     translation =
-      Translation.new([{"example.erl", core}])
-      |> Translation.add(:example, [{:identity_law, 1}])
+      Translation.new()
+      |> Translation.add({"example.erl", core})
+      |> Translation.translate(:example, [{:identity_law, 1}])
 
     assert {:law, _} = translation.modules.example.definitions[{:identity_law, 1}]
 
@@ -209,7 +217,7 @@ defmodule Lynx.TranslationTest do
       """)
 
     assert_raise CompileError, "example.erl:2: proof must immediately follow law", fn ->
-      Translation.new([{"example.erl", core}])
+      Translation.new() |> Translation.add({"example.erl", core})
     end
   end
 
@@ -224,7 +232,7 @@ defmodule Lynx.TranslationTest do
       """)
 
     assert_raise CompileError, "example.erl:3: proof must be a binary", fn ->
-      Translation.new([{"example.erl", core}])
+      Translation.new() |> Translation.add({"example.erl", core})
     end
   end
 
@@ -239,7 +247,9 @@ defmodule Lynx.TranslationTest do
       """)
 
     translation =
-      Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
+      Translation.new()
+      |> Translation.add({"example.erl", core})
+      |> Translation.translate(:example, [{:entry, 1}])
 
     assert [%{"contents" => [%{"name" => "expected"}, law]}] = Translation.assemble(translation)
 
@@ -266,7 +276,8 @@ defmodule Lynx.TranslationTest do
       unused(X) -> {unsupported, X}.
       """)
 
-    translation = Translation.new([{"example.erl", core}]) |> Translation.verify(:example)
+    translation =
+      Translation.new() |> Translation.add({"example.erl", core}) |> Translation.verify(:example)
 
     assert %{
              {:expected, 1} => %{},
@@ -275,6 +286,29 @@ defmodule Lynx.TranslationTest do
            } = translation.modules.example.translations
 
     refute Map.has_key?(translation.modules.example.translations, {:unused, 1})
+  end
+
+  test "verify raises when a module declares no laws" do
+    core =
+      cerl("""
+      -module(example).
+      -export([truth/0]).
+      truth() -> true.
+      """)
+
+    translation = Translation.new() |> Translation.add({"example.erl", core})
+
+    error =
+      assert_raise CompileError, ~r/module :example declares no laws/, fn ->
+        Translation.verify(translation, :example)
+      end
+
+    assert error.file == "example.erl"
+
+    assert [%{"contents" => [_]}] =
+             translation
+             |> Translation.translate(:example, [{:truth, 0}])
+             |> Translation.assemble()
   end
 
   test "keeps explicit apply when its argument list is dynamic" do
@@ -286,8 +320,9 @@ defmodule Lynx.TranslationTest do
       """)
 
     translation =
-      Translation.new([{"example.erl", core}])
-      |> Translation.add(:example, [{:entry, 2}])
+      Translation.new()
+      |> Translation.add({"example.erl", core})
+      |> Translation.translate(:example, [{:entry, 2}])
 
     assert %{
              pure: false,
@@ -318,8 +353,12 @@ defmodule Lynx.TranslationTest do
       """)
 
     for roots <- [[{:entry, 1}, {:pure, 1}], [{:pure, 1}, {:entry, 1}]] do
-      translation = Translation.new([{"example.erl", core}]) |> Translation.add(:example, roots)
-      translation = Translation.add(translation, :example, [{:later, 1}])
+      translation =
+        Translation.new()
+        |> Translation.add({"example.erl", core})
+        |> Translation.translate(:example, roots)
+
+      translation = Translation.translate(translation, :example, [{:later, 1}])
       functions = translation.modules.example.translations
 
       assert %{pure: true} = functions[{:pure, 1}]
@@ -327,7 +366,7 @@ defmodule Lynx.TranslationTest do
       for name <- [:entry, :first, :second, :later],
           do: assert(%{pure: false} = functions[{name, 1}])
 
-      assert Translation.add(translation, :example, roots) == translation
+      assert Translation.translate(translation, :example, roots) == translation
 
       assert [%{"contents" => contents}] = Translation.assemble(translation)
       assert Enum.count(contents, & &1["pure"]) == 1
@@ -366,13 +405,12 @@ defmodule Lynx.TranslationTest do
       """)
 
     translation =
-      Translation.new([
-        {"caller.erl", caller},
-        {"middle.erl", middle},
-        {"dependency.erl", dependency}
-      ])
-      |> Translation.add(:caller, [{:impure, 1}])
-      |> Translation.add(:caller, [{:pure, 1}])
+      Translation.new()
+      |> Translation.add({"caller.erl", caller})
+      |> Translation.add({"middle.erl", middle})
+      |> Translation.add({"dependency.erl", dependency})
+      |> Translation.translate(:caller, [{:impure, 1}])
+      |> Translation.translate(:caller, [{:pure, 1}])
 
     for module <- [:caller, :middle, :dependency] do
       assert %{
@@ -419,15 +457,19 @@ defmodule Lynx.TranslationTest do
         pure(X) -> X.
         """)
 
-      base = Translation.new([{"caller.erl", caller}, {"dependency.erl", dependency}])
-      dependency_only = Translation.add(base, :dependency, [{:entry, 1}])
+      base =
+        Translation.new()
+        |> Translation.add({"caller.erl", caller})
+        |> Translation.add({"dependency.erl", dependency})
+
+      dependency_only = Translation.translate(base, :dependency, [{:entry, 1}])
 
       for %{"contents" => contents} <- Translation.assemble(dependency_only) do
         assert Enum.all?(contents, &(&1["kind"] in ["def", "mutual"]))
       end
 
-      translation = Translation.add(dependency_only, :caller, [{:entry, 1}, {:pure, 1}])
-      direct = Translation.add(base, :caller, [{:entry, 1}, {:pure, 1}])
+      translation = Translation.translate(dependency_only, :caller, [{:entry, 1}, {:pure, 1}])
+      direct = Translation.translate(base, :caller, [{:entry, 1}, {:pure, 1}])
       assert Translation.assemble(translation) == Translation.assemble(direct)
 
       for name <- [:entry, :helper] do
@@ -501,8 +543,10 @@ defmodule Lynx.TranslationTest do
       """)
 
     translation =
-      Translation.new([{"caller.erl", caller}, {"dependency.erl", dependency}])
-      |> Translation.add(:caller, [{:entry, 1}])
+      Translation.new()
+      |> Translation.add({"caller.erl", caller})
+      |> Translation.add({"dependency.erl", dependency})
+      |> Translation.translate(:caller, [{:entry, 1}])
 
     assert %{
              {:caller, {:local, 1}} => %{id: 0, captures: []},
@@ -519,9 +563,9 @@ defmodule Lynx.TranslationTest do
 
     assert map_size(translation.funs) == 4
 
-    assert Translation.add(translation, :caller, [{:entry, 1}]) == translation
+    assert Translation.translate(translation, :caller, [{:entry, 1}]) == translation
 
-    updated = Translation.add(translation, :caller, [{:again, 0}, {:extra, 1}])
+    updated = Translation.translate(translation, :caller, [{:again, 0}, {:extra, 1}])
     assert map_size(updated.funs) == 5
     assert Map.take(updated.funs, Map.keys(translation.funs)) == translation.funs
 
@@ -595,9 +639,12 @@ defmodule Lynx.TranslationTest do
       reverse(X) -> lists:reverse(X, []).
       """)
 
-    translation = Translation.new([{"lists.erl", lists}, {"caller.erl", caller}])
+    translation =
+      Translation.new()
+      |> Translation.add({"lists.erl", lists})
+      |> Translation.add({"caller.erl", caller})
 
-    sum_only = Translation.add(translation, :caller, [{:sum, 1}])
+    sum_only = Translation.translate(translation, :caller, [{:sum, 1}])
     assert sum_only.builtin_modules == %{erlang: true}
 
     assert [
@@ -607,7 +654,9 @@ defmodule Lynx.TranslationTest do
 
     for roots <- [[{:sum, 1}, {:reverse, 1}], [{:reverse, 1}, {:sum, 1}]] do
       mixed =
-        Enum.reduce(roots, translation, fn root, acc -> Translation.add(acc, :caller, [root]) end)
+        Enum.reduce(roots, translation, fn root, acc ->
+          Translation.translate(acc, :caller, [root])
+        end)
 
       assert mixed.builtin_modules == %{erlang: true, lists: true}
       assert Map.keys(mixed.modules.lists.translations) == [{:sum, 1}]
@@ -633,7 +682,9 @@ defmodule Lynx.TranslationTest do
       """)
 
     translation =
-      Translation.new([{"lists.erl", lists}]) |> Translation.add(:lists, [{:reverse, 1}])
+      Translation.new()
+      |> Translation.add({"lists.erl", lists})
+      |> Translation.translate(:lists, [{:reverse, 1}])
 
     assert translation.builtin_modules == %{lists: true}
     assert translation.external_calls == %{}
@@ -662,8 +713,8 @@ defmodule Lynx.TranslationTest do
       )
 
     assert [%{"module" => "Erlang.lynx_lookup_root", "file" => ^source, "contents" => [_]}] =
-             Translation.new([])
-             |> Translation.add(:lynx_lookup_root, [{:entry, 1}])
+             Translation.new()
+             |> Translation.translate(:lynx_lookup_root, [{:entry, 1}])
              |> Translation.assemble()
   end
 
@@ -690,7 +741,9 @@ defmodule Lynx.TranslationTest do
 
       error =
         assert_raise CompileError, fn ->
-          Translation.new([{"caller.erl", caller}]) |> Translation.add(:caller, [{:entry, 1}])
+          Translation.new()
+          |> Translation.add({"caller.erl", caller})
+          |> Translation.translate(:caller, [{:entry, 1}])
         end
 
       assert %CompileError{file: "lookup_caller.erl", line: 4} = error
@@ -712,7 +765,9 @@ defmodule Lynx.TranslationTest do
 
       error =
         assert_raise CompileError, fn ->
-          Translation.new([{"caller.erl", caller}]) |> Translation.add(:caller, [{:entry, 1}])
+          Translation.new()
+          |> Translation.add({"caller.erl", caller})
+          |> Translation.translate(:caller, [{:entry, 1}])
         end
 
       assert %CompileError{file: "caller.erl", line: 3} = error
@@ -728,7 +783,9 @@ defmodule Lynx.TranslationTest do
         """)
 
       assert_raise CompileError, "example.erl:3: undefined function :maps.new/1", fn ->
-        Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
+        Translation.new()
+        |> Translation.add({"example.erl", core})
+        |> Translation.translate(:example, [{:entry, 1}])
       end
     end
 
@@ -742,7 +799,11 @@ defmodule Lynx.TranslationTest do
 
       error =
         assert_raise CompileError, fn ->
-          Translation.add(Translation.new([{"example.erl", core}]), :example, [{:entry, 1}])
+          Translation.translate(
+            Translation.new() |> Translation.add({"example.erl", core}),
+            :example,
+            [{:entry, 1}]
+          )
         end
 
       assert %CompileError{file: "example.erl", line: 3} = error
@@ -761,8 +822,9 @@ defmodule Lynx.TranslationTest do
       assert_raise CompileError,
                    "caller.erl:3: unknown module :z_dependency",
                    fn ->
-                     Translation.new([{"caller.erl", caller}])
-                     |> Translation.add(:a_caller, [{:entry, 1}])
+                     Translation.new()
+                     |> Translation.add({"caller.erl", caller})
+                     |> Translation.translate(:a_caller, [{:entry, 1}])
                    end
     end
 
@@ -782,8 +844,10 @@ defmodule Lynx.TranslationTest do
         """)
 
       assert_raise CompileError, "caller.erl:3: undefined function :other.entry/1", fn ->
-        Translation.new([{"caller.erl", caller}, {"other.erl", missing}])
-        |> Translation.add(:caller, [{:entry, 1}])
+        Translation.new()
+        |> Translation.add({"caller.erl", caller})
+        |> Translation.add({"other.erl", missing})
+        |> Translation.translate(:caller, [{:entry, 1}])
       end
     end
 
@@ -805,8 +869,10 @@ defmodule Lynx.TranslationTest do
       assert_raise CompileError,
                    "second.erl:3: cyclic module call to :first.entry/1 (:first -> :second -> :first)",
                    fn ->
-                     Translation.new([{"first.erl", first}, {"second.erl", second}])
-                     |> Translation.add(:first, [{:entry, 1}])
+                     Translation.new()
+                     |> Translation.add({"first.erl", first})
+                     |> Translation.add({"second.erl", second})
+                     |> Translation.translate(:first, [{:entry, 1}])
                    end
     end
 
@@ -821,7 +887,9 @@ defmodule Lynx.TranslationTest do
 
       error =
         assert_raise CompileError, "foo:4: unknown module :missing", fn ->
-          Translation.new([{"example.erl", core}]) |> Translation.add(:example, [{:entry, 1}])
+          Translation.new()
+          |> Translation.add({"example.erl", core})
+          |> Translation.translate(:example, [{:entry, 1}])
         end
 
       assert %CompileError{file: "foo", line: 4} = error
@@ -859,13 +927,12 @@ defmodule Lynx.TranslationTest do
           value() -> #{value}.
           """)
 
-        Translation.new([
-          {"source.erl", source},
-          {"dependent.erl", dependent},
-          {"unrelated.erl", unrelated}
-        ])
+        Translation.new()
+        |> Translation.add({"source.erl", source})
+        |> Translation.add({"dependent.erl", dependent})
+        |> Translation.add({"unrelated.erl", unrelated})
         |> Translation.verify(:cached_dependent)
-        |> Translation.add(:cached_unrelated, [{:value, 0}])
+        |> Translation.translate(:cached_unrelated, [{:value, 0}])
         |> Translation.assemble()
       end
 
