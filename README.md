@@ -88,11 +88,12 @@ mechanism may have bugs.
 
 ## Contributing
 
-The project requires Elixir 1.18 or newer in the 1.x series and Lean 4.33.1,
-which includes Lake. With those installed, fetch dependencies and build Lean with:
+The project requires Elixir 1.18+ and Lean 4.33.1+, which includes Lake.
+With those installed, fetch dependencies and compile the project with:
 
 ```console
-mix setup
+mix deps.get
+mix compile
 ```
 
 Run tests with:
