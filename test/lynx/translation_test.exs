@@ -43,9 +43,9 @@ defmodule Lynx.TranslationTest do
 
     assert Enum.sort(groups) == [
              ["caller"],
-             ["even", "odd"],
              ["first", "second", "third"],
              ["identity"],
+             ["odd", "even"],
              ["self"]
            ]
 
@@ -286,6 +286,20 @@ defmodule Lynx.TranslationTest do
            } = translation.modules.example.translations
 
     refute Map.has_key?(translation.modules.example.translations, {:unused, 1})
+
+    selected =
+      Translation.new()
+      |> Translation.add({"example.erl", core})
+      |> Translation.verify(:example, [{:second, 1}])
+
+    assert Map.keys(selected.modules.example.translations) |> Enum.sort() ==
+             [{:expected, 1}, {:second, 1}]
+
+    assert_raise CompileError, ~r/does not declare law/, fn ->
+      Translation.new()
+      |> Translation.add({"example.erl", core})
+      |> Translation.verify(:example, [{:unused, 1}])
+    end
   end
 
   test "verify raises when a module declares no laws" do

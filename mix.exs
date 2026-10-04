@@ -24,6 +24,7 @@ defmodule Lynx.MixProject do
 
   def application do
     [
+      mod: {Lynx.Application, []},
       extra_applications: [:logger, :crypto]
     ]
   end

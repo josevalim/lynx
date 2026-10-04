@@ -174,7 +174,6 @@ defmodule Lynx.LawsTest do
                      "pure" => true,
                      "body" => %{"kind" => "return", "value" => %{"kind" => "var", "name" => 0}}
                    },
-                   %{"kind" => "def", "name" => "allowed", "params" => [_], "pure" => true},
                    %{
                      "kind" => "def",
                      "name" => "checked:ensures",
@@ -186,6 +185,7 @@ defmodule Lynx.LawsTest do
                        "args" => [%{"kind" => "var", "name" => 1}]
                      }
                    },
+                   %{"kind" => "def", "name" => "allowed", "params" => [_], "pure" => true},
                    %{
                      "kind" => "def",
                      "name" => "checked:requires",

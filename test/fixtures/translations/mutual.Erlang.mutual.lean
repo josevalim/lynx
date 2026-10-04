@@ -8,15 +8,15 @@ namespace Erlang.mutual
 
 #lynx_pure
   mutual
-    def «even/1» (_0 : Lynx.Term) : Lynx.Result :=
-      match _0 with
-      | Lynx.Term.nil => pure (Lynx.Term.atom "true")
-      | Lynx.Term.cons _2 vXs => «odd/1» vXs
-      | _1 => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
     def «odd/1» (_0 : Lynx.Term) : Lynx.Result :=
       match _0 with
       | Lynx.Term.nil => pure (Lynx.Term.atom "false")
       | Lynx.Term.cons _2 vXs => «even/1» vXs
+      | _1 => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
+    def «even/1» (_0 : Lynx.Term) : Lynx.Result :=
+      match _0 with
+      | Lynx.Term.nil => pure (Lynx.Term.atom "true")
+      | Lynx.Term.cons _2 vXs => «odd/1» vXs
       | _1 => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
   end
 
