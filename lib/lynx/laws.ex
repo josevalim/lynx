@@ -9,15 +9,24 @@ defmodule Lynx.Laws do
 
   defmacro __using__(_opts) do
     quote do
-      Module.register_attribute(__MODULE__, :law, accumulate: true, persist: true)
+      Lynx.Laws.__register__(__MODULE__)
       import Lynx.Laws, only: [law: 2]
     end
   end
 
+  @doc false
+  def __register__(module) do
+    Module.register_attribute(module, :law, accumulate: true, persist: true)
+  end
+
   @doc "Defines a callable law with an optional precondition and a Lean proof."
   defmacro law(call, opts) do
-    env = __CALLER__
+    {_name, definition} = __law__(__CALLER__, call, opts)
+    definition
+  end
 
+  @doc false
+  def __law__(env, call, opts) do
     {name, args} =
       case Macro.decompose_call(call) do
         {name, args} -> {name, args}
@@ -70,25 +79,28 @@ defmodule Lynx.Laws do
     requires_message = "law #{name}/#{length(args)} requires returned "
     expects_message = "law #{name}/#{length(args)} expects returned "
 
-    quote generated: true do
-      @law unquote(Macro.escape(attribute))
+    definition =
+      quote generated: true do
+        @law unquote(Macro.escape(attribute))
 
-      defp unquote(requires_name)(unquote_splicing(helper_args)), do: unquote(requires)
-      defp unquote(ensures_name)(unquote_splicing(helper_args)), do: unquote(expects)
+        defp unquote(requires_name)(unquote_splicing(helper_args)), do: unquote(requires)
+        defp unquote(ensures_name)(unquote_splicing(helper_args)), do: unquote(expects)
 
-      def unquote(name)(unquote_splicing(args)) do
-        case unquote(requires_name)(unquote_splicing(args)) do
-          true ->
-            case unquote(ensures_name)(unquote_splicing(args)) do
-              true -> true
-              value -> raise RuntimeError, unquote(expects_message) <> inspect(value)
-            end
+        def unquote(name)(unquote_splicing(args)) do
+          case unquote(requires_name)(unquote_splicing(args)) do
+            true ->
+              case unquote(ensures_name)(unquote_splicing(args)) do
+                true -> true
+                value -> raise RuntimeError, unquote(expects_message) <> inspect(value)
+              end
 
-          value ->
-            raise ArgumentError, unquote(requires_message) <> inspect(value)
+            value ->
+              raise ArgumentError, unquote(requires_message) <> inspect(value)
+          end
         end
       end
-    end
+
+    {{name, length(args)}, definition}
   end
 
   defp span(meta, env) do

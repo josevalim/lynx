@@ -32,10 +32,26 @@ defmodule Lynx.Translation do
     put_in(translation.modules[name], module)
   end
 
-  @doc "Translates all declared laws and their reachable helpers; raises if there are no laws."
-  def verify(%__MODULE__{} = translation, name) when is_atom(name) do
+  @doc "Translates selected laws (or all laws) and their reachable helpers."
+  def verify(%__MODULE__{} = translation, name, laws \\ :all) when is_atom(name) do
     {module, translation} = fetch_module!(translation, name, fn -> [] end)
-    laws = for {name, {:law, _}} <- module.definitions, do: name
+
+    laws =
+      if laws == :all do
+        for {name, {:law, _}} <- module.definitions, do: name
+      else
+        for law <- laws do
+          case module.definitions do
+            %{^law => {:law, _}} ->
+              law
+
+            _ ->
+              raise CompileError,
+                file: module.file,
+                description: "#{inspect(name)} does not declare law #{inspect(law)}"
+          end
+        end
+      end
 
     if laws == [] do
       raise CompileError,
@@ -345,9 +361,20 @@ defmodule Lynx.Translation do
         :digraph.add_edge(graph, callee, name)
       end
 
+      # Proof strings can reference preceding theorems without a runtime call.
+      laws =
+        functions
+        |> Enum.filter(fn {_, definition} -> definition.translation["kind"] == "theorem" end)
+        |> Enum.sort_by(fn {name, _} -> declaration_location(functions, name) end)
+        |> Enum.map(&elem(&1, 0))
+
+      for [earlier, later] <- Enum.chunk_every(laws, 2, 1, :discard) do
+        :digraph.add_edge(graph, earlier, later)
+      end
+
       components = :digraph_utils.condensation(graph)
 
-      groups = topsort(components)
+      groups = topsort(components, &declaration_location(functions, &1))
       :digraph.delete(components)
       for group <- groups, do: emit_group(group, graph)
     after
@@ -355,11 +382,17 @@ defmodule Lynx.Translation do
     end
   end
 
-  # Alphabetize each ready batch. OTP's topsort leaves ties in arbitrary order.
-  defp topsort(graph) do
+  defp declaration_location(functions, name) do
+    span = functions[name].translation["span"]
+    {List.wrap(span), name}
+  end
+
+  # Source locations order declarations; module names break ties between modules.
+  defp topsort(graph, location \\ &Function.identity/1) do
     ready =
       for group <- :digraph.vertices(graph), :digraph.in_degree(graph, group) == 0 do
-        {Enum.sort(group), group}
+        names = Enum.sort_by(group, location)
+        {Enum.map(names, location), names, group}
       end
       |> Enum.sort()
 
@@ -373,12 +406,12 @@ defmodule Lynx.Translation do
 
       _ ->
         groups =
-          for {names, group} <- ready do
+          for {_, names, group} <- ready do
             :digraph.del_vertex(graph, group)
             names
           end
 
-        groups ++ topsort(graph)
+        groups ++ topsort(graph, location)
     end
   end
 
