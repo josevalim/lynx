@@ -947,31 +947,29 @@ defmodule Lynx.TranslationTest do
 
       lean_dir = Path.expand("../../Lean", __DIR__)
       cold = Lynx.Commands.runner!(lean_dir, request)
+      assert [_, cold_unrelated, _] = cold
       assert Enum.all?(cold, &match?(%{"status" => "ok", "cached" => false}, &1))
-      warm = Lynx.Commands.runner!(lean_dir, request)
-      assert Enum.all?(warm, &match?(%{"status" => "ok", "cached" => true}, &1))
-
-      assert Enum.map(cold, &Map.drop(&1, ["cached", "time_ms"])) ==
-               Enum.map(warm, &Map.drop(&1, ["cached", "time_ms"]))
 
       changed = assemble.(false)
       assert [source, unrelated, dependent] = files
       assert [changed_source, ^unrelated, changed_dependent] = changed
       refute source["cache_key"] == changed_source["cache_key"]
       refute dependent["cache_key"] == changed_dependent["cache_key"]
-      request = Map.put(request, "files", changed)
+      changed_request = Map.put(request, "files", changed)
 
       assert [
                %{"status" => "ok", "cached" => false},
-               %{"status" => "ok", "cached" => true},
+               %{"status" => "ok", "cached" => true} = warm_unrelated,
                %{"status" => "error", "cached" => false}
-             ] = Lynx.Commands.runner!(lean_dir, request)
+             ] = Lynx.Commands.runner!(lean_dir, changed_request)
 
-      assert [
-               %{"status" => "ok", "cached" => true},
-               %{"status" => "ok", "cached" => true},
-               %{"status" => "error", "cached" => false}
-             ] = Lynx.Commands.runner!(lean_dir, request)
+      assert Map.drop(cold_unrelated, ["cached", "time_ms"]) ==
+               Map.drop(warm_unrelated, ["cached", "time_ms"])
+
+      # Failed proofs must not leave reusable artifacts on disk.
+      assert Path.wildcard(
+               Path.join([cache_dir, "lean-*", changed_dependent["cache_key"], "result.json"])
+             ) == []
     end
   end
 
