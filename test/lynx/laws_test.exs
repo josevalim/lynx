@@ -261,14 +261,11 @@ defmodule Lynx.LawsTest do
   end
 
   defp translate(module, beam) do
-    assert {:ok, {^module, [debug_info: {:debug_info_v1, backend, data}]}} =
-             :beam_lib.chunks(beam, [:debug_info])
+    translation =
+      Lynx.Translation.new() |> Lynx.Translation.add(beam) |> Lynx.Translation.verify(module)
 
-    assert {:ok, core} = backend.debug_info(:core_v1, module, data, [])
-
-    Lynx.Translation.new([{__ENV__.file, core}])
-    |> Lynx.Translation.verify(module)
-    |> Lynx.Translation.assemble()
+    assert Map.has_key?(translation.modules, module)
+    Lynx.Translation.assemble(translation)
   end
 
   defp laws(module) do

@@ -4,12 +4,13 @@ defmodule Lynx.Commands do
   @protocol_version "1.0"
 
   @doc """
-  Runs a protocol request and collects its per-file JSON updates in order.
+  Runs a protocol request and collects its JSON updates in order.
 
   Each update includes rendered source, elapsed milliseconds, and diagnostics.
   Returns verification errors and skipped files as updates. Raises on failure responses,
   invalid JSON output, or unexpected exit statuses.
   The caller supplies the complete request, including its command and version.
+  Updates retain the JSON protocol's string keys and values.
   """
   @spec runner!(String.t(), map()) :: [map()]
   def runner!(project_dir, request) do
@@ -27,9 +28,11 @@ defmodule Lynx.Commands do
   Verifies assembled files and returns their source, timings, and diagnostics.
 
   Verification errors and skipped files are returned as updates. Runner failures raise.
+  Reports and diagnostics have atom keys; statuses and severities are atoms.
+  Module names, declarations, source, paths, and messages remain strings.
   Uses the current Mix build directory for cached artifacts, falling back to `_build/dev`.
   """
-  @spec verify!(String.t(), [map()]) :: [map()]
+  @spec verify!(String.t(), [map()]) :: [Lynx.report()]
   def verify!(project_dir, files) when is_list(files) do
     runner!(project_dir, %{
       "command" => "verify",
@@ -37,6 +40,7 @@ defmodule Lynx.Commands do
       "cache_dir" => cache_dir(),
       "files" => files
     })
+    |> Enum.map(&Lynx.Runner.decode_verify!/1)
   end
 
   defp cache_dir do
@@ -71,7 +75,7 @@ defmodule Lynx.Commands do
       %{"status" => "done"} ->
         Enum.reverse(responses)
 
-      %{"status" => status} when status in ["ok", "error", "skipped"] ->
+      %{"status" => status} when is_binary(status) ->
         collect_responses(port, [response | responses])
 
       _ ->

@@ -21,26 +21,26 @@ defmodule Lynx.RunnerTest do
     ]
 
     assert [
-             %{"status" => "ok", "source" => runtime_source, "diagnostics" => []},
-             %{"status" => "error", "diagnostics" => [source, runtime]},
-             %{"status" => "ok", "source" => translated_source, "diagnostics" => []}
+             %{status: :ok, source: runtime_source, diagnostics: []},
+             %{status: :error, diagnostics: [source, runtime]},
+             %{status: :ok, source: translated_source, diagnostics: []}
            ] = Lynx.Commands.verify!(@lean_dir, files)
 
     assert runtime_source =~ "public import Lynx.Modules.Erlang.maps"
     assert translated_source =~ "public import Erlang.maps"
 
     assert %{
-             "file" => @literal_erl,
-             "module" => "Elixir.Undeclared",
-             "declaration" => "source/0",
-             "severity" => "error",
-             "line" => 4,
-             "column" => 15
+             file: @literal_erl,
+             module: "Elixir.Undeclared",
+             declaration: "source/0",
+             severity: :error,
+             line: 4,
+             column: 15
            } = source
 
-    assert source["message"] =~ "Unknown identifier `Erlang.maps.«value/0»`"
-    assert %{"module" => "Elixir.Undeclared", "declaration" => "runtime/0"} = runtime
-    assert runtime["message"] =~ "Unknown identifier `Erlang.maps.«new/0»`"
+    assert source.message =~ "Unknown identifier `Erlang.maps.«value/0»`"
+    assert %{module: "Elixir.Undeclared", declaration: "runtime/0"} = runtime
+    assert runtime.message =~ "Unknown identifier `Erlang.maps.«new/0»`"
   end
 
   test "imports both dependency branches and theorems from their shared dependency" do
@@ -68,19 +68,19 @@ defmodule Lynx.RunnerTest do
 
     assert [
              %{
-               "status" => "ok",
-               "module" => "Elixir.Source",
-               "cached" => false,
-               "diagnostics" => []
+               status: :ok,
+               module: "Elixir.Source",
+               cached: false,
+               diagnostics: []
              },
              %{
-               "status" => "ok",
-               "module" => "Elixir.Left",
-               "cached" => false,
-               "diagnostics" => []
+               status: :ok,
+               module: "Elixir.Left",
+               cached: false,
+               diagnostics: []
              },
-             %{"status" => "ok", "module" => "Elixir.Right", "diagnostics" => []},
-             %{"status" => "ok", "module" => "Elixir.Join", "diagnostics" => []}
+             %{status: :ok, module: "Elixir.Right", diagnostics: []},
+             %{status: :ok, module: "Elixir.Join", diagnostics: []}
            ] = Lynx.Commands.verify!(@lean_dir, files)
   end
 
@@ -103,23 +103,23 @@ defmodule Lynx.RunnerTest do
     ]
 
     assert [
-             %{"status" => "error", "module" => "Elixir.Failed", "diagnostics" => [failed]},
-             %{"status" => "ok", "module" => "Elixir.Unrelated", "diagnostics" => []},
+             %{status: :error, module: "Elixir.Failed", diagnostics: [failed]},
+             %{status: :ok, module: "Elixir.Unrelated", diagnostics: []},
              %{
-               "status" => "skipped",
-               "module" => "Elixir.Dependent",
-               "diagnostics" => [dependent]
+               status: :skipped,
+               module: "Elixir.Dependent",
+               diagnostics: [dependent]
              }
            ] = Lynx.Commands.verify!(@lean_dir, files)
 
-    assert failed["message"] =~ "Unknown identifier `vmissing`"
+    assert failed.message =~ "Unknown identifier `vmissing`"
 
     assert dependent == %{
-             "file" => @literal_erl,
-             "module" => "Elixir.Dependent",
-             "declaration" => nil,
-             "severity" => "error",
-             "message" => "import 'Elixir.Failed' must precede this file and verify successfully"
+             file: @literal_erl,
+             module: "Elixir.Dependent",
+             declaration: nil,
+             severity: :error,
+             message: "import 'Elixir.Failed' must precede this file and verify successfully"
            }
   end
 
@@ -138,16 +138,16 @@ defmodule Lynx.RunnerTest do
     wrong_files = Enum.drop(files, -1) ++ [wrong_file]
 
     assert [
-             %{"status" => "ok", "diagnostics" => []},
-             %{"status" => "error", "diagnostics" => diagnostics}
+             %{status: :ok, diagnostics: []},
+             %{status: :error, diagnostics: diagnostics}
            ] = Lynx.Commands.verify!(@lean_dir, wrong_files)
 
     assert Enum.any?(diagnostics, fn diagnostic ->
-             diagnostic["severity"] == "error" and
-               diagnostic["module"] == table_file["module"] and
-               diagnostic["declaration"] == "fun_table_apply_2_bind" and
-               (diagnostic["message"] =~ "IsPure" or
-                  diagnostic["message"] =~ "simp` made no progress")
+             diagnostic.severity == :error and
+               diagnostic.module == table_file["module"] and
+               diagnostic.declaration == "fun_table_apply_2_bind" and
+               (diagnostic.message =~ "IsPure" or
+                  diagnostic.message =~ "simp` made no progress")
            end)
   end
 
@@ -170,17 +170,17 @@ defmodule Lynx.RunnerTest do
         ])
       ]
 
-      assert [%{"status" => "error", "diagnostics" => [diagnostic]}] =
+      assert [%{status: :error, diagnostics: [diagnostic]}] =
                Lynx.Commands.verify!(@lean_dir, files)
 
       assert diagnostic == %{
-               "file" => @literal_erl,
-               "module" => "Erlang.literal",
-               "declaration" => "broken/0",
-               "severity" => "error",
-               "line" => 4,
-               "column" => 15,
-               "message" => "Unknown identifier `vmissing`"
+               file: @literal_erl,
+               module: "Erlang.literal",
+               declaration: "broken/0",
+               severity: :error,
+               line: 4,
+               column: 15,
+               message: "Unknown identifier `vmissing`"
              }
     end
 
@@ -220,17 +220,17 @@ defmodule Lynx.RunnerTest do
         )
       ]
 
-      assert [%{"status" => "error", "diagnostics" => [diagnostic]}] =
+      assert [%{status: :error, diagnostics: [diagnostic]}] =
                Lynx.Commands.verify!(@lean_dir, files)
 
       assert %{
-               "file" => ^path,
-               "module" => "Erlang.invalid_match",
-               "declaration" => "broken/0",
-               "severity" => "error",
-               "line" => 4,
-               "column" => 5,
-               "message" => message
+               file: ^path,
+               module: "Erlang.invalid_match",
+               declaration: "broken/0",
+               severity: :error,
+               line: 4,
+               column: 5,
+               message: message
              } =
                diagnostic
 
@@ -268,33 +268,33 @@ defmodule Lynx.RunnerTest do
 
       files = [file(path, "Elixir.Precision", [definition("ensures", success()) | laws])]
 
-      assert [%{"status" => "error", "diagnostics" => diagnostics}] =
+      assert [%{status: :error, diagnostics: diagnostics}] =
                Lynx.Commands.verify!(@lean_dir, files)
 
       assert diagnostics == [
                %{
-                 "file" => path,
-                 "module" => "Elixir.Precision",
-                 "declaration" => "columns/0",
-                 "severity" => "error",
-                 "line" => 11,
-                 "column" => 28,
-                 "message" => "Unknown identifier `missing`"
+                 file: path,
+                 module: "Elixir.Precision",
+                 declaration: "columns/0",
+                 severity: :error,
+                 line: 11,
+                 column: 28,
+                 message: "Unknown identifier `missing`"
                },
                %{
-                 "file" => path,
-                 "module" => "Elixir.Precision",
-                 "declaration" => "line/0",
-                 "severity" => "error",
-                 "line" => 21,
-                 "message" => "Unknown identifier `missing`"
+                 file: path,
+                 module: "Elixir.Precision",
+                 declaration: "line/0",
+                 severity: :error,
+                 line: 21,
+                 message: "Unknown identifier `missing`"
                },
                %{
-                 "file" => path,
-                 "module" => "Elixir.Precision",
-                 "declaration" => "unknown/0",
-                 "severity" => "error",
-                 "message" => "Unknown identifier `missing`"
+                 file: path,
+                 module: "Elixir.Precision",
+                 declaration: "unknown/0",
+                 severity: :error,
+                 message: "Unknown identifier `missing`"
                }
              ]
     end
@@ -316,33 +316,33 @@ defmodule Lynx.RunnerTest do
 
       files = [file(path, "Elixir.Syntax", [definition("ensures", success()) | laws])]
 
-      assert [%{"status" => "error", "diagnostics" => diagnostics}] =
+      assert [%{status: :error, diagnostics: diagnostics}] =
                Lynx.Commands.verify!(@lean_dir, files)
 
       assert diagnostics == [
                %{
-                 "file" => path,
-                 "severity" => "error",
-                 "line" => 10,
-                 "column" => 13,
-                 "module" => "Elixir.Syntax",
-                 "declaration" => "columns/0",
-                 "message" => "expected term"
+                 file: path,
+                 severity: :error,
+                 line: 10,
+                 column: 13,
+                 module: "Elixir.Syntax",
+                 declaration: "columns/0",
+                 message: "expected term"
                },
                %{
-                 "file" => path,
-                 "severity" => "error",
-                 "line" => 20,
-                 "module" => "Elixir.Syntax",
-                 "declaration" => "line/0",
-                 "message" => "expected term"
+                 file: path,
+                 severity: :error,
+                 line: 20,
+                 module: "Elixir.Syntax",
+                 declaration: "line/0",
+                 message: "expected term"
                },
                %{
-                 "file" => path,
-                 "severity" => "error",
-                 "module" => "Elixir.Syntax",
-                 "declaration" => "unknown/0",
-                 "message" => "expected term"
+                 file: path,
+                 severity: :error,
+                 module: "Elixir.Syntax",
+                 declaration: "unknown/0",
+                 message: "expected term"
                }
              ]
     end
@@ -360,26 +360,26 @@ defmodule Lynx.RunnerTest do
 
       assert [
                %{
-                 "status" => "error",
-                 "diagnostics" => [
+                 status: :error,
+                 diagnostics: [
                    %{
-                     "severity" => "warning",
-                     "module" => "Elixir.Axioms",
-                     "declaration" => "untrusted/0"
+                     severity: :warning,
+                     module: "Elixir.Axioms",
+                     declaration: "untrusted/0"
                    },
-                   %{"severity" => "error"} = diagnostic
+                   %{severity: :error} = diagnostic
                  ]
                }
              ] = Lynx.Commands.verify!(@lean_dir, files)
 
       assert diagnostic == %{
-               "file" => path,
-               "severity" => "error",
-               "line" => 4,
-               "column" => 15,
-               "module" => "Elixir.Axioms",
-               "declaration" => "untrusted/0",
-               "message" => "unexpected axiom: sorryAx"
+               file: path,
+               severity: :error,
+               line: 4,
+               column: 15,
+               module: "Elixir.Axioms",
+               declaration: "untrusted/0",
+               message: "unexpected axiom: sorryAx"
              }
     end
   end
