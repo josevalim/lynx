@@ -71,7 +71,12 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
         all_goals
           intros
           simp_all (config := { failIfUnchanged := false }) [$[$definitions:ident],*]
-          repeat' first | split | simp_all)
+          repeat' first
+            | apply Result.IsPure.bind
+            | apply Result.IsPure.bind_explicit
+            | (intro)
+            | split
+            | simp_all)
       let proof ← Term.elabTermEnsuringType proofSyntax jointType
       Term.synthesizeSyntheticMVarsNoPostponing
       instantiateMVars proof
@@ -111,13 +116,23 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
         all_goals
           intros
           simp_all (config := { failIfUnchanged := false }) [$functionId:ident]
-          repeat' first | split at * | simp_all)
+          repeat' first
+            | apply Result.IsPure.bind
+            | apply Result.IsPure.bind_explicit
+            | (intro)
+            | split at *
+            | simp_all)
     else
       `(by
         $introduce:tactic
         unfold $functionId:ident
         simp_all (config := { failIfUnchanged := false, maxDischargeDepth := 64 })
-        repeat' first | split at * | simp_all)
+        repeat' first
+          | apply Result.IsPure.bind
+          | apply Result.IsPure.bind_explicit
+          | (intro)
+          | split at *
+          | simp_all)
     let proof ← Term.elabTermEnsuringType
       proofSyntax
       purityType

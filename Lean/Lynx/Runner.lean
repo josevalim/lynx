@@ -130,8 +130,13 @@ private def variableName (j : Json) : DecodeM (TSyntax `ident) := do
   let name ← match value.getNat? with
     | .ok index => pure s!"_{index}"
     | .error _ => do
-      let name ← value.getStr?
-      pure (if name.startsWith "_" then "_v" ++ name else "v" ++ name)
+      match value.getStr? with
+      | .ok name => pure (if name.startsWith "_" then "_v" ++ name else "v" ++ name)
+      | .error _ => do
+        -- Generated binders occupy a namespace that Core variable names cannot reach.
+        fields value ["generated"]
+        let index ← (← field value "generated").getNat?
+        pure s!"lynxGenerated{index}"
   return mkIdent (Name.mkSimple name)
 
 private def param (map : FileMap) (info : Span) (j : Json) : DecodeM (TSyntax `ident) := do
@@ -180,6 +185,11 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let captures ← (← arr j "captures").mapM (term map info pattern)
     let ctor := mkIdent ``Lynx.Term.function
     pure (Unhygienic.run `($ctor $id $arity #[$captures,*]))
+  | "tuple" => do
+    fields j ["kind", "elements", "span"]
+    let elements ← (← arr j "elements").mapM (term map info pattern)
+    let ctor := mkIdent ``Lynx.Term.tuple
+    pure (Unhygienic.run `($ctor #[$elements,*]))
   | "local_call" | "remote_call" => do
     fields j (if kind == "local_call" then ["kind", "name", "args", "span"]
       else ["kind", "module", "name", "args", "span"])
@@ -231,7 +241,8 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     fields j ["kind", "expressions", "cases", "span"]
     let exprs ← (← arr j "expressions").mapM (term map info false)
     let unit : TSyntax `term := ⟨(mkIdent ``Unit.unit).raw⟩
-    let cases ← (← arr j "cases").mapM fun c => do
+    let clauses ← arr j "cases"
+    let mut cases ← clauses.mapM fun c => do
       fields c ["patterns", "body", "span"]
       let ci ← span map c info
       let pats ← (← arr c "patterns").mapM (term map ci true)
@@ -240,6 +251,23 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       let body ← term map ci false (← field c "body")
       pure (withSpan ci.info (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $pats,* => $body)))
     if cases.isEmpty then throw "match requires at least one case"
+    -- Core can omit the fallback when it knows an operation returns a Boolean.
+    -- Term's type includes other values, so Lean still needs an exhaustive match.
+    let catchAll ← clauses.anyM fun c => do
+      (← arr c "patterns").allM fun p => do
+        pure ((← str p "kind") ∈ ["var", "wildcard"])
+    unless catchAll do
+      -- Source variables always start with `v` or `_`, keeping these binders distinct.
+      let unmatched : Array (TSyntax `term) := exprs.mapIdx fun i _ =>
+        ⟨(mkIdent (Name.mkSimple s!"lynxUnmatched{i}")).raw⟩
+      let tuple := mkIdent ``Lynx.Term.tuple
+      let value ← if unmatched.size == 1 then pure unmatched[0]!
+        else pure (Unhygienic.run `($tuple #[$unmatched,*]))
+      let error := mkIdent ``Lynx.Result.error
+      let exception := mkIdent ``Lynx.Exception.error
+      let atom := mkIdent ``Lynx.Term.atom
+      let body := Unhygienic.run `($error ($exception ($tuple #[$atom "case_clause", $value])))
+      cases := cases.push (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $unmatched,* => $body))
     let exprs := if exprs.isEmpty then #[unit] else exprs
     pure (Unhygienic.run `(match $[$exprs:term],* with $cases:matchAlt*))
   | _ => throw s!"unsupported {if pattern then "pattern" else "term"} kind '{kind}'"

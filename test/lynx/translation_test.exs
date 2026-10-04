@@ -808,7 +808,7 @@ defmodule Lynx.TranslationTest do
         cerl("""
         -module(example).
         -export([entry/1]).
-        entry(X) -> {ok, X}.
+        entry(X) -> 1.5.
         """)
 
       error =
@@ -822,7 +822,7 @@ defmodule Lynx.TranslationTest do
 
       assert %CompileError{file: "example.erl", line: 3} = error
       assert Exception.message(error) =~ "example.erl:3: unsupported Core expression:"
-      assert error.description =~ "'ok'"
+      assert error.description =~ "1.5"
     end
 
     test "validates remote modules" do

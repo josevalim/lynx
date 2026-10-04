@@ -7,7 +7,7 @@
 %% Anonymous functions use integer keys; named functions use {Module, {Name, Arity}}.
 %% Every entry carries a global integer ID for ordering and dispatch.
 -record(state, {module, name, defs, translated, funs = #{},
-                local_calls = #{}, pure = true, remote}).
+                local_calls = #{}, pure = true, remote, next_var = 0}).
 
 -spec module_name(module()) -> binary().
 module_name(Module) ->
@@ -145,7 +145,7 @@ translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensure
     translate_definition(Name, Anno, Params, {law, maps:find(requires, Law), Ensures, Proof}, State).
 
 translate_definition(Name, Anno, Vars, Definition, State0) ->
-    State1 = State0#state{name = Name, local_calls = #{}, pure = true,
+    State1 = State0#state{name = Name, local_calls = #{}, pure = true, next_var = 0,
                           translated = (State0#state.translated)#{Name => pending}},
     {Def, State2} = case Definition of
         {function, Body} ->
@@ -185,13 +185,28 @@ translate_law_helper(Name, Arity, State) ->
 %%   | Lynx.Term.nil => Lynx.Result.ok (Lynx.Term.integer 0)
 %%   | vOther => Lynx.Result.ok (Lynx.Term.integer 1)
 expression(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
-    Values = case Arg of #c_values{es = Es} -> Es; _ -> [Arg] end,
-    {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Values),
+    {Args, Bind, State1} = case Arg of
+        #c_values{es = Es} ->
+            {Translated, Next} = lists:mapfoldl(fun value/2, State0, Es),
+            {Translated, none, Next};
+        _ ->
+            {Translated, Next} = expression(Arg, State0),
+            case Translated of
+                #{~"kind" := ~"return", ~"value" := Value} ->
+                    {[Value], none, Next};
+                _ ->
+                    Var = var_node(#{~"generated" => Next#state.next_var}, Anno),
+                    {[Var], {Var, Translated}, Next#state{next_var = Next#state.next_var + 1}}
+            end
+    end,
     {TranslatedClauses, State2} = lists:mapfoldl(fun clause/2, State1, Clauses),
-    {node(~"match", Anno, #{
-        ~"expressions" => TranslatedArgs,
-        ~"cases" => TranslatedClauses
-    }), State2};
+    Match = node(~"match", Anno, #{~"expressions" => Args, ~"cases" => TranslatedClauses}),
+    case Bind of
+        none -> {Match, State2};
+        {Binder, Computation} ->
+            {node(~"bind", Anno, #{~"var" => Binder,
+                ~"computation" => Computation, ~"body" => Match}), State2}
+    end;
 %% Erlang: Y = f(X), g(Y)
 %% Lean: Lynx.Result.bind («f/1» vX) fun vY => «g/1» vY
 expression(#c_let{anno = Anno, vars = [Var], arg = Arg, body = Body}, State0) ->
@@ -224,6 +239,12 @@ expression(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->
     {TranslatedArgs, State2} = lists:mapfoldl(fun value/2, State1, Args),
     {node(~"fun_call", Anno, #{~"function" => Function, ~"args" => TranslatedArgs}),
      State2#state{pure = false}};
+%% Erlang: error(Reason)
+%% Lean: Lynx.Result.error (Lynx.Exception.error reason)
+expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
+                   name = #c_literal{val = error}, args = [Reason]}, State0) ->
+    {TranslatedReason, State1} = value(Reason, State0),
+    {node(~"raise", Anno, #{~"class" => ~"error", ~"reason" => TranslatedReason}), State1};
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX
 %% Erlang: ?MODULE:f(X) (non-builtin)
@@ -303,6 +324,11 @@ value(#c_cons{anno = Anno, hd = Head, tl = Tail}, State0) ->
     {TranslatedHead, State1} = value(Head, State0),
     {TranslatedTail, State2} = value(Tail, State1),
     {node(~"cons", Anno, #{~"head" => TranslatedHead, ~"tail" => TranslatedTail}), State2};
+value(#c_literal{anno = Anno, val = Tuple}, State) when is_tuple(Tuple) ->
+    value(#c_tuple{anno = Anno, es = [#c_literal{anno = Anno, val = V} || V <- tuple_to_list(Tuple)]}, State);
+value(#c_tuple{anno = Anno, es = Elements}, State0) ->
+    {Translated, State1} = lists:mapfoldl(fun value/2, State0, Elements),
+    {node(~"tuple", Anno, #{~"elements" => Translated}), State1};
 value(Core, _State) ->
     unsupported(Core).
 
