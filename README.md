@@ -6,13 +6,15 @@
 
 Write proofs about Erlang/Elixir programs using Lean.
 
-This project implements a model of the Erlang runtime in Lean
-and automatically translates your Erlang/Elixir code to Lean.
+This is done by writing laws, in Erlang/Elixir, with a Lean proof
+that guarantees your Erlang/Elixir code obey those laws. This is done
+by implementing a model of the Erlang runtime in Lean and automatically
+translating your Erlang/Elixir code to Lean.
 
-Automatic translation from Erlang/Elixir to Lean is work in progress.
-The operational semantics have not yet been formally validated.
+The automatic translation is still work in progress. The operational
+semantics have not yet been formally validated.
 
-## Example
+## Elixir example
 
 Use Lynx with ExUnit to run proofs alongside ordinary tests. Save this example
 as `test/laws/sum_test.exs`. It defines a recursive sum and proves that the empty
@@ -38,50 +40,31 @@ defmodule SumProofsTest do
       requires: is_integer_list(l) and is_integer_list(r),
       expects: sum(l) + sum(r) == sum(l ++ r),
       proof: ~LEAN"""
-      have cons_valid (head tail : Lynx.Term)
-          (valid : «is_integer_list/1» (.cons head tail) = .ok Lynx.Term.true) :
-          ∃ value, head = .integer value ∧ «is_integer_list/1» tail = .ok Lynx.Term.true := by
-        cases head <;> simp_all [«is_integer_list/1», Erlang.erlang.«is_integer/1»]
-
-      have sum_result (input : Lynx.Term)
+      have sums (input : Lynx.Term)
           (valid : «is_integer_list/1» input = .ok Lynx.Term.true) :
-          ∃ value : Int, «sum/1» input = .ok (.integer value) := by
+          ∃ value, «sum/1» input = .ok (.integer value) ∧
+            ∀ right total, «sum/1» right = .ok (.integer total) →
+              ∃ joined, Erlang.erlang.«++/2» input right = .ok joined ∧
+                «sum/1» joined = .ok (.integer (value + total)) := by
         induction input using «sum/1».induct with
-        | case1 => exact ⟨0, rfl⟩
+        | case1 => exact ⟨0, rfl, fun right total returned => ⟨right, rfl, by simpa using returned⟩⟩
         | case2 head tail ih =>
-          obtain ⟨value, rfl, tailValid⟩ := cons_valid head tail valid
-          obtain ⟨subtotal, returned⟩ := ih tailValid
-          exact ⟨value + subtotal, by simp [«sum/1», returned]⟩
+          cases head <;> simp [«is_integer_list/1», Erlang.erlang.«is_integer/1»] at valid
+          rename_i value
+          obtain ⟨subtotal, returned, append⟩ := ih valid
+          refine ⟨value + subtotal, by simp [«sum/1», returned], ?_⟩
+          intro right total rightReturned
+          obtain ⟨joined, appended, combined⟩ := append right total rightReturned
+          exact ⟨.cons (.integer value) joined, by simp [Erlang.erlang.«++/2», appended],
+            by simp [«sum/1», combined, Int.add_assoc]⟩
         | case3 input notNil notCons => simp_all [«is_integer_list/1»]
-
       have validity : «is_integer_list/1» l = .ok Lynx.Term.true ∧
           «is_integer_list/1» r = .ok Lynx.Term.true := by
-        simp only [«sum_append:requires/2»] at requires
-        cases left : «is_integer_list/1» l <;> simp [left] at requires
-        case ok value =>
-          split at requires <;> simp_all [Lynx.Term.true]
-
-      obtain ⟨leftValid, rightValid⟩ := validity
-      obtain ⟨rightSum, rightReturned⟩ := sum_result r rightValid
-
-      have append_ok (input : Lynx.Term)
-          (valid : «is_integer_list/1» input = .ok Lynx.Term.true) :
-          ∃ leftSum joined,
-            «sum/1» input = .ok (.integer leftSum) ∧
-            Erlang.erlang.«++/2» input r = .ok joined ∧
-            «sum/1» joined = .ok (.integer (leftSum + rightSum)) := by
-        induction input using «sum/1».induct with
-        | case1 => exact ⟨0, r, rfl, rfl, by simpa using rightReturned⟩
-        | case2 head tail ih =>
-          obtain ⟨value, rfl, tailValid⟩ := cons_valid head tail valid
-          obtain ⟨subtotal, joined, returned, appended, combined⟩ := ih tailValid
-          refine ⟨value + subtotal, .cons (.integer value) joined, ?_, ?_, ?_⟩
-          · simp [«sum/1», returned]
-          · simp [Erlang.erlang.«++/2», appended]
-          · simp [«sum/1», combined, Int.add_assoc]
-        | case3 input notNil notCons => simp_all [«is_integer_list/1»]
-
-      obtain ⟨leftSum, joined, leftReturned, appended, combined⟩ := append_ok l leftValid
+        cases left : «is_integer_list/1» l <;> simp [«sum_append:requires/2», left] at requires
+        split at requires <;> simp_all [Lynx.Term.true]
+      obtain ⟨leftSum, leftReturned, append⟩ := sums l validity.1
+      obtain ⟨rightSum, rightReturned, _⟩ := sums r validity.2
+      obtain ⟨joined, appended, combined⟩ := append r rightSum rightReturned
       simp [«sum_append:ensures/2», leftReturned, rightReturned, appended, combined,
         Erlang.erlang.«==/2»]
       """
@@ -105,7 +88,7 @@ mix test test/laws/sum_test.exs
 mix test --only laws
 ```
 
-## Erlang integration
+## Erlang example
 
 Lynx can also verify laws written in Erlang.
 
@@ -147,7 +130,7 @@ predicate names replaced by their Erlang equivalents.
 The argument names in `name` become Lean theorem parameters. The predicate
 helpers receive those arguments in order and remain callable from Erlang.
 `ensures` is required, while `requires` may be omitted for an unconditional
-law. Then call `Lynx.verify!/1` with the module name to validate the proofs.
+law. Then call `Lynx.Laws.verify!/1` with the module name to validate the proofs.
 
 ## Installation
 
@@ -164,13 +147,8 @@ defp deps do
 end
 ```
 
-Fetch and compile the dependency:
-
-```console
-mix deps.get
-```
-
-Ensure `test/test_helper.exs` calls `ExUnit.start()` then add the example above.
+For agentic usage, you can ask your agent to run `mix help Lynx` and get all
+instructions to get started.
 
 ## Contributing
 

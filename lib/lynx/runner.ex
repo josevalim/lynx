@@ -4,7 +4,7 @@ defmodule Lynx.Runner do
   @statuses %{"ok" => :ok, "error" => :error, "skipped" => :skipped}
   @severities %{"error" => :error, "warning" => :warning, "information" => :information}
 
-  @spec decode_verify!(map()) :: Lynx.report()
+  @spec decode_verify!(map()) :: Lynx.Laws.report()
   def decode_verify!(%{
         "status" => status,
         "file" => file,
