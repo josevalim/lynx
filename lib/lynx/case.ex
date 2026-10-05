@@ -165,23 +165,35 @@ defmodule Lynx.Case do
 
     reports = Lynx.Commands.verify!(@lean_dir, files)
 
-    for report <- reports do
-      message =
-        Enum.map_join(report.diagnostics, "\n\n", fn diagnostic ->
-          location =
-            Exception.format_file_line(Path.relative_to_cwd(diagnostic.file), diagnostic[:line])
+    errors =
+      for report <- reports,
+          report.status != :ok,
+          diagnostic <- report.diagnostics,
+          diagnostic.severity == :error do
+        location =
+          Exception.format_file_line_column(
+            Path.relative_to_cwd(diagnostic.file),
+            diagnostic[:line],
+            diagnostic[:column]
+          )
 
+        message =
           case Map.fetch(signatures, {diagnostic.module, diagnostic.declaration}) do
-            {:ok, signature} when diagnostic.severity == :error ->
+            {:ok, signature} ->
               "#{location} proof for law #{signature} failed\n\n#{diagnostic.message}"
 
             _ ->
               "#{location} #{diagnostic.message}"
           end
-        end)
 
-      ExUnit.Assertions.assert(report.status == :ok, message)
-    end
+        try do
+          ExUnit.Assertions.flunk(message)
+        rescue
+          error in ExUnit.AssertionError -> {:error, error, __STACKTRACE__}
+        end
+      end
+
+    if errors != [], do: raise(ExUnit.MultiError, errors: errors)
 
     :ok
   end

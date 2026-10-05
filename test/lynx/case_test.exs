@@ -44,7 +44,7 @@ defmodule Lynx.CaseTest do
     assert output =~ "cannot locate BEAM for :erlang"
   end
 
-  test "reports failed laws" do
+  test "reports multiple failed laws as separate assertions" do
     defmodule LawFailure do
       use ExUnit.Case, register: false
       use Lynx.Case
@@ -64,6 +64,21 @@ defmodule Lynx.CaseTest do
       end
     end
 
+    error =
+      assert_raise ExUnit.MultiError, fn ->
+        Lynx.Case.__verify__(LawFailure, [{:passing, 0}, {:invalid, 0}, {:sum_bar, 2}])
+      end
+
+    assert [
+             {:error, %ExUnit.AssertionError{message: first}, [_ | _]},
+             {:error, %ExUnit.AssertionError{message: second}, [_ | _]}
+           ] = error.errors
+
+    assert first =~ "proof for law invalid() failed"
+    refute first =~ "proof for law sum_bar(a, b) failed"
+    assert second =~ "proof for law sum_bar(a, b) failed"
+    refute second =~ "proof for law invalid() failed"
+
     output =
       capture_io(fn ->
         assert ExUnit.run([LawFailure]) == %{failures: 2, skipped: 0, total: 3, excluded: 0}
@@ -73,6 +88,10 @@ defmodule Lynx.CaseTest do
     assert output =~ "proof for law invalid() failed\n"
     assert output =~ "proof for law sum_bar(a, b) failed\n"
     assert output =~ "proof for law invalid_syntax() failed\n"
+
+    assert output =~
+             ~r/test\/lynx\/case_test\.exs:\d+:\d+: proof for law invalid_syntax\(\) failed/
+
     refute output =~ "proof for law passing() failed"
     assert output =~ "test/lynx/case_test.exs:"
     refute output =~ Path.expand(__ENV__.file)
