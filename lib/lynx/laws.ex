@@ -78,6 +78,7 @@ defmodule Lynx.Laws do
           source: String.t(),
           time_ms: non_neg_integer(),
           cached: boolean(),
+          theorems: [%{name: String.t(), time_ms: non_neg_integer()}],
           diagnostics: [diagnostic()]
         }
 
@@ -104,6 +105,9 @@ defmodule Lynx.Laws do
   Reports also include the source `:file`, translated `:module` name, `:time_ms`,
   and whether a cached result was used (`:cached`). See `t:report/0` and
   `t:diagnostic/0` for the complete structure.
+
+  `:theorems` lists each law's name (including its arity) and elaboration time in
+  milliseconds. Cached and skipped modules have an empty list.
 
   Raises on translation failures, including modules without laws or unsupported
   code, and on failures to run Lean or read its response.

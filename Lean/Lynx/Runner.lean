@@ -11,8 +11,11 @@ never imply a diagnostic column. Function and variable names retain their Erlang
 constructs and escapes their Lean identifiers.
 
 Each verified file emits `{"status": "ok" | "error" | "skipped", "file": ..., "module": ...,
-"source": ..., "time_ms": ..., "diagnostics": [...]}`. Time includes rendering, imports,
+"source": ..., "time_ms": ..., "theorems": [...], "diagnostics": [...]}`. Time includes rendering, imports,
 elaboration, auditing, and artifact writing; shared runtime loading is excluded.
+Theorems report `name` (including `/arity`) and `time_ms` for each law command's
+elaboration. They are elaborated sequentially and may use earlier declarations.
+Cached and skipped files have no theorem timings because no elaboration occurs.
 Files blocked by an unsuccessful input import are skipped without elaboration.
 A `{"status": "done"}` message terminates each completed request.
 Each newline-delimited request includes `"command": "verify"`.
@@ -561,21 +564,28 @@ private partial def declarationNames (stx : Syntax) : Array Name :=
     stx.getArgs.foldl (fun names child => names ++ declarationNames child) #[]
 
 private def elaborateFile (env : Lean.Environment) (file : String) (map : FileMap)
-    (commands : Array (TSyntax `command))
-    : IO (Elab.Command.State × Array (Message × Option Name)) := do
-  let action : Elab.Command.CommandElabM (Array (Message × Option Name)) := do
+    (commands : Array (TSyntax `command)) (theoremNames : Array Name)
+    : IO (Elab.Command.State × Array (Message × Option Name) × Array Json) := do
+  let action : Elab.Command.CommandElabM (Array (Message × Option Name) × Array Json) := do
     let mut messages := #[]
+    let mut theorems := #[]
     for cmd in commands do
       let names := declarationNames cmd.raw
       let declarationName := if names.size == 1 then names[0]? else none
+      let started ← IO.monoMsNow
       Elab.Command.elabCommandTopLevel cmd
+      let elapsed := (← IO.monoMsNow) - started
+      if let some name := declarationName then
+        if theoremNames.contains name then
+          theorems := theorems.push (Json.mkObj [
+            ("name", toJson name.getString!), ("time_ms", toJson elapsed)])
       for msg in (← get).messages.toList do
         messages := messages.push (msg, declarationName)
-    return messages
-  let (messages, state) ← (action.run { fileName := file, fileMap := map, snap? := none, cancelTk? := none }).run
+    return (messages, theorems)
+  let ((messages, theorems), state) ← (action.run { fileName := file, fileMap := map, snap? := none, cancelTk? := none }).run
     (Elab.Command.mkState env {} (Options.empty.setBool `Elab.async false)) |>.toIO
       (fun _ => IO.userError "runner elaboration failed")
-  return (state, messages)
+  return (state, messages, theorems)
 
 /-- One input file, decoded directly to Lean commands without elaboration. -/
 structure DecodedFile where
@@ -760,6 +770,7 @@ private def verify (files : Array DecodedFile) (runtime : Runtime)
       let mut imports := runtimeImports
       let mut missingImport := false
       let mut cacheHit := false
+      let mut theorems := #[]
       for name in file.imports do
         let moduleName ← IO.ofExcept <| (identifier name).run runtime.env |>.run' {}
         let moduleName := moduleName.getId
@@ -779,8 +790,9 @@ private def verify (files : Array DecodedFile) (runtime : Runtime)
           diagnostics := saved
           cacheHit := true
         else
-          let (state, messages) ← elaborateFile (env.setMainModule mainModule)
-            file.fileName file.fileMap file.commands
+          let (state, messages, timings) ← elaborateFile (env.setMainModule mainModule)
+            file.fileName file.fileMap file.commands (file.theorems.map Prod.fst)
+          theorems := timings
           for (msg, declarationName) in messages do
             if msg.severity == .error then fileFailed := true
             diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName
@@ -817,7 +829,8 @@ private def verify (files : Array DecodedFile) (runtime : Runtime)
         ("status", toJson status),
         ("file", toJson file.fileName), ("module", toJson file.moduleName),
         ("source", toJson source), ("time_ms", toJson elapsed),
-        ("cached", toJson cacheHit), ("diagnostics", .arr diagnostics)])
+        ("cached", toJson cacheHit), ("theorems", .arr theorems),
+        ("diagnostics", .arr diagnostics)])
 
 private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
   let files ← IO.ofExcept do

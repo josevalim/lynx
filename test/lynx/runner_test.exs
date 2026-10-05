@@ -66,6 +66,15 @@ defmodule Lynx.RunnerTest do
       )
     ]
 
+    files =
+      Enum.map(files, fn file ->
+        # Keep the first verification uncached across repeated test runs.
+        key = :crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)
+        Map.put(file, "cache_key", key)
+      end)
+
+    reports = Lynx.Commands.verify!(@lean_dir, files)
+
     assert [
              %{
                status: :ok,
@@ -81,7 +90,22 @@ defmodule Lynx.RunnerTest do
              },
              %{status: :ok, module: "Elixir.Right", diagnostics: []},
              %{status: :ok, module: "Elixir.Join", diagnostics: []}
-           ] = Lynx.Commands.verify!(@lean_dir, files)
+           ] = reports
+
+    assert [%{name: "left/0"}, %{name: "right/0"}, %{name: "source/0"}] =
+             List.last(reports).theorems
+
+    for report <- reports do
+      for theorem <- report.theorems do
+        assert is_integer(theorem.time_ms) and theorem.time_ms >= 0
+      end
+
+      assert Enum.sum(Enum.map(report.theorems, & &1.time_ms)) <= report.time_ms
+    end
+
+    assert Enum.all?(Lynx.Commands.verify!(@lean_dir, files), fn report ->
+             report.cached and report.theorems == []
+           end)
   end
 
   test "skips dependents of failed modules and continues verifying unrelated files" do
