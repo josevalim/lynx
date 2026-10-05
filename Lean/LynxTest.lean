@@ -1,6 +1,5 @@
 module
 
-import LynxTest.Integration
 import LynxTest.PublicApi
 import LynxTest.Term
 import LynxTest.Term.Compare
