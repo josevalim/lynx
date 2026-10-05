@@ -53,8 +53,8 @@ defmodule Lynx.CaseTest do
         law valid, expects: true
       end
 
-      laws "invalid" do
-        law passing, expects: true
+      laws "invalid / proof: [errors]" do
+        law passing, expects: Function.identity(true)
         law invalid, expects: false
         law sum_bar(a, b), requires: a and b, expects: false
       end
@@ -66,7 +66,11 @@ defmodule Lynx.CaseTest do
 
     error =
       assert_raise ExUnit.MultiError, fn ->
-        Lynx.Case.__verify__(LawFailure, [{:passing, 0}, {:invalid, 0}, {:sum_bar, 2}])
+        Lynx.Case.__verify__(LawFailure, :"laws invalid / proof: [errors]", [
+          {:passing, 0},
+          {:invalid, 0},
+          {:sum_bar, 2}
+        ])
       end
 
     assert [
@@ -78,6 +82,7 @@ defmodule Lynx.CaseTest do
     refute first =~ "proof for law sum_bar(a, b) failed"
     assert second =~ "proof for law sum_bar(a, b) failed"
     refute second =~ "proof for law invalid() failed"
+    refute first =~ "The translated .lean files are available at"
 
     output =
       capture_io(fn ->
@@ -97,6 +102,17 @@ defmodule Lynx.CaseTest do
     refute output =~ Path.expand(__ENV__.file)
     assert output =~ "`rfl` failed"
     assert output =~ "unexpected end of input"
+
+    path = "tmp/Lynx.CaseTest.LawFailure/laws-invalid---proof---errors-"
+    assert String.ends_with?(second, "The translated .lean files are available at #{path}")
+
+    assert Enum.sort(File.ls!(path)) == [
+             "Elixir.Function.lean",
+             "Elixir.Lynx.CaseTest.LawFailure.lean"
+           ]
+
+    assert File.read!(Path.join(path, "Elixir.Function.lean")) =~ "identity/1"
+    assert File.read!(Path.join(path, "Elixir.Lynx.CaseTest.LawFailure.lean")) =~ "sum_bar/2"
   end
 
   describe "errors" do
