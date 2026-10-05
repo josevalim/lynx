@@ -4,8 +4,7 @@ public import Lean
 
 public section
 
-/-! Reusable proof checks. Audit calls belong in the corresponding test modules;
-integration audits live in `LynxTest.Integration`, outside benchmark source files. -/
+/-! Reusable proof checks. Audit calls belong in the corresponding test modules. -/
 namespace LynxTest.ProofAudit
 open Lean
 

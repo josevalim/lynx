@@ -44,44 +44,19 @@ registered for simplification, without a contract verification tactic.
 
 Proofs must not introduce untrusted axioms or `sorry`
 
-### Proofs and integration examples
+### Proofs and examples
 
-Integration tests go in `LynxTest/Integration`. Start each example with an Elixir
-module comment containing only the implementation, followed by its faithful
-Erlang/Term translation. Keep the implementation separate from its properties.
-For each final theorem, include a separate source comment such as:
-
-```lean
-/- law sum_append(l, r),
-     requires: is_integer_list(l) and is_integer_list(r),
-     expects: sum(l) + sum(r) == sum(l ++ r) -/
-```
-
-Use `requires:` for input assumptions and `expects:` for an expression to prove
-or a return guarantee written as `(result -> ...)`, as applicable. These are
-illustrative source comments, not an implemented law DSL. Follow them with the
-translated computation or predicate and an explicit Lean theorem and handwritten
-proof. A successful Boolean property is an equation to `Result.ok Term.true`.
-A return guarantee establishes a successful result and the stated predicate.
+Integration examples go in `examples/` and use `Lynx.Case` to verify laws.
+Keep the implementation separate from its properties. Use `requires:` for input
+assumptions and `expects:` for the expression to prove, with a `~LEAN` proof.
 
 Simplify or close impossible branches promptly after a case split. Preserve input
 variables needed for induction and avoid unnecessarily expanding shared binds.
 When adding simp rules or changing public proof interfaces, check representative
 guarantees and properties. Improving one proof can slow another.
 
-Whenever a new integration example is added, also add a `Benchmarks/Native`
-equivalent using corresponding native data types without Term wrapping. Use the
-same implementation-comment and separate law-comment layout. Add relevant
-`#bench` annotations to native and integration theorems.
-
-## Benchmarks
-
-Read `Benchmarks/README.md` for the benchmark execution and measurement workflow.
-Update `Benchmarks/RESULTS.md` on new benchmarks, changing only the minimum text
-necessary. Compare medians from repeated runs against the preceding commit on the
-same machine, with each revision built from its own source. The measured sections
-exclude imports and separately declared supporting lemmas. Local lemmas within a
-timed theorem are included. Run `lake test` to check supporting proofs and axiom
-audits.
+Run examples with `LYNX_PROFILE=1 LYNX_CACHE=0 mix run examples/<name>.exs` to
+measure verification without cached results. Run `lake test` from `Lean/` to
+check runtime proofs and axiom audits.
 
 **Proof performance is more important than executable runtime performance.**
