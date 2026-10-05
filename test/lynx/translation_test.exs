@@ -936,6 +936,39 @@ defmodule Lynx.TranslationTest do
     @describetag :cache
     @describetag :tmp_dir
 
+    test "checks files without persistent caching when disabled", %{tmp_dir: cache_dir} do
+      core =
+        cerl("""
+        -module(uncached).
+        -export([value/0]).
+        value() -> true.
+        """)
+
+      translation =
+        Translation.new()
+        |> Translation.add({"uncached.erl", core})
+        |> Translation.translate(:uncached, [{:value, 0}])
+
+      files = Translation.assemble(translation, cache: false)
+      assert files == Enum.map(Translation.assemble(translation), &Map.delete(&1, "cache_key"))
+
+      request = %{
+        "command" => "verify",
+        "version" => "1.0",
+        "cache_dir" => cache_dir,
+        "files" => files
+      }
+
+      lean_dir = Path.expand("../../Lean", __DIR__)
+
+      for _ <- 1..2 do
+        assert [%{"status" => "ok", "cached" => false}] =
+                 Lynx.Commands.runner!(lean_dir, request)
+      end
+
+      assert Path.wildcard(Path.join(cache_dir, "**/result.json")) == []
+    end
+
     test "reuses verified files and invalidates dependents when their input changes", %{
       tmp_dir: cache_dir
     } do

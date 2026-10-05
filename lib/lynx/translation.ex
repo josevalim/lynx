@@ -254,13 +254,21 @@ defmodule Lynx.Translation do
     end
   end
 
-  @doc "Assembles translated modules in dependency order and assigns file cache keys."
-  def assemble(%__MODULE__{
-        modules: modules,
-        funs: funs,
-        external_calls: external_calls,
-        builtin_modules: builtin_modules
-      }) do
+  @doc """
+  Assembles translated modules in dependency order and assigns file cache keys.
+
+  Pass `cache: false` to omit cache keys and disable persistent verification caching.
+  """
+  def assemble(
+        %__MODULE__{
+          modules: modules,
+          funs: funs,
+          external_calls: external_calls,
+          builtin_modules: builtin_modules
+        },
+        opts \\ []
+      ) do
+    cache = Keyword.get(opts, :cache, true)
     graph = :digraph.new()
 
     try do
@@ -288,7 +296,7 @@ defmodule Lynx.Translation do
             "contents" => assemble_module(module.translations)
           }
 
-          cache_file(file, keys)
+          cache_file(file, keys, cache)
         end)
 
       if map_size(funs) == 0 do
@@ -309,7 +317,8 @@ defmodule Lynx.Translation do
                 }
               ]
             },
-            keys
+            keys,
+            cache
           )
 
         files ++ [program]
@@ -319,7 +328,9 @@ defmodule Lynx.Translation do
     end
   end
 
-  defp cache_file(file, keys) do
+  defp cache_file(file, keys, false), do: {file, keys}
+
+  defp cache_file(file, keys, true) do
     imports = for name <- file["imports"], {:ok, key} <- [Map.fetch(keys, name)], do: {name, key}
 
     key =
