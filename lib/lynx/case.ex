@@ -100,7 +100,7 @@ defmodule Lynx.Case do
     definition =
       quote unquote: false do
         def unquote(name)(_context) do
-          Lynx.Case.__verify__(__MODULE__, unquote(group_laws))
+          Lynx.Case.__verify__(__MODULE__, unquote(name), unquote(group_laws))
         end
       end
 
@@ -149,7 +149,7 @@ defmodule Lynx.Case do
   end
 
   @doc false
-  def __verify__(module, laws) do
+  def __verify__(module, name, laws) do
     files =
       Lynx.Translation.new()
       |> Lynx.Translation.add(Lynx.Bytecode.fetch!(module))
@@ -193,8 +193,39 @@ defmodule Lynx.Case do
         end
       end
 
-    if errors != [], do: raise(ExUnit.MultiError, errors: errors)
+    if errors != [] do
+      path = write_translations!(module, name, reports)
+
+      errors =
+        List.update_at(errors, -1, fn {kind, error, stack} ->
+          message = error.message <> "\n\nThe translated .lean files are available at #{path}"
+          {kind, %{error | message: message}, stack}
+        end)
+
+      raise ExUnit.MultiError, errors: errors
+    end
 
     :ok
+  end
+
+  # Match ExUnit's tmp_dir path sanitization.
+  @escape Enum.map(~c" [~#%&*{}\\:<>?/+|\"]", &<<&1::utf8>>)
+
+  defp write_translations!(module, name, reports) do
+    path =
+      Path.join([
+        "tmp",
+        String.replace(inspect(module), @escape, "-"),
+        String.replace(to_string(name), @escape, "-")
+      ])
+
+    File.rm_rf!(path)
+    File.mkdir_p!(path)
+
+    for report <- reports do
+      File.write!(Path.join(path, report.module <> ".lean"), report.source)
+    end
+
+    path
   end
 end
