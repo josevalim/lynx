@@ -14,6 +14,10 @@ defmodule Lynx.Case do
 
   Each group registers one ExUnit test of type `:laws`. Run groups with
   `mix test --only laws`.
+
+  Set `LYNX_PROFILE=1` to print each translated module's reported verification
+  time in milliseconds, status, and whether it was cached.
+  Set `LYNX_CACHE=0` to disable the verification cache.
   """
 
   @lean_dir Path.expand("../../Lean", __DIR__)
@@ -154,7 +158,7 @@ defmodule Lynx.Case do
       Lynx.Translation.new()
       |> Lynx.Translation.add(Lynx.Bytecode.fetch!(module))
       |> Lynx.Translation.verify(module, laws)
-      |> Lynx.Translation.assemble()
+      |> Lynx.Translation.assemble(cache: System.get_env("LYNX_CACHE") != "0")
 
     signatures =
       for file <- files,
@@ -164,6 +168,20 @@ defmodule Lynx.Case do
       end
 
     reports = Lynx.Commands.verify!(@lean_dir, files)
+
+    if System.get_env("LYNX_PROFILE") == "1" do
+      for report <- reports do
+        prefix =
+          case report.status do
+            :ok -> "Checked"
+            :error -> "Failed to check"
+            :skipped -> "Skipped"
+          end
+
+        cached = if report.cached, do: ", cached", else: ""
+        IO.puts("#{prefix} #{report.module} in #{report.time_ms}ms (#{report.status}#{cached})")
+      end
+    end
 
     errors =
       for report <- reports,
