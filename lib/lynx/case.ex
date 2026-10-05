@@ -150,17 +150,34 @@ defmodule Lynx.Case do
 
   @doc false
   def __verify__(module, laws) do
-    reports =
+    files =
       Lynx.Translation.new()
       |> Lynx.Translation.add(Lynx.Bytecode.fetch!(module))
       |> Lynx.Translation.verify(module, laws)
       |> Lynx.Translation.assemble()
-      |> then(&Lynx.Commands.verify!(@lean_dir, &1))
+
+    signatures =
+      for file <- files,
+          %{"kind" => "theorem", "name" => name, "params" => params} <- file["contents"],
+          into: %{} do
+        {{file["module"], "#{name}/#{length(params)}"}, "#{name}(#{Enum.join(params, ", ")})"}
+      end
+
+    reports = Lynx.Commands.verify!(@lean_dir, files)
 
     for report <- reports do
       message =
-        Enum.map_join(report.diagnostics, "\n", fn diagnostic ->
-          "#{diagnostic.file}:#{Map.get(diagnostic, :line, 1)}: #{diagnostic.message}"
+        Enum.map_join(report.diagnostics, "\n\n", fn diagnostic ->
+          location =
+            Exception.format_file_line(Path.relative_to_cwd(diagnostic.file), diagnostic[:line])
+
+          case Map.fetch(signatures, {diagnostic.module, diagnostic.declaration}) do
+            {:ok, signature} when diagnostic.severity == :error ->
+              "#{location} proof for law #{signature} failed\n\n#{diagnostic.message}"
+
+            _ ->
+              "#{location} #{diagnostic.message}"
+          end
         end)
 
       ExUnit.Assertions.assert(report.status == :ok, message)
