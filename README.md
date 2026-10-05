@@ -150,6 +150,13 @@ end
 For agentic usage, you can ask your agent to run `mix help Lynx` and get all
 instructions to get started.
 
+## Disclaimer
+
+The Elixir code, the translation layer, and the overall design of the Erlang
+runtime in Lean were done with full human design and review. Proofs, which are
+validated by Lean's kernel, and the deserialization layer in Lean code were
+produced by coding agents with limited review.
+
 ## Contributing
 
 The project requires Elixir 1.18+ and Lean 4.33.1+, which includes Lake.
