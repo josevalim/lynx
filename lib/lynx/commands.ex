@@ -2,6 +2,8 @@ defmodule Lynx.Commands do
   @moduledoc "Invokes the Lean runner and Lake."
 
   @protocol_version "1.0"
+  @statuses %{"ok" => :ok, "error" => :error, "skipped" => :skipped}
+  @severities %{"error" => :error, "warning" => :warning, "information" => :information}
 
   @doc """
   Runs a protocol request and collects its JSON updates in order.
@@ -40,8 +42,77 @@ defmodule Lynx.Commands do
       "cache_dir" => cache_dir(),
       "files" => files
     })
-    |> Enum.map(&Lynx.Runner.decode_verify!/1)
+    |> Enum.map(&decode_verify!/1)
   end
+
+  @spec decode_verify!(map()) :: Lynx.Laws.report()
+  defp decode_verify!(%{
+         "status" => status,
+         "file" => file,
+         "module" => module,
+         "source" => source,
+         "time_ms" => time,
+         "cached" => cached,
+         "theorems" => theorems,
+         "diagnostics" => diagnostics
+       })
+       when status in ["ok", "error", "skipped"] and is_binary(file) and is_binary(module) and
+              is_binary(source) and is_integer(time) and time >= 0 and is_boolean(cached) and
+              is_list(diagnostics) and is_list(theorems) do
+    %{
+      status: Map.fetch!(@statuses, status),
+      file: file,
+      module: module,
+      source: source,
+      time_ms: time,
+      cached: cached,
+      theorems: Enum.map(theorems, &decode_theorem!/1),
+      diagnostics: Enum.map(diagnostics, &decode_diagnostic!/1)
+    }
+  end
+
+  defp decode_verify!(response),
+    do: raise("lynx runner returned an unexpected response: #{inspect(response)}")
+
+  defp decode_theorem!(%{"name" => name, "time_ms" => time})
+       when is_binary(name) and is_integer(time) and time >= 0 do
+    %{name: name, time_ms: time}
+  end
+
+  defp decode_theorem!(theorem),
+    do: raise("lynx runner returned an unexpected theorem timing: #{inspect(theorem)}")
+
+  defp decode_diagnostic!(
+         %{
+           "file" => file,
+           "module" => module,
+           "declaration" => declaration,
+           "severity" => severity,
+           "message" => message
+         } = diagnostic
+       )
+       when is_binary(file) and is_binary(module) and
+              (is_binary(declaration) or is_nil(declaration)) and
+              severity in ["error", "warning", "information"] and is_binary(message) do
+    decoded = %{
+      file: file,
+      module: module,
+      declaration: declaration,
+      severity: Map.fetch!(@severities, severity),
+      message: message
+    }
+
+    Enum.reduce([{"line", :line}, {"column", :column}], decoded, fn {key, atom}, decoded ->
+      case Map.fetch(diagnostic, key) do
+        :error -> decoded
+        {:ok, value} when is_integer(value) and value > 0 -> Map.put(decoded, atom, value)
+        _ -> raise "lynx runner returned an unexpected diagnostic: #{inspect(diagnostic)}"
+      end
+    end)
+  end
+
+  defp decode_diagnostic!(diagnostic),
+    do: raise("lynx runner returned an unexpected diagnostic: #{inspect(diagnostic)}")
 
   defp cache_dir do
     build_path =

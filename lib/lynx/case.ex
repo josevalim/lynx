@@ -15,8 +15,10 @@ defmodule Lynx.Case do
   Each group registers one ExUnit test of type `:laws`. Run groups with
   `mix test --only laws`.
 
-  Set `LYNX_PROFILE=1` to print each translated module's reported verification
-  time in milliseconds, status, and whether it was cached.
+  Set `LYNX_PROFILE=1` to print each translated module's reported
+  verification time in milliseconds, status, and whether it was cached,
+  as well as the elaboration time of any law.
+
   Set `LYNX_CACHE=0` to disable the verification cache.
   """
 
@@ -180,6 +182,13 @@ defmodule Lynx.Case do
 
         cached = if report.cached, do: ", cached", else: ""
         IO.puts("#{prefix} #{report.module} in #{report.time_ms}ms (#{report.status}#{cached})")
+
+        last_index = length(report.theorems) - 1
+
+        for {theorem, index} <- Enum.with_index(report.theorems) do
+          branch = if index == last_index, do: "└─", else: "├─"
+          IO.puts("#{branch} #{theorem.name} (#{theorem.time_ms}ms)")
+        end
       end
     end
 
