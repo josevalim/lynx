@@ -88,7 +88,7 @@ defmodule Lynx.Translation do
       {:error, span_anno, reason} ->
         raise CompileError,
               source_location(span_anno, module.file) ++
-                [description: reason]
+                [description: String.replace(reason, "\n", "\n    ")]
     end
   end
 

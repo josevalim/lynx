@@ -54,17 +54,30 @@ defmodule Lynx.CaseTest do
       end
 
       laws "invalid" do
+        law passing, expects: true
         law invalid, expects: false
+        law sum_bar(a, b), requires: a and b, expects: false
+      end
+
+      laws "syntax" do
+        law invalid_syntax, expects: true, proof: ~LEAN"exact ("
       end
     end
 
     output =
       capture_io(fn ->
-        assert ExUnit.run([LawFailure]) == %{failures: 1, skipped: 0, total: 2, excluded: 0}
+        assert ExUnit.run([LawFailure]) == %{failures: 2, skipped: 0, total: 3, excluded: 0}
       end)
 
     assert output =~ "laws invalid"
+    assert output =~ "proof for law invalid() failed\n"
+    assert output =~ "proof for law sum_bar(a, b) failed\n"
+    assert output =~ "proof for law invalid_syntax() failed\n"
+    refute output =~ "proof for law passing() failed"
+    assert output =~ "test/lynx/case_test.exs:"
+    refute output =~ Path.expand(__ENV__.file)
     assert output =~ "`rfl` failed"
+    assert output =~ "unexpected end of input"
   end
 
   describe "errors" do

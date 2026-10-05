@@ -140,7 +140,16 @@ translate_def(Name, #state{translated = Translated} = State) ->
     end.
 
 translate_def(Name, {function, #c_fun{anno = Anno, vars = Vars, body = Body}}, State) ->
-    translate_definition(Name, Anno, Vars, {function, Body}, State);
+    try translate_definition(Name, Anno, Vars, {function, Body}, State)
+    catch
+        throw:{error, Core, Reason} ->
+            %% Compiler-generated primops may have no source position.
+            %% Fall back to the innermost function containing the expression.
+            case span(cerl:get_ann(Core)) of
+                [] -> core_error(cerl:set_ann(Core, cerl:get_ann(Core) ++ Anno), Reason);
+                _ -> core_error(Core, Reason)
+            end
+    end;
 translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensures, proof := Proof} = Law}, State) ->
     translate_definition(Name, Anno, Params, {law, maps:find(requires, Law), Ensures, Proof}, State).
 
@@ -375,7 +384,7 @@ span([]) ->
     [].
 
 unsupported(Core) ->
-    core_error(Core, <<"unsupported Core expression:\n",
+    core_error(Core, <<"unsupported Core expression:\n\n",
                        (unicode:characters_to_binary(core_pp:format(Core)))/binary>>).
 
 core_error(Core, Reason) ->

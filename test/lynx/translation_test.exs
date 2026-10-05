@@ -822,7 +822,29 @@ defmodule Lynx.TranslationTest do
 
       assert %CompileError{file: "example.erl", line: 3} = error
       assert Exception.message(error) =~ "example.erl:3: unsupported Core expression:"
+      assert error.description =~ "unsupported Core expression:"
       assert error.description =~ "1.5"
+    end
+
+    test "falls back to the function line for compiler-generated NIF primops" do
+      core =
+        cerl("""
+        -module(example).
+        -export([entry/0]).
+        entry() -> erlang:load_nif("example_nif", 0).
+        """)
+
+      error =
+        assert_raise CompileError, fn ->
+          Translation.new()
+          |> Translation.add({"example.erl", core})
+          |> Translation.translate(:example, [{:entry, 0}])
+        end
+
+      assert %CompileError{file: "example.erl", line: 3} = error
+
+      assert error.description ==
+               "unsupported Core expression:\n    \n    primop 'nif_start'\n        ()"
     end
 
     test "validates remote modules" do
