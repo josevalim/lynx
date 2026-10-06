@@ -3,8 +3,10 @@ module
 public import Lynx.Term.Apply
 
 /-! Finite local-process execution. Sends insert directly into the destination
-mailbox; message transit, remote processes, timers, links, and monitors are not
-modeled. Scheduling occurs after spawn/send/successful receive, and another
+mailbox; message transit, remote processes, links, and monitors are not
+modeled. Positive receive timeouts are scheduler events, with no elapsed-time
+model. Zero timeouts are immediate; infinity never expires. Scheduling occurs
+after spawn/send/receive completion, and another
 runnable process takes over when the current one blocks or terminates.
 Only continuations created by this run can execute: saved Environment entries
 are state snapshots, not independent external actors. Deadlock is relative to
@@ -24,6 +26,12 @@ private def findProcess (processId : PID) : List (PID × ProcessState) → Optio
   | [] => none
   | entry :: rest =>
       if entry.1 = processId then some entry.2 else findProcess processId rest
+
+/-- Restore the environment of a process before reading it, including in guards. -/
+private def activate (env : Environment) (processId : PID) : Environment :=
+  { env with currentPid := processId
+             currentProcess := (findProcess processId env.processes).getD {}
+             processes := removeProcess processId env.processes }
 
 /-- Select the oldest matching message, preserving all unmatched messages. -/
 private def selectMessage (select : Term → Option β) : List Term → Option (β × List Term)
@@ -66,7 +74,8 @@ private inductive Progress : Pool α → Pool α → Prop where
   | get : Progress (.process processId (next env) finish) (.process processId (.get next) finish)
   | set : Progress (.process processId next finish) (.process processId (.set env next) finish)
   | send : Progress (.process processId next finish) (.process processId (.send dest message next) finish)
-  | receive : Progress (.process processId (next value) finish) (.process processId (.receive select next) finish)
+  | receive : Progress (.process processId (next reply) finish)
+      (.process processId (.receive timeout select next) finish)
   | schedule : Progress (.parallel (.process processId (next childPid) finish)
       (.process childPid child (fun _ => none))) (.process processId (Result.schedule child next) finish)
   | left : Progress a' a → Progress (.parallel a' b) (.parallel a b)
@@ -135,12 +144,11 @@ private theorem accProcess {β : Type} (computation : Result β) :
     intro p h
     cases h
     apply ih
-  | receive select next ih =>
+  | receive timeout select next ih =>
     intro processId finish
     constructor
     intro p h
-    cases h with
-    | receive => apply ih
+    cases h <;> apply ih
   | schedule child next childIH nextIH =>
     intro processId finish
     constructor
@@ -171,21 +179,56 @@ private def findReady (env : Environment) (accept : PID → Bool) : Pool α → 
   | .process processId computation _ =>
       if !accept processId then none else
         match computation with
-        | .receive select _ =>
-            if (selectMessage select ((findProcess processId env.processes).getD {}).mailbox).isSome
-            then some processId else none
+        | .receive timeout select _ =>
+            if (selectMessage (select (activate env processId)) ((findProcess processId env.processes).getD {}).mailbox).isSome
+            then some processId else
+              match timeout with
+              | .infinity => none
+              | .finite => none
+              | .immediate => some processId
         | _ => some processId
 
-/-- Consume one choice at spawn/send/successful receive. A missing or waiting
-PID falls back to a runnable process when execution next selects a branch. -/
-private def schedule (env : Environment) : Environment × PID :=
-  let (choice, rest) := match env.schedule with
-    | [] => (ScheduleChoice.current, [])
-    | choice :: rest => (choice, rest)
-  let preferred := match choice with
-    | .current => env.currentPid
-    | .swap processId => processId
-  ({ env with schedule := rest }, preferred)
+/-- Only positive receives without a queued match can be explicitly expired. -/
+private def findTimeout (env : Environment) (accept : PID → Bool) : Pool α → Option PID
+  | .empty => none
+  | .parallel left right => (findTimeout env accept left).orElse fun _ => findTimeout env accept right
+  | .process processId computation _ =>
+      if !accept processId then none else
+        match computation with
+        | .receive timeout select _ =>
+            match timeout with
+            | .finite =>
+                if (selectMessage (select (activate env processId)) ((findProcess processId env.processes).getD {}).mailbox).isNone
+                then some processId else none
+            | _ => none
+        | _ => none
+
+/-- Consume one choice at each process-effect boundary. -/
+private def schedule (env : Environment) : Environment × ScheduleChoice :=
+  match env.schedule with
+  | [] => (env, .current)
+  | choice :: rest => ({ env with schedule := rest }, choice)
+
+/-- A blocked preferred process consumes another scheduling choice. Recursion
+is bounded by the supplied choices; each execution step still decreases the
+process tree. Without a choice, ordinary runnable processes precede expiry. -/
+private def choose (pool : Pool α) (env : Environment) (preferred : ScheduleChoice) :
+    Environment × Option (PID × Bool) :=
+  let runnable := ((findReady env (· == env.currentPid) pool).orElse fun _ =>
+    findReady env (fun _ => true) pool).map (·, false)
+  let requested := match preferred with
+    | .current => findReady env (· == env.currentPid) pool |>.map (·, false)
+    | .swap processId => ((findReady env (· == processId) pool).map (·, false)).orElse fun _ => runnable
+    | .timeout processId => ((findTimeout env (· == processId) pool).map (·, true)).orElse fun _ => runnable
+  match requested with
+  | some chosen => (env, some chosen)
+  | none =>
+      match _h : env.schedule with
+      | choice :: rest => choose pool { env with schedule := rest } choice
+      | [] =>
+          (env, runnable.orElse fun _ => (findTimeout env (fun _ => true) pool).map (·, true))
+termination_by env.schedule
+decreasing_by simp [_h]; omega
 
 private structure Transition (before : Pool α) where
   next : Pool α
@@ -197,23 +240,20 @@ private structure Transition (before : Pool α) where
 
 /-- Execute one structural step of the selected process. A blocked receive
 returns no step; unmatched messages and the continuation remain intact. -/
-private def step (pool : Pool α) (env : Environment) (chosen : PID) : Option (Transition pool) :=
+private def step (pool : Pool α) (env : Environment) (chosen : PID) (expire : Bool) : Option (Transition pool) :=
   match pool with
   | .empty => none
   | .parallel left right =>
-      match step left env chosen with
+      match step left env chosen expire with
       | some transition => some {
           transition with next := .parallel transition.next right
                           decreases := .left transition.decreases }
-      | none => (step right env chosen).map fun transition => {
+      | none => (step right env chosen expire).map fun transition => {
           transition with next := .parallel left transition.next
                           decreases := .right transition.decreases }
   | .process processId computation finish =>
       if processId != chosen then none else
-      let active := { env with
-        currentPid := processId
-        currentProcess := (findProcess processId env.processes).getD {}
-        processes := removeProcess processId env.processes }
+      let active := activate env processId
       match computation with
       | .exhausted => some {
           next := .empty, decreases := .exhausted, environment := active, exhausted := true }
@@ -250,12 +290,23 @@ private def step (pool : Pool α) (env : Environment) (chosen : PID) : Option (T
           next := .process processId next finish
           decreases := .send, environment := save (deliver active destination message)
           boundary := true }
-      | .receive select next =>
-          (selectMessage select active.currentProcess.mailbox).map fun (value, remaining) => {
-            next := .process processId (next value) finish
-            decreases := .receive
-            environment := save { active with currentProcess.mailbox := remaining }
-            boundary := true }
+      | .receive timeout select next =>
+          match selectMessage (select active) active.currentProcess.mailbox with
+          | some (value, remaining) => some {
+              next := .process processId (next (some value)) finish
+              decreases := .receive
+              environment := save { active with currentProcess.mailbox := remaining }
+              boundary := true }
+          | none =>
+              let reply : Option (Option _) := match timeout with
+                | .infinity => none
+                | .finite => if expire then some none else none
+                | .immediate => some none
+              reply.map fun reply => {
+                next := .process processId (next reply) finish
+                decreases := .receive
+                environment := save active
+                boundary := true }
 
 private def isEmpty : Pool α → Bool
   | .empty => true
@@ -265,10 +316,9 @@ private def isEmpty : Pool α → Bool
 private instance : WellFoundedRelation (Pool α) := ⟨Progress, wf⟩
 
 private def execute (root : PID) (env : Environment) (pool : Pool α)
-    (finished : Finished α) (preferred : PID) : Outcome α :=
-  let chosen := ((findReady env (· == preferred) pool).orElse fun _ =>
-    findReady env (· == env.currentPid) pool).orElse fun _ => findReady env (fun _ => true) pool
-  match chosen.bind (step pool env) with
+    (finished : Finished α) (preferred : ScheduleChoice) : Outcome α :=
+  let (env, chosen) := choose pool env preferred
+  match chosen.bind (fun (processId, expire) => step pool env processId expire) with
   | none =>
       let final := restore root finished env
       match isEmpty pool, finished with
@@ -280,7 +330,7 @@ private def execute (root : PID) (env : Environment) (pool : Pool α)
       let finished := transition.finished.orElse fun _ => finished
       let (scheduled, preferred) := if transition.boundary then
           schedule transition.environment
-        else (transition.environment, transition.environment.currentPid)
+        else (transition.environment, ScheduleChoice.current)
       execute root scheduled transition.next finished preferred
 termination_by pool
 decreasing_by exact transition.decreases
@@ -297,8 +347,8 @@ def run (computation : Result α) (env : Environment) : Outcome α :=
   | .error exception => .error exception env
   | .get next => run (next env) env
   | .set next continuation => run continuation next
-  | Result.schedule _ _ | .send _ _ _ | .receive _ _ =>
-      execute env.currentPid (save env) (.process env.currentPid computation some) none env.currentPid
+  | Result.schedule _ _ | .send _ _ _ | .receive _ _ _ =>
+      execute env.currentPid (save env) (.process env.currentPid computation some) none .current
 
 end Lynx.Term.Runner
 

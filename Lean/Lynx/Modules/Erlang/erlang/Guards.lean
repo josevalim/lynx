@@ -18,6 +18,17 @@ open Lynx
   | .atom "false", .atom "false" => .ok Term.false
   | _, _ => .error (.error (.atom "badarg"))
 
+#lynx_pure @[expose] def «or/2» : Term → Term → Result
+  | .atom "false", .atom "false" => .ok Term.false
+  | .atom "true", .atom "true" | .atom "true", .atom "false"
+  | .atom "false", .atom "true" => .ok Term.true
+  | _, _ => .error (.error (.atom "badarg"))
+
+#lynx_pure @[expose] def «not/1» : Term → Result
+  | .atom "true" => .ok Term.false
+  | .atom "false" => .ok Term.true
+  | _ => .error (.error (.atom "badarg"))
+
 #lynx_pure @[expose] def «is_integer/1» (input : Term) : Result :=
   .ok (match input with | .integer _ => Term.true | _ => Term.false)
 

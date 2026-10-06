@@ -24,6 +24,11 @@ before creating the child; the function body executes in the child's process. -/
   let env ← get
   .ok (.pid env.currentPid)
 
+@[simp] theorem self_readOnly : Result.IsReadOnly «self/0» := by
+  change ∀ env : Environment, Result.IsReadOnly (.ok (Term.pid env.currentPid))
+  intro env
+  trivial
+
 /-- Send to a local PID and return the message. A nonexistent or terminated
 PID silently discards the message. Registered names and remote destinations
 are not modeled. Sending is a scheduler boundary, even to self or a dead PID. -/

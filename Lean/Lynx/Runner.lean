@@ -158,7 +158,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     (j : Json) : DecodeM (TSyntax `term) := do
   let info ← span map j parent
   let kind ← str j "kind"
-  if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "raise_dynamic", "reraise", "match", "try", "stacktrace"] then
+  if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "raise_dynamic", "reraise", "match", "receive", "try", "stacktrace"] then
     throw s!"{kind} is not valid in patterns"
   let result ← match kind with
   | "wildcard" => do
@@ -168,6 +168,12 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   | "var" => do
     fields j ["kind", "name", "span"]
     pure ⟨(← variableName j).raw⟩
+  | "alias" => do
+    fields j ["kind", "var", "pattern", "span"]
+    unless pattern do throw "alias is only valid in patterns"
+    let var ← param map info (← field j "var")
+    let pat ← term map info true (← field j "pattern")
+    pure (Unhygienic.run `($var:ident@$pat))
   | "integer" => do
     fields j ["kind", "value", "span"]
     let value ← (← field j "value").getInt?
@@ -310,6 +316,100 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       | $atom "throw" => $error ($throwClass $reason)
       | $atom "exit" => $error ($exitClass $reason)
       | _ => $ok ($atom "badarg")))
+  | "receive" => do
+    fields j ["kind", "message", "cases", "timeout", "after", "span"]
+    let message ← param map info (← field j "message")
+    let clauses ← arr j "cases"
+    let termType : TSyntax `term := ⟨(mkIdent ``Lynx.Term).raw⟩
+    let unitType : TSyntax `term := ⟨(mkIdent ``Unit).raw⟩
+    let unit : TSyntax `term := Unhygienic.run `(())
+    let option := mkIdent ``Option
+    let someId := mkIdent ``Option.some
+    let noneId := mkIdent ``Option.none
+    let exceptOk := mkIdent ``Except.ok
+    let atomId := mkIdent ``Lynx.Term.atom
+    let mut payloadTypes : Array (TSyntax `term) := #[]
+    let mut payloads : Array (TSyntax `term) := #[]
+    let mut patterns : Array (TSyntax `term) := #[]
+    let mut guards : Array (TSyntax `term) := #[]
+    let mut bodies : Array (TSyntax `term) := #[]
+    for clause in clauses do
+      fields clause ["span", "pattern", "vars", "guard", "body"]
+      let ci ← span map clause info
+      let vars ← (← arr clause "vars").mapM (param map ci)
+      let mut payload := unit
+      let mut payloadType := unitType
+      for v in vars.reverse do
+        let value : TSyntax `term := ⟨v.raw⟩
+        if payloadType.raw == unitType.raw then
+          payload := value
+          payloadType := termType
+        else
+          payload := Unhygienic.run `(($value, $payload))
+          payloadType := Unhygienic.run `($termType × $payloadType)
+      payloadTypes := payloadTypes.push payloadType
+      payloads := payloads.push payload
+      patterns := patterns.push (← term map ci true (← field clause "pattern"))
+      guards := guards.push (← term map ci false (← field clause "guard"))
+      bodies := bodies.push (← term map ci false (← field clause "body"))
+    let sum := mkIdent ``Sum
+    let inl := mkIdent ``Sum.inl
+    let inr := mkIdent ``Sum.inr
+    let emptyType : TSyntax `term := ⟨(mkIdent ``Empty).raw⟩
+    let mut bindingType := if clauses.isEmpty then emptyType else payloadTypes.back!
+    for t in payloadTypes.toList.dropLast.reverse do
+      bindingType := Unhygienic.run `($sum $t $bindingType)
+    let mut select : TSyntax `term := Unhygienic.run `($noneId)
+    let mut alternatives : Array (TSyntax ``Lean.Parser.Term.matchAlt) := #[]
+    let toExcept := mkIdent ``Lynx.Result.toExceptRead
+    let env := mkIdent `_lynxReceiveEnv
+    let envType : TSyntax `term := ⟨(mkIdent ``Lynx.Environment).raw⟩
+    let purity : TSyntax `term := ⟨← Parser.runParserCategory (← read) `term
+      "by simp (config := { maxDischargeDepth := 64 })"⟩
+    for i in [:clauses.size] do
+      let mut payload := payloads[i]!
+      if i + 1 < clauses.size then payload := Unhygienic.run `($inl $payload)
+      for _ in [:i] do payload := Unhygienic.run `($inr $payload)
+      let body := bodies[i]!
+      alternatives := alternatives.push (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $payload => $body))
+    let fallback := mkIdent `lynxReceiveNext
+    for i in (List.range clauses.size).reverse do
+      let mut payload := payloads[i]!
+      if i + 1 < clauses.size then payload := Unhygienic.run `($inl $payload)
+      for _ in [:i] do payload := Unhygienic.run `($inr $payload)
+      let pat := patterns[i]!
+      let guard := guards[i]!
+      let accepted : TSyntax `term := Unhygienic.run `($someId $payload)
+      let guardJson ← field clauses[i]! "guard"
+      let unconditional := (← str guardJson "kind") == "return" &&
+        (match (arr guardJson "values" >>= fun values => do
+            unless values.size == 1 do throw "guard must return one value"
+            str values[0]! "value") with
+          | .ok "true" => true
+          | _ => false)
+      let branch ← if unconditional then pure accepted else pure (Unhygienic.run `(
+        match ($toExcept $guard $env:ident $purity) with
+        | $exceptOk ($atomId "true") => $accepted
+        | _ => $fallback ()))
+      let rest := select
+      let catchAll := (← str (← field clauses[i]! "pattern") "kind") ∈ ["var", "wildcard"]
+      let matched := if catchAll then Unhygienic.run `(match $message:ident with | $pat => $branch)
+        else Unhygienic.run `(match $message:ident with | $pat => $branch | _ => $fallback ())
+      select := if catchAll && unconditional then matched else Unhygienic.run `(
+        let $fallback := fun (_ : $unitType) => ($rest : $option $bindingType)
+        $matched)
+    let selector := if clauses.isEmpty then Unhygienic.run `(fun (_ : $envType) (_ : $termType) => ($noneId : $option $bindingType))
+      else Unhygienic.run `(fun ($env:ident : $envType) ($message:ident : $termType) => ($select : $option $bindingType))
+    let selected := mkIdent `lynxReceived
+    let continuation ← if clauses.isEmpty then pure (Unhygienic.run `(nomatch $selected:ident))
+      else pure (Unhygienic.run `(match $selected:ident with $alternatives:matchAlt*))
+    let timeout ← term map info false (← field j "timeout")
+    let afterBody ← term map info false (← field j "after")
+    let receive := mkIdent ``Lynx.Result.receiveWith
+    let computation := Unhygienic.run `($receive $timeout $selector (fun
+      | $someId $selected:ident => $continuation
+      | $noneId => $afterBody))
+    pure computation
   | "match" => do
     fields j ["kind", "expressions", "cases", "span"]
     let exprs ← (← arr j "expressions").mapM (term map info false)

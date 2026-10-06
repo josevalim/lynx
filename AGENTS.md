@@ -13,6 +13,12 @@ translation fixtures from the repository root as appropriate:
 
 If both change, regenerate JSON first, then Lean.
 
+Unit test relevant Core-to-JSON translation details directly in `test/lynx/core_to_leanj_test.exs`,
+The integration test should focus exclusively on the translation fixtures which
+validate Erlang code against the generated JSON and Lean sources (plus elaboration).
+Test Lean runtime features and their properties in Lean's `LynxTest/` suite,
+including kernel-checked proofs and axiom audits.
+
 ## Lean
 
 All package paths below are relative to `Lean/`.

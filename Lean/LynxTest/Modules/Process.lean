@@ -15,10 +15,15 @@ import all Init.Data.Ord.String
 namespace LynxTest.Modules.Process
 open Lynx Erlang.erlang
 
-private def receiveAny : Result := .receive some .ok
+private def receiveBlocking (select : Term → Option β) (next : β → Result) : Result :=
+  .receive .infinity (fun _ => select) (fun
+    | some value => next value
+    | none => .ok .nil)
+
+private def receiveAny : Result := receiveBlocking some .ok
 
 private def receiveAtom (name : String) : Result :=
-  .receive (fun message => match message with
+  receiveBlocking (fun message => match message with
     | .atom found => if found == name then some message else none
     | _ => none) .ok
 
@@ -58,11 +63,119 @@ theorem selective_receive_preserves_unmatched :
 
 /-- Selectors can bind values and encode ordered clauses, not just predicates. -/
 theorem receive_bindings_and_clause_priority :
-    let computation : Result := .receive (fun message => match message with
+    let computation : Result := receiveBlocking (fun message => match message with
       | .integer n => some (n + 1)
       | _ => some 0) (fun n => .ok (.integer n))
     computation { currentProcess := { mailbox := [.integer 7] } } =
       .ok (.integer 8) {} := by cbv
+
+private def receiveTimed (duration : Term) : Result :=
+  Result.receiveWith duration (fun _ message => match message with
+    | .atom "wanted" => some message
+    | _ => none) (fun
+      | some value => .ok value
+      | none => .ok (.atom "timeout"))
+
+/-- A poll scans past rejected messages and consumes only its first match. -/
+theorem zero_timeout_scans_mailbox :
+    (receiveTimed (.integer 0)) { currentProcess := {
+      mailbox := [.integer 1, .atom "wanted", .integer 2] } } =
+    .ok (.atom "wanted") { currentProcess := { mailbox := [.integer 1, .integer 2] } } := by cbv
+
+theorem zero_timeout_preserves_unmatched :
+    (receiveTimed (.integer 0)) { currentProcess := { mailbox := [.integer 1] } } =
+    .ok (.atom "timeout") { currentProcess := { mailbox := [.integer 1] } } := by cbv
+
+theorem infinity_never_expires :
+    (receiveTimed (.atom "infinity")) { schedule := [.timeout 1] } = .deadlock {} := by cbv
+
+/-- Timeout validation precedes scanning, even with a queued match. -/
+theorem timeout_validation_precedes_scan :
+    (receiveTimed (.atom "invalid")) { currentProcess := { mailbox := [.atom "wanted"] } } =
+      .error (.error (.atom "timeout_value")) { currentProcess := { mailbox := [.atom "wanted"] } } ∧
+    Lynx.run (receiveTimed (.atom "invalid")) = .error (.error (.atom "timeout_value")) {} ∧
+    Lynx.run (receiveTimed (.integer (-1))) = .error (.error (.atom "timeout_value")) {} ∧
+    Lynx.run (receiveTimed (.integer 4294967296)) = .error (.error (.atom "timeout_value")) {} := by
+  repeat' apply And.intro
+  all_goals cbv
+
+/-- With no runnable sender, finite receives expire without an execution budget. -/
+theorem finite_timeout_progress :
+    Lynx.run (receiveTimed (.integer 1)) = .ok (.atom "timeout") {} ∧
+    Lynx.run (receiveTimed (.integer 10000)) = .ok (.atom "timeout") {} := by cbv
+
+private def timeoutRace : Result := do
+  let _ ← Result.schedule («send/2» (.pid 1) (.atom "wanted")) (fun pid => .ok (Term.pid pid))
+  receiveTimed (.integer 10)
+
+/-- Blocking consumes a choice: the same program can receive or time out first. -/
+theorem timeout_is_a_scheduler_choice :
+    returned (Lynx.run timeoutRace [.current, .swap 2]) = some (.atom "wanted") ∧
+    returned (Lynx.run timeoutRace [.current, .timeout 1]) = some (.atom "timeout") := by cbv
+
+/-- Timer choices target waiting children as well as the root process. -/
+theorem timeout_can_expire_child :
+    Lynx.run (do
+      let _ ← Result.schedule (do
+        let value ← receiveTimed (.integer 10)
+        «send/2» (.pid 1) value) (fun processId => .ok (Term.pid processId))
+      receiveAny) [.current, .timeout 2] = .ok (.atom "timeout") { pidCounter := 2 } := by cbv
+
+/-- A timeout choice cannot discard a matching message already in the queue. -/
+theorem queued_match_precedes_timeout_choice :
+    (receiveTimed (.integer 10)) {
+      currentProcess := { mailbox := [.atom "wanted"] }
+      schedule := [.timeout 1] } = .ok (.atom "wanted") {} := by cbv
+
+/-- Timeout exceptions and bodies remain covered by the receiving caller's handler. -/
+theorem timeout_handler_scope :
+    returned (Lynx.run (tryCatch (receiveTimed (.integer (-1)))
+      (fun _ => .ok (.atom "caught")))) = some (.atom "caught") ∧
+    returned (Lynx.run (tryCatch
+      (Result.receiveWith (.integer 0) (β := Unit) (fun _ _ => none) (fun _ =>
+        .error (.error (.atom "failure"))))
+      (fun _ => .ok (.atom "caught")))) = some (.atom "caught") := by cbv
+
+/-- Guard reads use the receiver's state while the scheduler scans other PIDs. -/
+private def receiveSelf : Result :=
+  Result.receiveWith (.atom "infinity") (fun env message =>
+    match Result.toExceptRead (do
+      let receiver ← «self/0»
+      «=:=/2» message receiver) env (by simp) with
+    | .ok (.atom "true") => some message
+    | _ => none) (fun reply => .ok (reply.getD .nil))
+
+theorem guard_reads_waiting_child_identity :
+    Lynx.run (do
+      let child ← Result.schedule (do
+        let value ← receiveSelf
+        «send/2» (.pid 1) value) (fun pid => .ok (Term.pid pid))
+      let _ ← «send/2» child child
+      receiveAny) [.swap 2] = .ok (.pid 2) { pidCounter := 2 } := by cbv
+
+private def receiveFalse : Result :=
+  Result.receiveWith (.integer 0) (fun env message =>
+    match Result.toExceptRead (Result.tryWith («not/1» message)
+      Result.ok (fun _ => .ok Term.false)) env
+      (by simp (config := { maxDischargeDepth := 64 })) with
+    | .ok (.atom "true") => some message
+    | _ => none) (fun reply => .ok (reply.getD (.atom "timeout")))
+
+/-- General try catches guard errors; both errors and false guards reject a
+message without consuming it, and scanning continues to the next candidate. -/
+theorem guard_errors_and_false_preserve_messages :
+    receiveFalse { currentProcess := {
+      mailbox := [.integer 7, .atom "true", .atom "false", .atom "tail"] } } =
+    .ok (.atom "false") { currentProcess := {
+      mailbox := [.integer 7, .atom "true", .atom "tail"] } } := by cbv
+
+theorem guard_cannot_perform_process_effects :
+    ¬ Result.IsReadOnly («send/2» (.pid 1) .nil) ∧
+    ¬ Result.IsReadOnly («put/2» (.atom "key") .nil) := by
+  constructor
+  · cbv
+  · intro readOnly
+    exact readOnly {}
 
 theorem try_success_body_is_outside_handler :
     Lynx.run (Result.tryWith (.ok (.integer 7))
@@ -145,7 +258,7 @@ theorem blocking_is_not_an_exception :
 theorem receive_body_exception_is_caught :
     returned (Lynx.run (do
       let _ ← «send/2» (.pid 1) (.integer 7)
-      tryCatch (Result.receive some (fun _ => .error (.error (.atom "failure"))))
+      tryCatch (receiveBlocking some (fun _ => .error (.error (.atom "failure"))))
         (fun _ => .ok (.atom "caught")))) = some (.atom "caught") := by cbv
 
 /-- A child finishing first disappears; sending to its old PID creates no state. -/
@@ -216,12 +329,12 @@ private def sends : Nat → Result
 
 open Lynx.Term.Runner in
 private theorem sends_execute (n : Nat) :
-    execute 1 (save {}) (.process 1 (sends n) some) none 1 = .ok .nil {} := by
+    execute 1 (save {}) (.process 1 (sends n) some) none .current = .ok .nil {} := by
   induction n with
   | zero => cbv
   | succ n ih =>
-    rw [execute]
-    change execute 1 (save {}) (.process 1 (sends n) some) none 1 = .ok .nil {}
+    rw [execute, choose]
+    change execute 1 (save {}) (.process 1 (sends n) some) none .current = .ok .nil {}
     exact ih
 
 /-- Any finite number of sends completes, with no fixed execution cutoff. -/

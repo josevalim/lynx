@@ -188,6 +188,29 @@ translate_law_helper(Name, Arity, State) ->
     Next = translate_def(Callee, State),
     Next#state{local_calls = (Next#state.local_calls)#{Callee => true}}.
 
+%% OTP lowers receive to a local scan/wait loop. Recover the operation before
+%% translating ordinary expressions; loop identity is checked structurally,
+%% never inferred from the compiler's generated function spelling.
+expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
+             #c_fun{vars = [], body = LoopBody}}],
+             body = #c_apply{op = #c_var{name = Loop}, args = []}} = Core, State0) ->
+    {Message, Clauses, Timeout, Action} = receive_parts(LoopBody, Loop, Core),
+    {TranslatedMessage, State1} = case Message of
+        none ->
+            {var_node(#{~"generated" => State0#state.next_var}, Anno),
+             State0#state{next_var = State0#state.next_var + 1}};
+        _ -> {variable(Message), State0}
+    end,
+    {TranslatedTimeout, State2} = value(Timeout, State1),
+    {TranslatedClauses, State3} = lists:mapfoldl(fun receive_clause/2, State2, Clauses),
+    {TranslatedAction, State4} = case Timeout of
+        #c_literal{val = infinity} ->
+            {node(~"return", Anno, #{~"values" => [node(~"atom", Anno, #{~"value" => ~"true"})]}), State3};
+        _ -> expression(Action, State3)
+    end,
+    {node(~"receive", Anno, #{~"message" => TranslatedMessage,
+        ~"cases" => TranslatedClauses, ~"timeout" => TranslatedTimeout,
+        ~"after" => TranslatedAction}), State4#state{pure = false}};
 %% Core try catches only the protected expression, not its success continuation.
 expression(#c_try{anno = Anno, arg = Arg, vars = Vars, body = Body,
                   evars = EVars, handler = Handler}, State0) ->
@@ -335,6 +358,58 @@ clause(#c_clause{anno = Anno, pats = Patterns, guard = Guard, body = Body}, Stat
 clause(Core, _State) ->
     unsupported(Core).
 
+receive_parts(#c_let{vars = [#c_var{name = Available}, Message],
+        arg = #c_primop{name = #c_literal{val = recv_peek_message}, args = []},
+        body = #c_case{arg = #c_var{name = Available}, clauses = Branches}}, Loop, Core) ->
+    {Scan, Wait} = receive_booleans(Branches, Core),
+    {Timeout, Action} = receive_wait(Wait, Loop, Core),
+    {Message, receive_clauses(Scan, Message, Loop, Core), Timeout, Action};
+receive_parts(Wait, Loop, Core) ->
+    {Timeout, Action} = receive_wait(Wait, Loop, Core),
+    {none, [], Timeout, Action}.
+
+receive_booleans([
+        #c_clause{pats = [#c_literal{val = true}], guard = #c_literal{val = true}, body = Yes},
+        #c_clause{pats = [#c_literal{val = false}], guard = #c_literal{val = true}, body = No}], _) ->
+    {Yes, No};
+receive_booleans(_, Core) -> unsupported(Core).
+
+receive_wait(#c_let{vars = [#c_var{name = Expired}],
+        arg = #c_primop{name = #c_literal{val = recv_wait_timeout}, args = [Timeout]},
+        body = #c_case{arg = #c_var{name = Expired}, clauses = Branches}}, Loop, Core) ->
+    case receive_booleans(Branches, Core) of
+        {Action, #c_apply{op = #c_var{name = Loop}, args = []}} -> {Timeout, Action};
+        _ -> unsupported(Core)
+    end;
+receive_wait(_, _, Core) -> unsupported(Core).
+
+receive_clauses(#c_case{arg = #c_var{name = Message}, clauses = Clauses},
+                #c_var{name = Message}, Loop, Core) ->
+    receive_scan_clauses(Clauses, Loop, Core);
+receive_clauses(#c_seq{arg = #c_primop{name = #c_literal{val = remove_message}, args = []},
+                       body = Body}, Message, _, _) ->
+    [#c_clause{pats = [Message], guard = #c_literal{val = true}, body = Body}];
+receive_clauses(_, _, _, Core) -> unsupported(Core).
+
+receive_scan_clauses([#c_clause{pats = [#c_var{}], guard = #c_literal{val = true},
+        body = #c_seq{arg = #c_primop{name = #c_literal{val = recv_next}, args = []},
+        body = #c_apply{op = #c_var{name = Loop}, args = []}}}], Loop, _) -> [];
+receive_scan_clauses([#c_clause{body = #c_seq{
+        arg = #c_primop{name = #c_literal{val = remove_message}, args = []}, body = Body}} = Clause | Rest],
+        Loop, Core) ->
+    [Clause#c_clause{body = Body} | receive_scan_clauses(Rest, Loop, Core)];
+receive_scan_clauses([], _, _) -> [];
+receive_scan_clauses(_, _, Core) -> unsupported(Core).
+
+receive_clause(#c_clause{anno = Anno, pats = [Pattern], guard = Guard, body = Body}, State0) ->
+    {Pat, State1} = value(Pattern, State0),
+    {TranslatedGuard, State2} = expression(Guard, State1),
+    {TranslatedBody, State3} = expression(Body, State2),
+    Bound = ordsets:intersection(cerl_trees:variables(Pattern), cerl_trees:free_variables(Body)),
+    Vars = [variable(#c_var{name = Name}) || Name <- Bound],
+    {#{~"span" => span(Anno), ~"pattern" => Pat, ~"vars" => Vars,
+       ~"guard" => TranslatedGuard, ~"body" => TranslatedBody}, State3}.
+
 %% Core separates values from computations; only computations produce Result.
 value(#c_fun{vars = Vars} = Fun, State0) ->
     Captures = [#c_var{name = V} || V <- cerl_trees:free_variables(Fun),
@@ -357,6 +432,9 @@ value(#c_var{anno = Anno, name = {_, Arity} = Name}, State0) ->
             State2 = translate_def(Name, State1),
             function_node(Entry, Anno, State2)
     end;
+value(#c_alias{anno = Anno, var = Var, pat = Pattern}, State0) ->
+    {Translated, State1} = value(Pattern, State0),
+    {node(~"alias", Anno, #{~"var" => variable(Var), ~"pattern" => Translated}), State1};
 value(#c_var{} = Var, State) ->
     {variable(Var), State};
 value(#c_literal{anno = Anno, val = []}, State) ->

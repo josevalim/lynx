@@ -10,6 +10,8 @@
   "send/2": {"pure": false},
   "self/0": {"pure": false},
   "put/2": {"pure": false},
+  "or/2": {"pure": true},
+  "not/1": {"pure": true},
   "is_list/1": {"pure": true},
   "is_integer/1": {"pure": true},
   "is_float/1": {"pure": true},
