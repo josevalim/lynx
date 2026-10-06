@@ -43,4 +43,19 @@ namespace Erlang.literal
       (Lynx.Term.tuple
         #[Lynx.Term.atom "ok", _0, Lynx.Term.tuple #[_0, Lynx.Term.cons _0 Lynx.Term.nil]])
 
+#lynx_pure
+  def «maps/0» : Lynx.Result :=
+    pure
+      (Lynx.Term.cons (Lynx.Term.map [])
+        (Lynx.Term.cons
+          (Lynx.Term.map
+            [(Lynx.Term.atom "a", Lynx.Term.integer 1),
+              (Lynx.Term.integer 1, Lynx.Term.map [(Lynx.Term.atom "b", Lynx.Term.integer 2)])])
+          Lynx.Term.nil))
+
+#lynx_pure
+  def «computed_maps/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result := do
+    let _2 ← pure (Lynx.Term.map [(_0, _1), (_0, Lynx.Term.integer 1)])
+    pure (Lynx.Term.map [(_0, _2), (Lynx.Term.atom "a", Lynx.Term.integer 1)])
+
 end Erlang.literal

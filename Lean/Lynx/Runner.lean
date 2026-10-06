@@ -206,6 +206,19 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let elements ← (← arr j "elements").mapM (term map info pattern)
     let ctor := mkIdent ``Lynx.Term.tuple
     pure (Unhygienic.run `($ctor #[$elements,*]))
+  | "map" => do
+    fields j ["kind", "entries", "span"]
+    if pattern then throw "map is not valid in patterns"
+    let entries ← (← arr j "entries").mapM fun entry => do
+      fields entry ["key", "value", "span"]
+      let ei ← span map entry info
+      let key ← term map ei false (← field entry "key")
+      let value ← term map ei false (← field entry "value")
+      pure (withSpan ei.info (Unhygienic.run `(($key, $value))))
+    -- Core entries are in construction order; Term.map lookup takes the first binding.
+    let entries := entries.reverse
+    let ctor := mkIdent ``Lynx.Term.map
+    pure (Unhygienic.run `($ctor [$entries,*]))
   | "local_call" | "remote_call" => do
     fields j (if kind == "local_call" then ["kind", "name", "args", "span"]
       else ["kind", "module", "name", "args", "span"])

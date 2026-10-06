@@ -72,6 +72,28 @@ defmodule Lynx.CoreToLeanjTest do
            } = functions[{:entry, 1}].translation
   end
 
+  test "translates map construction" do
+    key = :cerl.c_var(0)
+
+    body =
+      :cerl.c_map([
+        :cerl.c_map_pair(key, :cerl.c_int(1)),
+        :cerl.c_map_pair(key, :cerl.c_var(0))
+      ])
+
+    assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
+    assert functions[{:entry, 1}].pure
+
+    assert %{
+             "kind" => "return",
+             "values" => [%{"kind" => "map", "entries" => [first, last]}]
+           } = functions[{:entry, 1}].translation["body"]
+
+    assert last["key"] == first["key"]
+    assert last["value"] == %{"kind" => "var", "name" => 0, "span" => []}
+    assert first["value"] == %{"kind" => "integer", "value" => 1, "span" => []}
+  end
+
   test "marks fallthrough solely from whether the Core guard is literally true" do
     guards = [
       :cerl.c_atom(true),
