@@ -12,6 +12,12 @@ namespace Erlang.erlang
 
 open Lynx
 
+#lynx_pure @[expose] def «and/2» : Term → Term → Result
+  | .atom "true", .atom "true" => .ok Term.true
+  | .atom "true", .atom "false" | .atom "false", .atom "true"
+  | .atom "false", .atom "false" => .ok Term.false
+  | _, _ => .error (.error (.atom "badarg"))
+
 #lynx_pure @[expose] def «is_integer/1» (input : Term) : Result :=
   .ok (match input with | .integer _ => Term.true | _ => Term.false)
 

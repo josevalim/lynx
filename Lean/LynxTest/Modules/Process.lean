@@ -64,6 +64,16 @@ theorem receive_bindings_and_clause_priority :
     computation { currentProcess := { mailbox := [.integer 7] } } =
       .ok (.integer 8) {} := by cbv
 
+theorem try_success_body_is_outside_handler :
+    Lynx.run (Result.tryWith (.ok (.integer 7))
+      (fun value => .error (.throw value)) (fun _ => .ok (Term.atom "caught"))) =
+      .error (.throw (.integer 7)) {} := by cbv
+
+theorem try_handler_exception_propagates :
+    Lynx.run (Result.tryWith (.error (.error (.atom "protected")) : Result)
+      Result.ok (fun _ => .error (.exit (.atom "handler")))) =
+      .error (.exit (.atom "handler")) {} := by cbv
+
 private def handshake : Result := do
   let child ← Result.schedule (do
     let _ ← receiveAtom "start"
@@ -226,3 +236,5 @@ run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Modules.Process
 
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Term.Runner
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Term.DataTypes
+
+run_cmd LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.erlang.Exceptions

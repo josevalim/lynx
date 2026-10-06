@@ -147,11 +147,18 @@ private def param (map : FileMap) (info : Span) (j : Json) : DecodeM (TSyntax `i
   unless (← str j "kind") == "var" do throw "parameter must be a variable"
   return withSpan (← span map j info).info (← variableName j)
 
+private def product (values : Array (TSyntax `term)) : DecodeM (TSyntax `term) := do
+  if values.isEmpty then return Unhygienic.run `(())
+  let mut result := values.back!
+  for value in values.toList.dropLast.reverse do
+    result := Unhygienic.run `(($value, $result))
+  return result
+
 private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     (j : Json) : DecodeM (TSyntax `term) := do
   let info ← span map j parent
   let kind ← str j "kind"
-  if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "match"] then
+  if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "raise_dynamic", "reraise", "match", "try", "stacktrace"] then
     throw s!"{kind} is not valid in patterns"
   let result ← match kind with
   | "wildcard" => do
@@ -210,11 +217,11 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let apply := mkIdent ``Lynx.Term.apply
     pure (Unhygienic.run `($apply $fn #[$args,*]))
   | "bind" => do
-    fields j ["kind", "var", "computation", "body", "span"]
-    let binder ← field j "var"
-    let var : TSyntax `term ← if (← str binder "kind") == "wildcard" then
-      term map info true binder
-    else pure ⟨(← param map info binder).raw⟩
+    fields j ["kind", "vars", "computation", "body", "span"]
+    let vars ← (← arr j "vars").mapM fun binder => do
+      if (← str binder "kind") == "wildcard" then term map info true binder
+      else pure (⟨(← param map info binder).raw⟩ : TSyntax `term)
+    let var ← product vars
     let computation ← term map info false (← field j "computation")
     let body ← term map info false (← field j "body")
     let item := withSpan info.info (Unhygienic.run `(doSeqItem| let $var:term ← $computation:term))
@@ -225,8 +232,9 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       let last := Unhygienic.run `(doSeqItem| $body:term)
       pure (Unhygienic.run `(do $item:doSeqItem $last:doSeqItem))
   | "return" => do
-    fields j ["kind", "value", "span"]
-    let value ← term map info false (← field j "value")
+    fields j ["kind", "values", "span"]
+    let values ← (← arr j "values").mapM (term map info false)
+    let value ← product values
     -- `pure` remains local to this computation, including inside a bind's RHS.
     let pureId := mkIdent `pure
     pure (Unhygienic.run `($pureId $value))
@@ -240,13 +248,76 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let reason ← term map info false (← field j "reason")
     let error := mkIdent ``Lynx.Result.error
     pure (Unhygienic.run `($error ($ctor $reason)))
+  | "try" => do
+    fields j ["kind", "computation", "vars", "body", "exception_vars", "handler", "span"]
+    let vars ← (← arr j "vars").mapM (param map info)
+    let binder ← product (vars.map fun v => ⟨v.raw⟩)
+    let evars ← (← arr j "exception_vars").mapM (param map info)
+    unless evars.size == 2 || evars.size == 3 do
+      throw "try requires class/reason and an optional raw exception variable"
+    let computation ← term map info false (← field j "computation")
+    let body ← term map info false (← field j "body")
+    let handler ← term map info false (← field j "handler")
+    let exception := if evars.size == 3 then evars[2]! else mkIdent `lynxException
+    let classVar := evars[0]!
+    let reasonVar := evars[1]!
+    let exceptionClass := mkIdent ``Lynx.Exception.classTerm
+    let reason := mkIdent ``Lynx.Exception.reason
+    let tryWith := mkIdent ``Lynx.Result.tryWith
+    pure (Unhygienic.run `($tryWith $computation (fun $binder:term => $body)
+      (fun $exception:ident =>
+        let $classVar := $exceptionClass $exception:ident
+        let $reasonVar := $reason $exception:ident
+        $handler)))
+  | "stacktrace" => do
+    fields j ["kind", "exception", "span"]
+    let exception ← term map info false (← field j "exception")
+    let stacktrace := mkIdent ``Lynx.Exception.stacktrace
+    let ok := mkIdent ``Lynx.Result.ok
+    pure (Unhygienic.run `($ok ($stacktrace $exception)))
+  | "reraise" => do
+    fields j ["kind", "exception", "reason", "span"]
+    let exception ← term map info false (← field j "exception")
+    let reason ← term map info false (← field j "reason")
+    let withReason := mkIdent ``Lynx.Exception.withReason
+    let error := mkIdent ``Lynx.Result.error
+    pure (Unhygienic.run `($error ($withReason $exception $reason)))
+  | "raise_dynamic" => do
+    fields j ["kind", "class", "reason", "exception", "span"]
+    let exceptionClass ← term map info false (← field j "class")
+    let reason ← term map info false (← field j "reason")
+    let exception ← term map info false (← field j "exception")
+    let classJson ← field j "class"
+    if (← str classJson "kind") == "atom" then
+      let ctor? := match ← str classJson "value" with
+        | "error" => some (mkIdent ``Lynx.Exception.error)
+        | "throw" => some (mkIdent ``Lynx.Exception.throw)
+        | "exit" => some (mkIdent ``Lynx.Exception.exit)
+        | _ => none
+      if let some ctor := ctor? then
+        let error := mkIdent ``Lynx.Result.error
+        return withSpan info.info (Unhygienic.run `($error ($ctor $reason)))
+    let error := mkIdent ``Lynx.Result.error
+    let ok := mkIdent ``Lynx.Result.ok
+    let atom := mkIdent ``Lynx.Term.atom
+    let errorClass := mkIdent ``Lynx.Exception.error
+    let throwClass := mkIdent ``Lynx.Exception.throw
+    let exitClass := mkIdent ``Lynx.Exception.exit
+    pure (Unhygienic.run `(
+      let _ := $exception;
+      match ($exceptionClass) with
+      | $atom "error" => $error ($errorClass $reason)
+      | $atom "throw" => $error ($throwClass $reason)
+      | $atom "exit" => $error ($exitClass $reason)
+      | _ => $ok ($atom "badarg")))
   | "match" => do
     fields j ["kind", "expressions", "cases", "span"]
     let exprs ← (← arr j "expressions").mapM (term map info false)
     let unit : TSyntax `term := ⟨(mkIdent ``Unit.unit).raw⟩
     let clauses ← arr j "cases"
     let mut cases ← clauses.mapM fun c => do
-      fields c ["patterns", "body", "span"]
+      fields c (if (field c "guard").isOk then ["patterns", "guard", "body", "span"]
+        else ["patterns", "body", "span"])
       let ci ← span map c info
       let pats ← (← arr c "patterns").mapM (term map ci true)
       unless pats.size == exprs.size do throw "match case must have one pattern per expression"
@@ -257,6 +328,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     -- Core can omit the fallback when it knows an operation returns a Boolean.
     -- Term's type includes other values, so Lean still needs an exhaustive match.
     let catchAll ← clauses.anyM fun c => do
+      if (field c "guard").isOk then return false
       (← arr c "patterns").allM fun p => do
         pure ((← str p "kind") ∈ ["var", "wildcard"])
     unless catchAll do
@@ -272,6 +344,37 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       let body := Unhygienic.run `($error ($exception ($tuple #[$atom "case_clause", $value])))
       cases := cases.push (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $unmatched,* => $body))
     let exprs := if exprs.isEmpty then #[unit] else exprs
+    let wildcards : Array (TSyntax `term) := exprs.map fun _ => Unhygienic.run `(_)
+    if clauses.any (fun c => (field c "guard").isOk) then
+      let last := cases.back!
+      let mut result := Unhygienic.run `(match $[$exprs:term],* with $last:matchAlt)
+      let fallback := mkIdent `lynxMatchNext
+      let unitType : TSyntax `term := ⟨(mkIdent ``Unit).raw⟩
+      let tryWith := mkIdent ``Lynx.Result.tryWith
+      let atom := mkIdent ``Lynx.Term.atom
+      let value := mkIdent `lynxGuardValue
+      for i in (List.range (cases.size - 1)).reverse do
+        let alt := cases[i]!
+        match alt with
+        | `(Lean.Parser.Term.matchAltExpr| | $pats,* => $body) =>
+          let c := clauses[i]!
+          let branch ← match field c "guard" with
+            | .ok guardJson => do
+                let guard ← term map info false guardJson
+                pure (Unhygienic.run `($tryWith $guard (fun $value:ident =>
+                  match $value:ident with
+                  | $atom "true" => $body
+                  | _ => $fallback ()) (fun _ => $fallback ())))
+            | .error _ => pure body
+          let catchAll ← (← arr c "patterns").allM fun p => do
+            pure ((← str p "kind") ∈ ["var", "wildcard"])
+          let matched := if catchAll then Unhygienic.run `(
+            match $[$exprs:term],* with | $pats,* => $branch)
+            else Unhygienic.run `(
+              match $[$exprs:term],* with | $pats,* => $branch | $wildcards,* => $fallback ())
+          result := Unhygienic.run `(let $fallback := fun (_ : $unitType) => $result; $matched)
+        | _ => throw "invalid match alternative"
+      return withSpan info.info result
     pure (Unhygienic.run `(match $[$exprs:term],* with $cases:matchAlt*))
   | _ => throw s!"unsupported {if pattern then "pattern" else "term"} kind '{kind}'"
   return withSpan info.info result

@@ -591,7 +591,7 @@ defmodule Lynx.TranslationTest do
     assert %{pure: false} = updated.modules.dependency.translations[{:"$lynx_fun_2", 3}]
 
     assert %{
-             "body" => %{"kind" => "return", "value" => function}
+             "body" => %{"kind" => "return", "values" => [function]}
            } =
              updated.modules.caller.translations[{:again, 0}].translation
 

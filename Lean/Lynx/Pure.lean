@@ -72,6 +72,8 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
           intros
           simp_all (config := { failIfUnchanged := false }) [$[$definitions:ident],*]
           repeat' first
+            | apply Result.IsPure.tryWith
+            | apply Result.IsPure.handle
             | apply Result.IsPure.bind
             | apply Result.IsPure.bind_explicit
             | (intro)
@@ -117,6 +119,8 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
           intros
           simp_all (config := { failIfUnchanged := false }) [$functionId:ident]
           repeat' first
+            | apply Result.IsPure.tryWith
+            | apply Result.IsPure.handle
             | apply Result.IsPure.bind
             | apply Result.IsPure.bind_explicit
             | (intro)
@@ -128,6 +132,8 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
         unfold $functionId:ident
         simp_all (config := { failIfUnchanged := false, maxDischargeDepth := 64 })
         repeat' first
+          | apply Result.IsPure.tryWith
+          | apply Result.IsPure.handle
           | apply Result.IsPure.bind
           | apply Result.IsPure.bind_explicit
           | (intro)
