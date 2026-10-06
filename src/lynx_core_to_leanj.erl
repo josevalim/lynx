@@ -348,12 +348,14 @@ prim_op(Op, Anno, Args, _State) ->
 clause(#c_clause{anno = Anno, pats = Patterns, guard = #c_literal{val = true}, body = Body}, State0) ->
     {Pats, State1} = lists:mapfoldl(fun value/2, State0, Patterns),
     {TranslatedBody, State2} = expression(Body, State1),
-    {#{~"span" => span(Anno), ~"patterns" => Pats, ~"body" => TranslatedBody}, State2};
+    {#{~"span" => span(Anno), ~"patterns" => Pats, ~"nest" => false,
+       ~"body" => TranslatedBody}, State2};
 clause(#c_clause{anno = Anno, pats = Patterns, guard = Guard, body = Body}, State0) ->
     {Pats, State1} = lists:mapfoldl(fun value/2, State0, Patterns),
     {TranslatedGuard, State2} = expression(Guard, State1),
     {TranslatedBody, State3} = expression(Body, State2),
-    {#{~"span" => span(Anno), ~"patterns" => Pats, ~"guard" => TranslatedGuard,
+    {#{~"span" => span(Anno), ~"patterns" => Pats, ~"nest" => true,
+       ~"guard" => TranslatedGuard,
        ~"body" => TranslatedBody}, State3};
 clause(Core, _State) ->
     unsupported(Core).

@@ -415,9 +415,10 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let exprs ← (← arr j "expressions").mapM (term map info false)
     let unit : TSyntax `term := ⟨(mkIdent ``Unit.unit).raw⟩
     let clauses ← arr j "cases"
+    let nests ← clauses.mapM fun c => do (← field c "nest").getBool?
     let mut cases ← clauses.mapM fun c => do
-      fields c (if (field c "guard").isOk then ["patterns", "guard", "body", "span"]
-        else ["patterns", "body", "span"])
+      fields c (if (field c "guard").isOk then ["patterns", "nest", "guard", "body", "span"]
+        else ["patterns", "nest", "body", "span"])
       let ci ← span map c info
       let pats ← (← arr c "patterns").mapM (term map ci true)
       unless pats.size == exprs.size do throw "match case must have one pattern per expression"
@@ -428,7 +429,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     -- Core can omit the fallback when it knows an operation returns a Boolean.
     -- Term's type includes other values, so Lean still needs an exhaustive match.
     let catchAll ← clauses.anyM fun c => do
-      if (field c "guard").isOk then return false
+      if (← (← field c "nest").getBool?) then return false
       (← arr c "patterns").allM fun p => do
         pure ((← str p "kind") ∈ ["var", "wildcard"])
     unless catchAll do
@@ -445,35 +446,53 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       cases := cases.push (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $unmatched,* => $body))
     let exprs := if exprs.isEmpty then #[unit] else exprs
     let wildcards : Array (TSyntax `term) := exprs.map fun _ => Unhygienic.run `(_)
-    if clauses.any (fun c => (field c "guard").isOk) then
-      let last := cases.back!
-      let mut result := Unhygienic.run `(match $[$exprs:term],* with $last:matchAlt)
+    if nests.contains true then
       let fallback := mkIdent `lynxMatchNext
       let unitType : TSyntax `term := ⟨(mkIdent ``Unit).raw⟩
       let tryWith := mkIdent ``Lynx.Result.tryWith
       let atom := mkIdent ``Lynx.Term.atom
       let value := mkIdent `lynxGuardValue
-      for i in (List.range (cases.size - 1)).reverse do
-        let alt := cases[i]!
-        match alt with
-        | `(Lean.Parser.Term.matchAltExpr| | $pats,* => $body) =>
+      let mut result := Unhygienic.run `(Lynx.Result.error
+        (Lynx.Exception.error (Lynx.Term.atom "function_clause")))
+      let mut stop := cases.size
+      while stop > 0 do
+        let i := stop - 1
+        if nests[i]?.getD false then
           let c := clauses[i]!
-          let branch ← match field c "guard" with
-            | .ok guardJson => do
-                let guard ← term map info false guardJson
-                pure (Unhygienic.run `($tryWith $guard (fun $value:ident =>
-                  match $value:ident with
-                  | $atom "true" => $body
-                  | _ => $fallback ()) (fun _ => $fallback ())))
-            | .error _ => pure body
-          let catchAll ← (← arr c "patterns").allM fun p => do
-            pure ((← str p "kind") ∈ ["var", "wildcard"])
-          let matched := if catchAll then Unhygienic.run `(
-            match $[$exprs:term],* with | $pats,* => $branch)
-            else Unhygienic.run `(
-              match $[$exprs:term],* with | $pats,* => $branch | $wildcards,* => $fallback ())
-          result := Unhygienic.run `(let $fallback := fun (_ : $unitType) => $result; $matched)
-        | _ => throw "invalid match alternative"
+          let ci ← span map c info
+          let guard ← term map ci false (← field c "guard")
+          match cases[i]! with
+          | `(Lean.Parser.Term.matchAltExpr| | $pats,* => $body) =>
+            let branch := Unhygienic.run `($tryWith $guard (fun $value:ident =>
+              match $value:ident with
+              | $atom "true" => $body
+              | _ => $fallback ()) (fun _ => $fallback ()))
+            let catchAll ← (← arr c "patterns").allM fun p => do
+              pure ((← str p "kind") ∈ ["var", "wildcard"])
+            let matched := if catchAll then Unhygienic.run `(
+              match $[$exprs:term],* with | $pats,* => $branch)
+              else Unhygienic.run `(
+                match $[$exprs:term],* with | $pats,* => $branch | $wildcards,* => $fallback ())
+            -- An applied lambda shares the continuation without leaving a recursive
+            -- let-bound thunk in Lean's generated induction principle.
+            result := Unhygienic.run `((fun $fallback => $matched) (fun (_ : $unitType) => $result))
+          | _ => throw "invalid match alternative"
+          stop := i
+        else
+          -- Keep consecutive unconditional clauses in one ordinary match, including
+          -- recursive suffixes. Only guarded clauses introduce fallback thunks.
+          let mut start := i
+          while start > 0 && !(nests[start - 1]?.getD false) do
+            start := start - 1
+          let mut group := cases.extract start stop
+          let catchAll ← (clauses.extract start (min stop clauses.size)).anyM fun c => do
+            (← arr c "patterns").allM fun p => do
+              pure ((← str p "kind") ∈ ["var", "wildcard"])
+          unless catchAll || stop > clauses.size do
+            group := group.push (Unhygienic.run `(Lean.Parser.Term.matchAltExpr|
+              | $wildcards,* => $result))
+          result := Unhygienic.run `(match $[$exprs:term],* with $group:matchAlt*)
+          stop := start
       return withSpan info.info result
     pure (Unhygienic.run `(match $[$exprs:term],* with $cases:matchAlt*))
   | _ => throw s!"unsupported {if pattern then "pattern" else "term"} kind '{kind}'"

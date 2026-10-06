@@ -430,6 +430,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
             "cases" => [
               %{
                 "patterns" => [%{"kind" => "integer", "value" => 3, "span" => [4, 5]}],
+                "nest" => false,
                 "body" => success(),
                 "span" => [4, 1]
               }

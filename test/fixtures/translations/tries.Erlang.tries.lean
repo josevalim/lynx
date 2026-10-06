@@ -52,22 +52,23 @@ namespace Erlang.tries
       (fun _2 =>
         let _4 := Lynx.Exception.classTerm _2
         let _3 := Lynx.Exception.reason _2
-        let lynxMatchNext := fun (_ : Unit) =>
-          match _4, _3, _2 with
-          | _9, _10, _11 => pure (Lynx.Term.atom "other");
-        match _4, _3, _2 with
-        | Lynx.Term.atom "error", vR, _8 =>
-          Lynx.Result.tryWith
-            (do
-              let _5 ← Erlang.erlang.«is_integer/1» vR
-              let _6 ← Erlang.erlang.«>/2» vR (Lynx.Term.integer 0)
-              Erlang.erlang.«and/2» _5 _6)
-            (fun lynxGuardValue =>
-              match lynxGuardValue with
-              | Lynx.Term.atom "true" => pure (Lynx.Term.atom "positive")
-              | _ => lynxMatchNext ())
-            (fun _ => lynxMatchNext ())
-        | _, _, _ => lynxMatchNext ())
+        (fun lynxMatchNext =>
+            match _4, _3, _2 with
+            | Lynx.Term.atom "error", vR, _8 =>
+              Lynx.Result.tryWith
+                (do
+                  let _5 ← Erlang.erlang.«is_integer/1» vR
+                  let _6 ← Erlang.erlang.«>/2» vR (Lynx.Term.integer 0)
+                  Erlang.erlang.«and/2» _5 _6)
+                (fun lynxGuardValue =>
+                  match lynxGuardValue with
+                  | Lynx.Term.atom "true" => pure (Lynx.Term.atom "positive")
+                  | _ => lynxMatchNext ())
+                (fun _ => lynxMatchNext ())
+            | _, _, _ => lynxMatchNext ())
+          (fun (_ : Unit) =>
+            match _4, _3, _2 with
+            | _9, _10, _11 => pure (Lynx.Term.atom "other")))
 
 #lynx_pure
   def «reraised/1» (_0 : Lynx.Term) : Lynx.Result :=
