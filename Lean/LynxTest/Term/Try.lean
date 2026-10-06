@@ -117,7 +117,8 @@ theorem exhaustion_is_not_caught :
       .exhausted {} := by cbv
 
 theorem blocking_is_not_caught :
-    Lynx.run (Result.tryWith (Result.receive some Result.ok)
+    Lynx.run (Result.tryWith (Result.receiveWith (.atom "infinity") (fun _ => some)
+      (fun | some value => .ok value | none => .ok .nil))
       Result.ok (fun _ => .ok (Term.atom "caught"))) = .deadlock {} := by cbv
 
 /-- The protected handler remains installed across a receive suspension. -/
@@ -125,7 +126,8 @@ theorem resumed_receive_exception_is_caught :
     Lynx.run (Result.tryWith (do
       let _ ← Result.schedule («send/2» (.pid 1) (.integer 7))
         (fun pid => .ok (Term.pid pid))
-      Result.receive some (fun value => .error (.throw value)))
+      Result.receiveWith (.atom "infinity") (fun _ => some)
+        (fun | some value => .error (.throw value) | none => .ok .nil))
       Result.ok (fun exception => .ok exception.reason)) =
       .ok (.integer 7) { pidCounter := 2 } := by cbv
 

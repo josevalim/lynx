@@ -36,7 +36,8 @@ private def resume (computation : Result β)
       .spawn child fun result => resume (continuation result) next
   | Result.schedule child continuation => Result.schedule child fun pid => resume (continuation pid) next
   | .send pid message continuation => .send pid message (resume continuation next)
-  | .receive select continuation => .receive select fun value => resume (continuation value) next
+  | .receive timeout select continuation =>
+      .receive timeout select fun reply => resume (continuation reply) next
   | .apply function arguments continuation =>
       .apply function arguments fun result => resume (continuation result) next
 
@@ -50,7 +51,8 @@ private def expand (dispatch : Bool → Term → Array Term → Result Term) : R
       resume (dispatch true child #[]) fun result => expand dispatch (next result)
   | Result.schedule child next => .schedule (expand dispatch child) fun pid => expand dispatch (next pid)
   | .send pid message next => .send pid message (expand dispatch next)
-  | .receive select next => .receive select fun value => expand dispatch (next value)
+  | .receive timeout select next =>
+      .receive timeout select fun reply => expand dispatch (next reply)
   | .apply function arguments next =>
       resume (dispatch false function arguments) fun result => expand dispatch (next result)
 

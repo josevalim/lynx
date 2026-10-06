@@ -1,6 +1,50 @@
 defmodule Lynx.CoreToLeanjTest do
   use ExUnit.Case, async: true
 
+  test "allocates distinct generated message binders for timeout-only receives" do
+    receive_after = fn action ->
+      loop = :cerl.c_fname(:receive_loop, 0)
+      expired = :cerl.c_var(:expired)
+
+      wait =
+        :cerl.c_let(
+          [expired],
+          :cerl.c_primop(:cerl.c_atom(:recv_wait_timeout), [:cerl.c_int(0)]),
+          :cerl.c_case(expired, [
+            :cerl.c_clause([:cerl.c_atom(true)], action),
+            :cerl.c_clause([:cerl.c_atom(false)], :cerl.c_apply(loop, []))
+          ])
+        )
+
+      :cerl.c_letrec([{loop, :cerl.c_fun([], wait)}], :cerl.c_apply(loop, []))
+    end
+
+    body =
+      :cerl.c_seq(
+        receive_after.(:cerl.c_atom(:ok)),
+        receive_after.(:cerl.c_atom(:done))
+      )
+
+    assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
+    assert functions[{:entry, 1}].pure == false
+
+    assert %{
+             "body" => %{
+               "kind" => "bind",
+               "computation" => %{
+                 "kind" => "receive",
+                 "message" => %{"name" => %{"generated" => 0}},
+                 "cases" => []
+               },
+               "body" => %{
+                 "kind" => "receive",
+                 "message" => %{"name" => %{"generated" => 1}},
+                 "cases" => []
+               }
+             }
+           } = functions[{:entry, 1}].translation
+  end
+
   test "translates Core values into separate match expressions and patterns" do
     body =
       :cerl.c_case(:cerl.c_values([:cerl.c_var(0), :cerl.c_nil()]), [

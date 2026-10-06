@@ -109,7 +109,7 @@ theorem dispatched_state :
 
 /-- The same program table is available in children without adding a scheduling boundary. -/
 theorem spawned_dispatch :
-    (Result.schedule (call 0) fun _ => .receive (fun value => some value) .ok).runWith
+    (Result.schedule (call 0) fun _ => .receive .infinity (fun _ value => some value) (fun value => .ok (value.getD .nil))).runWith
       #[.effectful fun _ _ => .send 1 (.integer 7) (.ok .nil)] 1 {} =
       .ok (.integer 7) { pidCounter := 2 } := by cbv
 

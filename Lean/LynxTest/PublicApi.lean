@@ -19,6 +19,11 @@ example : Lynx.Result → Lynx.Term.FunTable → Nat → Lynx.Environment → Ly
 example : Lynx.Term → Lynx.Term → Lynx.Result := Erlang.erlang.«apply/2»
 example : Lynx.Term → Array Lynx.Term → Lynx.Result := Lynx.Term.apply
 example : Lynx.Term → Lynx.Result := Erlang.erlang.«spawn/1»
+example : Lynx.Term → (Lynx.Environment → Lynx.Term → Option β) →
+    (Option β → Lynx.Result α) → Lynx.Result α :=
+  Lynx.Result.receiveWith
+example : Lynx.PID → Lynx.ScheduleChoice := Lynx.ScheduleChoice.timeout
+
 example : Lynx.Term → (Except Lynx.Exception Lynx.Term → Lynx.Result α) → Lynx.Result α :=
   Lynx.Result.spawn
 
@@ -57,6 +62,11 @@ example (table : Lynx.Term.FunTable) (depth id arity : Nat)
 example (computation : Lynx.Result α) :
     (do let value ← computation; pure value) = computation := by
   simp
+
+-- Ordinary guard evaluation supports environment reads without process effects.
+example (env : Lynx.Environment) :
+    Lynx.Result.toExceptRead Erlang.erlang.«self/0» env Erlang.erlang.self_readOnly =
+      .ok (.pid env.currentPid) := by rfl
 
 example (computation : Lynx.Result α) (next : α → Lynx.Result β)
     (handler : Lynx.Exception → Lynx.Result β) (pure : Lynx.Result.IsPure computation)
@@ -102,6 +112,8 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«is_float/1»",
   "Erlang.erlang.«is_integer/1»",
   "Erlang.erlang.«is_list/1»",
+  "Erlang.erlang.«not/1»",
+  "Erlang.erlang.«or/2»",
   "Erlang.erlang.«put/2»",
   "Erlang.erlang.«self/0»",
   "Erlang.erlang.«send/2»",
@@ -139,8 +151,14 @@ private def expectedDeclarations : Array String := #[
   "Lynx.ProcessState.mailbox",
   "Lynx.ProcessState.mk",
   "Lynx.ProcessState.pdict",
+  "Lynx.ReceiveTimeout",
+  "Lynx.ReceiveTimeout.finite",
+  "Lynx.ReceiveTimeout.immediate",
+  "Lynx.ReceiveTimeout.infinity",
+  "Lynx.ReceiveTimeout.ofTerm",
   "Lynx.Result",
   "Lynx.Result.IsPure",
+  "Lynx.Result.IsReadOnly",
   "Lynx.Result.apply",
   "Lynx.Result.bind",
   "Lynx.Result.error",
@@ -153,6 +171,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.ofExcept",
   "Lynx.Result.ok",
   "Lynx.Result.receive",
+  "Lynx.Result.receiveWith",
   "Lynx.Result.resolve",
   "Lynx.Result.run",
   "Lynx.Result.runWith",
@@ -161,10 +180,12 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.set",
   "Lynx.Result.spawn",
   "Lynx.Result.toExcept",
+  "Lynx.Result.toExceptRead",
   "Lynx.Result.tryWith",
   "Lynx.ScheduleChoice",
   "Lynx.ScheduleChoice.current",
   "Lynx.ScheduleChoice.swap",
+  "Lynx.ScheduleChoice.timeout",
   "Lynx.Term",
   "Lynx.Term.Bitstring.bitSize",
   "Lynx.Term.Bitstring.toBits",
@@ -204,11 +225,13 @@ private def expectedDeclarations : Array String := #[
   "Lynx.instCoeFunResultForallEnvironmentOutcome",
   "Lynx.instInhabitedEnvironment",
   "Lynx.instInhabitedProcessState",
+  "Lynx.instInhabitedReceiveTimeout",
   "Lynx.instInhabitedScheduleChoice",
   "Lynx.instReprEnvironment",
   "Lynx.instReprException",
   "Lynx.instReprOutcome",
   "Lynx.instReprProcessState",
+  "Lynx.instReprReceiveTimeout",
   "Lynx.instReprScheduleChoice",
   "Lynx.instReprTerm",
   "Lynx.run",
