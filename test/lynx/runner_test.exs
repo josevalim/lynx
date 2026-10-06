@@ -361,7 +361,9 @@ defmodule Lynx.RunnerDiagnosticsTest do
       assert [expectation, requirement] =
                String.split(
                  diagnostic.message,
-                 "Requires (definitionally reduced):", parts: 2)
+                 "Requires (definitionally reduced):",
+                 parts: 2
+               )
 
       assert expectation =~ ~s(Term.atom "false")
       assert [expected, got] = String.split(requirement, "got:      ", parts: 2)
