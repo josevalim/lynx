@@ -117,7 +117,9 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
         apply $induction:ident
         all_goals
           intros
-          simp_all (config := { failIfUnchanged := false }) [$functionId:ident]
+          -- Unfold only the goal: recursive hypotheses may themselves be matches
+          -- (for example under a shared guard continuation).
+          unfold $functionId:ident
           repeat' first
             | apply Result.IsPure.tryWith
             | apply Result.IsPure.handle

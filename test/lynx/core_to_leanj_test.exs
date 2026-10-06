@@ -72,6 +72,29 @@ defmodule Lynx.CoreToLeanjTest do
            } = functions[{:entry, 1}].translation
   end
 
+  test "marks fallthrough solely from whether the Core guard is literally true" do
+    guards = [
+      :cerl.c_atom(true),
+      :cerl.c_atom(false),
+      :cerl.c_var(0),
+      :cerl.c_seq(:cerl.c_atom(:ok), :cerl.c_atom(true))
+    ]
+
+    body =
+      :cerl.c_case(
+        :cerl.c_var(0),
+        Enum.map(guards, fn guard ->
+          :cerl.c_clause([:cerl.c_var(:X)], guard, :cerl.c_var(:X))
+        end)
+      )
+
+    assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
+    cases = functions[{:entry, 1}].translation["body"]["cases"]
+    assert Enum.map(cases, & &1["nest"]) == [false, true, true, true]
+    refute Map.has_key?(hd(cases), "guard")
+    assert Enum.all?(tl(cases), &Map.has_key?(&1, "guard"))
+  end
+
   test "translates zero and multiple Core try values" do
     x = :cerl.c_var(:x)
     a = :cerl.c_var(:a)

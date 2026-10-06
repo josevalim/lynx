@@ -81,6 +81,27 @@ theorem bitstring_byte_size_is_integer (input : Term)
   | .cons _ _ => .ok Term.false
   | _ => .ok Term.false
 
+-- A guard continuation contains one flat recursive suffix. Its induction
+-- hypothesis is a match, so purity must preserve it until the scrutinee splits.
+#lynx_pure def guardedSuffix (input : Term) : Result :=
+  (fun next => Result.tryWith (Erlang.erlang.«is_integer/1» input)
+    (fun value => match value with
+      | .atom "true" => .ok (.integer 0)
+      | _ => next ())
+    (fun _ => next ()))
+    (fun (_ : Unit) => match input with
+      | .nil => .ok (.integer 0)
+      | .cons _ tail => guardedSuffix tail
+      | _ => .ok (.integer 0))
+
+theorem guardedSuffix_zero (input : Term) :
+    guardedSuffix input = .ok (.integer 0) := by
+  induction input using guardedSuffix.induct with
+  | case1 input ih =>
+    unfold guardedSuffix
+    split at ih <;> simp_all [Erlang.erlang.«is_integer/1»]
+    split <;> rfl
+
 -- Explicit binds in translated mutual calls retain the group's induction hypotheses.
 #lynx_pure mutual
   def sumLeft : Term → Result
