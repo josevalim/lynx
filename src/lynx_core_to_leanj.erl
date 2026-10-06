@@ -458,7 +458,25 @@ value(#c_literal{anno = Anno, val = Tuple}, State) when is_tuple(Tuple) ->
 value(#c_tuple{anno = Anno, es = Elements}, State0) ->
     {Translated, State1} = lists:mapfoldl(fun value/2, State0, Elements),
     {node(~"tuple", Anno, #{~"elements" => Translated}), State1};
+value(#c_literal{anno = Anno, val = Map}, State0) when is_map(Map) ->
+    Pairs = [#c_map_pair{anno = Anno, op = #c_literal{val = assoc},
+                       key = #c_literal{anno = Anno, val = K},
+                       val = #c_literal{anno = Anno, val = V}} || {K, V} <- maps:to_list(Map)],
+    value(#c_map{anno = Anno, arg = #c_literal{val = #{}}, es = Pairs}, State0);
+value(#c_map{anno = Anno, arg = #c_literal{val = Base}, es = Pairs,
+             is_pat = false}, State0) when is_map(Base), map_size(Base) =:= 0 ->
+    {Entries, State1} = lists:mapfoldl(fun map_entry/2, State0, Pairs),
+    {node(~"map", Anno, #{~"entries" => Entries}), State1};
 value(Core, _State) ->
+    unsupported(Core).
+
+map_entry(#c_map_pair{anno = Anno, op = #c_literal{val = assoc},
+                       key = Key, val = Value}, State0) ->
+    {TranslatedKey, State1} = value(Key, State0),
+    {TranslatedValue, State2} = value(Value, State1),
+    {#{~"span" => span(Anno), ~"key" => TranslatedKey,
+       ~"value" => TranslatedValue}, State2};
+map_entry(Core, _State) ->
     unsupported(Core).
 
 %% The table contains code; every function value carries its own capture values.
