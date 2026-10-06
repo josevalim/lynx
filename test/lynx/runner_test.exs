@@ -264,6 +264,112 @@ defmodule Lynx.RunnerDiagnosticsTest do
   @literal_erl "../test/fixtures/translations/literal.erl"
   @moduletag timeout: to_timeout(minute: 10)
 
+  test "reports expected and actual values for expects" do
+    receive_body = fn timeout ->
+      %{
+        "kind" => "receive",
+        "message" => %{"kind" => "var", "name" => %{"generated" => 0}, "span" => []},
+        "cases" => [],
+        "timeout" => timeout,
+        "after" => success(),
+        "span" => []
+      }
+    end
+
+    infinite = receive_body.(%{"kind" => "atom", "value" => "infinity", "span" => []})
+    finite = receive_body.(%{"kind" => "integer", "value" => 10, "span" => []})
+    zero = receive_body.(%{"kind" => "integer", "value" => 0, "span" => []})
+    invalid = receive_body.(%{"kind" => "atom", "value" => "invalid", "span" => []})
+
+    effect = %{
+      "kind" => "bind",
+      "vars" => [%{"kind" => "wildcard", "span" => []}],
+      "computation" => call("Erlang.erlang", "self"),
+      "body" => infinite,
+      "span" => []
+    }
+
+    false_body = put_in(success(), ["values", Access.at(0), "value"], "false")
+    proof = "simp [«ensures/0», Lynx.Result.receiveWith, Lynx.ReceiveTimeout.ofTerm]"
+
+    cases = [
+      {"Infinite", infinite, "ReceiveTimeout.infinity"},
+      {"Finite", finite, "ReceiveTimeout.finite"},
+      {"Zero", zero, "ReceiveTimeout.immediate"},
+      {"Invalid", invalid, "timeout_value"},
+      {"Effect", effect, "Result.get"},
+      {"False", false_body, ~s(Term.atom "false")},
+      {"Success", success(), ~s(Term.atom "true")}
+    ]
+
+    files =
+      for {name, body, _actual} <- cases do
+        file(
+          @literal_erl,
+          "Elixir.#{name}",
+          [
+            definition("ensures", body),
+            theorem(
+              "law",
+              if(name == "Success", do: "fail \"deliberate failure\"", else: proof)
+            )
+          ],
+          ["Erlang.erlang"]
+        )
+      end
+
+    reports = Lynx.Commands.verify!(@lean_dir, files)
+
+    for {report, {_name, _body, actual}} <- Enum.zip(reports, cases) do
+      assert report.status == :error
+      assert [diagnostic] = Enum.filter(report.diagnostics, &(&1.severity == :error))
+      assert diagnostic.declaration == "law/0"
+      assert diagnostic.message =~ "Expectation (definitionally reduced):"
+      assert [expected, got] = String.split(diagnostic.message, "got:      ", parts: 2)
+      assert expected =~ "Result.ok"
+      assert expected =~ ~s(Term.atom "true")
+      assert got =~ actual
+      refute diagnostic.message =~ "Deadlock:"
+      refute diagnostic.message =~ "Requires (definitionally reduced):"
+    end
+  end
+
+  test "reports expected and actual values for requires" do
+    false_body = put_in(success(), ["values", Access.at(0), "value"], "false")
+
+    files =
+      for {name, requirement} <- [
+            {"FalseRequirement", false_body},
+            {"TrueRequirement", success()}
+          ] do
+        law = Map.put(theorem("law", "fail \"deliberate failure\""), "requires", "requires")
+
+        file(@literal_erl, "Elixir.#{name}", [
+          definition("requires", requirement),
+          definition("ensures", false_body),
+          law
+        ])
+      end
+
+    reports = Lynx.Commands.verify!(@lean_dir, files)
+
+    for {report, actual} <- Enum.zip(reports, ["false", "true"]) do
+      assert report.status == :error
+      assert [diagnostic] = report.diagnostics
+      assert diagnostic.message =~ "deliberate failure"
+
+      assert [expectation, requirement] =
+               String.split(
+                 diagnostic.message,
+                 "Requires (definitionally reduced):", parts: 2)
+
+      assert expectation =~ ~s(Term.atom "false")
+      assert [expected, got] = String.split(requirement, "got:      ", parts: 2)
+      assert expected =~ ~s(Term.atom "true")
+      assert got =~ ~s(Term.atom "#{actual}")
+    end
+  end
+
   test "reports function elaboration errors at the inherited node location" do
     files = [
       file(@literal_erl, "Erlang.literal", [
@@ -383,30 +489,35 @@ defmodule Lynx.RunnerDiagnosticsTest do
     assert [%{status: :error, diagnostics: diagnostics}] =
              Lynx.Commands.verify!(@lean_dir, files)
 
-    assert diagnostics == [
+    for diagnostic <- diagnostics do
+      assert diagnostic.message =~ "Expectation (definitionally reduced):"
+      assert diagnostic.message =~ "expected:"
+      assert diagnostic.message =~ "got:"
+      assert diagnostic.message =~ ~s(Term.atom "true")
+      assert String.ends_with?(diagnostic.message, "Unknown identifier `missing`")
+    end
+
+    assert Enum.map(diagnostics, &Map.delete(&1, :message)) == [
              %{
                file: path,
                module: "Elixir.Precision",
                declaration: "columns/0",
                severity: :error,
                line: 11,
-               column: 28,
-               message: "Unknown identifier `missing`"
+               column: 28
              },
              %{
                file: path,
                module: "Elixir.Precision",
                declaration: "line/0",
                severity: :error,
-               line: 21,
-               message: "Unknown identifier `missing`"
+               line: 21
              },
              %{
                file: path,
                module: "Elixir.Precision",
                declaration: "unknown/0",
-               severity: :error,
-               message: "Unknown identifier `missing`"
+               severity: :error
              }
            ]
   end
@@ -511,6 +622,16 @@ defmodule Lynx.RunnerDiagnosticsTest do
       "kind" => "return",
       "span" => [],
       "values" => [%{"kind" => "atom", "value" => "true", "span" => []}]
+    }
+  end
+
+  defp call(module, name) do
+    %{
+      "kind" => "remote_call",
+      "module" => module,
+      "name" => name,
+      "args" => [],
+      "span" => [4, 15]
     }
   end
 

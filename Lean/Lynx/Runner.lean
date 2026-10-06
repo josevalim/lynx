@@ -766,6 +766,47 @@ private partial def declarationNames (stx : Syntax) : Array Name :=
   else
     stx.getArgs.foldl (fun names child => names ++ declarationNames child) #[]
 
+/-- Reveal the outer computation constructor and terminal payloads without
+running process effects or traversing their continuations. -/
+private def normalizeComputation (computation : Expr) : MetaM Expr := do
+  let computation ← Meta.withTransparency .all <| Meta.whnf computation
+  if computation.isAppOfArity ``Lynx.Result.ok 2 ||
+      computation.isAppOfArity ``Lynx.Result.error 2 then
+    let args := computation.getAppArgs
+    let payload ← Meta.withTransparency .all <| Meta.whnf args[1]!
+    return mkAppN computation.getAppFn (args.set! 1 payload)
+  return computation
+
+/-- Show both sides of the original law, independently of its incomplete proof
+and of simplification that may have reduced the proof goal to `False`. -/
+private def comparisonDescription (type : Expr) : MetaM (Option String) := do
+  unless type.isAppOfArity ``Eq 3 do return none
+  let args := type.getAppArgs
+  let resultType ← Meta.whnf args[0]!
+  unless resultType.isAppOfArity ``Lynx.Result 1 do return none
+  let actual ← normalizeComputation args[1]!
+  let expected ← normalizeComputation args[2]!
+  -- Continuations can contain the rest of the program. Bound their rendering;
+  -- the constructor and leading arguments remain visible.
+  withOptions (fun opts => opts.set `pp.maxSteps (80 : Nat)) do
+    return some s!"  expected: {← Meta.ppExpr expected}\n  got:      {← Meta.ppExpr actual}"
+
+private def lawFailureDetails (name : Name) : Elab.Command.CommandElabM (Option String) := do
+  try
+    let name := (← getCurrNamespace) ++ name
+    let some (.thmInfo info) := (← getEnv).find? name | return none
+    Elab.Command.liftTermElabM do
+      Meta.forallTelescopeReducing info.type fun binders type => do
+        let some expectation ← comparisonDescription type | return none
+        let mut details := s!"Expectation (definitionally reduced):\n{expectation}"
+        for binder in binders do
+          let declaration ← binder.fvarId!.getDecl
+          if declaration.userName == `requires then
+            if let some requirement ← comparisonDescription declaration.type then
+              details := details ++ s!"\n\nRequires (definitionally reduced):\n{requirement}"
+        return some details
+  catch _ => return none
+
 private def elaborateFile (env : Lean.Environment) (file : String) (map : FileMap)
     (commands : Array (TSyntax `command)) (theoremNames : Array Name)
     : IO (Elab.Command.State × Array (Message × Option Name) × Array Json) := do
@@ -782,7 +823,19 @@ private def elaborateFile (env : Lean.Environment) (file : String) (map : FileMa
         if theoremNames.contains name then
           theorems := theorems.push (Json.mkObj [
             ("name", toJson name.getString!), ("time_ms", toJson elapsed)])
-      for msg in (← get).messages.toList do
+      let commandMessages := (← get).messages.toList
+      let mut hint ← match declarationName with
+        | some name =>
+            if theoremNames.contains name && commandMessages.any (·.severity == .error) then
+              lawFailureDetails name
+            else pure none
+        | none => pure none
+      for msg in commandMessages do
+        let msg ← match msg.severity, hint with
+          | .error, some explanation => do
+              hint := none
+              pure { msg with data := m!"{explanation}\n\n{msg.data}" }
+          | _, _ => pure msg
         messages := messages.push (msg, declarationName)
     return (messages, theorems)
   let ((messages, theorems), state) ← (action.run { fileName := file, fileMap := map, snap? := none, cancelTk? := none }).run
