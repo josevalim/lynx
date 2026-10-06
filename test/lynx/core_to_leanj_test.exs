@@ -28,6 +28,110 @@ defmodule Lynx.CoreToLeanjTest do
            } = functions[{:entry, 1}].translation
   end
 
+  test "translates zero and multiple Core try values" do
+    x = :cerl.c_var(:x)
+    a = :cerl.c_var(:a)
+    b = :cerl.c_var(:b)
+    evars = Enum.map([:class, :reason, :trace], &:cerl.c_var/1)
+    empty = :cerl.c_var({:empty, 0})
+    pair = :cerl.c_var({:pair, 1})
+    bound = :cerl.c_var({:bound, 1})
+    empty_bound = :cerl.c_var({:empty_bound, 0})
+    matched = :cerl.c_var({:matched, 1})
+    returned = :cerl.c_values([x, :cerl.c_atom(:second)])
+
+    protected =
+      :cerl.c_try(
+        returned,
+        [a, b],
+        :cerl.c_values([b, a]),
+        evars,
+        :cerl.c_values([:cerl.c_atom(:caught), :cerl.c_atom(:caught)])
+      )
+
+    core =
+      :cerl.c_module(:cerl.c_atom(:core_try), [empty, pair, bound, empty_bound, matched], [], [
+        {empty,
+         :cerl.c_fun(
+           [],
+           :cerl.c_try(
+             :cerl.c_values([]),
+             [],
+             :cerl.c_atom(:empty),
+             Enum.take(evars, 2),
+             :cerl.c_atom(:caught)
+           )
+         )},
+        {pair,
+         :cerl.c_fun(
+           [x],
+           :cerl.c_try(returned, [a, b], :cerl.c_tuple([b, a]), evars, :cerl.c_atom(:caught))
+         )},
+        {bound, :cerl.c_fun([x], :cerl.c_let([a, b], protected, :cerl.c_tuple([a, b])))},
+        {empty_bound, :cerl.c_fun([], :cerl.c_let([], :cerl.c_values([]), :cerl.c_atom(:empty)))},
+        {matched,
+         :cerl.c_fun(
+           [x],
+           :cerl.c_case(protected, [
+             :cerl.c_clause([a, b], :cerl.c_tuple([a, b]))
+           ])
+         )}
+      ])
+
+    roots = [{:empty, 0}, {:pair, 1}, {:bound, 1}, {:empty_bound, 0}, {:matched, 1}]
+    callback = fn _, _, _, _, _, _ -> flunk("unexpected remote call") end
+
+    assert {:ok, functions, %{}, []} =
+             :lynx_core_to_leanj.translate(
+               :core_try,
+               :lynx_core_to_leanj.to_definitions(core),
+               roots,
+               %{},
+               %{},
+               {[], callback}
+             )
+
+    by_name =
+      Map.new(functions, fn {{name, _}, function} ->
+        {Atom.to_string(name), function.translation}
+      end)
+
+    assert %{
+             "kind" => "try",
+             "vars" => [],
+             "computation" => %{"kind" => "return", "values" => []},
+             "exception_vars" => [_, _]
+           } = by_name["empty"]["body"]
+
+    assert %{
+             "kind" => "try",
+             "vars" => [_, _],
+             "computation" => %{"kind" => "return", "values" => [_, _]},
+             "exception_vars" => [_, _, _]
+           } = by_name["pair"]["body"]
+
+    assert %{
+             "kind" => "bind",
+             "vars" => [],
+             "computation" => %{"kind" => "return", "values" => []}
+           } = by_name["empty_bound"]["body"]
+
+    assert %{
+             "kind" => "bind",
+             "vars" => [_, _],
+             "computation" => %{
+               "kind" => "try",
+               "computation" => %{"kind" => "return", "values" => [_, _]}
+             }
+           } = by_name["bound"]["body"]
+
+    assert %{
+             "kind" => "bind",
+             "vars" => [left, right],
+             "body" => %{"kind" => "match", "expressions" => [left, right]}
+           } = by_name["matched"]["body"]
+  end
+
   test "recursively translates reachable callees and keeps each function's calls separate" do
     body =
       :cerl.c_let(
@@ -85,7 +189,7 @@ defmodule Lynx.CoreToLeanjTest do
     assert %{
              "body" => %{
                "kind" => "bind",
-               "var" => %{"kind" => "var", "name" => name},
+               "vars" => [%{"kind" => "var", "name" => name}],
                "computation" => %{"kind" => "remote_call", "name" => "entry"},
                "body" => %{
                  "kind" => "match",

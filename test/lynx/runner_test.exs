@@ -114,7 +114,7 @@ defmodule Lynx.RunnerTest do
         definition("value", %{
           "kind" => "return",
           "span" => [4, 15],
-          "value" => %{"kind" => "var", "name" => "missing", "span" => [4, 15]}
+          "values" => [%{"kind" => "var", "name" => "missing", "span" => [4, 15]}]
         })
       ]),
       file(@literal_erl, "Elixir.Unrelated", [definition("value", success())]),
@@ -227,7 +227,7 @@ defmodule Lynx.RunnerTest do
     %{
       "kind" => "return",
       "span" => [],
-      "value" => %{"kind" => "atom", "value" => "true", "span" => []}
+      "values" => [%{"kind" => "atom", "value" => "true", "span" => []}]
     }
   end
 
@@ -276,7 +276,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
           "body" => %{
             "kind" => "return",
             "span" => [4, 15],
-            "value" => %{"kind" => "var", "name" => "missing", "span" => []}
+            "values" => [%{"kind" => "var", "name" => "missing", "span" => []}]
           }
         }
       ])
@@ -510,7 +510,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
     %{
       "kind" => "return",
       "span" => [],
-      "value" => %{"kind" => "atom", "value" => "true", "span" => []}
+      "values" => [%{"kind" => "atom", "value" => "true", "span" => []}]
     }
   end
 

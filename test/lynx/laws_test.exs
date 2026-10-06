@@ -207,7 +207,10 @@ defmodule Lynx.LawsTest do
                      "name" => "identity",
                      "params" => [%{"name" => 0}],
                      "pure" => true,
-                     "body" => %{"kind" => "return", "value" => %{"kind" => "var", "name" => 0}}
+                     "body" => %{
+                       "kind" => "return",
+                       "values" => [%{"kind" => "var", "name" => 0}]
+                     }
                    },
                    %{
                      "kind" => "def",
@@ -261,7 +264,10 @@ defmodule Lynx.LawsTest do
                      "kind" => "def",
                      "name" => "first:ensures",
                      "params" => [_],
-                     "body" => %{"kind" => "return", "value" => %{"kind" => "var", "name" => 0}}
+                     "body" => %{
+                       "kind" => "return",
+                       "values" => [%{"kind" => "var", "name" => 0}]
+                     }
                    },
                    %{
                      "kind" => "def",
@@ -269,7 +275,7 @@ defmodule Lynx.LawsTest do
                      "params" => [],
                      "body" => %{
                        "kind" => "return",
-                       "value" => %{"kind" => "atom", "value" => "true"}
+                       "values" => [%{"kind" => "atom", "value" => "true"}]
                      }
                    },
                    %{

@@ -188,47 +188,59 @@ translate_law_helper(Name, Arity, State) ->
     Next = translate_def(Callee, State),
     Next#state{local_calls = (Next#state.local_calls)#{Callee => true}}.
 
+%% Core try catches only the protected expression, not its success continuation.
+expression(#c_try{anno = Anno, arg = Arg, vars = Vars, body = Body,
+                  evars = EVars, handler = Handler}, State0) ->
+    {TranslatedArg, State1} = expression(Arg, State0),
+    {TranslatedBody, State2} = expression(Body, State1),
+    {TranslatedHandler, State3} = expression(Handler, State2),
+    {node(~"try", Anno, #{~"computation" => TranslatedArg,
+        ~"vars" => [variable(V) || V <- Vars], ~"body" => TranslatedBody,
+        ~"exception_vars" => [variable(V) || V <- EVars],
+        ~"handler" => TranslatedHandler}), State3};
+%% Multiple Core return values are internal Lean products, not Erlang tuples.
+expression(#c_values{anno = Anno, es = Values}, State0) ->
+    {Translated, State1} = lists:mapfoldl(fun value/2, State0, Values),
+    {node(~"return", Anno, #{~"values" => Translated}), State1};
 %% Erlang: case X of [] -> 0; Other -> 1 end
 %% Lean:
 %%   match vX with
 %%   | Lynx.Term.nil => Lynx.Result.ok (Lynx.Term.integer 0)
 %%   | vOther => Lynx.Result.ok (Lynx.Term.integer 1)
 expression(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
-    {Args, Bind, State1} = case Arg of
-        #c_values{es = Es} ->
-            {Translated, Next} = lists:mapfoldl(fun value/2, State0, Es),
-            {Translated, none, Next};
+    {Translated, Next} = expression(Arg, State0),
+    {Args, Bind, State1} = case Translated of
+        #{~"kind" := ~"return", ~"values" := Values} ->
+            {Values, none, Next};
         _ ->
-            {Translated, Next} = expression(Arg, State0),
-            case Translated of
-                #{~"kind" := ~"return", ~"value" := Value} ->
-                    {[Value], none, Next};
-                _ ->
-                    Var = var_node(#{~"generated" => Next#state.next_var}, Anno),
-                    {[Var], {Var, Translated}, Next#state{next_var = Next#state.next_var + 1}}
-            end
+            [#c_clause{pats = Patterns} | _] = Clauses,
+            {Vars, BoundState} = lists:mapfoldl(fun(_, Acc) ->
+                Var = var_node(#{~"generated" => Acc#state.next_var}, Anno),
+                {Var, Acc#state{next_var = Acc#state.next_var + 1}}
+            end, Next, lists:seq(1, length(Patterns))),
+            {Vars, {Vars, Translated}, BoundState}
     end,
     {TranslatedClauses, State2} = lists:mapfoldl(fun clause/2, State1, Clauses),
     Match = node(~"match", Anno, #{~"expressions" => Args, ~"cases" => TranslatedClauses}),
     case Bind of
         none -> {Match, State2};
-        {Binder, Computation} ->
-            {node(~"bind", Anno, #{~"var" => Binder,
+        {Binders, Computation} ->
+            {node(~"bind", Anno, #{~"vars" => Binders,
                 ~"computation" => Computation, ~"body" => Match}), State2}
     end;
 %% Erlang: Y = f(X), g(Y)
 %% Lean: Lynx.Result.bind («f/1» vX) fun vY => «g/1» vY
-expression(#c_let{anno = Anno, vars = [Var], arg = Arg, body = Body}, State0) ->
+expression(#c_let{anno = Anno, vars = Vars, arg = Arg, body = Body}, State0) ->
     {TranslatedArg, State1} = expression(Arg, State0),
     {TranslatedBody, State2} = expression(Body, State1),
-    {node(~"bind", Anno, #{~"var" => variable(Var),
+    {node(~"bind", Anno, #{~"vars" => [variable(V) || V <- Vars],
         ~"computation" => TranslatedArg, ~"body" => TranslatedBody}), State2};
 %% Erlang: f(X), g(X)
 %% Lean: do let _ ← «f/1» vX; «g/1» vX
 expression(#c_seq{anno = Anno, arg = Arg, body = Body}, State0) ->
     {TranslatedArg, State1} = expression(Arg, State0),
     {TranslatedBody, State2} = expression(Body, State1),
-    {node(~"bind", Anno, #{~"var" => node(~"wildcard", Anno, #{}),
+    {node(~"bind", Anno, #{~"vars" => [node(~"wildcard", Anno, #{})],
         ~"computation" => TranslatedArg, ~"body" => TranslatedBody}), State2};
 %% Erlang: f(X, Y)
 %% Lean: «f/2» vX vY
@@ -251,9 +263,10 @@ expression(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->
 %% Erlang: error(Reason)
 %% Lean: Lynx.Result.error (Lynx.Exception.error reason)
 expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
-                   name = #c_literal{val = error}, args = [Reason]}, State0) ->
+                   name = #c_literal{val = Class}, args = [Reason]}, State0)
+        when Class =:= error; Class =:= throw; Class =:= exit ->
     {TranslatedReason, State1} = value(Reason, State0),
-    {node(~"raise", Anno, #{~"class" => ~"error", ~"reason" => TranslatedReason}), State1};
+    {node(~"raise", Anno, #{~"class" => atom_to_binary(Class, utf8), ~"reason" => TranslatedReason}), State1};
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX
 %% Erlang: ?MODULE:f(X) (non-builtin)
@@ -272,26 +285,53 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
                 State0#state{funs = NewFuns, remote = {NewContext, Callback}}, Args),
             {remote_call_node(module_name(Module), atom_to_binary(Name, utf8), TranslatedArgs, Anno), State1#state{pure = State1#state.pure andalso Pure}}
     end;
-%% Erlang: f([]) -> ok.
-%% Core inserts match_fail for arguments that match no function clause.
-%% Lean (the generated fallback body):
-%%   Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
-expression(#c_primop{anno = Anno, name = #c_literal{val = match_fail},
-                     args = [#c_literal{val = {function_clause}}]}, State) ->
-    {error_node(function_clause, Anno), State};
-expression(#c_primop{anno = Anno, name = #c_literal{val = match_fail},
-                     args = [#c_tuple{es = [#c_literal{val = function_clause} | _]}]}, State) ->
-    {error_node(function_clause, Anno), State};
+expression(#c_primop{anno = Anno, name = #c_literal{val = Op}, args = Args}, State) ->
+    prim_op(Op, Anno, Args, State);
 %% Everything else (literals, cons, etc)
 %% Lean: Lynx.Result.ok (Lynx.Term.integer 0)
 expression(Value, State0) ->
     {Translated, State1} = value(Value, State0),
-    {node(~"return", cerl:get_ann(Value), #{~"value" => Translated}), State1}.
+    {node(~"return", cerl:get_ann(Value), #{~"values" => [Translated]}), State1}.
+
+%% Erlang: f([]) -> ok.
+%% Core inserts match_fail for arguments that match no function clause.
+%% Lean (the generated fallback body):
+%%   Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
+prim_op(match_fail, Anno, [#c_literal{val = {function_clause}}], State) ->
+    {error_node(function_clause, Anno), State};
+prim_op(match_fail, Anno, [#c_tuple{es = [#c_literal{val = function_clause} | _]}], State) ->
+    {error_node(function_clause, Anno), State};
+%% The runtime retains class and reason, but does not record stack frames.
+prim_op(build_stacktrace, Anno, [Trace], State0) ->
+    {Translated, State1} = value(Trace, State0),
+    {node(~"stacktrace", Anno, #{~"exception" => Translated}), State1};
+prim_op(raise, Anno, [Trace, Reason], State0) ->
+    {TranslatedTrace, State1} = value(Trace, State0),
+    {TranslatedReason, State2} = value(Reason, State1),
+    {node(~"reraise", Anno, #{~"exception" => TranslatedTrace,
+        ~"reason" => TranslatedReason}), State2};
+prim_op(raw_raise, Anno, [Class, Reason, Trace], State0) ->
+    {TranslatedClass, State1} = value(Class, State0),
+    {TranslatedReason, State2} = value(Reason, State1),
+    {TranslatedTrace, State3} = value(Trace, State2),
+    {node(~"raise_dynamic", Anno, #{~"class" => TranslatedClass,
+        ~"reason" => TranslatedReason, ~"exception" => TranslatedTrace}), State3};
+prim_op(match_fail, Anno, [Reason], State0) ->
+    {Translated, State1} = value(Reason, State0),
+    {node(~"raise", Anno, #{~"class" => ~"error", ~"reason" => Translated}), State1};
+prim_op(Op, Anno, Args, _State) ->
+    unsupported(#c_primop{anno = Anno, name = #c_literal{val = Op}, args = Args}).
 
 clause(#c_clause{anno = Anno, pats = Patterns, guard = #c_literal{val = true}, body = Body}, State0) ->
     {Pats, State1} = lists:mapfoldl(fun value/2, State0, Patterns),
     {TranslatedBody, State2} = expression(Body, State1),
     {#{~"span" => span(Anno), ~"patterns" => Pats, ~"body" => TranslatedBody}, State2};
+clause(#c_clause{anno = Anno, pats = Patterns, guard = Guard, body = Body}, State0) ->
+    {Pats, State1} = lists:mapfoldl(fun value/2, State0, Patterns),
+    {TranslatedGuard, State2} = expression(Guard, State1),
+    {TranslatedBody, State3} = expression(Body, State2),
+    {#{~"span" => span(Anno), ~"patterns" => Pats, ~"guard" => TranslatedGuard,
+       ~"body" => TranslatedBody}, State3};
 clause(Core, _State) ->
     unsupported(Core).
 

@@ -58,6 +58,12 @@ example (computation : Lynx.Result α) :
     (do let value ← computation; pure value) = computation := by
   simp
 
+example (computation : Lynx.Result α) (next : α → Lynx.Result β)
+    (handler : Lynx.Exception → Lynx.Result β) (pure : Lynx.Result.IsPure computation)
+    (nextPure : ∀ value, Lynx.Result.IsPure (next value))
+    (handlerPure : ∀ exception, Lynx.Result.IsPure (handler exception)) :
+    Lynx.Result.IsPure (Lynx.Result.tryWith computation next handler) := by simp [*]
+
 meta section
 
 /-! Snapshot of public types and executable declarations available through `Lynx`,
@@ -80,11 +86,13 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«==/2»",
   "Erlang.erlang.«>/2»",
   "Erlang.erlang.«>=/2»",
+  "Erlang.erlang.«and/2»",
   "Erlang.erlang.«apply/2»",
   "Erlang.erlang.«bit_size/1»",
   "Erlang.erlang.«byte_size/1»",
   "Erlang.erlang.«erase/0»",
   "Erlang.erlang.«erase/1»",
+  "Erlang.erlang.«exit/1»",
   "Erlang.erlang.«get/0»",
   "Erlang.erlang.«get/1»",
   "Erlang.erlang.«get_keys/0»",
@@ -98,6 +106,7 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«self/0»",
   "Erlang.erlang.«send/2»",
   "Erlang.erlang.«spawn/1»",
+  "Erlang.erlang.«throw/1»",
   "Erlang.lists.«reverse/2»",
   "Erlang.maps.«get/2»",
   "Erlang.maps.«merge/2»",
@@ -113,9 +122,13 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Environment.schedule",
   "Lynx.Environment.setPdict",
   "Lynx.Exception",
+  "Lynx.Exception.classTerm",
   "Lynx.Exception.error",
   "Lynx.Exception.exit",
+  "Lynx.Exception.reason",
+  "Lynx.Exception.stacktrace",
   "Lynx.Exception.throw",
+  "Lynx.Exception.withReason",
   "Lynx.Outcome",
   "Lynx.Outcome.deadlock",
   "Lynx.Outcome.error",
@@ -148,6 +161,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.set",
   "Lynx.Result.spawn",
   "Lynx.Result.toExcept",
+  "Lynx.Result.tryWith",
   "Lynx.ScheduleChoice",
   "Lynx.ScheduleChoice.current",
   "Lynx.ScheduleChoice.swap",

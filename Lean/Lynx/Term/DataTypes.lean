@@ -34,6 +34,27 @@ inductive Exception where
   | exit : Term → Exception
 deriving Repr
 
+namespace Exception
+
+@[expose] def classTerm : Exception → Term
+  | .error _ => .atom "error"
+  | .throw _ => .atom "throw"
+  | .exit _ => .atom "exit"
+
+@[expose] def reason : Exception → Term
+  | .error value | .throw value | .exit value => value
+
+/-- Raw Core exception tokens retain their class when re-raised. -/
+@[expose] def withReason : Exception → Term → Exception
+  | .error _, value => .error value
+  | .throw _, value => .throw value
+  | .exit _, value => .exit value
+
+/-- Stack frames are not recorded by the runtime model. -/
+@[expose] def stacktrace (_ : Exception) : Term := .nil
+
+end Exception
+
 structure ProcessState where
   pdict : List (Term × Term) := []
   mailbox : List Term := []
@@ -144,7 +165,7 @@ instance : MonadStateOf Environment @Result where
     let (value, next) := update env
     .set next (.ok value)
 
-protected def handle (computation : Result α) (handler : Exception → Result α) : Result α :=
+@[expose] protected def handle (computation : Result α) (handler : Exception → Result α) : Result α :=
   match computation with
   | .exhausted => .exhausted
   | .ok value => .ok value
@@ -158,6 +179,28 @@ protected def handle (computation : Result α) (handler : Exception → Result �
   | Result.schedule child continuation => Result.schedule child fun pid => Result.handle (continuation pid) handler
   | .send pid message continuation => .send pid message (Result.handle continuation handler)
   | .receive select continuation => .receive select fun value => Result.handle (continuation value) handler
+
+/-- Catch only the protected computation. Exceptions raised by either
+continuation propagate to an enclosing handler. -/
+@[expose] def tryWith (computation : Result α) (next : α → Result β)
+    (handler : Exception → Result β) : Result β :=
+  Result.bind
+    (Result.handle (Result.bind computation (fun value => .ok (Except.ok value)))
+      (fun exception => .ok (Except.error exception)))
+    (fun reply => match reply with
+      | .ok value => next value
+      | .error exception => handler exception)
+
+@[simp] theorem tryWith_ok (value : α) (next : α → Result β)
+    (handler : Exception → Result β) :
+    Result.tryWith (.ok value) next handler = next value := rfl
+
+@[simp] theorem tryWith_error (exception : Exception) (next : α → Result β)
+    (handler : Exception → Result β) :
+    Result.tryWith (.error exception) next handler = handler exception := rfl
+
+@[simp] theorem tryWith_exhausted (next : α → Result β) (handler : Exception → Result β) :
+    Result.tryWith .exhausted next handler = .exhausted := rfl
 
 instance : MonadExceptOf Exception @Result where
   throw := .error
@@ -251,6 +294,11 @@ instance : LawfulMonad @Result := LawfulMonad.mk' _
 @[simp] theorem not_isPure_receive (select : Term → Option β) (next : β → Result α) :
     ¬ IsPure (.receive select next) := by simp [IsPure]
 
+@[simp↓] theorem IsPure.handle (computation : Result α) (handler : Exception → Result α)
+    (computationPure : IsPure computation) (handlerPure : ∀ exception, IsPure (handler exception)) :
+    IsPure (Result.handle computation handler) := by
+  cases computation <;> simp_all [IsPure, Result.handle]
+
 @[simp↓] theorem IsPure.bind (computation : Result α) (next : α → Result β)
     (computationPure : IsPure computation) (nextPure : ∀ value, IsPure (next value)) :
     IsPure (computation >>= next) := by
@@ -262,6 +310,13 @@ instance : LawfulMonad @Result := LawfulMonad.mk' _
     (computationPure : IsPure computation) (nextPure : ∀ value, IsPure (next value)) :
     IsPure (Result.bind computation next) :=
   IsPure.bind computation next computationPure nextPure
+
+@[simp↓] theorem IsPure.tryWith (computation : Result α) (next : α → Result β)
+    (handler : Exception → Result β) (protectedPure : IsPure computation)
+    (nextPure : ∀ value, IsPure (next value))
+    (handlerPure : ∀ exception, IsPure (handler exception)) :
+    IsPure (Result.tryWith computation next handler) := by
+  cases computation <;> simp_all [IsPure, Result.tryWith, Result.bind, Result.handle]
 
 @[simp] theorem not_isPure_exhausted : ¬ IsPure (.exhausted : Result α) := by simp [IsPure]
 
