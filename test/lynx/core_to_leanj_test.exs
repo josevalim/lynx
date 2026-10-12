@@ -94,6 +94,60 @@ defmodule Lynx.CoreToLeanjTest do
     assert first["value"] == %{"kind" => "integer", "value" => 1, "span" => []}
   end
 
+  test "lowers mixed map updates to calls and fresh binds with dependencies" do
+    base = :cerl.c_var(0)
+    key = :cerl.c_atom(:a)
+    assoc = :cerl.ann_c_map_pair([10], :cerl.c_atom(:assoc), key, :cerl.c_int(1))
+    exact = :cerl.ann_c_map_pair([11], :cerl.c_atom(:exact), key, :cerl.c_int(2))
+    update = :cerl.c_map(base, [assoc, exact, assoc])
+    # A surrounding match also allocates a generated variable.
+    body = :cerl.c_case(update, [:cerl.c_clause([:cerl.c_var(:result)], :cerl.c_var(:result))])
+
+    assert {:ok, functions, calls} = translate(definitions([definition(:entry, body)]))
+    assert functions[{:entry, 1}].pure
+    assert calls == [{:maps, :put, 3, [10]}, {:maps, :update, 3, [11]}, {:maps, :put, 3, [10]}]
+    outer = functions[{:entry, 1}].translation["body"]
+    first = outer["computation"]
+    second = first["body"]
+    assert first["kind"] == "bind"
+    assert first["computation"]["module"] == "Erlang.maps"
+    assert first["computation"]["name"] == "put"
+
+    assert first["computation"]["args"] |> List.last() == %{
+             "kind" => "var",
+             "name" => 0,
+             "span" => []
+           }
+
+    assert second["computation"]["name"] == "update"
+    assert List.last(second["computation"]["args"]) == hd(first["vars"])
+    assert second["body"]["name"] == "put"
+    assert List.last(second["body"]["args"]) == hd(second["vars"])
+
+    assert Enum.map(first["vars"] ++ second["vars"] ++ outer["vars"], & &1["name"]) ==
+             [%{"generated" => 0}, %{"generated" => 1}, %{"generated" => 2}]
+
+    assert {:ok, impure, _} =
+             translate(definitions([definition(:entry, update)]), %{}, %{
+               {:maps, :update, 3} => false
+             })
+
+    refute impure[{:entry, 1}].pure
+  end
+
+  test "lowers exact updates even with an empty literal base" do
+    pair = :cerl.c_map_pair_exact(:cerl.c_atom(:a), :cerl.c_int(1))
+    body = :cerl.c_map(:cerl.abstract(%{}), [pair])
+
+    assert {:ok, functions, [{:maps, :update, 3, []}]} =
+             translate(definitions([definition(:entry, body)]))
+
+    call = functions[{:entry, 1}].translation["body"]
+    assert call["kind"] == "remote_call"
+    assert call["name"] == "update"
+    assert List.last(call["args"]) == %{"kind" => "map", "entries" => [], "span" => []}
+  end
+
   test "marks fallthrough solely from whether the Core guard is literally true" do
     guards = [
       :cerl.c_atom(true),

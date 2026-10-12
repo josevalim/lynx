@@ -310,6 +310,18 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
     end;
 expression(#c_primop{anno = Anno, name = #c_literal{val = Op}, args = Args}, State) ->
     prim_op(Op, Anno, Args, State);
+%% Construction remains a value; updates may fail and are computations.
+expression(#c_map{arg = #c_literal{val = Base}, is_pat = false} = Map, State0)
+        when is_map(Base), map_size(Base) =:= 0 ->
+    case lists:all(fun(#c_map_pair{op = #c_literal{val = assoc}}) -> true;
+                     (_) -> false end, Map#c_map.es) of
+        true ->
+            {Translated, State1} = value(Map, State0),
+            {node(~"return", Map#c_map.anno, #{~"values" => [Translated]}), State1};
+        false -> map_update(Map, State0)
+    end;
+expression(#c_map{is_pat = false} = Map, State0) ->
+    map_update(Map, State0);
 %% Everything else (literals, cons, etc)
 %% Lean: Lynx.Result.ok (Lynx.Term.integer 0)
 expression(Value, State0) ->
@@ -469,6 +481,35 @@ value(#c_map{anno = Anno, arg = #c_literal{val = Base}, es = Pairs,
     {node(~"map", Anno, #{~"entries" => Entries}), State1};
 value(Core, _State) ->
     unsupported(Core).
+
+map_update(#c_map{anno = Anno, arg = Base, es = Pairs}, State0) ->
+    {TranslatedBase, State1} = value(Base, State0),
+    map_updates(Pairs, TranslatedBase, Anno, State1).
+
+map_updates([], Base, Anno, State) ->
+    {node(~"return", Anno, #{~"values" => [Base]}), State};
+map_updates([#c_map_pair{anno = Anno, op = #c_literal{val = Op},
+                         key = Key, val = Value} | Rest], Base, MapAnno, State0)
+        when Op =:= assoc; Op =:= exact ->
+    Name = case Op of assoc -> put; exact -> update end,
+    {Context, Callback} = State0#state.remote,
+    {Pure, NewFuns, NewContext} = Callback(Context, maps, Name, 3, Anno, State0#state.funs),
+    {TranslatedKey, State1} = value(Key,
+        State0#state{funs = NewFuns, remote = {NewContext, Callback}}),
+    {TranslatedValue, State2} = value(Value, State1),
+    Call = remote_call_node(module_name(maps), atom_to_binary(Name, utf8),
+        [TranslatedKey, TranslatedValue, Base], Anno),
+    State3 = State2#state{pure = State2#state.pure andalso Pure},
+    case Rest of
+        [] -> {Call, State3};
+        _ ->
+            Var = var_node(#{~"generated" => State3#state.next_var}, Anno),
+            {Body, State4} = map_updates(Rest, Var, MapAnno,
+                State3#state{next_var = State3#state.next_var + 1}),
+            {node(~"bind", MapAnno, #{~"vars" => [Var],
+                ~"computation" => Call, ~"body" => Body}), State4}
+    end;
+map_updates([Core | _], _, _, _) -> unsupported(Core).
 
 map_entry(#c_map_pair{anno = Anno, op = #c_literal{val = assoc},
                        key = Key, val = Value}, State0) ->

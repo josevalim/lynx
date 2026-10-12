@@ -1,5 +1,6 @@
 {"maps":
- {"put/3": {"pure": true},
+ {"update/3": {"pure": true},
+  "put/3": {"pure": true},
   "new/0": {"pure": true},
   "merge/2": {"pure": true},
   "get/2": {"pure": true}},
@@ -12,6 +13,7 @@
   "put/2": {"pure": false},
   "or/2": {"pure": true},
   "not/1": {"pure": true},
+  "is_map/1": {"pure": true},
   "is_list/1": {"pure": true},
   "is_integer/1": {"pure": true},
   "is_float/1": {"pure": true},

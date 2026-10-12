@@ -1,6 +1,7 @@
 module
 
 import Lynx.Modules.Erlang.maps
+import Lynx.Modules.Erlang.erlang
 meta import LynxTest.ProofAudit
 import Lynx
 import all Lynx.Term.Compare
@@ -64,6 +65,43 @@ theorem bad_maps : ∀ bad ∈ [one, .nil, .tuple #[]],
   intro bad h
   simp only [List.mem_cons, List.not_mem_nil, or_false] at h
   rcases h with rfl | rfl | rfl <;> simp [Erlang.maps.«get/2», Erlang.maps.«put/3», Erlang.maps.«merge/2», one]
+
+theorem update_existing :
+    Erlang.maps.«update/3» a two (.map [(a, one)]) = .ok (.map [(a, two), (a, one)]) := rfl
+
+theorem update_missing (key value : Term) :
+    Erlang.maps.«update/3» key value (.map []) =
+      .error (.error (.tuple #[.atom "badkey", key])) := rfl
+
+theorem update_numeric_keys :
+    Erlang.maps.«update/3» (.integer 1) two (.map [(.float floatOne, one)]) =
+      .error (.error (.tuple #[.atom "badkey", .integer 1])) := rfl
+
+theorem mixed_same_key :
+    (Erlang.maps.«put/3» a one (.map []) >>= Erlang.maps.«update/3» a two) =
+      .ok (.map [(a, two), (a, one)]) ∧
+    (Erlang.maps.«update/3» a one (.map []) >>= Erlang.maps.«put/3» a two) =
+      .error (.error (.tuple #[.atom "badkey", a])) := ⟨rfl, rfl⟩
+
+theorem update_badmap (n : Int) :
+    Erlang.maps.«update/3» a one (.integer n) =
+      .error (.error (.tuple #[.atom "badmap", .integer n])) := rfl
+
+theorem update_lookup (m key value old : Term)
+    (present : Erlang.maps.«get/2» key m = .ok old) :
+    (Erlang.maps.«update/3» key value m >>= Erlang.maps.«get/2» key) = .ok value :=
+  Erlang.maps.get_after_update m key value old present
+
+theorem update_other_lookup (entries : List (Term × Term)) (key other value old : Term)
+    (present : Erlang.maps.«get/2» key (.map entries) = .ok old)
+    (distinct : Term.exactCompare other key ≠ .eq) :
+    (Erlang.maps.«update/3» key value (.map entries) >>= Erlang.maps.«get/2» other) =
+      Erlang.maps.«get/2» other (.map entries) :=
+  Erlang.maps.get_after_update_other entries key other value old present distinct
+
+theorem is_map_guard (entries : List (Term × Term)) :
+    Erlang.erlang.«is_map/1» (.map entries) = .ok Term.true ∧
+    Erlang.erlang.«is_map/1» one = .ok Term.false := ⟨rfl, rfl⟩
 
 end LynxTest.Modules.Maps
 

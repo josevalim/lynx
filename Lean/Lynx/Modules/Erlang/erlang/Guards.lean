@@ -32,6 +32,9 @@ open Lynx
 #lynx_pure @[expose] def «is_integer/1» (input : Term) : Result :=
   .ok (match input with | .integer _ => Term.true | _ => Term.false)
 
+#lynx_pure @[expose] def «is_map/1» (input : Term) : Result :=
+  .ok (match input with | .map _ => Term.true | _ => Term.false)
+
 #lynx_pure @[expose] def «is_float/1» (input : Term) : Result :=
   .ok (match input with | .float _ => Term.true | _ => Term.false)
 
