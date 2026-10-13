@@ -204,13 +204,14 @@ defmodule Lynx.CoreToLeanjTest do
            } = functions[{:entry, 1}].translation["body"]
   end
 
-  test "inlines compiler fallthrough labels without evaluating their body eagerly" do
+  test "preserves compiler fallthrough labels and their jump sites" do
     label = :cerl.c_fname(:label, 0)
     fallback = :cerl.c_call(:cerl.c_atom(:other), :cerl.c_atom(:fallback), [])
 
     guarded =
       :cerl.c_case(:cerl.c_var(0), [
         :cerl.c_clause([:cerl.c_atom(true)], :cerl.c_atom(:matched)),
+        :cerl.c_clause([:cerl.c_atom(false)], :cerl.c_apply(label, [])),
         :cerl.c_clause([:cerl.c_var(:other)], :cerl.c_apply(label, []))
       ])
 
@@ -220,24 +221,69 @@ defmodule Lynx.CoreToLeanjTest do
              translate(definitions([definition(:entry, body)]))
 
     assert %{
-             "kind" => "match",
-             "cases" => [
-               %{
-                 "body" => %{
+             "kind" => "label",
+             "label" => "label",
+             "continuation" => %{
+               "kind" => "remote_call",
+               "module" => "Erlang.other",
+               "name" => "fallback",
+               "args" => []
+             },
+             "body" => %{
+               "kind" => "match",
+               "cases" => [
+                 %{
+                   "body" => %{
+                     "kind" => "return",
+                     "values" => [%{"kind" => "atom", "value" => "matched"}]
+                   }
+                 },
+                 %{"body" => %{"kind" => "jump", "label" => "label"}},
+                 %{"body" => %{"kind" => "jump", "label" => "label"}}
+               ]
+             }
+           } = functions[{:entry, 1}].translation["body"]
+  end
+
+  test "preserves nested compiler labels with immediate jumps" do
+    outer = :cerl.c_fname(:outer, 0)
+    inner = :cerl.c_fname(:inner, 0)
+
+    nested =
+      :cerl.ann_c_letrec(
+        [:letrec_goto],
+        [{inner, :cerl.c_fun([], :cerl.c_apply(outer, []))}],
+        :cerl.c_apply(inner, [])
+      )
+
+    body =
+      :cerl.ann_c_letrec(
+        [:letrec_goto],
+        [{outer, :cerl.c_fun([], :cerl.c_atom(:fallback))}],
+        nested
+      )
+
+    assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
+
+    assert %{
+             local_calls: [],
+             translation: %{
+               "body" => %{
+                 "kind" => "label",
+                 "label" => "outer",
+                 "continuation" => %{
                    "kind" => "return",
-                   "values" => [%{"kind" => "atom", "value" => "matched"}]
-                 }
-               },
-               %{
+                   "values" => [%{"kind" => "atom", "value" => "fallback"}]
+                 },
                  "body" => %{
-                   "kind" => "remote_call",
-                   "module" => "Erlang.other",
-                   "name" => "fallback",
-                   "args" => []
+                   "kind" => "label",
+                   "label" => "inner",
+                   "continuation" => %{"kind" => "jump", "label" => "outer"},
+                   "body" => %{"kind" => "jump", "label" => "inner"}
                  }
                }
-             ]
-           } = functions[{:entry, 1}].translation["body"]
+             }
+           } = functions[{:entry, 1}]
   end
 
   test "marks clauses without map patterns solely from whether the Core guard is literally true" do

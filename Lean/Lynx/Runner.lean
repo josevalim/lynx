@@ -191,7 +191,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     (j : Json) : DecodeM (TSyntax `term) := do
   let info ← span map j parent
   let kind ← str j "kind"
-  if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "raise_dynamic", "reraise", "match", "receive", "try", "stacktrace"] then
+  if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "raise_dynamic", "reraise", "match", "receive", "try", "stacktrace", "label", "jump"] then
     throw s!"{kind} is not valid in patterns"
   let result ← match kind with
   | "$list" => do
@@ -293,6 +293,18 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let args ← (← arr j "args").mapM (term map info false)
     let apply := mkIdent ``Lynx.Term.apply
     pure (Unhygienic.run `($apply $fn #[$args,*]))
+  | "label" => do
+    fields j ["kind", "label", "continuation", "body", "span"]
+    let label := mkIdent (Name.mkSimple s!"lynxLabel_{← str j "label"}")
+    let continuation ← term map info false (← field j "continuation")
+    let body ← term map info false (← field j "body")
+    let unitType := mkIdent ``Unit
+    -- Use the same applied-lambda form as match fallthrough continuations.
+    pure (Unhygienic.run `((fun $label => $body) (fun (_ : $unitType) => $continuation)))
+  | "jump" => do
+    fields j ["kind", "label", "span"]
+    let label := mkIdent (Name.mkSimple s!"lynxLabel_{← str j "label"}")
+    pure (Unhygienic.run `($label ()))
   | "bind" => do
     fields j ["kind", "vars", "computation", "body", "span"]
     let vars ← (← arr j "vars").mapM fun binder => do

@@ -7,7 +7,7 @@
 %% Anonymous functions use integer keys; named functions use {Module, {Name, Arity}}.
 %% Every entry carries a global integer ID for ordering and dispatch.
 -record(state, {module, name, defs, translated, funs = #{},
-                local_calls = #{}, pure = true, remote, next_var = 0}).
+                local_calls = #{}, pure = true, remote, next_var = 0, labels = #{}}).
 
 -spec module_name(module()) -> binary().
 module_name(Module) ->
@@ -154,7 +154,7 @@ translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensure
     translate_definition(Name, Anno, Params, {law, maps:find(requires, Law), Ensures, Proof}, State).
 
 translate_definition(Name, Anno, Vars, Definition, State0) ->
-    State1 = State0#state{name = Name, local_calls = #{}, pure = true, next_var = 0,
+    State1 = State0#state{name = Name, local_calls = #{}, pure = true, next_var = 0, labels = #{},
                           translated = (State0#state.translated)#{Name => pending}},
     {Def, State2} = case Definition of
         {function, Body} ->
@@ -192,8 +192,10 @@ translate_law_helper(Name, Arity, State) ->
 %% translating ordinary expressions; loop identity is checked structurally,
 %% never inferred from the compiler's generated function spelling.
 expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
-             #c_fun{vars = [], body = LoopBody}}],
-             body = #c_apply{op = #c_var{name = Loop}, args = []}} = Core, State0) ->
+             #c_fun{vars = [], body = #c_let{arg = #c_primop{
+                 name = #c_literal{val = ReceiveOp}}} = LoopBody}}],
+             body = #c_apply{op = #c_var{name = Loop}, args = []}} = Core, State0)
+        when ReceiveOp =:= recv_peek_message; ReceiveOp =:= recv_wait_timeout ->
     {Message, Clauses, Timeout, Action} = receive_parts(LoopBody, Loop, Core),
     {TranslatedMessage, State1} = case Message of
         none ->
@@ -211,18 +213,18 @@ expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
     {node(~"receive", Anno, #{~"message" => TranslatedMessage,
         ~"cases" => TranslatedClauses, ~"timeout" => TranslatedTimeout,
         ~"after" => TranslatedAction}), State4#state{pure = false}};
-%% Computed map-pattern keys use a nonrecursive compiler label for clause
-%% fallthrough. Inline its zero-argument body without evaluating it eagerly.
+%% Preserve nonrecursive compiler labels; Lean renders the shared continuation.
 expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Label},
              #c_fun{vars = [], body = Fallback}}], body = Body} = Core, State0) ->
     case lists:member(letrec_goto, Anno) andalso
             not lists:member(Label, cerl_trees:free_variables(Fallback)) of
         true ->
-            Expanded = cerl_trees:map(fun
-                (#c_apply{op = #c_var{name = Name}, args = []}) when Name =:= Label -> Fallback;
-                (Node) -> Node
-            end, Body),
-            expression(Expanded, State0);
+            {TranslatedFallback, State1} = expression(Fallback, State0),
+            {TranslatedBody, State2} = expression(Body,
+                State1#state{labels = (State1#state.labels)#{Label => true}}),
+            {node(~"label", Anno, #{~"label" => function_name(Label),
+                ~"continuation" => TranslatedFallback, ~"body" => TranslatedBody}),
+             State2#state{labels = State0#state.labels}};
         false -> unsupported(Core)
     end;
 %% Core try catches only the protected expression, not its success continuation.
@@ -281,15 +283,21 @@ expression(#c_seq{anno = Anno, arg = Arg, body = Body}, State0) ->
         ~"computation" => TranslatedArg, ~"body" => TranslatedBody}), State2};
 %% Erlang: f(X, Y)
 %% Lean: «f/2» vX vY
-expression(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args}, State0) ->
-    {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
-    State2 = translate_def(Name, State1),
-    Calls = case State2#state.name of
-        Name -> State2#state.local_calls;
-        _ -> (State2#state.local_calls)#{Name => true}
-    end,
-    {local_call_node(function_name(Name), TranslatedArgs, Anno),
-     State2#state{local_calls = Calls}};
+expression(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args} = Core, State0) ->
+    case maps:is_key(Name, State0#state.labels) of
+        true when Args =:= [] ->
+            {node(~"jump", Anno, #{~"label" => function_name(Name)}), State0};
+        true -> unsupported(Core);
+        false ->
+            {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
+            State2 = translate_def(Name, State1),
+            Calls = case State2#state.name of
+                Name -> State2#state.local_calls;
+                _ -> (State2#state.local_calls)#{Name => true}
+            end,
+            {local_call_node(function_name(Name), TranslatedArgs, Anno),
+             State2#state{local_calls = Calls}}
+    end;
 %% Erlang: F(X, Y)
 %% Lean: Lynx.Term.apply vF #[vX, vY]
 expression(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->

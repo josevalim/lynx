@@ -120,25 +120,27 @@ namespace Erlang.patterns
 
 #lynx_pure
   def «map_computed/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
-    match _1 with
-    | _6@(Lynx.Term.map _) => do
-      let (_11, _7) ←
-        Lynx.Result.tryWith (Erlang.erlang.«+/2» _0 (Lynx.Term.integer 1))
-            (fun _7 => pure (Lynx.Term.atom "true", _7))
-            (fun _8 =>
-              let _10 := Lynx.Exception.classTerm _8
-              let _9 := Lynx.Exception.reason _8
-              pure (Lynx.Term.atom "false", Lynx.Term.atom "false"))
-      (fun lynxMatchNext =>
-            match _11, _6 with
-            | Lynx.Term.atom "true", lynxMap195 =>
-              match (Lynx.Term.getMapKeys [_7] lynxMap195) with
-              | [vValue] => pure vValue
-              | _ => lynxMatchNext ()
-            | _, _ => lynxMatchNext ())
-          (fun (_ : Unit) =>
-            match _11, _6 with
-            | _15, _16 => pure (Lynx.Term.atom "missing"))
-    | _13 => pure (Lynx.Term.atom "missing")
+    (fun «lynxLabel_label^0» =>
+        match _1 with
+        | _6@(Lynx.Term.map _) => do
+          let (_11, _7) ←
+            Lynx.Result.tryWith (Erlang.erlang.«+/2» _0 (Lynx.Term.integer 1))
+                (fun _7 => pure (Lynx.Term.atom "true", _7))
+                (fun _8 =>
+                  let _10 := Lynx.Exception.classTerm _8
+                  let _9 := Lynx.Exception.reason _8
+                  pure (Lynx.Term.atom "false", Lynx.Term.atom "false"))
+          (fun lynxMatchNext =>
+                match _11, _6 with
+                | Lynx.Term.atom "true", lynxMap198 =>
+                  match (Lynx.Term.getMapKeys [_7] lynxMap198) with
+                  | [vValue] => pure vValue
+                  | _ => lynxMatchNext ()
+                | _, _ => lynxMatchNext ())
+              (fun (_ : Unit) =>
+                match _11, _6 with
+                | _15, _16 => «lynxLabel_label^0» ())
+        | _13 => «lynxLabel_label^0» ())
+      (fun (_ : Unit) => pure (Lynx.Term.atom "missing"))
 
 end Erlang.patterns
