@@ -86,6 +86,7 @@ private structure DecodeState where
   spans : Array Span := #[]
   diagnostics : Array ProofDiagnostic := #[]
   theorems : Array (Name × Span) := #[]
+  mapPatterns : Array (TSyntax `term × Json) := #[]
 
 private abbrev DecodeM := ReaderT Lean.Environment (StateT DecodeState (Except String))
 
@@ -137,9 +138,13 @@ private def variableName (j : Json) : DecodeM (TSyntax `ident) := do
       | .ok name => pure (if name.startsWith "_" then "_v" ++ name else "v" ++ name)
       | .error _ => do
         -- Generated binders occupy a namespace that Core variable names cannot reach.
-        fields value ["generated"]
-        let index ← (← field value "generated").getNat?
-        pure s!"lynxGenerated{index}"
+        if (field value "pattern").isOk then
+          fields value ["pattern"]
+          pure s!"lynxMap{← (← field value "pattern").getNat?}"
+        else
+          fields value ["generated"]
+          let index ← (← field value "generated").getNat?
+          pure s!"lynxGenerated{index}"
   return mkIdent (Name.mkSimple name)
 
 private def param (map : FileMap) (info : Span) (j : Json) : DecodeM (TSyntax `ident) := do
@@ -154,6 +159,34 @@ private def product (values : Array (TSyntax `term)) : DecodeM (TSyntax `term) :
     result := Unhygienic.run `(($value, $result))
   return result
 
+private partial def catchAllPattern (j : Json) : Except String Bool := do
+  match ← str j "kind" with
+  | "var" | "wildcard" => return true
+  | "map" => return !(← arr j "entries").isEmpty
+  | "alias" => catchAllPattern (← field j "pattern")
+  | _ => return false
+
+/-- Collect map lookups during ordinary recursive pattern decoding. -/
+private def withMapPatterns (decode : DecodeM α) : DecodeM (α × Array (TSyntax `term × Json)) := do
+  let saved := (← get).mapPatterns
+  modify fun s => { s with mapPatterns := #[] }
+  let result ← decode
+  let patterns := (← get).mapPatterns
+  modify fun s => { s with mapPatterns := saved }
+  return (result, patterns)
+
+/-- Decode extracted values through the existing recursive pattern decoder,
+then match the lookup directly with the clause's fallthrough continuation. -/
+private partial def mapMatches (patterns : Array (TSyntax `term × Json))
+    (decode : Json → DecodeM (TSyntax `term)) (body fallback : TSyntax `term) :
+    DecodeM (TSyntax `term) := do
+  let mut branch := body
+  for (lookup, pattern) in patterns.reverse do
+    let (pat, nested) ← withMapPatterns (decode pattern)
+    let matched ← mapMatches nested decode branch fallback
+    branch := Unhygienic.run `(match ($lookup) with | $pat => $matched | _ => $fallback)
+  return branch
+
 private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     (j : Json) : DecodeM (TSyntax `term) := do
   let info ← span map j parent
@@ -161,6 +194,10 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "raise_dynamic", "reraise", "match", "receive", "try", "stacktrace"] then
     throw s!"{kind} is not valid in patterns"
   let result ← match kind with
+  | "$list" => do
+    fields j ["kind", "elements", "span"]
+    let elements ← (← arr j "elements").mapM (term map info pattern)
+    pure (Unhygienic.run `([$elements,*]))
   | "wildcard" => do
     fields j ["kind", "span"]
     unless pattern do throw "wildcard is only valid in patterns"
@@ -205,10 +242,31 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     fields j ["kind", "elements", "span"]
     let elements ← (← arr j "elements").mapM (term map info pattern)
     let ctor := mkIdent ``Lynx.Term.tuple
-    pure (Unhygienic.run `($ctor #[$elements,*]))
+    -- Use Array's ordinary constructor in patterns, avoiding the array-literal
+    -- match elaborator's auxiliary arity checks and equality proofs.
+    if pattern then pure (Unhygienic.run `($ctor ⟨[$elements,*]⟩))
+    else pure (Unhygienic.run `($ctor #[$elements,*]))
   | "map" => do
     fields j ["kind", "entries", "span"]
-    if pattern then throw "map is not valid in patterns"
+    if pattern then
+      let entries ← arr j "entries"
+      if entries.isEmpty then
+        let ctor := mkIdent ``Lynx.Term.map
+        return withSpan info.info (Unhygienic.run `($ctor _))
+      let nodeSpan ← field j "span"
+      let binder := Json.mkObj [("kind", toJson "var"),
+        ("name", Json.mkObj [("pattern", toJson (← get).spans.size)]), ("span", nodeSpan)]
+      let keys ← entries.mapM fun entry => do
+        fields entry ["key", "value", "span"]
+        let ei ← span map entry info
+        term map ei false (← field entry "key")
+      let values ← entries.mapM fun entry => field entry "value"
+      let input ← term map info true binder
+      let getMapKeys := mkIdent ``Lynx.Term.getMapKeys
+      let lookup := withSpan info.info (Unhygienic.run `($getMapKeys [$keys,*] $input))
+      let values := Json.mkObj [("kind", toJson "$list"), ("elements", toJson values), ("span", nodeSpan)]
+      modify fun s => { s with mapPatterns := s.mapPatterns.push (lookup, values) }
+      return input
     let entries ← (← arr j "entries").mapM fun entry => do
       fields entry ["key", "value", "span"]
       let ei ← span map entry info
@@ -344,6 +402,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let mut payloadTypes : Array (TSyntax `term) := #[]
     let mut payloads : Array (TSyntax `term) := #[]
     let mut patterns : Array (TSyntax `term) := #[]
+    let mut lookups : Array (Array (TSyntax `term × Json)) := #[]
     let mut guards : Array (TSyntax `term) := #[]
     let mut bodies : Array (TSyntax `term) := #[]
     for clause in clauses do
@@ -362,7 +421,9 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
           payloadType := Unhygienic.run `($termType × $payloadType)
       payloadTypes := payloadTypes.push payloadType
       payloads := payloads.push payload
-      patterns := patterns.push (← term map ci true (← field clause "pattern"))
+      let (pat, maps) ← withMapPatterns (term map ci true (← field clause "pattern"))
+      patterns := patterns.push pat
+      lookups := lookups.push maps
       guards := guards.push (← term map ci false (← field clause "guard"))
       bodies := bodies.push (← term map ci false (← field clause "body"))
     let sum := mkIdent ``Sum
@@ -404,11 +465,12 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
         match ($toExcept $guard $env:ident $purity) with
         | $exceptOk ($atomId "true") => $accepted
         | _ => $fallback ()))
+      let branch ← mapMatches lookups[i]! (term map info true) branch (Unhygienic.run `($fallback ()))
       let rest := select
-      let catchAll := (← str (← field clauses[i]! "pattern") "kind") ∈ ["var", "wildcard"]
+      let catchAll ← catchAllPattern (← field clauses[i]! "pattern")
       let matched := if catchAll then Unhygienic.run `(match $message:ident with | $pat => $branch)
         else Unhygienic.run `(match $message:ident with | $pat => $branch | _ => $fallback ())
-      select := if catchAll && unconditional then matched else Unhygienic.run `(
+      select := if catchAll && unconditional && lookups[i]!.isEmpty then matched else Unhygienic.run `(
         let $fallback := fun (_ : $unitType) => ($rest : $option $bindingType)
         $matched)
     let selector := if clauses.isEmpty then Unhygienic.run `(fun (_ : $envType) (_ : $termType) => ($noneId : $option $bindingType))
@@ -428,16 +490,21 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let exprs ← (← arr j "expressions").mapM (term map info false)
     let unit : TSyntax `term := ⟨(mkIdent ``Unit.unit).raw⟩
     let clauses ← arr j "cases"
-    let nests ← clauses.mapM fun c => do (← field c "nest").getBool?
-    let mut cases ← clauses.mapM fun c => do
+    let mut nests : Array Bool := #[]
+    let mut lookups : Array (Array (TSyntax `term × Json)) := #[]
+    let mut cases : Array (TSyntax ``Lean.Parser.Term.matchAlt) := #[]
+    for c in clauses do
       fields c (if (field c "guard").isOk then ["patterns", "nest", "guard", "body", "span"]
         else ["patterns", "nest", "body", "span"])
       let ci ← span map c info
-      let pats ← (← arr c "patterns").mapM (term map ci true)
+      let (pats, maps) ← withMapPatterns ((← arr c "patterns").mapM (term map ci true))
+      lookups := lookups.push maps
       unless pats.size == exprs.size do throw "match case must have one pattern per expression"
       let pats := if pats.isEmpty then #[unit] else pats
       let body ← term map ci false (← field c "body")
-      pure (withSpan ci.info (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $pats,* => $body)))
+      nests := nests.push ((← (← field c "nest").getBool?) || !maps.isEmpty)
+      cases := cases.push (withSpan ci.info
+        (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $pats,* => $body)))
     if cases.isEmpty then throw "match requires at least one case"
     -- Core can omit the fallback when it knows an operation returns a Boolean.
     -- Term's type includes other values, so Lean still needs an exhaustive match.
@@ -473,15 +540,17 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
         if nests[i]?.getD false then
           let c := clauses[i]!
           let ci ← span map c info
-          let guard ← term map ci false (← field c "guard")
           match cases[i]! with
           | `(Lean.Parser.Term.matchAltExpr| | $pats,* => $body) =>
-            let branch := Unhygienic.run `($tryWith $guard (fun $value:ident =>
-              match $value:ident with
-              | $atom "true" => $body
-              | _ => $fallback ()) (fun _ => $fallback ()))
-            let catchAll ← (← arr c "patterns").allM fun p => do
-              pure ((← str p "kind") ∈ ["var", "wildcard"])
+            let branch ← if (field c "guard").isOk then do
+              let guard ← term map ci false (← field c "guard")
+              pure (Unhygienic.run `($tryWith $guard (fun $value:ident =>
+                match $value:ident with
+                | $atom "true" => $body
+                | _ => $fallback ()) (fun _ => $fallback ())))
+              else pure body
+            let branch ← mapMatches lookups[i]! (term map ci true) branch (Unhygienic.run `($fallback ()))
+            let catchAll ← (← arr c "patterns").allM fun pat => do return ← catchAllPattern pat
             let matched := if catchAll then Unhygienic.run `(
               match $[$exprs:term],* with | $pats,* => $branch)
               else Unhygienic.run `(
@@ -493,7 +562,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
           stop := i
         else
           -- Keep consecutive unconditional clauses in one ordinary match, including
-          -- recursive suffixes. Only guarded clauses introduce fallback thunks.
+          -- recursive suffixes. Guards and map patterns introduce fallback thunks.
           let mut start := i
           while start > 0 && !(nests[start - 1]?.getD false) do
             start := start - 1

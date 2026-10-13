@@ -2,6 +2,7 @@ module
 
 public import Lynx.Term.DataTypes
 public import Lynx.Term.Compare
+public import Lynx.Term.Maps
 public import Lynx.Term.Runner
 public import Lynx.Term.Induction
 

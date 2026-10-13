@@ -29,7 +29,7 @@ def «selective/1» (_0 : Lynx.Term) : Lynx.Result :=
             | _ => lynxReceiveNext () :
             Option (Sum Lynx.Term Unit))
         match _3 with
-        | Lynx.Term.tuple #[_2, vX] =>
+        | Lynx.Term.tuple ⟨[_2, vX]⟩ =>
           match
             (Lynx.Result.toExceptRead (Erlang.erlang.«=:=/2» _2 _0) _lynxReceiveEnv
               (by simp (config := { maxDischargeDepth := 64 }))) with
@@ -57,7 +57,7 @@ def «guarded/1» (_0 : Lynx.Term) : Lynx.Result :=
                     | _ => lynxReceiveNext () :
                     Option (Sum Lynx.Term (Sum Lynx.Term (Sum Lynx.Term Unit))))
                 match _12 with
-                | Lynx.Term.tuple #[_11, vX] =>
+                | Lynx.Term.tuple ⟨[_11, vX]⟩ =>
                   match
                     (Lynx.Result.toExceptRead (Erlang.erlang.«=:=/2» _11 _0) _lynxReceiveEnv
                       (by simp (config := { maxDischargeDepth := 64 }))) with
@@ -67,7 +67,7 @@ def «guarded/1» (_0 : Lynx.Term) : Lynx.Result :=
                 | _ => lynxReceiveNext () :
                 Option (Sum Lynx.Term (Sum Lynx.Term (Sum Lynx.Term Unit))))
             match _12 with
-            | Lynx.Term.tuple #[_8, vX] =>
+            | Lynx.Term.tuple ⟨[_8, vX]⟩ =>
               match
                 (Lynx.Result.toExceptRead
                   (do
@@ -84,7 +84,7 @@ def «guarded/1» (_0 : Lynx.Term) : Lynx.Result :=
             | _ => lynxReceiveNext () :
             Option (Sum Lynx.Term (Sum Lynx.Term (Sum Lynx.Term Unit))))
         match _12 with
-        | Lynx.Term.tuple #[_5, vX] =>
+        | Lynx.Term.tuple ⟨[_5, vX]⟩ =>
           match
             (Lynx.Result.toExceptRead
               (do
@@ -119,7 +119,7 @@ def «self_guard/0» : Lynx.Result :=
     (fun (_lynxReceiveEnv : Lynx.Environment) (_1 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) => (Option.none : Option Lynx.Term)
         match _1 with
-        | Lynx.Term.tuple #[vPid, vX] =>
+        | Lynx.Term.tuple ⟨[vPid, vX]⟩ =>
           match
             (Lynx.Result.toExceptRead
               (Lynx.Result.tryWith
@@ -147,7 +147,7 @@ def «poll/0» : Lynx.Result :=
     (fun (_lynxReceiveEnv : Lynx.Environment) (_0 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) => (Option.none : Option Lynx.Term)
         match _0 with
-        | Lynx.Term.tuple #[Lynx.Term.atom "ok", vX] => Option.some vX
+        | Lynx.Term.tuple ⟨[Lynx.Term.atom "ok", vX]⟩ => Option.some vX
         | _ => lynxReceiveNext () :
         Option Lynx.Term))
     (fun
@@ -161,7 +161,7 @@ def «timed/1» (_0 : Lynx.Term) : Lynx.Result :=
     (fun (_lynxReceiveEnv : Lynx.Environment) (_2 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) => (Option.none : Option Lynx.Term)
         match _2 with
-        | Lynx.Term.tuple #[Lynx.Term.atom "ok", vX] => Option.some vX
+        | Lynx.Term.tuple ⟨[Lynx.Term.atom "ok", vX]⟩ => Option.some vX
         | _ => lynxReceiveNext () :
         Option Lynx.Term))
     (fun
@@ -200,7 +200,7 @@ def «nested/0» : Lynx.Result :=
             | _ => lynxReceiveNext () :
             Option (Sum Lynx.Term Unit))
         match _4 with
-        | Lynx.Term.tuple #[Lynx.Term.atom "ok", vX] => Option.some (Sum.inl vX)
+        | Lynx.Term.tuple ⟨[Lynx.Term.atom "ok", vX]⟩ => Option.some (Sum.inl vX)
         | _ => lynxReceiveNext () :
         Option (Sum Lynx.Term Unit)))
     (fun
@@ -237,7 +237,7 @@ def «bindings/0» : Lynx.Result :=
             | _ => lynxReceiveNext () :
             Option (Sum (Lynx.Term × Lynx.Term) Unit))
         match _0 with
-        | Lynx.Term.tuple #[Lynx.Term.atom "pair", vX, vY] => Option.some (Sum.inl (vX, vY))
+        | Lynx.Term.tuple ⟨[Lynx.Term.atom "pair", vX, vY]⟩ => Option.some (Sum.inl (vX, vY))
         | _ => lynxReceiveNext () :
         Option (Sum (Lynx.Term × Lynx.Term) Unit)))
     (fun
@@ -252,7 +252,7 @@ def «repeated/0» : Lynx.Result :=
     (fun (_lynxReceiveEnv : Lynx.Environment) (_1 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) => (Option.none : Option Lynx.Term)
         match _1 with
-        | Lynx.Term.tuple #[vX, _0] =>
+        | Lynx.Term.tuple ⟨[vX, _0]⟩ =>
           match
             (Lynx.Result.toExceptRead (Erlang.erlang.«=:=/2» _0 vX) _lynxReceiveEnv
               (by simp (config := { maxDischargeDepth := 64 }))) with
@@ -272,7 +272,7 @@ def «alias/0» : Lynx.Result :=
       (let lynxReceiveNext := fun (_ : Unit) =>
           (Option.none : Option (Lynx.Term × Lynx.Term × Lynx.Term))
         match _0 with
-        | vPair@(Lynx.Term.tuple #[Lynx.Term.atom "pair", vX, vY]) => Option.some (vPair, (vX, vY))
+        | vPair@(Lynx.Term.tuple ⟨[Lynx.Term.atom "pair", vX, vY]⟩) => Option.some (vPair, (vX, vY))
         | _ => lynxReceiveNext () :
         Option (Lynx.Term × Lynx.Term × Lynx.Term)))
     (fun

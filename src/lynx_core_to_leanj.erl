@@ -211,6 +211,20 @@ expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
     {node(~"receive", Anno, #{~"message" => TranslatedMessage,
         ~"cases" => TranslatedClauses, ~"timeout" => TranslatedTimeout,
         ~"after" => TranslatedAction}), State4#state{pure = false}};
+%% Computed map-pattern keys use a nonrecursive compiler label for clause
+%% fallthrough. Inline its zero-argument body without evaluating it eagerly.
+expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Label},
+             #c_fun{vars = [], body = Fallback}}], body = Body} = Core, State0) ->
+    case lists:member(letrec_goto, Anno) andalso
+            not lists:member(Label, cerl_trees:free_variables(Fallback)) of
+        true ->
+            Expanded = cerl_trees:map(fun
+                (#c_apply{op = #c_var{name = Name}, args = []}) when Name =:= Label -> Fallback;
+                (Node) -> Node
+            end, Body),
+            expression(Expanded, State0);
+        false -> unsupported(Core)
+    end;
 %% Core try catches only the protected expression, not its success continuation.
 expression(#c_try{anno = Anno, arg = Arg, vars = Vars, body = Body,
                   evars = EVars, handler = Handler}, State0) ->
@@ -475,6 +489,9 @@ value(#c_literal{anno = Anno, val = Map}, State0) when is_map(Map) ->
                        key = #c_literal{anno = Anno, val = K},
                        val = #c_literal{anno = Anno, val = V}} || {K, V} <- maps:to_list(Map)],
     value(#c_map{anno = Anno, arg = #c_literal{val = #{}}, es = Pairs}, State0);
+value(#c_map{anno = Anno, es = Pairs, is_pat = true}, State0) ->
+    {Entries, State1} = lists:mapfoldl(fun map_pattern_entry/2, State0, Pairs),
+    {node(~"map", Anno, #{~"entries" => Entries}), State1};
 value(#c_map{anno = Anno, arg = #c_literal{val = Base}, es = Pairs,
              is_pat = false}, State0) when is_map(Base), map_size(Base) =:= 0 ->
     {Entries, State1} = lists:mapfoldl(fun map_entry/2, State0, Pairs),
@@ -510,6 +527,14 @@ map_updates([#c_map_pair{anno = Anno, op = #c_literal{val = Op},
                 ~"computation" => Call, ~"body" => Body}), State4}
     end;
 map_updates([Core | _], _, _, _) -> unsupported(Core).
+
+map_pattern_entry(#c_map_pair{anno = Anno, op = #c_literal{val = exact},
+                               key = Key, val = Pattern}, State0) ->
+    {TranslatedKey, State1} = value(Key, State0),
+    {TranslatedPattern, State2} = value(Pattern, State1),
+    {#{~"span" => span(Anno), ~"key" => TranslatedKey,
+       ~"value" => TranslatedPattern}, State2};
+map_pattern_entry(Core, _) -> unsupported(Core).
 
 map_entry(#c_map_pair{anno = Anno, op = #c_literal{val = assoc},
                        key = Key, val = Value}, State0) ->

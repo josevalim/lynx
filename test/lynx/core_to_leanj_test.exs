@@ -148,7 +148,99 @@ defmodule Lynx.CoreToLeanjTest do
     assert List.last(call["args"]) == %{"kind" => "map", "entries" => [], "span" => []}
   end
 
-  test "marks fallthrough solely from whether the Core guard is literally true" do
+  test "map pattern keys remain values while nested values remain patterns" do
+    literal_key = :cerl.abstract(%{a: 1})
+
+    nested =
+      :cerl.c_map_pattern([
+        :cerl.c_map_pair_exact(:cerl.c_atom(:b), :cerl.c_var(:value))
+      ])
+
+    pat = :cerl.c_map_pattern([:cerl.c_map_pair_exact(literal_key, nested)])
+
+    body =
+      :cerl.c_case(:cerl.c_var(0), [
+        :cerl.c_clause([pat], :cerl.c_var(:value)),
+        :cerl.c_clause([:cerl.c_var(:other)], :cerl.c_atom(:fallback))
+      ])
+
+    assert {:ok, functions, []} =
+             translate(definitions([definition(:entry, body)]))
+
+    assert %{
+             "kind" => "match",
+             "cases" => [
+               %{
+                 "patterns" => [
+                   %{
+                     "kind" => "map",
+                     "entries" => [
+                       %{
+                         "key" => %{
+                           "kind" => "map",
+                           "entries" => [
+                             %{
+                               "key" => %{"kind" => "atom", "value" => "a"},
+                               "value" => %{"kind" => "integer", "value" => 1}
+                             }
+                           ]
+                         },
+                         "value" => %{
+                           "kind" => "map",
+                           "entries" => [
+                             %{
+                               "key" => %{"kind" => "atom", "value" => "b"},
+                               "value" => %{"kind" => "var", "name" => "value"}
+                             }
+                           ]
+                         }
+                       }
+                     ]
+                   }
+                 ]
+               },
+               _fallback
+             ]
+           } = functions[{:entry, 1}].translation["body"]
+  end
+
+  test "inlines compiler fallthrough labels without evaluating their body eagerly" do
+    label = :cerl.c_fname(:label, 0)
+    fallback = :cerl.c_call(:cerl.c_atom(:other), :cerl.c_atom(:fallback), [])
+
+    guarded =
+      :cerl.c_case(:cerl.c_var(0), [
+        :cerl.c_clause([:cerl.c_atom(true)], :cerl.c_atom(:matched)),
+        :cerl.c_clause([:cerl.c_var(:other)], :cerl.c_apply(label, []))
+      ])
+
+    body = :cerl.ann_c_letrec([:letrec_goto], [{label, :cerl.c_fun([], fallback)}], guarded)
+
+    assert {:ok, functions, [{:other, :fallback, 0, []}]} =
+             translate(definitions([definition(:entry, body)]))
+
+    assert %{
+             "kind" => "match",
+             "cases" => [
+               %{
+                 "body" => %{
+                   "kind" => "return",
+                   "values" => [%{"kind" => "atom", "value" => "matched"}]
+                 }
+               },
+               %{
+                 "body" => %{
+                   "kind" => "remote_call",
+                   "module" => "Erlang.other",
+                   "name" => "fallback",
+                   "args" => []
+                 }
+               }
+             ]
+           } = functions[{:entry, 1}].translation["body"]
+  end
+
+  test "marks clauses without map patterns solely from whether the Core guard is literally true" do
     guards = [
       :cerl.c_atom(true),
       :cerl.c_atom(false),

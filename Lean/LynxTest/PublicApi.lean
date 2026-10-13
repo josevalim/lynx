@@ -27,6 +27,13 @@ example : Lynx.PID → Lynx.ScheduleChoice := Lynx.ScheduleChoice.timeout
 example : Lynx.Term → (Except Lynx.Exception Lynx.Term → Lynx.Result α) → Lynx.Result α :=
   Lynx.Result.spawn
 
+example : List Lynx.Term → Lynx.Term → List Lynx.Term := Lynx.Term.getMapKeys
+
+example (keys : List Lynx.Term) (input : Lynx.Term)
+    (nonempty : Lynx.Term.getMapKeys keys input ≠ []) :
+    (Lynx.Term.getMapKeys keys input).length = keys.length :=
+  Lynx.Term.getMapKeys_arity keys input nonempty
+
 -- Conversion cancellation works through ordinary public imports without unfolding.
 example (computation : Lynx.Result α) (pure : Lynx.Result.IsPure computation) :
     Lynx.Result.ofExcept (Lynx.Result.toExcept computation pure) = computation := by
@@ -215,6 +222,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.false",
   "Lynx.Term.float",
   "Lynx.Term.function",
+  "Lynx.Term.getMapKeys",
   "Lynx.Term.instDecidableEqFiniteFloat",
   "Lynx.Term.instReprFiniteFloat",
   "Lynx.Term.integer",

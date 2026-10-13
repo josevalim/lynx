@@ -19,6 +19,9 @@ validate Erlang code against the generated JSON and Lean sources (plus elaborati
 Test Lean runtime features and their properties in Lean's `LynxTest/` suite,
 including kernel-checked proofs and axiom audits.
 
+When matching JSON values in tests, prefer pattern matching on the shape as a
+whole rather than multiple assertions on individual fields.
+
 ## Lean
 
 All package paths below are relative to `Lean/`.
@@ -29,6 +32,10 @@ in `Lynx/Term.lean` and within the `Lynx/Term/` directory.
 Keep `Lynx.Term` focused on runtime definitions and foundational comparison,
 monad, and purity facts. Put laws about Erlang operations in the corresponding
 `Erlang.*` module.
+
+Public executable definitions in `Erlang.*` must correspond to existing Erlang
+functions. Put translation and runtime helpers in `Lynx.*`, such as `Lynx.Term`,
+instead of adding helper functions to `Erlang.maps` or other Erlang modules.
 
 Use Lean's `module` system with explicit `public` declarations and deliberate
 `public import` re-exports. Update `LynxTest/PublicApi.lean` for exported API
@@ -51,6 +58,9 @@ registered for simplification, without a contract verification tactic.
 Proofs must not introduce untrusted axioms or `sorry`
 
 ### Proofs and examples
+
+Do not add new examples unless explicitly requested. Existing examples may be
+run as regression checks.
 
 Integration examples go in `examples/` and use `Lynx.Case` to verify laws.
 Keep the implementation separate from its properties. Use `requires:` for input
