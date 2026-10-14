@@ -167,6 +167,7 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«is_function/1»",
   "Erlang.erlang.«is_function/2»",
   "Erlang.erlang.«is_integer/1»",
+  "Erlang.erlang.«is_integer/3»",
   "Erlang.erlang.«is_list/1»",
   "Erlang.erlang.«is_map/1»",
   "Erlang.erlang.«is_map_key/2»",

@@ -1,6 +1,6 @@
 # LYNX_PROFILE=1 LYNX_CACHE=0 mix run examples/otp/rand.exs
 # Prove the installed OTP rand module, translated from its BEAM debug information.
-# Verified against Erlang/OTP 28.1.1 (stdlib 7.1, ERTS 16.1.1).
+# Verified against Erlang/OTP 29.1.2 (stdlib 8.1.1, ERTS 17.1.1).
 # The proofs depend on mwc59/1's implementation and constants; rerun them after OTP upgrades.
 ExUnit.start()
 
@@ -35,7 +35,7 @@ defmodule RandProofsTest do
         have mask := Erlang.erlang.«band/2_mask» n 32 nonnegative
         change Erlang.erlang.«band/2» (.integer n) (.integer 4294967295) =
           .ok (.integer (n % 4294967296)) at mask
-        simp [Erlang.rand.«mwc59/1», Erlang.erlang.«is_integer/1»,
+        simp [Erlang.rand.«mwc59/1», Erlang.erlang.«is_integer/3»,
           lower, upper, show n ≤ 574882961707499518 by omega,
           Erlang.erlang.«bsr/2», Int.shiftRight_eq_div_pow, mask,
           Erlang.erlang.«=:=/2», Erlang.erlang.«and/2»]
@@ -64,7 +64,7 @@ defmodule RandProofsTest do
         have mask := Erlang.erlang.«band/2_mask» n 32 nonnegative
         change Erlang.erlang.«band/2» (.integer n) (.integer 4294967295) =
           .ok (.integer (n % 4294967296)) at mask
-        simp [Erlang.rand.«mwc59/1», Erlang.erlang.«is_integer/1»,
+        simp [Erlang.rand.«mwc59/1», Erlang.erlang.«is_integer/3»,
           lower, upper, show n ≤ 574882961707499518 by omega,
           Erlang.erlang.«bsr/2», Int.shiftRight_eq_div_pow, mask,
           Erlang.erlang.«=:=/2», Erlang.erlang.«and/2»]

@@ -606,6 +606,10 @@ theorem numeric_guards_invalid :
       (fun operation => operation .nil)) =
       List.replicate 6 (.error (.error (.atom "badarg"))) := by rfl
 
+theorem integer_range_guard (n lo hi : Int) :
+    «is_integer/3» (.integer n) (.integer lo) (.integer hi) =
+      .ok (if lo ≤ n ∧ n ≤ hi then Term.true else Term.false) := by rfl
+
 theorem arithmetic_boundaries :
     «-/1» (.float ⟨false, 0, 0⟩) = .ok (.float ⟨true, 0, 0⟩) ∧
     «+/1» (.float ⟨true, 0, 0⟩) = .ok (.float ⟨true, 0, 0⟩) ∧

@@ -36,6 +36,7 @@
   "is_map_key/2": {"pure": true},
   "is_map/1": {"pure": true},
   "is_list/1": {"pure": true},
+  "is_integer/3": {"pure": true},
   "is_integer/1": {"pure": true},
   "is_function/2": {"pure": true},
   "is_function/1": {"pure": true},

@@ -65,6 +65,15 @@ open Lynx
 #lynx_pure @[expose] def «is_integer/1» (input : Term) : Result :=
   .ok (match input with | .integer _ => Term.true | _ => Term.false)
 
+/-- Inclusive integer bounds. Invalid bounds raise badarg, even for noninteger inputs. -/
+#lynx_pure @[expose] def «is_integer/3» (input lower upper : Term) : Result :=
+  match lower, upper with
+  | .integer lo, .integer hi =>
+    .ok (match input with
+      | .integer n => if lo ≤ n ∧ n ≤ hi then Term.true else Term.false
+      | _ => Term.false)
+  | _, _ => throw (.error (.atom "badarg"))
+
 #lynx_pure @[expose] def «is_map/1» (input : Term) : Result :=
   .ok (match input with | .map _ => Term.true | _ => Term.false)
 
