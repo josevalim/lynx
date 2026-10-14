@@ -178,10 +178,47 @@ defmodule CalendarProofsTest do
 
   # Includes dates whose ISO week belongs to the preceding, negative year.
   laws "ISO week totality" do
+    termination_suffix :calendar.mod/2, ~LEAN"""
+    partial_fixpoint monotonicity by
+      intro f g h n
+      cases n <;> cases _1 <;>
+        simp [Erlang.erlang.«rem/2», Erlang.erlang.«</2»,
+          Lynx.Result.tryWith, Lynx.Result.handle, Lynx.Result.bind]
+      all_goals try exact Lean.Order.PartialOrder.rel_refl
+      rename_i n d
+      by_cases zero : d = 0
+      · simp [zero]
+        exact Lean.Order.PartialOrder.rel_refl
+      · by_cases negative : n.tmod d < 0 <;>
+          simp [zero, negative, Int.compare_eq_lt]
+        · exact h _
+        · exact Lean.Order.PartialOrder.rel_refl
+    """
+
     law iso_week_number_valid_date(date),
       requires: :calendar.valid_date(date),
       expects: is_tuple(:calendar.iso_week_number(date)),
       proof: ~LEAN"""
+      have modulo (n d : Int) (positive : 0 < d) :
+          ∃ r, Erlang.calendar.«mod/2» (.integer n) (.integer d) = .ok (.integer r) := by
+        have nonzero : d ≠ 0 := by omega
+        have nonnegative (value : Int) (lo : 0 ≤ value) :
+            Erlang.calendar.«mod/2» (.integer value) (.integer d) = .ok (.integer (value.tmod d)) := by
+          have remLo := Int.tmod_nonneg d lo
+          rw [Erlang.calendar.«mod/2».eq_def]
+          simp [Erlang.erlang.«rem/2», nonzero, Erlang.erlang.«</2»,
+            Ordering.isLT_iff_eq_lt, Int.compare_eq_lt, show ¬ value.tmod d < 0 by omega]
+        by_cases negative : n.tmod d < 0
+        · have corrected : 0 ≤ n.tmod d + d := by
+            have := Int.lt_tmod_of_pos n positive
+            omega
+          rw [Erlang.calendar.«mod/2».eq_def]
+          simp [Erlang.erlang.«rem/2», nonzero, Erlang.erlang.«</2»,
+            Ordering.isLT_iff_eq_lt, Int.compare_eq_lt, negative, nonnegative _ corrected]
+        · rw [Erlang.calendar.«mod/2».eq_def]
+          simp [Erlang.erlang.«rem/2», nonzero, Erlang.erlang.«</2»,
+            Ordering.isLT_iff_eq_lt, Int.compare_eq_lt, negative]
+
       have days (y m d : Int) (positive : 0 < d) :
           ∃ n, Erlang.calendar.«date_to_gregorian_days/3» (.integer y) (.integer m) (.integer d) =
             .ok (.integer n) := by
@@ -207,9 +244,8 @@ defmodule CalendarProofsTest do
           ∃ n, Erlang.calendar.«day_of_the_week/3» (.integer y) (.integer m) (.integer d) =
             .ok (.integer n) := by
         obtain ⟨n, returned⟩ := days y m d positive
-        by_cases negative : (n + 5).tmod 7 < 0 <;>
-          simp [Erlang.calendar.«day_of_the_week/3», returned, Erlang.erlang.«rem/2»,
-            Erlang.erlang.«</2», Ordering.isLT_iff_eq_lt, Int.compare_eq_lt, negative]
+        obtain ⟨r, returnedMod⟩ := modulo (n + 5) 7 (by decide)
+        simp [Erlang.calendar.«day_of_the_week/3», returned, returnedMod]
 
       have firstWeek (y : Int) :
           ∃ n, Erlang.calendar.«gregorian_days_of_iso_w01_1/1» (.integer y) = .ok (.integer n) := by

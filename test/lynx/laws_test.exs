@@ -1,6 +1,8 @@
 defmodule Lynx.LawsTest do
   use ExUnit.Case, async: true
 
+  import Lynx.Lean, only: [sigil_LEAN: 2]
+
   test "verifies laws from a module compiled in memory" do
     {:module, _module, binary, _} =
       defmodule Laws do
@@ -34,6 +36,39 @@ defmodule Lynx.LawsTest do
     assert source =~ "«another/0»"
     assert source =~ "«identity/1»"
     refute source =~ "«unused/0»"
+  end
+
+  test "verifies laws with termination suffix options" do
+    {:module, module, binary, _} =
+      defmodule TerminationSuffix do
+        @compile :debug_info
+        use Lynx.Laws
+
+        def increment(value) when is_integer(value), do: increment(value + 1)
+        def increment(_value), do: true
+
+        law stops(value),
+          requires: is_atom(value),
+          expects: increment(value),
+          proof: ~LEAN"""
+          cases value <;> simp [«stops:requires/1», Erlang.erlang.«is_atom/1»] at requires
+          simp [«stops:ensures/1», «increment/1».eq_def]
+          """
+      end
+
+    suffix = ~LEAN"""
+    partial_fixpoint monotonicity by
+      intro f g h n
+      cases n <;> simp
+      all_goals first | exact h _ | exact Lean.Order.PartialOrder.rel_refl
+    """
+
+    assert [%{status: :ok, diagnostics: [], source: source}] =
+             Lynx.Laws.verify!([binary],
+               termination_suffixes: %{{module, :increment, 1} => suffix}
+             )
+
+    assert source =~ "partial_fixpoint monotonicity by"
   end
 
   describe "evaluation" do
@@ -161,14 +196,12 @@ defmodule Lynx.LawsTest do
       end
     end
 
-    test "requires an expectation and a literal proof sigil" do
+    test "requires an expectation and a Lean proof value" do
       for {options, reason} <- [
             {:invalid, "law options must be a keyword list"},
             {[requires: true], "law requires the :expects option to be given"},
-            {[expects: true, proof: "rfl"],
-             "proof must be a literal ~LEAN sigil without modifiers"},
             {quote(do: [expects: true, proof: ~LEAN"rfl"x]),
-             "proof must be a literal ~LEAN sigil without modifiers"}
+             "~LEAN requires a literal string without modifiers"}
           ] do
         error =
           assert_raise CompileError, fn ->
@@ -183,6 +216,13 @@ defmodule Lynx.LawsTest do
           end
 
         assert %CompileError{description: ^reason} = error
+      end
+
+      assert_raise ArgumentError, "proof must be a Lynx.Lean value", fn ->
+        defmodule InvalidProof do
+          use Lynx.Laws
+          law checked, expects: true, proof: "rfl"
+        end
       end
     end
   end

@@ -35,6 +35,9 @@ A proof object contains tactic source, nonnegative indentation, and a span locat
 the first character of that source. The producer handles host delimiters and line offsets. Proof syntax keeps
 its own source ranges, mapped to the supplied host locations using a synthetic file map.
 Original source files are not read.
+Definitions may carry a termination_suffix object with Lean source, file, indentation,
+and span. It is parsed as the declaration's termination clause before elaboration;
+suffix diagnostics retain the supplied origin, even when it differs from the module file.
 Function tables carry entry metadata: body, captures, args, pure, and span.
 The decoder builds typed pure/effectful callables; a pure entry must prove
 the translated body's purity during elaboration. Each entry also generates checked
@@ -74,6 +77,7 @@ private instance : Inhabited Location := ⟨.unknown⟩
 private structure Span where
   info : SourceInfo := .synthetic 0 0 true
   location : Location := .unknown
+  fileName : Option String := none
 
 private instance : Inhabited Span := ⟨{}⟩
 
@@ -81,6 +85,7 @@ private structure ProofDiagnostic where
   declarationName : Name
   message : String
   location : Location
+  fileName : Option String := none
 
 private structure DecodeState where
   spans : Array Span := #[]
@@ -106,7 +111,7 @@ private def span (map : FileMap) (j : Json) (parent : Span := {}) : DecodeM Span
   -- A line-only location is a zero-width anchor, not a claimed first column.
   let stop := if xs.size == 1 || pos.atEnd map.source then pos else pos.next map.source
   let result : Span := ⟨.synthetic pos stop true,
-    if xs.size == 1 then .line line else .column ⟨line, column - 1⟩⟩
+    if xs.size == 1 then .line line else .column ⟨line, column - 1⟩, none⟩
   modify fun s => { s with spans := s.spans.push result }
   return result
 
@@ -931,7 +936,7 @@ private partial def locateProof (map proofMap : FileMap) (start : Position)
   let info := SourceInfo.synthetic
     (map.ofPosition (proofPosition proofMap start indentation pos))
     (map.ofPosition (proofPosition proofMap start indentation stop)) true
-  modify fun s => { s with spans := s.spans.push ⟨info, location⟩ }
+  modify fun s => { s with spans := s.spans.push ⟨info, location, anchor.fileName⟩ }
   return stx.setInfo info
 
 private def leanProof (map : FileMap) (parent : Span) (name : Name) (j : Json) : DecodeM (TSyntax `term × Span) := do
@@ -955,9 +960,37 @@ private def leanProof (map : FileMap) (parent : Span) (name : Name) (j : Json) :
       | .unknown => Location.unknown
       | .line _ => .line p.line
       | .column _ => .column p
-    modify fun s => { s with diagnostics := s.diagnostics.push ⟨name, toString error, location⟩ }
+    modify fun s => { s with diagnostics := s.diagnostics.push ⟨name, toString error, location, none⟩ }
   if !parsed.allErrors.isEmpty then return (⟨.missing⟩, info)
   return (⟨← locateProof map ctx.fileMap start indentation info parsed.stxStack.back⟩, info)
+
+/-- Parse a termination suffix and retain the source location of every syntax node. -/
+private def leanSuffix (map : FileMap) (parent : Span) (name : Name) (j : Json) : DecodeM Syntax := do
+  fields j ["source", "file", "indentation", "span"]
+  let info := { (← span map j parent) with fileName := some (← str j "file") }
+  let indentation ← (← field j "indentation").getNat?
+  let source ← str j "source"
+  if source.trimAscii.toString.isEmpty then throw "termination suffix cannot be empty"
+  let input := "\n" ++ source
+  let ctx := Parser.mkInputContext input "<termination suffix>" (normalizeLineEndings := false)
+  let parser := Parser.andthenFn Parser.whitespace Parser.Termination.suffix.fn
+  let env ← read
+  let parsed := parser.run ctx { env, options := {} } (Parser.getTokenTable env) (Parser.mkParserState input)
+  let parsed := if parsed.allErrors.isEmpty && !ctx.atEnd parsed.pos then
+    parsed.mkError "end of input" else parsed
+  let start := match info.location with
+    | .column p => p
+    | .line line => ⟨line, 0⟩
+    | .unknown => ⟨1, 0⟩
+  for (pos, _, error) in parsed.allErrors do
+    let p := proofPosition ctx.fileMap start indentation pos
+    let location := match info.location with
+      | .unknown => Location.unknown
+      | .line _ => .line p.line
+      | .column _ => .column p
+    modify fun s => { s with diagnostics := s.diagnostics.push ⟨name, toString error, location, info.fileName⟩ }
+  if !parsed.allErrors.isEmpty then return .missing
+  return ← locateProof map ctx.fileMap start indentation info parsed.stxStack.back
 
 private structure TableEntry where
   captures : Array (TSyntax `ident)
@@ -1048,14 +1081,23 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     pure (Unhygienic.run `(theorem $name $binders:bracketedBinder*
       : $ensures = $ok $trueTerm := $proof))
   | "def" => do
-    fields j ["kind", "name", "params", "body", "pure", "span"]
+    fields j ["kind", "name", "params", "body", "pure", "span", "termination_suffix"]
     let params ← (← arr j "params").mapM (param map info)
     let name := functionName (← str j "name") params.size
     let termType := mkIdent ``Lynx.Term
     let resultType := mkIdent ``Lynx.Result
     let binders := params.map fun p => Unhygienic.run `(bracketedBinder| ($p : $termType))
     let body ← term map info false (← field j "body")
-    pure (Unhygienic.run `(def $name $binders:bracketedBinder* : $resultType := $body))
+    let declaration := Unhygienic.run `(def $name $binders:bracketedBinder* : $resultType := $body)
+    match field j "termination_suffix" with
+    | .error _ => pure declaration
+    | .ok annotation =>
+      if ← (← field j "pure").getBool? then throw "a function with a termination suffix must be classified as impure"
+      let suffix ← leanSuffix map info name.getId annotation
+      -- A simple definition has a declValSimple containing :=, body, suffix, and where.
+      let definition := declaration.raw[1]
+      let value := definition[3].setArg 2 suffix
+      pure ⟨declaration.raw.setArg 1 (definition.setArg 3 value)⟩
   | _ => throw s!"unsupported command kind '{kind}'"
   let isPure ← if kind ∈ ["def", "mutual"] then (← field j "pure").getBool? else pure false
   -- A mutual group gets one joint purity proof, rather than wrapping its members.
@@ -1173,15 +1215,16 @@ private def diagnostic (file moduleName severity message : String)
 /-- Match original offsets, retaining the precision the producer actually supplied.
 If ranges coincide (e.g. a column at EOF and a line-only anchor), conservatively
 report the less precise location rather than inventing a column. -/
-private def messageLocation (map : FileMap) (spans : Array Span) (msg : Message) : Location := Id.run do
-  let mut result := Location.unknown
+private def messageLocation (map : FileMap) (spans : Array Span) (msg : Message) :
+    Option String × Location := Id.run do
+  let mut result := (none, Location.unknown)
   for span in spans do
     if let .synthetic start stop _ := span.info then
       if map.toPosition start == msg.pos && some (map.toPosition stop) == msg.endPos then
         match span.location with
-        | .unknown => return .unknown
-        | .line line => return .line line
-        | .column pos => result := .column pos
+        | .unknown => return (span.fileName, .unknown)
+        | .line line => return (span.fileName, .line line)
+        | .column pos => result := (span.fileName, .column pos)
   return result
 
 /-- Read declaration identifiers from generated syntax, including purity wrappers.
@@ -1390,7 +1433,7 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
 
 private def parsingDiagnostics (file : DecodedFile) : Array Json :=
   file.proofDiagnostics.map fun error =>
-    diagnostic file.fileName file.moduleName "error"
+    diagnostic (error.fileName.getD file.fileName) file.moduleName "error"
       error.message error.location (some error.declarationName)
 
 private def renderFile (file : DecodedFile) (env : Lean.Environment) : IO String := do
@@ -1495,9 +1538,10 @@ private def verify (files : Array DecodedFile) (runtime : Runtime)
           theorems := timings
           for (msg, declarationName) in messages do
             if msg.severity == .error then fileFailed := true
-            diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName
+            let (origin, location) := messageLocation file.fileMap file.spans msg
+            diagnostics := diagnostics.push (diagnostic (origin.getD file.fileName) file.moduleName
               msg.severity.toString
-              (← msg.data.toString) (messageLocation file.fileMap file.spans msg) declarationName)
+              (← msg.data.toString) location declarationName)
           -- Audit local laws and the precomputed axiom dependencies of imported declarations.
           unless fileFailed do
             let audit : CoreM (Array Json) := do

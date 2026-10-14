@@ -44,6 +44,42 @@ defmodule Lynx.CaseTest do
     assert output =~ "cannot locate BEAM for :erlang"
   end
 
+  test "verifies termination suffixes within their laws group" do
+    defmodule TerminationSuffix do
+      use ExUnit.Case, register: false
+      use Lynx.Case
+
+      def increment(value) when is_integer(value), do: increment(value + 1)
+      def increment(_value), do: true
+
+      laws "partial recursion" do
+        termination_suffix __MODULE__.increment() / 1, ~LEAN"""
+        partial_fixpoint monotonicity by
+          intro f g h n
+          cases n <;> simp
+          all_goals first | exact h _ | exact Lean.Order.PartialOrder.rel_refl
+        """
+
+        law stops(value),
+          requires: is_atom(value),
+          expects: increment(value),
+          proof: ~LEAN"""
+          cases value <;> simp [«stops:requires/1», Erlang.erlang.«is_atom/1»] at requires
+          simp [«stops:ensures/1», «increment/1».eq_def]
+          """
+      end
+
+      laws "without annotation" do
+        law valid, expects: true
+      end
+    end
+
+    capture_io(fn ->
+      assert ExUnit.run([TerminationSuffix]) ==
+               %{failures: 0, skipped: 0, total: 2, excluded: 0}
+    end)
+  end
+
   test "reports multiple failed laws as separate assertions" do
     defmodule LawFailure do
       use ExUnit.Case, register: false
@@ -66,11 +102,16 @@ defmodule Lynx.CaseTest do
 
     error =
       assert_raise ExUnit.MultiError, fn ->
-        Lynx.Case.__verify__(LawFailure, :"laws invalid / proof: [errors]", [
-          {:passing, 0},
-          {:invalid, 0},
-          {:sum_bar, 2}
-        ])
+        Lynx.Case.__verify__(
+          LawFailure,
+          :"laws invalid / proof: [errors]",
+          [
+            {:passing, 0},
+            {:invalid, 0},
+            {:sum_bar, 2}
+          ],
+          %{}
+        )
       end
 
     assert [

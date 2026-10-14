@@ -548,6 +548,70 @@ defmodule Lynx.RunnerDiagnosticsTest do
            ]
   end
 
+  test "reports termination suffix errors at their original file and position" do
+    argument = %{"kind" => "var", "name" => 0, "span" => []}
+
+    elaboration =
+      definition("broken", %{
+        "kind" => "remote_call",
+        "module" => "Erlang.suffix_elaboration",
+        "name" => "broken",
+        "args" => [argument],
+        "span" => []
+      })
+      |> Map.put("params", [argument])
+      |> Map.put("termination_suffix", %{
+        "source" => "partial_fixpoint monotonicity by\n  exact (let hé := True; missing)\n",
+        "file" => "suffixes.exs",
+        "span" => [10, 7],
+        "indentation" => 4
+      })
+
+    parsing =
+      definition("broken", success())
+      |> Map.put("termination_suffix", %{
+        "source" => "termination_by )",
+        "file" => "suffixes.exs",
+        "span" => [20, 7],
+        "indentation" => 4
+      })
+
+    assert [
+             %{
+               status: :error,
+               diagnostics: [
+                 %{
+                   file: "suffixes.exs",
+                   module: "Erlang.suffix_elaboration",
+                   declaration: "broken/1",
+                   severity: :error,
+                   line: 11,
+                   column: 30,
+                   message: "Unknown identifier `missing`"
+                 }
+               ]
+             },
+             %{
+               status: :error,
+               diagnostics: [
+                 %{
+                   file: "suffixes.exs",
+                   module: "Erlang.suffix_parsing",
+                   declaration: "broken/0",
+                   severity: :error,
+                   line: 20,
+                   column: 22,
+                   message: "expected term"
+                 }
+               ]
+             }
+           ] =
+             Lynx.Commands.verify!(@lean_dir, [
+               file(@literal_erl, "Erlang.suffix_elaboration", [elaboration]),
+               file(@literal_erl, "Erlang.suffix_parsing", [parsing])
+             ])
+  end
+
   test "reports proof parsing errors with the supplied location precision" do
     path = "syntax.ex"
 

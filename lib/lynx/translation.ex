@@ -1,7 +1,12 @@
 defmodule Lynx.Translation do
   @moduledoc false
 
-  defstruct modules: %{}, funs: %{}, external_calls: %{}, builtin_modules: %{}, stack: []
+  defstruct termination_suffixes: %{},
+            modules: %{},
+            funs: %{},
+            external_calls: %{},
+            builtin_modules: %{},
+            stack: []
 
   @external_resource Path.expand("../../Lean/modules.json", __DIR__)
   for {module, functions} <- JSON.decode!(File.read!(@external_resource)),
@@ -19,7 +24,9 @@ defmodule Lynx.Translation do
 
   defp lean_bif(_, _, _), do: :error
 
-  def new, do: %__MODULE__{}
+  def new(opts \\ []) do
+    %__MODULE__{termination_suffixes: Keyword.get(opts, :termination_suffixes, %{})}
+  end
 
   @doc "Adds a BEAM binary or {file, Core Erlang module} as source to avoid disk lookup."
   def add(%__MODULE__{} = translation, {file, core}) when is_binary(file) do
@@ -76,7 +83,10 @@ defmodule Lynx.Translation do
 
     case :lynx_core_to_leanj.translate(name, definitions, names, translations, funs, context) do
       {:ok, functions, funs, translation} ->
-        updated = %{module | translations: propagate_purity(functions)}
+        updated = %{
+          module
+          | translations: propagate_purity(functions, name, translation.termination_suffixes)
+        }
 
         %{
           translation
@@ -262,6 +272,7 @@ defmodule Lynx.Translation do
   def assemble(
         %__MODULE__{
           modules: modules,
+          termination_suffixes: suffixes,
           funs: funs,
           external_calls: external_calls,
           builtin_modules: builtin_modules
@@ -269,6 +280,40 @@ defmodule Lynx.Translation do
         opts \\ []
       ) do
     cache = Keyword.get(opts, :cache, true)
+
+    modules =
+      Enum.reduce(suffixes, modules, fn {{module, function, arity}, %Lynx.Lean{} = suffix},
+                                        modules ->
+        path = [module, :translations, {function, arity}, :translation]
+
+        if get_in(modules, path ++ ["kind"]) != "def" do
+          line =
+            case suffix.span do
+              {line, _} -> line
+              line -> line
+            end
+
+          raise CompileError,
+            file: suffix.file,
+            line: line,
+            description:
+              "cannot attach termination suffix to #{Exception.format_mfa(module, function, arity)}: function is not translated"
+        end
+
+        json = %{
+          "source" => suffix.source,
+          "file" => suffix.file,
+          "span" =>
+            case suffix.span do
+              {line, column} -> [line, column]
+              line -> [line]
+            end,
+          "indentation" => suffix.indentation
+        }
+
+        update_in(modules, path, &Map.put(&1, "termination_suffix", json))
+      end)
+
     graph = :digraph.new()
 
     try do
@@ -340,11 +385,12 @@ defmodule Lynx.Translation do
     {Map.put(file, "cache_key", key), Map.put(keys, file["module"], key)}
   end
 
-  defp propagate_purity(functions) do
+  defp propagate_purity(functions, module, suffixes) do
     {functions, changed?} =
-      Enum.reduce(functions, {functions, false}, fn {name, definition}, {functions, changed?} ->
+      Enum.reduce(functions, {functions, false}, fn {{function, arity} = name, definition},
+                                                    {functions, changed?} ->
         pure =
-          definition.pure and
+          definition.pure and not Map.has_key?(suffixes, {module, function, arity}) and
             Enum.all?(definition.local_calls, fn callee -> Map.fetch!(functions, callee).pure end)
 
         if pure != definition.pure do
@@ -354,7 +400,7 @@ defmodule Lynx.Translation do
         end
       end)
 
-    if changed?, do: propagate_purity(functions), else: functions
+    if changed?, do: propagate_purity(functions, module, suffixes), else: functions
   end
 
   defp assemble_module(functions) do

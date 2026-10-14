@@ -27,7 +27,8 @@ defmodule Lynx.Case do
   defmacro __using__(_opts) do
     quote do
       Lynx.Case.__register__(__MODULE__)
-      import Lynx.Case, only: [law: 2, laws: 2]
+      import Lynx.Case, only: [law: 2, laws: 2, termination_suffix: 2]
+      import Lynx.Lean, only: [sigil_LEAN: 2]
     end
   end
 
@@ -52,7 +53,7 @@ defmodule Lynx.Case do
 
     * `:requires` (optional) — the precondition expression. Defaults to `true`.
     * `:expects` (required) — the expression to prove.
-    * `:proof` (optional) — a literal `~LEAN` sigil. Defaults to `rfl`.
+    * `:proof` (optional) — a `Lynx.Lean` value. Defaults to `rfl`.
 
   ## Executable definition
 
@@ -82,6 +83,57 @@ defmodule Lynx.Case do
   end
 
   @doc """
+  Attaches a Lean termination suffix to a translated function for this laws group.
+
+      termination_suffix :calendar.mod/2, ~LEAN"partial_fixpoint"
+
+  The source is a `Lynx.Lean` value. It is parsed as part of the function's
+  declaration, after its body. Providing a suffix disables automatic purity
+  proofs (`#lynx_pure`) for the function and its callers, regardless of the suffix
+  contents. They are conservatively classified as impure; purity may be proved
+  separately when needed.
+  Raises if the target function is not translated by the group's laws.
+  """
+  defmacro termination_suffix(target, source) do
+    mfa =
+      case target do
+        {:/, _, [{{:., _, [module, name]}, _, []}, arity]}
+        when is_atom(name) and is_integer(arity) and arity >= 0 ->
+          module = Macro.expand(module, __CALLER__)
+
+          if not is_atom(module),
+            do: raise(ArgumentError, "expected a module in termination_suffix")
+
+          {module, name, arity}
+
+        _ ->
+          raise ArgumentError, "termination_suffix expects Module.function/arity"
+      end
+
+    quote do
+      Lynx.Case.__termination_suffix__(__MODULE__, unquote(Macro.escape(mfa)), unquote(source))
+    end
+  end
+
+  @doc false
+  def __termination_suffix__(module, {target, name, arity} = mfa, %Lynx.Lean{} = source) do
+    case Module.get_attribute(module, :lynx_termination_suffixes) do
+      nil ->
+        raise ArgumentError, "termination_suffix must be defined inside a laws group"
+
+      suffixes ->
+        if Map.has_key?(suffixes, mfa),
+          do:
+            raise(
+              ArgumentError,
+              "duplicate termination_suffix for #{Exception.format_mfa(target, name, arity)}"
+            )
+
+        Module.put_attribute(module, :lynx_termination_suffixes, Map.put(suffixes, mfa, source))
+    end
+  end
+
+  @doc """
   Registers a group of laws as one ExUnit test.
 
   The test translates the laws and their callees, verifies their proofs,
@@ -106,12 +158,17 @@ defmodule Lynx.Case do
     definition =
       quote unquote: false do
         def unquote(name)(_context) do
-          Lynx.Case.__verify__(__MODULE__, unquote(name), unquote(group_laws))
+          Lynx.Case.__verify__(
+            __MODULE__,
+            unquote(name),
+            unquote(group_laws),
+            unquote(Macro.escape(suffixes))
+          )
         end
       end
 
     quote do
-      {name, group_laws} =
+      {name, group_laws, suffixes} =
         Lynx.Case.__laws__(
           __MODULE__,
           unquote(__CALLER__.file),
@@ -131,6 +188,7 @@ defmodule Lynx.Case do
     end
 
     Module.put_attribute(module, :lynx_laws, [])
+    Module.put_attribute(module, :lynx_termination_suffixes, %{})
 
     try do
       fun.()
@@ -141,9 +199,10 @@ defmodule Lynx.Case do
       end
 
       name = ExUnit.Case.register_test(module, file, line, :laws, description, [:laws])
-      {name, group_laws}
+      {name, group_laws, Module.get_attribute(module, :lynx_termination_suffixes)}
     after
       Module.delete_attribute(module, :lynx_laws)
+      Module.delete_attribute(module, :lynx_termination_suffixes)
     end
   end
 
@@ -155,9 +214,9 @@ defmodule Lynx.Case do
   end
 
   @doc false
-  def __verify__(module, name, laws) do
+  def __verify__(module, name, laws, suffixes) do
     files =
-      Lynx.Translation.new()
+      Lynx.Translation.new(termination_suffixes: suffixes)
       |> Lynx.Translation.add(Lynx.Bytecode.fetch!(module))
       |> Lynx.Translation.verify(module, laws)
       |> Lynx.Translation.assemble(cache: System.get_env("LYNX_CACHE") != "0")

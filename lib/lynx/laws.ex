@@ -109,20 +109,27 @@ defmodule Lynx.Laws do
   `:theorems` lists each law's name (including its arity) and elaboration time in
   milliseconds. Cached and skipped modules have an empty list.
 
+  Pass `termination_suffixes: %{{module, function, arity} => lean_source}` to attach
+  a `Lynx.Lean` termination suffix to a translated function. Providing a suffix
+  disables automatic purity proofs (`#lynx_pure`) for that function and its
+  callers: they are conservatively classified as impure, regardless of the suffix
+  contents. Purity may be proved separately when needed. Targets must be
+  translated by the laws being verified; annotations do not add translation roots.
+
   Raises on translation failures, including modules without laws or unsupported
   code, and on failures to run Lean or read its response.
   """
-  @spec verify!([module() | binary()]) :: [report()]
-  def verify!(modules) when is_list(modules) do
+  @spec verify!([module() | binary()], keyword()) :: [report()]
+  def verify!(modules, opts \\ []) when is_list(modules) do
     {names, source} = Enum.split_with(modules, &is_atom/1)
-    translation = Enum.reduce(source, Lynx.Translation.new(), &Lynx.Translation.add(&2, &1))
+    translation = Enum.reduce(source, Lynx.Translation.new(opts), &Lynx.Translation.add(&2, &1))
 
     files =
       (names ++ Map.keys(translation.modules))
       |> Enum.reduce(translation, fn module, translation ->
         Lynx.Translation.verify(translation, module)
       end)
-      |> Lynx.Translation.assemble()
+      |> Lynx.Translation.assemble(opts)
 
     Lynx.Commands.verify!(@lean_dir, files)
   end
@@ -131,6 +138,7 @@ defmodule Lynx.Laws do
     quote do
       Lynx.Laws.__register__(__MODULE__)
       import Lynx.Laws, only: [law: 2]
+      import Lynx.Lean, only: [sigil_LEAN: 2]
     end
   end
 
@@ -155,8 +163,8 @@ defmodule Lynx.Laws do
     * `:expects` (required) — the Elixir expression to prove. It must evaluate to
       exactly `true` whenever the precondition holds.
 
-    * `:proof` (optional) — a literal `~LEAN` sigil containing the Lean tactic
-      proof, without sigil modifiers. Both inline and heredoc sigils are accepted.
+    * `:proof` (optional) — a `Lynx.Lean` value containing the Lean tactic proof,
+      usually built with `~LEAN`. Both inline and heredoc sigils are accepted.
       Defaults to `rfl`, which only proves goals that hold by definitional equality.
 
   ## Example
@@ -196,7 +204,7 @@ defmodule Lynx.Laws do
       compile_error!(env, "law arguments must be unique")
     end
 
-    unless Keyword.keyword?(opts) do
+    if not Keyword.keyword?(opts) do
       compile_error!(env, "law options must be a keyword list")
     end
 
@@ -210,6 +218,11 @@ defmodule Lynx.Laws do
         :error -> compile_error!(env, "law requires the :expects option to be given")
       end
 
+    proof =
+      Keyword.get_lazy(opts, :proof, fn ->
+        Macro.escape(%Lynx.Lean{source: "rfl", file: env.file, indentation: 0, span: env.line})
+      end)
+
     requires_name = :"#{name}:requires"
     ensures_name = :"#{name}:ensures"
     requires = Keyword.get(opts, :requires, true)
@@ -217,14 +230,16 @@ defmodule Lynx.Laws do
     attribute = %{
       name: {name, params},
       ensures: ensures_name,
-      span: span(elem(call, 1), env),
-      proof: proof(Keyword.fetch(opts, :proof), env)
+      span: span(elem(call, 1), env)
     }
 
     attribute =
       if Keyword.has_key?(opts, :requires),
         do: Map.put(attribute, :requires, requires_name),
         else: attribute
+
+    attributes = Macro.escape(Map.to_list(attribute))
+    attributes = [proof: quote(do: Lynx.Laws.__proof__(unquote(proof)))] ++ attributes
 
     helper_args =
       Enum.map(args, &Macro.update_meta(&1, fn meta -> Keyword.put(meta, :generated, true) end))
@@ -234,7 +249,7 @@ defmodule Lynx.Laws do
 
     definition =
       quote generated: true do
-        @law unquote(Macro.escape(attribute))
+        @law %{unquote_splicing(attributes)}
 
         defp unquote(requires_name)(unquote_splicing(helper_args)), do: unquote(requires)
         defp unquote(ensures_name)(unquote_splicing(helper_args)), do: unquote(expects)
@@ -265,28 +280,10 @@ defmodule Lynx.Laws do
     end
   end
 
-  defp proof(:error, env), do: %{source: "rfl", indentation: 0, span: env.line}
+  @doc false
+  def __proof__(%Lynx.Lean{} = proof), do: proof
 
-  defp proof({:ok, {:sigil_LEAN, meta, [{:<<>>, binary_meta, [source]}, []]}}, env)
-       when is_binary(source) do
-    indentation = Keyword.get(binary_meta, :indentation, 0)
-    line = Keyword.get(meta, :line, env.line)
-
-    span =
-      if Keyword.get(meta, :delimiter) in ~w(""" ''') do
-        {line + 1, indentation + 1}
-      else
-        case Keyword.fetch(meta, :column) do
-          {:ok, column} -> {line, column + 6}
-          :error -> line
-        end
-      end
-
-    %{source: source, indentation: indentation, span: span}
-  end
-
-  defp proof(_, env),
-    do: compile_error!(env, "proof must be a literal ~LEAN sigil without modifiers")
+  def __proof__(_proof), do: raise(ArgumentError, "proof must be a Lynx.Lean value")
 
   defp compile_error!(env, description) do
     raise CompileError, file: env.file, line: env.line, description: description
