@@ -516,6 +516,18 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let literal : TSyntax `term := ⟨← Parser.runParserCategory (← read) `term (toString value)⟩
     let ctor := mkIdent ``Lynx.Term.integer
     pure (Unhygienic.run `($ctor $literal))
+  | "float" => do
+    fields j ["kind", "negative", "exponent", "fraction", "span"]
+    let negative ← (← field j "negative").getBool?
+    let exponent ← (← field j "exponent").getNat?
+    let fraction ← (← field j "fraction").getNat?
+    unless exponent < 2047 do throw "float exponent must be less than 2047"
+    unless fraction < 2 ^ 52 do throw "float fraction must be less than 2^52"
+    let sign := mkIdent (if negative then ``Bool.true else ``Bool.false)
+    let exponent : TSyntax `term := ⟨Syntax.mkNumLit (toString exponent)⟩
+    let fraction : TSyntax `term := ⟨Syntax.mkNumLit (toString fraction)⟩
+    let ctor := mkIdent ``Lynx.Term.float
+    pure (Unhygienic.run `($ctor ⟨$sign, $exponent, $fraction⟩))
   | "atom" => do
     fields j ["kind", "value", "span"]
     let literal : TSyntax `term := ⟨Syntax.mkStrLit (← str j "value")⟩

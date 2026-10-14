@@ -481,6 +481,10 @@ value(#c_literal{anno = Anno, val = [Head | Tail]}, State0) ->
     {node(~"cons", Anno, #{~"head" => TranslatedHead, ~"tail" => TranslatedTail}), State2};
 value(#c_literal{anno = Anno, val = N}, State) when is_integer(N) ->
     {node(~"integer", Anno, #{~"value" => N}), State};
+value(#c_literal{anno = Anno, val = N}, State) when is_float(N) ->
+    <<Sign:1, Exponent:11, Fraction:52>> = <<N:64/float>>,
+    {node(~"float", Anno, #{~"negative" => Sign =:= 1,
+        ~"exponent" => Exponent, ~"fraction" => Fraction}), State};
 value(#c_literal{anno = Anno, val = Atom}, State) when is_atom(Atom) ->
     {node(~"atom", Anno, #{~"value" => atom_to_binary(Atom, utf8)}), State};
 value(#c_cons{anno = Anno, hd = Head, tl = Tail}, State0) ->

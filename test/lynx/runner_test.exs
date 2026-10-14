@@ -210,6 +210,30 @@ defmodule Lynx.RunnerTest do
       assert error.message =~ @literal_erl
       assert error.message =~ "unsupported command kind 'unknown'"
     end
+
+    test "rejects non-finite exponents and oversized float fractions" do
+      for {field, value, message} <- [
+            {"exponent", 2047, "float exponent must be less than 2047"},
+            {"exponent", 2048, "float exponent must be less than 2047"},
+            {"fraction", 4_503_599_627_370_496, "float fraction must be less than 2^52"}
+          ] do
+        literal =
+          %{
+            "kind" => "float",
+            "negative" => false,
+            "exponent" => 0,
+            "fraction" => 0,
+            "span" => []
+          }
+          |> Map.put(field, value)
+
+        body = %{"kind" => "return", "values" => [literal], "span" => []}
+        files = [file(@literal_erl, "Erlang.literal", [definition("invalid", body)])]
+
+        error = assert_raise RuntimeError, fn -> Lynx.Commands.verify!(@lean_dir, files) end
+        assert error.message =~ message
+      end
+    end
   end
 
   defp definition(name, body) do

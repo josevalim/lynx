@@ -1,6 +1,40 @@
 defmodule Lynx.CoreToLeanjTest do
   use ExUnit.Case, async: true
 
+  test "translates floats as exact binary64 fields with source annotations" do
+    anno = [{:file, ~c"example.erl"}, {7, 3}]
+
+    for {value, negative, exponent, fraction} <- [
+          {0.0, false, 0, 0},
+          {-0.0, true, 0, 0},
+          {1.0, false, 1023, 0},
+          {-1.5, true, 1023, 2_251_799_813_685_248},
+          {0.1, false, 1019, 2_702_159_776_422_298},
+          {5.0e-324, false, 0, 1},
+          {1.7976931348623157e308, false, 2046, 4_503_599_627_370_495}
+        ] do
+      body = :cerl.ann_abstract(anno, value)
+
+      assert {:ok, %{{:entry, 1} => %{pure: true, translation: translation}}, []} =
+               translate(definitions([definition(:entry, body)]))
+
+      assert %{
+               "body" => %{
+                 "kind" => "return",
+                 "values" => [
+                   %{
+                     "kind" => "float",
+                     "negative" => ^negative,
+                     "exponent" => ^exponent,
+                     "fraction" => ^fraction,
+                     "span" => [7, 3]
+                   }
+                 ]
+               }
+             } = translation
+    end
+  end
+
   test "allocates distinct generated message binders for timeout-only receives" do
     receive_after = fn action ->
       loop = :cerl.c_fname(:receive_loop, 0)
@@ -772,10 +806,10 @@ defmodule Lynx.CoreToLeanjTest do
 
   test "returns annotated binary reasons for unsupported Core during translation" do
     anno = [{:file, ~c"example.erl"}, {7, 3}]
-    body = :cerl.ann_abstract(anno, 1.5)
+    body = :cerl.ann_abstract(anno, <<1>>)
     assert {:error, ^anno, reason} = translate(definitions([definition(:entry, body)]))
     assert reason =~ "unsupported Core expression:"
-    assert reason =~ "1.5"
+    assert reason =~ "1"
   end
 
   test "translates laws without a requires helper" do

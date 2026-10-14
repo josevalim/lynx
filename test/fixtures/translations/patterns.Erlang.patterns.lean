@@ -109,4 +109,28 @@ namespace Erlang.patterns
         | _13 => «lynxLabel_label^0» ())
       (fun (_ : Unit) => pure (Lynx.Term.atom "missing"))
 
+#lynx_pure
+  def «floats/1» (_0 : Lynx.Term) : Lynx.Result :=
+    match _0 with
+    | Lynx.Term.integer 1 => pure (Lynx.Term.atom "integer")
+    | Lynx.Term.float ⟨Bool.false, 1023, 0⟩ => pure (Lynx.Term.atom "float")
+    | Lynx.Term.float ⟨Bool.false, 0, 0⟩ => pure (Lynx.Term.atom "positive_zero")
+    | Lynx.Term.float ⟨Bool.true, 0, 0⟩ => pure (Lynx.Term.atom "negative_zero")
+    | Lynx.Term.float ⟨Bool.true, 1023, 2251799813685248⟩ => pure (Lynx.Term.atom "negative")
+    |
+    Lynx.Term.tuple
+        ⟨[Lynx.Term.float ⟨Bool.false, 1019, 2702159776422298⟩,
+            Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 0, 1⟩) Lynx.Term.nil]⟩ =>
+      pure (Lynx.Term.atom "nested")
+    | _ =>
+      (fun lynxMatchNext =>
+          match _0 with
+          | lynxMap255 =>
+            match (Lynx.Term.getMapKeys [Lynx.Term.float ⟨Bool.false, 1023, 0⟩] lynxMap255) with
+            | [Lynx.Term.float ⟨Bool.false, 1023, 2251799813685248⟩] => pure (Lynx.Term.atom "map")
+            | _ => lynxMatchNext ())
+        (fun (_ : Unit) =>
+          match _0 with
+          | _2 => pure (Lynx.Term.atom "other"))
+
 end Erlang.patterns

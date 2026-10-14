@@ -1,6 +1,6 @@
 -module(patterns).
 -export([grouped/1, map_grouped/1, map_nested/1, map_duplicate/3,
-         map_computed/2]).
+         map_computed/2, floats/1]).
 
 grouped(a) -> first;
 grouped(b) -> second;
@@ -24,3 +24,12 @@ map_duplicate(K1, K2, Map) ->
 
 map_computed(Key, Map) ->
     case Map of #{(Key + 1) := Value} -> Value; _ -> missing end.
+
+floats(1) -> integer;
+floats(1.0) -> float;
+floats(0.0) -> positive_zero;
+floats(-0.0) -> negative_zero;
+floats(-1.5) -> negative;
+floats({0.1, [5.0e-324]}) -> nested;
+floats(#{1.0 := 1.5}) -> map;
+floats(_) -> other.

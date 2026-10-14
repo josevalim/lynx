@@ -808,7 +808,7 @@ defmodule Lynx.TranslationTest do
         cerl("""
         -module(example).
         -export([entry/1]).
-        entry(X) -> 1.5.
+        entry(X) -> <<1>>.
         """)
 
       error =
@@ -823,7 +823,7 @@ defmodule Lynx.TranslationTest do
       assert %CompileError{file: "example.erl", line: 3} = error
       assert Exception.message(error) =~ "example.erl:3: unsupported Core expression:"
       assert error.description =~ "unsupported Core expression:"
-      assert error.description =~ "1.5"
+      assert error.description =~ "1"
     end
 
     test "falls back to the function line for compiler-generated NIF primops" do

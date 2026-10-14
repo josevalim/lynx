@@ -58,4 +58,27 @@ namespace Erlang.literal
     let _2 ← pure (Lynx.Term.map [(_0, _1), (_0, Lynx.Term.integer 1)])
     pure (Lynx.Term.map [(_0, _2), (Lynx.Term.atom "a", Lynx.Term.integer 1)])
 
+#lynx_pure
+  def «floats/0» : Lynx.Result :=
+    pure
+      (Lynx.Term.cons (Lynx.Term.float ⟨Bool.true, 1023, 2251799813685248⟩)
+        (Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 0, 0⟩)
+          (Lynx.Term.cons (Lynx.Term.float ⟨Bool.true, 0, 0⟩)
+            (Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 1023, 0⟩)
+              (Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 1019, 2702159776422298⟩)
+                (Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 26, 1528457577689945⟩)
+                  (Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 0, 1⟩)
+                    (Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 2046, 4503599627370495⟩)
+                      (Lynx.Term.cons
+                        (Lynx.Term.tuple
+                          #[Lynx.Term.atom "nested",
+                            Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 1023, 2251799813685248⟩)
+                              Lynx.Term.nil])
+                        (Lynx.Term.cons
+                          (Lynx.Term.map
+                            [(Lynx.Term.float ⟨Bool.false, 1023, 0⟩,
+                                Lynx.Term.float ⟨Bool.false, 1019, 2702159776422298⟩),
+                              (Lynx.Term.integer 1, Lynx.Term.atom "integer")])
+                          Lynx.Term.nil))))))))))
+
 end Erlang.literal
