@@ -3,6 +3,7 @@ module
 meta import LynxTest.ProofAudit
 -- Import implementation modules here to audit their private declarations as well.
 import all Lynx.Modules.Erlang.erlang
+import Lynx.Modules.Erlang.maps
 import LynxTest.Term.Compare
 import all Lynx.Term
 import all Lynx.Term.DataTypes
@@ -16,6 +17,7 @@ import all Std
 import all Init.Data.List.Basic
 import all Init.Data.List.Control
 import all Init.Data.Ord.String
+import all Init.Data.Rat.Basic
 
 namespace LynxTest.Modules.Erlang
 open Lynx
@@ -514,6 +516,194 @@ theorem process_dictionary_queries :
       (.cons (.tuple #[.atom "b", .integer 1]) .nil)) {} := by
   repeat' first | apply And.intro | rfl
 
+section
+set_option maxRecDepth 4096
+set_option exponentiation.threshold 2048
+
+-- Boundary results checked against the installed Erlang/OTP 28.1.1.
+private def half : Term.FiniteFloat := ⟨false, 1022, 0⟩
+private def minusOneHalf : Term.FiniteFloat := ⟨true, 1023, 2 ^ 51⟩
+
+theorem «hd/1_cons» (head tail : Term) :
+    «hd/1» (.cons head tail) = .ok head := by rfl
+
+theorem «tl/1_cons» (head tail : Term) :
+    «tl/1» (.cons head tail) = .ok tail := by rfl
+
+theorem «length/1_two_elements» (first second : Term) :
+    «length/1» (.cons first (.cons second .nil)) = .ok (.integer 2) := by
+  simp [«length/1»]
+
+theorem list_guards_invalid :
+    «hd/1» .nil = .error (.error (.atom "badarg")) ∧
+    «tl/1» .nil = .error (.error (.atom "badarg")) ∧
+    «length/1» (.cons (.integer 1) (.atom "tail")) = .error (.error (.atom "badarg")) := by
+  simp [«hd/1», «tl/1», «length/1»]
+
+theorem «is_function/2_arity» (id arity : Nat) (captures : Array Term) :
+    «is_function/2» (.function id arity captures) (.integer arity) = .ok Term.true := by
+  simp [«is_function/2»]
+
+theorem «is_function/2_invalid_arity» (input : Term) :
+    «is_function/2» input (.integer (-1)) = .error (.error (.atom "badarg")) ∧
+    «is_function/2» input (.atom "arity") = .error (.error (.atom "badarg")) := by
+  simp [«is_function/2»]
+
+theorem «is_function/2_mismatch» :
+    «is_function/2» (.function 0 2 #[]) (.integer 1) = .ok Term.false ∧
+    «is_function/2» (.atom "not_fun") (.integer 999) = .ok Term.false := by
+  repeat' first | apply And.intro | (with_unfolding_all rfl)
+
+theorem «map_get/2_after_put» (entries : List (Term × Term)) (key value : Term) :
+    (Erlang.maps.«put/3» key value (.map entries) >>= «map_get/2» key) = .ok value := by
+  simp [Erlang.maps.«put/3», «map_get/2»]
+
+theorem «map_size/1_shadowed_and_exact_keys» :
+    «map_size/1» (.map [(.integer 1, .nil), (.integer 1, .atom "new"),
+      (.float ⟨false, 1023, 0⟩, .nil)]) = .ok (.integer 2) ∧
+    «map_size/1» (.map []) = .ok (.integer 0) ∧
+    «is_map_key/2» (.integer 1) (.map [(.float ⟨false, 1023, 0⟩, .nil)]) = .ok Term.false ∧
+    «is_map_key/2» (.integer 1) (.map [(.integer 1, .nil)]) = .ok Term.true := by
+  repeat' first | apply And.intro | (with_unfolding_all rfl)
+
+theorem map_guards_errors (key : Term) :
+    «map_get/2» key (.map []) = .error (.error (.tuple #[.atom "badkey", key])) ∧
+    «map_get/2» key .nil = .error (.error (.tuple #[.atom "badmap", .nil])) ∧
+    «is_map_key/2» key .nil = .error (.error (.tuple #[.atom "badmap", .nil])) ∧
+    «map_size/1» .nil = .error (.error (.tuple #[.atom "badmap", .nil])) := by
+  simp [«map_get/2», «is_map_key/2», «map_size/1»]
+
+theorem numeric_rounding :
+    «round/1» (.float half) = .ok (.integer 1) ∧
+    «round/1» (.float { half with negative := true }) = .ok (.integer (-1)) ∧
+    «round/1» (.float floatOneAndHalf) = .ok (.integer 2) ∧
+    «round/1» (.float minusOneHalf) = .ok (.integer (-2)) ∧
+    «floor/1» (.float minusOneHalf) = .ok (.integer (-2)) ∧
+    «ceil/1» (.float minusOneHalf) = .ok (.integer (-1)) ∧
+    «trunc/1» (.float minusOneHalf) = .ok (.integer (-1)) ∧
+    «floor/1» (.float half) = .ok (.integer 0) ∧
+    «ceil/1» (.float half) = .ok (.integer 1) := by
+  repeat' first | apply And.intro | (with_unfolding_all rfl)
+
+theorem numeric_conversion_boundaries :
+    «abs/1» (.float ⟨true, 0, 0⟩) = .ok (.float ⟨false, 0, 0⟩) ∧
+    «float/1» (.integer (2 ^ 53 + 1)) = .ok (.float ⟨false, 1076, 0⟩) ∧
+    «float/1» (.integer (2 ^ 1024)) = .error (.error (.atom "badarg")) ∧
+    «trunc/1» (.float ⟨false, 0, 1⟩) = .ok (.integer 0) ∧
+    «floor/1» (.float ⟨true, 0, 1⟩) = .ok (.integer (-1)) := by
+  repeat' first | apply And.intro | (with_unfolding_all rfl)
+
+theorem numeric_guards_integer_identity (n : Int) :
+    «round/1» (.integer n) = .ok (.integer n) ∧
+    «floor/1» (.integer n) = .ok (.integer n) ∧
+    «ceil/1» (.integer n) = .ok (.integer n) ∧
+    «trunc/1» (.integer n) = .ok (.integer n) ∧
+    «abs/1» (.integer n) = .ok (.integer n.natAbs) := by
+  simp [«round/1», «floor/1», «ceil/1», «trunc/1», «abs/1»]
+
+theorem numeric_guards_invalid :
+    ([«round/1», «floor/1», «ceil/1», «trunc/1», «abs/1», «float/1»].map
+      (fun operation => operation .nil)) =
+      List.replicate 6 (.error (.error (.atom "badarg"))) := by rfl
+
+theorem arithmetic_boundaries :
+    «-/1» (.float ⟨false, 0, 0⟩) = .ok (.float ⟨true, 0, 0⟩) ∧
+    «+/1» (.float ⟨true, 0, 0⟩) = .ok (.float ⟨true, 0, 0⟩) ∧
+    «-/2» (.float floatOneAndHalf) (.integer 1) = .ok (.float half) ∧
+    «-/2» (.integer 1) (.float floatOneAndHalf) = .ok (.float { half with negative := true }) ∧
+    «//2» (.integer 3) (.integer 2) = .ok (.float floatOneAndHalf) ∧
+    «//2» (.float floatOneAndHalf) (.integer 3) = .ok (.float half) ∧
+    «//2» (.integer 3) (.float floatOneAndHalf) = .ok (.float ⟨false, 1024, 0⟩) ∧
+    «//2» (.integer 1) (.float ⟨true, 0, 0⟩) = .error (.error (.atom "badarith")) ∧
+    «//2» (.integer 0) (.integer 0) = .error (.error (.atom "badarith")) ∧
+    «-/2» (.float ⟨false, 2046, 2 ^ 52 - 1⟩) (.float ⟨true, 2046, 2 ^ 52 - 1⟩) =
+      .error (.error (.atom "badarith")) := by
+  repeat' first | apply And.intro | (with_unfolding_all rfl)
+
+theorem «div/2_signs» :
+    «div/2» (.integer 7) (.integer (-3)) = .ok (.integer (-2)) ∧
+    «div/2» (.integer (-7)) (.integer 3) = .ok (.integer (-2)) ∧
+    «div/2» (.integer (-7)) (.integer (-3)) = .ok (.integer 2) ∧
+    «div/2» (.integer 7) (.integer 0) = .error (.error (.atom "badarith")) := by
+  repeat' first | apply And.intro | (with_unfolding_all rfl)
+
+theorem bitwise_signs :
+    «bor/2» (.integer 10) (.integer 12) = .ok (.integer 14) ∧
+    «bor/2» (.integer (-10)) (.integer 12) = .ok (.integer (-2)) ∧
+    «bor/2» (.integer 10) (.integer (-12)) = .ok (.integer (-2)) ∧
+    «bor/2» (.integer (-10)) (.integer (-12)) = .ok (.integer (-10)) ∧
+    «bxor/2» (.integer 10) (.integer 12) = .ok (.integer 6) ∧
+    «bxor/2» (.integer (-10)) (.integer 12) = .ok (.integer (-6)) ∧
+    «bxor/2» (.integer 10) (.integer (-12)) = .ok (.integer (-2)) ∧
+    «bxor/2» (.integer (-10)) (.integer (-12)) = .ok (.integer 2) ∧
+    «bnot/1» (.integer (-10)) = .ok (.integer 9) := by
+  repeat' first | apply And.intro | (with_unfolding_all rfl)
+
+theorem «bnot/1_involution» (n : Int) :
+    («bnot/1» (.integer n) >>= «bnot/1») = .ok (.integer n) := by
+  simp [«bnot/1»]
+  omega
+
+theorem arithmetic_invalid :
+    «+/1» .nil = .error (.error (.atom "badarith")) ∧
+    «-/1» .nil = .error (.error (.atom "badarith")) ∧
+    ([«-/2», «//2», «div/2», «bor/2», «bxor/2»].map
+      (fun operation => operation (.integer 1) .nil)) =
+      List.replicate 5 (.error (.error (.atom "badarith"))) ∧
+    «bnot/1» (.float half) = .error (.error (.atom "badarith")) := by
+  repeat' first | apply And.intro | (with_unfolding_all rfl)
+
+theorem «xor/2_booleans» :
+    «xor/2» Term.true Term.false = .ok Term.true ∧
+    «xor/2» Term.false Term.true = .ok Term.true ∧
+    «xor/2» Term.true Term.true = .ok Term.false ∧
+    «xor/2» Term.false Term.false = .ok Term.false ∧
+    «xor/2» Term.true (.integer 0) = .error (.error (.atom "badarg")) := by
+  repeat' first | apply And.intro | (with_unfolding_all rfl)
+
+theorem min_max_equal_returns_first :
+    «min/2» (.integer 1) (.float ⟨false, 1023, 0⟩) = .ok (.integer 1) ∧
+    «max/2» (.float ⟨false, 1023, 0⟩) (.integer 1) = .ok (.float ⟨false, 1023, 0⟩) ∧
+    «min/2» (.atom "a") (.integer 1) = .ok (.integer 1) ∧
+    «max/2» (.integer 1) (.atom "a") = .ok (.atom "a") := by
+  repeat' first | apply And.intro | (with_unfolding_all rfl)
+
+theorem local_node (pid reference : Nat) (input : Term) :
+    «node/1» (.pid pid) = «node/0» ∧
+    «node/1» (.reference reference) = «node/0» ∧
+    «node/1» .nil = .error (.error (.atom "badarg")) ∧
+    «is_port/1» input = .ok Term.false := by
+  simp [«node/1», «is_port/1»]
+
+private def bytes : ByteArray := ⟨#[1, 2, 3]⟩
+
+theorem «binary_part/3_ranges» :
+    «binary_part/3» (.bitstring bytes 0) (.integer 1) (.integer 2) =
+      .ok (.bitstring ⟨#[2, 3]⟩ 0) ∧
+    «binary_part/2» (.bitstring bytes 0) (.tuple #[.integer 3, .integer (-2)]) =
+      .ok (.bitstring ⟨#[2, 3]⟩ 0) ∧
+    «binary_part/3» (.bitstring bytes 0) (.integer 3) (.integer 0) =
+      .ok (.bitstring ⟨#[]⟩ 0) ∧
+    «binary_part/3» (.bitstring bytes 0) (.integer 2) (.integer 2) =
+      .error (.error (.atom "badarg")) ∧
+    «binary_part/3» (.bitstring bytes 0) (.integer 1) (.integer (-2)) =
+      .error (.error (.atom "badarg")) ∧
+    «binary_part/3» (.bitstring bytes 1) (.integer 0) (.integer 0) =
+      .error (.error (.atom "badarg")) ∧
+    «binary_part/2» (.bitstring bytes 0) (.tuple #[.integer 1]) =
+      .error (.error (.atom "badarg")) := by
+  repeat' first | apply And.intro | (with_unfolding_all rfl)
+
+theorem «size/1_complete_bytes» :
+    «size/1» (.bitstring bytes 1) = .ok (.integer 2) ∧
+    «byte_size/1» (.bitstring bytes 1) = .ok (.integer 3) ∧
+    «size/1» (.tuple #[.nil, .nil]) = .ok (.integer 2) ∧
+    «size/1» .nil = .error (.error (.atom "badarg")) := by
+  repeat' first | apply And.intro | (with_unfolding_all rfl)
+
+
+end
+
 end LynxTest.Modules.Erlang
 
 run_cmd do
@@ -521,3 +711,4 @@ run_cmd do
   LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.erlang
   LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.erlang.Guards
   LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.erlang.Process
+  LynxTest.ProofAudit.checkModule `Lynx.Term.FiniteFloat

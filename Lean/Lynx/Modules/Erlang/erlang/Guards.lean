@@ -138,6 +138,24 @@ open Lynx
       | some result => .ok (.float result)
       | none => .error (.error (.atom "badarith"))) := by rfl
 
+#lynx_pure def «-/2» : Term → Term → Result
+  | .integer x, .integer y => .ok (.integer (x - y))
+  | .float x, .float y => floatResult (x.sub y)
+  | .integer x, .float y => floatResult (Term.FiniteFloat.ofInt x >>= (·.sub y))
+  | .float x, .integer y => floatResult (Term.FiniteFloat.ofInt y >>= x.sub)
+  | _, _ => throw (.error (.atom "badarith"))
+
+@[simp↓] theorem «-/2_integers» (left right : Int) :
+    «-/2» (.integer left) (.integer right) = .ok (.integer (left - right)) := by rfl
+
+#lynx_pure def «//2» : Term → Term → Result
+  | .float x, .float y => floatResult (x.div y)
+  | .integer x, .float y => floatResult (Term.FiniteFloat.ofInt x >>= (·.div y))
+  | .float x, .integer y => floatResult (Term.FiniteFloat.ofInt y >>= x.div)
+  | .integer x, .integer y => floatResult
+      (Term.FiniteFloat.ofInt x >>= fun a => Term.FiniteFloat.ofInt y >>= a.div)
+  | _, _ => throw (.error (.atom "badarith"))
+
 #lynx_pure def «*/2» : Term → Term → Result
   | .integer x, .integer y => .ok (.integer (x * y))
   | .float x, .float y => floatResult (x.mul y)
@@ -228,5 +246,165 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
       let rest ← «++/2» tail right
       .ok (.cons head rest)
   | _, _ => throw (.error (.atom "badarg"))
+
+#lynx_pure @[expose] def «xor/2» : Term → Term → Result
+  | .atom "true", .atom "false" | .atom "false", .atom "true" => .ok Term.true
+  | .atom "true", .atom "true" | .atom "false", .atom "false" => .ok Term.false
+  | _, _ => throw (.error (.atom "badarg"))
+
+/-- No port values are represented by the local runtime. -/
+#lynx_pure @[expose] def «is_port/1» (_ : Term) : Result := .ok Term.false
+
+#lynx_pure @[expose] def «is_function/2» (input arity : Term) : Result :=
+  match arity with
+  | .integer n =>
+    if n < 0 then throw (.error (.atom "badarg"))
+    else .ok (match input with
+      | .function _ a _ => if (a : Int) = n then Term.true else Term.false
+      | _ => Term.false)
+  | _ => throw (.error (.atom "badarg"))
+
+#lynx_pure @[expose] def «hd/1» : Term → Result
+  | .cons head _ => .ok head
+  | _ => throw (.error (.atom "badarg"))
+
+#lynx_pure @[expose] def «tl/1» : Term → Result
+  | .cons _ tail => .ok tail
+  | _ => throw (.error (.atom "badarg"))
+
+/-- Unlike is_list/1, length/1 requires a proper list. -/
+#lynx_pure @[expose] def «length/1» : Term → Result
+  | .nil => .ok (.integer 0)
+  | .cons _ tail => do
+    let .integer n ← «length/1» tail | throw (.error (.atom "badarg"))
+    .ok (.integer (n + 1))
+  | _ => throw (.error (.atom "badarg"))
+
+/-- Tuple arity or the number of complete bytes in a bitstring. -/
+#lynx_pure @[expose] def «size/1» : Term → Result
+  | .tuple entries => .ok (.integer entries.size)
+  | .bitstring bytes lastBits _ =>
+    .ok (.integer (Term.Bitstring.bitSize bytes lastBits / 8))
+  | _ => throw (.error (.atom "badarg"))
+
+#lynx_pure @[expose] def «map_get/2» (key input : Term) : Result :=
+  match input with
+  | .map entries =>
+    match entries.find? (fun entry => decide (Term.exactCompare key entry.1 = .eq)) with
+    | some entry => .ok entry.2
+    | none => throw (.error (.tuple #[.atom "badkey", key]))
+  | _ => throw (.error (.tuple #[.atom "badmap", input]))
+
+#lynx_pure @[expose] def «is_map_key/2» (key input : Term) : Result :=
+  match input with
+  | .map entries => .ok (if entries.any (fun entry => Term.exactCompare key entry.1 == .eq)
+    then Term.true else Term.false)
+  | _ => throw (.error (.tuple #[.atom "badmap", input]))
+
+/-- The map representation retains shadowed entries, which count only once. -/
+#lynx_pure @[expose] def «map_size/1» : Term → Result
+  | .map entries => .ok (.integer
+      ((entries.map Prod.fst).eraseDupsBy (fun a b => Term.exactCompare a b == .eq)).length)
+  | input => throw (.error (.tuple #[.atom "badmap", input]))
+
+#lynx_pure @[expose] def «min/2» (left right : Term) : Result :=
+  .ok (if (Term.compare left right).isLE then left else right)
+
+#lynx_pure @[expose] def «max/2» (left right : Term) : Result :=
+  .ok (if (Term.compare left right).isGE then left else right)
+
+/-- The runtime models a local node with distribution disabled. -/
+#lynx_pure @[expose] def «node/0» : Result := .ok (.atom "nonode@nohost")
+
+#lynx_pure @[expose] def «node/1» : Term → Result
+  | .pid _ | .reference _ => «node/0»
+  | _ => throw (.error (.atom "badarg"))
+
+/-- Negative lengths select bytes preceding the supplied position. -/
+#lynx_pure @[expose] def «binary_part/3» : Term → Term → Term → Result
+  | .bitstring bytes 0 _, .integer position, .integer length =>
+    let start := if length < 0 then position + length else position
+    let stop := if length < 0 then position else position + length
+    if 0 ≤ start ∧ start ≤ stop ∧ stop ≤ (bytes.size : Int) then
+      .ok (.bitstring (bytes.extract start.toNat stop.toNat) 0)
+    else throw (.error (.atom "badarg"))
+  | _, _, _ => throw (.error (.atom "badarg"))
+
+#lynx_pure @[expose] def «binary_part/2» (input range : Term) : Result :=
+  match range with
+  | .tuple entries =>
+    match entries.toList with
+    | [position, length] => «binary_part/3» input position length
+    | _ => throw (.error (.atom "badarg"))
+  | _ => throw (.error (.atom "badarg"))
+
+#lynx_pure @[expose] def «+/1» : Term → Result
+  | .integer n => .ok (.integer n)
+  | .float f => .ok (.float f)
+  | _ => throw (.error (.atom "badarith"))
+
+#lynx_pure @[expose] def «-/1» : Term → Result
+  | .integer n => .ok (.integer (-n))
+  | .float f => .ok (.float { f with negative := !f.negative })
+  | _ => throw (.error (.atom "badarith"))
+
+#lynx_pure @[expose] def «abs/1» : Term → Result
+  | .integer n => .ok (.integer n.natAbs)
+  | .float f => .ok (.float { f with negative := false })
+  | _ => throw (.error (.atom "badarg"))
+
+#lynx_pure @[expose] def «float/1» : Term → Result
+  | .float f => .ok (.float f)
+  | .integer n => match Term.FiniteFloat.ofInt n with
+    | some f => .ok (.float f)
+    | none => throw (.error (.atom "badarg"))
+  | _ => throw (.error (.atom "badarg"))
+
+#lynx_pure @[expose] def «floor/1» : Term → Result
+  | .integer n => .ok (.integer n)
+  | .float f => .ok (.integer f.toRat.floor)
+  | _ => throw (.error (.atom "badarg"))
+
+#lynx_pure @[expose] def «ceil/1» : Term → Result
+  | .integer n => .ok (.integer n)
+  | .float f => .ok (.integer f.toRat.ceil)
+  | _ => throw (.error (.atom "badarg"))
+
+#lynx_pure @[expose] def «trunc/1» : Term → Result
+  | .integer n => .ok (.integer n)
+  | .float f => .ok (.integer (f.toRat.num.tdiv f.toRat.den))
+  | _ => throw (.error (.atom "badarg"))
+
+/-- Round ties away from zero, rather than IEEE's ties to even. -/
+#lynx_pure @[expose] def «round/1» : Term → Result
+  | .integer n => .ok (.integer n)
+  | .float f =>
+    let magnitude := (f.magnitude + (1 / 2 : Rat)).floor
+    .ok (.integer (if f.negative then -magnitude else magnitude))
+  | _ => throw (.error (.atom "badarg"))
+
+#lynx_pure @[expose] def «div/2» : Term → Term → Result
+  | .integer x, .integer y =>
+    if y = 0 then throw (.error (.atom "badarith"))
+    else .ok (.integer (x.tdiv y))
+  | _, _ => throw (.error (.atom "badarith"))
+
+#lynx_pure @[expose] def «bnot/1» : Term → Result
+  | .integer x => .ok (.integer (-x - 1))
+  | _ => throw (.error (.atom "badarith"))
+
+#lynx_pure @[expose] def «bor/2» : Term → Term → Result
+  | .integer (.ofNat x), .integer (.ofNat y) => .ok (.integer (.ofNat (x ||| y)))
+  | .integer (.ofNat x), .integer (.negSucc y) => .ok (.integer (.negSucc (y ^^^ (y &&& x))))
+  | .integer (.negSucc x), .integer (.ofNat y) => .ok (.integer (.negSucc (x ^^^ (x &&& y))))
+  | .integer (.negSucc x), .integer (.negSucc y) => .ok (.integer (.negSucc (x &&& y)))
+  | _, _ => throw (.error (.atom "badarith"))
+
+#lynx_pure @[expose] def «bxor/2» : Term → Term → Result
+  | .integer (.ofNat x), .integer (.ofNat y) => .ok (.integer (.ofNat (x ^^^ y)))
+  | .integer (.ofNat x), .integer (.negSucc y) => .ok (.integer (.negSucc (x ^^^ y)))
+  | .integer (.negSucc x), .integer (.ofNat y) => .ok (.integer (.negSucc (x ^^^ y)))
+  | .integer (.negSucc x), .integer (.negSucc y) => .ok (.integer (.ofNat (x ^^^ y)))
+  | _, _ => throw (.error (.atom "badarith"))
 
 end Erlang.erlang
