@@ -138,7 +138,10 @@ private def variableName (j : Json) : DecodeM (TSyntax `ident) := do
       | .ok name => pure (if name.startsWith "_" then "_v" ++ name else "v" ++ name)
       | .error _ => do
         -- Generated binders occupy a namespace that Core variable names cannot reach.
-        if (field value "pattern").isOk then
+        if (field value "group").isOk then
+          fields value ["group", "index"]
+          pure s!"lynxMapGroup{← (← field value "group").getNat?}_{← (← field value "index").getNat?}"
+        else if (field value "pattern").isOk then
           fields value ["pattern"]
           pure s!"lynxMap{← (← field value "pattern").getNat?}"
         else
@@ -186,6 +189,107 @@ private partial def mapMatches (patterns : Array (TSyntax `term × Json))
     let matched ← mapMatches nested decode branch fallback
     branch := Unhygienic.run `(match ($lookup) with | $pat => $matched | _ => $fallback)
   return branch
+
+/-- Source locations do not affect literal-key identity. -/
+private partial def withoutSpans : Json → Json
+  | .arr values => .arr (values.map withoutSpans)
+  | .obj fields => Json.mkObj (fields.toArray.toList.filterMap fun (key, value) =>
+      if key == "span" then none else some (key, withoutSpans value))
+  | value => value
+
+private def literalMapKeys? (pattern : Json) : Except String (Option (Array Json)) := do
+  unless (← str pattern "kind") == "map" do return none
+  fields pattern ["kind", "entries", "span"]
+  let entries ← arr pattern "entries"
+  if entries.isEmpty then return none
+  let mut keys := #[]
+  for entry in entries do
+    fields entry ["key", "value", "span"]
+    let key ← field entry "key"
+    unless (← str key "kind") ∈ ["atom", "integer", "float", "binary", "bitstring", "nil"] do
+      return none
+    keys := keys.push (withoutSpans key)
+  return some (keys.qsort fun a b => a.compress < b.compress)
+
+/-- Share literal-key extraction across consecutive clauses. Move their value
+patterns and guards into an ordinary inner match; a label shares fallthrough. -/
+private def groupMapCases (j : Json) : DecodeM (Option Json) := do
+  let clauses ← arr j "cases"
+  let expressions ← arr j "expressions"
+  let nodeSpan ← field j "span"
+  for start in [:clauses.size] do
+    let patterns ← arr clauses[start]! "patterns"
+    let signatures ← patterns.mapM fun pat => do return ← literalMapKeys? pat
+    unless signatures.any (·.isSome) do continue
+    unless patterns.size == expressions.size do throw "match case must have one pattern per expression"
+    let mut stop := start + 1
+    while stop < clauses.size do
+      let next ← arr clauses[stop]! "patterns"
+      if next.size != patterns.size then break
+      let mut same := true
+      for i in [:patterns.size] do
+        if let some keys := signatures[i]! then
+          if (← literalMapKeys? next[i]!) != some keys then same := false
+      unless same do break
+      stop := stop + 1
+    if stop == start + 1 then continue
+    let group := (← get).spans.size
+    let binder (index : Nat) := Json.mkObj [("kind", toJson "var"),
+      ("name", Json.mkObj [("group", toJson group), ("index", toJson index)]), ("span", nodeSpan)]
+    let mut values := #[]
+    let mut outerPatterns := #[]
+    for i in [:patterns.size] do
+      let pat := patterns[i]!
+      if signatures[i]!.isSome then
+        let mut entries := #[]
+        for entry in ← arr pat "entries" do
+          let value := binder values.size
+          values := values.push value
+          entries := entries.push (entry.setObjVal! "value" value)
+        outerPatterns := outerPatterns.push (pat.setObjVal! "entries" (toJson entries))
+      else
+        let value := binder values.size
+        values := values.push value
+        outerPatterns := outerPatterns.push value
+    let mut innerCases := #[]
+    for clause in clauses.extract start stop do
+      let pats ← arr clause "patterns"
+      let mut innerPatterns := #[]
+      for i in [:patterns.size] do
+        if signatures[i]!.isSome then
+          let mut entries ← arr pats[i]! "entries"
+          for entry in ← arr patterns[i]! "entries" do
+            let key := withoutSpans (← field entry "key")
+            let some index := entries.findIdx? (fun e => withoutSpans (e.getObjValD "key") == key)
+              | throw "inconsistent grouped map keys"
+            innerPatterns := innerPatterns.push (← field entries[index]! "value")
+            entries := entries.eraseIdxIfInBounds index
+        else innerPatterns := innerPatterns.push pats[i]!
+      innerCases := innerCases.push (clause.setObjVal! "patterns" (toJson innerPatterns))
+    let label := toJson s!"map_group_{group}"
+    let jump := Json.mkObj [("kind", toJson "jump"), ("label", label), ("span", nodeSpan)]
+    let wildcard := Json.mkObj [("kind", toJson "wildcard"), ("span", nodeSpan)]
+    let fallback (pats : Array Json) := Json.mkObj [("patterns", toJson pats),
+      ("nest", toJson false), ("body", jump), ("span", nodeSpan)]
+    innerCases := innerCases.push (fallback (values.map fun _ => wildcard))
+    let inner := Json.mkObj [("kind", toJson "match"), ("expressions", toJson values),
+      ("cases", toJson innerCases), ("span", nodeSpan)]
+    let grouped := Json.mkObj [("patterns", toJson outerPatterns), ("nest", toJson false),
+      ("body", inner), ("span", ← field clauses[start]! "span")]
+    let body := j.setObjVal! "cases" (toJson (clauses.extract 0 start ++
+      #[grouped, fallback (expressions.map fun _ => wildcard)]))
+    let continuation ← if stop < clauses.size then
+      pure (j.setObjVal! "cases" (toJson (clauses.extract stop clauses.size)))
+      else do
+        let tuple (elements : Array Json) := Json.mkObj [("kind", toJson "tuple"),
+          ("elements", toJson elements), ("span", nodeSpan)]
+        let value := if expressions.size == 1 then expressions[0]! else tuple expressions
+        let atom := Json.mkObj [("kind", toJson "atom"), ("value", toJson "case_clause"), ("span", nodeSpan)]
+        pure (Json.mkObj [("kind", toJson "raise"), ("class", toJson "error"),
+          ("reason", tuple #[atom, value]), ("span", nodeSpan)])
+    return some (Json.mkObj [("kind", toJson "label"), ("label", label),
+      ("continuation", continuation), ("body", body), ("span", nodeSpan)])
+  return none
 
 private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     (j : Json) : DecodeM (TSyntax `term) := do
@@ -499,6 +603,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     pure computation
   | "match" => do
     fields j ["kind", "expressions", "cases", "span"]
+    if let some grouped ← groupMapCases j then return ← term map info false grouped
     let exprs ← (← arr j "expressions").mapM (term map info false)
     let unit : TSyntax `term := ⟨(mkIdent ``Unit.unit).raw⟩
     let clauses ← arr j "cases"
