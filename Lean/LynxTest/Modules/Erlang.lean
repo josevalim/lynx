@@ -142,18 +142,27 @@ theorem bitstring_guards :
        .ok (.integer 1), .ok (.integer 2)] := by
   exact ⟨rfl, rfl, rfl, rfl⟩
 
+theorem binary_guard_alignment (bytes : ByteArray) (bits : Fin 8)
+    (valid : bytes.size = 0 → bits = 0) :
+    «is_binary/1» (.bitstring bytes bits valid) =
+      .ok (if bits = 0 then Term.true else Term.false) := by
+  unfold «is_binary/1»
+  split <;> simp_all
+
 theorem all_partial_byte_sizes :
     ([0, 1, 2, 3, 4, 5, 6, 7] : List (Fin 8)).map
       (fun bits => «bit_size/1» (.bitstring ⟨#[255, 255]⟩ bits)) =
     [16, 9, 10, 11, 12, 13, 14, 15].map (fun n => .ok (.integer n)) := rfl
 
 theorem non_bitstrings_rejected (input : Term)
-    (h : ∀ bytes bits, input ≠ .bitstring bytes bits) :
+    (h : ∀ bytes bits valid, input ≠ .bitstring bytes bits valid) :
     «is_binary/1» input = .ok Term.false ∧
     «is_bitstring/1» input = .ok Term.false ∧
     «bit_size/1» input = .error (.error (.atom "badarg")) ∧
     «byte_size/1» input = .error (.error (.atom "badarg")) := by
-  cases input <;> simp_all [«is_binary/1», «is_bitstring/1», «bit_size/1», «byte_size/1»]
+  cases input with
+  | bitstring bytes bits valid => exact False.elim (h bytes bits valid rfl)
+  | _ => simp [«is_binary/1», «is_bitstring/1», «bit_size/1», «byte_size/1»]
 
 theorem bitstring_comparison :
     -- A proper prefix sorts first; significant bits take precedence over length.
@@ -168,11 +177,15 @@ theorem bitstring_comparison :
       (.map [(.bitstring ⟨#[255]⟩ 1, .integer 42)]) = .ok Term.true := by
   repeat' first | apply And.intro | rfl
 
-theorem empty_bitstring_ignores_count (bits : Fin 8) :
-    «is_binary/1» (.bitstring ⟨#[]⟩ bits) = .ok Term.true ∧
-    «bit_size/1» (.bitstring ⟨#[]⟩ bits) = .ok (.integer 0) ∧
-    «byte_size/1» (.bitstring ⟨#[]⟩ bits) = .ok (.integer 0) := by
-  exact ⟨rfl, rfl, rfl⟩
+theorem empty_bitstring_has_zero_lastBits (bits : Fin 8)
+    (valid : (⟨#[]⟩ : ByteArray).size = 0 → bits = 0) :
+    bits = 0 ∧
+    «is_binary/1» (.bitstring ⟨#[]⟩ bits valid) = .ok Term.true ∧
+    «bit_size/1» (.bitstring ⟨#[]⟩ bits valid) = .ok (.integer 0) ∧
+    «byte_size/1» (.bitstring ⟨#[]⟩ bits valid) = .ok (.integer 0) := by
+  have zero := valid rfl
+  subst bits
+  exact ⟨rfl, rfl, rfl, rfl⟩
 
 private theorem floatOne_toRat : floatOne.toRat = 1 := by
   simp [floatOne, Term.FiniteFloat.toRat, Term.FiniteFloat.magnitude]

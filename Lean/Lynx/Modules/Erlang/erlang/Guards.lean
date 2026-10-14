@@ -57,22 +57,21 @@ open Lynx
   .ok (match input with | .float _ => Term.true | _ => Term.false)
 
 #lynx_pure @[expose] def «is_bitstring/1» : Term → Result
-  | .bitstring _ _ => .ok Term.true
+  | .bitstring _ _ _ => .ok Term.true
   | _ => .ok Term.false
 
 #lynx_pure @[expose] def «is_binary/1» : Term → Result
-  | .bitstring bytes lastBits =>
-      .ok (if bytes.size = 0 ∨ lastBits = 0 then Term.true else Term.false)
+  | .bitstring _ 0 _ => .ok Term.true
   | _ => .ok Term.false
 
 #lynx_pure @[expose] def «bit_size/1» : Term → Result
-  | .bitstring bytes lastBits =>
+  | .bitstring bytes lastBits _ =>
       .ok (.integer (Term.Bitstring.bitSize bytes lastBits))
   | _ => throw (.error (.atom "badarg"))
 
 /-- Partial final bytes count as one byte, as in Erlang's `byte_size/1`. -/
 #lynx_pure @[expose] def «byte_size/1» : Term → Result
-  | .bitstring bytes _ => .ok (.integer bytes.size)
+  | .bitstring bytes _ _ => .ok (.integer bytes.size)
   | _ => throw (.error (.atom "badarg"))
 
 #lynx_pure @[expose] def «is_list/1» : Term → Result

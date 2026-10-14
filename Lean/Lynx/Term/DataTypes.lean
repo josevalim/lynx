@@ -24,8 +24,14 @@ inductive Term where
   | nil : Term
   | cons : Term → Term → Term
   /-- Packed bits, with `0` denoting whole bytes and `1`–`7` denoting
-  the used high bits of the last byte. Empty storage ignores the count. -/
-  | bitstring : ByteArray → Fin 8 → Term
+  the used high bits of the last byte. Empty storage must use `0`. -/
+  | bitstring (bytes : ByteArray) (lastBits : Fin 8)
+      (valid : bytes.size = 0 → lastBits = 0 := by
+        first
+        | assumption
+        | intro _; rfl
+        | intro h; contradiction
+        | decide) : Term
 deriving Repr
 
 inductive Exception where

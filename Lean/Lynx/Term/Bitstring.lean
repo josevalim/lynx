@@ -10,8 +10,9 @@ private instance : Repr ByteArray where
 namespace Lynx.Term.Bitstring
 
 /-- Number of meaningful bits. Zero means the last byte is fully used;
-otherwise only its leading `lastBits` bits are used. For empty storage the
-count is ignored, and unused low bits never affect the represented value. -/
+otherwise only its leading `lastBits` bits are used. Empty storage has zero
+meaningful bits; `Term` requires its count to be zero. Unused low bits never
+affect the represented value. -/
 @[expose] public def bitSize (bytes : ByteArray) (lastBits : Fin 8) : Nat :=
   if bytes.size = 0 then 0
   else if lastBits = 0 then bytes.size * 8

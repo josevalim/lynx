@@ -346,6 +346,7 @@ private def typePattern? (j : Json) : Option Json := do
     | "is_pid" => some "pid"
     | "is_function" => some "function"
     | "is_bitstring" => some "bitstring"
+    | "is_binary" => some "binary"
     | _ => none
   return Json.mkObj [("kind", toJson "$type"), ("constructor", toJson constructor),
     ("span", j.getObjValD "span")]
@@ -489,10 +490,11 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     unless pattern do throw "type refinement is only valid in patterns"
     fields j ["kind", "constructor", "span"]
     let name ← str j "constructor"
-    let ctor := mkIdent (``Lynx.Term ++ Name.mkSimple name)
+    let ctor := mkIdent (``Lynx.Term ++ Name.mkSimple (if name == "binary" then "bitstring" else name))
     match name with
     | "integer" | "float" | "atom" | "tuple" | "map" | "pid" => pure (Unhygienic.run `($ctor _))
-    | "bitstring" => pure (Unhygienic.run `($ctor _ _))
+    | "bitstring" => pure (Unhygienic.run `($ctor _ _ _))
+    | "binary" => pure (Unhygienic.run `($ctor _ 0 _))
     | "function" => pure (Unhygienic.run `($ctor _ _ _))
     | _ => throw "unsupported type refinement"
   | "wildcard" => do

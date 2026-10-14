@@ -7,7 +7,10 @@ public import Lynx.Modules.Erlang.erlang
 public import Lynx.Modules.Erlang.lists
 public import Lynx.Modules.Erlang.maps
 
--- Keep the closure environment and table adapter signatures part of the API check.
+-- Keep constructor and table adapter signatures part of the API check.
+private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) →
+    (bytes.size = 0 → lastBits = 0) → Lynx.Term :=
+  fun bytes lastBits valid => Lynx.Term.bitstring bytes lastBits valid
 example : Nat → Nat → Array Lynx.Term → Lynx.Term := Lynx.Term.function
 example (entry : Array Lynx.Term → Array Lynx.Term → Lynx.Result) :
     Lynx.Term.FunTable := #[.effectful entry]

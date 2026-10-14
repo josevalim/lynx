@@ -40,7 +40,13 @@ namespace Erlang.guard_patterns
 #lynx_pure
   def «bitstring/1» (_0 : Lynx.Term) : Lynx.Result :=
     match _0 with
-    | vX@(Lynx.Term.bitstring _ _) => pure vX
+    | vX@(Lynx.Term.bitstring _ _ _) => pure vX
+    | _2 => pure (Lynx.Term.atom "no")
+
+#lynx_pure
+  def «binary/1» (_0 : Lynx.Term) : Lynx.Result :=
+    match _0 with
+    | vX@(Lynx.Term.bitstring _ 0 _) => pure vX
     | _2 => pure (Lynx.Term.atom "no")
 
 #lynx_pure
@@ -65,9 +71,9 @@ namespace Erlang.guard_patterns
   def «nested/1» (_0 : Lynx.Term) : Lynx.Result :=
     (fun lynxMatchNext =>
         match _0 with
-        | Lynx.Term.tuple ⟨[Lynx.Term.atom "tag", Lynx.Term.cons lynxMap141 Lynx.Term.nil]⟩ =>
-          match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap141) with
-          | [vX@(Lynx.Term.integer _)] => pure vX
+        | Lynx.Term.tuple ⟨[Lynx.Term.atom "tag", Lynx.Term.cons lynxMap155 Lynx.Term.nil]⟩ =>
+          match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap155) with
+          | [vX@(Lynx.Term.bitstring _ 0 _)] => pure vX
           | _ => lynxMatchNext ()
         | _ => lynxMatchNext ())
       (fun (_ : Unit) =>
