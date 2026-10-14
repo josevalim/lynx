@@ -66,6 +66,12 @@ Integration examples go in `examples/` and use `Lynx.Case` to verify laws.
 Keep the implementation separate from its properties. Use `requires:` for input
 assumptions and `expects:` for the expression to prove, with a `~LEAN` proof.
 
+When investigating a bug, state the intended general property and let verification
+fail on the buggy implementation. Do not replace it with a passing law asserting
+the incorrect behavior, or restrict its assumptions to exclude the bug. Concrete
+counterexamples belong in ordinary tests. Document intentional failing properties
+and the OTP version checked; do not use `sorry` or axioms to make them pass.
+
 Simplify or close impossible branches promptly after a case split. Preserve input
 variables needed for induction and avoid unnecessarily expanding shared binds.
 When adding simp rules or changing public proof interfaces, check representative
@@ -76,3 +82,5 @@ measure verification without cached results. Run `lake test` from `Lean/` to
 check runtime proofs and axiom audits.
 
 **Proof performance is more important than executable runtime performance.**
+This priority concerns Lean's implementation and proof infrastructure; integration
+examples may take time to verify.

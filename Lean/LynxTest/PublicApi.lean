@@ -46,6 +46,14 @@ example : Lynx.Term → (Except Lynx.Exception Lynx.Term → Lynx.Result α) →
 
 example : List Lynx.Term → Lynx.Term → List Lynx.Term := Lynx.Term.getMapKeys
 
+example (a b : Int) :
+    Erlang.erlang.«=:=/2» (.integer a) (.integer b) = .ok Lynx.Term.true ↔ a = b := by
+  simp [Erlang.erlang.«=:=/2», Lynx.Term.true, Lynx.Term.false]
+
+example (a b : String) :
+    Erlang.erlang.«=:=/2» (.atom a) (.atom b) = .ok Lynx.Term.true ↔ a = b := by
+  simp [Erlang.erlang.«=:=/2», Lynx.Term.true, Lynx.Term.false]
+
 example (keys : List Lynx.Term) (input : Lynx.Term)
     (nonempty : Lynx.Term.getMapKeys keys input ≠ []) :
     (Lynx.Term.getMapKeys keys input).length = keys.length :=

@@ -508,6 +508,16 @@ end Lynx.Term
 
 namespace Lynx.Term
 
+@[simp] theorem exactCompare_integers (a b : Int) :
+    exactCompare (.integer a) (.integer b) = Ord.compare a b := by
+  rw [exactCompare_eq_step]
+  rfl
+
+@[simp] theorem exactCompare_atoms (a b : String) :
+    exactCompare (.atom a) (.atom b) = Ord.compare a b := by
+  rw [exactCompare_eq_step]
+  rfl
+
 @[simp] theorem exactCompare_reference (a b : Nat) :
     exactCompare (.reference a) (.reference b) = Ord.compare a b := by
   rw [exactCompare_eq_step]
