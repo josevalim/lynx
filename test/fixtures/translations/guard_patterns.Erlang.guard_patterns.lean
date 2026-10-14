@@ -7,6 +7,10 @@ public import Lynx.Modules.Erlang.erlang
 
 namespace Erlang.guard_patterns
 
+section
+
+set_option «match».ignoreUnusedAlts true
+
 #lynx_pure
   def «integer/1» (_0 : Lynx.Term) : Lynx.Result :=
     match _0 with
@@ -192,5 +196,7 @@ namespace Erlang.guard_patterns
       (fun (_ : Unit) =>
         match _1 with
         | _5 => pure (Lynx.Term.atom "no"))
+
+end
 
 end Erlang.guard_patterns

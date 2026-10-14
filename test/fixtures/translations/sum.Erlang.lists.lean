@@ -7,6 +7,10 @@ public import Lynx.Modules.Erlang.erlang
 
 namespace Erlang.lists
 
+section
+
+set_option «match».ignoreUnusedAlts true
+
 #lynx_pure
   def «sum/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
     match _0, _1 with
@@ -19,5 +23,7 @@ namespace Erlang.lists
 #lynx_pure
   def «sum/1» (_0 : Lynx.Term) : Lynx.Result :=
     «sum/2» _0 (Lynx.Term.integer 0)
+
+end
 
 end Erlang.lists

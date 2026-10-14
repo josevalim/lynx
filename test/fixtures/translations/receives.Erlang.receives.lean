@@ -7,6 +7,10 @@ public import Lynx.Modules.Erlang.erlang
 
 namespace Erlang.receives
 
+section
+
+set_option «match».ignoreUnusedAlts true
+
 def «plain/0» : Lynx.Result :=
   Lynx.Result.receiveWith (Lynx.Term.atom "infinity")
     (fun (_lynxReceiveEnv : Lynx.Environment) (_0 : Lynx.Term) =>
@@ -332,5 +336,7 @@ def «sequence/0» : Lynx.Result := do
       (fun
         | Option.some lynxReceived => nomatch lynxReceived
         | Option.none => pure (Lynx.Term.atom "done"))
+
+end
 
 end Erlang.receives

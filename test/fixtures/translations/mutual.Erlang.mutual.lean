@@ -6,6 +6,10 @@ public import Lynx
 
 namespace Erlang.mutual
 
+section
+
+set_option «match».ignoreUnusedAlts true
+
 #lynx_pure
   mutual
     def «odd/1» (_0 : Lynx.Term) : Lynx.Result :=
@@ -42,5 +46,7 @@ namespace Erlang.mutual
 #lynx_pure
   def «identity/1» (_0 : Lynx.Term) : Lynx.Result :=
     pure _0
+
+end
 
 end Erlang.mutual

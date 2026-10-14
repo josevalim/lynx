@@ -7,6 +7,10 @@ public import Lynx.Modules.Erlang.erlang
 
 namespace Erlang.functions
 
+section
+
+set_option «match».ignoreUnusedAlts true
+
 #lynx_pure
   def «make/1» (_0 : Lynx.Term) : Lynx.Result :=
     pure (Lynx.Term.function 0 1 #[_0])
@@ -71,5 +75,7 @@ def «apply_calls/1» (_0 : Lynx.Term) : Lynx.Result := do
 def «sequence_calls/1» (_0 : Lynx.Term) : Lynx.Result := do
   let _ ← «remember/1» _0
   pure _0
+
+end
 
 end Erlang.functions

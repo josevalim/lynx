@@ -7,6 +7,10 @@ public import Lynx.Modules.Erlang.erlang
 
 namespace Erlang.patterns
 
+section
+
+set_option «match».ignoreUnusedAlts true
+
 #lynx_pure
   def «grouped/1» (_0 : Lynx.Term) : Lynx.Result :=
     match _0 with
@@ -132,5 +136,7 @@ namespace Erlang.patterns
         (fun (_ : Unit) =>
           match _0 with
           | _2 => pure (Lynx.Term.atom "other"))
+
+end
 
 end Erlang.patterns

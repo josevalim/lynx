@@ -8,6 +8,10 @@ public import Erlang.lists
 
 namespace Erlang.sum
 
+section
+
+set_option «match».ignoreUnusedAlts true
+
 #lynx_pure
   def «sum/1» (_0 : Lynx.Term) : Lynx.Result :=
     Erlang.lists.«sum/1» _0
@@ -25,6 +29,8 @@ namespace Erlang.sum
   def «sum_singleton_ensures/1» (_0 : Lynx.Term) : Lynx.Result := do
     let _1 ← «sum/1» (Lynx.Term.cons _0 Lynx.Term.nil)
     Erlang.erlang.«==/2» _1 _0
+
+end
 
 theorem «sum_empty/0» : «sum_empty_ensures/0» = Lynx.Result.ok Lynx.Term.true := by
   simp [«sum_empty_ensures/0», «sum/1», Erlang.lists.«sum/1», Erlang.lists.«sum/2»,

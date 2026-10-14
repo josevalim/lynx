@@ -7,7 +7,8 @@
 %% Anonymous functions use integer keys; named functions use {Module, {Name, Arity}}.
 %% Every entry carries a global integer ID for ordering and dispatch.
 -record(state, {module, name, defs, translated, funs = #{},
-                local_calls = #{}, pure = true, remote, next_var = 0, labels = #{}}).
+                local_calls = #{}, pure = true, remote, next_var = 0, labels = #{},
+                local_funs = #{}}).
 
 -spec module_name(module()) -> binary().
 module_name(Module) ->
@@ -225,8 +226,11 @@ expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Label},
             {node(~"label", Anno, #{~"label" => function_name(Label),
                 ~"continuation" => TranslatedFallback, ~"body" => TranslatedBody}),
              State2#state{labels = State0#state.labels}};
-        false -> unsupported(Core)
+        false -> expression_local_function(Core, State0)
     end;
+%% Named local functions, including comprehension loops, use the same call path.
+expression(#c_letrec{defs = [{#c_var{}, #c_fun{}}]} = Core, State0) ->
+    expression_local_function(Core, State0);
 %% Core try catches only the protected expression, not its success continuation.
 expression(#c_try{anno = Anno, arg = Arg, vars = Vars, body = Body,
                   evars = EVars, handler = Handler}, State0) ->
@@ -284,19 +288,12 @@ expression(#c_seq{anno = Anno, arg = Arg, body = Body}, State0) ->
 %% Erlang: f(X, Y)
 %% Lean: «f/2» vX vY
 expression(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args} = Core, State0) ->
-    case maps:is_key(Name, State0#state.labels) of
-        true when Args =:= [] ->
-            {node(~"jump", Anno, #{~"label" => function_name(Name)}), State0};
-        true -> unsupported(Core);
-        false ->
-            {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
-            State2 = translate_def(Name, State1),
-            Calls = case State2#state.name of
-                Name -> State2#state.local_calls;
-                _ -> (State2#state.local_calls)#{Name => true}
-            end,
-            {local_call_node(function_name(Name), TranslatedArgs, Anno),
-             State2#state{local_calls = Calls}}
+    case maps:find(Name, State0#state.local_funs) of
+        {ok, {Lifted, Captures}} ->
+            expression(#c_apply{anno = Anno, op = #c_var{name = Lifted},
+                               args = Args ++ Captures},
+                       State0);
+        error -> expression_apply(Core, State0)
     end;
 %% Erlang: F(X, Y)
 %% Lean: Lynx.Term.apply vF #[vX, vY]
@@ -349,6 +346,53 @@ expression(#c_map{is_pat = false} = Map, State0) ->
 expression(Value, State0) ->
     {Translated, State1} = value(Value, State0),
     {node(~"return", cerl:get_ann(Value), #{~"values" => [Translated]}), State1}.
+
+expression_local_function(#c_letrec{defs = [{#c_var{name = Loop},
+             #c_fun{vars = Vars} = Fun}], body = Body}, State0) ->
+    Captures = local_captures(Fun, State0, [Loop]),
+    Name = local_function_name(map_size(State0#state.translated),
+                              length(Captures) + length(Vars), State0#state.defs),
+    %% Keep recursive arguments first for structural purity proofs.
+    LiftedFun = Fun#c_fun{vars = Vars ++ Captures},
+    State1 = State0#state{
+        local_funs = (State0#state.local_funs)#{Loop => {Name, Captures}},
+        defs = (State0#state.defs)#{Name => {function, LiftedFun}}},
+    {TranslatedBody, State2} = expression(Body, State1),
+    {TranslatedBody, State2#state{local_funs = State0#state.local_funs}}.
+
+local_function_name(Index, Arity, Definitions) ->
+    Name = {list_to_atom("lynx_local_" ++ integer_to_list(Index)), Arity},
+    case maps:is_key(Name, Definitions) of
+        true -> local_function_name(Index + 1, Arity, Definitions);
+        false -> Name
+    end.
+
+%% A closure calling an enclosing local function also needs that function's
+%% captured environment, even when those variables are absent from its syntax.
+local_captures(Fun, State, Ignored) ->
+    Free = cerl_trees:free_variables(Fun),
+    Indirect = lists:append([Captures || Name <- Free,
+        not lists:member(Name, Ignored),
+        {ok, {_, Captures}} <- [maps:find(Name, State#state.local_funs)]]),
+    Names = lists:usort([V || V <- Free, not is_tuple(V)] ++
+                        [V || #c_var{name = V} <- Indirect]),
+    [#c_var{name = V} || V <- Names].
+
+expression_apply(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args} = Core, State0) ->
+    case maps:is_key(Name, State0#state.labels) of
+        true when Args =:= [] ->
+            {node(~"jump", Anno, #{~"label" => function_name(Name)}), State0};
+        true -> unsupported(Core);
+        false ->
+            {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
+            State2 = translate_def(Name, State1),
+            Calls = case State2#state.name of
+                Name -> State2#state.local_calls;
+                _ -> (State2#state.local_calls)#{Name => true}
+            end,
+            {local_call_node(function_name(Name), TranslatedArgs, Anno),
+             State2#state{local_calls = Calls}}
+    end.
 
 %% Erlang: f([]) -> ok.
 %% Core inserts match_fail for arguments that match no function clause.
@@ -448,8 +492,7 @@ receive_clause(#c_clause{anno = Anno, pats = [Pattern], guard = Guard, body = Bo
 
 %% Core separates values from computations; only computations produce Result.
 value(#c_fun{vars = Vars} = Fun, State0) ->
-    Captures = [#c_var{name = V} || V <- cerl_trees:free_variables(Fun),
-                                   not is_tuple(V)],
+    Captures = local_captures(Fun, State0, []),
     Id = map_size(State0#state.funs),
     Name = {list_to_atom("$lynx_fun_" ++ integer_to_list(Id)), length(Captures) + length(Vars)},
     Entry = #{id => Id, module => State0#state.module,
@@ -457,16 +500,11 @@ value(#c_fun{vars = Vars} = Fun, State0) ->
     State1 = State0#state{funs = (State0#state.funs)#{Id => Entry}},
     State2 = translate_def(Name, {function, Fun#c_fun{vars = Captures ++ Vars}}, State1),
     function_node(Entry, cerl:get_ann(Fun), State2);
-value(#c_var{anno = Anno, name = {_, Arity} = Name}, State0) ->
-    Key = {State0#state.module, Name},
-    case maps:find(Key, State0#state.funs) of
-        {ok, Entry} -> function_node(Entry, Anno, State0);
-        error ->
-            Entry = #{id => map_size(State0#state.funs), module => State0#state.module,
-                      name => Name, arity => Arity, captures => []},
-            State1 = State0#state{funs = (State0#state.funs)#{Key => Entry}},
-            State2 = translate_def(Name, State1),
-            function_node(Entry, Anno, State2)
+value(#c_var{anno = Anno, name = {_, Arity} = Name} = Core, State0) ->
+    case maps:find(Name, State0#state.local_funs) of
+        {ok, {Lifted, Captures}} ->
+            local_function_value(Lifted, Captures, Arity, Anno, State0);
+        error -> named_function_value(Core, State0)
     end;
 value(#c_alias{anno = Anno, var = Var, pat = Pattern}, State0) ->
     {Translated, State1} = value(Pattern, State0),
@@ -510,6 +548,44 @@ value(#c_map{anno = Anno, arg = #c_literal{val = Base}, es = Pairs,
     {node(~"map", Anno, #{~"entries" => Entries}), State1};
 value(Core, _State) ->
     unsupported(Core).
+
+local_function_value(Lifted, Captures, Arity, Anno, State0) ->
+    Key = {State0#state.module, Lifted},
+    case maps:find(Key, State0#state.funs) of
+        {ok, Entry} -> function_node(Entry, Anno, State0);
+        error ->
+            %% Reuse one wrapper ID so a named fun and its self-reference have
+            %% the same identity. Adapt capture-first dispatch to the lifted ABI.
+            {Args, State1} = lists:mapfoldl(fun(_, Acc) ->
+                Arg = var_node(#{~"generated" => Acc#state.next_var}, Anno),
+                {Arg, Acc#state{next_var = Acc#state.next_var + 1}}
+            end, State0, lists:seq(1, Arity)),
+            Id = map_size(State0#state.funs),
+            Name = {list_to_atom("$lynx_fun_" ++ integer_to_list(Id)), length(Captures) + Arity},
+            Entry = #{id => Id, module => State0#state.module,
+                      name => Name, arity => Arity, captures => Captures},
+            State2 = translate_def(Lifted,
+                State1#state{funs = (State1#state.funs)#{Key => Entry}}),
+            {CaptureArgs, State3} = lists:mapfoldl(fun value/2, State2, Captures),
+            Definition = node(~"def", Anno, #{
+                ~"name" => function_name(Name), ~"params" => CaptureArgs ++ Args,
+                ~"body" => local_call_node(function_name(Lifted), Args ++ CaptureArgs, Anno)}),
+            Wrapper = #{translation => Definition, local_calls => [Lifted], pure => true},
+            State4 = State3#state{translated = (State3#state.translated)#{Name => Wrapper}},
+            function_node(Entry, Anno, State4)
+    end.
+
+named_function_value(#c_var{anno = Anno, name = {_, Arity} = Name}, State0) ->
+    Key = {State0#state.module, Name},
+    case maps:find(Key, State0#state.funs) of
+        {ok, Entry} -> function_node(Entry, Anno, State0);
+        error ->
+            Entry = #{id => map_size(State0#state.funs), module => State0#state.module,
+                      name => Name, arity => Arity, captures => []},
+            State1 = State0#state{funs = (State0#state.funs)#{Key => Entry}},
+            State2 = translate_def(Name, State1),
+            function_node(Entry, Anno, State2)
+    end.
 
 map_update(#c_map{anno = Anno, arg = Base, es = Pairs}, State0) ->
     {TranslatedBase, State1} = value(Base, State0),

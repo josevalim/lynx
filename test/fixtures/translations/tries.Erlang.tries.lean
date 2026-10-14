@@ -7,6 +7,10 @@ public import Lynx.Modules.Erlang.erlang
 
 namespace Erlang.tries
 
+section
+
+set_option «match».ignoreUnusedAlts true
+
 #lynx_pure
   def «caught/1» (_0 : Lynx.Term) : Lynx.Result :=
     Lynx.Result.tryWith (Erlang.erlang.«+/2» _0 (Lynx.Term.integer 1))
@@ -142,5 +146,7 @@ def «effectful/0» : Lynx.Result :=
         let _4 := Lynx.Exception.classTerm _2
         let _3 := Lynx.Exception.reason _2
         pure (Lynx.Term.tuple #[_4, _3]))
+
+end
 
 end Erlang.tries

@@ -35,6 +35,18 @@ open Lynx
 #lynx_pure @[expose] def «is_tuple/1» (input : Term) : Result :=
   .ok (match input with | .tuple _ => Term.true | _ => Term.false)
 
+#lynx_pure @[expose] def «tuple_size/1» : Term → Result
+  | .tuple entries => .ok (.integer entries.size)
+  | _ => throw (.error (.atom "badarg"))
+
+/-- Erlang tuple positions start at one; invalid positions raise badarg. -/
+#lynx_pure @[expose] def «element/2» : Term → Term → Result
+  | .integer index, .tuple entries =>
+      match if 1 ≤ index then entries[index.toNat - 1]? else none with
+      | some value => .ok value
+      | none => throw (.error (.atom "badarg"))
+  | _, _ => throw (.error (.atom "badarg"))
+
 #lynx_pure @[expose] def «is_pid/1» (input : Term) : Result :=
   .ok (match input with | .pid _ => Term.true | _ => Term.false)
 

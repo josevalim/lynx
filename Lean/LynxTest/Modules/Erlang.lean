@@ -123,6 +123,27 @@ theorem addition_rejects_nonnumeric (input other : Term)
     «+/2» other input = .error (.error (.atom "badarith")) := by
   cases input <;> cases other <;> simp_all [«+/2»]
 
+theorem tuple_access (first second : Term) :
+    «tuple_size/1» (.tuple #[]) = .ok (.integer 0) ∧
+    «tuple_size/1» (.tuple #[first, second]) = .ok (.integer 2) ∧
+    «element/2» (.integer 1) (.tuple #[first, second]) = .ok first ∧
+    «element/2» (.integer 2) (.tuple #[first, second]) = .ok second := by
+  repeat' first | apply And.intro | rfl
+
+theorem tuple_access_invalid_indices (value : Term) :
+    «element/2» (.integer 0) (.tuple #[value]) = .error (.error (.atom "badarg")) ∧
+    «element/2» (.integer (-1)) (.tuple #[value]) = .error (.error (.atom "badarg")) ∧
+    «element/2» (.integer 2) (.tuple #[value]) = .error (.error (.atom "badarg")) ∧
+    «element/2» (.integer 1) (.tuple #[]) = .error (.error (.atom "badarg")) ∧
+    «element/2» (.float floatOne) (.tuple #[value]) = .error (.error (.atom "badarg")) := by
+  repeat' first | apply And.intro | rfl
+
+theorem tuple_access_rejects_nontuples (input index : Term)
+    (valid : ∀ entries, input ≠ .tuple entries) :
+    «tuple_size/1» input = .error (.error (.atom "badarg")) ∧
+    «element/2» index input = .error (.error (.atom "badarg")) := by
+  cases input <;> cases index <;> simp_all [«tuple_size/1», «element/2»]
+
 theorem multiplication_numeric_types :
     «*/2» (.integer (-7)) (.integer (2 ^ 100)) = .ok (.integer (-7 * 2 ^ 100)) ∧
     «*/2» (.float floatOneAndHalf) (.float floatOneAndHalf) =

@@ -6,6 +6,10 @@ public import Lynx
 
 namespace Erlang.literal
 
+section
+
+set_option «match».ignoreUnusedAlts true
+
 #lynx_pure
   def «integers/0» : Lynx.Result :=
     pure
@@ -80,5 +84,7 @@ namespace Erlang.literal
                                 Lynx.Term.float ⟨Bool.false, 1019, 2702159776422298⟩),
                               (Lynx.Term.integer 1, Lynx.Term.atom "integer")])
                           Lynx.Term.nil))))))))))
+
+end
 
 end Erlang.literal

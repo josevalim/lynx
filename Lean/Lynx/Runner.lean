@@ -1363,11 +1363,27 @@ private def decode (files : Array Json) (env : Lean.Environment) : IO (Array Dec
         let contents ← arr entry "contents"
         let reexportImports := !contents.isEmpty
         let (commands, state) ← contents.mapM (commands map) |>.run env |>.run {}
+        -- Generated Core may contain unused match alternatives. Scope the
+        -- option to generated declarations, restoring diagnostics for laws.
+        let ignoreUnused := mkIdent `match.ignoreUnusedAlts
+        let mut sectionCommands : Array (TSyntax `command) := #[]
+        let mut generatedSection := false
+        for i in [:contents.size] do
+          let generated := (← str contents[i]! "kind") != "theorem"
+          if generated != generatedSection then
+            if generated then
+              sectionCommands := sectionCommands.push (Unhygienic.run `(section))
+              sectionCommands := sectionCommands.push (Unhygienic.run `(set_option $ignoreUnused:ident true))
+            else
+              sectionCommands := sectionCommands.push (Unhygienic.run `(end))
+            generatedSection := generated
+          sectionCommands := sectionCommands ++ commands[i]!
+        if generatedSection then sectionCommands := sectionCommands.push (Unhygienic.run `(end))
         let visibility := Unhygienic.run `(@[expose] public section)
         let start := Unhygienic.run `(namespace $namespaceId)
         let stop := Unhygienic.run `(end $namespaceId)
         pure (namespaceId.getId.toString, imports,
-          #[visibility, start] ++ commands.flatten ++ #[stop], state, reexportImports)
+          #[visibility, start] ++ sectionCommands ++ #[stop], state, reexportImports)
       return ⟨file, moduleName, imports, map, commands, key,
         state.spans, state.diagnostics, state.theorems, reexportImports⟩
     catch err => throw (IO.userError s!"{file}: {err}")

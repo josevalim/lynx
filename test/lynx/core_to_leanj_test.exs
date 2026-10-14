@@ -1,6 +1,129 @@
 defmodule Lynx.CoreToLeanjTest do
   use ExUnit.Case, async: true
 
+  test "passes captures explicitly through direct local recursion" do
+    loop = :cerl.c_fname(:loop, 1)
+    input = :cerl.c_var(:input)
+    captured = :cerl.c_var(0)
+    tail = :cerl.c_var(:tail)
+
+    body =
+      :cerl.c_case(input, [
+        :cerl.c_clause([:cerl.c_nil()], captured),
+        :cerl.c_clause(
+          [:cerl.c_cons(:cerl.c_var(:head), tail)],
+          :cerl.c_apply(loop, [tail])
+        )
+      ])
+
+    local =
+      :cerl.c_letrec(
+        [{loop, :cerl.c_fun([input], body)}],
+        :cerl.c_apply(loop, [:cerl.c_nil()])
+      )
+
+    assert {:ok,
+            %{
+              {:entry, 1} => %{
+                pure: true,
+                local_calls: [{:lynx_local_1, 2}],
+                translation: %{
+                  "body" => %{
+                    "kind" => "local_call",
+                    "name" => "lynx_local_1",
+                    "args" => [%{"kind" => "nil"}, %{"name" => 0}]
+                  }
+                }
+              },
+              {:lynx_local_1, 2} => %{
+                pure: true,
+                local_calls: [],
+                translation: %{
+                  "params" => [%{"name" => "input"}, %{"name" => 0}],
+                  "body" => %{
+                    "cases" => [
+                      _,
+                      %{
+                        "body" => %{
+                          "kind" => "local_call",
+                          "name" => "lynx_local_1",
+                          "args" => [%{"name" => "tail"}, %{"name" => 0}]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }, []} = translate(definitions([definition(:entry, local)]))
+  end
+
+  test "escaping local functions preserve captures, generated arguments, and self identity" do
+    loop = :cerl.c_fname(:loop, 1)
+    input = :cerl.c_var(:input)
+    captured = :cerl.c_var(0)
+    call = :cerl.c_call(:cerl.c_atom(:external), :cerl.c_atom(:entry), [captured])
+
+    body =
+      :cerl.c_letrec(
+        [{loop, :cerl.c_fun([input], :cerl.c_tuple([captured, input, loop]))}],
+        :cerl.c_case(call, [:cerl.c_clause([:cerl.c_var(:ignored)], loop)])
+      )
+
+    assert {:ok,
+            %{
+              {:entry, 1} => %{
+                translation: %{
+                  "body" => %{
+                    "body" => %{
+                      "cases" => [
+                        %{
+                          "body" => %{
+                            "values" => [
+                              %{
+                                "kind" => "function",
+                                "id" => id,
+                                "arity" => 1,
+                                "captures" => [%{"name" => 0}]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              {:lynx_local_1, 2} => %{
+                translation: %{
+                  "body" => %{
+                    "values" => [
+                      %{
+                        "kind" => "tuple",
+                        "elements" => [
+                          %{"name" => 0},
+                          %{"name" => "input"},
+                          %{"kind" => "function", "id" => self_id, "captures" => [%{"name" => 0}]}
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {:"$lynx_fun_0", 2} => %{
+                translation: %{
+                  "params" => [%{"name" => 0}, %{"name" => %{"generated" => 1}}],
+                  "body" => %{
+                    "kind" => "local_call",
+                    "name" => "lynx_local_1",
+                    "args" => [%{"name" => %{"generated" => 1}}, %{"name" => 0}]
+                  }
+                }
+              }
+            }, [{:external, :entry, 1, []}]} = translate(definitions([definition(:entry, body)]))
+
+    assert id == self_id
+  end
+
   test "translates floats as exact binary64 fields with source annotations" do
     anno = [{:file, ~c"example.erl"}, {7, 3}]
 

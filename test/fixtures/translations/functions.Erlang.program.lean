@@ -7,6 +7,10 @@ public import Erlang.functions
 
 namespace Erlang.program
 
+section
+
+set_option «match».ignoreUnusedAlts true
+
 def fun_table : Lynx.Term.FunTable :=
   #[Lynx.Term.FunEntry.pure fun captures args =>
       match captures, args with
@@ -218,5 +222,7 @@ theorem fun_table_apply_4 (depth : Nat) :
   simpa only [(Lynx.Result.bind_ok),
     (Lynx.Result.resolve_of_isPure fun_table depth Erlang.functions.«zero/0» (by simp))] using
     fun_table_apply_4_bind depth (fun value => Lynx.Result.ok value)
+
+end
 
 end Erlang.program
