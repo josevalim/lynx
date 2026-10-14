@@ -1,6 +1,6 @@
 -module(functions).
 -export([captured_closures/1, zero_arity_calls/0, apply_calls/1, sequence_calls/1,
-         make/1, explicit/2, inc/1, zero/0, remember/1, make_store/1]).
+         make/1, explicit/2, inc/1, zero/0, remember/1, make_store/1, references/0]).
 
 %% Two closures share code but retain different captured values.
 captured_closures(X) ->
@@ -37,3 +37,10 @@ inc(X) -> X + 1.
 zero() -> 0.
 remember(X) -> put(last, X).
 make_store(X) -> fun(Y) -> put(X, Y) end.
+
+%% Stateful reference allocation also works through a named function value.
+references() ->
+    First = make_ref(),
+    MakeRef = fun erlang:make_ref/0,
+    Second = MakeRef(),
+    {is_reference(First), First =:= Second, #{First => Second}}.

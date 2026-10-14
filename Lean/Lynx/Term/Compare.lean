@@ -185,6 +185,9 @@ private def compareStep (exact : Bool) (cmp exactCmp : Term → Term → Orderin
   | .atom a, .atom b => Ord.compare a b
   | .atom _, _ => .lt
   | _, .atom _ => .gt
+  | .reference a, .reference b => Ord.compare a b
+  | .reference _, _ => .lt
+  | _, .reference _ => .gt
   | .function id _ captures, .function otherId _ otherCaptures =>
     (Ord.compare id otherId).then (List.compareLex exactCmp captures.toList otherCaptures.toList)
   | .function _ _ _, _ => .lt
@@ -260,6 +263,9 @@ private def boundedStep (exact : Bool) (n : Nat) (cmp exactCmp : Child n → Chi
   | .atom a, .atom b => Ord.compare a b
   | .atom _, _ => .lt
   | _, .atom _ => .gt
+  | .reference a, .reference b => Ord.compare a b
+  | .reference _, _ => .lt
+  | _, .reference _ => .gt
   | .function id _ captures, .function otherId _ otherCaptures =>
     (Ord.compare id otherId).then
       (List.compareLex exactCmp (boundedList n captures.toList (function_child ha))
@@ -502,6 +508,20 @@ end Lynx.Term
 
 namespace Lynx.Term
 
+@[simp] theorem exactCompare_reference (a b : Nat) :
+    exactCompare (.reference a) (.reference b) = Ord.compare a b := by
+  rw [exactCompare_eq_step]
+  rfl
+
+@[simp] theorem exactCompare_eq_reference (a : Term) (id : Nat) :
+    exactCompare a (.reference id) = .eq ↔ a = .reference id := by
+  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
+
+@[simp] theorem reference_exactCompare_eq (id : Nat) (a : Term) :
+    exactCompare (.reference id) a = .eq ↔ a = .reference id := by
+  rw [Std.OrientedCmp.eq_swap (cmp := exactCompare), Ordering.swap_eq_eq]
+  exact exactCompare_eq_reference a id
+
 @[simp] theorem exactCompare_eq_float (a : Term) (n : FiniteFloat) :
     exactCompare a (.float n) = .eq ↔ a = .float n := by
   cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
@@ -515,6 +535,11 @@ end Lynx.Term
 /-! ## Numeric equality -/
 
 namespace Lynx.Term
+
+@[simp] theorem compare_reference (a b : Nat) :
+    compare (.reference a) (.reference b) = Ord.compare a b := by
+  rw [compare_eq_step]
+  rfl
 
 @[simp] theorem compare_eq_nil (a : Term) : compare a .nil = .eq ↔ a = .nil := by
   cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]

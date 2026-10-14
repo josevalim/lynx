@@ -11,6 +11,7 @@ stored map binding. Map hypotheses concern raw entries, including shadowed ones.
     (integer : ∀ n, motive (.integer n))
     (float : ∀ n, motive (.float n))
     (atom : ∀ s, motive (.atom s))
+    (reference : ∀ id, motive (.reference id))
     (function : ∀ id arity captures, (∀ x ∈ captures, motive x) →
       motive (.function id arity captures))
     (pid : ∀ pid, motive (.pid pid))
@@ -25,7 +26,7 @@ stored map binding. Map hypotheses concern raw entries, including shadowed ones.
     (motive_3 := fun entries => ∀ k v, (k, v) ∈ entries → motive k ∧ motive v)
     (motive_4 := fun xs => ∀ x ∈ xs, motive x)
     (motive_5 := fun entry => motive entry.1 ∧ motive entry.2)
-    integer float atom function pid tuple map nil cons bitstring ?_ ?_ ?_ ?_ ?_ ?_ t
+    integer float atom reference function pid tuple map nil cons bitstring ?_ ?_ ?_ ?_ ?_ ?_ t
   · intro xs ih x hx
     exact ih x (by simpa using hx)
   · simp

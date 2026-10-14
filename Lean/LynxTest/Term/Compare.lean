@@ -35,6 +35,7 @@ private theorem floatOne_toRat : floatOne.toRat = 1 := by
   .integer (-1000000000000000000000000000000), .integer (-1), .integer 0,
   .integer 1000000000000000000000000000000,
   .atom "", .atom "a", .atom "aa", .atom "b", .atom "é", .atom "λ", .atom "😀",
+  .reference 0, .reference 1, .reference 1000000000000000000000000000000,
   .function 0 1 #[], .function 0 1 #[.integer 10],
   .function 0 1 #[.integer 20], .function 1 0 #[],
   .pid 0, .pid 1, .pid 1000000000000000000000000000000,

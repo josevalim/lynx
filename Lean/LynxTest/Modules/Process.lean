@@ -36,6 +36,68 @@ private def mailbox (outcome : Outcome Term) : List Term :=
   match outcome with
   | .ok _ env | .error _ env | .deadlock env | .exhausted env => env.currentProcess.mailbox
 
+/-- Allocation changes only the reference counter, for any initial environment. -/
+theorem make_ref_preserves_process_state (env : Environment) :
+    «make_ref/0» env = .ok (.reference (env.refCounter + 1))
+      { env with refCounter := env.refCounter + 1 } := by simp
+
+/-- All previously allocated identities lie below the next reference. -/
+theorem make_ref_fresh (env : Environment) (previous : Nat)
+    (allocated : previous ≤ env.refCounter) :
+    Term.reference (env.refCounter + 1) ≠ .reference previous := by
+  intro equal
+  have := Term.reference.inj equal
+  omega
+
+theorem successive_references_are_distinct (env : Environment) :
+    (do
+      let first ← «make_ref/0»
+      let second ← «make_ref/0»
+      «=:=/2» first second) env =
+    .ok Term.false { env with refCounter := env.refCounter + 2 } := by
+  simp [«=:=/2», Nat.add_assoc]
+
+theorem reference_type_guard (input : Term) :
+    «is_reference/1» input = .ok Term.true ↔ ∃ id, input = .reference id := by
+  cases input <;> simp [«is_reference/1», Term.true, Term.false]
+
+theorem make_ref_is_effectful :
+    ¬ Result.IsReadOnly «make_ref/0» ∧ ¬ Result.IsPure «make_ref/0» := by
+  constructor
+  · intro readOnly
+    exact readOnly {}
+  · intro pure
+    exact (show ¬ Result.IsReadOnly «make_ref/0» from fun readOnly => readOnly {})
+      (Result.IsPure.readOnly _ pure)
+
+/-- Dictionary writes must preserve allocation state between calls. -/
+theorem dictionary_preserves_reference_counter :
+    Lynx.run (do
+      let first ← «make_ref/0»
+      let _ ← «put/2» (.atom "key") first
+      let second ← «make_ref/0»
+      pure (Term.tuple #[first, second])) =
+    .ok (.tuple #[.reference 1, .reference 2]) {
+      refCounter := 2, currentProcess := { pdict := [(.atom "key", .reference 1)] } } := by cbv
+
+private def referenceExchange : Result := do
+  let first ← «make_ref/0»
+  let _ ← Result.schedule (do
+    let ref ← «make_ref/0»
+    «send/2» (.pid 1) ref) (fun pid => .ok (Term.pid pid))
+  let second ← «make_ref/0»
+  let child ← receiveAny
+  pure (.tuple #[first, second, child])
+
+/-- All processes share reference allocation; it does not consume PID identities. -/
+theorem references_are_unique_across_processes :
+    Lynx.run referenceExchange [.swap 2] =
+      .ok (.tuple #[.reference 1, .reference 3, .reference 2])
+        { pidCounter := 2, refCounter := 3 } ∧
+    Lynx.run referenceExchange [.current] =
+      .ok (.tuple #[.reference 1, .reference 2, .reference 3])
+        { pidCounter := 2, refCounter := 3 } := by cbv
+
 /-- Sending returns its argument and appends behind existing messages. -/
 theorem send_to_self :
     Lynx.run («send/2» (.pid 1) (.integer 7)) =

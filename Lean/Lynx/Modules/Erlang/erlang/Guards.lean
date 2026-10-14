@@ -38,6 +38,9 @@ open Lynx
 #lynx_pure @[expose] def «is_pid/1» (input : Term) : Result :=
   .ok (match input with | .pid _ => Term.true | _ => Term.false)
 
+#lynx_pure @[expose] def «is_reference/1» (input : Term) : Result :=
+  .ok (match input with | .reference _ => Term.true | _ => Term.false)
+
 #lynx_pure @[expose] def «is_function/1» (input : Term) : Result :=
   .ok (match input with | .function _ _ _ => Term.true | _ => Term.false)
 

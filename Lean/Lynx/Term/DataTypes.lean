@@ -15,6 +15,8 @@ inductive Term where
   | integer : Int → Term
   | float : _root_.Lynx.Term.FiniteFloat → Term
   | atom : String → Term
+  /-- Reference identity allocated from the runtime's global counter. -/
+  | reference : Nat → Term
   /-- Program function index, source arity, and captured values.
   Comparison uses the index followed by the captured values. -/
   | function (id arity : Nat) (captures : Array Term) : Term
@@ -82,6 +84,8 @@ structure Environment where
   currentPid : PID := 1
   /-- Greatest PID allocated so far. A spawn increments this before allocation. -/
   pidCounter : PID := 1
+  /-- Greatest reference identity allocated in this runtime. Shared by all processes. -/
+  refCounter : Nat := 0
   /-- State of the process running the current computation. -/
   currentProcess : ProcessState := {}
   /-- Saved states of non-current processes, indexed by PID. -/
@@ -104,6 +108,7 @@ def pdict (env : Environment) : List (Term × Term) := env.currentProcess.pdict
 def setPdict (env : Environment) (pdict : List (Term × Term)) : Environment :=
   { currentPid := env.currentPid
     pidCounter := env.pidCounter
+    refCounter := env.refCounter
     currentProcess := { env.currentProcess with pdict }
     processes := env.processes
     schedule := env.schedule }

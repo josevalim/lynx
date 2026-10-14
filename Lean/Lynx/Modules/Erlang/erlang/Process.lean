@@ -10,6 +10,30 @@ namespace Erlang.erlang
 
 open Lynx
 
+/-- Allocate a reference unique within this runtime, independently of PIDs.
+Allocation preserves process state and does not introduce a scheduler boundary. -/
+@[expose] def «make_ref/0» : Result := do
+  let env ← get
+  let id := env.refCounter + 1
+  set { env with refCounter := id }
+  .ok (.reference id)
+
+@[simp] theorem make_ref_apply (env : Environment) :
+    «make_ref/0» env =
+      .ok (.reference (env.refCounter + 1)) { env with refCounter := env.refCounter + 1 } := by
+  change (Result.get fun initial => Result.set
+    { initial with refCounter := initial.refCounter + 1 }
+    (.ok (Term.reference (initial.refCounter + 1)))) env = _
+  simp
+
+@[simp] theorem make_ref_bind_apply (next : Term → Result α) (env : Environment) :
+    («make_ref/0» >>= next) env =
+      next (.reference (env.refCounter + 1)) { env with refCounter := env.refCounter + 1 } := by
+  change (Result.get fun initial => Result.set
+    { initial with refCounter := initial.refCounter + 1 }
+    (next (.reference (initial.refCounter + 1)))) env = _
+  simp
+
 /-- Request a zero-arity function spawn. The dispatcher validates the table entry
 before creating the child; the function body executes in the child's process. -/
 @[expose] def «spawn/1» (child : Term) : Result :=

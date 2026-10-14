@@ -36,6 +36,14 @@ def «remember/1» (_0 : Lynx.Term) : Lynx.Result :=
 def «$lynx_fun_3/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
   Erlang.erlang.«put/2» _0 _1
 
+def «references/0» : Lynx.Result := do
+  let vFirst ← Erlang.erlang.«make_ref/0»
+  let vSecond ← Erlang.erlang.«make_ref/0»
+  let _5 ← Erlang.erlang.«is_reference/1» vFirst
+  let _4 ← Erlang.erlang.«=:=/2» vFirst vSecond
+  let _3 ← pure (Lynx.Term.map [(vFirst, vSecond)])
+  pure (Lynx.Term.tuple #[_5, _4, _3])
+
 def «captured_closures/1» (_0 : Lynx.Term) : Lynx.Result := do
   let vF ← «make/1» _0
   let _2 ← Erlang.erlang.«+/2» _0 (Lynx.Term.integer 10)

@@ -344,6 +344,7 @@ private def typePattern? (j : Json) : Option Json := do
     | "is_tuple" => some "tuple"
     | "is_map" => some "map"
     | "is_pid" => some "pid"
+    | "is_reference" => some "reference"
     | "is_function" => some "function"
     | "is_bitstring" => some "bitstring"
     | "is_binary" => some "binary"
@@ -492,7 +493,8 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let name ← str j "constructor"
     let ctor := mkIdent (``Lynx.Term ++ Name.mkSimple (if name == "binary" then "bitstring" else name))
     match name with
-    | "integer" | "float" | "atom" | "tuple" | "map" | "pid" => pure (Unhygienic.run `($ctor _))
+    | "integer" | "float" | "atom" | "tuple" | "map" | "pid" | "reference" =>
+      pure (Unhygienic.run `($ctor _))
     | "bitstring" => pure (Unhygienic.run `($ctor _ _ _))
     | "binary" => pure (Unhygienic.run `($ctor _ 0 _))
     | "function" => pure (Unhygienic.run `($ctor _ _ _))

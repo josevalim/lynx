@@ -11,6 +11,20 @@ public import Lynx.Modules.Erlang.maps
 private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) →
     (bytes.size = 0 → lastBits = 0) → Lynx.Term :=
   fun bytes lastBits valid => Lynx.Term.bitstring bytes lastBits valid
+private def referenceConstructor : Nat → Lynx.Term := Lynx.Term.reference
+private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0»
+
+-- Allocation equations remain usable through ordinary public imports.
+private theorem makeRefEquation (env : Lynx.Environment) :
+    makeRef env = .ok (.reference (env.refCounter + 1))
+      { env with refCounter := env.refCounter + 1 } := by
+  simp [makeRef]
+
+private theorem makeRefContinuationEquation (next : Lynx.Term → Lynx.Result α)
+    (env : Lynx.Environment) :
+    (makeRef >>= next) env = next (.reference (env.refCounter + 1))
+      { env with refCounter := env.refCounter + 1 } := by
+  simp [makeRef]
 example : Nat → Nat → Array Lynx.Term → Lynx.Term := Lynx.Term.function
 example (entry : Array Lynx.Term → Array Lynx.Term → Lynx.Result) :
     Lynx.Term.FunTable := #[.effectful entry]
@@ -128,7 +142,9 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«is_map/1»",
   "Erlang.erlang.«is_number/1»",
   "Erlang.erlang.«is_pid/1»",
+  "Erlang.erlang.«is_reference/1»",
   "Erlang.erlang.«is_tuple/1»",
+  "Erlang.erlang.«make_ref/0»",
   "Erlang.erlang.«not/1»",
   "Erlang.erlang.«or/2»",
   "Erlang.erlang.«put/2»",
@@ -149,6 +165,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Environment.pdict",
   "Lynx.Environment.pidCounter",
   "Lynx.Environment.processes",
+  "Lynx.Environment.refCounter",
   "Lynx.Environment.schedule",
   "Lynx.Environment.setPdict",
   "Lynx.Exception",
@@ -238,6 +255,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.map",
   "Lynx.Term.nil",
   "Lynx.Term.pid",
+  "Lynx.Term.reference",
   "Lynx.Term.true",
   "Lynx.Term.tuple",
   "Lynx.instBEqTerm",

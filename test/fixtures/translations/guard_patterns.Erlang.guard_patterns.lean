@@ -187,4 +187,10 @@ namespace Erlang.guard_patterns
         match _1 with
         | _5 => pure (Lynx.Term.atom "no"))
 
+#lynx_pure
+  def «reference/1» (_0 : Lynx.Term) : Lynx.Result :=
+    match _0 with
+    | vX@(Lynx.Term.reference _) => pure vX
+    | _2 => pure (Lynx.Term.atom "no")
+
 end Erlang.guard_patterns
