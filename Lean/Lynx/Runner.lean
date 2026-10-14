@@ -291,6 +291,189 @@ private def groupMapCases (j : Json) : DecodeM (Option Json) := do
       ("continuation", continuation), ("body", body), ("span", nodeSpan)])
   return none
 
+/-- Helpers for collecting type tests from the positive, conjunctive part of a guard. -/
+private def guardKind (j : Json) : String := (str j "kind").toOption.getD ""
+
+private def atomIs (j : Json) (value : String) : Bool :=
+  guardKind j == "atom" && (str j "value").toOption == some value
+
+private def returned? (j : Json) : Option Json := do
+  guard (guardKind j == "return")
+  let values ← (arr j "values").toOption
+  guard (values.size == 1)
+  return values[0]!
+
+private def returnsBool (j : Json) (value : String) : Bool :=
+  (returned? j).any (atomIs · value)
+
+/-- Core lowers short-circuit operators to matches. Leave those guards intact,
+along with any guard containing a disjunction. -/
+private partial def guardHasBranching (j : Json) : Bool :=
+  guardKind j == "match" ||
+  (guardKind j == "remote_call" && (str j "module").toOption == some "Erlang.erlang" &&
+    ((str j "name").toOption.getD "") ∈ ["or", "orelse"]) ||
+  match j with
+  | .arr xs => xs.any guardHasBranching
+  | .obj xs => xs.toArray.any fun (_, v) => guardHasBranching v
+  | _ => false
+
+private abbrev GuardBindings := Array (Json × Json)
+
+private def guardLookup (bindings : GuardBindings) (name : Json) : Option Json :=
+  (bindings.findSome? fun (key, value) => if key == name then some value else none)
+
+/-- Standalone binders, including those in values extracted from map patterns.
+An alias on an existing structural pattern already constrains its own type. -/
+private partial def guardBinders (j : Json) : Array Json :=
+  match guardKind j with
+  | "var" => #[(j.getObjValD "name")]
+  | "cons" => guardBinders (j.getObjValD "head") ++ guardBinders (j.getObjValD "tail")
+  | "tuple" | "$list" => ((arr j "elements").toOption.getD #[]).flatMap guardBinders
+  | "map" => ((arr j "entries").toOption.getD #[]).flatMap fun e => guardBinders (e.getObjValD "value")
+  | "alias" => guardBinders (j.getObjValD "pattern")
+  | _ => #[]
+
+private def typePattern? (j : Json) : Option Json := do
+  guard (guardKind j == "remote_call" && (str j "module").toOption == some "Erlang.erlang")
+  let args ← (arr j "args").toOption
+  guard (args.size == 1 && guardKind args[0]! == "var")
+  let constructor ← match (str j "name").toOption.getD "" with
+    | "is_integer" => some "integer"
+    | "is_float" => some "float"
+    | "is_atom" => some "atom"
+    | "is_tuple" => some "tuple"
+    | "is_map" => some "map"
+    | "is_pid" => some "pid"
+    | "is_function" => some "function"
+    | "is_bitstring" => some "bitstring"
+    | _ => none
+  return Json.mkObj [("kind", toJson "$type"), ("constructor", toJson constructor),
+    ("span", j.getObjValD "span")]
+
+/-- Follow the values that must be true, rather than every call evaluated by Core.
+Only follow conjunctions and Core bind scaffolding; leave other operators intact. -/
+private partial def positiveGuardCalls (j : Json) (bindings : GuardBindings := #[]) : Array Json := Id.run do
+  match guardKind j with
+  | "var" =>
+    let some value := guardLookup bindings (j.getObjValD "name") | return #[]
+    return positiveGuardCalls value (bindings.filter fun (key, _) => key != (j.getObjValD "name"))
+  | "return" => return (returned? j).map (positiveGuardCalls · bindings) |>.getD #[]
+  | "bind" | "try" =>
+    if guardKind j == "try" && !returnsBool (j.getObjValD "handler") "false" then return #[]
+    let vars := (arr j "vars").toOption.getD #[]
+    if vars.size != 1 || guardKind vars[0]! != "var" then return #[]
+    let name := (vars[0]!.getObjValD "name")
+    return positiveGuardCalls (j.getObjValD "body")
+      (#[ (name, (j.getObjValD "computation")) ] ++ bindings.filter fun (key, _) => key != name)
+  | "remote_call" =>
+    if (typePattern? j).isSome then return #[j]
+    if (str j "module").toOption != some "Erlang.erlang" then return #[]
+    let args := (arr j "args").toOption.getD #[]
+    if args.size != 2 then return #[]
+    if (str j "name").toOption == some "and" then
+      return args.flatMap (positiveGuardCalls · bindings)
+    return #[]
+  | _ => return #[]
+
+private def guardReturn (j value : Json) : Json := Json.mkObj
+  [("kind", toJson "return"), ("values", toJson #[value]), ("span", (j.getObjValD "span"))]
+
+private def guardTrue (j : Json) : Json := guardReturn j (Json.mkObj
+  [("kind", toJson "atom"), ("value", toJson "true"), ("span", (j.getObjValD "span"))])
+
+/-- Replace selected tests once, propagate Boolean constants through Core binds,
+and shrink conjunctions without dropping computations that can still fail. -/
+private partial def shrinkGuard (j : Json) (selected : Array Json)
+    (values : GuardBindings := #[]) : Json × Array Json := Id.run do
+  if let some i := selected.findIdx? (· == j) then
+    return (guardTrue j, selected.eraseIdxIfInBounds i)
+  if guardKind j == "var" then return (guardLookup values (j.getObjValD "name") |>.getD j, selected)
+  if guardKind j ∈ ["bind", "try"] then
+    let (computation, remaining) := shrinkGuard (j.getObjValD "computation") selected values
+    let vars := (arr j "vars").toOption.getD #[]
+    let names := vars.map (·.getObjValD "name")
+    let values := values.filter fun (name, _) => !names.contains name
+    if vars.size == 1 then
+      if let some value := returned? computation then
+        if atomIs value "true" || atomIs value "false" || guardKind value == "var" then
+          return shrinkGuard (j.getObjValD "body") remaining (values.push (names[0]!, value))
+    let (body, remaining) := shrinkGuard (j.getObjValD "body") remaining values
+    if guardKind j == "bind" && vars.size == 1 then
+      if let some value := returned? body then
+        if guardKind value == "var" && value.getObjValD "name" == names[0]! then
+          return (computation, remaining)
+    return (j.setObjVal! "computation" computation |>.setObjVal! "body" body, remaining)
+  let mut remaining := selected
+  let mut result := j
+  match j with
+  | .arr xs =>
+    let mut ys := #[]
+    for x in xs do
+      let (y, rest) := shrinkGuard x remaining values
+      ys := ys.push y
+      remaining := rest
+    result := toJson ys
+  | .obj xs =>
+    for (key, value) in xs.toArray do
+      if key ∈ ["span", "patterns", "name"] then continue
+      let (value, rest) := shrinkGuard value remaining values
+      result := result.setObjVal! key value
+      remaining := rest
+  | _ => pure ()
+  if guardKind result == "remote_call" && (str result "module").toOption == some "Erlang.erlang" &&
+      (str result "name").toOption == some "and" then
+    let args := (arr result "args").toOption.getD #[]
+    if args.size == 2 && args.all (atomIs · "true") then return (guardTrue result, remaining)
+  return (result, remaining)
+
+private partial def refineGuardPattern (j : Json) (name pattern : Json) : Json := Id.run do
+  if guardKind j == "var" && (j.getObjValD "name") == name then
+    return Json.mkObj [("kind", toJson "alias"), ("var", j),
+      ("pattern", pattern), ("span", (j.getObjValD "span"))]
+  match guardKind j with
+  | "cons" => return j.setObjVal! "head" (refineGuardPattern (j.getObjValD "head") name pattern)
+      |>.setObjVal! "tail" (refineGuardPattern (j.getObjValD "tail") name pattern)
+  | "tuple" | "$list" => return j.setObjVal! "elements" (toJson
+      (((arr j "elements").toOption.getD #[]).map (refineGuardPattern · name pattern)))
+  | "map" => return j.setObjVal! "entries" (toJson
+      (((arr j "entries").toOption.getD #[]).map fun e =>
+        e.setObjVal! "value" (refineGuardPattern (e.getObjValD "value") name pattern)))
+  | "alias" => return j.setObjVal! "pattern" (refineGuardPattern (j.getObjValD "pattern") name pattern)
+  | _ => return j
+
+/-- Refine only locally bound variables. Core sometimes tests a scrutinee variable
+instead of the fresh whole-value binder; map that name to the pattern binder. -/
+private def refineGuardClause (c : Json) (expressions : Array Json) (receiveClause := false) : DecodeM Json := do
+  let .ok guard := field c "guard" | return c
+  if guardHasBranching guard then return c
+  let patterns ← if receiveClause then pure #[← field c "pattern"] else arr c "patterns"
+  let binders := patterns.flatMap guardBinders
+  let mut aliases : GuardBindings := #[]
+  for i in [:min patterns.size expressions.size] do
+    if guardKind patterns[i]! == "var" && guardKind expressions[i]! == "var" then
+      aliases := aliases.push (expressions[i]!.getObjValD "name", patterns[i]!.getObjValD "name")
+  let mut refinements : GuardBindings := #[]
+  let mut selected := #[]
+  for call in positiveGuardCalls guard do
+    let some pattern := typePattern? call | continue
+    let args ← arr call "args"
+    let source := (args[0]!.getObjValD "name")
+    let name := if binders.contains source then source else (guardLookup aliases source).getD source
+    unless binders.contains name do continue
+    if refinements.any (fun (key, _) => key == name) then continue
+    refinements := refinements.push (name, pattern)
+    selected := selected.push call
+  if refinements.isEmpty then return c
+  let (guard, _) := shrinkGuard guard selected
+  let mut c := c.setObjVal! "guard" guard
+  if !receiveClause && returnsBool guard "true" then
+    c := Json.mkObj ((← c.getObj?).toArray.toList.filter fun (key, _) => key != "guard")
+  let mut patterns := patterns
+  for (name, pattern) in refinements do
+    patterns := patterns.map (refineGuardPattern · name pattern)
+  return if receiveClause then c.setObjVal! "pattern" patterns[0]!
+    else c.setObjVal! "patterns" (toJson patterns)
+
 private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     (j : Json) : DecodeM (TSyntax `term) := do
   let info ← span map j parent
@@ -302,6 +485,16 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     fields j ["kind", "elements", "span"]
     let elements ← (← arr j "elements").mapM (term map info pattern)
     pure (Unhygienic.run `([$elements,*]))
+  | "$type" => do
+    unless pattern do throw "type refinement is only valid in patterns"
+    fields j ["kind", "constructor", "span"]
+    let name ← str j "constructor"
+    let ctor := mkIdent (``Lynx.Term ++ Name.mkSimple name)
+    match name with
+    | "integer" | "float" | "atom" | "tuple" | "map" | "pid" => pure (Unhygienic.run `($ctor _))
+    | "bitstring" => pure (Unhygienic.run `($ctor _ _))
+    | "function" => pure (Unhygienic.run `($ctor _ _ _))
+    | _ => throw "unsupported type refinement"
   | "wildcard" => do
     fields j ["kind", "span"]
     unless pattern do throw "wildcard is only valid in patterns"
@@ -506,7 +699,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   | "receive" => do
     fields j ["kind", "message", "cases", "timeout", "after", "span"]
     let message ← param map info (← field j "message")
-    let clauses ← arr j "cases"
+    let clauses ← (← arr j "cases").mapM (fun c => refineGuardClause c #[] true)
     let termType : TSyntax `term := ⟨(mkIdent ``Lynx.Term).raw⟩
     let unitType : TSyntax `term := ⟨(mkIdent ``Unit).raw⟩
     let unit : TSyntax `term := Unhygienic.run `(())
@@ -604,9 +797,10 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   | "match" => do
     fields j ["kind", "expressions", "cases", "span"]
     if let some grouped ← groupMapCases j then return ← term map info false grouped
-    let exprs ← (← arr j "expressions").mapM (term map info false)
+    let exprJson ← arr j "expressions"
+    let exprs ← exprJson.mapM (term map info false)
     let unit : TSyntax `term := ⟨(mkIdent ``Unit.unit).raw⟩
-    let clauses ← arr j "cases"
+    let clauses ← (← arr j "cases").mapM (fun c => refineGuardClause c exprJson)
     let mut nests : Array Bool := #[]
     let mut lookups : Array (Array (TSyntax `term × Json)) := #[]
     let mut cases : Array (TSyntax ``Lean.Parser.Term.matchAlt) := #[]

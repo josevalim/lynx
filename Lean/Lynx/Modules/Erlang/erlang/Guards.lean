@@ -29,6 +29,24 @@ open Lynx
   | .atom "false" => .ok Term.true
   | _ => .error (.error (.atom "badarg"))
 
+#lynx_pure @[expose] def «is_atom/1» (input : Term) : Result :=
+  .ok (match input with | .atom _ => Term.true | _ => Term.false)
+
+#lynx_pure @[expose] def «is_tuple/1» (input : Term) : Result :=
+  .ok (match input with | .tuple _ => Term.true | _ => Term.false)
+
+#lynx_pure @[expose] def «is_pid/1» (input : Term) : Result :=
+  .ok (match input with | .pid _ => Term.true | _ => Term.false)
+
+#lynx_pure @[expose] def «is_function/1» (input : Term) : Result :=
+  .ok (match input with | .function _ _ _ => Term.true | _ => Term.false)
+
+#lynx_pure @[expose] def «is_number/1» (input : Term) : Result :=
+  .ok (match input with | .integer _ | .float _ => Term.true | _ => Term.false)
+
+#lynx_pure @[expose] def «is_boolean/1» (input : Term) : Result :=
+  .ok (match input with | .atom "true" | .atom "false" => Term.true | _ => Term.false)
+
 #lynx_pure @[expose] def «is_integer/1» (input : Term) : Result :=
   .ok (match input with | .integer _ => Term.true | _ => Term.false)
 

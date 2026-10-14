@@ -54,12 +54,11 @@ namespace Erlang.tries
         let _3 := Lynx.Exception.reason _2
         (fun lynxMatchNext =>
             match _4, _3, _2 with
-            | Lynx.Term.atom "error", vR, _8 =>
+            | Lynx.Term.atom "error", vR@(Lynx.Term.integer _), _8 =>
               Lynx.Result.tryWith
                 (do
-                  let _5 ← Erlang.erlang.«is_integer/1» vR
                   let _6 ← Erlang.erlang.«>/2» vR (Lynx.Term.integer 0)
-                  Erlang.erlang.«and/2» _5 _6)
+                  Erlang.erlang.«and/2» (Lynx.Term.atom "true") _6)
                 (fun lynxGuardValue =>
                   match lynxGuardValue with
                   | Lynx.Term.atom "true" => pure (Lynx.Term.atom "positive")

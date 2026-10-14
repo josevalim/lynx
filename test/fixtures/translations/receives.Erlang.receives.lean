@@ -67,16 +67,15 @@ def «guarded/1» (_0 : Lynx.Term) : Lynx.Result :=
                 | _ => lynxReceiveNext () :
                 Option (Sum Lynx.Term (Sum Lynx.Term (Sum Lynx.Term Unit))))
             match _12 with
-            | Lynx.Term.tuple ⟨[_8, vX]⟩ =>
+            | Lynx.Term.tuple ⟨[_8, vX@(Lynx.Term.integer _)]⟩ =>
               match
                 (Lynx.Result.toExceptRead
                   (do
                     let _9 ← Erlang.erlang.«=:=/2» _8 _0
                     let _10 ←
                       do
-                        let _2 ← Erlang.erlang.«is_integer/1» vX
                         let _3 ← Erlang.erlang.«>/2» vX (Lynx.Term.integer 0)
-                        Erlang.erlang.«and/2» _2 _3
+                        Erlang.erlang.«and/2» (Lynx.Term.atom "true") _3
                     Erlang.erlang.«and/2» _9 _10)
                   _lynxReceiveEnv (by simp (config := { maxDischargeDepth := 64 }))) with
               | Except.ok (Lynx.Term.atom "true") => Option.some (Sum.inr (Sum.inl vX))

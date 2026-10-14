@@ -12,78 +12,42 @@ namespace Erlang.patterns
     match _0 with
     | Lynx.Term.atom "a" => pure (Lynx.Term.atom "first")
     | Lynx.Term.atom "b" => pure (Lynx.Term.atom "second")
-    | _ =>
-      (fun lynxMatchNext =>
-          match _0 with
-          | Lynx.Term.cons (Lynx.Term.atom "c") vX =>
-            Lynx.Result.tryWith (Erlang.erlang.«is_integer/1» vX)
-              (fun lynxGuardValue =>
-                match lynxGuardValue with
-                | Lynx.Term.atom "true" => pure (Lynx.Term.atom "guarded")
-                | _ => lynxMatchNext ())
-              (fun _ => lynxMatchNext ())
-          | _ => lynxMatchNext ())
-        (fun (_ : Unit) =>
-          match _0 with
-          | Lynx.Term.cons (Lynx.Term.atom "c") _2 => pure (Lynx.Term.atom "rejected")
-          | _3 => pure (Lynx.Term.atom "other"))
+    | Lynx.Term.cons (Lynx.Term.atom "c") vX@(Lynx.Term.integer _) =>
+      pure (Lynx.Term.atom "guarded")
+    | Lynx.Term.cons (Lynx.Term.atom "c") _2 => pure (Lynx.Term.atom "rejected")
+    | _3 => pure (Lynx.Term.atom "other")
 
 #lynx_pure
   def «map_grouped/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxLabel_map_group_34 =>
+    (fun lynxLabel_map_group_33 =>
         (fun lynxMatchNext =>
             match _0 with
-            | lynxMap76 =>
-              match (Lynx.Term.getMapKeys [Lynx.Term.atom "a", Lynx.Term.atom "b"] lynxMap76) with
-              | [lynxMapGroup34_0, lynxMapGroup34_1] =>
-                (fun lynxMatchNext =>
-                    match lynxMapGroup34_0, lynxMapGroup34_1 with
-                    | Lynx.Term.integer 0, vB =>
-                      Lynx.Result.tryWith (Erlang.erlang.«is_integer/1» vB)
-                        (fun lynxGuardValue =>
-                          match lynxGuardValue with
-                          | Lynx.Term.atom "true" => pure (Lynx.Term.atom "first")
-                          | _ => lynxMatchNext ())
-                        (fun _ => lynxMatchNext ())
-                    | _, _ => lynxMatchNext ())
-                  (fun (_ : Unit) =>
-                    (fun lynxMatchNext =>
-                        match lynxMapGroup34_0, lynxMapGroup34_1 with
-                        | Lynx.Term.integer 1, vB =>
-                          Lynx.Result.tryWith (Erlang.erlang.«is_integer/1» vB)
-                            (fun lynxGuardValue =>
-                              match lynxGuardValue with
-                              | Lynx.Term.atom "true" => pure (Lynx.Term.atom "second")
-                              | _ => lynxMatchNext ())
-                            (fun _ => lynxMatchNext ())
-                        | _, _ => lynxMatchNext ())
-                      (fun (_ : Unit) =>
-                        match lynxMapGroup34_0, lynxMapGroup34_1 with
-                        | _, _ => lynxLabel_map_group_34 ()))
+            | lynxMap75 =>
+              match (Lynx.Term.getMapKeys [Lynx.Term.atom "a", Lynx.Term.atom "b"] lynxMap75) with
+              | [lynxMapGroup33_0, lynxMapGroup33_1] =>
+                match lynxMapGroup33_0, lynxMapGroup33_1 with
+                | Lynx.Term.integer 0, vB@(Lynx.Term.integer _) => pure (Lynx.Term.atom "first")
+                | Lynx.Term.integer 1, vB@(Lynx.Term.integer _) => pure (Lynx.Term.atom "second")
+                | _, _ => lynxLabel_map_group_33 ()
               | _ => lynxMatchNext ())
           (fun (_ : Unit) =>
             match _0 with
-            | _ => lynxLabel_map_group_34 ()))
+            | _ => lynxLabel_map_group_33 ()))
       (fun (_ : Unit) =>
         (fun lynxMatchNext =>
             match _0 with
-            | lynxMap39 =>
-              match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap39) with
+            | lynxMap38 =>
+              match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap38) with
               | [vA] => pure (Lynx.Term.tuple #[Lynx.Term.atom "second", vA])
               | _ => lynxMatchNext ())
           (fun (_ : Unit) =>
             (fun lynxMatchNext =>
                 match _0 with
-                | lynxMap48 =>
+                | lynxMap47 =>
                   match
-                    (Lynx.Term.getMapKeys [Lynx.Term.atom "a", Lynx.Term.atom "b"] lynxMap48) with
-                  | [Lynx.Term.integer 2, vB] =>
-                    Lynx.Result.tryWith (Erlang.erlang.«is_integer/1» vB)
-                      (fun lynxGuardValue =>
-                        match lynxGuardValue with
-                        | Lynx.Term.atom "true" => pure (Lynx.Term.atom "fourth")
-                        | _ => lynxMatchNext ())
-                      (fun _ => lynxMatchNext ())
+                    (Lynx.Term.getMapKeys [Lynx.Term.atom "a", Lynx.Term.atom "b"] lynxMap47) with
+                  | [Lynx.Term.integer 2, vB@(Lynx.Term.integer _)] =>
+                    pure (Lynx.Term.atom "fourth")
                   | _ => lynxMatchNext ())
               (fun (_ : Unit) =>
                 match _0 with
@@ -96,17 +60,11 @@ namespace Erlang.patterns
         match _0 with
         |
         Lynx.Term.tuple
-            ⟨[Lynx.Term.atom "tag", Lynx.Term.cons (vOuter@lynxMap122) Lynx.Term.nil]⟩ =>
-          match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap122) with
-          | [vInner@lynxMap142] =>
-            match (Lynx.Term.getMapKeys [Lynx.Term.atom "b"] lynxMap142) with
-            | [vValue] =>
-              Lynx.Result.tryWith (Erlang.erlang.«is_integer/1» vValue)
-                (fun lynxGuardValue =>
-                  match lynxGuardValue with
-                  | Lynx.Term.atom "true" => pure (Lynx.Term.tuple #[vValue, vInner, vOuter])
-                  | _ => lynxMatchNext ())
-                (fun _ => lynxMatchNext ())
+            ⟨[Lynx.Term.atom "tag", Lynx.Term.cons (vOuter@lynxMap119) Lynx.Term.nil]⟩ =>
+          match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap119) with
+          | [vInner@lynxMap137] =>
+            match (Lynx.Term.getMapKeys [Lynx.Term.atom "b"] lynxMap137) with
+            | [vValue@(Lynx.Term.integer _)] => pure (Lynx.Term.tuple #[vValue, vInner, vOuter])
             | _ => lynxMatchNext ()
           | _ => lynxMatchNext ()
         | _ => lynxMatchNext ())
@@ -118,8 +76,8 @@ namespace Erlang.patterns
   def «map_duplicate/3» (_0 : Lynx.Term) (_1 : Lynx.Term) (_2 : Lynx.Term) : Lynx.Result :=
     (fun lynxMatchNext =>
         match _2 with
-        | lynxMap155 =>
-          match (Lynx.Term.getMapKeys [_0, _1] lynxMap155) with
+        | lynxMap152 =>
+          match (Lynx.Term.getMapKeys [_0, _1] lynxMap152) with
           | [vX, Lynx.Term.tuple ⟨[Lynx.Term.atom "ok", vY]⟩] => pure (Lynx.Term.tuple #[vX, vY])
           | _ => lynxMatchNext ())
       (fun (_ : Unit) =>
@@ -140,8 +98,8 @@ namespace Erlang.patterns
                   pure (Lynx.Term.atom "false", Lynx.Term.atom "false"))
           (fun lynxMatchNext =>
                 match _11, _6 with
-                | Lynx.Term.atom "true", lynxMap209 =>
-                  match (Lynx.Term.getMapKeys [_7] lynxMap209) with
+                | Lynx.Term.atom "true", lynxMap206 =>
+                  match (Lynx.Term.getMapKeys [_7] lynxMap206) with
                   | [vValue] => pure vValue
                   | _ => lynxMatchNext ()
                 | _, _ => lynxMatchNext ())
