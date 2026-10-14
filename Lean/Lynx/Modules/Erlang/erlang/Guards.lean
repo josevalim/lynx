@@ -126,6 +126,54 @@ open Lynx
       | some result => .ok (.float result)
       | none => .error (.error (.atom "badarith"))) := by rfl
 
+#lynx_pure def «*/2» : Term → Term → Result
+  | .integer x, .integer y => .ok (.integer (x * y))
+  | .float x, .float y => floatResult (x.mul y)
+  | .integer x, .float y => floatResult (Term.FiniteFloat.ofInt x >>= (·.mul y))
+  | .float x, .integer y => floatResult (Term.FiniteFloat.ofInt y >>= x.mul)
+  | _, _ => throw (.error (.atom "badarith"))
+
+@[simp↓] theorem «*/2_integers» (left right : Int) :
+    «*/2» (.integer left) (.integer right) = .ok (.integer (left * right)) := by rfl
+
+/-- Erlang remainder uses division truncated toward zero, including negative operands. -/
+#lynx_pure @[expose] def «rem/2» : Term → Term → Result
+  | .integer x, .integer y =>
+      if y = 0 then throw (.error (.atom "badarith"))
+      else .ok (.integer (x.tmod y))
+  | _, _ => throw (.error (.atom "badarith"))
+
+/-- Infinite two's complement AND. For mixed signs, clear the bits of the
+nonnegative operand selected by the complement of the negative operand. -/
+#lynx_pure @[expose] def «band/2» : Term → Term → Result
+  | .integer (.ofNat x), .integer (.ofNat y) => .ok (.integer (.ofNat (x &&& y)))
+  | .integer (.ofNat x), .integer (.negSucc y) => .ok (.integer (.ofNat (x ^^^ (x &&& y))))
+  | .integer (.negSucc x), .integer (.ofNat y) => .ok (.integer (.ofNat (y ^^^ (y &&& x))))
+  | .integer (.negSucc x), .integer (.negSucc y) => .ok (.integer (.negSucc (x ||| y)))
+  | _, _ => throw (.error (.atom "badarith"))
+
+/-- A negative shift count reverses direction; right shifts preserve the sign. -/
+#lynx_pure @[expose] def «bsr/2» : Term → Term → Result
+  | .integer x, .integer (.ofNat n) => .ok (.integer (x >>> n))
+  | .integer x, .integer (.negSucc n) => .ok (.integer (x <<< (n + 1)))
+  | _, _ => throw (.error (.atom "badarith"))
+
+#lynx_pure @[expose] def «bsl/2» : Term → Term → Result
+  | .integer x, .integer (.ofNat n) => .ok (.integer (x <<< n))
+  | .integer x, .integer (.negSucc n) => .ok (.integer (x >>> (n + 1)))
+  | _, _ => throw (.error (.atom "badarith"))
+
+/-- Masking a nonnegative integer to a word is Euclidean remainder. -/
+theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
+    «band/2» (.integer value) (.integer (2 ^ bits - 1)) =
+      .ok (.integer (value % 2 ^ bits)) := by
+  obtain ⟨n, rfl⟩ := Int.eq_ofNat_of_zero_le nonnegative
+  have mask : (2 ^ bits - 1 : Int) = Int.ofNat (2 ^ bits - 1) := by
+    have bound : 1 ≤ (2 : Nat) ^ bits := Nat.one_le_pow bits 2 (by decide)
+    simp [Int.ofNat_eq_natCast, Int.natCast_sub bound]
+  rw [mask]
+  simp [«band/2», Nat.and_two_pow_sub_one_eq_mod, Int.natCast_emod]
+
 #lynx_pure @[expose] def «==/2» (left right : Term) : Result :=
   .ok (if Term.compare left right = .eq then Term.true else Term.false)
 
@@ -149,6 +197,18 @@ open Lynx
 
 #lynx_pure @[expose] def «>=/2» (left right : Term) : Result :=
   .ok (if (Term.compare left right).isGE then Term.true else Term.false)
+
+@[simp] theorem «>=/2_integers» (x y : Int) :
+    «>=/2» (.integer x) (.integer y) = .ok (if y ≤ x then Term.true else Term.false) := by
+  simp [«>=/2», Int.isGE_compare]
+
+@[simp] theorem «</2_integers» (x y : Int) :
+    «</2» (.integer x) (.integer y) = .ok (if x < y then Term.true else Term.false) := by
+  simp [«</2», Ordering.isLT_iff_eq_lt, Int.compare_eq_lt]
+
+@[simp] theorem «=</2_integers» (x y : Int) :
+    «=</2» (.integer x) (.integer y) = .ok (if x ≤ y then Term.true else Term.false) := by
+  simp [«=</2», Int.isLE_compare]
 
 #lynx_pure @[expose] def «++/2» : Term → Term → Result
   | .nil, right => .ok right

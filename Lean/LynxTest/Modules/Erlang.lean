@@ -123,6 +123,94 @@ theorem addition_rejects_nonnumeric (input other : Term)
     «+/2» other input = .error (.error (.atom "badarith")) := by
   cases input <;> cases other <;> simp_all [«+/2»]
 
+theorem multiplication_numeric_types :
+    «*/2» (.integer (-7)) (.integer (2 ^ 100)) = .ok (.integer (-7 * 2 ^ 100)) ∧
+    «*/2» (.float floatOneAndHalf) (.float floatOneAndHalf) =
+      .ok (.float ⟨false, 1024, 2 ^ 49⟩) ∧
+    «*/2» (.integer 2) (.float floatOneAndHalf) = .ok (.float ⟨false, 1024, 2 ^ 51⟩) ∧
+    «*/2» (.float floatOneAndHalf) (.integer (-2)) = .ok (.float ⟨true, 1024, 2 ^ 51⟩) := by
+  repeat' first | apply And.intro | rfl
+
+-- Rounding happens during integer conversion before multiplication.
+theorem multiplication_rounding_and_underflow :
+    «*/2» (.integer (2 ^ 53 + 1)) (.float floatOne) =
+      .ok (.float ⟨false, 1076, 0⟩) ∧
+    «*/2» (.float ⟨false, 0, 1⟩) (.float ⟨false, 1022, 0⟩) =
+      .ok (.float ⟨false, 0, 0⟩) ∧
+    «*/2» (.float ⟨true, 0, 3⟩) (.float ⟨false, 1022, 0⟩) =
+      .ok (.float ⟨true, 0, 2⟩) ∧
+    «*/2» (.float ⟨true, 0, 0⟩) (.float floatOne) =
+      .ok (.float ⟨true, 0, 0⟩) := by
+  repeat' first | apply And.intro | rfl
+
+set_option maxRecDepth 4096 in
+set_option exponentiation.threshold 2048 in
+theorem multiplication_overflow :
+    «*/2» (.float ⟨false, 2046, 2 ^ 52 - 1⟩) (.integer 2) =
+      .error (.error (.atom "badarith")) ∧
+    -- Conversion overflows even though multiplication by zero would be finite.
+    «*/2» (.integer (2 ^ 1024)) (.float ⟨false, 0, 0⟩) =
+      .error (.error (.atom "badarith")) ∧
+    «*/2» (.float ⟨false, 0, 0⟩) (.integer (2 ^ 1024)) =
+      .error (.error (.atom "badarith")) := by
+  repeat' first | apply And.intro | rfl
+
+theorem multiplication_rejects_nonnumeric (input other : Term)
+    (hi : ∀ n, input ≠ .integer n) (hf : ∀ f, input ≠ .float f) :
+    «*/2» input other = .error (.error (.atom "badarith")) ∧
+    «*/2» other input = .error (.error (.atom "badarith")) := by
+  cases input <;> cases other <;> simp_all [«*/2»]
+
+theorem remainder_signs_and_zero :
+    «rem/2» (.integer 7) (.integer 3) = .ok (.integer 1) ∧
+    «rem/2» (.integer (-7)) (.integer 3) = .ok (.integer (-1)) ∧
+    «rem/2» (.integer 7) (.integer (-3)) = .ok (.integer 1) ∧
+    «rem/2» (.integer (-7)) (.integer (-3)) = .ok (.integer (-1)) ∧
+    «rem/2» (.integer 7) (.integer 0) = .error (.error (.atom "badarith")) := by
+  repeat' first | apply And.intro | rfl
+
+theorem bitwise_and_signs :
+    «band/2» (.integer 10) (.integer 12) = .ok (.integer 8) ∧
+    «band/2» (.integer 10) (.integer (-4)) = .ok (.integer 8) ∧
+    «band/2» (.integer (-4)) (.integer 10) = .ok (.integer 8) ∧
+    «band/2» (.integer (-10)) (.integer (-12)) = .ok (.integer (-12)) ∧
+    «band/2» (.integer (2 ^ 100 + 3)) (.integer (-2)) = .ok (.integer (2 ^ 100 + 2)) := by
+  repeat' first | apply And.intro | rfl
+
+theorem shifts_signed_values_and_counts :
+    «bsr/2» (.integer (-7)) (.integer 1) = .ok (.integer (-4)) ∧
+    «bsr/2» (.integer (-7)) (.integer (-2)) = .ok (.integer (-28)) ∧
+    «bsl/2» (.integer (-7)) (.integer 2) = .ok (.integer (-28)) ∧
+    «bsl/2» (.integer (-7)) (.integer (-1)) = .ok (.integer (-4)) ∧
+    «bsr/2» (.integer (-7)) (.integer 100) = .ok (.integer (-1)) ∧
+    «bsl/2» (.integer 7) (.integer (-100)) = .ok (.integer 0) ∧
+    «bsl/2» (.integer 7) (.integer 100) = .ok (.integer (7 * 2 ^ 100)) ∧
+    «bsr/2» (.integer 7) (.integer 0) = .ok (.integer 7) := by
+  repeat' first | apply And.intro | rfl
+
+theorem integer_operations_reject_nonintegers (input other : Term)
+    (hi : ∀ n, input ≠ .integer n) :
+    «rem/2» input other = .error (.error (.atom "badarith")) ∧
+    «rem/2» other input = .error (.error (.atom "badarith")) ∧
+    «band/2» input other = .error (.error (.atom "badarith")) ∧
+    «band/2» other input = .error (.error (.atom "badarith")) ∧
+    «bsr/2» input other = .error (.error (.atom "badarith")) ∧
+    «bsr/2» other input = .error (.error (.atom "badarith")) ∧
+    «bsl/2» input other = .error (.error (.atom "badarith")) ∧
+    «bsl/2» other input = .error (.error (.atom "badarith")) := by
+  cases input <;> cases other <;> simp_all [«rem/2», «band/2», «bsr/2», «bsl/2»]
+
+-- Word masking and signed shifts expose arithmetic equations through the public API.
+theorem word_mask (n bits : Nat) :
+    «band/2» (.integer n) (.integer (2 ^ bits - 1)) =
+      .ok (.integer ((n : Int) % 2 ^ bits)) := by
+  exact «band/2_mask» n bits (Int.natCast_nonneg n)
+
+theorem right_shift_is_floor_division (value : Int) (bits : Nat) :
+    «bsr/2» (.integer value) (.integer bits) =
+      .ok (.integer (value / 2 ^ bits)) := by
+  simp [«bsr/2», Int.shiftRight_eq_div_pow]
+
 -- Elixir: <<>>, <<1::1>>, <<1::7>>, <<1>>, <<1, 1::1>>.
 -- Partial bytes store their meaningful bits at the most significant end.
 private def bitstrings : List Term := [

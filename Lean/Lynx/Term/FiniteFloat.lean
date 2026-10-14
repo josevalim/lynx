@@ -36,6 +36,10 @@ public def ofInt (value : Int) : Option FiniteFloat :=
 public def add (left right : FiniteFloat) : Option FiniteFloat :=
   ofModel (left.toModel + right.toModel)
 
+/-- IEEE binary64 multiplication, failing on any non-finite result. -/
+public def mul (left right : FiniteFloat) : Option FiniteFloat :=
+  ofModel (left.toModel * right.toModel)
+
 /-- The nonnegative mathematical magnitude of a finite binary64 value. -/
 @[expose] public def magnitude (value : FiniteFloat) : Rat :=
   if value.exponent.val = 0 then

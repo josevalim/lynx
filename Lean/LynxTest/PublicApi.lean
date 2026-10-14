@@ -110,6 +110,7 @@ namespace LynxTest.PublicApi
 open Lean Elab Command
 
 private def expectedDeclarations : Array String := #[
+  "Erlang.erlang.«*/2»",
   "Erlang.erlang.«++/2»",
   "Erlang.erlang.«+/2»",
   "Erlang.erlang.«/=/2»",
@@ -122,7 +123,10 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«>=/2»",
   "Erlang.erlang.«and/2»",
   "Erlang.erlang.«apply/2»",
+  "Erlang.erlang.«band/2»",
   "Erlang.erlang.«bit_size/1»",
+  "Erlang.erlang.«bsl/2»",
+  "Erlang.erlang.«bsr/2»",
   "Erlang.erlang.«byte_size/1»",
   "Erlang.erlang.«erase/0»",
   "Erlang.erlang.«erase/1»",
@@ -148,6 +152,7 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«not/1»",
   "Erlang.erlang.«or/2»",
   "Erlang.erlang.«put/2»",
+  "Erlang.erlang.«rem/2»",
   "Erlang.erlang.«self/0»",
   "Erlang.erlang.«send/2»",
   "Erlang.erlang.«spawn/1»",
@@ -230,6 +235,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.FiniteFloat.fraction",
   "Lynx.Term.FiniteFloat.magnitude",
   "Lynx.Term.FiniteFloat.mk",
+  "Lynx.Term.FiniteFloat.mul",
   "Lynx.Term.FiniteFloat.negative",
   "Lynx.Term.FiniteFloat.ofInt",
   "Lynx.Term.FiniteFloat.toRat",

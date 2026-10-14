@@ -547,6 +547,13 @@ namespace Lynx.Term
   rw [Std.OrientedCmp.eq_swap (cmp := compare), Ordering.swap_eq_eq]
   exact compare_eq_nil a
 
+@[simp] theorem compare_integers (a b : Int) :
+    compare (.integer a) (.integer b) = Ord.compare a b := by
+  rw [compare_eq_step]
+  by_cases hab : a < b <;> by_cases hba : b < a <;> by_cases eq : a = b <;>
+    simp [Compare.compareStep, Compare.ratCompare, compareOfLessAndEq,
+      Int.compare_eq_ite_lt, Rat.intCast_lt_intCast, hab, hba, eq] <;> omega
+
 @[simp] theorem integer_compare_integer_eq (a b : Int) :
     compare (.integer a) (.integer b) = .eq ↔ a = b := by
   rw [compare_eq_step]

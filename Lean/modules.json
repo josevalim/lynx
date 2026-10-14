@@ -10,6 +10,7 @@
   "spawn/1": {"pure": false},
   "send/2": {"pure": false},
   "self/0": {"pure": false},
+  "rem/2": {"pure": true},
   "put/2": {"pure": false},
   "or/2": {"pure": true},
   "not/1": {"pure": true},
@@ -35,7 +36,10 @@
   "erase/1": {"pure": false},
   "erase/0": {"pure": false},
   "byte_size/1": {"pure": true},
+  "bsr/2": {"pure": true},
+  "bsl/2": {"pure": true},
   "bit_size/1": {"pure": true},
+  "band/2": {"pure": true},
   "apply/2": {"pure": false},
   "and/2": {"pure": true},
   ">=/2": {"pure": true},
@@ -47,4 +51,5 @@
   "</2": {"pure": true},
   "/=/2": {"pure": true},
   "+/2": {"pure": true},
-  "++/2": {"pure": true}}}
+  "++/2": {"pure": true},
+  "*/2": {"pure": true}}}
