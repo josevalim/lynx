@@ -1,7 +1,7 @@
 -module(guard_patterns).
 -compile({no_auto_import, [float/1]}).
 -export([integer/1, float/1, atom/1, tuple/1, map/1, bitstring/1, binary/1,
-         pid/1, function/1, reference/1,
+         pid/1, reference/1, function/1,
          conjunction/1, nested/1, conflict/1, repeated/1, negated/1,
          disjunction/2, outer/2]).
 

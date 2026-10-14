@@ -56,6 +56,12 @@ namespace Erlang.guard_patterns
     | _2 => pure (Lynx.Term.atom "no")
 
 #lynx_pure
+  def «reference/1» (_0 : Lynx.Term) : Lynx.Result :=
+    match _0 with
+    | vX@(Lynx.Term.reference _) => pure vX
+    | _2 => pure (Lynx.Term.atom "no")
+
+#lynx_pure
   def «function/1» (_0 : Lynx.Term) : Lynx.Result :=
     match _0 with
     | vX@(Lynx.Term.function _ _ _) => pure vX
@@ -71,8 +77,8 @@ namespace Erlang.guard_patterns
   def «nested/1» (_0 : Lynx.Term) : Lynx.Result :=
     (fun lynxMatchNext =>
         match _0 with
-        | Lynx.Term.tuple ⟨[Lynx.Term.atom "tag", Lynx.Term.cons lynxMap155 Lynx.Term.nil]⟩ =>
-          match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap155) with
+        | Lynx.Term.tuple ⟨[Lynx.Term.atom "tag", Lynx.Term.cons lynxMap169 Lynx.Term.nil]⟩ =>
+          match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap169) with
           | [vX@(Lynx.Term.bitstring _ 0 _)] => pure vX
           | _ => lynxMatchNext ()
         | _ => lynxMatchNext ())
@@ -186,11 +192,5 @@ namespace Erlang.guard_patterns
       (fun (_ : Unit) =>
         match _1 with
         | _5 => pure (Lynx.Term.atom "no"))
-
-#lynx_pure
-  def «reference/1» (_0 : Lynx.Term) : Lynx.Result :=
-    match _0 with
-    | vX@(Lynx.Term.reference _) => pure vX
-    | _2 => pure (Lynx.Term.atom "no")
 
 end Erlang.guard_patterns
