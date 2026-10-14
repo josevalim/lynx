@@ -270,11 +270,11 @@ private def groupMapCases (j : Json) : DecodeM (Option Json) := do
     let jump := Json.mkObj [("kind", toJson "jump"), ("label", label), ("span", nodeSpan)]
     let wildcard := Json.mkObj [("kind", toJson "wildcard"), ("span", nodeSpan)]
     let fallback (pats : Array Json) := Json.mkObj [("patterns", toJson pats),
-      ("nest", toJson false), ("body", jump), ("span", nodeSpan)]
+      ("body", jump), ("span", nodeSpan)]
     innerCases := innerCases.push (fallback (values.map fun _ => wildcard))
     let inner := Json.mkObj [("kind", toJson "match"), ("expressions", toJson values),
       ("cases", toJson innerCases), ("span", nodeSpan)]
-    let grouped := Json.mkObj [("patterns", toJson outerPatterns), ("nest", toJson false),
+    let grouped := Json.mkObj [("patterns", toJson outerPatterns),
       ("body", inner), ("span", ← field clauses[start]! "span")]
     let body := j.setObjVal! "cases" (toJson (clauses.extract 0 start ++
       #[grouped, fallback (expressions.map fun _ => wildcard)]))
@@ -611,22 +611,22 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let mut lookups : Array (Array (TSyntax `term × Json)) := #[]
     let mut cases : Array (TSyntax ``Lean.Parser.Term.matchAlt) := #[]
     for c in clauses do
-      fields c (if (field c "guard").isOk then ["patterns", "nest", "guard", "body", "span"]
-        else ["patterns", "nest", "body", "span"])
+      fields c (if (field c "guard").isOk then ["patterns", "guard", "body", "span"]
+        else ["patterns", "body", "span"])
       let ci ← span map c info
       let (pats, maps) ← withMapPatterns ((← arr c "patterns").mapM (term map ci true))
       lookups := lookups.push maps
       unless pats.size == exprs.size do throw "match case must have one pattern per expression"
       let pats := if pats.isEmpty then #[unit] else pats
       let body ← term map ci false (← field c "body")
-      nests := nests.push ((← (← field c "nest").getBool?) || !maps.isEmpty)
+      nests := nests.push ((field c "guard").isOk || !maps.isEmpty)
       cases := cases.push (withSpan ci.info
         (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $pats,* => $body)))
     if cases.isEmpty then throw "match requires at least one case"
     -- Core can omit the fallback when it knows an operation returns a Boolean.
     -- Term's type includes other values, so Lean still needs an exhaustive match.
     let catchAll ← clauses.anyM fun c => do
-      if (← (← field c "nest").getBool?) then return false
+      if (field c "guard").isOk then return false
       (← arr c "patterns").allM fun p => do
         pure ((← str p "kind") ∈ ["var", "wildcard"])
     unless catchAll do
