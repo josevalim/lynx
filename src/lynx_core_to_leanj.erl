@@ -515,6 +515,13 @@ value(#c_alias{anno = Anno, var = Var, pat = Pattern}, State0) ->
     {node(~"alias", Anno, #{~"var" => variable(Var), ~"pattern" => Translated}), State1};
 value(#c_var{} = Var, State) ->
     {variable(Var), State};
+value(#c_binary{anno = Anno, segments = Segments}, State0) ->
+    case binary_pattern_literal(Segments, <<>>) of
+        {ok, Bits} when is_binary(Bits) -> value(#c_literal{anno = Anno, val = Bits}, State0);
+        _ ->
+            {Translated, State1} = binary_pattern_segments(Segments, State0),
+            {node(~"bitstring_pattern", Anno, #{~"segments" => Translated}), State1}
+    end;
 value(#c_literal{anno = Anno, val = []}, State) ->
     {node(~"nil", Anno, #{}), State};
 value(#c_literal{anno = Anno, val = [Head | Tail]}, State0) ->
@@ -556,6 +563,55 @@ value(#c_map{anno = Anno, arg = #c_literal{val = Base}, es = Pairs,
     {node(~"map", Anno, #{~"entries" => Entries}), State1};
 value(Core, _State) ->
     unsupported(Core).
+
+%% Fold whole-byte constant patterns into ordinary literals. Bound each segment
+%% expansion; larger segments retain matching without changing their semantics.
+binary_pattern_literal([], Bits) -> {ok, Bits};
+binary_pattern_literal([#c_bitstr{val = #c_literal{val = Value},
+        size = #c_literal{val = Size}, unit = #c_literal{val = Unit},
+        type = #c_literal{val = integer}, flags = #c_literal{val = Flags}} | Rest], Bits)
+        when is_integer(Value), is_integer(Size), Size >= 0,
+             is_integer(Unit), Unit >= 1, Unit =< 256, is_list(Flags) ->
+    case lists:sort(Flags) of
+        [Endian, Signed] when (Endian =:= big orelse Endian =:= little),
+                              (Signed =:= signed orelse Signed =:= unsigned) ->
+            Width = Size * Unit,
+            case Width =< 4096 andalso integer_pattern_value(Value, Width, Signed) of
+                true ->
+                    Segment = case Endian of
+                        big -> <<Value:Width/big>>;
+                        little -> <<Value:Width/little>>
+                    end,
+                    binary_pattern_literal(Rest, <<Bits/bitstring, Segment/bitstring>>);
+                false -> error
+            end;
+        _ -> error
+    end;
+binary_pattern_literal(_, _) -> error.
+
+%% Pattern literals must be representable; unlike construction, they do not truncate.
+integer_pattern_value(Value, 0, _) -> Value =:= 0;
+integer_pattern_value(Value, Width, unsigned) -> Value >= 0 andalso Value < (1 bsl Width);
+integer_pattern_value(Value, Width, signed) ->
+    Bound = 1 bsl (Width - 1),
+    Value >= -Bound andalso Value < Bound.
+
+binary_pattern_segments([], State) -> {[], State};
+binary_pattern_segments([#c_bitstr{anno = Anno, val = Value,
+        type = #c_literal{val = binary}, size = Size,
+        unit = #c_literal{val = Unit}}], State0)
+        when is_integer(Unit), Unit >= 1, Unit =< 256 ->
+    {TranslatedValue, State1} = value(Value, State0),
+    {TranslatedSize, State2} = value(Size, State1),
+    {[#{~"type" => ~"binary", ~"span" => span(Anno), ~"size" => TranslatedSize,
+        ~"value" => TranslatedValue, ~"unit" => Unit}], State2};
+binary_pattern_segments([#c_bitstr{type = #c_literal{val = Type}} = Segment | Rest], State0)
+        when Type =:= integer; Type =:= float ->
+    {Translated, State1} = binary_segment(Segment, State0),
+    {Remaining, State2} = binary_pattern_segments(Rest, State1),
+    {[Translated | Remaining], State2};
+binary_pattern_segments([Core | _], _State) ->
+    unsupported(#c_binary{anno = cerl:get_ann(Core), segments = [Core]}).
 
 binary_segment(#c_bitstr{unit = #c_literal{val = Unit}, type = #c_literal{val = integer},
         flags = #c_literal{val = Flags}} = Core, State0)

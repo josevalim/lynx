@@ -124,151 +124,48 @@ defmodule Lynx.CoreToLeanjTest do
     assert id == self_id
   end
 
-  test "translates floats as exact binary64 fields with source annotations" do
-    anno = [{:file, ~c"example.erl"}, {7, 3}]
-
-    for {value, negative, exponent, fraction} <- [
-          {0.0, false, 0, 0},
-          {-0.0, true, 0, 0},
-          {1.0, false, 1023, 0},
-          {-1.5, true, 1023, 2_251_799_813_685_248},
-          {0.1, false, 1019, 2_702_159_776_422_298},
-          {5.0e-324, false, 0, 1},
-          {1.7976931348623157e308, false, 2046, 4_503_599_627_370_495}
+  test "keeps unrepresentable integer patterns and large literals as segment matches" do
+    # The compiler removes impossible source clauses; exercise their Core forms directly.
+    for {value, size, signed} <- [
+          {256, 8, :unsigned},
+          {-1, 8, :unsigned},
+          {128, 8, :signed},
+          {-129, 8, :signed},
+          {1, 0, :unsigned},
+          {0, 8192, :unsigned}
         ] do
-      body = :cerl.ann_abstract(anno, value)
-
-      assert {:ok, %{{:entry, 1} => %{pure: true, translation: translation}}, []} =
-               translate(definitions([definition(:entry, body)]))
-
-      assert %{
-               "body" => %{
-                 "kind" => "return",
-                 "values" => [
-                   %{
-                     "kind" => "float",
-                     "negative" => ^negative,
-                     "exponent" => ^exponent,
-                     "fraction" => ^fraction,
-                     "span" => [7, 3]
-                   }
-                 ]
-               }
-             } = translation
-    end
-  end
-
-  test "translates packed bitstring literals with partial final bytes" do
-    anno = [{:file, ~c"example.erl"}, {7, 3}]
-
-    for {bits, bytes, last} <- [
-          {<<>>, [], 0},
-          {<<1, 255>>, [1, 255], 0},
-          {<<5::3>>, [160], 3},
-          {<<255, 5::3>>, [255, 160], 3}
-        ] do
-      body = :cerl.ann_abstract(anno, bits)
-
-      assert {:ok,
-              %{
-                {:entry, 1} => %{
-                  pure: true,
-                  translation: %{
-                    "body" => %{
-                      "kind" => "return",
-                      "values" => [
-                        %{
-                          "kind" => "bitstring",
-                          "bytes" => ^bytes,
-                          "last_bits" => ^last,
-                          "span" => [7, 3]
-                        }
-                      ]
-                    }
-                  }
-                }
-              }, []} = translate(definitions([definition(:entry, body)]))
-    end
-  end
-
-  test "preserves integer segment sizes, units, flags, order, and annotations" do
-    anno = [{:file, ~c"example.erl"}, {7, 3}]
-
-    for {signed, sign} <- [{true, :signed}, {false, :unsigned}], endian <- [:big, :little] do
       segment =
-        :cerl.ann_c_bitstr(
-          anno,
-          :cerl.c_var(0),
-          :cerl.c_int(5),
-          :cerl.c_int(3),
-          :cerl.c_atom(:integer),
-          :cerl.abstract([sign, endian])
-        )
-
-      body = :cerl.ann_c_binary(anno, [segment, segment])
-      endian = Atom.to_string(endian)
-
-      assert {:ok,
-              %{
-                {:entry, 1} => %{
-                  pure: true,
-                  translation: %{
-                    "body" => %{
-                      "kind" => "bitstring_constructor",
-                      "span" => [7, 3],
-                      "segments" => [
-                        %{
-                          "type" => "integer",
-                          "value" => %{"kind" => "var", "name" => 0},
-                          "size" => %{"kind" => "integer", "value" => 5},
-                          "unit" => 3,
-                          "signed" => ^signed,
-                          "endian" => ^endian,
-                          "span" => [7, 3]
-                        } = first,
-                        second
-                      ]
-                    }
-                  }
-                }
-              }, []} = translate(definitions([definition(:entry, body)]))
-
-      assert first == second
-    end
-  end
-
-  test "translates float segment widths, units, and byte order" do
-    anno = [{:file, ~c"example.erl"}, {7, 3}]
-
-    for {size, unit, width} <- [{16, 1, 16}, {32, 1, 32}, {64, 1, 64}, {8, 8, 64}],
-        endian <- [:big, :little] do
-      segment =
-        :cerl.ann_c_bitstr(
-          anno,
-          :cerl.c_var(0),
+        :cerl.c_bitstr(
+          :cerl.c_int(value),
           :cerl.c_int(size),
-          :cerl.c_int(unit),
-          :cerl.c_atom(:float),
-          :cerl.abstract([:unsigned, endian])
+          :cerl.c_int(1),
+          :cerl.c_atom(:integer),
+          :cerl.abstract([signed, :big])
         )
 
-      body = :cerl.ann_c_binary(anno, [segment])
-      endian = Atom.to_string(endian)
+      body =
+        :cerl.c_case(:cerl.c_var(0), [
+          :cerl.c_clause([:cerl.c_binary([segment])], :cerl.c_atom(true))
+        ])
 
       assert {:ok,
               %{
                 {:entry, 1} => %{
-                  pure: true,
                   translation: %{
                     "body" => %{
-                      "kind" => "bitstring_constructor",
-                      "segments" => [
+                      "cases" => [
                         %{
-                          "type" => "float",
-                          "value" => %{"kind" => "var", "name" => 0},
-                          "size" => ^width,
-                          "endian" => ^endian,
-                          "span" => [7, 3]
+                          "patterns" => [
+                            %{
+                              "kind" => "bitstring_pattern",
+                              "segments" => [
+                                %{
+                                  "value" => %{"kind" => "integer", "value" => ^value},
+                                  "size" => %{"kind" => "integer", "value" => ^size}
+                                }
+                              ]
+                            }
+                          ]
                         }
                       ]
                     }
@@ -276,35 +173,6 @@ defmodule Lynx.CoreToLeanjTest do
                 }
               }, []} = translate(definitions([definition(:entry, body)]))
     end
-  end
-
-  test "preserves dynamic sizes and integer segment units" do
-    anno = [7]
-
-    segment =
-      :cerl.ann_c_bitstr(
-        anno,
-        :cerl.c_var(0),
-        :cerl.c_var(:size),
-        :cerl.c_int(256),
-        :cerl.c_atom(:integer),
-        :cerl.abstract([:unsigned, :big])
-      )
-
-    body = :cerl.c_binary([segment])
-
-    assert {:ok,
-            %{
-              {:entry, 1} => %{
-                translation: %{
-                  "body" => %{
-                    "segments" => [
-                      %{"size" => %{"kind" => "var", "name" => "size"}, "unit" => 256}
-                    ]
-                  }
-                }
-              }
-            }, []} = translate(definitions([definition(:entry, body)]))
   end
 
   test "allocates distinct generated message binders for timeout-only receives" do

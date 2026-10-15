@@ -39,6 +39,10 @@ set_option «match».ignoreUnusedAlts true
     Lynx.Term.Bitstring.integerSegment _0 _1 3 Bool.false
 
 #lynx_pure
+  def «integer_max_unit/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.integerSegment _0 _1 256 Bool.false
+
+#lynx_pure
   def «integer_mixed/1» (_0 : Lynx.Term) : Lynx.Result :=
     Lynx.Result.bind
       (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer 1) (Lynx.Term.integer 3) 1 Bool.false)

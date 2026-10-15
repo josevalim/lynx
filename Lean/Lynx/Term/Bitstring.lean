@@ -34,6 +34,15 @@ Signedness affects matching, but does not affect construction. -/
     else width - 1 - i
     (value >>> shift) % 2 == 1
 
+/-- Decode transmission-order integer bits, with a possible partial final byte. -/
+@[expose] public def decodeInteger (bits : List Bool) (little : Bool) : Nat :=
+  if little then
+    bits.zipIdx.foldl (fun value (bit, i) =>
+      let shift := i / 8 * 8 + (min 8 (bits.length - i / 8 * 8) - 1 - i % 8)
+      if bit then value + 2 ^ shift else value) 0
+  else
+    bits.foldl (fun value bit => value * 2 + if bit then 1 else 0) 0
+
 /-- Pack transmission-order bits into bytes, padding unused low bits with zero. -/
 @[expose] public def pack (bits : List Bool) : ByteArray :=
   ⟨((List.range ((bits.length + 7) / 8)).map fun index =>

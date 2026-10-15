@@ -91,7 +91,8 @@ private structure DecodeState where
   spans : Array Span := #[]
   diagnostics : Array ProofDiagnostic := #[]
   theorems : Array (Name × Span) := #[]
-  mapPatterns : Array (TSyntax `term × Json) := #[]
+  patternExtractions : Array (TSyntax `term × Json) := #[]
+  nextBitstringPattern : Nat := 0
 
 private abbrev DecodeM := ReaderT Lean.Environment (StateT DecodeState (Except String))
 
@@ -146,6 +147,9 @@ private def variableName (j : Json) : DecodeM (TSyntax `ident) := do
         if (field value "group").isOk then
           fields value ["group", "index"]
           pure s!"lynxMapGroup{← (← field value "group").getNat?}_{← (← field value "index").getNat?}"
+        else if (field value "bitstring").isOk then
+          fields value ["bitstring"]
+          pure s!"lynxBits{← (← field value "bitstring").getNat?}"
         else if (field value "pattern").isOk then
           fields value ["pattern"]
           pure s!"lynxMap{← (← field value "pattern").getNat?}"
@@ -171,28 +175,33 @@ private partial def catchAllPattern (j : Json) : Except String Bool := do
   match ← str j "kind" with
   | "var" | "wildcard" => return true
   | "map" => return !(← arr j "entries").isEmpty
+  | "bitstring_pattern" => return true
+  | "bitstring" => return (← (← field j "last_bits").getNat?) != 0
   | "alias" => catchAllPattern (← field j "pattern")
   | _ => return false
 
-/-- Collect map lookups during ordinary recursive pattern decoding. -/
-private def withMapPatterns (decode : DecodeM α) : DecodeM (α × Array (TSyntax `term × Json)) := do
-  let saved := (← get).mapPatterns
-  modify fun s => { s with mapPatterns := #[] }
+/-- Collect extraction checks during ordinary recursive pattern decoding. -/
+private def withExtractions (decode : DecodeM α) : DecodeM (α × Array (TSyntax `term × Json)) := do
+  let saved := (← get).patternExtractions
+  modify fun s => { s with patternExtractions := #[] }
   let result ← decode
-  let patterns := (← get).mapPatterns
-  modify fun s => { s with mapPatterns := saved }
+  let patterns := (← get).patternExtractions
+  modify fun s => { s with patternExtractions := saved }
   return (result, patterns)
 
 /-- Decode extracted values through the existing recursive pattern decoder,
 then match the lookup directly with the clause's fallthrough continuation. -/
-private partial def mapMatches (patterns : Array (TSyntax `term × Json))
+private partial def patternMatches (patterns : Array (TSyntax `term × Json))
     (decode : Json → DecodeM (TSyntax `term)) (body fallback : TSyntax `term) :
     DecodeM (TSyntax `term) := do
   let mut branch := body
   for (lookup, pattern) in patterns.reverse do
-    let (pat, nested) ← withMapPatterns (decode pattern)
-    let matched ← mapMatches nested decode branch fallback
-    branch := Unhygienic.run `(match ($lookup) with | $pat => $matched | _ => $fallback)
+    let (pat, nested) ← withExtractions (decode pattern)
+    let matched ← patternMatches nested decode branch fallback
+    branch := if ← catchAllPattern pattern then
+      Unhygienic.run `(match ($lookup) with | $pat => $matched)
+    else
+      Unhygienic.run `(match ($lookup) with | $pat => $matched | _ => $fallback)
   return branch
 
 /-- Source locations do not affect literal-key identity. -/
@@ -540,19 +549,112 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let literal : TSyntax `term := ⟨Syntax.mkStrLit (← str j "value")⟩
     let ctor := mkIdent ``Lynx.Term.atom
     pure (Unhygienic.run `($ctor $literal))
+  | "$some_pair" => do
+    fields j ["kind", "first", "second", "span"]
+    unless pattern do throw "option pair extraction is only valid in patterns"
+    let first ← term map info true (← field j "first")
+    let second ← term map info true (← field j "second")
+    pure (Unhygienic.run `(Option.some ($first, $second)))
+  | "$bool" => do
+    fields j ["kind", "value", "span"]
+    unless pattern do throw "boolean extraction is only valid in patterns"
+    if ← (← field j "value").getBool? then pure (Unhygienic.run `(Bool.true))
+    else pure (Unhygienic.run `(Bool.false))
+  | "bitstring_pattern" => do
+    fields j ["kind", "segments", "span"]
+    unless pattern do throw "bitstring pattern is only valid in patterns"
+    let nodeSpan ← field j "span"
+    let fresh : DecodeM Json := do
+      let index := (← get).nextBitstringPattern
+      modify fun s => { s with nextBitstringPattern := index + 1 }
+      pure (Json.mkObj [("kind", toJson "var"), ("span", nodeSpan),
+        ("name", Json.mkObj [("bitstring", toJson index)])])
+    let binder ← fresh
+    let input ← term map info true binder
+    let mut remaining := input
+    let accepted := Json.mkObj [("kind", toJson "$bool"), ("value", toJson true),
+      ("span", nodeSpan)]
+    let segments ← arr j "segments"
+    let mut trailing := false
+    for i in [:segments.size] do
+      let segment := segments[i]!
+      let segmentType ← str segment "type"
+      let si ← span map segment info
+      let value ← field segment "value"
+      let lookup ← if segmentType == "binary" then do
+        fields segment ["type", "value", "size", "unit", "span"]
+        unless i + 1 == segments.size do throw "binary/bitstring capture must be trailing"
+        let unit ← (← field segment "unit").getNat?
+        unless 1 ≤ unit && unit ≤ 256 do throw "bitstring segment unit must be in 1..256"
+        let unit : TSyntax `term := ⟨Syntax.mkNumLit (toString unit)⟩
+        let size ← term map si false (← field segment "size")
+        let extract := mkIdent ``Lynx.Term.Bitstring.matchTail
+        trailing := true
+        let lookup := Unhygienic.run `($extract $remaining $size $unit)
+        modify fun s => { s with patternExtractions := s.patternExtractions.push (lookup, accepted) }
+        pure (remaining, value)
+      else do
+        let little ← match ← str segment "endian" with
+          | "big" => pure (mkIdent ``Bool.false)
+          | "little" => pure (mkIdent ``Bool.true)
+          | other => throw s!"unsupported bitstring endianness '{other}'"
+        let next ← fresh
+        let rest ← term map si false next
+        let extract ← if segmentType == "integer" then do
+          fields segment ["type", "value", "size", "unit", "signed", "endian", "span"]
+          let size ← term map si false (← field segment "size")
+          let unit ← (← field segment "unit").getNat?
+          unless 1 ≤ unit && unit ≤ 256 do throw "integer segment unit must be in 1..256"
+          let unit : TSyntax `term := ⟨Syntax.mkNumLit (toString unit)⟩
+          let signed ← if ← (← field segment "signed").getBool? then pure (mkIdent ``Bool.true)
+            else pure (mkIdent ``Bool.false)
+          let extract := mkIdent ``Lynx.Term.Bitstring.matchInteger
+          pure (Unhygienic.run `($extract $remaining $size $unit $signed $little))
+        else if segmentType == "float" then do
+          fields segment ["type", "value", "size", "endian", "span"]
+          let width ← (← field segment "size").getNat?
+          unless width == 64 do throw "only binary64 float matching is implemented"
+          let width : TSyntax `term := ⟨Syntax.mkNumLit (toString width)⟩
+          let extract := mkIdent ``Lynx.Term.Bitstring.matchFloat
+          pure (Unhygienic.run `($extract $remaining $width $little))
+        else throw s!"unsupported bitstring pattern segment '{segmentType}'"
+        remaining := rest
+        let pair := Json.mkObj [("kind", toJson "$some_pair"), ("first", value),
+          ("second", next), ("span", nodeSpan)]
+        pure (extract, pair)
+      modify fun s => { s with patternExtractions := s.patternExtractions.push lookup }
+    unless trailing do
+      let finish := mkIdent ``Lynx.Term.Bitstring.matchEnd
+      let lookup := Unhygienic.run `($finish $remaining)
+      modify fun s => { s with patternExtractions := s.patternExtractions.push (lookup, accepted) }
+    pure input
   | "bitstring" => do
     fields j ["kind", "bytes", "last_bits", "span"]
-    if pattern then throw "bitstring patterns are not supported"
     let bytes ← (← arr j "bytes").mapM fun byte => do
       let value ← byte.getNat?
       unless value < 256 do throw "bitstring bytes must be less than 256"
       pure (⟨Syntax.mkNumLit (toString value)⟩ : TSyntax `term)
-    let last ← (← field j "last_bits").getNat?
-    unless last < 8 do throw "bitstring last_bits must be less than 8"
-    unless !bytes.isEmpty || last == 0 do throw "empty bitstrings must have last_bits zero"
-    let last : TSyntax `term := ⟨Syntax.mkNumLit (toString last)⟩
+    let lastBits ← (← field j "last_bits").getNat?
+    unless lastBits < 8 do throw "bitstring last_bits must be less than 8"
+    unless !bytes.isEmpty || lastBits == 0 do throw "empty bitstrings must have last_bits zero"
     let ctor := mkIdent ``Lynx.Term.bitstring
-    pure (Unhygienic.run `($ctor ⟨#[$bytes,*]⟩ $last (by decide)))
+    if pattern && lastBits == 0 then
+      return withSpan info.info (Unhygienic.run `($ctor ⟨⟨[$bytes,*]⟩⟩ 0 _))
+    let last : TSyntax `term := ⟨Syntax.mkNumLit (toString lastBits)⟩
+    let literal := Unhygienic.run `($ctor ⟨#[$bytes,*]⟩ $last (by decide))
+    if pattern then
+      let index := (← get).nextBitstringPattern
+      modify fun s => { s with nextBitstringPattern := index + 1 }
+      let nodeSpan ← field j "span"
+      let binder := Json.mkObj [("kind", toJson "var"), ("span", nodeSpan),
+        ("name", Json.mkObj [("bitstring", toJson index)])]
+      let input ← term map info true binder
+      let compare := mkIdent ``Lynx.Term.exactCompare
+      let lookup := Unhygienic.run `(decide ($compare $input $literal = Ordering.eq))
+      let expected := Json.mkObj [("kind", toJson "$bool"), ("value", toJson true), ("span", nodeSpan)]
+      modify fun s => { s with patternExtractions := s.patternExtractions.push (lookup, expected) }
+      return input
+    pure literal
   | "bitstring_constructor" => do
     fields j ["kind", "segments", "span"]
     if pattern then throw "bitstring construction is not a pattern"
@@ -637,7 +739,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       let getMapKeys := mkIdent ``Lynx.Term.getMapKeys
       let lookup := withSpan info.info (Unhygienic.run `($getMapKeys [$keys,*] $input))
       let values := Json.mkObj [("kind", toJson "$list"), ("elements", toJson values), ("span", nodeSpan)]
-      modify fun s => { s with mapPatterns := s.mapPatterns.push (lookup, values) }
+      modify fun s => { s with patternExtractions := s.patternExtractions.push (lookup, values) }
       return input
     let entries ← (← arr j "entries").mapM fun entry => do
       fields entry ["key", "value", "span"]
@@ -805,7 +907,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
           payloadType := Unhygienic.run `($termType × $payloadType)
       payloadTypes := payloadTypes.push payloadType
       payloads := payloads.push payload
-      let (pat, maps) ← withMapPatterns (term map ci true (← field clause "pattern"))
+      let (pat, maps) ← withExtractions (term map ci true (← field clause "pattern"))
       patterns := patterns.push pat
       lookups := lookups.push maps
       guards := guards.push (← term map ci false (← field clause "guard"))
@@ -849,7 +951,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
         match ($toExcept $guard $env:ident $purity) with
         | $exceptOk ($atomId "true") => $accepted
         | _ => $fallback ()))
-      let branch ← mapMatches lookups[i]! (term map info true) branch (Unhygienic.run `($fallback ()))
+      let branch ← patternMatches lookups[i]! (term map info true) branch (Unhygienic.run `($fallback ()))
       let rest := select
       let catchAll ← catchAllPattern (← field clauses[i]! "pattern")
       let matched := if catchAll then Unhygienic.run `(match $message:ident with | $pat => $branch)
@@ -883,7 +985,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       fields c (if (field c "guard").isOk then ["patterns", "guard", "body", "span"]
         else ["patterns", "body", "span"])
       let ci ← span map c info
-      let (pats, maps) ← withMapPatterns ((← arr c "patterns").mapM (term map ci true))
+      let (pats, maps) ← withExtractions ((← arr c "patterns").mapM (term map ci true))
       lookups := lookups.push maps
       unless pats.size == exprs.size do throw "match case must have one pattern per expression"
       let pats := if pats.isEmpty then #[unit] else pats
@@ -935,7 +1037,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
                 | $atom "true" => $body
                 | _ => $fallback ()) (fun _ => $fallback ())))
               else pure body
-            let branch ← mapMatches lookups[i]! (term map ci true) branch (Unhygienic.run `($fallback ()))
+            let branch ← patternMatches lookups[i]! (term map ci true) branch (Unhygienic.run `($fallback ()))
             let catchAll ← (← arr c "patterns").allM fun pat => do return ← catchAllPattern pat
             let matched := if catchAll then Unhygienic.run `(
               match $[$exprs:term],* with | $pats,* => $branch)
