@@ -555,22 +555,35 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     pure (Unhygienic.run `($ctor ⟨#[$bytes,*]⟩ $last (by decide)))
   | "bitstring_constructor" => do
     fields j ["kind", "segments", "span"]
-    if pattern then throw "binary construction is not a pattern"
+    if pattern then throw "bitstring construction is not a pattern"
     let segments ← (← arr j "segments").mapM fun segment => do
-      fields segment ["value", "size", "unit", "signed", "endian", "span"]
+      let segmentType ← str segment "type"
+      match segmentType with
+      | "integer" => fields segment ["type", "value", "size", "unit", "signed", "endian", "span"]
+      | "float" => fields segment ["type", "value", "size", "endian", "span"]
+      | other => throw s!"unsupported bitstring segment type '{other}'"
       let si ← span map segment info
       let value ← term map si false (← field segment "value")
-      let size ← term map si false (← field segment "size")
-      let unit ← (← field segment "unit").getNat?
-      unless 1 ≤ unit && unit ≤ 256 do throw "integer segment unit must be in 1..256"
-      let _ ← (← field segment "signed").getBool?
       let little ← match ← str segment "endian" with
         | "big" => pure (mkIdent ``Bool.false)
         | "little" => pure (mkIdent ``Bool.true)
-        | other => throw s!"unsupported integer segment endianness '{other}'"
-      let unit : TSyntax `term := ⟨Syntax.mkNumLit (toString unit)⟩
-      let build := mkIdent ``Lynx.Term.Bitstring.integerSegment
-      pure (withSpan si.info (Unhygienic.run `($build $value $size $unit $little)))
+        | other => throw s!"unsupported bitstring segment endianness '{other}'"
+      let body ← if segmentType == "float" then do
+        let width ← (← field segment "size").getNat?
+        unless width == 16 || width == 32 || width == 64 do
+          throw "float segment size must be 16, 32, or 64"
+        let width : TSyntax `term := ⟨Syntax.mkNumLit (toString width)⟩
+        let build := mkIdent ``Lynx.Term.Bitstring.floatSegment
+        pure (Unhygienic.run `($build $value $width $little))
+      else do
+        let size ← term map si false (← field segment "size")
+        let unit ← (← field segment "unit").getNat?
+        unless 1 ≤ unit && unit ≤ 256 do throw "integer segment unit must be in 1..256"
+        let _ ← (← field segment "signed").getBool?
+        let unit : TSyntax `term := ⟨Syntax.mkNumLit (toString unit)⟩
+        let build := mkIdent ``Lynx.Term.Bitstring.integerSegment
+        pure (Unhygienic.run `($build $value $size $unit $little))
+      pure (withSpan si.info body)
     let empty := Unhygienic.run `(Lynx.Term.bitstring ⟨#[]⟩ 0 (by decide))
     let ok := mkIdent ``Lynx.Result.ok
     let append := mkIdent ``Lynx.Term.Bitstring.append

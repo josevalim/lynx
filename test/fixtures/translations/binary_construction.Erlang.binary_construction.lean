@@ -58,6 +58,45 @@ set_option «match».ignoreUnusedAlts true
   def «integer_invalid_size/1» (_0 : Lynx.Term) : Lynx.Result :=
     Lynx.Term.Bitstring.integerSegment _0 (Lynx.Term.integer (-1)) 1 Bool.false
 
+#lynx_pure
+  def «float_default/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.floatSegment _0 64 Bool.false
+
+#lynx_pure
+  def «float_big/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.floatSegment _0 64 Bool.false
+
+#lynx_pure
+  def «float_little/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.floatSegment _0 64 Bool.true
+
+#lynx_pure
+  def «float_unit/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.floatSegment _0 64 Bool.false
+
+#lynx_pure
+  def «float_mixed/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Result.bind
+      (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer 1) (Lynx.Term.integer 3) 1 Bool.false)
+      (fun lynxBinarySegment✝ =>
+        Lynx.Result.bind
+          (Lynx.Result.bind (Lynx.Term.Bitstring.floatSegment _0 64 Bool.true)
+            (fun lynxBinarySegment✝ =>
+              Lynx.Result.bind
+                (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer (-1)) (Lynx.Term.integer 5) 1
+                  Bool.false)
+                (fun lynxBinaryTail✝ =>
+                  Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
+          (fun lynxBinaryTail✝ => Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝))
+
+#lynx_pure
+  def «float16/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.floatSegment _0 16 Bool.false
+
+#lynx_pure
+  def «float32/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.floatSegment _0 32 Bool.false
+
 end
 
 end Erlang.binary_construction

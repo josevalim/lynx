@@ -196,6 +196,77 @@ theorem units_and_cross_byte_concatenation :
         .ok (.bitstring ⟨#[0xa2, 0x46]⟩ 7 (by decide)) := by
   repeat first | apply And.intro | rfl
 
+-- Expected bytes checked against OTP 29. Signed zero and subnormals are encodings,
+-- so these comparisons deliberately avoid numeric float equality.
+private def floatBytes (value : Term.FiniteFloat) (big little : List UInt8) : Prop :=
+  Term.Bitstring.floatSegment (.float value) 64 false =
+    .ok (.bitstring ⟨big.toArray⟩ 0 (by intro _; rfl)) ∧
+  Term.Bitstring.floatSegment (.float value) 64 true =
+    .ok (.bitstring ⟨little.toArray⟩ 0 (by intro _; rfl))
+
+set_option maxRecDepth 2048 in
+theorem float64_signed_zeros :
+    floatBytes ⟨false, 0, 0⟩ [0, 0, 0, 0, 0, 0, 0, 0] [0, 0, 0, 0, 0, 0, 0, 0] ∧
+    floatBytes ⟨true, 0, 0⟩ [128, 0, 0, 0, 0, 0, 0, 0] [0, 0, 0, 0, 0, 0, 0, 128] := by
+  repeat first | apply And.intro | rfl
+
+set_option maxRecDepth 2048 in
+theorem float64_normal_values :
+    floatBytes ⟨false, 1023, 0⟩ [0x3f, 0xf0, 0, 0, 0, 0, 0, 0]
+      [0, 0, 0, 0, 0, 0, 0xf0, 0x3f] ∧
+    floatBytes ⟨true, 1023, 2 ^ 51⟩ [0xbf, 0xf8, 0, 0, 0, 0, 0, 0]
+      [0, 0, 0, 0, 0, 0, 0xf8, 0xbf] := by
+  repeat first | apply And.intro | rfl
+
+set_option maxRecDepth 2048 in
+theorem float64_extremes :
+    floatBytes ⟨false, 0, 1⟩ [0, 0, 0, 0, 0, 0, 0, 1] [1, 0, 0, 0, 0, 0, 0, 0] ∧
+    floatBytes ⟨false, 1, 0⟩ [0, 0x10, 0, 0, 0, 0, 0, 0] [0, 0, 0, 0, 0, 0, 0x10, 0] ∧
+    floatBytes ⟨false, 2046, 2 ^ 52 - 1⟩
+      [0x7f, 0xef, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+      [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xef, 0x7f] := by
+  repeat first | apply And.intro | rfl
+
+set_option exponentiation.threshold 1024 in
+set_option maxRecDepth 4096 in
+theorem float64_integer_conversion :
+    Term.Bitstring.floatSegment (.integer 1) 64 false =
+      .ok (.bitstring ⟨#[0x3f, 0xf0, 0, 0, 0, 0, 0, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (-1)) 64 true =
+      .ok (.bitstring ⟨#[0, 0, 0, 0, 0, 0, 0xf0, 0xbf]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (2 ^ 53 + 1)) 64 false =
+      .ok (.bitstring ⟨#[0x43, 0x40, 0, 0, 0, 0, 0, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (2 ^ 53 + 3)) 64 false =
+      .ok (.bitstring ⟨#[0x43, 0x40, 0, 0, 0, 0, 0, 2]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (-(2 ^ 53 + 1))) 64 false =
+      .ok (.bitstring ⟨#[0xc3, 0x40, 0, 0, 0, 0, 0, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (2 ^ 1024)) 64 false =
+      .error (.error (.atom "badarg")) := by
+  repeat first | apply And.intro | rfl
+
+theorem float64_size (value : Term.FiniteFloat) (little : Bool) :
+    ∃ result, Term.Bitstring.floatSegment (.float value) 64 little = .ok result ∧
+      size result = 64 := by
+  let encoded : Nat := (if value.negative then 2 ^ 63 else 0) +
+    value.exponent.val * 2 ^ 52 + value.fraction.val
+  refine ⟨Term.Bitstring.ofBits (Term.Bitstring.integerBits (Int.ofNat encoded) 64 little), ?_, ?_⟩
+  · rfl
+  · rw [ofBits_preserves_size]
+    simp [Term.Bitstring.integerBits]
+
+set_option maxRecDepth 2048 in
+theorem float64_unaligned_concatenation :
+    ((Term.Bitstring.floatSegment (.float ⟨false, 1023, 0⟩) 64 true).bind fun encoded =>
+      (Term.Bitstring.append (.bitstring ⟨#[0x20]⟩ 3 (by decide)) encoded).bind fun joined =>
+        Term.Bitstring.append joined (.bitstring ⟨#[0xf8]⟩ 5 (by decide))) =
+      .ok (.bitstring ⟨#[32, 0, 0, 0, 0, 0, 30, 7, 255]⟩ 0 (by decide)) := by
+  rfl
+
+theorem unimplemented_float_widths (value : Term) (little : Bool) :
+    Term.Bitstring.floatSegment value 16 little = .error (.error (.atom "badarg")) ∧
+    Term.Bitstring.floatSegment value 32 little = .error (.error (.atom "badarg")) := by
+  constructor <;> rfl
+
 end LynxTest.Term.Bitstring.Construction
 
 run_cmd do

@@ -218,6 +218,7 @@ defmodule Lynx.CoreToLeanjTest do
                       "span" => [7, 3],
                       "segments" => [
                         %{
+                          "type" => "integer",
                           "value" => %{"kind" => "var", "name" => 0},
                           "size" => %{"kind" => "integer", "value" => 5},
                           "unit" => 3,
@@ -233,6 +234,47 @@ defmodule Lynx.CoreToLeanjTest do
               }, []} = translate(definitions([definition(:entry, body)]))
 
       assert first == second
+    end
+  end
+
+  test "translates float segment widths, units, and byte order" do
+    anno = [{:file, ~c"example.erl"}, {7, 3}]
+
+    for {size, unit, width} <- [{16, 1, 16}, {32, 1, 32}, {64, 1, 64}, {8, 8, 64}],
+        endian <- [:big, :little] do
+      segment =
+        :cerl.ann_c_bitstr(
+          anno,
+          :cerl.c_var(0),
+          :cerl.c_int(size),
+          :cerl.c_int(unit),
+          :cerl.c_atom(:float),
+          :cerl.abstract([:unsigned, endian])
+        )
+
+      body = :cerl.ann_c_binary(anno, [segment])
+      endian = Atom.to_string(endian)
+
+      assert {:ok,
+              %{
+                {:entry, 1} => %{
+                  pure: true,
+                  translation: %{
+                    "body" => %{
+                      "kind" => "bitstring_constructor",
+                      "segments" => [
+                        %{
+                          "type" => "float",
+                          "value" => %{"kind" => "var", "name" => 0},
+                          "size" => ^width,
+                          "endian" => ^endian,
+                          "span" => [7, 3]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }, []} = translate(definitions([definition(:entry, body)]))
     end
   end
 

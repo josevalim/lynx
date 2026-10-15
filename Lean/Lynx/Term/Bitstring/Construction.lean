@@ -39,6 +39,23 @@ nonnegative integers; the Core unit is a compile-time value in `1..256`. -/
     else .error (.error (.atom "badarg"))
   | _, _ => .error (.error (.atom "badarg"))
 
+/-- Encode binary64 fields without rounding. Integer operands are first rounded
+into binary64, failing with badarg if conversion overflows. Binary16 and
+binary32 are not modeled yet and currently return badarg. -/
+#lynx_pure @[expose] public def floatSegment (value : Term) (width : Nat) (little : Bool) : Result :=
+  if width != 64 then .error (.error (.atom "badarg"))
+  else
+    let converted := match value with
+      | .float value => some value
+      | .integer value => Term.FiniteFloat.ofInt value
+      | _ => none
+    match converted with
+    | some value =>
+      let encoded : Nat := (if value.negative then 2 ^ 63 else 0) +
+        value.exponent.val * 2 ^ 52 + value.fraction.val
+      integerSegment (.integer (Int.ofNat encoded)) (.integer 64) 1 little
+    | none => .error (.error (.atom "badarg"))
+
 /-- Concatenate meaningful bits, including segments that cross byte boundaries. -/
 #lynx_pure @[expose] public def append (left right : Term) : Result :=
   match left, right with

@@ -561,8 +561,13 @@ binary_segment(#c_bitstr{unit = #c_literal{val = Unit}, type = #c_literal{val = 
         flags = #c_literal{val = Flags}} = Core, State0)
         when is_integer(Unit), Unit >= 1, Unit =< 256, is_list(Flags) ->
     binary_integer_segment(lists:sort(Flags), Core, State0);
+binary_segment(#c_bitstr{size = #c_literal{val = Size}, unit = #c_literal{val = Unit},
+        type = #c_literal{val = float}, flags = #c_literal{val = Flags}} = Core, State0)
+        when is_integer(Size), is_integer(Unit), Unit >= 1, Unit =< 256,
+             (Size * Unit =:= 16 orelse Size * Unit =:= 32 orelse Size * Unit =:= 64), is_list(Flags) ->
+    binary_float_segment(lists:sort(Flags), Core, State0);
 binary_segment(Core, _State) ->
-    core_error(Core, ~"unsupported binary segment (expected an integer segment with unit 1..256)").
+    core_error(Core, ~"unsupported binary segment (expected integer or 16/32/64-bit float segment)").
 
 binary_integer_segment([Endian, Signed], #c_bitstr{anno = Anno, val = Value, size = Size,
         unit = #c_literal{val = Unit}}, State0)
@@ -570,11 +575,22 @@ binary_integer_segment([Endian, Signed], #c_bitstr{anno = Anno, val = Value, siz
              (Signed =:= signed orelse Signed =:= unsigned) ->
     {TranslatedValue, State1} = value(Value, State0),
     {TranslatedSize, State2} = value(Size, State1),
-    {#{~"span" => span(Anno), ~"value" => TranslatedValue, ~"size" => TranslatedSize,
+    {#{~"type" => ~"integer", ~"span" => span(Anno), ~"value" => TranslatedValue, ~"size" => TranslatedSize,
        ~"unit" => Unit, ~"signed" => Signed =:= signed,
        ~"endian" => atom_to_binary(Endian, utf8)}, State2};
 binary_integer_segment(_Flags, Core, _State) ->
     core_error(Core, ~"unsupported binary segment flags (expected signed/unsigned and big/little)").
+
+binary_float_segment([Endian, Signed], #c_bitstr{anno = Anno, val = Value,
+        size = #c_literal{val = Size}, unit = #c_literal{val = Unit}}, State0)
+        when (Endian =:= big orelse Endian =:= little),
+             (Signed =:= signed orelse Signed =:= unsigned) ->
+    {TranslatedValue, State1} = value(Value, State0),
+    {#{~"type" => ~"float", ~"size" => Size * Unit,
+       ~"span" => span(Anno), ~"value" => TranslatedValue,
+       ~"endian" => atom_to_binary(Endian, utf8)}, State1};
+binary_float_segment(_Flags, Core, _State) ->
+    core_error(Core, ~"unsupported float segment flags (expected big/little)").
 
 local_function_value(Lifted, Captures, Arity, Anno, State0) ->
     Key = {State0#state.module, Lifted},

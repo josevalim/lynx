@@ -29,8 +29,13 @@ private def ofModel (value : Float.Model) : Option FiniteFloat :=
   else none
 
 /-- Convert with binary64 rounding, failing if the integer overflows. -/
-public def ofInt (value : Int) : Option FiniteFloat :=
-  ofModel (Float.Model.ofInt value)
+@[expose] public def ofInt (value : Int) : Option FiniteFloat :=
+  let bits := (Float.Model.ofInt value).toBits.toNat
+  let exponent := bits / 2 ^ 52 % 2048
+  if h : exponent < 2047 then
+    some ⟨bits / 2 ^ 63 != 0, ⟨exponent, h⟩,
+      ⟨bits % 2 ^ 52, Nat.mod_lt _ (by decide)⟩⟩
+  else none
 
 /-- IEEE binary64 addition, failing on any non-finite result. -/
 public def add (left right : FiniteFloat) : Option FiniteFloat :=
