@@ -40,6 +40,21 @@ defmodule FloatProofsTest do
     ratio_is_reduced(ratio) and ratio_is_exact(number, ratio)
   end
 
+  def rounding_preserves_encoding(number, precision) do
+    encoded = <<number::float>>
+
+    encoded === <<Float.floor(number, precision)::float>> and
+      encoded === <<Float.ceil(number, precision)::float>> and
+      encoded === <<Float.round(number, precision)::float>>
+  end
+
+  # At this binary64 exponent the spacing between adjacent values is at least
+  # one, so every represented value is already an integer.
+  def has_integral_spacing?(number) do
+    <<_sign::1, exponent::11, _fraction::52>> = <<number::float>>
+    exponent >= 1075
+  end
+
   # The private reducer loops on zero. Keep it partial; the law proves the
   # public function terminates, including both signed zeros.
   @ratio_fixpoint ~LEAN"""
@@ -402,6 +417,61 @@ defmodule FloatProofsTest do
         Erlang.erlang.«is_float/1»] at requires
       rename_i value
       simpa [«ratio_exact_reduced_and_total:ensures/1»] using contract_true value
+      """
+  end
+
+  laws "Float decimal rounding" do
+    # Successful-return proofs must establish these error paths are unreachable.
+    cutoff &Float.invalid_precision_message/1
+    cutoff &ArgumentError.exception/1
+
+    law decimal_rounding_preserves_exact_integers(number, precision),
+      requires:
+        is_float(number) and is_integer(precision) and precision >= 1 and precision <= 15 and
+          has_integral_spacing?(number),
+      expects: rounding_preserves_encoding(number, precision),
+      proof: ~LEAN"""
+      have spacing (value : Lynx.Term.FiniteFloat) :
+          «has_integral_spacing?/1» (.float value) = .ok (.atom "true") ↔
+            1075 ≤ value.exponent.val := by
+        obtain ⟨encoded, built, sign, exponent, fraction⟩ := Lynx.Term.Bitstring.floatSegment_fields value
+        have empty : Lynx.Term.Bitstring.matchEnd (Lynx.Term.Bitstring.ofBits []) = true := rfl
+        by_cases large : 1075 ≤ value.exponent.val
+        · have bound : (1075 : Int) ≤ value.exponent.val := by omega
+          simp [«has_integral_spacing?/1», built, sign, exponent, fraction, empty, bound, large]
+        · have bound : ¬ (1075 : Int) ≤ value.exponent.val := by omega
+          simp [«has_integral_spacing?/1», built, sign, exponent, fraction, empty, bound, large]
+      have fixed (value : Lynx.Term.FiniteFloat) (p : Int)
+          (lower : 1 ≤ p) (upper : p ≤ 15) (large : 1075 ≤ value.exponent.val) :
+          Elixir.Float.«floor/2» (.float value) (.integer p) = .ok (.float value) ∧
+          Elixir.Float.«ceil/2» (.float value) (.integer p) = .ok (.float value) ∧
+          Elixir.Float.«round/2» (.float value) (.integer p) = .ok (.float value) := by
+        have nonzero : value.toRat ≠ 0 := by
+          intro zero
+          have fields := (Lynx.Term.FiniteFloat.toRat_eq_zero value).mp zero
+          omega
+        have pNonzero : p ≠ 0 := by omega
+        have nonnegative : 0 ≤ p := by omega
+        have notTiny : ¬ (value.exponent.val : Int) ≤ 971 := by omega
+        have exact : (1075 : Int) - p ≤ value.exponent.val := by omega
+        obtain ⟨encoded, built, sign, exponent, fraction⟩ := Lynx.Term.Bitstring.floatSegment_fields value
+        have empty : Lynx.Term.Bitstring.matchEnd (Lynx.Term.Bitstring.ofBits []) = true := rfl
+        simp [Elixir.Float.«floor/2», Elixir.Float.«ceil/2», Elixir.Float.«round/2», Elixir.Float.«round/3»,
+          Erlang.erlang.«is_float/1», Erlang.erlang.«is_integer/1»,
+          Erlang.erlang.«=:=/2», Erlang.erlang.«==/2», nonzero, pNonzero, lower, upper, nonnegative,
+          built, sign, exponent, fraction, empty, notTiny, exact]
+      cases number <;> simp [«decimal_rounding_preserves_exact_integers:requires/2»,
+        Erlang.erlang.«is_float/1»] at requires
+      rename_i value
+      cases precision <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      rename_i p
+      have bounds : 1 ≤ p ∧ p ≤ 15 ∧ 1075 ≤ value.exponent.val := by
+        by_cases lower : 1 ≤ p <;> by_cases upper : p ≤ 15 <;>
+          simp [lower, upper, spacing] at requires <;> omega
+      obtain ⟨floored, ceiled, rounded⟩ := fixed value p bounds.1 bounds.2.1 bounds.2.2
+      obtain ⟨encoded, built, _⟩ := Lynx.Term.Bitstring.floatSegment_fields value
+      simp [«decimal_rounding_preserves_exact_integers:ensures/2», «rounding_preserves_encoding/2»,
+        floored, ceiled, rounded, built, Erlang.erlang.«=:=/2»]
       """
   end
 

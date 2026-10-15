@@ -116,6 +116,11 @@ defmodule Lynx.Laws do
   contents. Purity may be proved separately when needed. Targets must be
   translated by the laws being verified; annotations do not add translation roots.
 
+  Pass `cutoffs: [{module, function, arity}]` to leave selected functions
+  untranslated. Calls to these functions evaluate to `Lynx.Result.exhausted`;
+  successful-return proofs must show they are unreachable. No return values or
+  exceptions are assumed for a cutoff.
+
   Raises on translation failures, including modules without laws or unsupported
   code, and on failures to run Lean or read its response.
   """

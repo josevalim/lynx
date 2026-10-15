@@ -19,6 +19,51 @@ defmodule Lynx.CaseTest do
     on_exit(fn -> ExUnit.configure(old_opts) end)
   end
 
+  test "cutoffs allow unreachable dependencies but cannot prove a reached call returns" do
+    defmodule Cutoffs do
+      use ExUnit.Case, register: false
+      use Lynx.Case
+
+      def choose(true), do: true
+      def choose(value), do: unavailable(value)
+      def unavailable(value), do: :erlang.nif_error(value)
+
+      laws "unreached" do
+        cutoff &__MODULE__.unavailable/1
+
+        law returns(value),
+          requires: value,
+          expects: choose(value),
+          proof: ~LEAN"""
+          have actual : value = .atom "true" := by simpa [«returns:requires/1»] using requires
+          subst value
+          simp [«returns:ensures/1», «choose/1»]
+          """
+      end
+
+      laws "reached" do
+        cutoff &__MODULE__.unavailable/1
+
+        law cannot_claim_return,
+          expects: choose(false),
+          proof: ~LEAN"""
+          simp [«cannot_claim_return:ensures/0», «choose/1», «unavailable/1»]
+          """
+      end
+    end
+
+    output =
+      capture_io(fn ->
+        send(self(), {:cutoff_results, ExUnit.run([Cutoffs])})
+      end)
+
+    assert_receive {:cutoff_results, results}
+    assert results == %{failures: 1, skipped: 0, total: 2, excluded: 0}, output
+    assert output =~ "laws reached"
+    assert output =~ "proof for law cannot_claim_return() failed"
+    refute output =~ "CompileError"
+  end
+
   test "reports translation failures" do
     defmodule TranslationFailure do
       use ExUnit.Case, register: false

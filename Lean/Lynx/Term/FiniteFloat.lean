@@ -67,9 +67,49 @@ Positive and negative zero have the same value but remain distinct structures. -
 @[expose] public def toRat (value : FiniteFloat) : Rat :=
   if value.negative then -value.magnitude else value.magnitude
 
-@[simp] theorem toRat_zero (negative : Bool) :
+@[simp] public theorem toRat_zero (negative : Bool) :
     toRat ⟨negative, 0, 0⟩ = 0 := by
   cases negative <;> rfl
+
+public theorem toRat_eq_zero (value : FiniteFloat) :
+    value.toRat = 0 ↔ value.exponent.val = 0 ∧ value.fraction.val = 0 := by
+  have magnitude_zero : value.magnitude = 0 ↔ value.exponent.val = 0 ∧ value.fraction.val = 0 := by
+    by_cases exp0 : value.exponent.val = 0
+    · by_cases frac0 : value.fraction.val = 0
+      · simp [Lynx.Term.FiniteFloat.magnitude, exp0, frac0]
+      · have nonzero : (value.fraction.val : Rat) * (2 : Rat) ^ (-1074 : Int) ≠ 0 :=
+          Rat.ne_of_gt (Rat.mul_pos (Rat.natCast_pos.mpr (by omega)) (Rat.zpow_pos (by decide)))
+        simp only [Lynx.Term.FiniteFloat.magnitude, if_pos exp0, if_neg frac0]
+        exact ⟨fun h => False.elim (nonzero h), fun h => False.elim (frac0 h.2)⟩
+    · have nonzero : ((2 ^ 52 + value.fraction.val : Nat) : Rat) *
+          (2 : Rat) ^ ((value.exponent.val : Int) - 1075) ≠ 0 :=
+        Rat.ne_of_gt (Rat.mul_pos (Rat.natCast_pos.mpr (by omega)) (Rat.zpow_pos (by decide)))
+      simp only [Lynx.Term.FiniteFloat.magnitude, if_neg exp0]
+      exact ⟨fun h => False.elim (nonzero h), fun h => False.elim (exp0 h.1)⟩
+  unfold Lynx.Term.FiniteFloat.toRat
+  cases hn : value.negative
+  · simpa only [hn, Bool.false_eq_true, ↓reduceIte] using magnitude_zero
+  · simp only [↓reduceIte]
+    have neg_zero : -value.magnitude = 0 ↔ value.magnitude = 0 := by
+      constructor
+      · intro h
+        have := congrArg Neg.neg h
+        simpa only [Rat.neg_neg, Rat.neg_zero] using this
+      · intro h; rw [h, Rat.neg_zero]
+    exact neg_zero.trans magnitude_zero
+
+/-- A binary64 value with no fractional bit positions represents an integer. -/
+public theorem toRat_integral_of_exponent (value : FiniteFloat) (large : 1075 ≤ value.exponent.val) :
+    ∃ n : Int, value.toRat = (n : Rat) := by
+  let n : Nat := (2 ^ 52 + value.fraction.val) * 2 ^ (value.exponent.val - 1075)
+  have exp0 : value.exponent.val ≠ 0 := by omega
+  have exponent : (value.exponent.val : Int) - 1075 = ((value.exponent.val - 1075 : Nat) : Int) := by omega
+  have magnitude : value.magnitude = (n : Rat) := by
+    simp [Lynx.Term.FiniteFloat.magnitude, exp0, exponent, n, Rat.natCast_mul,
+      Rat.natCast_pow, Rat.zpow_natCast]
+  cases sign : value.negative
+  · exact ⟨n, by simp [Lynx.Term.FiniteFloat.toRat, sign, magnitude, Rat.intCast_natCast]⟩
+  · exact ⟨-(n : Int), by simp [Lynx.Term.FiniteFloat.toRat, sign, magnitude, Rat.intCast_natCast, Rat.intCast_neg]⟩
 
 end FiniteFloat
 end Lynx.Term

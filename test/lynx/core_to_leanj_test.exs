@@ -1,6 +1,27 @@
 defmodule Lynx.CoreToLeanjTest do
   use ExUnit.Case, async: true
 
+  test "cutoffs retain the signature without traversing the original body" do
+    body = :cerl.c_primop(:cerl.c_atom(:unsupported_body), [])
+    defs = definitions([definition(:entry, body)])
+    {:function, core} = defs[{:entry, 1}]
+    defs = Map.put(defs, {:entry, 1}, {:cutoff, core})
+
+    assert {:ok,
+            %{
+              {:entry, 1} => %{
+                pure: false,
+                local_calls: [],
+                translation: %{
+                  "kind" => "def",
+                  "name" => "entry",
+                  "params" => [_],
+                  "body" => %{"kind" => "cutoff"}
+                }
+              }
+            }, []} = translate(defs)
+  end
+
   test "passes captures explicitly through direct local recursion" do
     loop = :cerl.c_fname(:loop, 1)
     input = :cerl.c_var(:input)

@@ -1,4 +1,5 @@
-{"maps":
+{"math": {"floor/1": {"pure": true}, "ceil/1": {"pure": true}},
+ "maps":
  {"update/3": {"pure": true},
   "put/3": {"pure": true},
   "new/0": {"pure": true},

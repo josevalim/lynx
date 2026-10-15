@@ -6,6 +6,7 @@ public import Lynx
 public import Lynx.Modules.Erlang.erlang
 public import Lynx.Modules.Erlang.lists
 public import Lynx.Modules.Erlang.maps
+public import Lynx.Modules.Erlang.math
 
 -- Keep constructor and table adapter signatures part of the API check.
 private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) →
@@ -40,6 +41,10 @@ private theorem floatOrdering (left right : Lynx.Term.FiniteFloat) :
     Lynx.Term.compare (.float left) (.float right) =
       compareOfLessAndEq left.toRat right.toRat :=
   Lynx.Term.compare_floats left right
+
+private theorem floatZeroEncoding (value : Lynx.Term.FiniteFloat) :
+    value.toRat = 0 ↔ value.exponent.val = 0 ∧ value.fraction.val = 0 :=
+  Lynx.Term.FiniteFloat.toRat_eq_zero value
 
 -- Allocation equations remain usable through ordinary public imports.
 private theorem makeRefEquation (env : Lynx.Environment) :
@@ -234,6 +239,8 @@ private def expectedDeclarations : Array String := #[
   "Erlang.maps.«new/0»",
   "Erlang.maps.«put/3»",
   "Erlang.maps.«update/3»",
+  "Erlang.math.«ceil/1»",
+  "Erlang.math.«floor/1»",
   "Lynx.Environment",
   "Lynx.Environment.currentPid",
   "Lynx.Environment.currentProcess",

@@ -2,6 +2,7 @@ defmodule Lynx.Translation do
   @moduledoc false
 
   defstruct termination_suffixes: %{},
+            cutoffs: MapSet.new(),
             modules: %{},
             funs: %{},
             external_calls: %{},
@@ -25,7 +26,10 @@ defmodule Lynx.Translation do
   defp lean_bif(_, _, _), do: :error
 
   def new(opts \\ []) do
-    %__MODULE__{termination_suffixes: Keyword.get(opts, :termination_suffixes, %{})}
+    %__MODULE__{
+      termination_suffixes: Keyword.get(opts, :termination_suffixes, %{}),
+      cutoffs: MapSet.new(Keyword.get(opts, :cutoffs, []))
+    }
   end
 
   @doc "Adds a BEAM binary or {file, Core Erlang module} as source to avoid disk lookup."
@@ -77,8 +81,21 @@ defmodule Lynx.Translation do
       validate_function!(module, name, function, arity, fn -> [file: module.file] end)
     end
 
+    definitions =
+      Enum.reduce(translation.cutoffs, module.definitions, fn
+        {^name, function, arity}, definitions ->
+          validate_function!(module, name, function, arity, fn -> [file: module.file] end)
+
+          Map.update!(definitions, {function, arity}, fn
+            {:function, core} -> {:cutoff, core}
+          end)
+
+        _, definitions ->
+          definitions
+      end)
+
     context = {%{translation | stack: [name | stack]}, &remote_call/6}
-    %{definitions: definitions, translations: translations} = module
+    %{translations: translations} = module
     %{funs: funs} = translation
 
     case :lynx_core_to_leanj.translate(name, definitions, names, translations, funs, context) do

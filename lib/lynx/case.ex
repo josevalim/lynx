@@ -27,7 +27,7 @@ defmodule Lynx.Case do
   defmacro __using__(_opts) do
     quote do
       Lynx.Case.__register__(__MODULE__)
-      import Lynx.Case, only: [law: 2, laws: 2, termination_suffix: 2]
+      import Lynx.Case, only: [law: 2, laws: 2, termination_suffix: 2, cutoff: 1]
       import Lynx.Lean, only: [sigil_LEAN: 2]
     end
   end
@@ -142,6 +142,42 @@ defmodule Lynx.Case do
   end
 
   @doc """
+  Leaves a function untranslated in this laws group.
+
+      cutoff &Float.invalid_precision_message/1
+
+  The function's body becomes `Lynx.Result.exhausted`, not a return value or an
+  Erlang exception. A successful-return proof must establish that the cutoff
+  is never reached. This supports proofs whose unreachable error paths depend
+  on libraries outside the model; it makes no claim about executing those paths.
+  """
+  defmacro cutoff(target) do
+    mfa =
+      case target do
+        {:&, _, [{:/, _, [{{:., _, [module, name]}, _, []}, arity]}]}
+        when is_atom(name) and is_integer(arity) and arity >= 0 ->
+          module = Macro.expand(module, __CALLER__)
+          if not is_atom(module), do: raise(ArgumentError, "expected a module in cutoff")
+          {module, name, arity}
+
+        _ ->
+          raise ArgumentError, "cutoff expects &Module.function/arity"
+      end
+
+    quote do
+      Lynx.Case.__cutoff__(__MODULE__, unquote(Macro.escape(mfa)))
+    end
+  end
+
+  @doc false
+  def __cutoff__(module, mfa) do
+    case Module.get_attribute(module, :lynx_cutoffs) do
+      nil -> raise ArgumentError, "cutoff must be defined inside a laws group"
+      cutoffs -> Module.put_attribute(module, :lynx_cutoffs, MapSet.put(cutoffs, mfa))
+    end
+  end
+
+  @doc """
   Registers a group of laws as one ExUnit test.
 
   The test translates the laws and their callees, verifies their proofs,
@@ -170,13 +206,14 @@ defmodule Lynx.Case do
             __MODULE__,
             unquote(name),
             unquote(group_laws),
-            unquote(Macro.escape(suffixes))
+            unquote(Macro.escape(suffixes)),
+            unquote(Macro.escape(cutoffs))
           )
         end
       end
 
     quote do
-      {name, group_laws, suffixes} =
+      {name, group_laws, suffixes, cutoffs} =
         Lynx.Case.__laws__(
           __MODULE__,
           unquote(__CALLER__.file),
@@ -197,6 +234,7 @@ defmodule Lynx.Case do
 
     Module.put_attribute(module, :lynx_laws, [])
     Module.put_attribute(module, :lynx_termination_suffixes, %{})
+    Module.put_attribute(module, :lynx_cutoffs, MapSet.new())
 
     try do
       fun.()
@@ -207,10 +245,13 @@ defmodule Lynx.Case do
       end
 
       name = ExUnit.Case.register_test(module, file, line, :laws, description, [:laws])
-      {name, group_laws, Module.get_attribute(module, :lynx_termination_suffixes)}
+
+      {name, group_laws, Module.get_attribute(module, :lynx_termination_suffixes),
+       Module.get_attribute(module, :lynx_cutoffs)}
     after
       Module.delete_attribute(module, :lynx_laws)
       Module.delete_attribute(module, :lynx_termination_suffixes)
+      Module.delete_attribute(module, :lynx_cutoffs)
     end
   end
 
@@ -222,9 +263,9 @@ defmodule Lynx.Case do
   end
 
   @doc false
-  def __verify__(module, name, laws, suffixes) do
+  def __verify__(module, name, laws, suffixes, cutoffs \\ MapSet.new()) do
     files =
-      Lynx.Translation.new(termination_suffixes: suffixes)
+      Lynx.Translation.new(termination_suffixes: suffixes, cutoffs: cutoffs)
       |> Lynx.Translation.add(Lynx.Bytecode.fetch!(module))
       |> Lynx.Translation.verify(module, laws)
       |> Lynx.Translation.assemble(cache: System.get_env("LYNX_CACHE") != "0")

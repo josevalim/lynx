@@ -109,7 +109,7 @@ fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Nam
 %% The supplied maps contain this module's definitions and the program-wide function registry.
 %% The callback returns remote callee purity. Local purity is propagated by Lynx.Translation.
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
--spec translate(module(), #{{atom(), arity()} => {function, cerl:c_fun()} | {law, map()}}, [{atom(), arity()}], map(), map(),
+-spec translate(module(), #{{atom(), arity()} => {function | cutoff, cerl:c_fun()} | {law, map()}}, [{atom(), arity()}], map(), map(),
                 {term(), fun((term(), module(), atom(), arity(), list(), map()) ->
                     {boolean(), map(), term()} | local)}) ->
     {ok, map(), map(), term()} | {error, list(), binary()}.
@@ -151,6 +151,8 @@ translate_def(Name, {function, #c_fun{anno = Anno, vars = Vars, body = Body}}, S
                 _ -> core_error(Core, Reason)
             end
     end;
+translate_def(Name, {cutoff, #c_fun{anno = Anno, vars = Vars}}, State) ->
+    translate_definition(Name, Anno, Vars, cutoff, State);
 translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensures, proof := Proof} = Law}, State) ->
     translate_definition(Name, Anno, Params, {law, maps:find(requires, Law), Ensures, Proof}, State).
 
@@ -158,6 +160,12 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
     State1 = State0#state{name = Name, local_calls = #{}, pure = true, next_var = 0, labels = #{},
                           translated = (State0#state.translated)#{Name => pending}},
     {Def, State2} = case Definition of
+        cutoff ->
+            {node(~"def", Anno, #{
+                ~"name" => function_name(Name),
+                ~"params" => [variable(Var) || Var <- Vars],
+                ~"body" => node(~"cutoff", Anno, #{})
+            }), State1#state{pure = false}};
         {function, Body} ->
             {TranslatedBody, Next} = expression(Body, State1),
             {node(~"def", Anno, #{

@@ -352,6 +352,12 @@ end Result
 
 namespace Result
 
+/-- Prove a shared continuation once, then use its purity throughout the body. -/
+theorem IsPure.shared (next : α → Result β) (body : (α → Result β) → Result γ)
+    (nextPure : ∀ value, IsPure (next value))
+    (bodyPure : ∀ next, (∀ value, IsPure (next value)) → IsPure (body next)) :
+    IsPure (body next) := bodyPure next nextPure
+
 @[simp↓] theorem IsPure.handle (computation : Result α) (handler : Exception → Result α)
     (computationPure : IsPure computation) (handlerPure : ∀ exception, IsPure (handler exception)) :
     IsPure (Result.handle computation handler) := by

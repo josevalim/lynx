@@ -10,5 +10,6 @@ import LynxTest.Term.Maps
 import LynxTest.Term.Order
 import LynxTest.Modules.Erlang
 import LynxTest.Modules.Maps
+import LynxTest.Modules.Math
 import LynxTest.Modules.Process
 import LynxTest.Pure

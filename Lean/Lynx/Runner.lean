@@ -548,6 +548,11 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let fraction : TSyntax `term := ⟨Syntax.mkNumLit (toString fraction)⟩
     let ctor := mkIdent ``Lynx.Term.float
     pure (Unhygienic.run `($ctor ⟨$sign, $exponent, $fraction⟩))
+  | "cutoff" => do
+    fields j ["kind", "span"]
+    unless !pattern do throw "translation cutoff is only valid in computations"
+    let exhausted := mkIdent ``Lynx.Result.exhausted
+    pure ⟨exhausted.raw⟩
   | "atom" => do
     fields j ["kind", "value", "span"]
     let literal : TSyntax `term := ⟨Syntax.mkStrLit (← str j "value")⟩

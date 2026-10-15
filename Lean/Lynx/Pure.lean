@@ -11,6 +11,59 @@ Recursive definitions use their compiler-generated induction principle. -/
 namespace Lynx.Pure
 open Lean Meta Elab Tactic
 
+-- Core's guard fallthroughs are applied lambdas. Abstract their continuation
+-- before beta reduction duplicates it into every match alternative.
+elab "lynx_pure_share" : tactic => do
+  liftMetaTactic fun goal => goal.withContext do
+    let target := (← instantiateMVars (← goal.getType)).consumeMData
+    unless target.isAppOfArity ``Result.IsPure 2 do throwError "not a purity goal"
+    let .app body next := target.appArg!.consumeMData | throwError "not an applied continuation"
+    let body := body.consumeMData
+    unless body.isLambda do throwError "not a shared lambda"
+    let applicable ← forallTelescopeReducing (← inferType next) fun args result =>
+      return args.size == 1 && result.isAppOfArity ``Result 1
+    unless applicable do throwError "not a result continuation"
+    let proof ← mkAppM ``Result.IsPure.shared #[next, body]
+    goal.apply proof
+
+-- Inspect the syntax before applying purity lemmas. Blind `apply`/`intro` can
+-- unfold IsPure and execute an entire computation just to reject a rule.
+elab "lynx_pure_step" : tactic => do
+  liftMetaTactic fun goal => goal.withContext do
+    let target := (← instantiateMVars (← goal.getType)).consumeMData
+    if target.isForall then
+      let (_, next) ← goal.intro1
+      return [next]
+    unless target.isAppOfArity ``Result.IsPure 2 do throwError "not a purity goal"
+    let computation := target.appArg!.consumeMData
+    let head := computation.getAppFn.consumeMData
+    if head.isConst then
+      let name := head.constName!
+      let proofName := name.getPrefix ++ Name.mkSimple (name.getString! ++ "_pure")
+      if (← getEnv).contains proofName then
+        let proof := mkAppN (mkConst proofName head.constLevels!) computation.getAppArgs
+        goal.assign proof
+        return []
+      if name == ``Result.ok || name == ``Result.error then
+        goal.assign (mkConst ``True.intro)
+        return []
+      let rule? := if name == ``Bind.bind then some ``Result.IsPure.bind
+        else if name == ``Result.bind then some ``Result.IsPure.bind_explicit
+        else if name == ``Result.tryWith then some ``Result.IsPure.tryWith
+        else if name == ``Result.handle then some ``Result.IsPure.handle else none
+      if let some rule := rule? then
+        return ← goal.apply (← mkConstWithFreshMVarLevels rule)
+      if name == ``Pure.pure then
+        let reduced ← whnf computation
+        if reduced == computation then throwError "pure instance did not reduce"
+        return [← goal.change (mkApp target.appFn! reduced)]
+    match computation with
+    | .letE _ _ value body _ =>
+      return [← goal.change (mkApp target.appFn! (body.instantiate1 value))]
+    | .app (.lam _ _ body _) value =>
+      return [← goal.change (mkApp target.appFn! (body.instantiate1 value))]
+    | _ => throwError "not a structural purity step"
+
 private def isResultType (type : Expr) : MetaM Bool := do
   return (← whnf type).isAppOfArity ``Result 1
 
@@ -131,15 +184,14 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
     else
       `(by
         $introduce:tactic
-        unfold $functionId:ident
-        simp_all (config := { failIfUnchanged := false, maxDischargeDepth := 64 })
+        delta $functionId:ident
+        -- Peel binds before simplifying their continuations. Simplifying a large
+        -- straight-line computation first can duplicate all later branches at
+        -- each intermediate match (notably binary64 conversion code).
         repeat' first
-          | apply Result.IsPure.tryWith
-          | apply Result.IsPure.handle
-          | apply Result.IsPure.bind
-          | apply Result.IsPure.bind_explicit
-          | (intro)
-          | split at *
+          | lynx_pure_share
+          | lynx_pure_step
+          | split
           | simp_all)
     let proof ← Term.elabTermEnsuringType
       proofSyntax
