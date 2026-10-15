@@ -47,12 +47,12 @@ defmodule ArrayProofsTest do
   """
 
   laws "array updates" do
-    termination_suffix :array.find_bits() / 2, @array_fixpoint
-    termination_suffix :array.grow_1() / 3, @array_fixpoint
-    termination_suffix :array.get_leaf() / 4, @array_fixpoint
-    termination_suffix :array.set_leaf_1() / 3, @array_fixpoint
-    termination_suffix :array.set_leaf() / 4, @array_fixpoint
-    termination_suffix :array.get_1() / 4, @array_fixpoint
+    termination_suffix &:array.find_bits/2, @array_fixpoint
+    termination_suffix &:array.grow_1/3, @array_fixpoint
+    termination_suffix &:array.get_leaf/4, @array_fixpoint
+    termination_suffix &:array.set_leaf_1/3, @array_fixpoint
+    termination_suffix &:array.set_leaf/4, @array_fixpoint
+    termination_suffix &:array.get_1/4, @array_fixpoint
 
     # Check the shared model once for readback, growth, and last-write-wins.
     law set_obeys_update_contract(index, first, last, array),

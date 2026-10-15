@@ -53,7 +53,7 @@ defmodule Lynx.CaseTest do
       def increment(_value), do: true
 
       laws "partial recursion" do
-        termination_suffix __MODULE__.increment() / 1, ~LEAN"""
+        termination_suffix &__MODULE__.increment/1, ~LEAN"""
         partial_fixpoint monotonicity by
           intro f g h n
           cases n <;> simp

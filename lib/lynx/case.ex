@@ -93,7 +93,7 @@ defmodule Lynx.Case do
   @doc """
   Attaches a Lean termination suffix to a translated function for this laws group.
 
-      termination_suffix :calendar.mod/2, ~LEAN"partial_fixpoint"
+      termination_suffix &:calendar.mod/2, ~LEAN"partial_fixpoint"
 
   The source is a `Lynx.Lean` value. It is parsed as part of the function's
   declaration, after its body. Providing a suffix disables automatic purity
@@ -105,7 +105,7 @@ defmodule Lynx.Case do
   defmacro termination_suffix(target, source) do
     mfa =
       case target do
-        {:/, _, [{{:., _, [module, name]}, _, []}, arity]}
+        {:&, _, [{:/, _, [{{:., _, [module, name]}, _, []}, arity]}]}
         when is_atom(name) and is_integer(arity) and arity >= 0 ->
           module = Macro.expand(module, __CALLER__)
 
@@ -115,7 +115,7 @@ defmodule Lynx.Case do
           {module, name, arity}
 
         _ ->
-          raise ArgumentError, "termination_suffix expects Module.function/arity"
+          raise ArgumentError, "termination_suffix expects &Module.function/arity"
       end
 
     quote do

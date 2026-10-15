@@ -178,7 +178,7 @@ defmodule CalendarProofsTest do
 
   # Includes dates whose ISO week belongs to the preceding, negative year.
   laws "ISO week totality" do
-    termination_suffix :calendar.mod/2, ~LEAN"""
+    termination_suffix &:calendar.mod/2, ~LEAN"""
     partial_fixpoint monotonicity by
       intro f g h n
       cases n <;> cases _1 <;>
