@@ -24,6 +24,16 @@ open Lynx
 open Erlang.erlang
 open LynxTest.Term.Compare (orderedTerms ordered_terms)
 
+theorem make_tuple_replicates (n : Nat) (value : Term) (bound : n ≤ 16777215) :
+    «make_tuple/2» (.integer n) value = .ok (.tuple (Array.replicate n value)) := by
+  have limit : (n : Int) ≤ 16777215 := by omega
+  simp [«make_tuple/2», limit]
+
+theorem make_tuple_bad_size (n : Int) (value : Term) (invalid : n < 0 ∨ 16777215 < n) :
+    «make_tuple/2» (.integer n) value = .error (.error (.atom "badarg")) := by
+  have : ¬ (0 ≤ n ∧ n ≤ 16777215) := by omega
+  simp [«make_tuple/2», this]
+
 private def identityFun (args : Array Term) : Result :=
   match args.toList with
   | [value] => .ok value

@@ -289,6 +289,14 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
     .ok (.integer (n + 1))
   | _ => throw (.error (.atom "badarg"))
 
+/-- Construct a tuple within the BEAM arity limit. -/
+#lynx_pure @[expose] def «make_tuple/2» (size value : Term) : Result :=
+  match size with
+  | .integer n =>
+    if 0 ≤ n ∧ n ≤ 16777215 then .ok (.tuple (Array.replicate n.toNat value))
+    else throw (.error (.atom "badarg"))
+  | _ => throw (.error (.atom "badarg"))
+
 /-- Tuple arity or the number of complete bytes in a bitstring. -/
 #lynx_pure @[expose] def «size/1» : Term → Result
   | .tuple entries => .ok (.integer entries.size)

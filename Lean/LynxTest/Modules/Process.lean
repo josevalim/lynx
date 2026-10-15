@@ -15,6 +15,16 @@ import all Init.Data.Ord.String
 namespace LynxTest.Modules.Process
 open Lynx Erlang.erlang
 
+theorem error_reason (reason arguments : Term) :
+    «error/2» reason arguments = .error (.error reason) := by rfl
+
+theorem error_caught (reason arguments : Term) :
+    Result.handle («error/2» reason arguments) (fun
+      | .error value => .ok value
+      | exception => .error exception) =
+      .ok reason := by
+  rfl
+
 private def receiveBlocking (select : Term → Option β) (next : β → Result) : Result :=
   .receive .infinity (fun _ => select) (fun
     | some value => next value
