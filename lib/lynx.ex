@@ -44,5 +44,31 @@ defmodule Lynx do
 
   Furthermore, when running proofs with ExUnit, the error reports include the path to
   folder with all `.lean` files. Use this to debug and guide your proofs.
+
+  ## Limitations
+
+  Lynx models a subset of Erlang/Elixir and the Erlang runtime. Proofs describe
+  this model, the following restrictions matter when interpreting their results:
+
+    * Bitstring float segments support only 64 bits. Float-16 and float-32
+      construction currently raises `badarg` in the model, and matching those
+      sizes is rejected during translation. Float segment sizes must be known
+      at translation time.
+
+    * `native` endianness in bitstring construction and matching is resolved to
+      `little` or `big` during translation, according to the platform running
+      Lynx. The generated Lean code retains that choice when used elsewhere.
+
+    * `node()` (`:erlang.node/0`) always returns `:nonode@nohost`. Distributed
+      nodes are not modeled. Sending messages supports local PIDs only;
+      registered names and remote destinations are not modeled.
+
+    * Receive timeouts do not measure wall-clock time. Positive timeouts expire
+      according to the modeled scheduler's choices, or when no process can run.
+
+    * Exception stack traces are not recorded and are represented by `[]`.
+
+  Lynx does not yet translate all language constructs nor implements all BIFs.
+  Those will lead to errors when attempting to translate them.
   """
 end

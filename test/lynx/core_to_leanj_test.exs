@@ -124,6 +124,99 @@ defmodule Lynx.CoreToLeanjTest do
     assert id == self_id
   end
 
+  test "resolves native segment endianness on the translating platform" do
+    # Keep platform-dependent expectations here rather than in fixture snapshots.
+    endian = Atom.to_string(:erlang.system_info(:endian))
+
+    for {type, width} <- [{:integer, 13}, {:float, 64}],
+        signed <- [:signed, :unsigned] do
+      segment =
+        :cerl.c_bitstr(
+          :cerl.c_var(0),
+          :cerl.c_int(width),
+          :cerl.c_int(1),
+          :cerl.c_atom(type),
+          :cerl.abstract([signed, :native])
+        )
+
+      type = Atom.to_string(type)
+
+      assert {:ok,
+              %{
+                {:entry, 1} => %{
+                  translation: %{
+                    "body" => %{
+                      "kind" => "bitstring_constructor",
+                      "segments" => [%{"type" => ^type, "endian" => ^endian}]
+                    }
+                  }
+                }
+              }, []} = translate(definitions([definition(:entry, :cerl.c_binary([segment]))]))
+
+      body =
+        :cerl.c_case(:cerl.c_var(0), [
+          :cerl.c_clause([:cerl.c_binary([segment])], :cerl.c_atom(true))
+        ])
+
+      assert {:ok,
+              %{
+                {:entry, 1} => %{
+                  translation: %{
+                    "body" => %{
+                      "cases" => [
+                        %{
+                          "patterns" => [
+                            %{
+                              "kind" => "bitstring_pattern",
+                              "segments" => [%{"type" => ^type, "endian" => ^endian}]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }, []} = translate(definitions([definition(:entry, body)]))
+    end
+  end
+
+  test "folds native integer literals using the translating platform" do
+    for {value, signed} <- [{0x123, :unsigned}, {-2, :signed}] do
+      bytes = :binary.bin_to_list(<<value::native-size(12), 0::4>>)
+
+      segment =
+        :cerl.c_bitstr(
+          :cerl.c_int(value),
+          :cerl.c_int(12),
+          :cerl.c_int(1),
+          :cerl.c_atom(:integer),
+          :cerl.abstract([:native, signed])
+        )
+
+      body =
+        :cerl.c_case(:cerl.c_var(0), [
+          :cerl.c_clause([:cerl.c_binary([segment])], :cerl.c_atom(true))
+        ])
+
+      assert {:ok,
+              %{
+                {:entry, 1} => %{
+                  translation: %{
+                    "body" => %{
+                      "cases" => [
+                        %{
+                          "patterns" => [
+                            %{"kind" => "bitstring", "bytes" => ^bytes, "last_bits" => 4}
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }, []} = translate(definitions([definition(:entry, body)]))
+    end
+  end
+
   test "keeps unrepresentable integer patterns and large literals as segment matches" do
     # The compiler removes impossible source clauses; exercise their Core forms directly.
     for {value, size, signed} <- [
