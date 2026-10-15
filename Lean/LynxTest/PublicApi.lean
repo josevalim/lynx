@@ -14,6 +14,12 @@ private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) �
 private def referenceConstructor : Nat → Lynx.Term := Lynx.Term.reference
 private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0»
 
+-- Numeric float ordering is available without unfolding comparison internals.
+private theorem floatOrdering (left right : Lynx.Term.FiniteFloat) :
+    Lynx.Term.compare (.float left) (.float right) =
+      compareOfLessAndEq left.toRat right.toRat :=
+  Lynx.Term.compare_floats left right
+
 -- Allocation equations remain usable through ordinary public imports.
 private theorem makeRefEquation (env : Lynx.Environment) :
     makeRef env = .ok (.reference (env.refCounter + 1))

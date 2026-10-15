@@ -564,6 +564,12 @@ namespace Lynx.Term
     simp [Compare.compareStep, Compare.ratCompare, compareOfLessAndEq,
       Int.compare_eq_ite_lt, Rat.intCast_lt_intCast, hab, hba, eq] <;> omega
 
+/-- Float ordering agrees with the exact rational value of each encoding. -/
+theorem compare_floats (a b : FiniteFloat) :
+    compare (.float a) (.float b) = compareOfLessAndEq a.toRat b.toRat := by
+  rw [compare_eq_step]
+  rfl
+
 @[simp] theorem integer_compare_integer_eq (a b : Int) :
     compare (.integer a) (.integer b) = .eq ↔ a = b := by
   rw [compare_eq_step]
