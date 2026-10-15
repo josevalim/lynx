@@ -39,7 +39,15 @@ defmodule Lynx.Case do
     end
 
     ExUnit.plural_rule("laws", "laws")
+
+    # Retain bytecode before ExUnit's callback makes async tests runnable.
+    callbacks = Module.delete_attribute(module, :after_compile)
     Module.put_attribute(module, :after_compile, __MODULE__)
+
+    for callback <- Enum.reverse(callbacks) do
+      Module.put_attribute(module, :after_compile, callback)
+    end
+
     Module.put_attribute(module, :compile, :debug_info)
     Lynx.Laws.__register__(module)
   end
