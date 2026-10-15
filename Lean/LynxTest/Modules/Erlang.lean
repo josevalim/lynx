@@ -34,6 +34,21 @@ theorem make_tuple_bad_size (n : Int) (value : Term) (invalid : n < 0 ∨ 167772
   have : ¬ (0 ≤ n ∧ n ≤ 16777215) := by omega
   simp [«make_tuple/2», this]
 
+theorem setelement_read (entries : Array Term) (i : Nat) (value : Term)
+    (valid : i < entries.size) :
+    (do
+      let updated ← «setelement/3» (.integer (i + 1)) (.tuple entries) value
+      «element/2» (.integer (i + 1)) updated) = .ok value := by
+  have lower : (1 : Int) ≤ i + 1 := by omega
+  have upper : (i : Int) + 1 ≤ entries.size := by omega
+  simp [«setelement/3», «element/2», lower, upper, valid]
+
+theorem setelement_bad_index (entries : Array Term) (n : Int) (value : Term)
+    (invalid : n < 1 ∨ entries.size < n) :
+    «setelement/3» (.integer n) (.tuple entries) value = .error (.error (.atom "badarg")) := by
+  have : ¬ (1 ≤ n ∧ n ≤ entries.size) := by omega
+  simp [«setelement/3», this]
+
 private def identityFun (args : Array Term) : Result :=
   match args.toList with
   | [value] => .ok value

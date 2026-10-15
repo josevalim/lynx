@@ -47,6 +47,15 @@ open Lynx
       | none => throw (.error (.atom "badarg"))
   | _, _ => throw (.error (.atom "badarg"))
 
+/-- Replace an existing entry using Erlang's one-based tuple positions. -/
+#lynx_pure @[expose] def «setelement/3» (index input value : Term) : Result :=
+  match index, input with
+  | .integer n, .tuple entries =>
+    if valid : 1 ≤ n ∧ n ≤ entries.size then
+      .ok (.tuple (entries.set (n.toNat - 1) value (h := by omega)))
+    else throw (.error (.atom "badarg"))
+  | _, _ => throw (.error (.atom "badarg"))
+
 #lynx_pure @[expose] def «is_pid/1» (input : Term) : Result :=
   .ok (match input with | .pid _ => Term.true | _ => Term.false)
 

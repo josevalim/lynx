@@ -5,6 +5,7 @@ public import Lynx.Term.Compare
 public import Lynx.Term.Maps
 public import Lynx.Term.Runner
 public import Lynx.Term.Induction
+public import Lynx.Term.Order
 
 namespace Lynx
 

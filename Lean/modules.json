@@ -13,6 +13,7 @@
   "throw/1": {"pure": true},
   "spawn/1": {"pure": false},
   "size/1": {"pure": true},
+  "setelement/3": {"pure": true},
   "send/2": {"pure": false},
   "self/0": {"pure": false},
   "round/1": {"pure": true},
