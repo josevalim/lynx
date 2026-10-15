@@ -808,7 +808,7 @@ defmodule Lynx.TranslationTest do
         cerl("""
         -module(example).
         -export([entry/1]).
-        entry(X) -> <<1>>.
+        entry(<<1>>) -> ok.
         """)
 
       error =

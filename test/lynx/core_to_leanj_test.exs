@@ -158,6 +158,113 @@ defmodule Lynx.CoreToLeanjTest do
     end
   end
 
+  test "translates packed bitstring literals with partial final bytes" do
+    anno = [{:file, ~c"example.erl"}, {7, 3}]
+
+    for {bits, bytes, last} <- [
+          {<<>>, [], 0},
+          {<<1, 255>>, [1, 255], 0},
+          {<<5::3>>, [160], 3},
+          {<<255, 5::3>>, [255, 160], 3}
+        ] do
+      body = :cerl.ann_abstract(anno, bits)
+
+      assert {:ok,
+              %{
+                {:entry, 1} => %{
+                  pure: true,
+                  translation: %{
+                    "body" => %{
+                      "kind" => "return",
+                      "values" => [
+                        %{
+                          "kind" => "bitstring",
+                          "bytes" => ^bytes,
+                          "last_bits" => ^last,
+                          "span" => [7, 3]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }, []} = translate(definitions([definition(:entry, body)]))
+    end
+  end
+
+  test "preserves integer segment sizes, units, flags, order, and annotations" do
+    anno = [{:file, ~c"example.erl"}, {7, 3}]
+
+    for {signed, sign} <- [{true, :signed}, {false, :unsigned}], endian <- [:big, :little] do
+      segment =
+        :cerl.ann_c_bitstr(
+          anno,
+          :cerl.c_var(0),
+          :cerl.c_int(5),
+          :cerl.c_int(3),
+          :cerl.c_atom(:integer),
+          :cerl.abstract([sign, endian])
+        )
+
+      body = :cerl.ann_c_binary(anno, [segment, segment])
+      endian = Atom.to_string(endian)
+
+      assert {:ok,
+              %{
+                {:entry, 1} => %{
+                  pure: true,
+                  translation: %{
+                    "body" => %{
+                      "kind" => "bitstring_constructor",
+                      "span" => [7, 3],
+                      "segments" => [
+                        %{
+                          "value" => %{"kind" => "var", "name" => 0},
+                          "size" => %{"kind" => "integer", "value" => 5},
+                          "unit" => 3,
+                          "signed" => ^signed,
+                          "endian" => ^endian,
+                          "span" => [7, 3]
+                        } = first,
+                        second
+                      ]
+                    }
+                  }
+                }
+              }, []} = translate(definitions([definition(:entry, body)]))
+
+      assert first == second
+    end
+  end
+
+  test "preserves dynamic sizes and integer segment units" do
+    anno = [7]
+
+    segment =
+      :cerl.ann_c_bitstr(
+        anno,
+        :cerl.c_var(0),
+        :cerl.c_var(:size),
+        :cerl.c_int(256),
+        :cerl.c_atom(:integer),
+        :cerl.abstract([:unsigned, :big])
+      )
+
+    body = :cerl.c_binary([segment])
+
+    assert {:ok,
+            %{
+              {:entry, 1} => %{
+                translation: %{
+                  "body" => %{
+                    "segments" => [
+                      %{"size" => %{"kind" => "var", "name" => "size"}, "unit" => 256}
+                    ]
+                  }
+                }
+              }
+            }, []} = translate(definitions([definition(:entry, body)]))
+  end
+
   test "allocates distinct generated message binders for timeout-only receives" do
     receive_after = fn action ->
       loop = :cerl.c_fname(:receive_loop, 0)
@@ -929,10 +1036,10 @@ defmodule Lynx.CoreToLeanjTest do
 
   test "returns annotated binary reasons for unsupported Core during translation" do
     anno = [{:file, ~c"example.erl"}, {7, 3}]
-    body = :cerl.ann_abstract(anno, <<1>>)
+    body = :cerl.ann_c_primop(anno, :cerl.c_atom(:unsupported), [])
     assert {:error, ^anno, reason} = translate(definitions([definition(:entry, body)]))
     assert reason =~ "unsupported Core expression:"
-    assert reason =~ "1"
+    assert reason =~ "unsupported"
   end
 
   test "translates laws without a requires helper" do

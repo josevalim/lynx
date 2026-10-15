@@ -329,6 +329,10 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
     end;
 expression(#c_primop{anno = Anno, name = #c_literal{val = Op}, args = Args}, State) ->
     prim_op(Op, Anno, Args, State);
+%% Integer construction is a computation: invalid values or sizes raise badarg.
+expression(#c_binary{anno = Anno, segments = Segments}, State0) ->
+    {Translated, State1} = lists:mapfoldl(fun binary_segment/2, State0, Segments),
+    {node(~"bitstring_constructor", Anno, #{~"segments" => Translated}), State1};
 %% Construction remains a value; updates may fail and are computations.
 expression(#c_map{arg = #c_literal{val = Base}, is_pat = false} = Map, State0)
         when is_map(Base), map_size(Base) =:= 0 ->
@@ -523,6 +527,10 @@ value(#c_literal{anno = Anno, val = N}, State) when is_float(N) ->
     <<Sign:1, Exponent:11, Fraction:52>> = <<N:64/float>>,
     {node(~"float", Anno, #{~"negative" => Sign =:= 1,
         ~"exponent" => Exponent, ~"fraction" => Fraction}), State};
+value(#c_literal{anno = Anno, val = Bits}, State) when is_bitstring(Bits) ->
+    Padding = (8 - bit_size(Bits) rem 8) rem 8,
+    Bytes = binary_to_list(<<Bits/bitstring, 0:Padding>>),
+    {node(~"bitstring", Anno, #{~"bytes" => Bytes, ~"last_bits" => bit_size(Bits) rem 8}), State};
 value(#c_literal{anno = Anno, val = Atom}, State) when is_atom(Atom) ->
     {node(~"atom", Anno, #{~"value" => atom_to_binary(Atom, utf8)}), State};
 value(#c_cons{anno = Anno, hd = Head, tl = Tail}, State0) ->
@@ -548,6 +556,25 @@ value(#c_map{anno = Anno, arg = #c_literal{val = Base}, es = Pairs,
     {node(~"map", Anno, #{~"entries" => Entries}), State1};
 value(Core, _State) ->
     unsupported(Core).
+
+binary_segment(#c_bitstr{unit = #c_literal{val = Unit}, type = #c_literal{val = integer},
+        flags = #c_literal{val = Flags}} = Core, State0)
+        when is_integer(Unit), Unit >= 1, Unit =< 256, is_list(Flags) ->
+    binary_integer_segment(lists:sort(Flags), Core, State0);
+binary_segment(Core, _State) ->
+    core_error(Core, ~"unsupported binary segment (expected an integer segment with unit 1..256)").
+
+binary_integer_segment([Endian, Signed], #c_bitstr{anno = Anno, val = Value, size = Size,
+        unit = #c_literal{val = Unit}}, State0)
+        when (Endian =:= big orelse Endian =:= little),
+             (Signed =:= signed orelse Signed =:= unsigned) ->
+    {TranslatedValue, State1} = value(Value, State0),
+    {TranslatedSize, State2} = value(Size, State1),
+    {#{~"span" => span(Anno), ~"value" => TranslatedValue, ~"size" => TranslatedSize,
+       ~"unit" => Unit, ~"signed" => Signed =:= signed,
+       ~"endian" => atom_to_binary(Endian, utf8)}, State2};
+binary_integer_segment(_Flags, Core, _State) ->
+    core_error(Core, ~"unsupported binary segment flags (expected signed/unsigned and big/little)").
 
 local_function_value(Lifted, Captures, Arity, Anno, State0) ->
     Key = {State0#state.module, Lifted},

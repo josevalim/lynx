@@ -2,6 +2,8 @@ module
 
 import LynxTest.PublicApi
 import LynxTest.Term
+import LynxTest.Term.Bitstring
+import LynxTest.Term.Bitstring.Construction
 import LynxTest.Term.Compare
 import LynxTest.Term.Maps
 import LynxTest.Term.Order

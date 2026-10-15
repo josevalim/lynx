@@ -85,6 +85,13 @@ set_option «match».ignoreUnusedAlts true
                               (Lynx.Term.integer 1, Lynx.Term.atom "integer")])
                           Lynx.Term.nil))))))))))
 
+#lynx_pure
+  def «bitstrings/0» : Lynx.Result :=
+    pure
+      (Lynx.Term.cons (Lynx.Term.bitstring ⟨#[0, 255]⟩ 0 (by decide))
+        (Lynx.Term.cons (Lynx.Term.bitstring ⟨#[160]⟩ 3 (by decide))
+          (Lynx.Term.cons (Lynx.Term.bitstring ⟨#[128, 255, 128]⟩ 1 (by decide)) Lynx.Term.nil)))
+
 end
 
 end Erlang.literal

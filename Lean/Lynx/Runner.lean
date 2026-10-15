@@ -540,6 +540,47 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let literal : TSyntax `term := ⟨Syntax.mkStrLit (← str j "value")⟩
     let ctor := mkIdent ``Lynx.Term.atom
     pure (Unhygienic.run `($ctor $literal))
+  | "bitstring" => do
+    fields j ["kind", "bytes", "last_bits", "span"]
+    if pattern then throw "bitstring patterns are not supported"
+    let bytes ← (← arr j "bytes").mapM fun byte => do
+      let value ← byte.getNat?
+      unless value < 256 do throw "bitstring bytes must be less than 256"
+      pure (⟨Syntax.mkNumLit (toString value)⟩ : TSyntax `term)
+    let last ← (← field j "last_bits").getNat?
+    unless last < 8 do throw "bitstring last_bits must be less than 8"
+    unless !bytes.isEmpty || last == 0 do throw "empty bitstrings must have last_bits zero"
+    let last : TSyntax `term := ⟨Syntax.mkNumLit (toString last)⟩
+    let ctor := mkIdent ``Lynx.Term.bitstring
+    pure (Unhygienic.run `($ctor ⟨#[$bytes,*]⟩ $last (by decide)))
+  | "bitstring_constructor" => do
+    fields j ["kind", "segments", "span"]
+    if pattern then throw "binary construction is not a pattern"
+    let segments ← (← arr j "segments").mapM fun segment => do
+      fields segment ["value", "size", "unit", "signed", "endian", "span"]
+      let si ← span map segment info
+      let value ← term map si false (← field segment "value")
+      let size ← term map si false (← field segment "size")
+      let unit ← (← field segment "unit").getNat?
+      unless 1 ≤ unit && unit ≤ 256 do throw "integer segment unit must be in 1..256"
+      let _ ← (← field segment "signed").getBool?
+      let little ← match ← str segment "endian" with
+        | "big" => pure (mkIdent ``Bool.false)
+        | "little" => pure (mkIdent ``Bool.true)
+        | other => throw s!"unsupported integer segment endianness '{other}'"
+      let unit : TSyntax `term := ⟨Syntax.mkNumLit (toString unit)⟩
+      let build := mkIdent ``Lynx.Term.Bitstring.integerSegment
+      pure (withSpan si.info (Unhygienic.run `($build $value $size $unit $little)))
+    let empty := Unhygienic.run `(Lynx.Term.bitstring ⟨#[]⟩ 0 (by decide))
+    let ok := mkIdent ``Lynx.Result.ok
+    let append := mkIdent ``Lynx.Term.Bitstring.append
+    let bind := mkIdent ``Lynx.Result.bind
+    let mut body := segments.back?.getD (Unhygienic.run `($ok $empty))
+    -- All segment operands are Core values: preserve segment validation order.
+    for segment in segments.toList.dropLast.reverse do
+      body := Unhygienic.run `($bind $segment (fun lynxBinarySegment =>
+        $bind $body (fun lynxBinaryTail => $append lynxBinarySegment lynxBinaryTail)))
+    pure body
   | "nil" => do
     fields j ["kind", "span"]
     pure ⟨(mkIdent ``Lynx.Term.nil).raw⟩
