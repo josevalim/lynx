@@ -106,9 +106,9 @@ theorem negative_values_and_truncation :
 -- Construction retains the low bits even outside signed and unsigned ranges.
 private def encodesBytes (value : Int) (width unit : Nat) (big little : List UInt8) : Prop :=
   Term.Bitstring.integerSegment (.integer value) (.integer width) unit false =
-    .ok (.bitstring ⟨big.toArray⟩ 0 (by intro _; rfl)) ∧
+    .ok (.bitstring ⟨big.toArray⟩ 0 (by simp)) ∧
   Term.Bitstring.integerSegment (.integer value) (.integer width) unit true =
-    .ok (.bitstring ⟨little.toArray⟩ 0 (by intro _; rfl))
+    .ok (.bitstring ⟨little.toArray⟩ 0 (by simp))
 
 theorem unsigned_byte_boundaries :
     encodesBytes 0 8 1 [0] [0] ∧
@@ -200,9 +200,9 @@ theorem units_and_cross_byte_concatenation :
 -- so these comparisons deliberately avoid numeric float equality.
 private def floatBytes (value : Term.FiniteFloat) (big little : List UInt8) : Prop :=
   Term.Bitstring.floatSegment (.float value) 64 false =
-    .ok (.bitstring ⟨big.toArray⟩ 0 (by intro _; rfl)) ∧
+    .ok (.bitstring ⟨big.toArray⟩ 0 (by simp)) ∧
   Term.Bitstring.floatSegment (.float value) 64 true =
-    .ok (.bitstring ⟨little.toArray⟩ 0 (by intro _; rfl))
+    .ok (.bitstring ⟨little.toArray⟩ 0 (by simp))
 
 set_option maxRecDepth 2048 in
 theorem float64_signed_zeros :

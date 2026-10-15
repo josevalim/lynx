@@ -23,6 +23,14 @@ theorem packing_pads_low_bits :
     pack (List.replicate 9 true) = ⟨#[0xff, 0x80]⟩ := by
   repeat first | apply And.intro | rfl
 
+theorem packing_always_zeroes_padding (input : List Bool) :
+    Valid (pack input) ⟨input.length % 8, Nat.mod_lt _ (by decide)⟩ :=
+  pack_valid input
+
+theorem nonzero_padding_is_invalid :
+    ¬ Valid ⟨#[0xa1]⟩ 3 ∧ ¬ Valid ⟨#[0xbf]⟩ 3 ∧ ¬ Valid ⟨#[]⟩ 3 := by
+  decide
+
 end LynxTest.Term.Bitstring
 
 run_cmd do

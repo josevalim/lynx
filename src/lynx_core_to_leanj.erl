@@ -517,7 +517,7 @@ value(#c_var{} = Var, State) ->
     {variable(Var), State};
 value(#c_binary{anno = Anno, segments = Segments}, State0) ->
     case binary_pattern_literal(Segments, <<>>) of
-        {ok, Bits} when is_binary(Bits) -> value(#c_literal{anno = Anno, val = Bits}, State0);
+        {ok, Bits} -> value(#c_literal{anno = Anno, val = Bits}, State0);
         _ ->
             {Translated, State1} = binary_pattern_segments(Segments, State0),
             {node(~"bitstring_pattern", Anno, #{~"segments" => Translated}), State1}
@@ -564,7 +564,7 @@ value(#c_map{anno = Anno, arg = #c_literal{val = Base}, es = Pairs,
 value(Core, _State) ->
     unsupported(Core).
 
-%% Fold whole-byte constant patterns into ordinary literals. Bound each segment
+%% Fold constant bitstring patterns into ordinary literals. Bound each segment
 %% expansion; larger segments retain matching without changing their semantics.
 binary_pattern_literal([], Bits) -> {ok, Bits};
 binary_pattern_literal([#c_bitstr{val = #c_literal{val = Value},

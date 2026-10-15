@@ -181,7 +181,6 @@ private partial def catchAllPattern (j : Json) : Except String Bool := do
   | "var" | "wildcard" => return true
   | "map" => return !(← arr j "entries").isEmpty
   | "bitstring_pattern" => return true
-  | "bitstring" => return (← (← field j "last_bits").getNat?) != 0
   | "alias" => catchAllPattern (← field j "pattern")
   | _ => return false
 
@@ -631,22 +630,16 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     unless lastBits < 8 do throw "bitstring last_bits must be less than 8"
     unless !bytes.isEmpty || lastBits == 0 do throw "empty bitstrings must have last_bits zero"
     let ctor := mkIdent ``Lynx.Term.bitstring
-    if pattern && lastBits == 0 then
-      return withSpan info.info (Unhygienic.run `($ctor ⟨⟨[$bytes,*]⟩⟩ 0 _))
     let last : TSyntax `term := ⟨Syntax.mkNumLit (toString lastBits)⟩
-    let literal := Unhygienic.run `($ctor ⟨#[$bytes,*]⟩ $last (by decide))
+    unless lastBits == 0 do
+      let padding := 8 - lastBits
+      let value ← (← arr j "bytes").back!.getNat?
+      unless value % (2 ^ padding) == 0 do throw "bitstring padding must be zero"
     if pattern then
-      let index := (← get).nextBitstringPattern
-      modify fun s => { s with nextBitstringPattern := index + 1 }
-      let nodeSpan ← field j "span"
-      let binder := Json.mkObj [("kind", toJson "var"), ("span", nodeSpan),
-        ("name", Json.mkObj [("bitstring", toJson index)])]
-      let input ← term map info true binder
-      let compare := mkIdent ``Lynx.Term.exactCompare
-      let lookup := Unhygienic.run `(decide ($compare $input $literal = Ordering.eq))
-      addExtraction lookup (Unhygienic.run `(Bool.true))
-      return input
-    pure literal
+      if lastBits == 0 then pure (Unhygienic.run `($ctor ⟨⟨[$bytes,*]⟩⟩ 0 _))
+      else pure (Unhygienic.run `($ctor ⟨⟨[$bytes,*]⟩⟩ ⟨$last, _⟩ _))
+    else
+      pure (Unhygienic.run `($ctor ⟨#[$bytes,*]⟩ $last (by decide)))
   | "bitstring_constructor" => do
     fields j ["kind", "segments", "span"]
     if pattern then throw "bitstring construction is not a pattern"

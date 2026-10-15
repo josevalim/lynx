@@ -1,5 +1,5 @@
 -module(bitstring_matching).
--export([empty/1, literal/1, binary_literal/1, string_literal/1, signed_literal/1, integers/1, integer_sized/1, integer_external_size/2,
+-export([empty/1, literal/1, partial_literal/1, binary_literal/1, string_literal/1, signed_literal/1, integers/1, integer_sized/1, integer_external_size/2,
          float64/1, binary_tail/1, bitstring_tail/1, binary_literal_tail/1,
          bitstring_literal_tail/1, binary_fixed/2,
          bitstring_fixed/2, nested/1, guarded/1, alias/1, pinned/2]).
@@ -9,6 +9,9 @@ empty(_) -> other.
 
 literal(<<1, 2, 5:3>>) -> matched;
 literal(_) -> other.
+
+partial_literal(<<5:3>>) -> matched;
+partial_literal(_) -> other.
 
 binary_literal(<<97, 98, 99>>) -> matched;
 binary_literal(_) -> other.

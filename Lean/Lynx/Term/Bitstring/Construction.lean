@@ -7,12 +7,7 @@ namespace Lynx.Term.Bitstring
 
 /-- Pack transmission-order bits as a term. The empty list produces the empty binary. -/
 @[expose] public def ofBits (bits : List Bool) : Term :=
-  .bitstring (pack bits) ⟨bits.length % 8, Nat.mod_lt _ (by decide)⟩ (by
-    intro empty
-    have size := pack_size bits
-    apply Fin.ext
-    simp only [Fin.val_zero]
-    omega)
+  .bitstring (pack bits) ⟨bits.length % 8, Nat.mod_lt _ (by decide)⟩ (pack_valid bits)
 
 /-- Packing preserves the number of meaningful bits. -/
 @[simp] public theorem ofBits_bitSize (bits : List Bool) :

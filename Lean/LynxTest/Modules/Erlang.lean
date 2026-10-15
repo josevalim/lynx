@@ -4,6 +4,7 @@ meta import LynxTest.ProofAudit
 -- Import implementation modules here to audit their private declarations as well.
 import all Lynx.Modules.Erlang.erlang
 import Lynx.Modules.Erlang.maps
+import Lynx.Term.Bitstring.Construction
 import LynxTest.Term.Compare
 import all Lynx.Term
 import all Lynx.Term.DataTypes
@@ -279,7 +280,7 @@ theorem bitstring_guards :
   exact ⟨rfl, rfl, rfl, rfl⟩
 
 theorem binary_guard_alignment (bytes : ByteArray) (bits : Fin 8)
-    (valid : bytes.size = 0 → bits = 0) :
+    (valid : Term.Bitstring.Valid bytes bits) :
     «is_binary/1» (.bitstring bytes bits valid) =
       .ok (if bits = 0 then Term.true else Term.false) := by
   unfold «is_binary/1»
@@ -287,7 +288,9 @@ theorem binary_guard_alignment (bytes : ByteArray) (bits : Fin 8)
 
 theorem all_partial_byte_sizes :
     ([0, 1, 2, 3, 4, 5, 6, 7] : List (Fin 8)).map
-      (fun bits => «bit_size/1» (.bitstring ⟨#[255, 255]⟩ bits)) =
+      (fun bits => «bit_size/1» (.bitstring ⟨#[255, 0]⟩ bits (by
+        have valid : ∀ bits : Fin 8, Term.Bitstring.Valid ⟨#[255, 0]⟩ bits := by decide
+        exact valid bits))) =
     [16, 9, 10, 11, 12, 13, 14, 15].map (fun n => .ok (.integer n)) := rfl
 
 theorem non_bitstrings_rejected (input : Term)
@@ -305,21 +308,21 @@ theorem bitstring_comparison :
     «</2» (.bitstring ⟨#[128]⟩ 1) (.bitstring ⟨#[128]⟩ 0) = .ok Term.true ∧
     «>/2» (.bitstring ⟨#[128]⟩ 1) (.bitstring ⟨#[127]⟩ 0) = .ok Term.true ∧
     «</2» (.cons (.integer 1) .nil) (.bitstring ⟨#[]⟩ 0) = .ok Term.true ∧
-    -- Padding is ignored by ordinary and exact equality.
-    «==/2» (.bitstring ⟨#[128]⟩ 1) (.bitstring ⟨#[255]⟩ 1) = .ok Term.true ∧
-    «=:=/2» (.bitstring ⟨#[128]⟩ 1) (.bitstring ⟨#[255]⟩ 1) = .ok Term.true ∧
+    -- Canonical partial bytes support ordinary and exact equality.
+    «==/2» (.bitstring ⟨#[128]⟩ 1) (Term.Bitstring.ofBits [true]) = .ok Term.true ∧
+    «=:=/2» (.bitstring ⟨#[128]⟩ 1) (Term.Bitstring.ofBits [true]) = .ok Term.true ∧
     «=:=/2» (.bitstring ⟨#[128]⟩ 1) (.bitstring ⟨#[128]⟩ 2) = .ok Term.false ∧
     «=:=/2» (.map [(.bitstring ⟨#[128]⟩ 1, .integer 42)])
-      (.map [(.bitstring ⟨#[255]⟩ 1, .integer 42)]) = .ok Term.true := by
+      (.map [(Term.Bitstring.ofBits [true], .integer 42)]) = .ok Term.true := by
   repeat' first | apply And.intro | rfl
 
 theorem empty_bitstring_has_zero_lastBits (bits : Fin 8)
-    (valid : (⟨#[]⟩ : ByteArray).size = 0 → bits = 0) :
+    (valid : Term.Bitstring.Valid ⟨#[]⟩ bits) :
     bits = 0 ∧
     «is_binary/1» (.bitstring ⟨#[]⟩ bits valid) = .ok Term.true ∧
     «bit_size/1» (.bitstring ⟨#[]⟩ bits valid) = .ok (.integer 0) ∧
     «byte_size/1» (.bitstring ⟨#[]⟩ bits valid) = .ok (.integer 0) := by
-  have zero := valid rfl
+  have zero := valid.1 rfl
   subst bits
   exact ⟨rfl, rfl, rfl, rfl⟩
 
@@ -717,15 +720,15 @@ theorem «binary_part/3_ranges» :
       .error (.error (.atom "badarg")) ∧
     «binary_part/3» (.bitstring bytes 0) (.integer 1) (.integer (-2)) =
       .error (.error (.atom "badarg")) ∧
-    «binary_part/3» (.bitstring bytes 1) (.integer 0) (.integer 0) =
+    «binary_part/3» (.bitstring ⟨#[1, 2, 0]⟩ 1) (.integer 0) (.integer 0) =
       .error (.error (.atom "badarg")) ∧
     «binary_part/2» (.bitstring bytes 0) (.tuple #[.integer 1]) =
       .error (.error (.atom "badarg")) := by
   repeat' first | apply And.intro | (with_unfolding_all rfl)
 
 theorem «size/1_complete_bytes» :
-    «size/1» (.bitstring bytes 1) = .ok (.integer 2) ∧
-    «byte_size/1» (.bitstring bytes 1) = .ok (.integer 3) ∧
+    «size/1» (.bitstring ⟨#[1, 2, 0]⟩ 1) = .ok (.integer 2) ∧
+    «byte_size/1» (.bitstring ⟨#[1, 2, 0]⟩ 1) = .ok (.integer 3) ∧
     «size/1» (.tuple #[.nil, .nil]) = .ok (.integer 2) ∧
     «size/1» .nil = .error (.error (.atom "badarg")) := by
   repeat' first | apply And.intro | (with_unfolding_all rfl)

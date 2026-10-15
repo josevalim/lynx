@@ -2,7 +2,10 @@ module
 
 public import Std
 public import Lynx.Term.FiniteFloat
-import all Lynx.Term.Bitstring
+public import Lynx.Term.Bitstring
+
+private instance : Repr ByteArray where
+  reprPrec bytes prec := reprPrec bytes.data prec
 
 public section
 
@@ -26,13 +29,13 @@ inductive Term where
   | nil : Term
   | cons : Term → Term → Term
   /-- Packed bits, with `0` denoting whole bytes and `1`–`7` denoting
-  the used high bits of the last byte. Empty storage must use `0`. -/
+  the used high bits of the last byte. Empty storage must use `0`, and
+  unused low bits must be zero. -/
   | bitstring (bytes : ByteArray) (lastBits : Fin 8)
-      (valid : bytes.size = 0 → lastBits = 0 := by
+      (valid : _root_.Lynx.Term.Bitstring.Valid bytes lastBits := by
         first
         | assumption
-        | intro _; rfl
-        | intro h; contradiction
+        | exact _root_.Lynx.Term.Bitstring.valid_aligned _
         | decide) : Term
 deriving Repr
 

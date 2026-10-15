@@ -20,7 +20,7 @@ stored map binding. Map hypotheses concern raw entries, including shadowed ones.
       motive (.map entries))
     (nil : motive .nil)
     (cons : ∀ x xs, motive x → motive xs → motive (.cons x xs))
-    (bitstring : ∀ bytes lastBits (valid : bytes.size = 0 → lastBits = 0),
+    (bitstring : ∀ bytes lastBits (valid : Term.Bitstring.Valid bytes lastBits),
       motive (.bitstring bytes lastBits valid)) : motive t := by
   refine Term.rec (motive_2 := fun xs => ∀ x ∈ xs, motive x)
     (motive_3 := fun entries => ∀ k v, (k, v) ∈ entries → motive k ∧ motive v)

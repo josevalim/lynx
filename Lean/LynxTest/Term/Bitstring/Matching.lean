@@ -200,8 +200,23 @@ theorem full_literal_pattern_requires_exact_bytes_and_length :
     matchesFullLiteral (.bitstring ⟨#[97, 98]⟩ 0 (by decide)) = false ∧
     matchesFullLiteral (.bitstring ⟨#[97, 98, 99, 100]⟩ 0 (by decide)) = false ∧
     matchesFullLiteral (.bitstring ⟨#[97, 98, 100]⟩ 0 (by decide)) = false ∧
-    matchesFullLiteral (.bitstring ⟨#[97, 98, 99]⟩ 7 (by decide)) = false ∧
+    matchesFullLiteral (.bitstring ⟨#[97, 98, 98]⟩ 7 (by decide)) = false ∧
     matchesFullLiteral (.atom "abc") = false := by
+  repeat first | apply And.intro | rfl
+
+private def matchesPartialLiteral (input : Term) : Bool :=
+  match input with
+  | .bitstring ⟨⟨[160]⟩⟩ ⟨3, _⟩ _ => true
+  | _ => false
+
+theorem partial_literal_pattern :
+    matchesPartialLiteral (Term.Bitstring.ofBits [true, false, true]) = true ∧
+    matchesPartialLiteral (.bitstring ⟨#[0xa0]⟩ 3 (by decide)) = true ∧
+    matchesPartialLiteral (.bitstring ⟨#[0x80]⟩ 3 (by decide)) = false ∧
+    matchesPartialLiteral (.bitstring ⟨#[0xa0]⟩ 4 (by decide)) = false ∧
+    matchesPartialLiteral (.bitstring ⟨#[0xa0]⟩ 0 (by decide)) = false ∧
+    matchesPartialLiteral (.bitstring ⟨#[0xa0, 0]⟩ 3 (by decide)) = false ∧
+    matchesPartialLiteral empty = false := by
   repeat first | apply And.intro | rfl
 
 end LynxTest.Term.Bitstring.Matching
