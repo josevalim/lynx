@@ -87,11 +87,16 @@ private structure ProofDiagnostic where
   location : Location
   fileName : Option String := none
 
+private structure PatternExtraction where
+  lookup : TSyntax `term
+  pattern : TSyntax `term
+  catchAll : Bool := false
+
 private structure DecodeState where
   spans : Array Span := #[]
   diagnostics : Array ProofDiagnostic := #[]
   theorems : Array (Name × Span) := #[]
-  patternExtractions : Array (TSyntax `term × Json) := #[]
+  patternExtractions : Array PatternExtraction := #[]
   nextBitstringPattern : Nat := 0
 
 private abbrev DecodeM := ReaderT Lean.Environment (StateT DecodeState (Except String))
@@ -181,7 +186,7 @@ private partial def catchAllPattern (j : Json) : Except String Bool := do
   | _ => return false
 
 /-- Collect extraction checks during ordinary recursive pattern decoding. -/
-private def withExtractions (decode : DecodeM α) : DecodeM (α × Array (TSyntax `term × Json)) := do
+private def withExtractions (decode : DecodeM α) : DecodeM (α × Array PatternExtraction) := do
   let saved := (← get).patternExtractions
   modify fun s => { s with patternExtractions := #[] }
   let result ← decode
@@ -189,19 +194,23 @@ private def withExtractions (decode : DecodeM α) : DecodeM (α × Array (TSynta
   modify fun s => { s with patternExtractions := saved }
   return (result, patterns)
 
-/-- Decode extracted values through the existing recursive pattern decoder,
-then match the lookup directly with the clause's fallthrough continuation. -/
-private partial def patternMatches (patterns : Array (TSyntax `term × Json))
-    (decode : Json → DecodeM (TSyntax `term)) (body fallback : TSyntax `term) :
-    DecodeM (TSyntax `term) := do
+/-- Queue a decoded pattern before the checks that depend on its bindings. -/
+private def addExtraction (lookup pattern : TSyntax `term) (catchAll : Bool := false)
+    (nested : Array PatternExtraction := #[]) : DecodeM Unit :=
+  modify fun s => { s with patternExtractions :=
+    (s.patternExtractions.push ⟨lookup, pattern, catchAll⟩) ++ nested }
+
+/-- Match extracted values with the clause's fallthrough continuation. -/
+private def patternMatches (patterns : Array PatternExtraction)
+    (body fallback : TSyntax `term) : TSyntax `term := Id.run do
   let mut branch := body
-  for (lookup, pattern) in patterns.reverse do
-    let (pat, nested) ← withExtractions (decode pattern)
-    let matched ← patternMatches nested decode branch fallback
-    branch := if ← catchAllPattern pattern then
-      Unhygienic.run `(match ($lookup) with | $pat => $matched)
+  for extraction in patterns.reverse do
+    let lookup := extraction.lookup
+    let pat := extraction.pattern
+    branch := if extraction.catchAll then
+      Unhygienic.run `(match ($lookup) with | $pat => $branch)
     else
-      Unhygienic.run `(match ($lookup) with | $pat => $matched | _ => $fallback)
+      Unhygienic.run `(match ($lookup) with | $pat => $branch | _ => $fallback)
   return branch
 
 /-- Source locations do not affect literal-key identity. -/
@@ -342,7 +351,7 @@ private partial def guardBinders (j : Json) : Array Json :=
   match guardKind j with
   | "var" => #[(j.getObjValD "name")]
   | "cons" => guardBinders (j.getObjValD "head") ++ guardBinders (j.getObjValD "tail")
-  | "tuple" | "$list" => ((arr j "elements").toOption.getD #[]).flatMap guardBinders
+  | "tuple" => ((arr j "elements").toOption.getD #[]).flatMap guardBinders
   | "map" => ((arr j "entries").toOption.getD #[]).flatMap fun e => guardBinders (e.getObjValD "value")
   | "alias" => guardBinders (j.getObjValD "pattern")
   | _ => #[]
@@ -449,7 +458,7 @@ private partial def refineGuardPattern (j : Json) (name pattern : Json) : Json :
   match guardKind j with
   | "cons" => return j.setObjVal! "head" (refineGuardPattern (j.getObjValD "head") name pattern)
       |>.setObjVal! "tail" (refineGuardPattern (j.getObjValD "tail") name pattern)
-  | "tuple" | "$list" => return j.setObjVal! "elements" (toJson
+  | "tuple" => return j.setObjVal! "elements" (toJson
       (((arr j "elements").toOption.getD #[]).map (refineGuardPattern · name pattern)))
   | "map" => return j.setObjVal! "entries" (toJson
       (((arr j "entries").toOption.getD #[]).map fun e =>
@@ -497,10 +506,6 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "raise_dynamic", "reraise", "match", "receive", "try", "stacktrace", "label", "jump"] then
     throw s!"{kind} is not valid in patterns"
   let result ← match kind with
-  | "$list" => do
-    fields j ["kind", "elements", "span"]
-    let elements ← (← arr j "elements").mapM (term map info pattern)
-    pure (Unhygienic.run `([$elements,*]))
   | "$type" => do
     unless pattern do throw "type refinement is only valid in patterns"
     fields j ["kind", "constructor", "span"]
@@ -549,17 +554,6 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let literal : TSyntax `term := ⟨Syntax.mkStrLit (← str j "value")⟩
     let ctor := mkIdent ``Lynx.Term.atom
     pure (Unhygienic.run `($ctor $literal))
-  | "$some_pair" => do
-    fields j ["kind", "first", "second", "span"]
-    unless pattern do throw "option pair extraction is only valid in patterns"
-    let first ← term map info true (← field j "first")
-    let second ← term map info true (← field j "second")
-    pure (Unhygienic.run `(Option.some ($first, $second)))
-  | "$bool" => do
-    fields j ["kind", "value", "span"]
-    unless pattern do throw "boolean extraction is only valid in patterns"
-    if ← (← field j "value").getBool? then pure (Unhygienic.run `(Bool.true))
-    else pure (Unhygienic.run `(Bool.false))
   | "bitstring_pattern" => do
     fields j ["kind", "segments", "span"]
     unless pattern do throw "bitstring pattern is only valid in patterns"
@@ -572,8 +566,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let binder ← fresh
     let input ← term map info true binder
     let mut remaining := input
-    let accepted := Json.mkObj [("kind", toJson "$bool"), ("value", toJson true),
-      ("span", nodeSpan)]
+    let accepted := Unhygienic.run `(Bool.true)
     let segments ← arr j "segments"
     let mut trailing := false
     for i in [:segments.size] do
@@ -581,7 +574,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       let segmentType ← str segment "type"
       let si ← span map segment info
       let value ← field segment "value"
-      let lookup ← if segmentType == "binary" then do
+      if segmentType == "binary" then do
         fields segment ["type", "value", "size", "unit", "span"]
         unless i + 1 == segments.size do throw "binary/bitstring capture must be trailing"
         let unit ← (← field segment "unit").getNat?
@@ -591,8 +584,9 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
         let extract := mkIdent ``Lynx.Term.Bitstring.matchTail
         trailing := true
         let lookup := Unhygienic.run `($extract $remaining $size $unit)
-        modify fun s => { s with patternExtractions := s.patternExtractions.push (lookup, accepted) }
-        pure (remaining, value)
+        addExtraction lookup accepted
+        let (pat, nested) ← withExtractions (term map si true value)
+        addExtraction remaining pat (← catchAllPattern value) nested
       else do
         let little ← match ← str segment "endian" with
           | "big" => pure (mkIdent ``Bool.false)
@@ -619,14 +613,13 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
           pure (Unhygienic.run `($extract $remaining $width $little))
         else throw s!"unsupported bitstring pattern segment '{segmentType}'"
         remaining := rest
-        let pair := Json.mkObj [("kind", toJson "$some_pair"), ("first", value),
-          ("second", next), ("span", nodeSpan)]
-        pure (extract, pair)
-      modify fun s => { s with patternExtractions := s.patternExtractions.push lookup }
+        let (pat, nested) ← withExtractions (term map si true value)
+        let pair := Unhygienic.run `(Option.some ($pat, $rest))
+        addExtraction extract pair false nested
     unless trailing do
       let finish := mkIdent ``Lynx.Term.Bitstring.matchEnd
       let lookup := Unhygienic.run `($finish $remaining)
-      modify fun s => { s with patternExtractions := s.patternExtractions.push (lookup, accepted) }
+      addExtraction lookup accepted
     pure input
   | "bitstring" => do
     fields j ["kind", "bytes", "last_bits", "span"]
@@ -651,8 +644,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       let input ← term map info true binder
       let compare := mkIdent ``Lynx.Term.exactCompare
       let lookup := Unhygienic.run `(decide ($compare $input $literal = Ordering.eq))
-      let expected := Json.mkObj [("kind", toJson "$bool"), ("value", toJson true), ("span", nodeSpan)]
-      modify fun s => { s with patternExtractions := s.patternExtractions.push (lookup, expected) }
+      addExtraction lookup (Unhygienic.run `(Bool.true))
       return input
     pure literal
   | "bitstring_constructor" => do
@@ -738,8 +730,8 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       let input ← term map info true binder
       let getMapKeys := mkIdent ``Lynx.Term.getMapKeys
       let lookup := withSpan info.info (Unhygienic.run `($getMapKeys [$keys,*] $input))
-      let values := Json.mkObj [("kind", toJson "$list"), ("elements", toJson values), ("span", nodeSpan)]
-      modify fun s => { s with patternExtractions := s.patternExtractions.push (lookup, values) }
+      let (values, nested) ← withExtractions (values.mapM (term map info true))
+      addExtraction lookup (Unhygienic.run `([$values,*])) false nested
       return input
     let entries ← (← arr j "entries").mapM fun entry => do
       fields entry ["key", "value", "span"]
@@ -888,7 +880,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let mut payloadTypes : Array (TSyntax `term) := #[]
     let mut payloads : Array (TSyntax `term) := #[]
     let mut patterns : Array (TSyntax `term) := #[]
-    let mut lookups : Array (Array (TSyntax `term × Json)) := #[]
+    let mut lookups : Array (Array PatternExtraction) := #[]
     let mut guards : Array (TSyntax `term) := #[]
     let mut bodies : Array (TSyntax `term) := #[]
     for clause in clauses do
@@ -951,7 +943,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
         match ($toExcept $guard $env:ident $purity) with
         | $exceptOk ($atomId "true") => $accepted
         | _ => $fallback ()))
-      let branch ← patternMatches lookups[i]! (term map info true) branch (Unhygienic.run `($fallback ()))
+      let branch := patternMatches lookups[i]! branch (Unhygienic.run `($fallback ()))
       let rest := select
       let catchAll ← catchAllPattern (← field clauses[i]! "pattern")
       let matched := if catchAll then Unhygienic.run `(match $message:ident with | $pat => $branch)
@@ -979,7 +971,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let unit : TSyntax `term := ⟨(mkIdent ``Unit.unit).raw⟩
     let clauses ← (← arr j "cases").mapM (fun c => refineGuardClause c exprJson)
     let mut nests : Array Bool := #[]
-    let mut lookups : Array (Array (TSyntax `term × Json)) := #[]
+    let mut lookups : Array (Array PatternExtraction) := #[]
     let mut cases : Array (TSyntax ``Lean.Parser.Term.matchAlt) := #[]
     for c in clauses do
       fields c (if (field c "guard").isOk then ["patterns", "guard", "body", "span"]
@@ -1037,7 +1029,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
                 | $atom "true" => $body
                 | _ => $fallback ()) (fun _ => $fallback ())))
               else pure body
-            let branch ← patternMatches lookups[i]! (term map ci true) branch (Unhygienic.run `($fallback ()))
+            let branch := patternMatches lookups[i]! branch (Unhygienic.run `($fallback ()))
             let catchAll ← (← arr c "patterns").allM fun pat => do return ← catchAllPattern pat
             let matched := if catchAll then Unhygienic.run `(
               match $[$exprs:term],* with | $pats,* => $branch)

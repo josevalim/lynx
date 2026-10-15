@@ -281,8 +281,8 @@ set_option «match».ignoreUnusedAlts true
   def «nested/1» (_0 : Lynx.Term) : Lynx.Result :=
     (fun lynxMatchNext =>
         match _0 with
-        | Lynx.Term.tuple ⟨[Lynx.Term.atom "tag", Lynx.Term.cons lynxMap382 Lynx.Term.nil]⟩ =>
-          match (Lynx.Term.getMapKeys [Lynx.Term.atom "bits"] lynxMap382) with
+        | Lynx.Term.tuple ⟨[Lynx.Term.atom "tag", Lynx.Term.cons lynxMap336 Lynx.Term.nil]⟩ =>
+          match (Lynx.Term.getMapKeys [Lynx.Term.atom "bits"] lynxMap336) with
           | [lynxBits29] =>
             match
               (Lynx.Term.Bitstring.matchInteger lynxBits29 (Lynx.Term.integer 8) 1 Bool.false

@@ -26,8 +26,8 @@ set_option «match».ignoreUnusedAlts true
     (fun lynxLabel_map_group_33 =>
         (fun lynxMatchNext =>
             match _0 with
-            | lynxMap75 =>
-              match (Lynx.Term.getMapKeys [Lynx.Term.atom "a", Lynx.Term.atom "b"] lynxMap75) with
+            | lynxMap73 =>
+              match (Lynx.Term.getMapKeys [Lynx.Term.atom "a", Lynx.Term.atom "b"] lynxMap73) with
               | [lynxMapGroup33_0, lynxMapGroup33_1] =>
                 match lynxMapGroup33_0, lynxMapGroup33_1 with
                 | Lynx.Term.integer 0, vB@(Lynx.Term.integer _) => pure (Lynx.Term.atom "first")
@@ -47,9 +47,9 @@ set_option «match».ignoreUnusedAlts true
           (fun (_ : Unit) =>
             (fun lynxMatchNext =>
                 match _0 with
-                | lynxMap47 =>
+                | lynxMap48 =>
                   match
-                    (Lynx.Term.getMapKeys [Lynx.Term.atom "a", Lynx.Term.atom "b"] lynxMap47) with
+                    (Lynx.Term.getMapKeys [Lynx.Term.atom "a", Lynx.Term.atom "b"] lynxMap48) with
                   | [Lynx.Term.integer 2, vB@(Lynx.Term.integer _)] =>
                     pure (Lynx.Term.atom "fourth")
                   | _ => lynxMatchNext ())
@@ -64,10 +64,10 @@ set_option «match».ignoreUnusedAlts true
         match _0 with
         |
         Lynx.Term.tuple
-            ⟨[Lynx.Term.atom "tag", Lynx.Term.cons (vOuter@lynxMap119) Lynx.Term.nil]⟩ =>
-          match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap119) with
-          | [vInner@lynxMap137] =>
-            match (Lynx.Term.getMapKeys [Lynx.Term.atom "b"] lynxMap137) with
+            ⟨[Lynx.Term.atom "tag", Lynx.Term.cons (vOuter@lynxMap116) Lynx.Term.nil]⟩ =>
+          match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap116) with
+          | [vInner@lynxMap122] =>
+            match (Lynx.Term.getMapKeys [Lynx.Term.atom "b"] lynxMap122) with
             | [vValue@(Lynx.Term.integer _)] => pure (Lynx.Term.tuple #[vValue, vInner, vOuter])
             | _ => lynxMatchNext ()
           | _ => lynxMatchNext ()
@@ -80,8 +80,8 @@ set_option «match».ignoreUnusedAlts true
   def «map_duplicate/3» (_0 : Lynx.Term) (_1 : Lynx.Term) (_2 : Lynx.Term) : Lynx.Result :=
     (fun lynxMatchNext =>
         match _2 with
-        | lynxMap152 =>
-          match (Lynx.Term.getMapKeys [_0, _1] lynxMap152) with
+        | lynxMap147 =>
+          match (Lynx.Term.getMapKeys [_0, _1] lynxMap147) with
           | [vX, Lynx.Term.tuple ⟨[Lynx.Term.atom "ok", vY]⟩] => pure (Lynx.Term.tuple #[vX, vY])
           | _ => lynxMatchNext ())
       (fun (_ : Unit) =>
@@ -102,8 +102,8 @@ set_option «match».ignoreUnusedAlts true
                   pure (Lynx.Term.atom "false", Lynx.Term.atom "false"))
           (fun lynxMatchNext =>
                 match _11, _6 with
-                | Lynx.Term.atom "true", lynxMap206 =>
-                  match (Lynx.Term.getMapKeys [_7] lynxMap206) with
+                | Lynx.Term.atom "true", lynxMap200 =>
+                  match (Lynx.Term.getMapKeys [_7] lynxMap200) with
                   | [vValue] => pure vValue
                   | _ => lynxMatchNext ()
                 | _, _ => lynxMatchNext ())
@@ -129,8 +129,8 @@ set_option «match».ignoreUnusedAlts true
     | _ =>
       (fun lynxMatchNext =>
           match _0 with
-          | lynxMap255 =>
-            match (Lynx.Term.getMapKeys [Lynx.Term.float ⟨Bool.false, 1023, 0⟩] lynxMap255) with
+          | lynxMap248 =>
+            match (Lynx.Term.getMapKeys [Lynx.Term.float ⟨Bool.false, 1023, 0⟩] lynxMap248) with
             | [Lynx.Term.float ⟨Bool.false, 1023, 2251799813685248⟩] => pure (Lynx.Term.atom "map")
             | _ => lynxMatchNext ())
         (fun (_ : Unit) =>
