@@ -51,6 +51,24 @@ binary32 are not modeled yet and currently return badarg. -/
       integerSegment (.integer (Int.ofNat encoded)) (.integer 64) 1 little
     | none => .error (.error (.atom "badarg"))
 
+/-- Copy a whole bitstring or a sized prefix. Whole segments must have a bit
+length divisible by their unit; sized segments may consume an unaligned input. -/
+#lynx_pure @[expose] public def binarySegment (value size : Term) (unit : Nat) : Result :=
+  match value with
+  | .bitstring bytes last _ =>
+    if 1 ≤ unit ∧ unit ≤ 256 then
+      let length := bitSize bytes last
+      match size with
+      | .atom "all" =>
+        if length % unit = 0 then .ok value else .error (.error (.atom "badarg"))
+      | .integer size =>
+        if 0 ≤ size ∧ size.toNat * unit ≤ length then
+          .ok (ofBits ((toBits bytes last).take (size.toNat * unit)))
+        else .error (.error (.atom "badarg"))
+      | _ => .error (.error (.atom "badarg"))
+    else .error (.error (.atom "badarg"))
+  | _ => .error (.error (.atom "badarg"))
+
 /-- Concatenate meaningful bits, including segments that cross byte boundaries. -/
 #lynx_pure @[expose] public def append (left right : Term) : Result :=
   match left, right with

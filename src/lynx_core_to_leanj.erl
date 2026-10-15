@@ -59,6 +59,11 @@ law(#c_literal{val = [#{name := {Name, Params}, ensures := Ensures} = Law]} = Co
         {ok, Requires} when is_atom(Requires) -> ok;
         _ -> core_error(Core, ~"law requires must be a function name")
     end,
+    case maps:find(max_heartbeats, Law) of
+        error -> ok;
+        {ok, Limit} when is_integer(Limit), Limit > 0 -> ok;
+        _ -> core_error(Core, ~"law max_heartbeats must be a positive integer")
+    end,
     Anno = case maps:find(span, Law) of
         error -> cerl:get_ann(Core);
         {ok, Span} ->
@@ -154,7 +159,8 @@ translate_def(Name, {function, #c_fun{anno = Anno, vars = Vars, body = Body}}, S
 translate_def(Name, {cutoff, #c_fun{anno = Anno, vars = Vars}}, State) ->
     translate_definition(Name, Anno, Vars, cutoff, State);
 translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensures, proof := Proof} = Law}, State) ->
-    translate_definition(Name, Anno, Params, {law, maps:find(requires, Law), Ensures, Proof}, State).
+    translate_definition(Name, Anno, Params,
+        {law, maps:find(requires, Law), Ensures, Proof, maps:find(max_heartbeats, Law)}, State).
 
 translate_definition(Name, Anno, Vars, Definition, State0) ->
     State1 = State0#state{name = Name, local_calls = #{}, pure = true, next_var = 0, labels = #{},
@@ -173,7 +179,7 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
                 ~"params" => [variable(Var) || Var <- Vars],
                 ~"body" => TranslatedBody
             }), Next};
-        {law, Requires, Ensures, Proof} ->
+        {law, Requires, Ensures, Proof, MaxHeartbeats} ->
             {_, Arity} = Name,
             {Requirement, Next1} = case Requires of
                 error -> {#{}, State1};
@@ -182,7 +188,12 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
                     {#{~"requires" => atom_to_binary(Helper, utf8)}, Next}
             end,
             Next2 = translate_law_helper(Ensures, Arity, Next1),
-            {node(~"theorem", Anno, Requirement#{
+            Options = case MaxHeartbeats of
+                error -> #{};
+                {ok, Limit} -> #{~"max_heartbeats" => Limit}
+            end,
+            Properties = maps:merge(Requirement, Options),
+            {node(~"theorem", Anno, Properties#{
                 ~"name" => function_name(Name), ~"params" => [atom_to_binary(Param, utf8) || Param <- Vars],
                 ~"ensures" => atom_to_binary(Ensures, utf8), ~"proof" => Proof
             }), Next2}
@@ -621,6 +632,13 @@ binary_pattern_segments([#c_bitstr{type = #c_literal{val = Type}} = Segment | Re
 binary_pattern_segments([Core | _], _State) ->
     unsupported(#c_binary{anno = cerl:get_ann(Core), segments = [Core]}).
 
+binary_segment(#c_bitstr{anno = Anno, val = Value, size = Size,
+        unit = #c_literal{val = Unit}, type = #c_literal{val = binary}}, State0)
+        when is_integer(Unit), Unit >= 1, Unit =< 256 ->
+    {TranslatedValue, State1} = value(Value, State0),
+    {TranslatedSize, State2} = value(Size, State1),
+    {#{~"type" => ~"binary", ~"span" => span(Anno), ~"value" => TranslatedValue,
+       ~"size" => TranslatedSize, ~"unit" => Unit}, State2};
 binary_segment(#c_bitstr{unit = #c_literal{val = Unit}, type = #c_literal{val = integer},
         flags = #c_literal{val = Flags}} = Core, State0)
         when is_integer(Unit), Unit >= 1, Unit =< 256, is_list(Flags) ->
@@ -631,7 +649,7 @@ binary_segment(#c_bitstr{size = #c_literal{val = Size}, unit = #c_literal{val = 
              (Size * Unit =:= 16 orelse Size * Unit =:= 32 orelse Size * Unit =:= 64), is_list(Flags) ->
     binary_float_segment(binary_segment_flags(Flags), Core, State0);
 binary_segment(Core, _State) ->
-    core_error(Core, ~"unsupported binary segment (expected integer or 16/32/64-bit float segment)").
+    core_error(Core, ~"unsupported binary segment (expected integer, binary, or 16/32/64-bit float segment)").
 
 %% Resolve native on the translating VM so Lean only needs explicit endianness.
 binary_segment_flags(Flags) ->

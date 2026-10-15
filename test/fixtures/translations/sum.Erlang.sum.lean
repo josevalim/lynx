@@ -32,6 +32,7 @@ set_option «match».ignoreUnusedAlts true
 
 end
 
+set_option maxHeartbeats 1000000 in
 theorem «sum_empty/0» : «sum_empty_ensures/0» = Lynx.Result.ok Lynx.Term.true := by
   simp [«sum_empty_ensures/0», «sum/1», Erlang.lists.«sum/1», Erlang.lists.«sum/2»,
     Erlang.erlang.«==/2»]

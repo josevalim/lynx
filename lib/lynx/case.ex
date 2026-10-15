@@ -62,6 +62,8 @@ defmodule Lynx.Case do
     * `:requires` (optional) — the precondition expression. Defaults to `true`.
     * `:expects` (required) — the expression to prove.
     * `:proof` (optional) — a `Lynx.Lean` value. Defaults to `rfl`.
+    * `:max_heartbeats` (optional) — a positive integer overriding Lean's
+      elaboration budget for this law only. It does not change proof checking.
 
   ## Executable definition
 

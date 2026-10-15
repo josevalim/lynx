@@ -653,28 +653,37 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       match segmentType with
       | "integer" => fields segment ["type", "value", "size", "unit", "signed", "endian", "span"]
       | "float" => fields segment ["type", "value", "size", "endian", "span"]
+      | "binary" => fields segment ["type", "value", "size", "unit", "span"]
       | other => throw s!"unsupported bitstring segment type '{other}'"
       let si ← span map segment info
       let value ← term map si false (← field segment "value")
-      let little ← match ← str segment "endian" with
-        | "big" => pure (mkIdent ``Bool.false)
-        | "little" => pure (mkIdent ``Bool.true)
-        | other => throw s!"unsupported bitstring segment endianness '{other}'"
-      let body ← if segmentType == "float" then do
-        let width ← (← field segment "size").getNat?
-        unless width == 16 || width == 32 || width == 64 do
-          throw "float segment size must be 16, 32, or 64"
-        let width : TSyntax `term := ⟨Syntax.mkNumLit (toString width)⟩
-        let build := mkIdent ``Lynx.Term.Bitstring.floatSegment
-        pure (Unhygienic.run `($build $value $width $little))
-      else do
+      let body ← if segmentType == "binary" then do
         let size ← term map si false (← field segment "size")
         let unit ← (← field segment "unit").getNat?
-        unless 1 ≤ unit && unit ≤ 256 do throw "integer segment unit must be in 1..256"
-        let _ ← (← field segment "signed").getBool?
+        unless 1 ≤ unit && unit ≤ 256 do throw "binary segment unit must be in 1..256"
         let unit : TSyntax `term := ⟨Syntax.mkNumLit (toString unit)⟩
-        let build := mkIdent ``Lynx.Term.Bitstring.integerSegment
-        pure (Unhygienic.run `($build $value $size $unit $little))
+        let build := mkIdent ``Lynx.Term.Bitstring.binarySegment
+        pure (Unhygienic.run `($build $value $size $unit))
+      else do
+        let little ← match ← str segment "endian" with
+          | "big" => pure (mkIdent ``Bool.false)
+          | "little" => pure (mkIdent ``Bool.true)
+          | other => throw s!"unsupported bitstring segment endianness '{other}'"
+        if segmentType == "float" then do
+          let width ← (← field segment "size").getNat?
+          unless width == 16 || width == 32 || width == 64 do
+            throw "float segment size must be 16, 32, or 64"
+          let width : TSyntax `term := ⟨Syntax.mkNumLit (toString width)⟩
+          let build := mkIdent ``Lynx.Term.Bitstring.floatSegment
+          pure (Unhygienic.run `($build $value $width $little))
+        else do
+          let size ← term map si false (← field segment "size")
+          let unit ← (← field segment "unit").getNat?
+          unless 1 ≤ unit && unit ≤ 256 do throw "integer segment unit must be in 1..256"
+          let _ ← (← field segment "signed").getBool?
+          let unit : TSyntax `term := ⟨Syntax.mkNumLit (toString unit)⟩
+          let build := mkIdent ``Lynx.Term.Bitstring.integerSegment
+          pure (Unhygienic.run `($build $value $size $unit $little))
       pure (withSpan si.info body)
     let empty := Unhygienic.run `(Lynx.Term.bitstring ⟨#[]⟩ 0 (by decide))
     let ok := mkIdent ``Lynx.Result.ok
@@ -1200,7 +1209,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       command map decl info false
     pure (Unhygienic.run `(mutual $decls:command* end))
   | "theorem" => do
-    fields j ["kind", "name", "params", "requires", "ensures", "proof", "span"]
+    fields j ["kind", "name", "params", "requires", "ensures", "proof", "span", "max_heartbeats"]
     let params ← (← arr j "params").mapM fun p => do
       pure (mkIdent (Name.mkSimple (← p.getStr?)))
     let arity := params.size
@@ -1224,8 +1233,16 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       | none => binders
       | some requires =>
         binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $requires = $ok $trueTerm)))
-    pure (Unhygienic.run `(theorem $name $binders:bracketedBinder*
-      : $ensures = $ok $trueTerm := $proof))
+    let declaration := Unhygienic.run `(theorem $name $binders:bracketedBinder*
+      : $ensures = $ok $trueTerm := $proof)
+    match field j "max_heartbeats" with
+    | .error _ => pure declaration
+    | .ok value =>
+      let limit ← value.getNat?
+      unless limit > 0 do throw "max_heartbeats must be positive"
+      let limit : TSyntax `num := ⟨Syntax.mkNumLit (toString limit)⟩
+      let option := mkIdent `maxHeartbeats
+      pure (Unhygienic.run `(set_option $option:ident $limit:num in $declaration:command))
   | "def" => do
     fields j ["kind", "name", "params", "body", "pure", "span", "termination_suffix"]
     let params ← (← arr j "params").mapM (param map info)

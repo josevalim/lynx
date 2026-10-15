@@ -101,6 +101,42 @@ set_option «match».ignoreUnusedAlts true
   def «float32/1» (_0 : Lynx.Term) : Lynx.Result :=
     Lynx.Term.Bitstring.floatSegment _0 32 Bool.false
 
+#lynx_pure
+  def «binary_all/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.binarySegment _0 (Lynx.Term.atom "all") 8
+
+#lynx_pure
+  def «bitstring_all/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.binarySegment _0 (Lynx.Term.atom "all") 1
+
+#lynx_pure
+  def «binary_prefix/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.binarySegment _0 _1 8
+
+#lynx_pure
+  def «bitstring_unit/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.binarySegment _0 _1 3
+
+#lynx_pure
+  def «binary_mixed/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
+    Lynx.Result.bind
+      (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer 1) (Lynx.Term.integer 3) 1 Bool.false)
+      (fun lynxBinarySegment✝ =>
+        Lynx.Result.bind
+          (Lynx.Result.bind (Lynx.Term.Bitstring.binarySegment _0 (Lynx.Term.atom "all") 1)
+            (fun lynxBinarySegment✝ =>
+              Lynx.Result.bind
+                (Lynx.Result.bind (Lynx.Term.Bitstring.binarySegment _1 (Lynx.Term.atom "all") 8)
+                  (fun lynxBinarySegment✝ =>
+                    Lynx.Result.bind
+                      (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer 0)
+                        (Lynx.Term.integer 1) 1 Bool.false)
+                      (fun lynxBinaryTail✝ =>
+                        Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
+                (fun lynxBinaryTail✝ =>
+                  Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
+          (fun lynxBinaryTail✝ => Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝))
+
 end
 
 end Erlang.binary_construction

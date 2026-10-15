@@ -23,6 +23,27 @@ theorem ofBits_preserves_bits (input : List Bool) : bits (Term.Bitstring.ofBits 
 theorem ofBits_preserves_size (input : List Bool) : size (Term.Bitstring.ofBits input) = input.length :=
   Term.Bitstring.ofBits_bitSize input
 
+theorem whole_bitstring_preserves_encoding (input : Term)
+    (bitstring : ∃ bytes last valid, input = .bitstring bytes last valid) :
+    Term.Bitstring.binarySegment input (.atom "all") 1 = .ok input := by
+  obtain ⟨bytes, last, valid, rfl⟩ := bitstring
+  simp [Term.Bitstring.binarySegment, Nat.mod_one]
+
+theorem whole_segment_checks_unit (input : List Bool) (unit : Nat)
+    (positive : 1 ≤ unit) (bounded : unit ≤ 256) :
+    Term.Bitstring.binarySegment (Term.Bitstring.ofBits input) (.atom "all") unit =
+      if input.length % unit = 0 then .ok (Term.Bitstring.ofBits input)
+      else .error (.error (.atom "badarg")) := by
+  simp [Term.Bitstring.binarySegment, Term.Bitstring.ofBits, Term.Bitstring.pack_bitSize,
+    positive, bounded]
+
+theorem sized_segment_preserves_prefix (input : List Bool) (count unit : Nat)
+    (positive : 1 ≤ unit) (bounded : unit ≤ 256) (fits : count * unit ≤ input.length) :
+    Term.Bitstring.binarySegment (Term.Bitstring.ofBits input) (.integer count) unit =
+      .ok (Term.Bitstring.ofBits (input.take (count * unit))) := by
+  simp [Term.Bitstring.binarySegment, Term.Bitstring.ofBits, Term.Bitstring.pack_bitSize,
+    Term.Bitstring.pack_toBits, positive, bounded, fits]
+
 theorem integer_segment_size (value : Int) (width unit : Nat) (little : Bool)
     (positive : 1 ≤ unit) (bounded : unit ≤ 256) :
     ∃ result, Term.Bitstring.integerSegment (.integer value) (.integer width) unit little = .ok result ∧

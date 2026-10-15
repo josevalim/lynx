@@ -3,7 +3,8 @@
          integer_signed_little/2, integer_unit/2, integer_max_unit/2,
          integer_mixed/1, integer_invalid_size/1,
          float_default/1, float_big/1, float_little/1, float_unit/1,
-         float_mixed/1, float16/1, float32/1]).
+         float_mixed/1, float16/1, float32/1,
+         binary_all/1, bitstring_all/1, binary_prefix/2, bitstring_unit/2, binary_mixed/2]).
 
 empty() -> <<>>.
 integer_default(X) -> <<X>>.
@@ -23,3 +24,9 @@ float_unit(X) -> <<X:8/float-unit:8>>.
 float_mixed(X) -> <<1:3, X:64/float-little, -1:5/signed>>.
 float16(X) -> <<X:16/float>>.
 float32(X) -> <<X:32/float>>.
+
+binary_all(X) -> <<X/binary>>.
+bitstring_all(X) -> <<X/bitstring>>.
+binary_prefix(X, Size) -> <<X:Size/binary>>.
+bitstring_unit(X, Size) -> <<X:Size/binary-unit:3>>.
+binary_mixed(X, Y) -> <<1:3, X/bitstring, Y/binary, 0:1>>.

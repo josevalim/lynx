@@ -3,6 +3,7 @@ module
 public import Lynx.Modules.Erlang.erlang.Guards
 public import Lynx.Modules.Erlang.erlang.Process
 public import Lynx.Modules.Erlang.erlang.Exceptions
+public import Lynx.Modules.Erlang.erlang.Conversions
 
 public section
 

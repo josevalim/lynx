@@ -51,6 +51,8 @@ defmodule Lynx.Laws do
     * `ensures` (required) — the name of the predicate function to prove.
     * `requires` (optional) — the name of the precondition function. Omit it for
       an unconditional law.
+    * `max_heartbeats` (optional) — a positive integer setting Lean's elaboration
+      budget for this law only.
 
   Both predicate functions receive the law's arguments in order. Their results
   must be `true` for the precondition to hold or the law to succeed. The predicate
@@ -172,6 +174,9 @@ defmodule Lynx.Laws do
       usually built with `~LEAN`. Both inline and heredoc sigils are accepted.
       Defaults to `rfl`, which only proves goals that hold by definitional equality.
 
+    * `:max_heartbeats` (optional) — a positive integer overriding Lean's
+      elaboration budget for this law only. Proofs remain kernel-checked.
+
   ## Example
 
       law checked(value),
@@ -213,7 +218,7 @@ defmodule Lynx.Laws do
       compile_error!(env, "law options must be a keyword list")
     end
 
-    for key <- Keyword.keys(opts), key not in [:requires, :expects, :proof] do
+    for key <- Keyword.keys(opts), key not in [:requires, :expects, :proof, :max_heartbeats] do
       compile_error!(env, "unknown law option #{inspect(key)}")
     end
 
@@ -242,6 +247,18 @@ defmodule Lynx.Laws do
       if Keyword.has_key?(opts, :requires),
         do: Map.put(attribute, :requires, requires_name),
         else: attribute
+
+    attribute =
+      case Keyword.fetch(opts, :max_heartbeats) do
+        :error ->
+          attribute
+
+        {:ok, limit} when is_integer(limit) and limit > 0 ->
+          Map.put(attribute, :max_heartbeats, limit)
+
+        _ ->
+          compile_error!(env, ":max_heartbeats must be a positive integer literal")
+      end
 
     attributes = Macro.escape(Map.to_list(attribute))
     attributes = [proof: quote(do: Lynx.Laws.__proof__(unquote(proof)))] ++ attributes
