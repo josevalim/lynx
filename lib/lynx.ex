@@ -45,6 +45,50 @@ defmodule Lynx do
   Furthermore, when running proofs with ExUnit, the error reports include the path to
   folder with all `.lean` files. Use this to debug and guide your proofs.
 
+  ## Guidelines
+
+  A few tools and proof patterns help when working with existing library code:
+
+    * State the input domain with `requires:` and the intended general property
+      with `expects:`. Focus on properties ranging over variables instead of
+      passing specific values whenever possible. A terminating example does
+      not establish totality over all inputs.
+
+    * Use `cutoff &Module.function/arity` inside a `laws` group for dependencies
+      that the property's inputs must never reach, such as unsupported error
+      formatting. Lynx replaces the function before traversing its body or
+      dependencies. It returns an exhausted computation, so a proof of a
+      successful result must establish that the cutoff is never reached.
+      A cutoff does not assume a return value or an exception. Keep reachable
+      behavior translated and prove the actual implementation.
+
+    * Use `termination_suffix &Module.function/arity, ~LEAN"..."` inside a group
+      when Lean cannot infer termination of a translated recursive function.
+      Supply a well-founded `termination_by` argument when appropriate, or use
+      `partial_fixpoint` with a monotonicity proof when totality depends on the
+      law's input domain. In the latter case, use the generated `.eq_def`
+      equation and induction on a decreasing measure to establish that calls
+      in the domain return. The suffix alone does not prove totality.
+
+    * Inspect the generated Lean before writing the proof. BEAM compilation
+      can inline helpers or replace arithmetic with bit operations. Prove
+      equations for the translated operations first, then reason about those
+      equations mathematically. Keep the implementation separate from its
+      specification instead of proving a rewritten substitute.
+
+    * Reduce type checks and impossible branches early. Preserve shared
+      continuations and introduce names for intermediate arithmetic values
+      before simplifying; expanding every bind and nested expression can make
+      a small property expensive to prove. For complex nonrecursive functions,
+      `unfold` followed by selective simplification can avoid expensive
+      generation of simplification equations.
+
+    * Use `max_heartbeats: 1_000_000` on an individual law when a proof needs a
+      larger Lean elaboration budget. It does not weaken kernel checking.
+      First look for repeated expansion or unnecessary case splits. Measure
+      verification with `LYNX_PROFILE=1 LYNX_CACHE=0` so cached results do not
+      hide slow proofs.
+
   ## Limitations
 
   Lynx models a subset of Erlang/Elixir and the Erlang runtime. Proofs describe
