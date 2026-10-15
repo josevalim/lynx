@@ -14,6 +14,27 @@ private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) �
 private def referenceConstructor : Nat → Lynx.Term := Lynx.Term.reference
 private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0»
 
+-- Bit-field proof interfaces are available through ordinary public imports.
+private theorem decodeBigEndian (value width : Nat) :
+    Lynx.Term.Bitstring.decodeInteger (Lynx.Term.Bitstring.integerBits value width false) false =
+      value % 2 ^ width :=
+  Lynx.Term.Bitstring.decodeInteger_integerBits value width
+
+private theorem extractBigEndian (value fieldWidth tailWidth : Nat) :
+    Lynx.Term.Bitstring.matchInteger
+      (Lynx.Term.Bitstring.ofBits (Lynx.Term.Bitstring.integerBits value (fieldWidth + tailWidth) false))
+      (.integer fieldWidth) 1 false false =
+        some (.integer (((value >>> tailWidth) % 2 ^ fieldWidth : Nat) : Int),
+          Lynx.Term.Bitstring.ofBits (Lynx.Term.Bitstring.integerBits value tailWidth false)) :=
+  Lynx.Term.Bitstring.matchInteger_big value fieldWidth tailWidth
+
+private theorem binary64Encoding (value : Lynx.Term.FiniteFloat) :
+    ∃ encoded : Nat,
+      Lynx.Term.Bitstring.floatSegment (.float value) 64 false =
+        .ok (Lynx.Term.Bitstring.ofBits (Lynx.Term.Bitstring.integerBits encoded 64 false)) := by
+  obtain ⟨encoded, built, _⟩ := Lynx.Term.Bitstring.floatSegment_fields value
+  exact ⟨encoded, built⟩
+
 -- Numeric float ordering is available without unfolding comparison internals.
 private theorem floatOrdering (left right : Lynx.Term.FiniteFloat) :
     Lynx.Term.compare (.float left) (.float right) =

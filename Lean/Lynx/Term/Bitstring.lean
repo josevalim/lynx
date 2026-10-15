@@ -114,4 +114,66 @@ public theorem pack_valid (bits : List Bool) :
     rw [getElem!_pos (pack bits) (i / 8) byteValid]
     simp [ByteArray.getElem_eq_getElem_data, pack, offset, position, List.getElem?_eq_getElem hi']
 
+private theorem decode_acc (bits : List Bool) (acc : Nat) :
+    bits.foldl (fun value bit => value * 2 + if bit then 1 else 0) acc =
+      acc * 2 ^ bits.length + (BitVec.ofBoolListBE bits).toNat := by
+  induction bits generalizing acc with
+  | nil => simp [BitVec.ofBoolListBE]
+  | cons b bs ih =>
+    simp only [List.foldl_cons, ih, List.length_cons, BitVec.ofBoolListBE, BitVec.toNat_cons']
+    cases b <;> simp [Nat.pow_succ, Nat.add_mul, Nat.mul_assoc, Nat.mul_comm,
+      Nat.add_assoc, Nat.add_comm, Nat.shiftLeft_eq]
+
+private theorem decode_big (bits : List Bool) :
+    decodeInteger bits false = (BitVec.ofBoolListBE bits).toNat := by
+  simp [decodeInteger, decode_acc]
+
+@[simp] public theorem integerBits_length (n : Int) (w : Nat) (little : Bool) :
+    (integerBits n w little).length = w := by simp [integerBits]
+
+/-- Unsigned big-endian encoding and decoding recover exactly the low bits. -/
+public theorem decodeInteger_integerBits (n w : Nat) :
+    decodeInteger (integerBits n w false) false = n % 2 ^ w := by
+  rw [decode_big]
+  have bits : (BitVec.ofBoolListBE (integerBits n w false)).cast (integerBits_length n w false) =
+      BitVec.ofNat w n := by
+    apply BitVec.eq_of_getMsbD_eq
+    intro i
+    simp only [BitVec.getMsbD_cast, BitVec.getMsbD_ofBoolListBE]
+    by_cases hi : i < w
+    · have hidx : w - 1 - i < w := by omega
+      simp only [BitVec.getMsbD, BitVec.getLsbD, BitVec.toNat_ofNat,
+        Nat.testBit_mod_two_pow, hi, hidx, decide_true, Bool.true_and]
+      simp [integerBits, List.getD, hi, ← Int.natCast_shiftRight,
+        Nat.testBit_eq_decide_div_mod_eq,
+        Nat.shiftRight_eq_div_pow]
+      have power : (2 : Int) ^ (w - 1 - i) = ((2 ^ (w - 1 - i) : Nat) : Int) := by simp
+      rw [power, ← Int.natCast_ediv]
+      change ((Int.ofNat (n / 2 ^ (w - 1 - i) % 2)) == Int.ofNat 1) = _
+      apply Bool.eq_iff_iff.mpr
+      simp only [beq_iff_eq, decide_eq_true_eq]
+      exact ⟨Int.ofNat.inj, congrArg Int.ofNat⟩
+    · simp [integerBits, List.getD, BitVec.getMsbD, hi]
+  have := congrArg BitVec.toNat bits
+  simpa using this
+
+/-- Split a big-endian integer into independently decodable fields. -/
+public theorem integerBits_add (n : Int) (left right : Nat) :
+    integerBits n (left + right) false =
+      integerBits (n >>> right) left false ++ integerBits n right false := by
+  simp only [integerBits, Bool.false_eq_true, ↓reduceIte, List.range_add, List.map_append,
+    List.map_map, Function.comp_def]
+  congr 1
+  · apply List.map_congr_left
+    intro i hi
+    have hi : i < left := List.mem_range.mp hi
+    rw [← Int.shiftRight_add]
+    have shift : right + (left - 1 - i) = left + right - 1 - i := by omega
+    rw [shift]
+  · apply List.map_congr_left
+    intro i hi
+    have shift : left + right - 1 - (left + i) = right - 1 - i := by omega
+    rw [shift]
+
+
 end Lynx.Term.Bitstring
