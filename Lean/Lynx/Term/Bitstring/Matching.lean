@@ -111,4 +111,18 @@ consume exactly the remaining bits. -/
   | .bitstring bytes last _ => bitSize bytes last == 0
   | _ => Bool.false
 
+/-- Extract a field from a bit view without expanding packed storage. -/
+public theorem matchInteger_take (bits : List Bool) (width : Nat) (enough : width ≤ bits.length) :
+    matchInteger (ofBits bits) (.integer width) 1 Bool.false Bool.false =
+      some (.integer (decodeInteger (bits.take width) Bool.false), ofBits (bits.drop width)) := by
+  simp [matchInteger, ofBits, pack_toBits, enough]
+
+public theorem matchTail_bits (bits : List Bool) :
+    matchTail (ofBits bits) (.atom "all") 1 = Bool.true := by
+  simp [matchTail, ofBits, pack_bitSize, Nat.mod_one]
+
+public theorem matchEnd_bits (bits : List Bool) :
+    matchEnd (ofBits bits) = (bits.length == 0) := by
+  simp [matchEnd, ofBits, pack_bitSize]
+
 end Lynx.Term.Bitstring

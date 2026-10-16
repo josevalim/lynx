@@ -523,6 +523,10 @@ namespace Lynx.Term
   rw [exactCompare_eq_step]
   rfl
 
+@[simp] theorem exactCompare_eq_atom (a : Term) (name : String) :
+    exactCompare a (.atom name) = .eq ↔ a = .atom name := by
+  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
+
 @[simp] theorem exactCompare_eq_reference (a : Term) (id : Nat) :
     exactCompare a (.reference id) = .eq ↔ a = .reference id := by
   cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]

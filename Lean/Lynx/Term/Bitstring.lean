@@ -114,6 +114,33 @@ public theorem pack_valid (bits : List Bool) :
     rw [getElem!_pos (pack bits) (i / 8) byteValid]
     simp [ByteArray.getElem_eq_getElem_data, pack, offset, position, List.getElem?_eq_getElem hi']
 
+/-- Byte-aligned bit views cover exactly the stored bytes. -/
+public theorem toBits_length_aligned (bytes : ByteArray) : (toBits bytes 0).length = bytes.size * 8 := by
+  simp only [toBits, List.length_map, List.length_range, bitSize]
+  split <;> simp_all
+
+public theorem pack_toBits_aligned (bytes : ByteArray) : pack (toBits bytes 0) = bytes := by
+  apply ByteArray.ext_getElem
+  · rw [pack_size, toBits_length_aligned]
+    omega
+  · intro i hi hj
+    apply UInt8.toBitVec_inj.mp
+    apply BitVec.eq_of_getMsbD_eq
+    intro offset ho
+    have hpos : i * 8 + offset < (toBits bytes 0).length := by rw [toBits_length_aligned]; omega
+    have bound : i < ((toBits bytes 0).length + 7) / 8 := by
+      rw [←pack_size]
+      exact hi
+    simp only [ByteArray.getElem_eq_getElem_data, pack, List.getElem_toArray,
+      List.getElem_map, List.getElem_range, UInt8.toBitVec_ofBitVec,
+      BitVec.getMsbD_cast, BitVec.getMsbD_ofBoolListBE]
+    simp only [List.getD, List.getElem?_map, (List.getElem?_range ho), Option.map_some,
+      Option.getD_some]
+    rw [List.getElem?_eq_getElem hpos]
+    simp only [Option.getD_some, toBits, List.getElem_map, List.getElem_range]
+    simp [getElem!_pos bytes i hj, ByteArray.getElem_eq_getElem_data,
+      show (i * 8 + offset) / 8 = i by omega, show (i * 8 + offset) % 8 = offset by omega]
+
 private theorem decode_acc (bits : List Bool) (acc : Nat) :
     bits.foldl (fun value bit => value * 2 + if bit then 1 else 0) acc =
       acc * 2 ^ bits.length + (BitVec.ofBoolListBE bits).toNat := by
@@ -175,5 +202,30 @@ public theorem integerBits_add (n : Int) (left right : Nat) :
     have shift : left + right - 1 - (left + i) = right - 1 - i := by omega
     rw [shift]
 
+
+/-- An unsigned field fits in its transmission width. -/
+public theorem decodeInteger_lt (bits : List Bool) :
+    decodeInteger bits false < 2 ^ bits.length := by
+  rw [decode_big]
+  exact (BitVec.ofBoolListBE bits).isLt
+
+/-- Decoding and re-encoding a big-endian field preserves every input bit. -/
+public theorem integerBits_decodeInteger (bits : List Bool) :
+    integerBits (decodeInteger bits false) bits.length false = bits := by
+  have bound := decodeInteger_lt bits
+  have returned := decodeInteger_integerBits (decodeInteger bits false) bits.length
+  rw [Nat.mod_eq_of_lt bound] at returned
+  have vectors :
+      (BitVec.ofBoolListBE (integerBits (decodeInteger bits false) bits.length false)).cast
+        (integerBits_length _ _ _) = BitVec.ofBoolListBE bits := by
+    apply BitVec.eq_of_toNat_eq
+    simpa only [BitVec.toNat_cast, ←decode_big] using returned
+  apply List.ext_getElem
+  · exact integerBits_length _ _ _
+  · intro index leftBound rightBound
+    have field := congrArg (fun value : BitVec bits.length => value.getMsbD index) vectors
+    simpa only [BitVec.getMsbD_cast, BitVec.getMsbD_ofBoolListBE, List.getD,
+      List.getElem?_eq_getElem leftBound, List.getElem?_eq_getElem rightBound,
+      Option.getD_some] using field
 
 end Lynx.Term.Bitstring

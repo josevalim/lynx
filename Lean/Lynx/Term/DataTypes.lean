@@ -352,6 +352,17 @@ end Result
 
 namespace Result
 
+/-- Prove a shared fallthrough once, then reason about both bodies with related
+abstract continuations instead of copying the fallthrough into every branch. -/
+theorem rel_shared (rel : Result α → Result α → Prop)
+    (leftNext rightNext : Unit → Result α)
+    (leftBody rightBody : (Unit → Result α) → Result α)
+    (next : ∀ token, rel (leftNext token) (rightNext token))
+    (body : ∀ left right, (∀ token, rel (left token) (right token)) →
+      rel (leftBody left) (rightBody right)) :
+    rel (leftBody leftNext) (rightBody rightNext) :=
+  body leftNext rightNext next
+
 /-- Prove a shared continuation once, then use its purity throughout the body. -/
 theorem IsPure.shared (next : α → Result β) (body : (α → Result β) → Result γ)
     (nextPure : ∀ value, IsPure (next value))

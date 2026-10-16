@@ -21,6 +21,20 @@ private theorem decodeBigEndian (value width : Nat) :
       value % 2 ^ width :=
   Lynx.Term.Bitstring.decodeInteger_integerBits value width
 
+private theorem bitViewRoundTrip (bits : List Bool) :
+    Lynx.Term.Bitstring.integerBits (Lynx.Term.Bitstring.decodeInteger bits false)
+      bits.length false = bits :=
+  Lynx.Term.Bitstring.integerBits_decodeInteger bits
+
+private theorem alignedBitView (bytes : ByteArray) :
+    Lynx.Term.Bitstring.ofBits (Lynx.Term.Bitstring.toBits bytes 0) =
+      .bitstring bytes 0 (Lynx.Term.Bitstring.valid_aligned bytes) :=
+  Lynx.Term.Bitstring.ofBits_toBits_aligned bytes
+
+private theorem atomEquality (term : Lynx.Term) (name : String) :
+    term.exactCompare (.atom name) = .eq ↔ term = .atom name :=
+  Lynx.Term.exactCompare_eq_atom term name
+
 private theorem extractBigEndian (value fieldWidth tailWidth : Nat) :
     Lynx.Term.Bitstring.matchInteger
       (Lynx.Term.Bitstring.ofBits (Lynx.Term.Bitstring.integerBits value (fieldWidth + tailWidth) false))

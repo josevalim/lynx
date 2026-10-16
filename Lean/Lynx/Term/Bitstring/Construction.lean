@@ -23,6 +23,15 @@ namespace Lynx.Term.Bitstring
       | _ => []) = bits := by
   exact pack_toBits bits
 
+/-- Repacking a binary preserves its canonical storage. -/
+public theorem ofBits_toBits_aligned (bytes : ByteArray) : ofBits (toBits bytes 0) =
+    .bitstring bytes 0 (valid_aligned bytes) := by
+  have aligned : (toBits bytes 0).length % 8 = 0 := by rw [toBits_length_aligned]; omega
+  simp only [ofBits]
+  have last : (⟨(toBits bytes 0).length % 8, Nat.mod_lt _ (by decide)⟩ : Fin 8) = 0 := Fin.ext aligned
+  congr 1
+  exact pack_toBits_aligned bytes
+
 /-- Build an integer segment. Segment sizes count `unit` bits and must be
 nonnegative integers; the Core unit is a compile-time value in `1..256`. -/
 #lynx_pure @[expose] public def integerSegment (value size : Term) (unit : Nat)
@@ -75,5 +84,19 @@ length divisible by their unit; sized segments may consume an unaligned input. -
   | .bitstring a ab _, .bitstring b bb _ =>
       .ok (ofBits (toBits a ab ++ toBits b bb))
   | _, _ => .error (.error (.atom "badarg"))
+
+/-- A well-sized integer field constructs exactly its low transmission bits. -/
+public theorem integerSegment_bits (value : Int) (width : Nat) :
+    integerSegment (.integer value) (.integer width) 1 Bool.false =
+      .ok (ofBits (integerBits value width Bool.false)) := by
+  simp [integerSegment]
+
+public theorem binarySegment_bits (bits : List Bool) :
+    binarySegment (ofBits bits) (.atom "all") 1 = .ok (ofBits bits) := by
+  simp [binarySegment, ofBits, pack_bitSize, Nat.mod_one]
+
+public theorem append_bits (left right : List Bool) :
+    append (ofBits left) (ofBits right) = .ok (ofBits (left ++ right)) := by
+  simp [append, ofBits, pack_toBits]
 
 end Lynx.Term.Bitstring

@@ -6,6 +6,21 @@ import all Init.Internal.Order.Basic
 
 public section
 
+namespace Lynx.Order
+open Lean.Order
+
+/-- Public pointwise interface for the function order used by fixed points. -/
+theorem rel_pi {ι : Sort u} {β : ι → Sort v} [∀ i, PartialOrder (β i)]
+    (left right : ∀ i, β i) :
+    PartialOrder.rel left right ↔ ∀ i, PartialOrder.rel (left i) (right i) := Iff.rfl
+
+/-- Public componentwise interface for mutually recursive fixed points. -/
+theorem rel_pprod {α : Sort u} {β : Sort v} [PartialOrder α] [PartialOrder β]
+    (left right : α ×' β) : PartialOrder.rel left right ↔
+      PartialOrder.rel left.1 right.1 ∧ PartialOrder.rel left.2 right.2 := Iff.rfl
+
+end Lynx.Order
+
 namespace Lynx.Result
 open Lean.Order
 
