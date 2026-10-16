@@ -83,7 +83,11 @@ theorem bitstring_byte_size_is_integer (input : Term)
 
 -- A guard continuation contains one flat recursive suffix. Its induction
 -- hypothesis is a match, so purity must preserve it until the scrutinee splits.
+-- Use the typed wrapper emitted by the decoder, keeping the shared lambda
+-- behind applications that must reduce before the tactic can recognize it.
 #lynx_pure def guardedSuffix (input : Term) : Result :=
+  (fun {α : Type} (body : (Unit → Result α) → Result α)
+      (next : Unit → Result α) => body next)
   (fun next => Result.tryWith (Erlang.erlang.«is_integer/1» input)
     (fun value => match value with
       | .atom "true" => .ok (.integer 0)

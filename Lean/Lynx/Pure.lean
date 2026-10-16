@@ -18,7 +18,9 @@ elab "lynx_pure_share" : tactic => do
     let target := (← instantiateMVars (← goal.getType)).consumeMData
     unless target.isAppOfArity ``Result.IsPure 2 do throwError "not a purity goal"
     let .app body next := target.appArg!.consumeMData | throwError "not an applied continuation"
-    let body := body.consumeMData
+    -- Typed continuation wrappers add applications before the shared lambda.
+    -- Reduce that prefix without substituting the continuation into its body.
+    let body := body.consumeMData.headBeta
     unless body.isLambda do throwError "not a shared lambda"
     let applicable ← forallTelescopeReducing (← inferType next) fun args result =>
       return args.size == 1 && result.isAppOfArity ``Result 1
