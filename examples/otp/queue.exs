@@ -225,7 +225,7 @@ defmodule QueueProofsTest do
           refine ⟨[], [], r, f, ?_, rfl, by simp⟩
           dsimp only [Erlang.queue.«split/2», pack]
           simp only [Int.cast_ofNat_Int, shape, Lynx.Result.ok_bind, Erlang.erlang.«and/2»,
-            Lynx.Term.true, Lynx.Result.tryWith_ok, pack, encNil] <;> rfl
+            Lynx.Term.true, Lynx.Result.guard_eq, Lynx.Result.tryWith_ok, pack, encNil] <;> rfl
         | succ n =>
           have positive : (1 : Int) ≤ ↑(n+1) := by omega
           have nonzero : (↑(n+1) : Int) ≠ 0 := by omega
@@ -243,7 +243,7 @@ defmodule QueueProofsTest do
                 simpa only [Lynx.Term.atom.injEq, String.reduceEq, imp_self, Int.cast_ofNat_Int, Int.reduceLT,
                   Int.reduceLE, Int.reduceEq, List.length_cons, lengthCons, List.append_nil, Lynx.Term.true,
                   Lynx.Term.false, shapeCons, shapeNil, if_true, if_false, Lynx.Result.ok_bind,
-                  Lynx.Result.tryWith_ok, Lynx.Result.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
+                  Lynx.Result.guard_eq, Lynx.Result.tryWith_ok, Lynx.Result.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
                   Erlang.erlang.«</2_integers», greaterModel, Erlang.erlang.«-/2_integers», if_pos, if_neg, encNil,
                   pack, shape, lengthModel, encCons,
                   Erlang.erlang.«and/2»,
@@ -266,7 +266,7 @@ defmodule QueueProofsTest do
                 simp only [Lynx.Term.atom.injEq, String.reduceEq, imp_self, Int.cast_ofNat_Int, Int.reduceLT,
                   Int.reduceLE, Int.reduceEq, List.length_cons, lengthCons, List.append_nil, Lynx.Term.true,
                   Lynx.Term.false, shapeCons, shapeNil, if_true, if_false, Lynx.Result.ok_bind,
-                  Lynx.Result.tryWith_ok, Lynx.Result.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
+                  Lynx.Result.guard_eq, Lynx.Result.tryWith_ok, Lynx.Result.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
                   Erlang.erlang.«</2_integers», greaterModel, Erlang.erlang.«-/2_integers», if_pos, if_neg, encNil,
                   shape, lengthModel,
                   Erlang.erlang.«and/2»,
@@ -287,7 +287,7 @@ defmodule QueueProofsTest do
                     simpa only [Lynx.Term.atom.injEq, String.reduceEq, imp_self, Int.cast_ofNat_Int, Int.reduceLT,
                       Int.reduceLE, Int.reduceEq, List.length_cons, lengthCons, List.append_nil, Lynx.Term.true,
                       Lynx.Term.false, shapeCons, shapeNil, if_true, if_false, Lynx.Result.ok_bind,
-                      Lynx.Result.tryWith_ok, Lynx.Result.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
+                      Lynx.Result.guard_eq, Lynx.Result.tryWith_ok, Lynx.Result.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
                       Erlang.erlang.«</2_integers», greaterModel, Erlang.erlang.«-/2_integers», if_pos, if_neg,
                       encNil, pack, shape, lengthModel, encCons,
                       Erlang.erlang.«and/2»,
@@ -319,7 +319,7 @@ defmodule QueueProofsTest do
                 simp only [Lynx.Term.atom.injEq, String.reduceEq, imp_self, Int.cast_ofNat_Int, Int.reduceLT,
                   Int.reduceLE, Int.reduceEq, List.length_cons, lengthCons, List.append_nil, Lynx.Term.true,
                   Lynx.Term.false, shapeCons, shapeNil, if_true, if_false, Lynx.Result.ok_bind,
-                  Lynx.Result.tryWith_ok, Lynx.Result.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
+                  Lynx.Result.guard_eq, Lynx.Result.tryWith_ok, Lynx.Result.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
                   Erlang.erlang.«</2_integers», greaterModel, Erlang.erlang.«-/2_integers», if_pos, if_neg, encNil,
                   shape, lengthModel,
                   Erlang.erlang.«and/2»,

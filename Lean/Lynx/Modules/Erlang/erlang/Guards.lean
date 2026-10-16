@@ -166,6 +166,13 @@ open Lynx
 @[simp↓] theorem «-/2_integers» (left right : Int) :
     «-/2» (.integer left) (.integer right) = .ok (.integer (left - right)) := by rfl
 
+/-- Integer subtraction results cannot originate from a float or another term kind. -/
+@[simp] theorem «-/2_integer_result» (left : Term) (right value : Int) :
+    «-/2» left (.integer right) = .ok (.integer value) ↔ left = .integer (value + right) := by
+  cases left <;> simp [«-/2», floatResult]
+  · omega
+  · split <;> simp_all
+
 #lynx_pure def «//2» : Term → Term → Result
   | .float x, .float y => floatResult (x.div y)
   | .integer x, .float y => floatResult (Term.FiniteFloat.ofInt x >>= (·.div y))

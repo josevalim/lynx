@@ -62,15 +62,11 @@ set_option «match».ignoreUnusedAlts true
           (fun lynxMatchNext =>
             match _4, _3, _2 with
             | Lynx.Term.atom "error", vR@(Lynx.Term.integer _), _8 =>
-              Lynx.Result.tryWith
+              Lynx.Result.guard
                 (do
                   let _6 ← Erlang.erlang.«>/2» vR (Lynx.Term.integer 0)
                   Erlang.erlang.«and/2» (Lynx.Term.atom "true") _6)
-                (fun lynxGuardValue =>
-                  match lynxGuardValue with
-                  | Lynx.Term.atom "true" => pure (Lynx.Term.atom "positive")
-                  | _ => lynxMatchNext ())
-                (fun _ => lynxMatchNext ())
+                (fun _ => pure (Lynx.Term.atom "positive")) lynxMatchNext
             | _, _, _ => lynxMatchNext ())
           (fun (_ : Unit) =>
             match _4, _3, _2 with

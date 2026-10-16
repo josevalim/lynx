@@ -3,6 +3,96 @@ module
 public meta import Lean
 public import Lynx.Term
 
+public section
+
+-- Retain successful-return equations while checking well-founded recursion.
+-- Only computations with a kernel-checked purity proof use these rewrites.
+@[expose] public def Lynx.Result.bindPure (computation : Lynx.Result α)
+    (pure : computation.IsPure)
+    (next : {value : α // computation = .ok value} → Lynx.Result β) : Lynx.Result β :=
+  match (generalizing := false) returned : computation with
+  | .ok value => next ⟨value, returned⟩
+  | .error exception => .error exception
+  | .exhausted | .apply .. | .get .. | .set .. | .spawn .. | .schedule .. |
+      .send .. | .receive .. => False.elim (by simp_all [Lynx.Result.IsPure])
+
+@[wf_preprocess] public theorem Lynx.Result.bindPure_eq
+    (computation : Lynx.Result α) (pure : computation.IsPure) (next : α → Lynx.Result β) :
+    (computation >>= next) = computation.bindPure pure
+      (fun value => binderNameHint value next (next (wfParam value.val))) := by
+  cases computation <;> first | rfl | exact False.elim pure
+
+@[wf_preprocess] public theorem Lynx.Result.bindPure_explicit
+    (computation : Lynx.Result α) (pure : computation.IsPure) (next : α → Lynx.Result β) :
+    Lynx.Result.bind computation next = computation.bindPure pure
+      (fun value => binderNameHint value next (next (wfParam value.val))) :=
+  Lynx.Result.bindPure_eq computation pure next
+
+/-- Erlang guards select their body only on the atom `true`. -/
+@[expose] public def Lynx.Result.guardPassed : Lynx.Result → Bool
+  | .ok (.atom value) => value == "true"
+  | _ => false
+
+/-- Run a Core guard, falling through on exceptions and values other than `true`. -/
+@[expose] public def Lynx.Result.guard (computation : Lynx.Result)
+    (body next : Unit → Lynx.Result α) : Lynx.Result α :=
+  computation.tryWith
+    (fun value => match value with | .atom "true" => body () | _ => next ())
+    (fun _ => next ())
+
+@[simp] public theorem Lynx.Result.guard_eq (computation : Lynx.Result)
+    (body next : Unit → Lynx.Result α) :
+    computation.guard body next = computation.tryWith
+      (fun value => match value with | .atom "true" => body () | _ => next ())
+      (fun _ => next ()) := rfl
+
+@[simp↓] public theorem Lynx.Result.IsPure.guard (computation : Lynx.Result)
+    (body next : Unit → Lynx.Result α) (pure : computation.IsPure)
+    (bodyPure : ∀ token, (body token).IsPure) (nextPure : ∀ token, (next token).IsPure) :
+    (computation.guard body next).IsPure := by
+  unfold Lynx.Result.guard
+  apply Lynx.Result.IsPure.tryWith _ _ _ pure
+  · intro value
+    split <;> simp_all
+  · exact fun _ => nextPure ()
+
+@[wf_preprocess] public theorem Lynx.Result.guard_wf
+    (computation : Lynx.Result) (pure : computation.IsPure)
+    (body next : Unit → Lynx.Result α) :
+    computation.guard body next =
+      (if computation.guardPassed then body () else next ()) := by
+  cases computation with
+  | ok value =>
+    simp only [Lynx.Result.guard_eq, Lynx.Result.tryWith_ok]
+    cases value <;> simp [Lynx.Result.guardPassed]
+    rename_i value
+    by_cases accepted : value = "true" <;> simp_all
+  | error exception => rfl
+  | _ => exact False.elim pure
+
+/-- Recursive purity proofs can use the equation for a successful bind. -/
+public theorem Lynx.Result.IsPure.bind_return (computation : Lynx.Result α)
+    (next : α → Lynx.Result β) (pure : computation.IsPure)
+    (nextPure : ∀ value, computation = .ok value → (next value).IsPure) :
+    (computation >>= next).IsPure := by
+  cases computation <;> simp_all [Lynx.Result.IsPure]
+
+public theorem Lynx.Result.IsPure.bind_return_explicit (computation : Lynx.Result α)
+    (next : α → Lynx.Result β) (pure : computation.IsPure)
+    (nextPure : ∀ value, computation = .ok value → (next value).IsPure) :
+    (Lynx.Result.bind computation next).IsPure :=
+  Lynx.Result.IsPure.bind_return computation next pure nextPure
+
+public theorem Lynx.Result.IsPure.guard_cases (computation : Lynx.Result)
+    (body next : Unit → Lynx.Result α) (pure : computation.IsPure)
+    (onTrue : computation.guardPassed = true → ∀ token, (body token).IsPure)
+    (onFalse : computation.guardPassed = false → ∀ token, (next token).IsPure) :
+    (computation.guard body next).IsPure := by
+  rw [Lynx.Result.guard_wf computation pure]
+  split <;> rename_i passed
+  · exact onTrue passed ()
+  · exact onFalse (by simpa using passed) ()
+
 public meta section
 
 /-! Generate kernel-checked purity lemmas for translated functions.
@@ -51,6 +141,7 @@ elab "lynx_pure_step" : tactic => do
         return []
       let rule? := if name == ``Bind.bind then some ``Result.IsPure.bind
         else if name == ``Result.bind then some ``Result.IsPure.bind_explicit
+        else if name == ``Result.guard then some ``Result.IsPure.guard
         else if name == ``Result.tryWith then some ``Result.IsPure.tryWith
         else if name == ``Result.handle then some ``Result.IsPure.handle else none
       if let some rule := rule? then
@@ -101,7 +192,7 @@ private def registerPureProof (function : Name) (type proof : Expr) : Command.Co
     type := type
     value := proof
   }
-  Command.elabCommand (← `(attribute [simp↓] $(mkIdent theoremName)))
+  Command.elabCommand (← `(attribute [simp↓, wf_preprocess] $(mkIdent theoremName)))
 
 /-- Elaborate pure definitions and prove that each fully applied computation
 neither reads nor changes the environment. Mutually recursive definitions are
@@ -116,23 +207,36 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
     let ids ← declarations.mapM pureDefinitionId
     Command.elabCommand declaration
     let functions ← ids.mapM resolveGlobalConstNoOverload
-    let types ← functions.mapM pureType
+    -- The equation compiler can reorder a mutual group. Its induction theorem
+    -- uses that order for motives and conjunction projections.
+    let env ← getEnv
+    let declaredFunctions := functions
+    let functions : Array Name := if let some info := Structural.eqnInfoExt.find? env functions[0]! then
+        info.declNames
+      else if let some info := WF.eqnInfoExt.find? env functions[0]! then info.declNames
+      else functions
+    unless functions.size == declaredFunctions.size && functions.all declaredFunctions.contains do
+      throwErrorAt declaration "#lynx_pure mutual block must be a single recursive group"
+    let types : Array Expr ← functions.mapM pureType
     let jointType := types.toList.dropLast.foldr (mkApp2 (mkConst ``And)) types.back!
     let proof ← Command.liftTermElabM do
       let induction := mkIdent (functions[0]! ++ `mutual_induct)
       let definitions := functions.map mkIdent
+      let unfoldings ← definitions.mapM fun definition => `(tactic| unfold $definition:ident)
       let proofSyntax ← `(by
         apply $induction:ident
         all_goals
           intros
-          simp_all (config := { failIfUnchanged := false }) [$[$definitions:ident],*]
+          first $[| $unfoldings:tactic]*
           repeat' first
+            | apply Result.IsPure.guard
             | apply Result.IsPure.tryWith
             | apply Result.IsPure.handle
             | apply Result.IsPure.bind
             | apply Result.IsPure.bind_explicit
             | (intro)
-            | split
+            | (solve | grind)
+            | split at *
             | simp_all)
       let proof ← Term.elabTermEnsuringType proofSyntax jointType
       Term.synthesizeSyntheticMVarsNoPostponing
@@ -176,11 +280,13 @@ private def elaboratePurity (doc? : Option (TSyntax ``Parser.Command.docComment)
           -- (for example under a shared guard continuation).
           unfold $functionId:ident
           repeat' first
+            | apply Result.IsPure.guard_cases
             | apply Result.IsPure.tryWith
             | apply Result.IsPure.handle
-            | apply Result.IsPure.bind
-            | apply Result.IsPure.bind_explicit
+            | apply Result.IsPure.bind_return
+            | apply Result.IsPure.bind_return_explicit
             | (intro)
+            | (solve | grind)
             | split at *
             | simp_all)
     else

@@ -180,12 +180,8 @@ set_option «match».ignoreUnusedAlts true
             | _4, lynxMap278 =>
               match (Lynx.Term.getMapKeys [Lynx.Term.atom "b"] lynxMap278) with
               | [vB] =>
-                Lynx.Result.tryWith (Erlang.erlang.«/=/2» vB (Lynx.Term.integer 1))
-                  (fun lynxGuardValue =>
-                    match lynxGuardValue with
-                    | Lynx.Term.atom "true" => pure (Lynx.Term.atom "b")
-                    | _ => lynxMatchNext ())
-                  (fun _ => lynxMatchNext ())
+                Lynx.Result.guard (Erlang.erlang.«/=/2» vB (Lynx.Term.integer 1))
+                  (fun _ => pure (Lynx.Term.atom "b")) lynxMatchNext
               | _ => lynxMatchNext ())
           (fun (_ : Unit) =>
             (fun {lynxValue : Type}
@@ -204,12 +200,8 @@ set_option «match».ignoreUnusedAlts true
                       (fun lynxMatchNext =>
                         match lynxMapGroup263_0, lynxMapGroup263_1 with
                         | vValue, vA =>
-                          Lynx.Result.tryWith (Erlang.erlang.«</2» vA (Lynx.Term.integer 0))
-                            (fun lynxGuardValue =>
-                              match lynxGuardValue with
-                              | Lynx.Term.atom "true" => pure vValue
-                              | _ => lynxMatchNext ())
-                            (fun _ => lynxMatchNext ()))
+                          Lynx.Result.guard (Erlang.erlang.«</2» vA (Lynx.Term.integer 0))
+                            (fun _ => pure vValue) lynxMatchNext)
                       (fun (_ : Unit) =>
                         match lynxMapGroup263_0, lynxMapGroup263_1 with
                         | _5, vA => pure vA

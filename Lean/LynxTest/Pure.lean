@@ -121,6 +121,57 @@ end
 example (input : Term) : Result.IsPure (sumLeft input) := by simp
 example (input : Term) : Result.IsPure (sumRight input) := by simp
 
+-- Same-arity members can be reordered by Lean's equation compiler. Their
+-- purity motives and conjunction projections must follow the compiler's order.
+#lynx_pure mutual
+  def rotateFirst (left right : Term) : Result :=
+    match left with
+    | .cons _ tail => rotateThird tail right
+    | _ => .ok right
+  def rotateSecond (left right : Term) : Result :=
+    match right with
+    | .cons _ tail => rotateFirst left tail
+    | _ => .ok left
+  def rotateThird (left right : Term) : Result :=
+    match left with
+    | .cons _ tail => rotateSecond tail right
+    | _ => .ok right
+end
+
+-- Guard preprocessing retains the accepted comparison, and arithmetic binds
+-- retain return equations for well-founded recursion on their computed results.
+#lynx_pure def halve (input : Term) : Result :=
+  Result.guard (Erlang.erlang.«>/2» input (.integer 1))
+    (fun _ => do
+      let smaller ← Erlang.erlang.«-/2» input (.integer 1)
+      let half ← Erlang.erlang.«div/2» smaller (.integer 2)
+      halve half)
+    (fun _ => .ok input)
+termination_by match input with | .integer n => n.toNat | _ => 0
+decreasing_by
+  rename_i passed
+  rcases smaller with ⟨smaller, smallerEq⟩
+  rcases half with ⟨half, halfEq⟩
+  cases smaller <;> simp [Erlang.erlang.«div/2»] at halfEq
+  rename_i sm _
+  subst half
+  have shape := (Erlang.erlang.«-/2_integer_result» input 1 sm).mp smallerEq
+  subst input
+  simp [Result.guardPassed, Erlang.erlang.«>/2»,
+    Ordering.isGT_iff_eq_gt, Int.compare_eq_gt] at passed
+  have positive : 0 < sm := by
+    by_cases h : 1 < sm+1
+    · omega
+    · simp [h] at passed
+  simp [Int.tdiv_eq_ediv_of_nonneg (Int.le_of_lt positive)]
+  omega
+
+theorem guard_retains_environment (value : Term) (env : Environment) :
+    (Result.guard (.get fun _ => .ok Term.true)
+      (fun _ => .ok value) (fun _ => .error (.error (.atom "unexpected")))).run env =
+        .ok value env := by
+  simp [Result.tryWith, Result.bind, Result.handle]
+
 theorem execution_reuses_purity (input : Term) (env final : Environment) :
     classifyTwice input env = .ok Term.false final ↔
       classifyTwice input = .ok Term.false ∧ env = final := by

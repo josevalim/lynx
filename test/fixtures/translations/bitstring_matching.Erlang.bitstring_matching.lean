@@ -341,13 +341,9 @@ set_option «match».ignoreUnusedAlts true
             | Bool.true✝ =>
               match (lynxBits28) with
               | vRest =>
-                Lynx.Result.tryWith (Erlang.erlang.«>/2» vX (Lynx.Term.integer 10))
-                  (fun lynxGuardValue =>
-                    match lynxGuardValue with
-                    | Lynx.Term.atom "true" =>
-                      pure (Lynx.Term.tuple #[Lynx.Term.atom "large", vX, vRest])
-                    | _ => lynxMatchNext ())
-                  (fun _ => lynxMatchNext ())
+                Lynx.Result.guard (Erlang.erlang.«>/2» vX (Lynx.Term.integer 10))
+                  (fun _ => pure (Lynx.Term.tuple #[Lynx.Term.atom "large", vX, vRest]))
+                  lynxMatchNext
             | _ => lynxMatchNext ()
           | _ => lynxMatchNext ())
       (fun (_ : Unit) =>
@@ -409,12 +405,8 @@ set_option «match».ignoreUnusedAlts true
             | Bool.true✝ =>
               match (lynxBits34) with
               | vRest =>
-                Lynx.Result.tryWith (Erlang.erlang.«=:=/2» _5 _0)
-                  (fun lynxGuardValue =>
-                    match lynxGuardValue with
-                    | Lynx.Term.atom "true" => pure (Lynx.Term.tuple #[_0, vRest])
-                    | _ => lynxMatchNext ())
-                  (fun _ => lynxMatchNext ())
+                Lynx.Result.guard (Erlang.erlang.«=:=/2» _5 _0)
+                  (fun _ => pure (Lynx.Term.tuple #[_0, vRest])) lynxMatchNext
             | _ => lynxMatchNext ()
           | _ => lynxMatchNext ())
       (fun (_ : Unit) =>

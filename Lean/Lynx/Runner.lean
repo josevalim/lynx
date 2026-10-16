@@ -801,7 +801,11 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let var ← product vars
     let computation ← term map info false (← field j "computation")
     let body ← term map info false (← field j "body")
-    let item := withSpan info.info (Unhygienic.run `(doSeqItem| let $var:term ← $computation:term))
+    -- Identifier binds retain the return witnesses introduced by wf preprocessing.
+    let item ← if var.raw.isIdent then do
+      let id : TSyntax `ident := ⟨var.raw⟩
+      pure (withSpan info.info (Unhygienic.run `(doSeqItem| let $id:ident ← $computation:term)))
+    else pure (withSpan info.info (Unhygienic.run `(doSeqItem| let $var:term ← $computation:term)))
     -- Consecutive Core binds share one block; preserve locations on each statement.
     match body with
     | `(do $items:doSeqItem*) => pure (Unhygienic.run `(do $item:doSeqItem $items:doSeqItem*))
@@ -1030,9 +1034,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let wildcards : Array (TSyntax `term) := exprs.map fun _ => Unhygienic.run `(_)
     if nests.contains true then
       let fallback := mkIdent `lynxMatchNext
-      let tryWith := mkIdent ``Lynx.Result.tryWith
-      let atom := mkIdent ``Lynx.Term.atom
-      let value := mkIdent `lynxGuardValue
+      let guardCall := mkIdent ``Lynx.Result.guard
       let mut result := Unhygienic.run `(Lynx.Result.error
         (Lynx.Exception.error (Lynx.Term.atom "function_clause")))
       let mut stop := cases.size
@@ -1045,10 +1047,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
           | `(Lean.Parser.Term.matchAltExpr| | $pats,* => $body) =>
             let branch ← if (field c "guard").isOk then do
               let guard ← term map ci false (← field c "guard")
-              pure (Unhygienic.run `($tryWith $guard (fun $value:ident =>
-                match $value:ident with
-                | $atom "true" => $body
-                | _ => $fallback ()) (fun _ => $fallback ())))
+              pure (Unhygienic.run `($guardCall $guard (fun _ => $body) $fallback))
               else pure body
             let branch := patternMatches lookups[i]! branch (Unhygienic.run `($fallback ()))
             let catchAll ← (← arr c "patterns").allM fun pat => do return ← catchAllPattern pat
