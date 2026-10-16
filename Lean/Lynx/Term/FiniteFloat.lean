@@ -37,6 +37,13 @@ private def ofModel (value : Float.Model) : Option FiniteFloat :=
       ⟨bits % 2 ^ 52, Nat.mod_lt _ (by decide)⟩⟩
   else none
 
+/-- Round `mantissa * 10 ^ exponent` to binary64 with the given sign, failing on
+overflow. -/
+public def ofScientific (negative : Bool) (mantissa : Nat) (exponent : Int) :
+    Option FiniteFloat :=
+  let value := Float.Model.ofScientific mantissa exponent
+  ofModel (if negative then value.neg else value)
+
 /-- IEEE binary64 addition, failing on any non-finite result. -/
 public def add (left right : FiniteFloat) : Option FiniteFloat :=
   ofModel (left.toModel + right.toModel)
