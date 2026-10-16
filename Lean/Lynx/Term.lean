@@ -64,13 +64,16 @@ public theorem law_of_pure {ensures : Result} (proof : ensures = .ok Term.true)
     run ensures schedule table callDepth = .ok Term.true := by
   simp [proof]
 
-/-- A law with a pure precondition holds when the precondition implies the expectation. -/
+/-- A law with a pure precondition holds under every schedule when the precondition,
+holding under some schedule, implies the expectation. -/
 public theorem law_of_pure_requires {requires ensures : Result}
     (requiresPure : requires.IsPure)
     (proof : requires = .ok Term.true → ensures = .ok Term.true)
-    {schedule : List ScheduleChoice} {table : Term.FunTable} {callDepth : Nat}
-    (holds : run requires schedule table callDepth = .ok Term.true) :
+    {table : Term.FunTable} {callDepth : Nat}
+    (holds : ∃ schedule, run requires schedule table callDepth = .ok Term.true)
+    {schedule : List ScheduleChoice} :
     run ensures schedule table callDepth = .ok Term.true :=
+  let ⟨_, holds⟩ := holds
   law_of_pure (proof ((IsPure.run_eq_ok_iff requiresPure).mp holds))
 
 end Lynx

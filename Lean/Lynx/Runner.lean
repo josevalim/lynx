@@ -34,8 +34,9 @@ sequentially. Dependent files import the prelude before their embedded proofs
 and termination suffixes are parsed; no declarations leak through request order.
 Theorem nodes contain name, named params, an optional requires helper, an ensures helper,
 and a proof object. Helpers are ordinary Result computations called with the theorem's
-parameters and stated through `Lynx.run` with depth 100. An absent requires helper means
-no assumption. An optional table names the program's function table; it defaults to empty.
+parameters and stated through `Lynx.run` with depth 100: the requires helper returns true
+under some schedule, and the ensures helper under every schedule. An absent requires helper
+means no assumption. An optional table names the program's function table; it defaults to empty.
 When `pure` is true, both helpers are pure and the proof receives the direct statement.
 A proof object contains tactic source, nonnegative indentation, and a span locating
 the first character of that source. The producer handles host delimiters and line offsets. Proof syntax keeps
@@ -1290,11 +1291,13 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     let hypothesis := mkIdent `requires
     let holds (computation : TSyntax `term) : TSyntax `term :=
       Unhygienic.run `($run $computation $schedule $table 100 = $ok $trueTerm)
-    let binders := binders.push (Unhygienic.run `(bracketedBinder| ($schedule : List $scheduleType)))
+    -- The precondition holds under some schedule; the expectation under every one.
     let binders := match requirement with
       | none => binders
       | some (requires, _) =>
-        binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $(holds requires))))
+        binders.push (Unhygienic.run
+          `(bracketedBinder| ($hypothesis : ∃ $schedule:ident : List $scheduleType, $(holds requires))))
+    let binders := binders.push (Unhygienic.run `(bracketedBinder| ($schedule : List $scheduleType)))
     -- Laws with pure helpers are proven against their direct statements,
     -- without the run-form binders in scope.
     let proof := if !isPure then proof else
@@ -1514,7 +1517,11 @@ private def lawFailureDetails (name : Name) : Elab.Command.CommandElabM (Option 
         for binder in binders do
           let declaration ← binder.fvarId!.getDecl
           if declaration.userName == `requires then
-            if let some requirement ← comparisonDescription declaration.type then
+            -- The precondition holds under some schedule; describe its body.
+            let requirement ← if declaration.type.isAppOfArity ``Exists 2 then
+                Meta.lambdaTelescope declaration.type.appArg! fun _ body => comparisonDescription body
+              else comparisonDescription declaration.type
+            if let some requirement := requirement then
               details := details ++ s!"\n\nRequires (definitionally reduced):\n{requirement}"
         return some details
   catch _ => return none

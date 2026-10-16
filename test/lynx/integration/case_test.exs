@@ -15,7 +15,7 @@ defmodule Lynx.Integration.CaseTest do
       proof: ~LEAN"""
       have pure (helper : Lynx.Result) (pure : helper.IsPure) := Lynx.IsPure.run_eq_ok_iff
         (schedule := []) (table := #[]) (callDepth := 100) (value := Lynx.Term.true) pure
-      exact (pure _ (by simp)).mp («z_checked/1» value [] ((pure _ (by simp)).mpr requires))
+      exact (pure _ (by simp)).mp («z_checked/1» value ⟨[], (pure _ (by simp)).mpr requires⟩ [])
       """
   end
 
