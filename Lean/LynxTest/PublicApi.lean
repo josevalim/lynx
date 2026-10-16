@@ -31,6 +31,16 @@ private theorem alignedBitView (bytes : ByteArray) :
       .bitstring bytes 0 (Lynx.Term.Bitstring.valid_aligned bytes) :=
   Lynx.Term.Bitstring.ofBits_toBits_aligned bytes
 
+private theorem utf8ConstructionRoundTrip (value : Nat) (tail : List Bool)
+    (bounded : value ≤ 0x10ffff) (scalar : value < 0xd800 ∨ 0xdfff < value) :
+    ∃ encoded : List Bool,
+      Lynx.Term.Bitstring.utf8Segment (.integer value) =
+        .ok (Lynx.Term.Bitstring.ofBits encoded) ∧
+      encoded.length % 8 = 0 ∧
+      Lynx.Term.Bitstring.matchUtf8 (Lynx.Term.Bitstring.ofBits (encoded ++ tail)) =
+        some (.integer value, Lynx.Term.Bitstring.ofBits tail) :=
+  Lynx.Term.Bitstring.matchUtf8_construct value tail bounded scalar
+
 private theorem atomEquality (term : Lynx.Term) (name : String) :
     term.exactCompare (.atom name) = .eq ↔ term = .atom name :=
   Lynx.Term.exactCompare_eq_atom term name

@@ -133,6 +133,87 @@ Endianness applies to each code unit, including at unaligned bit positions. -/
     else none
   | _ => none
 
+/-- UTF-8 construction followed by matching recovers every Unicode scalar and
+leaves an arbitrary bit suffix untouched. The encoding is byte aligned. -/
+public theorem matchUtf8_construct (value : Nat) (tail : List Bool)
+    (bounded : value ≤ 0x10ffff) (scalar : value < 0xd800 ∨ 0xdfff < value) :
+    ∃ encoded : List Bool,
+      utf8Segment (.integer value) = .ok (ofBits encoded) ∧
+      encoded.length % 8 = 0 ∧
+      matchUtf8 (ofBits (encoded ++ tail)) = some (.integer value, ofBits tail) := by
+  have takeByte (n : Int) : (integerBits n 8 Bool.false).take 8 = integerBits n 8 Bool.false := by
+    exact List.take_of_length_le (by simp)
+  have dropByte (n : Int) (width : Nat) (enough : 8 ≤ width) :
+      (integerBits n 8 Bool.false).drop width = [] := by
+    exact List.drop_eq_nil_of_le (by simpa using enough)
+  have valid : (0 : Int) ≤ value ∧ (value : Int) ≤ 0x10ffff ∧
+      ((value : Int) < 0xd800 ∨ 0xdfff < (value : Int)) := by omega
+  simp only [utf8Segment, valid, and_self, ↓reduceIte, Int.toNat_natCast]
+  split <;> rename_i bound1
+  · refine ⟨_, rfl, ?_, ?_⟩
+    · simp [integerBits_length]
+    · simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil]
+      simp only [matchUtf8, ofBits, pack_toBits]
+      simp [List.take_append, List.drop_append, integerBits_length,
+        decodeInteger_integerBits, Nat.mod_eq_of_lt (show value < 256 by omega), bound1,
+        scalar, bounded]
+  · split <;> rename_i bound2
+    · refine ⟨_, rfl, ?_, ?_⟩
+      · simp [integerBits_length]
+      · simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil]
+        generalize ha : 192 + value / 64 = a
+        generalize hb : 128 + value % 64 = b
+        have aBound : a < 256 := by omega
+        have bBound : b < 256 := by omega
+        have notAscii : ¬a < 128 := by omega
+        have leader : 194 ≤ a ∧ a ≤ 223 := by omega
+        simp only [matchUtf8, ofBits, pack_toBits]
+        simp [List.take_append, List.drop_append, integerBits_length,
+          decodeInteger_integerBits, takeByte, dropByte, Nat.mod_eq_of_lt aBound,
+          Nat.mod_eq_of_lt bBound,
+          notAscii, leader, List.range_succ]
+        omega
+    · split <;> rename_i bound3
+      · refine ⟨_, rfl, ?_, ?_⟩
+        · simp [integerBits_length]
+        · simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil]
+          generalize ha : 224 + value / 4096 = a
+          generalize hb : 128 + value / 64 % 64 = b
+          generalize hc : 128 + value % 64 = c
+          have aBound : a < 256 := by omega
+          have bBound : b < 256 := by omega
+          have cBound : c < 256 := by omega
+          have notAscii : ¬a < 128 := by omega
+          have notTwo : ¬(194 ≤ a ∧ a ≤ 223) := by omega
+          have leader : 224 ≤ a ∧ a ≤ 239 := by omega
+          simp only [matchUtf8, ofBits, pack_toBits]
+          simp [List.take_append, List.drop_append, integerBits_length,
+            decodeInteger_integerBits, takeByte, dropByte, Nat.mod_eq_of_lt aBound,
+            Nat.mod_eq_of_lt bBound, Nat.mod_eq_of_lt cBound,
+            notAscii, notTwo, leader, List.range_succ]
+          omega
+      · refine ⟨_, rfl, ?_, ?_⟩
+        · simp [integerBits_length]
+        · simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil]
+          generalize ha : 240 + value / 262144 = a
+          generalize hb : 128 + value / 4096 % 64 = b
+          generalize hc : 128 + value / 64 % 64 = c
+          generalize hd : 128 + value % 64 = d
+          have aBound : a < 256 := by omega
+          have bBound : b < 256 := by omega
+          have cBound : c < 256 := by omega
+          have dBound : d < 256 := by omega
+          have notAscii : ¬a < 128 := by omega
+          have notTwo : ¬(194 ≤ a ∧ a ≤ 223) := by omega
+          have notThree : ¬(224 ≤ a ∧ a ≤ 239) := by omega
+          have leader : 240 ≤ a ∧ a ≤ 244 := by omega
+          simp only [matchUtf8, ofBits, pack_toBits]
+          simp [List.take_append, List.drop_append, integerBits_length,
+            decodeInteger_integerBits, takeByte, dropByte, Nat.mod_eq_of_lt aBound,
+            Nat.mod_eq_of_lt bBound, Nat.mod_eq_of_lt cBound, Nat.mod_eq_of_lt dBound,
+            notAscii, notTwo, notThree, leader, List.range_succ]
+          omega
+
 /-- Validate a trailing binary or bitstring. The segment's unit constrains its
 length; binary uses eight and bitstring uses one. Alignment is relative to the
 captured segment, so an unaligned start is allowed. Explicit sizes must
