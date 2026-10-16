@@ -137,6 +137,63 @@ set_option «match».ignoreUnusedAlts true
                   Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
           (fun lynxBinaryTail✝ => Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝))
 
+#lynx_pure
+  def «utf8/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.utf8Segment _0
+
+#lynx_pure
+  def «utf8_little/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.utf8Segment _0
+
+#lynx_pure
+  def «utf16/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.utf16Segment _0 Bool.false
+
+#lynx_pure
+  def «utf16_big/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.utf16Segment _0 Bool.false
+
+#lynx_pure
+  def «utf16_little/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.utf16Segment _0 Bool.true
+
+#lynx_pure
+  def «utf32/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.utf32Segment _0 Bool.false
+
+#lynx_pure
+  def «utf32_big/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.utf32Segment _0 Bool.false
+
+#lynx_pure
+  def «utf32_little/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Term.Bitstring.utf32Segment _0 Bool.true
+
+#lynx_pure
+  def «utf_mixed/1» (_0 : Lynx.Term) : Lynx.Result :=
+    Lynx.Result.bind
+      (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer 1) (Lynx.Term.integer 3) 1 Bool.false)
+      (fun lynxBinarySegment✝ =>
+        Lynx.Result.bind
+          (Lynx.Result.bind (Lynx.Term.Bitstring.utf8Segment _0)
+            (fun lynxBinarySegment✝ =>
+              Lynx.Result.bind
+                (Lynx.Result.bind (Lynx.Term.Bitstring.utf16Segment _0 Bool.true)
+                  (fun lynxBinarySegment✝ =>
+                    Lynx.Result.bind
+                      (Lynx.Result.bind (Lynx.Term.Bitstring.utf32Segment _0 Bool.false)
+                        (fun lynxBinarySegment✝ =>
+                          Lynx.Result.bind
+                            (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer 0)
+                              (Lynx.Term.integer 1) 1 Bool.false)
+                            (fun lynxBinaryTail✝ =>
+                              Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
+                      (fun lynxBinaryTail✝ =>
+                        Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
+                (fun lynxBinaryTail✝ =>
+                  Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
+          (fun lynxBinaryTail✝ => Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝))
+
 end
 
 end Erlang.binary_construction

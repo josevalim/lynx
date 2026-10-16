@@ -60,6 +60,45 @@ binary32 are not modeled yet and currently return badarg. -/
       integerSegment (.integer (Int.ofNat encoded)) (.integer 64) 1 little
     | none => .error (.error (.atom "badarg"))
 
+/-- Encode one Unicode scalar as UTF-8. Endianness does not affect UTF-8. -/
+#lynx_pure @[expose] public def utf8Segment (value : Term) : Result :=
+  match value with
+  | .integer value =>
+    if 0 ≤ value ∧ value ≤ 0x10ffff ∧ (value < 0xd800 ∨ 0xdfff < value) then
+      let value := value.toNat
+      let bytes := if value < 0x80 then [value]
+        else if value < 0x800 then [0xc0 + value / 64, 0x80 + value % 64]
+        else if value < 0x10000 then
+          [0xe0 + value / 4096, 0x80 + value / 64 % 64, 0x80 + value % 64]
+        else [0xf0 + value / 262144, 0x80 + value / 4096 % 64,
+          0x80 + value / 64 % 64, 0x80 + value % 64]
+      .ok (ofBits (bytes.flatMap fun byte => integerBits (Int.ofNat byte) 8 Bool.false))
+    else .error (.error (.atom "badarg"))
+  | _ => .error (.error (.atom "badarg"))
+
+/-- Encode one Unicode scalar as UTF-16, ordering bytes within each code unit.
+Supplementary scalars emit the high surrogate before the low surrogate. -/
+#lynx_pure @[expose] public def utf16Segment (value : Term) (little : Bool) : Result :=
+  match value with
+  | .integer value =>
+    if 0 ≤ value ∧ value ≤ 0x10ffff ∧ (value < 0xd800 ∨ 0xdfff < value) then
+      let value := value.toNat
+      let bits := if value < 0x10000 then integerBits value 16 little
+        else integerBits (0xd800 + (value - 0x10000) / 1024) 16 little ++
+          integerBits (0xdc00 + (value - 0x10000) % 1024) 16 little
+      .ok (ofBits bits)
+    else .error (.error (.atom "badarg"))
+  | _ => .error (.error (.atom "badarg"))
+
+/-- Encode one Unicode scalar as UTF-32 without integer-segment truncation. -/
+#lynx_pure @[expose] public def utf32Segment (value : Term) (little : Bool) : Result :=
+  match value with
+  | .integer value =>
+    if 0 ≤ value ∧ value ≤ 0x10ffff ∧ (value < 0xd800 ∨ 0xdfff < value) then
+      .ok (ofBits (integerBits value 32 little))
+    else .error (.error (.atom "badarg"))
+  | _ => .error (.error (.atom "badarg"))
+
 /-- Copy a whole bitstring or a sized prefix. Whole segments must have a bit
 length divisible by their unit; sized segments may consume an unaligned input. -/
 #lynx_pure @[expose] public def binarySegment (value size : Term) (unit : Nat) : Result :=

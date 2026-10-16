@@ -255,6 +255,42 @@ defmodule Lynx.CoreToLeanjTest do
     end
   end
 
+  test "translates UTF construction with no size or unit and resolves native endianness" do
+    for type <- [:utf8, :utf16, :utf32], endian <- [:big, :little, :native] do
+      segment =
+        :cerl.c_bitstr(
+          :cerl.c_var(0),
+          :cerl.c_atom(:undefined),
+          :cerl.c_atom(:undefined),
+          :cerl.c_atom(type),
+          :cerl.abstract([:unsigned, endian])
+        )
+
+      type = Atom.to_string(type)
+
+      endian =
+        Atom.to_string(if endian == :native, do: :erlang.system_info(:endian), else: endian)
+
+      assert {:ok,
+              %{
+                {:entry, 1} => %{
+                  pure: true,
+                  translation: %{
+                    "body" => %{
+                      "kind" => "bitstring_constructor",
+                      "segments" => [translated]
+                    }
+                  }
+                }
+              }, []} = translate(definitions([definition(:entry, :cerl.c_binary([segment]))]))
+
+      assert %{"type" => ^type, "endian" => ^endian, "value" => %{"kind" => "var"}, "span" => _} =
+               translated
+
+      assert map_size(translated) == 4
+    end
+  end
+
   test "folds native integer literals using the translating platform" do
     for {value, signed} <- [{0x123, :unsigned}, {-2, :signed}] do
       bytes = :binary.bin_to_list(<<value::native-size(12), 0::4>>)

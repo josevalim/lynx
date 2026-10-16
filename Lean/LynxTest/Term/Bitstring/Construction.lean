@@ -288,6 +288,91 @@ theorem unimplemented_float_widths (value : Term) (little : Bool) :
     Term.Bitstring.floatSegment value 32 little = .error (.error (.atom "badarg")) := by
   constructor <;> rfl
 
+-- Expected bytes checked against OTP 29, including noncharacters and scalar boundaries.
+private def utfBytes (value : Int) (utf8 big16 little16 big32 little32 : List UInt8) : Prop :=
+  Term.Bitstring.utf8Segment (.integer value) =
+    .ok (.bitstring ⟨utf8.toArray⟩ 0 (by simp)) ∧
+  Term.Bitstring.utf16Segment (.integer value) false =
+    .ok (.bitstring ⟨big16.toArray⟩ 0 (by simp)) ∧
+  Term.Bitstring.utf16Segment (.integer value) true =
+    .ok (.bitstring ⟨little16.toArray⟩ 0 (by simp)) ∧
+  Term.Bitstring.utf32Segment (.integer value) false =
+    .ok (.bitstring ⟨big32.toArray⟩ 0 (by simp)) ∧
+  Term.Bitstring.utf32Segment (.integer value) true =
+    .ok (.bitstring ⟨little32.toArray⟩ 0 (by simp))
+
+set_option maxRecDepth 4096 in
+theorem utf_boundaries :
+    utfBytes 0x0 [0x0] [0x0, 0x0] [0x0, 0x0] [0x0, 0x0, 0x0, 0x0] [0x0, 0x0, 0x0, 0x0] ∧
+    utfBytes 0x7f [0x7f] [0x0, 0x7f] [0x7f, 0x0] [0x0, 0x0, 0x0, 0x7f] [0x7f, 0x0, 0x0, 0x0] ∧
+    utfBytes 0x80 [0xc2, 0x80] [0x0, 0x80] [0x80, 0x0] [0x0, 0x0, 0x0, 0x80] [0x80, 0x0, 0x0, 0x0] ∧
+    utfBytes 0x7ff [0xdf, 0xbf] [0x7, 0xff] [0xff, 0x7] [0x0, 0x0, 0x7, 0xff] [0xff, 0x7, 0x0, 0x0] ∧
+    utfBytes 0x800 [0xe0, 0xa0, 0x80] [0x8, 0x0] [0x0, 0x8] [0x0, 0x0, 0x8, 0x0] [0x0, 0x8, 0x0, 0x0] ∧
+    utfBytes 0xd7ff [0xed, 0x9f, 0xbf] [0xd7, 0xff] [0xff, 0xd7] [0x0, 0x0, 0xd7, 0xff] [0xff, 0xd7, 0x0, 0x0] ∧
+    utfBytes 0xe000 [0xee, 0x80, 0x80] [0xe0, 0x0] [0x0, 0xe0] [0x0, 0x0, 0xe0, 0x0] [0x0, 0xe0, 0x0, 0x0] ∧
+    utfBytes 0xffff [0xef, 0xbf, 0xbf] [0xff, 0xff] [0xff, 0xff] [0x0, 0x0, 0xff, 0xff] [0xff, 0xff, 0x0, 0x0] ∧
+    utfBytes 0x10000 [0xf0, 0x90, 0x80, 0x80] [0xd8, 0x0, 0xdc, 0x0] [0x0, 0xd8, 0x0, 0xdc] [0x0, 0x1, 0x0, 0x0] [0x0, 0x0, 0x1, 0x0] ∧
+    utfBytes 0x10ffff [0xf4, 0x8f, 0xbf, 0xbf] [0xdb, 0xff, 0xdf, 0xff] [0xff, 0xdb, 0xff, 0xdf] [0x0, 0x10, 0xff, 0xff] [0xff, 0xff, 0x10, 0x0] := by
+  repeat first | apply And.intro | rfl
+
+set_option maxRecDepth 4096 in
+theorem utf_characters :
+    utfBytes 0x20ac [0xe2, 0x82, 0xac] [0x20, 0xac] [0xac, 0x20] [0x0, 0x0, 0x20, 0xac] [0xac, 0x20, 0x0, 0x0] ∧
+    utfBytes 0x1f600 [0xf0, 0x9f, 0x98, 0x80] [0xd8, 0x3d, 0xde, 0x0] [0x3d, 0xd8, 0x0, 0xde] [0x0, 0x1, 0xf6, 0x0] [0x0, 0xf6, 0x1, 0x0] ∧
+    utfBytes 0xfeff [0xef, 0xbb, 0xbf] [0xfe, 0xff] [0xff, 0xfe] [0x0, 0x0, 0xfe, 0xff] [0xff, 0xfe, 0x0, 0x0] := by
+  repeat first | apply And.intro | rfl
+
+theorem utf_invalid_scalars (value : Int) (little : Bool)
+    (invalid : value < 0 ∨ 0x10ffff < value ∨ (0xd800 ≤ value ∧ value ≤ 0xdfff)) :
+    Term.Bitstring.utf8Segment (.integer value) = .error (.error (.atom "badarg")) ∧
+    Term.Bitstring.utf16Segment (.integer value) little = .error (.error (.atom "badarg")) ∧
+    Term.Bitstring.utf32Segment (.integer value) little = .error (.error (.atom "badarg")) := by
+  have rejected : ¬(0 ≤ value ∧ value ≤ 0x10ffff ∧ (value < 0xd800 ∨ 0xdfff < value)) := by
+    omega
+  simp [Term.Bitstring.utf8Segment, Term.Bitstring.utf16Segment,
+    Term.Bitstring.utf32Segment, rejected]
+
+theorem utf_noninteger (value : Term) (little : Bool)
+    (noninteger : ∀ n, value ≠ .integer n) :
+    Term.Bitstring.utf8Segment value = .error (.error (.atom "badarg")) ∧
+    Term.Bitstring.utf16Segment value little = .error (.error (.atom "badarg")) ∧
+    Term.Bitstring.utf32Segment value little = .error (.error (.atom "badarg")) := by
+  cases value <;> simp_all [Term.Bitstring.utf8Segment, Term.Bitstring.utf16Segment,
+    Term.Bitstring.utf32Segment]
+
+theorem utf32_preserves_scalar (value : Int) (little : Bool)
+    (nonnegative : 0 ≤ value) (bounded : value ≤ 0x10ffff)
+    (nonsurrogate : value < 0xd800 ∨ 0xdfff < value) :
+    Term.Bitstring.utf32Segment (.integer value) little =
+      .ok (Term.Bitstring.ofBits (Term.Bitstring.integerBits value 32 little)) := by
+  simp [Term.Bitstring.utf32Segment, nonnegative, bounded, nonsurrogate]
+
+theorem utf16_size (value : Int) (little : Bool)
+    (nonnegative : 0 ≤ value) (bounded : value ≤ 0x10ffff)
+    (nonsurrogate : value < 0xd800 ∨ 0xdfff < value) :
+    ∃ result, Term.Bitstring.utf16Segment (.integer value) little = .ok result ∧
+      size result = if value < 0x10000 then 16 else 32 := by
+  simp only [Term.Bitstring.utf16Segment, nonnegative, bounded, nonsurrogate,
+    and_self, ↓reduceIte]
+  split <;> rename_i branch
+  · refine ⟨_, rfl, ?_⟩
+    rw [ofBits_preserves_size, Term.Bitstring.integerBits_length]
+    have : value < 0x10000 := by omega
+    simp [this]
+  · refine ⟨_, rfl, ?_⟩
+    rw [ofBits_preserves_size, List.length_append,
+      Term.Bitstring.integerBits_length, Term.Bitstring.integerBits_length]
+    have : ¬value < 0x10000 := by omega
+    simp [this]
+
+set_option maxRecDepth 4096 in
+theorem utf_unaligned_concatenation :
+    ((Term.Bitstring.utf8Segment (.integer 0x20ac)).bind fun encoded =>
+      (Term.Bitstring.append (.bitstring ⟨#[0x20]⟩ 3 (by decide)) encoded).bind fun joined =>
+        Term.Bitstring.append joined (.bitstring ⟨#[0]⟩ 1 (by decide))) =
+      .ok (.bitstring ⟨#[0x3c, 0x50, 0x55, 0x80]⟩ 4 (by decide)) := by
+  rfl
+
 end LynxTest.Term.Bitstring.Construction
 
 run_cmd do

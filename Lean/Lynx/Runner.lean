@@ -682,6 +682,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       | "integer" => fields segment ["type", "value", "size", "unit", "signed", "endian", "span"]
       | "float" => fields segment ["type", "value", "size", "endian", "span"]
       | "binary" => fields segment ["type", "value", "size", "unit", "span"]
+      | "utf8" | "utf16" | "utf32" => fields segment ["type", "value", "endian", "span"]
       | other => throw s!"unsupported bitstring segment type '{other}'"
       let si ← span map segment info
       let value ← term map si false (← field segment "value")
@@ -697,7 +698,14 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
           | "big" => pure (mkIdent ``Bool.false)
           | "little" => pure (mkIdent ``Bool.true)
           | other => throw s!"unsupported bitstring segment endianness '{other}'"
-        if segmentType == "float" then do
+        if segmentType == "utf8" then do
+          let build := mkIdent ``Lynx.Term.Bitstring.utf8Segment
+          pure (Unhygienic.run `($build $value))
+        else if segmentType == "utf16" || segmentType == "utf32" then do
+          let build := mkIdent (if segmentType == "utf16" then
+            ``Lynx.Term.Bitstring.utf16Segment else ``Lynx.Term.Bitstring.utf32Segment)
+          pure (Unhygienic.run `($build $value $little))
+        else if segmentType == "float" then do
           let width ← (← field segment "size").getNat?
           unless width == 16 || width == 32 || width == 64 do
             throw "float segment size must be 16, 32, or 64"

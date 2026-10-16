@@ -4,6 +4,8 @@
          integer_mixed/1, integer_invalid_size/1,
          float_default/1, float_big/1, float_little/1, float_unit/1,
          float_mixed/1, float16/1, float32/1,
+         utf8/1, utf8_little/1, utf16/1, utf16_big/1, utf16_little/1,
+         utf32/1, utf32_big/1, utf32_little/1, utf_mixed/1,
          binary_all/1, bitstring_all/1, binary_prefix/2, bitstring_unit/2, binary_mixed/2]).
 
 empty() -> <<>>.
@@ -30,3 +32,13 @@ bitstring_all(X) -> <<X/bitstring>>.
 binary_prefix(X, Size) -> <<X:Size/binary>>.
 bitstring_unit(X, Size) -> <<X:Size/binary-unit:3>>.
 binary_mixed(X, Y) -> <<1:3, X/bitstring, Y/binary, 0:1>>.
+
+utf8(X) -> <<X/utf8>>.
+utf8_little(X) -> <<X/utf8-little>>.
+utf16(X) -> <<X/utf16>>.
+utf16_big(X) -> <<X/utf16-big>>.
+utf16_little(X) -> <<X/utf16-little>>.
+utf32(X) -> <<X/utf32>>.
+utf32_big(X) -> <<X/utf32-big>>.
+utf32_little(X) -> <<X/utf32-little>>.
+utf_mixed(X) -> <<1:3, X/utf8, X/utf16-little, X/utf32-big, 0:1>>.

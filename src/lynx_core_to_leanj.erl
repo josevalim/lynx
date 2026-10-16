@@ -661,8 +661,13 @@ binary_segment(#c_bitstr{size = #c_literal{val = Size}, unit = #c_literal{val = 
         when is_integer(Size), is_integer(Unit), Unit >= 1, Unit =< 256,
              (Size * Unit =:= 16 orelse Size * Unit =:= 32 orelse Size * Unit =:= 64), is_list(Flags) ->
     binary_float_segment(binary_segment_flags(Flags), Core, State0);
+binary_segment(#c_bitstr{size = #c_literal{val = undefined},
+        unit = #c_literal{val = undefined}, type = #c_literal{val = Type},
+        flags = #c_literal{val = Flags}} = Core, State0)
+        when (Type =:= utf8 orelse Type =:= utf16 orelse Type =:= utf32), is_list(Flags) ->
+    binary_utf_segment(binary_segment_flags(Flags), Core, State0);
 binary_segment(Core, _State) ->
-    core_error(Core, ~"unsupported binary segment (expected integer, binary, or 16/32/64-bit float segment)").
+    core_error(Core, ~"unsupported binary segment (expected integer, binary, utf8/utf16/utf32, or 16/32/64-bit float segment)").
 
 %% Resolve native on the translating VM so Lean only needs explicit endianness.
 binary_segment_flags(Flags) ->
@@ -690,6 +695,15 @@ binary_float_segment([Endian, Signed], #c_bitstr{anno = Anno, val = Value,
        ~"endian" => atom_to_binary(Endian, utf8)}, State1};
 binary_float_segment(_Flags, Core, _State) ->
     core_error(Core, ~"unsupported float segment flags (expected big/little/native)").
+
+binary_utf_segment([Endian, unsigned], #c_bitstr{anno = Anno, val = Value,
+        type = #c_literal{val = Type}}, State0)
+        when Endian =:= big; Endian =:= little ->
+    {TranslatedValue, State1} = value(Value, State0),
+    {#{~"type" => atom_to_binary(Type, utf8), ~"span" => span(Anno),
+       ~"value" => TranslatedValue, ~"endian" => atom_to_binary(Endian, utf8)}, State1};
+binary_utf_segment(_Flags, Core, _State) ->
+    core_error(Core, ~"unsupported UTF segment flags (expected unsigned and big/little/native)").
 
 local_function_value(Lifted, Captures, Arity, Anno, State0) ->
     Key = {State0#state.module, Lifted},
