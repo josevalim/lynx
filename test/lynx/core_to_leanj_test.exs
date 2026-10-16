@@ -22,6 +22,41 @@ defmodule Lynx.CoreToLeanjTest do
             }, []} = translate(defs)
   end
 
+  test "external function literals share a capture-free remote-call wrapper" do
+    capture = :cerl.abstract(&:erlang."=<"/2)
+    body = :cerl.c_tuple([capture, capture])
+
+    assert {:ok,
+            %{
+              {:entry, 1} => %{
+                translation: %{
+                  "body" => %{
+                    "values" => [
+                      %{
+                        "elements" => [
+                          %{"kind" => "function", "id" => id, "arity" => 2, "captures" => []},
+                          %{"kind" => "function", "id" => id, "arity" => 2, "captures" => []}
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {:"$lynx_fun_0", 2} => %{
+                pure: true,
+                translation: %{
+                  "params" => [%{"name" => 0}, %{"name" => 1}],
+                  "body" => %{
+                    "kind" => "remote_call",
+                    "module" => "Erlang.erlang",
+                    "name" => "=<",
+                    "args" => [%{"name" => 0}, %{"name" => 1}]
+                  }
+                }
+              }
+            }, [{:erlang, :"=<", 2, []}]} = translate(definitions([definition(:entry, body)]))
+  end
+
   test "passes captures explicitly through direct local recursion" do
     loop = :cerl.c_fname(:loop, 1)
     input = :cerl.c_var(:input)

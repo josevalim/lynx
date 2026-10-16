@@ -38,6 +38,13 @@ defmodule ListsProofsTest do
       :lists.sort(result) === result
   end
 
+  def enum_sort_contract(list, value) do
+    result = Enum.sort(list)
+
+    sorted(result) and multiplicity(result, value) === multiplicity(list, value) and
+      Enum.sort(result) === result
+  end
+
   @merge_fixpoint ~LEAN"""
   partial_fixpoint monotonicity by
     intro f g h
@@ -59,12 +66,14 @@ defmodule ListsProofsTest do
   """
 
   laws "sort preserves multiplicities and is idempotent" do
+    # The list-only law never enters Enum's general enumerable implementation.
+    cutoff &Enum.sort/2
     termination_suffix &:lists.mergel/2, @merge_fixpoint
     termination_suffix &:lists.rmergel/2, @merge_fixpoint
 
     law sort_contract_holds(list, value),
       requires: proper_list(list),
-      expects: sort_contract(list, value),
+      expects: sort_contract(list, value) and enum_sort_contract(list, value),
       proof: ~LEAN"""
       let encode (xs : List Lynx.Term) : Lynx.Term := xs.foldr Lynx.Term.cons .nil
       -- Reverse merging prefers the right run on ties. Sortedness uses a
@@ -1107,12 +1116,17 @@ defmodule ListsProofsTest do
           by_cases equal : Lynx.Term.exactCompare head value = .eq <;>
             simp [«multiplicity/2», encode, Erlang.erlang.«=:=/2», equal, ih,
               massCons, Int.natCast_add]
+      have enumSort (xs : List Lynx.Term) :
+          Elixir.Enum.«sort/1» (encode xs) = Erlang.lists.«sort/1» (encode xs) := by
+        have isList : Erlang.erlang.«is_list/1» (encode xs) = .ok Lynx.Term.true := by
+          cases xs <;> rfl
+        simp [Elixir.Enum.«sort/1», isList]
       have accepted : «proper_list/1» list = .ok Lynx.Term.true := by
         simpa only [«sort_contract_holds:requires/2»] using requires
       obtain ⟨xs, rfl⟩ := properModel list accepted
       obtain ⟨output, returned, sorted, masses⟩ := sortModel xs
       have countEqual := masses (fun head => if Lynx.Term.exactCompare head value = .eq then 1 else 0)
-      simp [«sort_contract_holds:ensures/2», «sort_contract/2», returned,
+      simp [«sort_contract_holds:ensures/2», «sort_contract/2», «enum_sort_contract/2», enumSort, returned,
         sortedCheck output sorted, multiplicityModel, countEqual, sortSorted output sorted,
         Erlang.erlang.«=:=/2»]
       """

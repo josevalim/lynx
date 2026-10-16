@@ -541,6 +541,15 @@ value(#c_binary{anno = Anno, segments = Segments}, State0) ->
             {Translated, State1} = binary_pattern_segments(Segments, State0),
             {node(~"bitstring_pattern", Anno, #{~"segments" => Translated}), State1}
     end;
+value(#c_literal{anno = Anno, val = Fun} = Core, State0) when is_function(Fun) ->
+    case erlang:fun_info(Fun, type) of
+        {type, external} ->
+            {module, Module} = erlang:fun_info(Fun, module),
+            {name, Name} = erlang:fun_info(Fun, name),
+            {arity, Arity} = erlang:fun_info(Fun, arity),
+            external_function_value(Module, Name, Arity, Anno, State0);
+        _ -> unsupported(Core)
+    end;
 value(#c_literal{anno = Anno, val = []}, State) ->
     {node(~"nil", Anno, #{}), State};
 value(#c_literal{anno = Anno, val = [Head | Tail]}, State0) ->
@@ -702,6 +711,24 @@ local_function_value(Lifted, Captures, Arity, Anno, State0) ->
             Wrapper = #{translation => Definition, local_calls => [Lifted], pure => true},
             State4 = State3#state{translated = (State3#state.translated)#{Name => Wrapper}},
             function_node(Entry, Anno, State4)
+    end.
+
+%% External captures share one dispatch entry per MFA, including repeated literals.
+external_function_value(Module, Function, Arity, Anno, State0) ->
+    Key = {external, Module, Function, Arity},
+    case maps:find(Key, State0#state.funs) of
+        {ok, Entry} -> function_node(Entry, Anno, State0);
+        error ->
+            Id = map_size(State0#state.funs),
+            Name = {list_to_atom("$lynx_fun_" ++ integer_to_list(Id)), Arity},
+            Args = [#c_var{name = Index} || Index <- lists:seq(0, Arity - 1)],
+            Entry = #{id => Id, module => State0#state.module,
+                      name => Name, arity => Arity, captures => []},
+            Fun = #c_fun{anno = Anno, vars = Args, body = #c_call{anno = Anno,
+                module = #c_literal{val = Module}, name = #c_literal{val = Function}, args = Args}},
+            State1 = State0#state{funs = (State0#state.funs)#{Key => Entry}},
+            State2 = translate_def(Name, {function, Fun}, State1),
+            function_node(Entry, Anno, State2)
     end.
 
 named_function_value(#c_var{anno = Anno, name = {_, Arity} = Name}, State0) ->
