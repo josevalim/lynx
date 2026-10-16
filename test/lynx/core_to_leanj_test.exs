@@ -22,6 +22,25 @@ defmodule Lynx.CoreToLeanjTest do
             }, []} = translate(defs)
   end
 
+  test "writable binary allocation starts with an empty binary" do
+    body = :cerl.c_primop(:cerl.c_atom(:bs_init_writable), [:cerl.c_int(256)])
+
+    assert {:ok,
+            %{
+              {:entry, 1} => %{
+                pure: true,
+                translation: %{
+                  "body" => %{
+                    "kind" => "return",
+                    "values" => [
+                      %{"kind" => "bitstring", "bytes" => [], "last_bits" => 0}
+                    ]
+                  }
+                }
+              }
+            }, []} = translate(definitions([definition(:entry, body)]))
+  end
+
   test "external function literals share a capture-free remote-call wrapper" do
     capture = :cerl.abstract(&:erlang."=<"/2)
     body = :cerl.c_tuple([capture, capture])

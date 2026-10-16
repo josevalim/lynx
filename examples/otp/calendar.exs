@@ -20,6 +20,11 @@ defmodule CalendarProofsTest do
     valid_time(time) and days * 86400 + :calendar.time_to_seconds(time) === seconds
   end
 
+  def gregorian_days_contract(days) do
+    date = :calendar.gregorian_days_to_date(days)
+    :calendar.valid_date(date) and :calendar.date_to_gregorian_days(date) === days
+  end
+
   def valid_year(year), do: is_integer(year) and year >= 0
 
   laws "calendar" do
@@ -173,6 +178,80 @@ defmodule CalendarProofsTest do
           ((n - 1) % 400) / 100 + 366 + 146097 := by omega
       simp [«date_to_gregorian_days_cycle:ensures/1», january _ nonnegative,
         january _ shifted, cycle, Erlang.erlang.«=:=/2»]
+      """
+  end
+
+  laws "Gregorian day round trip" do
+    law gregorian_days_roundtrip(days),
+      requires: is_integer(days),
+      expects: gregorian_days_contract(days),
+      proof: ~LEAN"""
+      cases days <;> simp [«gregorian_days_roundtrip:requires/1», Erlang.erlang.«is_integer/1»] at requires
+      rename_i n
+      have floorEra (z : Int) :
+          (if 0 ≤ z then z.tdiv 146097 else (z - 146096).tdiv 146097) = z / 146097 := by
+        by_cases positive : 0 ≤ z
+        · simp [positive, Int.tdiv_eq_ediv_of_nonneg positive]
+        · simp only [positive, if_false, Int.tdiv_eq_ediv,
+            show Int.sign 146097 = 1 by rfl]
+          split <;> omega
+      let era := (n - 60) / 146097
+      let d := (n - 60) % 146097
+      let y := (d - d / 1460 + d / 36524 - d / 146096) / 365
+      let r := d - (365 * y + y / 4 - y / 100)
+      let mp := (5*r+2)/153
+      let year := y + era*400 + if mp < 10 then 0 else 1
+      let month := if mp < 10 then mp+3 else mp-9
+      let day := r - (153*mp+2)/5+1
+      have dLo : 0 ≤ d := Int.emod_nonneg _ (by decide)
+      have dHi : d < 146097 := Int.emod_lt_of_pos _ (by decide)
+      have yBounds : 0 ≤ y ∧ y < 400 := by dsimp [y]; omega
+      have century : y / 100 = 0 ∨ y / 100 = 1 ∨ y / 100 = 2 ∨ y / 100 = 3 := by omega
+      have residue : y % 4 = 0 ∨ y % 4 = 1 ∨ y % 4 = 2 ∨ y % 4 = 3 := by omega
+      have rBounds : 0 ≤ r ∧ r ≤ 365 := by
+        rcases century with h | h | h | h <;>
+          rcases residue with rem | rem | rem | rem <;> dsimp [r, y] at * <;> omega
+      have leapSpec (d : Int) (lo : 0 ≤ d) (hi : d < 146097) :
+          let y := (d-d/1460+d/36524-d/146096)/365
+          d-(365*y+y/4-y/100) ≤
+            if (y+1)%4=0 ∧ ((y+1)%100≠0 ∨ (y+1)%400=0) then 365 else 364 := by
+        dsimp
+        let y := (d-d/1460+d/36524-d/146096)/365
+        have yBounds : 0 ≤ y ∧ y < 400 := by dsimp [y]; omega
+        have century : y/100=0 ∨ y/100=1 ∨ y/100=2 ∨ y/100=3 := by omega
+        have residue : y%4=0 ∨ y%4=1 ∨ y%4=2 ∨ y%4=3 := by omega
+        split <;> rcases century with h | h | h | h <;>
+          rcases residue with rem | rem | rem | rem <;> dsimp [y] at * <;> omega
+      have leapBound := leapSpec d dLo dHi
+      have monthBounds : 0 ≤ mp ∧ mp ≤ 11 := by dsimp [mp]; omega
+      have dayLo : 1 ≤ day := by dsimp [day, mp]; omega
+      have adjustedLo : 0 ≤ d - d/1460+d/36524-d/146096 := by omega
+      have remEra : n - 60 - era*146097 = d := by dsimp [era, d]; omega
+      have decoded : Erlang.calendar.«gregorian_days_to_date/1» (.integer n) =
+          .ok (.tuple #[.integer year, .integer month, .integer day]) := by
+        have eraPositive (h : 0 ≤ n-60) : (n-60).tdiv 146097 = era := by
+          simp [era, Int.tdiv_eq_ediv_of_nonneg h]
+        have eraNegative (h : ¬ 0 ≤ n-60) : (n-60-146097+1).tdiv 146097 = era := by
+          have eq := floorEra (n-60)
+          simpa [h, era] using eq
+        by_cases h : 0 ≤ n-60
+        all_goals
+          simp (disch := omega) [Erlang.calendar.«gregorian_days_to_date/1»,
+            Erlang.erlang.«div/2», Erlang.erlang.«>=/2», Erlang.erlang.«</2»,
+            Ordering.isLT_iff_eq_lt, Ordering.isGE_iff_ne_lt, Int.compare_eq_lt,
+            h, show (n-60<0) = (¬ 0≤n-60) by omega,
+            eraPositive, eraNegative, remEra, Int.tdiv_eq_ediv_of_nonneg,
+            y, r, mp, year, month, day]
+      have encoded : Erlang.calendar.«date_to_gregorian_days/1»
+          (.tuple #[.integer year, .integer month, .integer day]) = .ok (.integer n) := by
+        simp [Erlang.calendar.«date_to_gregorian_days/1»,
+          Erlang.calendar.«date_to_gregorian_days/3», dayLo]
+      have valid : Erlang.calendar.«valid_date/1»
+          (.tuple #[.integer year, .integer month, .integer day]) = .ok Lynx.Term.true := by
+        simp [Erlang.calendar.«valid_date/1», Erlang.calendar.«valid_date/3»,
+          Erlang.calendar.«valid_date1/3», Erlang.erlang.«is_integer/1»]
+      simp [«gregorian_days_roundtrip:ensures/1», «gregorian_days_contract/1»,
+        decoded, encoded, valid, Erlang.erlang.«=:=/2»]
       """
   end
 

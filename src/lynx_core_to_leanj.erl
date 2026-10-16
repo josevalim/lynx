@@ -421,6 +421,9 @@ expression_apply(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args} = 
 %% Core inserts match_fail for arguments that match no function clause.
 %% Lean (the generated fallback body):
 %%   Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
+%% The writable binary primop only preallocates storage; its Erlang value is empty.
+prim_op(bs_init_writable, Anno, [_Capacity], State) ->
+    expression(#c_literal{anno = Anno, val = <<>>}, State);
 prim_op(match_fail, Anno, [#c_literal{val = {function_clause}}], State) ->
     {error_node(function_clause, Anno), State};
 prim_op(match_fail, Anno, [#c_tuple{es = [#c_literal{val = function_clause} | _]}], State) ->
@@ -627,12 +630,13 @@ integer_pattern_value(Value, Width, signed) ->
 binary_pattern_segments([], State) -> {[], State};
 binary_pattern_segments([#c_bitstr{anno = Anno, val = Value,
         type = #c_literal{val = binary}, size = Size,
-        unit = #c_literal{val = Unit}}], State0)
+        unit = #c_literal{val = Unit}} | Rest], State0)
         when is_integer(Unit), Unit >= 1, Unit =< 256 ->
     {TranslatedValue, State1} = value(Value, State0),
     {TranslatedSize, State2} = value(Size, State1),
+    {Remaining, State3} = binary_pattern_segments(Rest, State2),
     {[#{~"type" => ~"binary", ~"span" => span(Anno), ~"size" => TranslatedSize,
-        ~"value" => TranslatedValue, ~"unit" => Unit}], State2};
+        ~"value" => TranslatedValue, ~"unit" => Unit} | Remaining], State3};
 binary_pattern_segments([#c_bitstr{type = #c_literal{val = Type}} = Segment | Rest], State0)
         when Type =:= integer; Type =:= float ->
     {Translated, State1} = binary_segment(Segment, State0),

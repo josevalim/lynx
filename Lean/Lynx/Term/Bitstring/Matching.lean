@@ -94,6 +94,17 @@ consume exactly the remaining bits. -/
     else Bool.false
   | _ => Bool.false
 
+/-- Extract a sized bitstring prefix, leaving the remaining bits for later fields. -/
+@[expose] public def matchBinary (input size : Term) (unit : Nat) : Option (Term × Term) :=
+  match input, size with
+  | .bitstring bytes last _, .integer size =>
+    let bits := toBits bytes last
+    let width := size.toNat * unit
+    if 0 ≤ size ∧ 1 ≤ unit ∧ unit ≤ 256 ∧ width ≤ bits.length then
+      some (ofBits (bits.take width), ofBits (bits.drop width))
+    else none
+  | _, _ => none
+
 /-- A pattern without a trailing capture must consume the whole bitstring. -/
 @[expose] public def matchEnd (input : Term) : Bool :=
   match input with

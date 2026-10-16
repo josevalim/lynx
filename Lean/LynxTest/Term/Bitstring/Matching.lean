@@ -14,6 +14,20 @@ private def bits (term : Term) : List Bool :=
 
 private def empty : Term := .bitstring ⟨#[]⟩ 0 (by decide)
 
+theorem binary_consumes_exact_width (input : List Bool) (width unit : Nat)
+    (positive : 1 ≤ unit) (bounded : unit ≤ 256) (enough : width * unit ≤ input.length) :
+    Term.Bitstring.matchBinary (Term.Bitstring.ofBits input) (.integer width) unit =
+      some (Term.Bitstring.ofBits (input.take (width * unit)),
+        Term.Bitstring.ofBits (input.drop (width * unit))) := by
+  simp [Term.Bitstring.matchBinary, Term.Bitstring.ofBits, Term.Bitstring.pack_toBits,
+    positive, bounded, enough]
+
+theorem short_binary_input (input : List Bool) (width unit : Nat)
+    (short : input.length < width * unit) :
+    Term.Bitstring.matchBinary (Term.Bitstring.ofBits input) (.integer width) unit = none := by
+  simp [Term.Bitstring.matchBinary, Term.Bitstring.ofBits, Term.Bitstring.pack_toBits,
+    Nat.not_le_of_gt short]
+
 -- Extraction preserves the remainder for every value, width, unit, and endian.
 theorem integer_consumes_exact_width (input : List Bool) (width unit : Nat)
     (signed little : Bool) (positive : 1 ≤ unit) (bounded : unit ≤ 256)

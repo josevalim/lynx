@@ -2,7 +2,7 @@
 -export([empty/1, literal/1, partial_literal/1, binary_literal/1, string_literal/1, signed_literal/1, integers/1, integer_sized/1, integer_external_size/2,
          float64/1, binary_tail/1, bitstring_tail/1, binary_literal_tail/1,
          bitstring_literal_tail/1, binary_fixed/2,
-         bitstring_fixed/2, nested/1, guarded/1, alias/1, pinned/2]).
+         bitstring_fixed/2, binary_prefix/2, nested/1, guarded/1, alias/1, pinned/2]).
 
 empty(<<>>) -> empty;
 empty(_) -> other.
@@ -51,6 +51,9 @@ binary_fixed(Size, Bits) ->
 
 bitstring_fixed(Size, Bits) ->
     case Bits of <<Tag:3, Tail:Size/bitstring>> -> {Tag, Tail}; _ -> other end.
+
+binary_prefix(Size, Bits) ->
+    case Bits of <<Prefix:Size/binary, Tag:3, Tail/bitstring>> -> {Prefix, Tag, Tail}; _ -> other end.
 
 nested({tag, [#{bits := <<X:8, Rest/bitstring>>}]}) -> {X, Rest};
 nested(_) -> other.

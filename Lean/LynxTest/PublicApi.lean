@@ -321,6 +321,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.Bitstring.instDecidableValid",
   "Lynx.Term.Bitstring.integerBits",
   "Lynx.Term.Bitstring.integerSegment",
+  "Lynx.Term.Bitstring.matchBinary",
   "Lynx.Term.Bitstring.matchEnd",
   "Lynx.Term.Bitstring.matchFloat",
   "Lynx.Term.Bitstring.matchInteger",

@@ -594,9 +594,8 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       let segmentType ← str segment "type"
       let si ← span map segment info
       let value ← field segment "value"
-      if segmentType == "binary" then do
+      if segmentType == "binary" && i + 1 == segments.size then do
         fields segment ["type", "value", "size", "unit", "span"]
-        unless i + 1 == segments.size do throw "binary/bitstring capture must be trailing"
         let unit ← (← field segment "unit").getNat?
         unless 1 ≤ unit && unit ≤ 256 do throw "bitstring segment unit must be in 1..256"
         let unit : TSyntax `term := ⟨Syntax.mkNumLit (toString unit)⟩
@@ -608,13 +607,22 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
         let (pat, nested) ← withExtractions (term map si true value)
         addExtraction remaining pat (← catchAllPattern value) nested
       else do
-        let little ← match ← str segment "endian" with
+        let little ← if segmentType == "binary" then pure (mkIdent ``Bool.false) else
+          match ← str segment "endian" with
           | "big" => pure (mkIdent ``Bool.false)
           | "little" => pure (mkIdent ``Bool.true)
           | other => throw s!"unsupported bitstring endianness '{other}'"
         let next ← fresh
         let rest ← term map si false next
-        let extract ← if segmentType == "integer" then do
+        let extract ← if segmentType == "binary" then do
+          fields segment ["type", "value", "size", "unit", "span"]
+          let size ← term map si false (← field segment "size")
+          let unit ← (← field segment "unit").getNat?
+          unless 1 ≤ unit && unit ≤ 256 do throw "bitstring segment unit must be in 1..256"
+          let unit : TSyntax `term := ⟨Syntax.mkNumLit (toString unit)⟩
+          let extract := mkIdent ``Lynx.Term.Bitstring.matchBinary
+          pure (Unhygienic.run `($extract $remaining $size $unit))
+        else if segmentType == "integer" then do
           fields segment ["type", "value", "size", "unit", "signed", "endian", "span"]
           let size ← term map si false (← field segment "size")
           let unit ← (← field segment "unit").getNat?
