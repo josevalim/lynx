@@ -59,6 +59,11 @@ defmodule BinaryProofsTest do
       expects: hex_contract(bytes, mode),
       max_heartbeats: 1_000_000,
       proof: ~LEAN"""
+      -- The expectation reaches functions with termination suffixes, so it has no
+      -- purity lemma; prove its direct statement under a pure precondition.
+      refine Lynx.law_of_pure_requires (by simp) ?_ requires
+      clear requires schedule
+      intro requires
       open Lynx.Term.Bitstring in
         set_option maxRecDepth 16384 in
           let encodeTable : Lynx.Term := by

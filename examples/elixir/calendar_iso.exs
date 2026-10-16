@@ -136,6 +136,11 @@ defmodule CalendarISOProofsTest do
       requires: is_integer(days),
       expects: date_roundtrip(days),
       proof: ~LEAN"""
+      -- The expectation reaches functions with termination suffixes, so it has no
+      -- purity lemma; prove its direct statement under a pure precondition.
+      refine Lynx.law_of_pure_requires (by simp) ?_ requires
+      clear requires schedule
+      intro requires
       have inverse (n : Int) : Elixir.Calendar.ISO.«date_from_iso_days/1» (.integer n) =
           .ok (let z := n - 60
             let era := if 0 ≤ z then z.tdiv 146097 else (z - 146097 + 1).tdiv 146097

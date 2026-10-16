@@ -75,6 +75,11 @@ defmodule ListsProofsTest do
       requires: proper_list(list),
       expects: sort_contract(list, value) and enum_sort_contract(list, value),
       proof: ~LEAN"""
+      -- The expectation reaches functions with termination suffixes, so it has no
+      -- purity lemma; prove its direct statement under a pure precondition.
+      refine Lynx.law_of_pure_requires (by simp) ?_ requires
+      clear requires schedule
+      intro requires
       let encode (xs : List Lynx.Term) : Lynx.Term := xs.foldr Lynx.Term.cons .nil
       -- Reverse merging prefers the right run on ties. Sortedness uses a
       -- non-strict relation in both directions; element identity is preserved.
