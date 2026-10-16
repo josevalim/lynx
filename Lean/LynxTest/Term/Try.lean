@@ -63,14 +63,13 @@ theorem stacktrace_is_empty (exception : Exception) : exception.stacktrace = .ni
 
 /-- State changes in the protected computation remain visible in its handler. -/
 theorem protected_effects_survive_failure :
-    Lynx.run (Result.tryWith (do
+    Result.run (Result.tryWith (do
       let _ ← «put/2» (.atom "key") (.atom "protected")
       «throw/1» (.atom "failure"))
       Result.ok (fun exception => do
         let value ← «get/1» (.atom "key")
-        pure (.tuple #[exception.classTerm, exception.reason, value]))) =
-      .ok (.tuple #[.atom "throw", .atom "failure", .atom "protected"])
-        { currentProcess := { pdict := [(.atom "key", .atom "protected")] } } := by cbv
+        pure (.tuple #[exception.classTerm, exception.reason, value]))) {} =
+      (.ok (.tuple #[.atom "throw", .atom "failure", .atom "protected"]), { currentProcess := { pdict := [(.atom "key", .atom "protected")] } }) := by cbv
 
 private def cleanup (computation : Result) : Result :=
   Result.tryWith computation
@@ -82,11 +81,10 @@ private def cleanup (computation : Result) : Result :=
       .error exception)
 
 theorem cleanup_runs_on_success_and_failure :
-    Lynx.run (cleanup (.ok (.integer 7))) =
-      .ok (.integer 7) { currentProcess := { pdict := [(.atom "cleanup", .atom "done")] } } ∧
-    Lynx.run (cleanup (.error (.throw (.atom "failure")))) =
-      .error (.throw (.atom "failure"))
-        { currentProcess := { pdict := [(.atom "cleanup", .atom "done")] } } := by
+    Result.run (cleanup (.ok (.integer 7))) {} =
+      (.ok (.integer 7), { currentProcess := { pdict := [(.atom "cleanup", .atom "done")] } }) ∧
+    Result.run (cleanup (.error (.throw (.atom "failure")))) {} =
+      (.error (.throw (.atom "failure")), { currentProcess := { pdict := [(.atom "cleanup", .atom "done")] } }) := by
   constructor <;> cbv
 
 theorem cleanup_failure_overrides_previous_outcome :
@@ -103,33 +101,33 @@ private def failingTable : Term.FunTable := #[
 theorem dispatched_exception_is_caught :
     Lynx.run (Result.tryWith (Term.apply (.function 0 0 #[]) #[])
       Result.ok (fun exception => .ok exception.reason)) [] failingTable =
-      .ok (.atom "dispatched") {} := by cbv
+      .ok (.atom "dispatched") := by cbv
 
 theorem dispatched_success_body_exception_escapes :
     Lynx.run (Result.tryWith (.ok Term.nil)
       (fun _ => Term.apply (.function 0 0 #[]) #[])
       (fun _ => .ok (Term.atom "caught"))) [] failingTable =
-      .error (.throw (.atom "dispatched")) {} := by cbv
+      .error (.throw (.atom "dispatched")) := by cbv
 
 theorem exhaustion_is_not_caught :
     Lynx.run (Result.tryWith (Term.apply (.function 0 0 #[]) #[])
       Result.ok (fun _ => .ok (Term.atom "caught"))) [] failingTable 0 =
-      .exhausted {} := by cbv
+      .exhausted := by cbv
 
 theorem blocking_is_not_caught :
     Lynx.run (Result.tryWith (Result.receiveWith (.atom "infinity") (fun _ => some)
       (fun | some value => .ok value | none => .ok .nil))
-      Result.ok (fun _ => .ok (Term.atom "caught"))) = .deadlock {} := by cbv
+      Result.ok (fun _ => .ok (Term.atom "caught"))) = .deadlock := by cbv
 
 /-- The protected handler remains installed across a receive suspension. -/
 theorem resumed_receive_exception_is_caught :
-    Lynx.run (Result.tryWith (do
+    Result.run (Result.tryWith (do
       let _ ← Result.schedule («send/2» (.pid 1) (.integer 7))
         (fun pid => .ok (Term.pid pid))
       Result.receiveWith (.atom "infinity") (fun _ => some)
         (fun | some value => .error (.throw value) | none => .ok .nil))
-      Result.ok (fun exception => .ok exception.reason)) =
-      .ok (.integer 7) { pidCounter := 2 } := by cbv
+      Result.ok (fun exception => .ok exception.reason)) {} =
+      (.ok (.integer 7), { pidCounter := 2 }) := by cbv
 
 end LynxTest.Term.Try
 

@@ -262,13 +262,14 @@ defmodule Lynx.TranslationTest do
                    "params" => ["value"],
                    "requires" => "allowed",
                    "ensures" => "identity_ensures",
-                   "proof" => %{"source" => "rfl", "indentation" => 0, "span" => [5]}
+                   "proof" => %{"source" => "rfl", "indentation" => 0, "span" => [5]},
+                   "pure" => true
                  } = law
                ]
              }
            ] = Translation.assemble(translation)
 
-    refute Map.has_key?(law, "pure")
+    refute Map.has_key?(law, "table")
   end
 
   test "raises CompileError with source annotations for invalid law attributes" do
@@ -325,6 +326,7 @@ defmodule Lynx.TranslationTest do
              "params" => ["x"],
              "ensures" => "expected",
              "proof" => %{"source" => "rfl", "indentation" => 0, "span" => [4]},
+             "pure" => true,
              "span" => [2, 2]
            }
   end

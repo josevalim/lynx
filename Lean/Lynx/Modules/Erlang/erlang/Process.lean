@@ -20,7 +20,7 @@ Allocation preserves process state and does not introduce a scheduler boundary. 
 
 @[simp] theorem make_ref_apply (env : Environment) :
     «make_ref/0» env =
-      .ok (.reference (env.refCounter + 1)) { env with refCounter := env.refCounter + 1 } := by
+      (.ok (.reference (env.refCounter + 1)), { env with refCounter := env.refCounter + 1 }) := by
   change (Result.get fun initial => Result.set
     { initial with refCounter := initial.refCounter + 1 }
     (.ok (Term.reference (initial.refCounter + 1)))) env = _

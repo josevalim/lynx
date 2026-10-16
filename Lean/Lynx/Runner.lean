@@ -34,7 +34,9 @@ sequentially. Dependent files import the prelude before their embedded proofs
 and termination suffixes are parsed; no declarations leak through request order.
 Theorem nodes contain name, named params, an optional requires helper, an ensures helper,
 and a proof object. Helpers are ordinary Result computations called with the theorem's
-parameters. An absent requires helper means no assumption.
+parameters and stated through `Lynx.run` with depth 100. An absent requires helper means
+no assumption. An optional table names the program's function table; it defaults to empty.
+When `pure` is true, both helpers are pure and the proof receives the direct statement.
 A proof object contains tactic source, nonnegative indentation, and a span locating
 the first character of that source. The producer handles host delimiters and line offsets. Proof syntax keeps
 its own source ranges, mapped to the supplied host locations using a synthetic file map.
@@ -1251,7 +1253,8 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       command map decl info false
     pure (Unhygienic.run `(mutual $decls:command* end))
   | "theorem" => do
-    fields j ["kind", "name", "params", "requires", "ensures", "proof", "span", "max_heartbeats"]
+    fields j ["kind", "name", "params", "requires", "ensures", "proof", "span", "max_heartbeats",
+      "table", "pure"]
     let params ← (← arr j "params").mapM fun p => do
       pure (mkIdent (Name.mkSimple (← p.getStr?)))
     let arity := params.size
@@ -1262,21 +1265,46 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     let requirement ← match field j "requires" with
       | .error _ => pure none
       | .ok value => do
-        let callee := functionName (← value.getStr?) arity
-        pure (some (Unhygienic.run `($callee $args*)))
+        let helper ← value.getStr?
+        let callee := functionName helper arity
+        -- Pure helpers have `<name>_pure` lemmas.
+        let purity := mkIdent (Name.mkSimple s!"{helper}/{arity}_pure")
+        pure (some (Unhygienic.run `($callee $args*), Unhygienic.run `($purity $args*)))
     let ensuresName := functionName (← str j "ensures") arity
     let ensures := Unhygienic.run `($ensuresName $args*)
     let (proof, proofInfo) ← leanProof map info name.getId (← field j "proof")
     modify fun s => { s with theorems := s.theorems.push (name.getId, proofInfo) }
-    let ok := mkIdent ``Lynx.Result.ok
+    let table ← match field j "table" with
+      | .error _ => pure (Unhygienic.run `(#[]))
+      | .ok value => pure (⟨(← identifier (← value.getStr?)).raw⟩ : TSyntax `term)
+    let isPure ← match field j "pure" with
+      | .error _ => pure false
+      | .ok value => value.getBool?
+    let ok := mkIdent ``Lynx.Outcome.ok
+    let run := mkIdent ``Lynx.run
+    let lawOfPure := mkIdent ``Lynx.law_of_pure
+    let lawOfPureRequires := mkIdent ``Lynx.law_of_pure_requires
     let trueTerm := mkIdent ``Lynx.Term.true
+    let scheduleType := mkIdent ``Lynx.ScheduleChoice
+    let schedule := mkIdent `schedule
     let hypothesis := mkIdent `requires
+    let holds (computation : TSyntax `term) : TSyntax `term :=
+      Unhygienic.run `($run $computation $schedule $table 100 = $ok $trueTerm)
+    let binders := binders.push (Unhygienic.run `(bracketedBinder| ($schedule : List $scheduleType)))
     let binders := match requirement with
       | none => binders
-      | some requires =>
-        binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $requires = $ok $trueTerm)))
+      | some (requires, _) =>
+        binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $(holds requires))))
+    -- Laws with pure helpers are proven against their direct statements,
+    -- without the run-form binders in scope.
+    let proof := if !isPure then proof else
+      match requirement with
+      | none => Unhygienic.run `($lawOfPure (by clear $schedule; exact $proof))
+      | some (_, requiresPure) =>
+        Unhygienic.run `($lawOfPureRequires $requiresPure
+          (by clear $hypothesis $schedule; exact fun $hypothesis => $proof) $hypothesis)
     let declaration := Unhygienic.run `(theorem $name $binders:bracketedBinder*
-      : $ensures = $ok $trueTerm := $proof)
+      : $(holds ensures) := $proof)
     match field j "max_heartbeats" with
     | .error _ => pure declaration
     | .ok value =>
@@ -1458,10 +1486,18 @@ and of simplification that may have reduced the proof goal to `False`. -/
 private def comparisonDescription (type : Expr) : MetaM (Option String) := do
   unless type.isAppOfArity ``Eq 3 do return none
   let args := type.getAppArgs
-  let resultType ← Meta.whnf args[0]!
-  unless resultType.isAppOfArity ``Lynx.Result 1 do return none
-  let actual ← normalizeComputation args[1]!
-  let expected ← normalizeComputation args[2]!
+  -- Laws state their helpers through `Lynx.run`; show the computation it runs.
+  let (actual, expected) ← if args[1]!.isAppOfArity ``Lynx.run 5 then
+      let expected ← if args[2]!.isAppOfArity ``Lynx.Outcome.ok 2 then
+          let outcome := args[2]!.getAppArgs
+          pure (mkAppN args[2]!.getAppFn
+            (outcome.set! 1 (← Meta.withTransparency .all <| Meta.whnf outcome[1]!)))
+        else pure args[2]!
+      pure (← normalizeComputation args[1]!.getAppArgs[1]!, expected)
+    else
+      let resultType ← Meta.whnf args[0]!
+      unless resultType.isAppOfArity ``Lynx.Result 1 do return none
+      pure (← normalizeComputation args[1]!, ← normalizeComputation args[2]!)
   -- Continuations can contain the rest of the program. Bound their rendering;
   -- the constructor and leading arguments remain visible.
   withOptions (fun opts => opts.set `pp.maxSteps (80 : Nat)) do

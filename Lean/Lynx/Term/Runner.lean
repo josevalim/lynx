@@ -316,17 +316,17 @@ private def isEmpty : Pool α → Bool
 private instance : WellFoundedRelation (Pool α) := ⟨Progress, wf⟩
 
 private def execute (root : PID) (env : Environment) (pool : Pool α)
-    (finished : Finished α) (preferred : ScheduleChoice) : Outcome α :=
+    (finished : Finished α) (preferred : ScheduleChoice) : Outcome α × Environment :=
   let (env, chosen) := choose pool env preferred
   match chosen.bind (fun (processId, expire) => step pool env processId expire) with
   | none =>
       let final := restore root finished env
       match isEmpty pool, finished with
-      | true, some (.ok value, _) => .ok value final
-      | true, some (.error exception, _) => .error exception final
-      | _, _ => .deadlock final
+      | true, some (.ok value, _) => (.ok value, final)
+      | true, some (.error exception, _) => (.error exception, final)
+      | _, _ => (.deadlock, final)
   | some transition =>
-      if transition.exhausted then .exhausted (restore root finished (save transition.environment)) else
+      if transition.exhausted then (.exhausted, restore root finished (save transition.environment)) else
       let finished := transition.finished.orElse fun _ => finished
       let (scheduled, preferred) := if transition.boundary then
           schedule transition.environment
@@ -337,14 +337,14 @@ decreasing_by exact transition.decreases
 
 /-- Local computations execute structurally; concurrent execution decreases
 through the process tree, without an execution budget. -/
-def run (computation : Result α) (env : Environment) : Outcome α :=
+def run (computation : Result α) (env : Environment) : Outcome α × Environment :=
   match computation with
-  | .exhausted => .exhausted env
+  | .exhausted => (.exhausted, env)
   | .apply callee _ next =>
       run (next (.error (.error (.tuple #[.atom "badfun", callee])))) env
   | .spawn _ next => run (next (.error (.error (.atom "badarg")))) env
-  | .ok value => .ok value env
-  | .error exception => .error exception env
+  | .ok value => (.ok value, env)
+  | .error exception => (.error exception, env)
   | .get next => run (next env) env
   | .set next continuation => run continuation next
   | Result.schedule _ _ | .send _ _ _ | .receive _ _ _ =>
@@ -360,26 +360,33 @@ namespace Lynx
 from a fresh runtime. The implementation is hidden; the application lemmas
 below describe its behavior. Without a program table, dynamic calls report
 `badfun`; use `runWith` for programs containing function values. -/
-def Result.run (computation : Result α) (env : Environment) : Outcome α :=
+def Result.run (computation : Result α) (env : Environment) : Outcome α × Environment :=
   Term.Runner.run computation env
 
 /-- Execute with the immutable program table and an explicit dynamic-call depth. -/
 def Result.runWith (computation : Result α) (table : Term.FunTable)
-    (callDepth : Nat) (env : Environment) : Outcome α :=
+    (callDepth : Nat) (env : Environment) : Outcome α × Environment :=
   Term.Runner.run (Result.resolve table callDepth computation) env
 
-instance : CoeFun (Result α) fun _ => Environment → Outcome α :=
+instance : CoeFun (Result α) fun _ => Environment → Outcome α × Environment :=
   ⟨Result.run⟩
 
 namespace Result
 
+/-- Executing with a table first resolves the computation's dynamic calls. -/
+theorem runWith_apply (computation : Result α) (table : Term.FunTable) (callDepth : Nat)
+    (env : Environment) :
+    computation.runWith table callDepth env = (resolve table callDepth computation) env := by
+  unfold Result.runWith Result.run
+  rfl
+
 @[simp] theorem ok_apply (value : α) (env : Environment) :
-    (Result.ok value : Result α) env = .ok value env := by
+    (Result.ok value : Result α) env = (.ok value, env) := by
   change Term.Runner.run (.ok value) env = _
   rw [Term.Runner.run]
 
 @[simp] theorem error_apply (exception : Exception) (env : Environment) :
-    (Result.error exception : Result α) env = .error exception env := by
+    (Result.error exception : Result α) env = (.error exception, env) := by
   change Term.Runner.run (.error exception) env = _
   rw [Term.Runner.run]
 
@@ -399,12 +406,12 @@ namespace Result
 
 @[simp] theorem IsPure.ok_iff (computation : Result α) (pure : IsPure computation)
     (env final : Environment) (value : α) :
-    computation env = .ok value final ↔ computation = .ok value ∧ env = final := by
+    computation env = (.ok value, final) ↔ computation = .ok value ∧ env = final := by
   cases computation <;> simp_all
 
 @[simp] theorem IsPure.error_iff (computation : Result α) (pure : IsPure computation)
     (env final : Environment) (exception : Exception) :
-    computation env = .error exception final ↔
+    computation env = (.error exception, final) ↔
       computation = .error exception ∧ env = final := by
   cases computation <;> simp_all
 

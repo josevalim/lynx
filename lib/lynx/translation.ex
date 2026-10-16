@@ -406,8 +406,8 @@ defmodule Lynx.Translation do
               file = %{
                 "module" => module_name <> ".laws",
                 "file" => module.file,
-                "imports" => support_imports ++ [module_name],
-                "contents" => assemble_laws(module.laws)
+                "imports" => support_imports ++ [module_name | Enum.map(program, & &1["module"])],
+                "contents" => assemble_laws(module, program != [])
               }
 
               {file, keys} = cache_file(file, keys, cache)
@@ -525,10 +525,22 @@ defmodule Lynx.Translation do
   end
 
   # Proof strings can reference preceding theorems, so laws keep source order.
-  defp assemble_laws(laws) do
+  # Laws whose helpers are pure are proven against their direct statements.
+  defp assemble_laws(%{laws: laws, translations: translations}, table?) do
     laws
     |> Enum.sort_by(fn {name, law} -> {List.wrap(law["span"]), name} end)
-    |> Enum.map(&elem(&1, 1))
+    |> Enum.map(fn {{_, arity}, law} ->
+      pure =
+        Enum.all?(["requires", "ensures"], fn key ->
+          case law do
+            %{^key => helper} -> translations[{String.to_existing_atom(helper), arity}].pure
+            %{} -> true
+          end
+        end)
+
+      law = Map.put(law, "pure", pure)
+      if table?, do: Map.put(law, "table", "Erlang.program.fun_table"), else: law
+    end)
   end
 
   defp declaration_location(functions, name) do

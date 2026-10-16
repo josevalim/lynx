@@ -434,10 +434,10 @@ theorem spawn_schedules_child_or_parent_first :
     let final : Environment := {
       pidCounter := 2
       currentProcess := { pdict := [(.atom "pid", .pid 1)] } }
-    Lynx.run spawnCaller [.swap 2] functions 1 =
-      .ok (.tuple #[.pid 2, .pid 1]) final ∧
-    Lynx.run spawnCaller [.current] functions 1 =
-      .ok (.tuple #[.pid 2, .pid 1]) final := by
+    spawnCaller.runWith functions 1 { schedule := [.swap 2] } =
+      (.ok (.tuple #[.pid 2, .pid 1]), final) ∧
+    spawnCaller.runWith functions 1 { schedule := [.current] } =
+      (.ok (.tuple #[.pid 2, .pid 1]), final) := by
   cbv
 
 private def nestedSpawnFun (args : Array Term) : Result :=
@@ -452,19 +452,19 @@ private def nestedFunctions : Term.FunTable := functions.push (.effectful fun _ 
 
 theorem completed_nested_processes_are_removed :
     let final : Environment := { pidCounter := 3 }
-    Lynx.run nestedSpawnCaller [.swap 2, .swap 3] nestedFunctions 2 =
-      .ok (.pid 2) final ∧
-    Lynx.run nestedSpawnCaller [.current, .current] nestedFunctions 2 =
-      .ok (.pid 2) final := by
+    nestedSpawnCaller.runWith nestedFunctions 2 { schedule := [.swap 2, .swap 3] } =
+      (.ok (.pid 2), final) ∧
+    nestedSpawnCaller.runWith nestedFunctions 2 { schedule := [.current, .current] } =
+      (.ok (.pid 2), final) := by
   cbv
 
 theorem spawn_rejects_invalid_fun :
     Lynx.run («spawn/1» (.atom "not_a_fun")) [] functions =
-      .error (.error (.atom "badarg")) {} ∧
+      .error (.error (.atom "badarg")) ∧
     Lynx.run («spawn/1» (.function 9 0 #[])) [] functions =
-      .error (.error (.atom "badarg")) {} ∧
+      .error (.error (.atom "badarg")) ∧
     Lynx.run («spawn/1» (.function 0 1 #[])) [] functions =
-      .error (.error (.atom "badarg")) {} := by
+      .error (.error (.atom "badarg")) := by
   repeat' apply And.intro
   all_goals cbv
 
@@ -502,10 +502,10 @@ theorem semantic_comparison_operators :
   repeat' first | apply And.intro | rfl
 
 theorem process_dictionary_empty :
-    Lynx.run «get/0» = .ok .nil {} ∧
-    Lynx.run («get/1» (.atom "missing")) = .ok (.atom "undefined") {} ∧
-    Lynx.run «get_keys/0» = .ok .nil {} ∧
-    Lynx.run «erase/0» = .ok .nil {} := by
+    Lynx.run «get/0» = .ok .nil ∧
+    Lynx.run («get/1» (.atom "missing")) = .ok (.atom "undefined") ∧
+    Lynx.run «get_keys/0» = .ok .nil ∧
+    Lynx.run «erase/0» = .ok .nil := by
   repeat' first | apply And.intro | rfl
 
 theorem process_dictionary_put_replace_erase :
@@ -517,31 +517,30 @@ theorem process_dictionary_put_replace_erase :
       let absent ← «get/1» (.atom "key")
       Result.ok (Term.tuple #[missing, previous, found, erased, absent])) =
       .ok (Term.tuple #[.atom "undefined", .integer 1, .integer 2,
-        .integer 2, .atom "undefined"]) {} := by
+        .integer 2, .atom "undefined"]) := by
   rfl
 
 theorem process_dictionary_numeric_types_are_distinct :
-    Lynx.run (do
+    Result.run (do
       let _ ← «put/2» (.integer 1) (.atom "integer")
       let _ ← «put/2» (.float floatOne) (.atom "float")
       let integer ← «get/1» (.integer 1)
       let float ← «get/1» (.float floatOne)
-      Result.ok (Term.tuple #[integer, float])) =
-      .ok (Term.tuple #[.atom "integer", .atom "float"])
-        { currentProcess := { pdict :=
-            [(.float floatOne, .atom "float"), (.integer 1, .atom "integer")] } } := by
+      Result.ok (Term.tuple #[integer, float])) {} =
+      (.ok (Term.tuple #[.atom "integer", .atom "float"]), { currentProcess := { pdict :=
+            [(.float floatOne, .atom "float"), (.integer 1, .atom "integer")] } }) := by
   rfl
 
 theorem process_dictionary_queries :
     let env : Environment := {
       currentProcess := { pdict := [(.atom "a", .integer 1), (.atom "b", .integer 1)] } }
-    «get/0» env = .ok (.cons (.tuple #[.atom "a", .integer 1])
-      (.cons (.tuple #[.atom "b", .integer 1]) .nil)) env ∧
-    «get_keys/0» env = .ok (.cons (.atom "a") (.cons (.atom "b") .nil)) env ∧
+    «get/0» env = (.ok (.cons (.tuple #[.atom "a", .integer 1])
+      (.cons (.tuple #[.atom "b", .integer 1]) .nil)), env) ∧
+    «get_keys/0» env = (.ok (.cons (.atom "a") (.cons (.atom "b") .nil)), env) ∧
     «get_keys/1» (.integer 1) env =
-      .ok (.cons (.atom "a") (.cons (.atom "b") .nil)) env ∧
-    «erase/0» env = .ok (.cons (.tuple #[.atom "a", .integer 1])
-      (.cons (.tuple #[.atom "b", .integer 1]) .nil)) {} := by
+      (.ok (.cons (.atom "a") (.cons (.atom "b") .nil)), env) ∧
+    «erase/0» env = (.ok (.cons (.tuple #[.atom "a", .integer 1])
+      (.cons (.tuple #[.atom "b", .integer 1]) .nil)), {}) := by
   repeat' first | apply And.intro | rfl
 
 section

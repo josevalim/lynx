@@ -12,7 +12,11 @@ defmodule Lynx.Integration.CaseTest do
     law a_checked(value),
       requires: value,
       expects: value,
-      proof: ~LEAN"exact «z_checked/1» value requires"
+      proof: ~LEAN"""
+      have pure (helper : Lynx.Result) (pure : helper.IsPure) := Lynx.IsPure.run_eq_ok_iff
+        (schedule := []) (table := #[]) (callDepth := 100) (value := Lynx.Term.true) pure
+      exact (pure _ (by simp)).mp («z_checked/1» value [] ((pure _ (by simp)).mpr requires))
+      """
   end
 
   laws "unconditional laws" do

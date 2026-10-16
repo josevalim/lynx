@@ -122,13 +122,15 @@ def setPdict (env : Environment) (pdict : List (Term × Term)) : Environment :=
 
 end Environment
 
+/-- How a run ended. The final environment is returned separately by the
+low-level runners, so laws and callers of `Lynx.run` compare outcomes alone. -/
 inductive Outcome (α : Type) where
-  | ok : α → Environment → Outcome α
-  | error : Exception → Environment → Outcome α
+  | ok : α → Outcome α
+  | error : Exception → Outcome α
   /-- No modeled process can proceed. This is not an Erlang exception. -/
-  | deadlock : Environment → Outcome α
+  | deadlock : Outcome α
   /-- The dynamic-call depth budget was exhausted. -/
-  | exhausted : Environment → Outcome α
+  | exhausted : Outcome α
 deriving Repr
 
 /-- Receive durations are validated before entering the process operation.

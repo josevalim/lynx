@@ -12,7 +12,7 @@ theorem callable_result (computation : Result) (env : Environment) :
     computation env = computation.run env := rfl
 
 theorem run_ok (value : Term) (env : Environment) :
-    (Result.ok value).run env = .ok value env := by simp
+    (Result.ok value).run env = (.ok value, env) := by simp
 
 theorem one_bit_size :
     Erlang.erlang.«bit_size/1» (.bitstring ⟨#[128]⟩ 1) = .ok (.integer 1) := by
@@ -169,11 +169,11 @@ decreasing_by
 theorem guard_retains_environment (value : Term) (env : Environment) :
     (Result.guard (.get fun _ => .ok Term.true)
       (fun _ => .ok value) (fun _ => .error (.error (.atom "unexpected")))).run env =
-        .ok value env := by
+        (.ok value, env) := by
   simp [Result.tryWith, Result.bind, Result.handle]
 
 theorem execution_reuses_purity (input : Term) (env final : Environment) :
-    classifyTwice input env = .ok Term.false final ↔
+    classifyTwice input env = (.ok Term.false, final) ↔
       classifyTwice input = .ok Term.false ∧ env = final := by
   simp
 

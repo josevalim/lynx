@@ -44,7 +44,10 @@ defmodule Lynx.RunnerTest do
   end
 
   test "imports both dependency branches and theorems from their shared dependency" do
-    contents = [definition("ensures", success()), theorem("law", "exact Elixir.Source.«law/0»")]
+    contents = [
+      definition("ensures", success()),
+      theorem("law", "exact Elixir.Source.«law/0» schedule", false)
+    ]
 
     files = [
       file(@literal_erl, "Elixir.Source", [
@@ -58,9 +61,9 @@ defmodule Lynx.RunnerTest do
         "Elixir.Join",
         [
           definition("ensures", success()),
-          theorem("left", "exact Elixir.Left.«law/0»"),
-          theorem("right", "exact Elixir.Right.«law/0»"),
-          theorem("source", "exact Elixir.Source.«law/0»")
+          theorem("left", "exact Elixir.Left.«law/0» schedule", false),
+          theorem("right", "exact Elixir.Right.«law/0» schedule", false),
+          theorem("source", "exact Elixir.Source.«law/0» schedule", false)
         ],
         ["Elixir.Left", "Elixir.Right"]
       )
@@ -265,12 +268,14 @@ defmodule Lynx.RunnerTest do
     }
   end
 
-  defp theorem(name, proof) do
+  # Pure laws receive the direct statement; the others prove it through `Lynx.run`.
+  defp theorem(name, proof, pure \\ true) do
     %{
       "kind" => "theorem",
       "name" => name,
       "params" => [],
       "ensures" => "ensures",
+      "pure" => pure,
       "span" => [4, 1],
       "proof" => %{"source" => proof, "indentation" => 0, "span" => [4, 15]}
     }
@@ -436,7 +441,8 @@ defmodule Lynx.RunnerDiagnosticsTest do
             definition("ensures", body),
             theorem(
               "law",
-              if(name == "Success", do: "fail \"deliberate failure\"", else: proof)
+              if(name == "Success", do: "fail \"deliberate failure\"", else: proof),
+              false
             )
           ],
           ["Erlang.erlang"]
@@ -451,7 +457,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
       assert diagnostic.declaration == "law/0"
       assert diagnostic.message =~ "Expectation (definitionally reduced):"
       assert [expected, got] = String.split(diagnostic.message, "got:      ", parts: 2)
-      assert expected =~ "Result.ok"
+      assert expected =~ "Outcome.ok"
       assert expected =~ ~s(Term.atom "true")
       assert got =~ actual
       refute diagnostic.message =~ "Deadlock:"
@@ -467,7 +473,8 @@ defmodule Lynx.RunnerDiagnosticsTest do
             {"FalseRequirement", false_body},
             {"TrueRequirement", success()}
           ] do
-        law = Map.put(theorem("law", "fail \"deliberate failure\""), "requires", "requires")
+        law =
+          Map.put(theorem("law", "fail \"deliberate failure\"", false), "requires", "requires")
 
         file(@literal_erl, "Elixir.#{name}", [
           definition("requires", requirement),
@@ -826,12 +833,14 @@ defmodule Lynx.RunnerDiagnosticsTest do
     }
   end
 
-  defp theorem(name, proof) do
+  # Pure laws receive the direct statement; the others prove it through `Lynx.run`.
+  defp theorem(name, proof, pure \\ true) do
     %{
       "kind" => "theorem",
       "name" => name,
       "params" => [],
       "ensures" => "ensures",
+      "pure" => pure,
       "span" => [4, 1],
       "proof" => %{"source" => proof, "indentation" => 0, "span" => [4, 15]}
     }

@@ -76,8 +76,8 @@ private theorem floatZeroEncoding (value : Lynx.Term.FiniteFloat) :
 
 -- Allocation equations remain usable through ordinary public imports.
 private theorem makeRefEquation (env : Lynx.Environment) :
-    makeRef env = .ok (.reference (env.refCounter + 1))
-      { env with refCounter := env.refCounter + 1 } := by
+    makeRef env = (.ok (.reference (env.refCounter + 1)),
+      { env with refCounter := env.refCounter + 1 }) := by
   simp [makeRef]
 
 private theorem makeRefContinuationEquation (next : Lynx.Term → Lynx.Result α)
@@ -91,8 +91,12 @@ example (entry : Array Lynx.Term → Array Lynx.Term → Lynx.Result) :
 example (entry : Array Lynx.Term → Array Lynx.Term → Except Lynx.Exception Lynx.Term) :
     Lynx.Term.FunTable := #[.pure entry]
 
-example : Lynx.Result → Lynx.Term.FunTable → Nat → Lynx.Environment → Lynx.Outcome Lynx.Term :=
+example : Lynx.Result → Lynx.Term.FunTable → Nat → Lynx.Environment →
+    Lynx.Outcome Lynx.Term × Lynx.Environment :=
   Lynx.Result.runWith
+example : Lynx.Result → List Lynx.ScheduleChoice → Lynx.Term.FunTable → Nat →
+    Lynx.Outcome Lynx.Term :=
+  fun computation schedule table callDepth => Lynx.run computation schedule table callDepth
 example : Lynx.Term → Lynx.Term → Lynx.Result := Erlang.erlang.«apply/2»
 example : Lynx.Term → Array Lynx.Term → Lynx.Result := Lynx.Term.apply
 example : Lynx.Term → Lynx.Result := Erlang.erlang.«spawn/1»
@@ -407,7 +411,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.true",
   "Lynx.Term.tuple",
   "Lynx.instBEqTerm",
-  "Lynx.instCoeFunResultForallEnvironmentOutcome",
+  "Lynx.instCoeFunResultForallEnvironmentProdOutcome",
   "Lynx.instInhabitedEnvironment",
   "Lynx.instInhabitedProcessState",
   "Lynx.instInhabitedReceiveTimeout",
