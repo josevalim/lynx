@@ -288,6 +288,107 @@ defmodule Lynx.RunnerDiagnosticsTest do
   @literal_erl "../test/fixtures/translations/literal.erl"
   @moduletag timeout: to_timeout(minute: 10)
 
+  test "checks prelude imports, caching, source locations, and proof axioms" do
+    source = %{
+      "file" => "elaborators.exs",
+      "span" => [10, 5],
+      "indentation" => 4,
+      "source" =>
+        "open Lean Elab Tactic\nelab \"custom_finish\" : tactic => do evalTactic (← `(tactic| rfl))\n"
+    }
+
+    support = file("elaborators.exs", "Lynx.Prelude.Cached", []) |> Map.put("preludes", [source])
+
+    client =
+      file(
+        @literal_erl,
+        "Elixir.CustomClient",
+        [
+          definition("ensures", success()),
+          theorem("law", "custom_finish")
+        ],
+        ["Lynx.Prelude.Cached"]
+      )
+
+    unrelated = %{client | "module" => "Elixir.UnrelatedClient", "imports" => []}
+
+    files =
+      Enum.map([support, client, unrelated], fn file ->
+        Map.put(file, "cache_key", Base.encode16(:crypto.strong_rand_bytes(32), case: :lower))
+      end)
+
+    assert [
+             %{status: :ok, cached: false},
+             %{status: :ok, cached: false},
+             %{status: :error, diagnostics: [%{message: "unknown tactic"}]}
+           ] = Lynx.Commands.verify!(@lean_dir, files)
+
+    assert [
+             %{status: :ok, cached: true},
+             %{status: :ok, cached: true},
+             %{status: :error, cached: false, diagnostics: [%{message: "unknown tactic"}]}
+           ] = Lynx.Commands.verify!(@lean_dir, files)
+
+    source = %{
+      "file" => "custom.exs",
+      "span" => [10, 7],
+      "indentation" => 4,
+      "source" => "open Lean Elab Tactic\nelab \"broken\" : tactic => missing\n"
+    }
+
+    support = file("custom.exs", "Lynx.Prelude.Broken", []) |> Map.put("preludes", [source])
+
+    assert [%{status: :error, diagnostics: [error]}] =
+             Lynx.Commands.verify!(@lean_dir, [support])
+
+    assert %{
+             file: "custom.exs",
+             declaration: nil,
+             line: 11,
+             column: 31,
+             message: "Unknown identifier `missing`"
+           } = error
+
+    imprecise =
+      for {name, span} <- [{"Line", [20]}, {"Unknown", []}] do
+        file("custom.exs", "Lynx.Prelude." <> name, [])
+        |> Map.put("preludes", [%{source | "span" => span}])
+      end
+
+    assert [
+             %{status: :error, diagnostics: [%{file: "custom.exs", line: 21} = line]},
+             %{status: :error, diagnostics: [unknown]}
+           ] = Lynx.Commands.verify!(@lean_dir, imprecise)
+
+    refute Map.has_key?(line, :column)
+    refute Map.has_key?(unknown, :line)
+    refute Map.has_key?(unknown, :column)
+
+    source = %{
+      source
+      | "source" =>
+          "open Lean Elab Tactic\nelab \"untrusted\" : tactic => do evalTactic (← `(tactic| sorry))\n"
+    }
+
+    support = file("custom.exs", "Lynx.Prelude.Untrusted", []) |> Map.put("preludes", [source])
+
+    client =
+      file(
+        @literal_erl,
+        "Elixir.UntrustedClient",
+        [
+          definition("ensures", success()),
+          theorem("law", "untrusted")
+        ],
+        ["Lynx.Prelude.Untrusted"]
+      )
+
+    assert [%{status: :ok}, %{status: :error, diagnostics: diagnostics}] =
+             Lynx.Commands.verify!(@lean_dir, [support, client])
+
+    assert Enum.any?(diagnostics, &(&1.message =~ "unexpected axiom: sorryAx"))
+  end
+
   test "reports expected and actual values for expects" do
     receive_body = fn timeout ->
       %{

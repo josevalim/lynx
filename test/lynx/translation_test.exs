@@ -3,6 +3,62 @@ defmodule Lynx.TranslationTest do
 
   alias Lynx.Translation
 
+  test "elaborators precede clients and changes invalidate dependent cache keys" do
+    core =
+      cerl("""
+      -module(example).
+      -export([identity/1]).
+      identity(X) -> X.
+      """)
+
+    source = %Lynx.Lean{
+      source:
+        "open Lean Elab Tactic\nelab \"finish\" : tactic => do evalTactic (← `(tactic| rfl))\n",
+      file: "proofs.exs",
+      span: {10, 7},
+      indentation: 4
+    }
+
+    assemble = fn source, opts ->
+      Translation.new(preludes: [source])
+      |> Translation.add({"example.erl", core})
+      |> Translation.translate(:example, [{:identity, 1}])
+      |> Translation.assemble(opts)
+    end
+
+    assert [
+             %{
+               "module" => "Lynx.Prelude",
+               "cache_key" => support_key,
+               "contents" => [],
+               "preludes" => [
+                 %{
+                   "file" => "proofs.exs",
+                   "span" => [10, 7],
+                   "indentation" => 4,
+                   "source" => body
+                 }
+               ]
+             },
+             %{
+               "module" => "Erlang.example",
+               "imports" => ["Lynx.Prelude"],
+               "cache_key" => client_key
+             }
+           ] = assemble.(source, [])
+
+    assert body == source.source
+
+    assert [
+             %{"module" => "Lynx.Prelude", "cache_key" => changed_support_key},
+             %{"cache_key" => changed_client_key}
+           ] = assemble.(%{source | source: source.source <> "\n"}, [])
+
+    assert changed_support_key != support_key
+    assert changed_client_key != client_key
+    assert Enum.all?(assemble.(source, cache: false), &(not Map.has_key?(&1, "cache_key")))
+  end
+
   test "clusters cycles separately and emits dependencies before callers" do
     core =
       cerl("""

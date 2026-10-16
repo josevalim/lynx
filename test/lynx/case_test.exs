@@ -125,6 +125,77 @@ defmodule Lynx.CaseTest do
     end)
   end
 
+  test "preludes are available to suffixes and remain group scoped" do
+    defmodule Elaborators do
+      use ExUnit.Case, register: false
+      use Lynx.Case
+
+      def increment(value) when is_integer(value), do: increment(value + 1)
+      def increment(_value), do: true
+
+      laws "custom syntax" do
+        prelude ~LEAN"""
+        namespace PreludeTest
+        theorem truth : True := by trivial
+        end PreludeTest
+        open Lean Elab Tactic
+        elab "test_partial" : tactic => do evalTactic (← `(tactic| (
+          intro f g h n
+          cases n <;> simp
+          all_goals first | exact h _ | exact Lean.Order.PartialOrder.rel_refl)))
+        """
+
+        # Parsing this declaration requires the syntax from the previous one.
+        prelude ~LEAN"""
+        elab "test_partial_again" : tactic => do evalTactic (← `(tactic| test_partial))
+        elab "test_finish" : tactic => do evalTactic (← `(tactic| rfl))
+        """
+
+        termination_suffix &__MODULE__.increment/1, ~LEAN"""
+        partial_fixpoint monotonicity by test_partial_again
+        """
+
+        law stops(value),
+          requires: is_atom(value),
+          expects: increment(value),
+          proof: ~LEAN"""
+          cases value <;> simp [«stops:requires/1», Erlang.erlang.«is_atom/1»] at requires
+          simp [«stops:ensures/1», «increment/1».eq_def]
+          """
+
+        law finished, expects: true, proof: ~LEAN"have := PreludeTest.truth; test_finish"
+      end
+
+      laws "independent registration" do
+        prelude ~LEAN"""
+        open Lean Elab Tactic
+        elab "test_finish" : tactic => throwError "second prelude loaded"
+        """
+
+        law independent,
+          expects: true,
+          proof: ~LEAN"""
+          fail_if_success test_finish
+          rfl
+          """
+      end
+
+      laws "without registration" do
+        law unavailable, expects: true, proof: ~LEAN"test_finish"
+      end
+    end
+
+    output =
+      capture_io(fn ->
+        assert ExUnit.run([Elaborators]) ==
+                 %{failures: 1, skipped: 0, total: 3, excluded: 0}
+      end)
+
+    assert output =~ "laws without registration"
+    refute output =~ "laws custom syntax ("
+    assert output =~ "proof for law unavailable() failed"
+  end
+
   test "reports multiple failed laws as separate assertions" do
     defmodule LawFailure do
       use ExUnit.Case, register: false

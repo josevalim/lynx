@@ -11,6 +11,14 @@ defmodule Base64ProofsTest do
     :base64.decode(encoded) === bytes and byte_size(encoded) === div(byte_size(bytes) + 2, 3) * 4
   end
 
+  @prelude_file Path.expand("monotonicity_tactics.lean", __DIR__)
+  @monotonicity_tactics %Lynx.Lean{
+    source: File.read!(@prelude_file),
+    file: @prelude_file,
+    span: {1, 1},
+    indentation: 0
+  }
+
   @fixpoint ~LEAN"""
   partial_fixpoint monotonicity by
     intro f g h
@@ -39,6 +47,7 @@ defmodule Base64ProofsTest do
   """
 
   laws "Base64 encoding round trip" do
+    prelude @monotonicity_tactics
     cutoff &:base64.encode_list/4
     cutoff &:base64.decode_list/4
     termination_suffix &:base64.encode_binary/4, @fixpoint

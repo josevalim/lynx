@@ -123,6 +123,9 @@ defmodule Lynx.Laws do
   successful-return proofs must show they are unreachable. No return values or
   exceptions are assumed for a cutoff.
 
+  Pass `preludes: [source, ...]` to load `Lynx.Lean` declaration blocks before
+  translated definitions and proofs, as with `Lynx.Case.prelude/1`.
+
   Raises on translation failures, including modules without laws or unsupported
   code, and on failures to run Lean or read its response.
   """

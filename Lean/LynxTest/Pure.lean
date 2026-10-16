@@ -202,31 +202,6 @@ error: #lynx_pure could not prove purity; refusing an incomplete proof
 #guard_msgs in
 #lynx_pure def writesEnvironment : Result := .set {} (.ok .nil)
 
--- Monotonicity automation must retain the purity obligation on a fixed prefix.
-example (left right : Nat → Result Nat)
-    (below : ∀ n, Lean.Order.PartialOrder.rel (left n) (right n)) :
-    Lean.Order.PartialOrder.rel (.ok 1 >>= left) (.ok 1 >>= right) := by
-  lynx_mono_step
-  · simp
-  · exact below
-
-example (_left _right : Nat → Result Nat) : True := by
-  fail_if_success
-    have : Lean.Order.PartialOrder.rel
-        ((.get fun _ => .ok 1) >>= _left) ((.get fun _ => .ok 1) >>= _right) := by
-      lynx_mono_step
-      all_goals simp
-  trivial
-
--- Folding is restricted to a local definition equal to the actual literal.
-example : Term.tuple #[.integer 1] = Term.tuple #[.integer 1] := by
-  let wrong := Term.tuple #[.integer 2]
-  fail_if_success lynx_fold_tuple wrong
-  let table := Term.tuple #[.integer 1]
-  lynx_fold_tuple table
-  change table = table
-  rfl
-
 end LynxTest.Pure
 
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Pure

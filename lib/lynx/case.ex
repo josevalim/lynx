@@ -27,7 +27,7 @@ defmodule Lynx.Case do
   defmacro __using__(_opts) do
     quote do
       Lynx.Case.__register__(__MODULE__)
-      import Lynx.Case, only: [law: 2, laws: 2, termination_suffix: 2, cutoff: 1]
+      import Lynx.Case, only: [law: 2, laws: 2, termination_suffix: 2, cutoff: 1, prelude: 1]
       import Lynx.Lean, only: [sigil_LEAN: 2]
     end
   end
@@ -143,6 +143,44 @@ defmodule Lynx.Case do
     end
   end
 
+  @doc ~S'''
+  Adds Lean declarations to the prelude for this laws group.
+
+      prelude ~LEAN"""
+      open Lean Elab Tactic
+      elab "finish" : tactic => do evalTactic (← `(tactic| rfl))
+      """
+
+  Blocks contain complete Lean declarations and are elaborated in order in a
+  separate public module importing `Lynx`. Every translated module imports the
+  prelude before its proofs and termination suffixes are parsed. Definitions,
+  lemmas, macros, and elaborators may be declared; namespaces are chosen by the
+  source. Meta helper definitions must use Lean's `meta` modifier as usual.
+
+  The prelude cannot refer to translated definitions, which do not exist yet.
+  It does not leak into other groups, and its source participates in verification
+  cache keys. Proofs retain kernel checking and axiom audits.
+  '''
+  defmacro prelude(source) do
+    quote do
+      Lynx.Case.__prelude__(__MODULE__, unquote(source))
+    end
+  end
+
+  @doc false
+  def __prelude__(module, %Lynx.Lean{} = source) do
+    case Module.get_attribute(module, :lynx_preludes) do
+      nil ->
+        raise ArgumentError, "prelude must be defined inside a laws group"
+
+      preludes ->
+        Module.put_attribute(module, :lynx_preludes, [source | preludes])
+    end
+  end
+
+  def __prelude__(_module, _source),
+    do: raise(ArgumentError, "prelude expects a Lynx.Lean value")
+
   @doc """
   Leaves a function untranslated in this laws group.
 
@@ -209,13 +247,14 @@ defmodule Lynx.Case do
             unquote(name),
             unquote(group_laws),
             unquote(Macro.escape(suffixes)),
-            unquote(Macro.escape(cutoffs))
+            unquote(Macro.escape(cutoffs)),
+            unquote(Macro.escape(preludes))
           )
         end
       end
 
     quote do
-      {name, group_laws, suffixes, cutoffs} =
+      {name, group_laws, suffixes, cutoffs, preludes} =
         Lynx.Case.__laws__(
           __MODULE__,
           unquote(__CALLER__.file),
@@ -237,6 +276,7 @@ defmodule Lynx.Case do
     Module.put_attribute(module, :lynx_laws, [])
     Module.put_attribute(module, :lynx_termination_suffixes, %{})
     Module.put_attribute(module, :lynx_cutoffs, MapSet.new())
+    Module.put_attribute(module, :lynx_preludes, [])
 
     try do
       fun.()
@@ -249,11 +289,13 @@ defmodule Lynx.Case do
       name = ExUnit.Case.register_test(module, file, line, :laws, description, [:laws])
 
       {name, group_laws, Module.get_attribute(module, :lynx_termination_suffixes),
-       Module.get_attribute(module, :lynx_cutoffs)}
+       Module.get_attribute(module, :lynx_cutoffs),
+       Enum.reverse(Module.get_attribute(module, :lynx_preludes))}
     after
       Module.delete_attribute(module, :lynx_laws)
       Module.delete_attribute(module, :lynx_termination_suffixes)
       Module.delete_attribute(module, :lynx_cutoffs)
+      Module.delete_attribute(module, :lynx_preludes)
     end
   end
 
@@ -265,9 +307,9 @@ defmodule Lynx.Case do
   end
 
   @doc false
-  def __verify__(module, name, laws, suffixes, cutoffs \\ MapSet.new()) do
+  def __verify__(module, name, laws, suffixes, cutoffs \\ MapSet.new(), preludes \\ []) do
     files =
-      Lynx.Translation.new(termination_suffixes: suffixes, cutoffs: cutoffs)
+      Lynx.Translation.new(termination_suffixes: suffixes, cutoffs: cutoffs, preludes: preludes)
       |> Lynx.Translation.add(Lynx.Bytecode.fetch!(module))
       |> Lynx.Translation.verify(module, laws)
       |> Lynx.Translation.assemble(cache: System.get_env("LYNX_CACHE") != "0")

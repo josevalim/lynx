@@ -12,6 +12,14 @@ defmodule BinaryProofsTest do
     :binary.decode_hex(encoded) === bytes and byte_size(encoded) === 2 * byte_size(bytes)
   end
 
+  @prelude_file Path.expand("monotonicity_tactics.lean", __DIR__)
+  @monotonicity_tactics %Lynx.Lean{
+    source: File.read!(@prelude_file),
+    file: @prelude_file,
+    span: {1, 1},
+    indentation: 0
+  }
+
   @fixpoint ~LEAN"""
   partial_fixpoint monotonicity by
     intro f g h
@@ -40,6 +48,7 @@ defmodule BinaryProofsTest do
   """
 
   laws "hexadecimal encoding round trip" do
+    prelude @monotonicity_tactics
     termination_suffix &:binary.lynx_local_2/3, @fixpoint
     termination_suffix &:binary.encode_hex2/3, @fixpoint
     termination_suffix &:binary.lynx_local_6/2, @fixpoint

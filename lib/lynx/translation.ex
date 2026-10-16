@@ -1,7 +1,8 @@
 defmodule Lynx.Translation do
   @moduledoc false
 
-  defstruct termination_suffixes: %{},
+  defstruct preludes: [],
+            termination_suffixes: %{},
             cutoffs: MapSet.new(),
             modules: %{},
             funs: %{},
@@ -27,6 +28,7 @@ defmodule Lynx.Translation do
 
   def new(opts \\ []) do
     %__MODULE__{
+      preludes: Keyword.get(opts, :preludes, []),
       termination_suffixes: Keyword.get(opts, :termination_suffixes, %{}),
       cutoffs: MapSet.new(Keyword.get(opts, :cutoffs, []))
     }
@@ -289,6 +291,7 @@ defmodule Lynx.Translation do
   def assemble(
         %__MODULE__{
           modules: modules,
+          preludes: preludes,
           termination_suffixes: suffixes,
           funs: funs,
           external_calls: external_calls,
@@ -331,6 +334,7 @@ defmodule Lynx.Translation do
         update_in(modules, path, &Map.put(&1, "termination_suffix", json))
       end)
 
+    {support, keys, support_imports} = assemble_preludes(preludes, cache)
     graph = :digraph.new()
 
     try do
@@ -343,7 +347,7 @@ defmodule Lynx.Translation do
       end
 
       {files, keys} =
-        Enum.map_reduce(topsort(graph), %{}, fn [name], keys ->
+        Enum.map_reduce(topsort(graph), keys, fn [name], keys ->
           module = Map.fetch!(modules, name)
           imports = Map.get(external_calls, name, MapSet.new())
           imports = if builtin_modules[name], do: MapSet.put(imports, name), else: imports
@@ -354,7 +358,8 @@ defmodule Lynx.Translation do
             "imports" =>
               imports
               |> Enum.sort()
-              |> Enum.map(&:lynx_core_to_leanj.module_name/1),
+              |> Enum.map(&:lynx_core_to_leanj.module_name/1)
+              |> then(&(support_imports ++ &1)),
             "contents" => assemble_module(module.translations)
           }
 
@@ -362,7 +367,7 @@ defmodule Lynx.Translation do
         end)
 
       if map_size(funs) == 0 do
-        files
+        support ++ files
       else
         {program, _keys} =
           cache_file(
@@ -383,11 +388,48 @@ defmodule Lynx.Translation do
             cache
           )
 
-        files ++ [program]
+        support ++ files ++ [program]
       end
     after
       :digraph.delete(graph)
     end
+  end
+
+  defp assemble_preludes([], _cache), do: {[], %{}, []}
+
+  defp assemble_preludes(preludes, cache) do
+    declarations =
+      for source <- preludes do
+        %Lynx.Lean{} = source
+
+        %{
+          "source" => source.source,
+          "file" => source.file,
+          "span" =>
+            case source.span do
+              {line, column} -> [line, column]
+              line -> [line]
+            end,
+          "indentation" => source.indentation
+        }
+      end
+
+    name = "Lynx.Prelude"
+
+    {file, keys} =
+      cache_file(
+        %{
+          "module" => name,
+          "file" => hd(declarations)["file"],
+          "imports" => [],
+          "contents" => [],
+          "preludes" => declarations
+        },
+        %{},
+        cache
+      )
+
+    {[file], keys, [name]}
   end
 
   defp cache_file(file, keys, false), do: {file, keys}

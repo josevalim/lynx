@@ -1,11 +1,6 @@
-module
-
-public meta import Lean
-public import Lynx.Term.Order
-public import Lynx.Pure
-
-public meta section
-namespace Lynx.Monotonicity
+-- Proof automation shared by the Base64 and hex laws. Loaded by `prelude`.
+meta section
+namespace MonotonicityTactics
 open Lean Meta Elab Tactic
 
 /-- Fold a closed tuple literal into a local definition before simplifying.
@@ -90,4 +85,5 @@ elab "lynx_mono_step" : tactic => do
       return ← goal.apply (← mkConstWithFreshMVarLevels ``Lynx.Result.tryWith_mono_pure)
     throwError "no monotonicity rule for this computation"
 
-end Lynx.Monotonicity
+end MonotonicityTactics
+end
