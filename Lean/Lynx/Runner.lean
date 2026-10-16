@@ -643,6 +643,15 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
           let width : TSyntax `term := ⟨Syntax.mkNumLit (toString width)⟩
           let extract := mkIdent ``Lynx.Term.Bitstring.matchFloat
           pure (Unhygienic.run `($extract $remaining $width $little))
+        else if segmentType == "utf8" || segmentType == "utf16" || segmentType == "utf32" then do
+          fields segment ["type", "value", "endian", "span"]
+          if segmentType == "utf8" then do
+            let extract := mkIdent ``Lynx.Term.Bitstring.matchUtf8
+            pure (Unhygienic.run `($extract $remaining))
+          else do
+            let extract := mkIdent (if segmentType == "utf16" then
+              ``Lynx.Term.Bitstring.matchUtf16 else ``Lynx.Term.Bitstring.matchUtf32)
+            pure (Unhygienic.run `($extract $remaining $little))
         else throw s!"unsupported bitstring pattern segment '{segmentType}'"
         remaining := rest
         let (pat, nested) ← withExtractions (term map si true value)

@@ -438,6 +438,253 @@ set_option «match».ignoreUnusedAlts true
         match _1 with
         | _6 => pure (Lynx.Term.atom "other"))
 
+#lynx_pure
+  def «utf8/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _0 with
+        | lynxBits38 =>
+          match (Lynx.Term.Bitstring.matchUtf8 lynxBits38) with
+          | Option.some✝ (vX, lynxBits39) =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits39 (Lynx.Term.atom "all") 1) with
+            | Bool.true✝ =>
+              match (lynxBits39) with
+              | vRest => pure (Lynx.Term.tuple #[vX, vRest])
+            | _ => lynxMatchNext ()
+          | _ => lynxMatchNext ())
+      (fun (_ : Unit) =>
+        match _0 with
+        | _2 => pure (Lynx.Term.atom "other"))
+
+#lynx_pure
+  def «utf8_little/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _0 with
+        | lynxBits40 =>
+          match (Lynx.Term.Bitstring.matchUtf8 lynxBits40) with
+          | Option.some✝ (vX, lynxBits41) =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits41 (Lynx.Term.atom "all") 1) with
+            | Bool.true✝ =>
+              match (lynxBits41) with
+              | vRest => pure (Lynx.Term.tuple #[vX, vRest])
+            | _ => lynxMatchNext ()
+          | _ => lynxMatchNext ())
+      (fun (_ : Unit) =>
+        match _0 with
+        | _2 => pure (Lynx.Term.atom "other"))
+
+#lynx_pure
+  def «utf16/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _0 with
+        | lynxBits42 =>
+          match (Lynx.Term.Bitstring.matchUtf16 lynxBits42 Bool.false) with
+          | Option.some✝ (vX, lynxBits43) =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits43 (Lynx.Term.atom "all") 1) with
+            | Bool.true✝ =>
+              match (lynxBits43) with
+              | vRest => pure (Lynx.Term.tuple #[vX, vRest])
+            | _ => lynxMatchNext ()
+          | _ => lynxMatchNext ())
+      (fun (_ : Unit) =>
+        match _0 with
+        | _2 => pure (Lynx.Term.atom "other"))
+
+#lynx_pure
+  def «utf16_big/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _0 with
+        | lynxBits44 =>
+          match (Lynx.Term.Bitstring.matchUtf16 lynxBits44 Bool.false) with
+          | Option.some✝ (vX, lynxBits45) =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits45 (Lynx.Term.atom "all") 1) with
+            | Bool.true✝ =>
+              match (lynxBits45) with
+              | vRest => pure (Lynx.Term.tuple #[vX, vRest])
+            | _ => lynxMatchNext ()
+          | _ => lynxMatchNext ())
+      (fun (_ : Unit) =>
+        match _0 with
+        | _2 => pure (Lynx.Term.atom "other"))
+
+#lynx_pure
+  def «utf16_little/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _0 with
+        | lynxBits46 =>
+          match (Lynx.Term.Bitstring.matchUtf16 lynxBits46 Bool.true) with
+          | Option.some✝ (vX, lynxBits47) =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits47 (Lynx.Term.atom "all") 1) with
+            | Bool.true✝ =>
+              match (lynxBits47) with
+              | vRest => pure (Lynx.Term.tuple #[vX, vRest])
+            | _ => lynxMatchNext ()
+          | _ => lynxMatchNext ())
+      (fun (_ : Unit) =>
+        match _0 with
+        | _2 => pure (Lynx.Term.atom "other"))
+
+#lynx_pure
+  def «utf32/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _0 with
+        | lynxBits48 =>
+          match (Lynx.Term.Bitstring.matchUtf32 lynxBits48 Bool.false) with
+          | Option.some✝ (vX, lynxBits49) =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits49 (Lynx.Term.atom "all") 1) with
+            | Bool.true✝ =>
+              match (lynxBits49) with
+              | vRest => pure (Lynx.Term.tuple #[vX, vRest])
+            | _ => lynxMatchNext ()
+          | _ => lynxMatchNext ())
+      (fun (_ : Unit) =>
+        match _0 with
+        | _2 => pure (Lynx.Term.atom "other"))
+
+#lynx_pure
+  def «utf32_big/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _0 with
+        | lynxBits50 =>
+          match (Lynx.Term.Bitstring.matchUtf32 lynxBits50 Bool.false) with
+          | Option.some✝ (vX, lynxBits51) =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits51 (Lynx.Term.atom "all") 1) with
+            | Bool.true✝ =>
+              match (lynxBits51) with
+              | vRest => pure (Lynx.Term.tuple #[vX, vRest])
+            | _ => lynxMatchNext ()
+          | _ => lynxMatchNext ())
+      (fun (_ : Unit) =>
+        match _0 with
+        | _2 => pure (Lynx.Term.atom "other"))
+
+#lynx_pure
+  def «utf32_little/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _0 with
+        | lynxBits52 =>
+          match (Lynx.Term.Bitstring.matchUtf32 lynxBits52 Bool.true) with
+          | Option.some✝ (vX, lynxBits53) =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits53 (Lynx.Term.atom "all") 1) with
+            | Bool.true✝ =>
+              match (lynxBits53) with
+              | vRest => pure (Lynx.Term.tuple #[vX, vRest])
+            | _ => lynxMatchNext ()
+          | _ => lynxMatchNext ())
+      (fun (_ : Unit) =>
+        match _0 with
+        | _2 => pure (Lynx.Term.atom "other"))
+
+#lynx_pure
+  def «utf_mixed/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _0 with
+        | lynxBits54 =>
+          match
+            (Lynx.Term.Bitstring.matchInteger lynxBits54 (Lynx.Term.integer 3) 1 Bool.false
+              Bool.false) with
+          | Option.some✝ (vTag, lynxBits55) =>
+            match (Lynx.Term.Bitstring.matchUtf8 lynxBits55) with
+            | Option.some✝ (vX, lynxBits56) =>
+              match (Lynx.Term.Bitstring.matchUtf16 lynxBits56 Bool.true) with
+              | Option.some✝ (vY, lynxBits57) =>
+                match (Lynx.Term.Bitstring.matchUtf32 lynxBits57 Bool.false) with
+                | Option.some✝ (vZ, lynxBits58) =>
+                  match (Lynx.Term.Bitstring.matchTail lynxBits58 (Lynx.Term.atom "all") 1) with
+                  | Bool.true✝ =>
+                    match (lynxBits58) with
+                    | vRest => pure (Lynx.Term.tuple #[vTag, vX, vY, vZ, vRest])
+                  | _ => lynxMatchNext ()
+                | _ => lynxMatchNext ()
+              | _ => lynxMatchNext ()
+            | _ => lynxMatchNext ()
+          | _ => lynxMatchNext ())
+      (fun (_ : Unit) =>
+        match _0 with
+        | _2 => pure (Lynx.Term.atom "other"))
+
+#lynx_pure
+  def «utf_literal/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _0 with
+        | lynxBits59 =>
+          match (Lynx.Term.Bitstring.matchUtf8 lynxBits59) with
+          | Option.some✝ (Lynx.Term.integer 8364, lynxBits60) =>
+            match (Lynx.Term.Bitstring.matchUtf16 lynxBits60 Bool.true) with
+            | Option.some✝ (Lynx.Term.integer 128512, lynxBits61) =>
+              match (Lynx.Term.Bitstring.matchUtf32 lynxBits61 Bool.false) with
+              | Option.some✝ (Lynx.Term.integer 1114111, lynxBits62) =>
+                match (Lynx.Term.Bitstring.matchEnd lynxBits62) with
+                | Bool.true✝ => pure (Lynx.Term.atom "matched")
+                | _ => lynxMatchNext ()
+              | _ => lynxMatchNext ()
+            | _ => lynxMatchNext ()
+          | _ => lynxMatchNext ())
+      (fun (_ : Unit) =>
+        match _0 with
+        | _2 => pure (Lynx.Term.atom "other"))
+
+#lynx_pure
+  def «utf_pinned/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _1 with
+        | lynxBits63 =>
+          match (Lynx.Term.Bitstring.matchUtf8 lynxBits63) with
+          | Option.some✝ (_5, lynxBits64) =>
+            match (Lynx.Term.Bitstring.matchUtf16 lynxBits64 Bool.false) with
+            | Option.some✝ (_6, lynxBits65) =>
+              match (Lynx.Term.Bitstring.matchUtf32 lynxBits65 Bool.true) with
+              | Option.some✝ (_7, lynxBits66) =>
+                match (Lynx.Term.Bitstring.matchEnd lynxBits66) with
+                | Bool.true✝ =>
+                  Lynx.Result.guard
+                    (do
+                      let _10 ← Erlang.erlang.«=:=/2» _5 _0
+                      let _8 ← Erlang.erlang.«=:=/2» _6 _0
+                      let _9 ← Erlang.erlang.«=:=/2» _7 _0
+                      let _11 ← Erlang.erlang.«and/2» _8 _9
+                      Erlang.erlang.«and/2» _10 _11)
+                    (fun _ => pure (Lynx.Term.atom "matched")) lynxMatchNext
+                | _ => lynxMatchNext ()
+              | _ => lynxMatchNext ()
+            | _ => lynxMatchNext ()
+          | _ => lynxMatchNext ())
+      (fun (_ : Unit) =>
+        match _1 with
+        | _12 => pure (Lynx.Term.atom "other"))
+
 end
 
 end Erlang.bitstring_matching

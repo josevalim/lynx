@@ -859,12 +859,12 @@ defmodule Lynx.TranslationTest do
       end
     end
 
-    test "raises on unsupported Core" do
+    test "raises on unsupported binary segments" do
       core =
         cerl("""
         -module(example).
         -export([entry/1]).
-        entry(<<X/utf8>>) -> X.
+        entry(<<Size:8, X:Size/float>>) -> X.
         """)
 
       error =
@@ -877,9 +877,8 @@ defmodule Lynx.TranslationTest do
         end
 
       assert %CompileError{file: "example.erl", line: 3} = error
-      assert Exception.message(error) =~ "example.erl:3: unsupported Core expression:"
-      assert error.description =~ "unsupported Core expression:"
-      assert error.description =~ "utf8"
+      assert Exception.message(error) =~ "example.erl:3: unsupported binary segment"
+      assert error.description =~ "unsupported binary segment"
     end
 
     test "falls back to the function line for compiler-generated NIF primops" do

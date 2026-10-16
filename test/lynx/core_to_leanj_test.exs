@@ -291,6 +291,48 @@ defmodule Lynx.CoreToLeanjTest do
     end
   end
 
+  test "resolves native UTF pattern endianness on the translating platform" do
+    endian = Atom.to_string(:erlang.system_info(:endian))
+
+    for type <- [:utf8, :utf16, :utf32] do
+      segment =
+        :cerl.c_bitstr(
+          :cerl.c_var(1),
+          :cerl.c_atom(:undefined),
+          :cerl.c_atom(:undefined),
+          :cerl.c_atom(type),
+          :cerl.abstract([:unsigned, :native])
+        )
+
+      body =
+        :cerl.c_case(:cerl.c_var(0), [
+          :cerl.c_clause([:cerl.c_binary([segment])], :cerl.c_atom(true))
+        ])
+
+      type = Atom.to_string(type)
+
+      assert {:ok,
+              %{
+                {:entry, 1} => %{
+                  translation: %{
+                    "body" => %{
+                      "cases" => [
+                        %{
+                          "patterns" => [
+                            %{
+                              "kind" => "bitstring_pattern",
+                              "segments" => [%{"type" => ^type, "endian" => ^endian}]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }, []} = translate(definitions([definition(:entry, body)]))
+    end
+  end
+
   test "folds native integer literals using the translating platform" do
     for {value, signed} <- [{0x123, :unsigned}, {-2, :signed}] do
       bytes = :binary.bin_to_list(<<value::native-size(12), 0::4>>)

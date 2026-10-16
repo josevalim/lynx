@@ -79,6 +79,60 @@ Binary16 and binary32 decoding are not implemented yet. -/
         ⟨encoded % 2 ^ 52, Nat.mod_lt _ (by decide)⟩⟩, rest)
     else none
 
+/-- Extract one canonical UTF-8 sequence. Invalid leaders, continuation bytes,
+overlong encodings, surrogate code points, and incomplete sequences fail the pattern.
+The unconsumed suffix may contain arbitrary bits. -/
+@[expose] public def matchUtf8 (input : Term) : Option (Term × Term) :=
+  match input with
+  | .bitstring bytes last _ =>
+    let bits := toBits bytes last
+    let byte := fun i => decodeInteger ((bits.drop (i * 8)).take 8) Bool.false
+    let first := byte 0
+    let count := if first < 0x80 then 1
+      else if 0xc2 ≤ first ∧ first ≤ 0xdf then 2
+      else if 0xe0 ≤ first ∧ first ≤ 0xef then 3
+      else if 0xf0 ≤ first ∧ first ≤ 0xf4 then 4 else 0
+    let value := if count = 1 then first
+      else (List.range (count - 1)).foldl
+        (fun value i => value * 64 + byte (i + 1) % 64) (first % 2 ^ (7 - count))
+    let minimum := if count = 1 then 0 else if count = 2 then 0x80
+      else if count = 3 then 0x800 else 0x10000
+    if count ≠ 0 ∧ count * 8 ≤ bits.length ∧
+        ((List.range (count - 1)).all fun i => 0x80 ≤ byte (i + 1) && byte (i + 1) ≤ 0xbf) ∧
+        minimum ≤ value ∧ value ≤ 0x10ffff ∧ (value < 0xd800 ∨ 0xdfff < value) then
+      some (.integer value, ofBits (bits.drop (count * 8)))
+    else none
+  | _ => none
+
+/-- Extract one UTF-16 scalar, consuming a high/low surrogate pair together.
+Endianness applies to each code unit, including at unaligned bit positions. -/
+@[expose] public def matchUtf16 (input : Term) (little : Bool) : Option (Term × Term) :=
+  match input with
+  | .bitstring bytes last _ =>
+    let bits := toBits bytes last
+    let first := decodeInteger (bits.take 16) little
+    let paired := 0xd800 ≤ first ∧ first ≤ 0xdbff
+    let second := decodeInteger ((bits.drop 16).take 16) little
+    let width := if paired then 32 else 16
+    let value := if paired then 0x10000 + (first - 0xd800) * 1024 + (second - 0xdc00)
+      else first
+    if width ≤ bits.length ∧ (paired → 0xdc00 ≤ second ∧ second ≤ 0xdfff) ∧
+        value ≤ 0x10ffff ∧ (value < 0xd800 ∨ 0xdfff < value) then
+      some (.integer value, ofBits (bits.drop width))
+    else none
+  | _ => none
+
+/-- Extract a UTF-32 scalar. Surrogates and values above U+10FFFF fail the pattern. -/
+@[expose] public def matchUtf32 (input : Term) (little : Bool) : Option (Term × Term) :=
+  match input with
+  | .bitstring bytes last _ =>
+    let bits := toBits bytes last
+    let value := decodeInteger (bits.take 32) little
+    if 32 ≤ bits.length ∧ value ≤ 0x10ffff ∧ (value < 0xd800 ∨ 0xdfff < value) then
+      some (.integer value, ofBits (bits.drop 32))
+    else none
+  | _ => none
+
 /-- Validate a trailing binary or bitstring. The segment's unit constrains its
 length; binary uses eight and bitstring uses one. Alignment is relative to the
 captured segment, so an unaligned start is allowed. Explicit sizes must

@@ -638,7 +638,7 @@ binary_pattern_segments([#c_bitstr{anno = Anno, val = Value,
     {[#{~"type" => ~"binary", ~"span" => span(Anno), ~"size" => TranslatedSize,
         ~"value" => TranslatedValue, ~"unit" => Unit} | Remaining], State3};
 binary_pattern_segments([#c_bitstr{type = #c_literal{val = Type}} = Segment | Rest], State0)
-        when Type =:= integer; Type =:= float ->
+        when Type =:= integer; Type =:= float; Type =:= utf8; Type =:= utf16; Type =:= utf32 ->
     {Translated, State1} = binary_segment(Segment, State0),
     {Remaining, State2} = binary_pattern_segments(Rest, State1),
     {[Translated | Remaining], State2};

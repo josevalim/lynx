@@ -233,6 +233,202 @@ theorem partial_literal_pattern :
     matchesPartialLiteral empty = false := by
   repeat first | apply And.intro | rfl
 
+-- Expected encodings and malformed-input behavior checked against OTP 29.
+private def utfMatches (value : Nat) (utf8 big16 little16 big32 little32 : List UInt8) : Prop :=
+  Term.Bitstring.matchUtf8 (.bitstring ⟨utf8.toArray⟩ 0 (by simp)) =
+    some (.integer value, empty) ∧
+  Term.Bitstring.matchUtf16 (.bitstring ⟨big16.toArray⟩ 0 (by simp)) false =
+    some (.integer value, empty) ∧
+  Term.Bitstring.matchUtf16 (.bitstring ⟨little16.toArray⟩ 0 (by simp)) true =
+    some (.integer value, empty) ∧
+  Term.Bitstring.matchUtf32 (.bitstring ⟨big32.toArray⟩ 0 (by simp)) false =
+    some (.integer value, empty) ∧
+  Term.Bitstring.matchUtf32 (.bitstring ⟨little32.toArray⟩ 0 (by simp)) true =
+    some (.integer value, empty)
+
+set_option maxRecDepth 4096 in
+theorem utf_scalar_boundaries :
+    utfMatches 0x0 [0x0] [0x0, 0x0] [0x0, 0x0] [0x0, 0x0, 0x0, 0x0] [0x0, 0x0, 0x0, 0x0] ∧
+    utfMatches 0x7f [0x7f] [0x0, 0x7f] [0x7f, 0x0] [0x0, 0x0, 0x0, 0x7f] [0x7f, 0x0, 0x0, 0x0] ∧
+    utfMatches 0x80 [0xc2, 0x80] [0x0, 0x80] [0x80, 0x0] [0x0, 0x0, 0x0, 0x80] [0x80, 0x0, 0x0, 0x0] ∧
+    utfMatches 0x7ff [0xdf, 0xbf] [0x7, 0xff] [0xff, 0x7] [0x0, 0x0, 0x7, 0xff] [0xff, 0x7, 0x0, 0x0] ∧
+    utfMatches 0x800 [0xe0, 0xa0, 0x80] [0x8, 0x0] [0x0, 0x8] [0x0, 0x0, 0x8, 0x0] [0x0, 0x8, 0x0, 0x0] ∧
+    utfMatches 0xd7ff [0xed, 0x9f, 0xbf] [0xd7, 0xff] [0xff, 0xd7] [0x0, 0x0, 0xd7, 0xff] [0xff, 0xd7, 0x0, 0x0] ∧
+    utfMatches 0xe000 [0xee, 0x80, 0x80] [0xe0, 0x0] [0x0, 0xe0] [0x0, 0x0, 0xe0, 0x0] [0x0, 0xe0, 0x0, 0x0] ∧
+    utfMatches 0xffff [0xef, 0xbf, 0xbf] [0xff, 0xff] [0xff, 0xff] [0x0, 0x0, 0xff, 0xff] [0xff, 0xff, 0x0, 0x0] ∧
+    utfMatches 0x10000 [0xf0, 0x90, 0x80, 0x80] [0xd8, 0x0, 0xdc, 0x0] [0x0, 0xd8, 0x0, 0xdc] [0x0, 0x1, 0x0, 0x0] [0x0, 0x0, 0x1, 0x0] ∧
+    utfMatches 0x10ffff [0xf4, 0x8f, 0xbf, 0xbf] [0xdb, 0xff, 0xdf, 0xff] [0xff, 0xdb, 0xff, 0xdf] [0x0, 0x10, 0xff, 0xff] [0xff, 0xff, 0x10, 0x0] ∧
+    utfMatches 0x20ac [0xe2, 0x82, 0xac] [0x20, 0xac] [0xac, 0x20] [0x0, 0x0, 0x20, 0xac] [0xac, 0x20, 0x0, 0x0] ∧
+    utfMatches 0x1f600 [0xf0, 0x9f, 0x98, 0x80] [0xd8, 0x3d, 0xde, 0x0] [0x3d, 0xd8, 0x0, 0xde] [0x0, 0x1, 0xf6, 0x0] [0x0, 0xf6, 0x1, 0x0] ∧
+    utfMatches 0xfeff [0xef, 0xbb, 0xbf] [0xfe, 0xff] [0xff, 0xfe] [0x0, 0x0, 0xfe, 0xff] [0xff, 0xfe, 0x0, 0x0] := by
+  repeat first | apply And.intro | rfl
+
+set_option maxRecDepth 4096 in
+theorem utf8_rejects_malformed :
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0x80] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xbf] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xc0, 0x80] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xc1, 0xbf] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xc2] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xc2, 0x7f] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xc2, 0xc0] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xe0, 0x80, 0x80] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xe0, 0x9f, 0xbf] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xe1, 0x80] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xe1, 0x80, 0x7f] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xed, 0xa0, 0x80] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xed, 0xbf, 0xbf] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xf0, 0x80, 0x80, 0x80] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xf0, 0x8f, 0xbf, 0xbf] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xf0, 0x90, 0x80] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xf0, 0x90, 0x80, 0x7f] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xf4, 0x90, 0x80, 0x80] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xf5, 0x80, 0x80, 0x80] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xf8, 0x88, 0x80, 0x80, 0x80] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xfc, 0x84, 0x80, 0x80, 0x80, 0x80] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xfe] : List UInt8).toArray⟩ 0 (by simp)) = none ∧
+    Term.Bitstring.matchUtf8 (.bitstring ⟨([0xff] : List UInt8).toArray⟩ 0 (by simp)) = none := by
+  repeat first | apply And.intro | rfl
+
+set_option maxRecDepth 4096 in
+theorem utf16_rejects_malformed :
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (by simp)) true = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0xd8, 0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0x0, 0xd8] : List UInt8).toArray⟩ 0 (by simp)) true = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0xdb, 0xff] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0xff, 0xdb] : List UInt8).toArray⟩ 0 (by simp)) true = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0xdc, 0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0x0, 0xdc] : List UInt8).toArray⟩ 0 (by simp)) true = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0xdf, 0xff] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0xff, 0xdf] : List UInt8).toArray⟩ 0 (by simp)) true = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0xd8, 0x0, 0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0xd8, 0x0, 0x0, 0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0x0, 0xd8, 0x0, 0x0] : List UInt8).toArray⟩ 0 (by simp)) true = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0xd8, 0x0, 0xd8, 0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0x0, 0xd8, 0x0, 0xd8] : List UInt8).toArray⟩ 0 (by simp)) true = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0xd8, 0x0, 0xe0, 0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0x0, 0xd8, 0x0, 0xe0] : List UInt8).toArray⟩ 0 (by simp)) true = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0xdc, 0x0, 0xd8, 0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨([0x0, 0xdc, 0x0, 0xd8] : List UInt8).toArray⟩ 0 (by simp)) true = none := by
+  repeat first | apply And.intro | rfl
+
+set_option maxRecDepth 4096 in
+theorem utf32_rejects_malformed :
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (by simp)) true = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([0x0, 0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([0x0, 0x0, 0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([0x0, 0x0, 0xd8, 0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([0x0, 0xd8, 0x0, 0x0] : List UInt8).toArray⟩ 0 (by simp)) true = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([0x0, 0x0, 0xdf, 0xff] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([0xff, 0xdf, 0x0, 0x0] : List UInt8).toArray⟩ 0 (by simp)) true = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([0x0, 0x11, 0x0, 0x0] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([0x0, 0x0, 0x11, 0x0] : List UInt8).toArray⟩ 0 (by simp)) true = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([0xff, 0xff, 0xff, 0xff] : List UInt8).toArray⟩ 0 (by simp)) false = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨([0xff, 0xff, 0xff, 0xff] : List UInt8).toArray⟩ 0 (by simp)) true = none := by
+  repeat first | apply And.intro | rfl
+
+set_option maxRecDepth 4096 in
+theorem utf_unaligned_with_partial_suffix :
+    ((Term.Bitstring.matchInteger (.bitstring ⟨#[0xbe, 0x13, 0xf3, 0x10, 0x15]⟩ 0 (by decide))
+        (.integer 3) 1 false false).bind fun (tag, remaining) =>
+      (Term.Bitstring.matchUtf8 remaining).map fun (value, rest) => (tag, value, rest)) =
+      some (.integer 5, .integer 0x1f600, .bitstring ⟨#[0xa8]⟩ 5 (by decide)) ∧
+    ((Term.Bitstring.matchInteger (.bitstring ⟨#[0xbb, 0x7, 0xbb, 0xc0, 0x15]⟩ 0 (by decide))
+        (.integer 3) 1 false false).bind fun (tag, remaining) =>
+      (Term.Bitstring.matchUtf16 remaining false).map fun (value, rest) => (tag, value, rest)) =
+      some (.integer 5, .integer 0x1f600, .bitstring ⟨#[0xa8]⟩ 5 (by decide)) ∧
+    ((Term.Bitstring.matchInteger (.bitstring ⟨#[0xa7, 0xbb, 0x0, 0x1b, 0xd5]⟩ 0 (by decide))
+        (.integer 3) 1 false false).bind fun (tag, remaining) =>
+      (Term.Bitstring.matchUtf16 remaining true).map fun (value, rest) => (tag, value, rest)) =
+      some (.integer 5, .integer 0x1f600, .bitstring ⟨#[0xa8]⟩ 5 (by decide)) ∧
+    ((Term.Bitstring.matchInteger (.bitstring ⟨#[0xa0, 0x0, 0x3e, 0xc0, 0x15]⟩ 0 (by decide))
+        (.integer 3) 1 false false).bind fun (tag, remaining) =>
+      (Term.Bitstring.matchUtf32 remaining false).map fun (value, rest) => (tag, value, rest)) =
+      some (.integer 5, .integer 0x1f600, .bitstring ⟨#[0xa8]⟩ 5 (by decide)) ∧
+    ((Term.Bitstring.matchInteger (.bitstring ⟨#[0xa0, 0x1e, 0xc0, 0x20, 0x15]⟩ 0 (by decide))
+        (.integer 3) 1 false false).bind fun (tag, remaining) =>
+      (Term.Bitstring.matchUtf32 remaining true).map fun (value, rest) => (tag, value, rest)) =
+      some (.integer 5, .integer 0x1f600, .bitstring ⟨#[0xa8]⟩ 5 (by decide)) := by
+  repeat first | apply And.intro | rfl
+
+set_option maxRecDepth 4096 in
+theorem utf_rejects_incomplete_final_code_unit :
+    Term.Bitstring.matchUtf8 (.bitstring ⟨#[0xc2, 0x80]⟩ 7 (by decide)) = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨#[0, 0x40]⟩ 7 (by decide)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨#[0xd8, 0, 0xdc, 0]⟩ 7 (by decide)) false = none ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨#[0, 0xd8, 0, 0xdc]⟩ 7 (by decide)) true = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨#[0, 0, 0, 0x40]⟩ 7 (by decide)) false = none ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨#[0x40, 0, 0, 0]⟩ 7 (by decide)) true = none := by
+  repeat first | apply And.intro | rfl
+
+theorem utf_preserves_invalid_suffix :
+    Term.Bitstring.matchUtf8 (.bitstring ⟨#[0x61, 0xff]⟩ 0 (by decide)) =
+      some (.integer 0x61, .bitstring ⟨#[0xff]⟩ 0 (by decide)) ∧
+    Term.Bitstring.matchUtf16 (.bitstring ⟨#[0, 0x61, 0xdc, 0]⟩ 0 (by decide)) false =
+      some (.integer 0x61, .bitstring ⟨#[0xdc, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.matchUtf32 (.bitstring ⟨#[0, 0, 0, 0x61, 0xff]⟩ 0 (by decide)) false =
+      some (.integer 0x61, .bitstring ⟨#[0xff]⟩ 0 (by decide)) := by
+  repeat first | apply And.intro | rfl
+
+theorem utf32_big_roundtrip (value : Nat) (tail : List Bool)
+    (bounded : value ≤ 0x10ffff) (nonsurrogate : value < 0xd800 ∨ 0xdfff < value) :
+    Term.Bitstring.matchUtf32
+      (Term.Bitstring.ofBits (Term.Bitstring.integerBits value 32 false ++ tail)) false =
+      some (.integer value, Term.Bitstring.ofBits tail) := by
+  have low : value % 2 ^ 32 = value := Nat.mod_eq_of_lt (by omega)
+  simp only [Term.Bitstring.matchUtf32, Term.Bitstring.ofBits, Term.Bitstring.pack_toBits]
+  simp [Term.Bitstring.integerBits_length,
+    Term.Bitstring.decodeInteger_integerBits, low, bounded, nonsurrogate]
+
+theorem utf8_returns_scalar (input value rest : Term)
+    (returned : Term.Bitstring.matchUtf8 input = some (value, rest)) :
+    ∃ n : Int, value = .integer n ∧ 0 ≤ n ∧ n ≤ 0x10ffff ∧
+      (n < 0xd800 ∨ 0xdfff < n) := by
+  cases input <;> simp only [Term.Bitstring.matchUtf8] at returned <;> try contradiction
+  repeat' first | contradiction | split at returned
+  all_goals
+    simp only [Option.some.injEq, Prod.mk.injEq] at returned
+    obtain ⟨rfl, rfl⟩ := returned
+    refine ⟨_, rfl, ?_⟩
+    omega
+
+theorem utf16_returns_scalar (input value rest : Term) (little : Bool)
+    (returned : Term.Bitstring.matchUtf16 input little = some (value, rest)) :
+    ∃ n : Int, value = .integer n ∧ 0 ≤ n ∧ n ≤ 0x10ffff ∧
+      (n < 0xd800 ∨ 0xdfff < n) := by
+  cases input <;> simp only [Term.Bitstring.matchUtf16] at returned <;> try contradiction
+  repeat' first | contradiction | split at returned
+  all_goals
+    simp only [Option.some.injEq, Prod.mk.injEq] at returned
+    obtain ⟨rfl, rfl⟩ := returned
+    refine ⟨_, rfl, ?_⟩
+    omega
+
+theorem utf32_returns_scalar (input value rest : Term) (little : Bool)
+    (returned : Term.Bitstring.matchUtf32 input little = some (value, rest)) :
+    ∃ n : Int, value = .integer n ∧ 0 ≤ n ∧ n ≤ 0x10ffff ∧
+      (n < 0xd800 ∨ 0xdfff < n) := by
+  cases input <;> simp only [Term.Bitstring.matchUtf32] at returned <;> try contradiction
+  repeat' first | contradiction | split at returned
+  all_goals
+    simp only [Option.some.injEq, Prod.mk.injEq] at returned
+    obtain ⟨rfl, rfl⟩ := returned
+    refine ⟨_, rfl, ?_⟩
+    omega
+
+theorem utf_nonbitstring_inputs (input : Term) (little : Bool)
+    (nonbitstring : ∀ bytes last valid, input ≠ .bitstring bytes last valid) :
+    Term.Bitstring.matchUtf8 input = none ∧
+    Term.Bitstring.matchUtf16 input little = none ∧
+    Term.Bitstring.matchUtf32 input little = none := by
+  cases input <;> try { exact ⟨rfl, rfl, rfl⟩ }
+  exact False.elim (nonbitstring _ _ _ rfl)
+
 end LynxTest.Term.Bitstring.Matching
 
 run_cmd do
