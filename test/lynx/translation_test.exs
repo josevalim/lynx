@@ -157,14 +157,14 @@ defmodule Lynx.TranslationTest do
     assert [
              %{
                "module" => "Erlang.z_dependency",
-               "cache_key" => <<_::binary-size(64)>>,
+               "cache_key" => <<_::binary>>,
                "file" => "dependency.erl",
                "imports" => [],
                "contents" => [%{"name" => "entry", "pure" => true}]
              },
              %{
                "module" => "Erlang.a_caller",
-               "cache_key" => <<_::binary-size(64)>>,
+               "cache_key" => <<_::binary>>,
                "file" => "caller.erl",
                "imports" => ["Erlang.z_dependency"]
              }

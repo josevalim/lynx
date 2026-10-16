@@ -23,7 +23,7 @@ Updates are flushed as each file finishes. The runner continues until stdin clos
 Invalid input and runner failures return `{"status": "failure", "message": "..."}`.
 Each verification diagnostic has `file`, `module`, nullable `declaration`, `severity`
 (error/warning/information), and `message`, with `line` and `column` included only when known.
-Requests include `cache_dir`; input files may include a SHA-256 `cache_key` incorporating dependencies.
+Requests include `cache_dir`; input files may include a hexadecimal `cache_key` incorporating dependencies.
 Files without a key and their dependents are verified without persistent caching.
 Verified artifacts are cached below `cache_dir/lean-VERSION-HASH`, using Lake’s compiled artifact hashes.
 Only successful elaboration and axiom audits are cached; updates include a `cached` Boolean.
@@ -1589,8 +1589,8 @@ private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environme
     let moduleName ← IO.ofExcept (str entry "module")
     let key ← (entry.getObjVal? "cache_key").toOption.mapM fun value => do
       let key ← IO.ofExcept value.getStr?
-      unless key.length == 64 && key.toList.all (fun c => c.isDigit || ('a' ≤ c && c ≤ 'f')) do
-        throw (IO.userError "cache_key must be a SHA-256 hex digest")
+      unless [32, 64, 128].contains key.length && key.toList.all (fun c => c.isDigit || ('a' ≤ c && c ≤ 'f')) do
+        throw (IO.userError "cache_key must be a 32, 64, or 128 character lowercase hex digest")
       pure key
     let map := sourceMap entry
     let preludes ← IO.ofExcept <| match field entry "preludes" with

@@ -313,8 +313,8 @@ defmodule Lynx.RunnerDiagnosticsTest do
     unrelated = %{client | "module" => "Elixir.UnrelatedClient", "imports" => []}
 
     files =
-      Enum.map([support, client, unrelated], fn file ->
-        Map.put(file, "cache_key", Base.encode16(:crypto.strong_rand_bytes(32), case: :lower))
+      Enum.zip_with([support, client, unrelated], [16, 64, 32], fn file, bytes ->
+        Map.put(file, "cache_key", Base.encode16(:crypto.strong_rand_bytes(bytes), case: :lower))
       end)
 
     assert [

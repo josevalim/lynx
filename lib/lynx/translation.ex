@@ -438,10 +438,21 @@ defmodule Lynx.Translation do
     imports = for name <- file["imports"], {:ok, key} <- [Map.fetch(keys, name)], do: {name, key}
 
     key =
-      :crypto.hash(:sha256, :erlang.term_to_binary({file, imports}, [:deterministic]))
+      :erlang.term_to_binary({file, imports}, [:deterministic])
+      |> cache_hash()
       |> Base.encode16(case: :lower)
 
     {Map.put(file, "cache_key", key), Map.put(keys, file["module"], key)}
+  end
+
+  defp cache_hash(contents) do
+    case :erlang.system_info(:wordsize) do
+      8 -> :crypto.hash(:blake2b, contents)
+      _ -> :crypto.hash(:blake2s, contents)
+    end
+  rescue
+    # Blake may not be available on all OpenSSL distributions.
+    _ -> :erlang.md5(contents)
   end
 
   defp propagate_purity(functions, module, suffixes) do
