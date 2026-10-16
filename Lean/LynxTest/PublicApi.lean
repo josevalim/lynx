@@ -45,6 +45,10 @@ private theorem atomEquality (term : Lynx.Term) (name : String) :
     term.exactCompare (.atom name) = .eq ↔ term = .atom name :=
   Lynx.Term.exactCompare_eq_atom term name
 
+private theorem integerEquality (term : Lynx.Term) (value : Int) :
+    term.exactCompare (.integer value) = .eq ↔ term = .integer value :=
+  Lynx.Term.exactCompare_eq_integer term value
+
 private theorem extractBigEndian (value fieldWidth tailWidth : Nat) :
     Lynx.Term.Bitstring.matchInteger
       (Lynx.Term.Bitstring.ofBits (Lynx.Term.Bitstring.integerBits value (fieldWidth + tailWidth) false))

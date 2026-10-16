@@ -527,6 +527,15 @@ namespace Lynx.Term
     exactCompare a (.atom name) = .eq ↔ a = .atom name := by
   cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
 
+@[simp] theorem exactCompare_eq_integer (a : Term) (n : Int) :
+    exactCompare a (.integer n) = .eq ↔ a = .integer n := by
+  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
+
+@[simp] theorem integer_exactCompare_eq (n : Int) (a : Term) :
+    exactCompare (.integer n) a = .eq ↔ a = .integer n := by
+  rw [Std.OrientedCmp.eq_swap (cmp := exactCompare), Ordering.swap_eq_eq]
+  exact exactCompare_eq_integer a n
+
 @[simp] theorem exactCompare_eq_reference (a : Term) (id : Nat) :
     exactCompare a (.reference id) = .eq ↔ a = .reference id := by
   cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
