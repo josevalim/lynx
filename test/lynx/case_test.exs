@@ -265,11 +265,12 @@ defmodule Lynx.CaseTest do
 
     assert Enum.sort(File.ls!(path)) == [
              "Elixir.Function.lean",
+             "Elixir.Lynx.CaseTest.LawFailure.laws.lean",
              "Elixir.Lynx.CaseTest.LawFailure.lean"
            ]
 
     assert File.read!(Path.join(path, "Elixir.Function.lean")) =~ "identity/1"
-    assert File.read!(Path.join(path, "Elixir.Lynx.CaseTest.LawFailure.lean")) =~ "sum_bar/2"
+    assert File.read!(Path.join(path, "Elixir.Lynx.CaseTest.LawFailure.laws.lean")) =~ "sum_bar/2"
   end
 
   describe "errors" do

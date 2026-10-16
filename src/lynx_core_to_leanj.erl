@@ -6,7 +6,7 @@
 
 %% Anonymous functions use integer keys; named functions use {Module, {Name, Arity}}.
 %% Every entry carries a global integer ID for ordering and dispatch.
--record(state, {module, name, defs, translated, funs = #{},
+-record(state, {module, name, defs, translated, laws = #{}, funs = #{},
                 local_calls = #{}, pure = true, remote, next_var = 0, labels = #{},
                 local_funs = #{}}).
 
@@ -110,14 +110,15 @@ fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Nam
     #{~"body" => Body, ~"captures" => Captures, ~"args" => Args,
       ~"pure" => Pure, ~"span" => []}.
 
-%% Translate the requested functions and their reachable local callees.
+%% Translate the requested functions and laws, plus their reachable local callees.
+%% Laws are returned separately from definitions, keyed by name.
 %% The supplied maps contain this module's definitions and the program-wide function registry.
 %% The callback returns remote callee purity. Local purity is propagated by Lynx.Translation.
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
 -spec translate(module(), #{{atom(), arity()} => {function | cutoff, cerl:c_fun()} | {law, map()}}, [{atom(), arity()}], map(), map(),
                 {term(), fun((term(), module(), atom(), arity(), list(), map()) ->
                     {boolean(), map(), term()} | local)}) ->
-    {ok, map(), map(), term()} | {error, list(), binary()}.
+    {ok, map(), map(), map(), term()} | {error, list(), binary()}.
 translate(Module, Definitions, Names, Translated, Funs, Remote) ->
     try
         State = #state{
@@ -130,17 +131,18 @@ translate(Module, Definitions, Names, Translated, Funs, Remote) ->
 
         #state{
           translated = NewTranslated,
+          laws = Laws,
           funs = NewFuns,
           remote = {NewContext, _Callback}
         } = lists:foldl(fun translate_def/2, State, Names),
 
-        {ok, NewTranslated, NewFuns, NewContext}
+        {ok, NewTranslated, Laws, NewFuns, NewContext}
     catch
         throw:{error, Core, Reason} -> {error, cerl:get_ann(Core), Reason}
     end.
 
-translate_def(Name, #state{translated = Translated} = State) ->
-    case maps:is_key(Name, Translated) of
+translate_def(Name, #state{translated = Translated, laws = Laws} = State) ->
+    case maps:is_key(Name, Translated) orelse maps:is_key(Name, Laws) of
         true -> State;
         false -> translate_def(Name, maps:get(Name, State#state.defs), State)
     end.
@@ -158,9 +160,23 @@ translate_def(Name, {function, #c_fun{anno = Anno, vars = Vars, body = Body}}, S
     end;
 translate_def(Name, {cutoff, #c_fun{anno = Anno, vars = Vars}}, State) ->
     translate_definition(Name, Anno, Vars, cutoff, State);
-translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensures, proof := Proof} = Law}, State) ->
-    translate_definition(Name, Anno, Params,
-        {law, maps:find(requires, Law), Ensures, Proof, maps:find(max_heartbeats, Law)}, State).
+translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensures, proof := Proof} = Law}, State0) ->
+    {_, Arity} = Name,
+    {Requirement, State1} = case maps:find(requires, Law) of
+        error -> {#{}, State0};
+        {ok, Helper} -> {#{~"requires" => atom_to_binary(Helper, utf8)},
+                         translate_def({Helper, Arity}, State0)}
+    end,
+    State2 = translate_def({Ensures, Arity}, State1),
+    Options = case maps:find(max_heartbeats, Law) of
+        error -> #{};
+        {ok, Limit} -> #{~"max_heartbeats" => Limit}
+    end,
+    Theorem = node(~"theorem", Anno, (maps:merge(Requirement, Options))#{
+        ~"name" => function_name(Name), ~"params" => [atom_to_binary(Param, utf8) || Param <- Params],
+        ~"ensures" => atom_to_binary(Ensures, utf8), ~"proof" => Proof
+    }),
+    State2#state{laws = (State2#state.laws)#{Name => Theorem}}.
 
 translate_definition(Name, Anno, Vars, Definition, State0) ->
     State1 = State0#state{name = Name, local_calls = #{}, pure = true, next_var = 0, labels = #{},
@@ -178,35 +194,12 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
                 ~"name" => function_name(Name),
                 ~"params" => [variable(Var) || Var <- Vars],
                 ~"body" => TranslatedBody
-            }), Next};
-        {law, Requires, Ensures, Proof, MaxHeartbeats} ->
-            {_, Arity} = Name,
-            {Requirement, Next1} = case Requires of
-                error -> {#{}, State1};
-                {ok, Helper} ->
-                    Next = translate_law_helper(Helper, Arity, State1),
-                    {#{~"requires" => atom_to_binary(Helper, utf8)}, Next}
-            end,
-            Next2 = translate_law_helper(Ensures, Arity, Next1),
-            Options = case MaxHeartbeats of
-                error -> #{};
-                {ok, Limit} -> #{~"max_heartbeats" => Limit}
-            end,
-            Properties = maps:merge(Requirement, Options),
-            {node(~"theorem", Anno, Properties#{
-                ~"name" => function_name(Name), ~"params" => [atom_to_binary(Param, utf8) || Param <- Vars],
-                ~"ensures" => atom_to_binary(Ensures, utf8), ~"proof" => Proof
-            }), Next2}
+            }), Next}
     end,
     Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls),
               pure => State2#state.pure},
     State0#state{translated = (State2#state.translated)#{Name => Entry},
                  funs = State2#state.funs, remote = State2#state.remote}.
-
-translate_law_helper(Name, Arity, State) ->
-    Callee = {Name, Arity},
-    Next = translate_def(Callee, State),
-    Next#state{local_calls = (Next#state.local_calls)#{Callee => true}}.
 
 %% OTP lowers receive to a local scan/wait loop. Recover the operation before
 %% translating ordinary expressions; loop identity is checked structurally,

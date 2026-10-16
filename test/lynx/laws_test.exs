@@ -25,6 +25,13 @@ defmodule Lynx.LawsTest do
                file: file,
                time_ms: time,
                cached: cached
+             },
+             %{
+               status: :ok,
+               diagnostics: [],
+               module: "Elixir.Lynx.LawsTest.Laws.laws",
+               source: laws,
+               file: file
              }
            ] =
              Lynx.Laws.verify!([binary])
@@ -32,8 +39,8 @@ defmodule Lynx.LawsTest do
     assert file == __ENV__.file
     assert is_integer(time) and time >= 0
     assert is_boolean(cached)
-    assert source =~ "«checked/0»"
-    assert source =~ "«another/0»"
+    assert laws =~ "«checked/0»"
+    assert laws =~ "«another/0»"
     assert source =~ "«identity/1»"
     refute source =~ "«unused/0»"
   end
@@ -63,7 +70,7 @@ defmodule Lynx.LawsTest do
       all_goals first | exact h _ | exact Lean.Order.PartialOrder.rel_refl
     """
 
-    assert [%{status: :ok, diagnostics: [], source: source}] =
+    assert [%{status: :ok, diagnostics: [], source: source}, %{status: :ok, diagnostics: []}] =
              Lynx.Laws.verify!([binary],
                termination_suffixes: %{{module, :increment, 1} => suffix}
              )
@@ -274,7 +281,13 @@ defmodule Lynx.LawsTest do
                        "name" => "allowed",
                        "args" => [%{"kind" => "var", "name" => 0}]
                      }
-                   },
+                   }
+                 ]
+               },
+               %{
+                 "module" => "Elixir.Lynx.LawsTest.Predicates.laws",
+                 "imports" => ["Elixir.Lynx.LawsTest.Predicates"],
+                 "contents" => [
                    %{
                      "kind" => "theorem",
                      "name" => "checked",
@@ -317,7 +330,12 @@ defmodule Lynx.LawsTest do
                        "kind" => "return",
                        "values" => [%{"kind" => "atom", "value" => "true"}]
                      }
-                   },
+                   }
+                 ]
+               },
+               %{
+                 "module" => "Elixir.Lynx.LawsTest.Unconditional.laws",
+                 "contents" => [
                    %{
                      "kind" => "theorem",
                      "name" => "first",

@@ -759,7 +759,7 @@ defmodule Lynx.CoreToLeanjTest do
     roots = [{:empty, 0}, {:pair, 1}, {:bound, 1}, {:empty_bound, 0}, {:matched, 1}]
     callback = fn _, _, _, _, _, _ -> flunk("unexpected remote call") end
 
-    assert {:ok, functions, %{}, []} =
+    assert {:ok, functions, %{}, %{}, []} =
              :lynx_core_to_leanj.translate(
                :core_try,
                :lynx_core_to_leanj.to_definitions(core),
@@ -991,8 +991,8 @@ defmodule Lynx.CoreToLeanjTest do
     definitions = :lynx_core_to_leanj.to_definitions(core)
     assert {:law, _} = definitions[{:entry, 1}]
     assert {:function, _} = definitions[{:requirement, 1}]
-    assert {:ok, functions, []} = translate(definitions)
-    assert Enum.sort(functions[{:entry, 1}].local_calls) == [{:expected, 1}, {:requirement, 1}]
+    assert {laws, functions} = translate_law(definitions)
+    assert Enum.sort(Map.keys(functions)) == [{:expected, 1}, {:requirement, 1}]
 
     assert %{
              "kind" => "theorem",
@@ -1002,7 +1002,7 @@ defmodule Lynx.CoreToLeanjTest do
              "requires" => "requirement",
              "ensures" => "expected",
              "proof" => %{"source" => "rfl", "indentation" => 0, "span" => [12]}
-           } == functions[{:entry, 1}].translation
+           } == laws[{:entry, 1}]
   end
 
   test "uses the law's explicit span instead of the Core attribute's annotations" do
@@ -1011,10 +1011,8 @@ defmodule Lynx.CoreToLeanjTest do
         law_core(%{name: {:entry, [:x]}, ensures: :expected, span: span})
         |> :lynx_core_to_leanj.to_definitions()
 
-      assert {:ok, functions, []} = translate(definitions)
-
-      assert %{"span" => ^expected, "proof" => %{"span" => [12]}} =
-               functions[{:entry, 1}].translation
+      assert {laws, _functions} = translate_law(definitions)
+      assert %{"span" => ^expected, "proof" => %{"span" => [12]}} = laws[{:entry, 1}]
     end
   end
 
@@ -1202,8 +1200,8 @@ defmodule Lynx.CoreToLeanjTest do
     definitions =
       :lynx_core_to_leanj.to_definitions(law_core(%{name: {:entry, [:x]}, ensures: :expected}))
 
-    assert {:ok, %{{:entry, 1} => %{local_calls: [{:expected, 1}], translation: law}}, []} =
-             translate(definitions)
+    assert {%{{:entry, 1} => law}, functions} = translate_law(definitions)
+    assert Map.keys(functions) == [{:expected, 1}]
 
     assert law == %{
              "kind" => "theorem",
@@ -1243,9 +1241,25 @@ defmodule Lynx.CoreToLeanjTest do
            %{},
            {[], callback}
          ) do
-      {:ok, functions, _funs, calls} -> {:ok, functions, calls}
+      {:ok, functions, _laws, _funs, calls} -> {:ok, functions, calls}
       {:error, _, _} = error -> error
     end
+  end
+
+  defp translate_law(definitions) do
+    callback = fn _, _, _, _, _, _ -> :local end
+
+    assert {:ok, functions, laws, %{}, []} =
+             :lynx_core_to_leanj.translate(
+               :example,
+               definitions,
+               [{:entry, 1}],
+               %{},
+               %{},
+               {[], callback}
+             )
+
+    {laws, functions}
   end
 
   defp definitions(defs) do

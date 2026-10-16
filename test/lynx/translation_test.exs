@@ -239,14 +239,23 @@ defmodule Lynx.TranslationTest do
     assert {:law, _} = translation.modules.example.definitions[{:identity_law, 1}]
 
     assert Enum.sort(Map.keys(translation.modules.example.translations)) ==
-             [{:allowed, 1}, {:identity, 1}, {:identity_ensures, 1}, {:identity_law, 1}]
+             [{:allowed, 1}, {:identity, 1}, {:identity_ensures, 1}]
+
+    assert Map.keys(translation.modules.example.laws) == [{:identity_law, 1}]
 
     assert [
              %{
+               "module" => "Erlang.example",
                "contents" => [
                  %{"name" => "allowed"},
                  %{"name" => "identity"},
-                 %{"name" => "identity_ensures"},
+                 %{"name" => "identity_ensures"}
+               ]
+             },
+             %{
+               "module" => "Erlang.example.laws",
+               "imports" => ["Erlang.example"],
+               "contents" => [
                  %{
                    "kind" => "theorem",
                    "name" => "identity_law",
@@ -307,7 +316,8 @@ defmodule Lynx.TranslationTest do
       |> Translation.add({"example.erl", core})
       |> Translation.translate(:example, [{:entry, 1}])
 
-    assert [%{"contents" => [%{"name" => "expected"}, law]}] = Translation.assemble(translation)
+    assert [%{"contents" => [%{"name" => "expected"}]}, %{"contents" => [law]}] =
+             Translation.assemble(translation)
 
     assert law == %{
              "kind" => "theorem",
@@ -335,21 +345,16 @@ defmodule Lynx.TranslationTest do
     translation =
       Translation.new() |> Translation.add({"example.erl", core}) |> Translation.verify(:example)
 
-    assert %{
-             {:expected, 1} => %{},
-             {:first, 1} => %{},
-             {:second, 1} => %{}
-           } = translation.modules.example.translations
-
-    refute Map.has_key?(translation.modules.example.translations, {:unused, 1})
+    assert Map.keys(translation.modules.example.translations) == [{:expected, 1}]
+    assert %{{:first, 1} => %{}, {:second, 1} => %{}} = translation.modules.example.laws
 
     selected =
       Translation.new()
       |> Translation.add({"example.erl", core})
       |> Translation.verify(:example, [{:second, 1}])
 
-    assert Map.keys(selected.modules.example.translations) |> Enum.sort() ==
-             [{:expected, 1}, {:second, 1}]
+    assert Map.keys(selected.modules.example.translations) == [{:expected, 1}]
+    assert Map.keys(selected.modules.example.laws) == [{:second, 1}]
 
     assert_raise CompileError, ~r/does not declare law/, fn ->
       Translation.new()
@@ -1071,19 +1076,21 @@ defmodule Lynx.TranslationTest do
 
       lean_dir = Path.expand("../../Lean", __DIR__)
       cold = Lynx.Commands.runner!(lean_dir, request)
-      assert [_, cold_unrelated, _] = cold
+      assert [_, cold_unrelated, _, _] = cold
       assert Enum.all?(cold, &match?(%{"status" => "ok", "cached" => false}, &1))
 
       changed = assemble.(false)
-      assert [source, unrelated, dependent] = files
-      assert [changed_source, ^unrelated, changed_dependent] = changed
+      assert [source, unrelated, dependent, laws] = files
+      assert [changed_source, ^unrelated, changed_dependent, changed_laws] = changed
       refute source["cache_key"] == changed_source["cache_key"]
       refute dependent["cache_key"] == changed_dependent["cache_key"]
+      refute laws["cache_key"] == changed_laws["cache_key"]
       changed_request = Map.put(request, "files", changed)
 
       assert [
                %{"status" => "ok", "cached" => false},
                %{"status" => "ok", "cached" => true} = warm_unrelated,
+               %{"status" => "ok", "cached" => false},
                %{"status" => "error", "cached" => false}
              ] = Lynx.Commands.runner!(lean_dir, changed_request)
 
@@ -1092,7 +1099,7 @@ defmodule Lynx.TranslationTest do
 
       # Failed proofs must not leave reusable artifacts on disk.
       assert Path.wildcard(
-               Path.join([cache_dir, "lean-*", changed_dependent["cache_key"], "result.json"])
+               Path.join([cache_dir, "lean-*", changed_laws["cache_key"], "result.json"])
              ) == []
     end
   end

@@ -101,10 +101,11 @@ defmodule Lynx.Translation do
     %{funs: funs} = translation
 
     case :lynx_core_to_leanj.translate(name, definitions, names, translations, funs, context) do
-      {:ok, functions, funs, translation} ->
+      {:ok, functions, laws, funs, translation} ->
         updated = %{
           module
-          | translations: propagate_purity(functions, name, translation.termination_suffixes)
+          | translations: propagate_purity(functions, name, translation.termination_suffixes),
+            laws: Map.merge(module.laws, laws)
         }
 
         %{
@@ -271,7 +272,7 @@ defmodule Lynx.Translation do
         raise CompileError, source_location(span_anno, file) ++ [description: reason]
 
       definitions ->
-        %{definitions: definitions, translations: %{}, file: file}
+        %{definitions: definitions, translations: %{}, laws: %{}, file: file}
     end
   end
 
@@ -346,8 +347,10 @@ defmodule Lynx.Translation do
         :digraph.add_edge(graph, [dependency], [name])
       end
 
+      names = topsort(graph)
+
       {files, keys} =
-        Enum.map_reduce(topsort(graph), keys, fn [name], keys ->
+        Enum.map_reduce(names, keys, fn [name], keys ->
           module = Map.fetch!(modules, name)
           imports = Map.get(external_calls, name, MapSet.new())
           imports = if builtin_modules[name], do: MapSet.put(imports, name), else: imports
@@ -366,30 +369,53 @@ defmodule Lynx.Translation do
           cache_file(file, keys, cache)
         end)
 
-      if map_size(funs) == 0 do
-        support ++ files
-      else
-        {program, _keys} =
-          cache_file(
-            %{
-              "module" => "Erlang.program",
-              "file" => "Erlang/program.lean",
-              "imports" => Enum.map(files, & &1["module"]),
-              "contents" => [
-                %{
-                  "kind" => "fun_table",
-                  "span" => [],
-                  "name" => "fun_table",
-                  "entries" => :lynx_core_to_leanj.fun_table(funs, modules)
-                }
-              ]
-            },
-            keys,
-            cache
-          )
+      {program, keys} =
+        if map_size(funs) == 0 do
+          {[], keys}
+        else
+          program = %{
+            "module" => "Erlang.program",
+            "file" => "Erlang/program.lean",
+            "imports" => Enum.map(files, & &1["module"]),
+            "contents" => [
+              %{
+                "kind" => "fun_table",
+                "span" => [],
+                "name" => "fun_table",
+                "entries" => :lynx_core_to_leanj.fun_table(funs, modules)
+              }
+            ]
+          }
 
-        support ++ files ++ [program]
-      end
+          {program, keys} = cache_file(program, keys, cache)
+          {[program], keys}
+        end
+
+      # Laws follow the program, so their statements may reference its table.
+      # Their namespace nests below the module's, so proofs keep resolving
+      # unqualified names as before.
+      {laws, _keys} =
+        Enum.flat_map_reduce(names, keys, fn [name], keys ->
+          case Map.fetch!(modules, name) do
+            %{laws: laws} when map_size(laws) == 0 ->
+              {[], keys}
+
+            module ->
+              module_name = :lynx_core_to_leanj.module_name(name)
+
+              file = %{
+                "module" => module_name <> ".laws",
+                "file" => module.file,
+                "imports" => support_imports ++ [module_name],
+                "contents" => assemble_laws(module.laws)
+              }
+
+              {file, keys} = cache_file(file, keys, cache)
+              {[file], keys}
+          end
+        end)
+
+      support ++ files ++ program ++ laws
     after
       :digraph.delete(graph)
     end
@@ -488,17 +514,6 @@ defmodule Lynx.Translation do
         :digraph.add_edge(graph, callee, name)
       end
 
-      # Proof strings can reference preceding theorems without a runtime call.
-      laws =
-        functions
-        |> Enum.filter(fn {_, definition} -> definition.translation["kind"] == "theorem" end)
-        |> Enum.sort_by(fn {name, _} -> declaration_location(functions, name) end)
-        |> Enum.map(&elem(&1, 0))
-
-      for [earlier, later] <- Enum.chunk_every(laws, 2, 1, :discard) do
-        :digraph.add_edge(graph, earlier, later)
-      end
-
       components = :digraph_utils.condensation(graph)
 
       groups = topsort(components, &declaration_location(functions, &1))
@@ -507,6 +522,13 @@ defmodule Lynx.Translation do
     after
       :digraph.delete(graph)
     end
+  end
+
+  # Proof strings can reference preceding theorems, so laws keep source order.
+  defp assemble_laws(laws) do
+    laws
+    |> Enum.sort_by(fn {name, law} -> {List.wrap(law["span"]), name} end)
+    |> Enum.map(&elem(&1, 1))
   end
 
   defp declaration_location(functions, name) do
