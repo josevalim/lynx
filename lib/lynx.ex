@@ -91,8 +91,12 @@ defmodule Lynx do
 
   ## Limitations
 
-  Lynx models a subset of Erlang/Elixir and the Erlang runtime. Proofs describe
-  this model, the following restrictions matter when interpreting their results:
+  Lynx implements most Erlang/Elixir language constructs, although several
+  built-in functions (BIFs) may be missing. The focus is on verifying sequential
+  programs rather than concurrent or distributed ones.
+
+  Proofs describe Lynx's model of the Erlang runtime. The following restrictions
+  matter when interpreting their results:
 
     * Bitstring float segments support only 64 bits. Float-16 and float-32
       construction currently raises `badarg` in the model, and matching those
@@ -112,7 +116,7 @@ defmodule Lynx do
 
     * Exception stack traces are not recorded and are represented by `[]`.
 
-  Lynx does not yet translate all language constructs nor implements all BIFs.
-  Those will lead to errors when attempting to translate them.
+  Missing constructs or BIFs produce translation errors. Feel free to
+  [open an issue](https://github.com/josevalim/lynx/issues) for missing functionality.
   """
 end

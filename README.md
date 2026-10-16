@@ -11,8 +11,12 @@ that guarantees your Erlang/Elixir code obey those laws. This is done
 by implementing a model of the Erlang runtime in Lean and automatically
 translating your Erlang/Elixir code to Lean.
 
-The automatic translation is still work in progress. The operational
-semantics have not yet been formally validated.
+Lynx implements most Erlang/Elixir language constructs, although several
+built-in functions (BIFs) may be missing. The focus is on verifying sequential
+programs rather than concurrent or distributed ones. Feel free to
+[open an issue](https://github.com/josevalim/lynx/issues) for missing functionality.
+
+The operational semantics have not yet been formally validated.
 
 ## Elixir example
 
