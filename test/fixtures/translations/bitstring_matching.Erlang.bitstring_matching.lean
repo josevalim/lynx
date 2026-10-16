@@ -49,7 +49,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «integers/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | lynxBits0 =>
           match
@@ -76,8 +79,14 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «integer_sized/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun «lynxLabel_label^0» =>
-        (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun «lynxLabel_label^0» =>
+        (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+              (lynxNext : Unit → Lynx.Result lynxValue) =>
+            lynxBody lynxNext)
+          (fun lynxMatchNext =>
             match _0 with
             | lynxBits4 =>
               match
@@ -88,7 +97,11 @@ set_option «match».ignoreUnusedAlts true
                 | Bool.true✝ =>
                   match (lynxBits5) with
                   | _3 =>
-                    (fun lynxMatchNext =>
+                    (fun {lynxValue : Type}
+                          (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+                          (lynxNext : Unit → Lynx.Result lynxValue) =>
+                        lynxBody lynxNext)
+                      (fun lynxMatchNext =>
                         match _3 with
                         | lynxBits6 =>
                           match
@@ -115,7 +128,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «integer_external_size/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _1 with
         | lynxBits8 =>
           match (Lynx.Term.Bitstring.matchInteger lynxBits8 _0 3 Bool.false Bool.false) with
@@ -132,7 +148,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «float64/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | lynxBits10 =>
           match (Lynx.Term.Bitstring.matchFloat lynxBits10 64 Bool.false) with
@@ -150,7 +169,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «binary_tail/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | lynxBits13 =>
           match
@@ -169,7 +191,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «bitstring_tail/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | lynxBits15 =>
           match
@@ -188,7 +213,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «binary_literal_tail/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | lynxBits17 =>
           match
@@ -207,7 +235,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «bitstring_literal_tail/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | lynxBits19 =>
           match
@@ -226,7 +257,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «binary_fixed/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _1 with
         | lynxBits21 =>
           match
@@ -245,7 +279,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «bitstring_fixed/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _1 with
         | lynxBits23 =>
           match
@@ -264,7 +301,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «nested/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | Lynx.Term.tuple ⟨[Lynx.Term.atom "tag", Lynx.Term.cons lynxMap334 Lynx.Term.nil]⟩ =>
           match (Lynx.Term.getMapKeys [Lynx.Term.atom "bits"] lynxMap334) with
@@ -287,7 +327,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «guarded/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | lynxBits27 =>
           match
@@ -308,7 +351,10 @@ set_option «match».ignoreUnusedAlts true
             | _ => lynxMatchNext ()
           | _ => lynxMatchNext ())
       (fun (_ : Unit) =>
-        (fun lynxMatchNext =>
+        (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+              (lynxNext : Unit → Lynx.Result lynxValue) =>
+            lynxBody lynxNext)
+          (fun lynxMatchNext =>
             match _0 with
             | lynxBits29 =>
               match
@@ -327,7 +373,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «alias/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | vWhole@lynxBits31 =>
           match
@@ -346,7 +395,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «pinned/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _1 with
         | lynxBits33 =>
           match

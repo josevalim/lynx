@@ -176,6 +176,22 @@ private def product (values : Array (TSyntax `term)) : DecodeM (TSyntax `term) :
     result := Unhygienic.run `(($value, $result))
   return result
 
+/-- Give shared continuations the enclosing computation's result type before
+elaborating matches that capture them. Keep the result polymorphic for Core's
+zero and multiple return values, and use applied lambdas for recursive proofs. -/
+private def withContinuation (name : TSyntax `ident) (body next : TSyntax `term) :
+    TSyntax `term := Id.run do
+  let valueType := mkIdent `lynxValue
+  let bodyName := mkIdent `lynxBody
+  let nextName := mkIdent `lynxNext
+  let unitType := mkIdent ``Unit
+  let resultType := mkIdent ``Lynx.Result
+  return Unhygienic.run `(
+    (fun {$valueType : Type}
+        ($bodyName : ($unitType → $resultType $valueType) → $resultType $valueType)
+        ($nextName : $unitType → $resultType $valueType) => $bodyName $nextName)
+      (fun $name => $body) (fun (_ : $unitType) => $next))
+
 private partial def catchAllPattern (j : Json) : Except String Bool := do
   match ← str j "kind" with
   | "var" | "wildcard" => return true
@@ -771,9 +787,8 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let label := mkIdent (Name.mkSimple s!"lynxLabel_{← str j "label"}")
     let continuation ← term map info false (← field j "continuation")
     let body ← term map info false (← field j "body")
-    let unitType := mkIdent ``Unit
     -- Use the same applied-lambda form as match fallthrough continuations.
-    pure (Unhygienic.run `((fun $label => $body) (fun (_ : $unitType) => $continuation)))
+    pure (withContinuation label body continuation)
   | "jump" => do
     fields j ["kind", "label", "span"]
     let label := mkIdent (Name.mkSimple s!"lynxLabel_{← str j "label"}")
@@ -1015,7 +1030,6 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let wildcards : Array (TSyntax `term) := exprs.map fun _ => Unhygienic.run `(_)
     if nests.contains true then
       let fallback := mkIdent `lynxMatchNext
-      let unitType : TSyntax `term := ⟨(mkIdent ``Unit).raw⟩
       let tryWith := mkIdent ``Lynx.Result.tryWith
       let atom := mkIdent ``Lynx.Term.atom
       let value := mkIdent `lynxGuardValue
@@ -1044,7 +1058,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
                 match $[$exprs:term],* with | $pats,* => $branch | $wildcards,* => $fallback ())
             -- An applied lambda shares the continuation without leaving a recursive
             -- let-bound thunk in Lean's generated induction principle.
-            result := Unhygienic.run `((fun $fallback => $matched) (fun (_ : $unitType) => $result))
+            result := withContinuation fallback matched result
           | _ => throw "invalid match alternative"
           stop := i
         else

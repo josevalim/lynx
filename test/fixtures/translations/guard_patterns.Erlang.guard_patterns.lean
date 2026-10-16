@@ -79,7 +79,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «nested/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | Lynx.Term.tuple ⟨[Lynx.Term.atom "tag", Lynx.Term.cons lynxMap169 Lynx.Term.nil]⟩ =>
           match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap169) with
@@ -92,7 +95,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «conflict/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | Lynx.Term.tuple ⟨[vX@(Lynx.Term.integer _)]⟩ =>
           Lynx.Result.tryWith
@@ -111,7 +117,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «repeated/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | Lynx.Term.tuple ⟨[vX@(Lynx.Term.integer _), _2]⟩ =>
           Lynx.Result.tryWith
@@ -130,7 +139,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «negated/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0 with
         | vX =>
           Lynx.Result.tryWith
@@ -148,7 +160,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «disjunction/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _0, _1 with
         | Lynx.Term.tuple ⟨[vX]⟩, vY =>
           Lynx.Result.tryWith
@@ -183,7 +198,10 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «outer/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
-    (fun lynxMatchNext =>
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
         match _1 with
         | Lynx.Term.tuple ⟨[vZ]⟩ =>
           Lynx.Result.tryWith (Erlang.erlang.«is_integer/1» _0)

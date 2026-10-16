@@ -69,6 +69,7 @@ defmodule IntegerProofsTest do
     repeat' first
       | exact Lean.Order.PartialOrder.rel_refl
       | exact h _ _
+      | exact h _ _ _
       | apply Lynx.Result.tryWith_mono_pure
       | apply Lynx.Result.bind_mono_left
       | apply Lynx.Result.bind_mono_pure
@@ -80,6 +81,83 @@ defmodule IntegerProofsTest do
       | split
       | simp_all
   """
+
+  laws "Integer digits" do
+    cutoff &ArgumentError.exception/1
+    cutoff &String.Chars.to_string/1
+    termination_suffix &Integer.digits/3, @integer_fixpoint
+    termination_suffix &Integer.undigits/3, @integer_fixpoint
+
+    law digits_round_trip(integer, base),
+      requires: is_integer(integer) and is_integer(base) and base >= 2,
+      expects: Integer.undigits(Integer.digits(integer, base), base) === integer,
+      proof: ~LEAN"""
+      cases integer <;> simp [«digits_round_trip:requires/2»,
+        Erlang.erlang.«is_integer/1»] at requires
+      rename_i n
+      cases base <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      rename_i b
+      have baseValid : 2 ≤ b := by
+        by_cases h : 2 ≤ b <;> simp [h] at requires <;> omega
+      have digit (r a : Int) (acc : Lynx.Term) (lo : -b < r) (hi : r < b) :
+          Elixir.Integer.«undigits/3» (.cons (.integer r) acc) (.integer b) (.integer a) =
+            Elixir.Integer.«undigits/3» acc (.integer b) (.integer (a*b+r)) := by
+        rw [Elixir.Integer.«undigits/3».eq_def]
+        simp [Erlang.erlang.«is_integer/1», Erlang.erlang.«=:=/2»,
+          Erlang.erlang.«-/1», show ¬ b ≤ r by omega, show ¬ r ≤ -b by omega]
+      -- k records the positional multiplier: decoding the generated prefix
+      -- from a yields a*k+n before decoding the supplied suffix.
+      have run (m : Nat) : ∀ (n : Int), n.natAbs = m → ∀ acc : Lynx.Term,
+          Erlang.erlang.«is_list/1» acc = .ok Lynx.Term.true →
+          ∃ ds k, Elixir.Integer.«digits/3» (.integer n) (.integer b) acc = .ok ds ∧
+            Erlang.erlang.«is_list/1» ds = .ok Lynx.Term.true ∧
+            ∀ a : Int, Elixir.Integer.«undigits/3» ds (.integer b) (.integer a) =
+              Elixir.Integer.«undigits/3» acc (.integer b) (.integer (a*k+n)) := by
+        intro n magnitude acc proper
+        induction m using Nat.strongRecOn generalizing n acc with
+        | ind m ih =>
+          by_cases zero : n = 0
+          · subst n
+            exact ⟨acc, 1, by rw [Elixir.Integer.«digits/3».eq_def]; simp,
+              proper, by simp⟩
+          · have smaller : (n.tdiv b).natAbs < m := by
+              rw [Int.natAbs_tdiv, ← magnitude]
+              exact Nat.div_lt_self (by omega) (by omega)
+            obtain ⟨ds, k, returned, dsProper, decoded⟩ :=
+              ih _ smaller (n.tdiv b) rfl (.cons (.integer (n.tmod b)) acc)
+                (by simpa [Erlang.erlang.«is_list/1»] using proper)
+            refine ⟨ds, k*b, ?_, dsProper, ?_⟩
+            · rw [Elixir.Integer.«digits/3».eq_def]
+              simp [zero, Erlang.erlang.«div/2», Erlang.erlang.«rem/2»,
+                show b ≠ 0 by omega, returned]
+            · intro a
+              rw [decoded, digit _ _ _ (Int.lt_tmod_of_pos _ (by omega))
+                (Int.tmod_lt_of_pos _ (by omega))]
+              have reconstruct := Int.tmod_add_tdiv_mul n b
+              congr 2
+              grind only
+      obtain ⟨ds, k, returned, proper, decoded⟩ := run n.natAbs n rfl .nil rfl
+      have result : Elixir.Integer.«undigits/3» ds (.integer b) (.integer 0) =
+          .ok (.integer n) := by
+        have h := decoded 0
+        simpa only [Int.zero_mul, Int.zero_add,
+          show Elixir.Integer.«undigits/3» .nil (.integer b) (.integer n) =
+            .ok (.integer n) by rw [Elixir.Integer.«undigits/3».eq_def]; rfl] using h
+      have zeroDecoded : Elixir.Integer.«undigits/3» (.cons (.integer 0) .nil)
+          (.integer b) (.integer 0) = .ok (.integer 0) := by
+        rw [digit _ _ _ (by omega) (by omega), Elixir.Integer.«undigits/3».eq_def]
+        simp
+      by_cases zero : n = 0
+      · subst n
+        simp [«digits_round_trip:ensures/2», Elixir.Integer.«digits/2»,
+          Elixir.Integer.«undigits/2», zeroDecoded,
+          Erlang.erlang.«is_integer/1», Erlang.erlang.«is_list/1», baseValid,
+          Erlang.erlang.«=:=/2»]
+      · simp [«digits_round_trip:ensures/2», Elixir.Integer.«digits/2»,
+          Elixir.Integer.«undigits/2», Erlang.erlang.«is_integer/1»,
+          baseValid, zero, returned, proper, result, Erlang.erlang.«=:=/2»]
+      """
+  end
 
   laws "Integer division" do
     law signed_division_contract(dividend, divisor),

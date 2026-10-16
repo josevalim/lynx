@@ -1,6 +1,6 @@
 -module(patterns).
 -export([grouped/1, map_grouped/1, map_nested/1, map_duplicate/3,
-         map_computed/2, floats/1]).
+         map_computed/2, map_fallthrough/2, floats/1]).
 
 grouped(a) -> first;
 grouped(b) -> second;
@@ -33,3 +33,8 @@ floats(-1.5) -> negative;
 floats({0.1, [5.0e-324]}) -> nested;
 floats(#{1.0 := 1.5}) -> map;
 floats(_) -> other.
+
+%% A guard falling through to grouped map clauses needs a typed continuation.
+map_fallthrough(_, #{b := B}) when B /= 1 -> b;
+map_fallthrough(Value, #{a := A}) when A < 0 -> Value;
+map_fallthrough(_, #{a := A}) -> A.

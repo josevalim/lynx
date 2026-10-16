@@ -56,7 +56,10 @@ set_option «match».ignoreUnusedAlts true
       (fun _2 =>
         let _4 := Lynx.Exception.classTerm _2
         let _3 := Lynx.Exception.reason _2
-        (fun lynxMatchNext =>
+        (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+              (lynxNext : Unit → Lynx.Result lynxValue) =>
+            lynxBody lynxNext)
+          (fun lynxMatchNext =>
             match _4, _3, _2 with
             | Lynx.Term.atom "error", vR@(Lynx.Term.integer _), _8 =>
               Lynx.Result.tryWith
