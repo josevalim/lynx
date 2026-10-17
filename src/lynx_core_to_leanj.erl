@@ -284,38 +284,12 @@ expression(#c_values{anno = Anno, es = Values}, State0) ->
 %%   match vX with
 %%   | Lynx.Term.nil => Lynx.Result.ok (Lynx.Term.integer 0)
 %%   | vOther => Lynx.Result.ok (Lynx.Term.integer 1)
-expression(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
-    {Translated, Next} = expression(Arg, State0),
-    {Args, Bind, State1} = case Translated of
-        #{~"kind" := ~"return", ~"values" := Values} ->
-            {Values, none, Next};
-        _ ->
-            [#c_clause{pats = Patterns} | _] = Clauses,
-            {Vars, BoundState} = lists:mapfoldl(fun(_, Acc) ->
-                Var = var_node(#{~"generated" => Acc#state.next_var}, Anno),
-                {Var, Acc#state{next_var = Acc#state.next_var + 1}}
-            end, Next, lists:seq(1, length(Patterns))),
-            {Vars, {Vars, Translated}, BoundState}
-    end,
-    Scrutinees = case Arg of
-        #c_values{es = Elements} -> Elements;
-        _ -> [Arg]
-    end,
-    {TranslatedClauses, State2} = lists:mapfoldl(fun(#c_clause{pats = Patterns} = Clause, Acc) ->
-        Facts = Acc#state.size_facts,
-        Bound = [Binding || {Scrutinee, Pattern} <- lists:zip(Scrutinees, Patterns, trim),
-                            Fact <- [size_fact(Scrutinee, Facts)], Fact =/= unknown,
-                            Binding <- pattern_facts(Pattern, Fact, false)],
-        {TranslatedClause, ClauseState} =
-            clause(Clause, Acc#state{size_facts = maps:merge(Facts, maps:from_list(Bound))}),
-        {TranslatedClause, ClauseState#state{size_facts = Facts}}
-    end, State1, Clauses),
-    Match = node(~"match", Anno, #{~"expressions" => Args, ~"cases" => TranslatedClauses}),
-    case Bind of
-        none -> {Match, State2};
-        {Binders, Computation} ->
-            {node(~"bind", Anno, #{~"vars" => Binders,
-                ~"computation" => Computation, ~"body" => Match}), State2}
+%% Erlang: A orelse B
+%% Lean: Lynx.Result.orElse a b
+expression(#c_case{anno = Anno} = Case, State0) ->
+    case short_circuit(Case) of
+        {Kind, _} -> short_circuit_chain(Kind, Anno, operands(Kind, Case), State0);
+        none -> expression_case(Case, State0)
     end;
 %% Erlang: Y = f(X), g(Y)
 %% Lean: Lynx.Result.bind («f/1» vX) fun vY => «g/1» vY
@@ -396,6 +370,84 @@ expression(#c_map{is_pat = false} = Map, State0) ->
 expression(Value, State0) ->
     {Translated, State1} = value(Value, State0),
     {node(~"return", cerl:get_ann(Value), #{~"values" => [Translated]}), State1}.
+
+%% Core lowers orelse and andalso to a case on the left operand, raising badarg
+%% on other values unless the compiler knows the operand is a Boolean. The
+%% combinators keep the short circuit: the right operand is selected only after
+%% the left one returns.
+short_circuit(#c_case{arg = #c_values{}}) ->
+    none;
+short_circuit(#c_case{clauses = [
+        #c_clause{pats = [#c_literal{val = true}], guard = #c_literal{val = true}, body = OnTrue} = First,
+        #c_clause{pats = [#c_literal{val = false}], guard = #c_literal{val = true}, body = OnFalse}
+        | Rest]}) ->
+    Checked = case Rest of
+        [] -> lists:member(compiler_generated, cerl:get_ann(First));
+        [#c_clause{pats = [#c_var{name = Var}], guard = #c_literal{val = true}, body = Raise}] ->
+            badarg_raise(Raise, Var);
+        _ -> false
+    end,
+    case {Checked, OnTrue, OnFalse} of
+        {true, #c_literal{val = true}, Right} -> {~"orelse", Right};
+        {true, Right, #c_literal{val = false}} -> {~"andalso", Right};
+        _ -> none
+    end;
+short_circuit(_) ->
+    none.
+
+%% The operands of a right-nested chain of the same operator.
+operands(Kind, Expression) ->
+    case short_circuit(Expression) of
+        {Kind, Right} -> [cerl:case_arg(Expression) | operands(Kind, Right)];
+        _ -> [Expression]
+    end.
+
+short_circuit_chain(_Kind, _Anno, [Last], State) ->
+    expression(Last, State);
+short_circuit_chain(Kind, Anno, [Left | Rest], State0) ->
+    {TranslatedLeft, State1} = expression(Left, State0),
+    {TranslatedRight, State2} = short_circuit_chain(Kind, Anno, Rest, State1),
+    {node(Kind, Anno, #{~"left" => TranslatedLeft, ~"right" => TranslatedRight}), State2}.
+
+badarg_raise(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = error},
+                     args = [#c_tuple{es = [#c_literal{val = badarg}, #c_var{name = Var}]}]}, Var) ->
+    true;
+badarg_raise(_, _) ->
+    false.
+
+expression_case(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
+    {Translated, Next} = expression(Arg, State0),
+    {Args, Bind, State1} = case Translated of
+        #{~"kind" := ~"return", ~"values" := Values} ->
+            {Values, none, Next};
+        _ ->
+            [#c_clause{pats = Patterns} | _] = Clauses,
+            {Vars, BoundState} = lists:mapfoldl(fun(_, Acc) ->
+                Var = var_node(#{~"generated" => Acc#state.next_var}, Anno),
+                {Var, Acc#state{next_var = Acc#state.next_var + 1}}
+            end, Next, lists:seq(1, length(Patterns))),
+            {Vars, {Vars, Translated}, BoundState}
+    end,
+    Scrutinees = case Arg of
+        #c_values{es = Elements} -> Elements;
+        _ -> [Arg]
+    end,
+    {TranslatedClauses, State2} = lists:mapfoldl(fun(#c_clause{pats = Patterns} = Clause, Acc) ->
+        Facts = Acc#state.size_facts,
+        Bound = [Binding || {Scrutinee, Pattern} <- lists:zip(Scrutinees, Patterns, trim),
+                            Fact <- [size_fact(Scrutinee, Facts)], Fact =/= unknown,
+                            Binding <- pattern_facts(Pattern, Fact, false)],
+        {TranslatedClause, ClauseState} =
+            clause(Clause, Acc#state{size_facts = maps:merge(Facts, maps:from_list(Bound))}),
+        {TranslatedClause, ClauseState#state{size_facts = Facts}}
+    end, State1, Clauses),
+    Match = node(~"match", Anno, #{~"expressions" => Args, ~"cases" => TranslatedClauses}),
+    case Bind of
+        none -> {Match, State2};
+        {Binders, Computation} ->
+            {node(~"bind", Anno, #{~"vars" => Binders,
+                ~"computation" => Computation, ~"body" => Match}), State2}
+    end.
 
 expression_local_function(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
              #c_fun{vars = Vars} = Fun}], body = Body}, State0) ->

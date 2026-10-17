@@ -164,7 +164,8 @@ private def purePredicate : Predicate where
   shared := ``Result.IsPure.shared
   rules := [(``Bind.bind, ``Result.IsPure.bind), (``Result.bind, ``Result.IsPure.bind_explicit),
     (``Result.guard, ``Result.IsPure.guard), (``Result.tryWith, ``Result.IsPure.tryWith),
-    (``Result.handle, ``Result.IsPure.handle)]
+    (``Result.handle, ``Result.IsPure.handle), (``Result.orElse, ``Result.IsPure.orElse),
+    (``Result.andAlso, ``Result.IsPure.andAlso)]
 
 private def partialPredicate : Predicate where
   name := ``Result.IsPartial
@@ -175,7 +176,8 @@ private def partialPredicate : Predicate where
   shared := ``Result.IsPartial.shared
   rules := [(``Bind.bind, ``Result.IsPartial.bind),
     (``Result.bind, ``Result.IsPartial.bind_explicit), (``Result.guard, ``Result.IsPartial.guard),
-    (``Result.tryWith, ``Result.IsPartial.tryWith), (``Result.handle, ``Result.IsPartial.handle)]
+    (``Result.tryWith, ``Result.IsPartial.tryWith), (``Result.handle, ``Result.IsPartial.handle),
+    (``Result.orElse, ``Result.IsPartial.orElse), (``Result.andAlso, ``Result.IsPartial.andAlso)]
   stronger := some ("_pure", ``Result.IsPure.isPartial)
 
 -- Core's guard fallthroughs are applied lambdas. Abstract their continuation

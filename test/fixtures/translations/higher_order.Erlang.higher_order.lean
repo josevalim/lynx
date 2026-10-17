@@ -37,16 +37,11 @@ def «map/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
     pure (Lynx.Term.tuple #[_3])
 
 #lynx_pure
-  def «map_returns_list_requires/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result := do
-    let lynxGenerated0 ← «proper_list/1» _0
-    match lynxGenerated0 with
-      | Lynx.Term.atom "true" => do
-        let _8 ← pure (Lynx.Term.function 0 1 #[])
-        let _5 ← pure (Lynx.Term.function 1 1 #[])
-        Erlang.lists.«member/2» _1 (Lynx.Term.cons _8 (Lynx.Term.cons _5 Lynx.Term.nil))
-      | Lynx.Term.atom "false" => pure (Lynx.Term.atom "false")
-      | _2 =>
-        Lynx.Result.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "badarg", _2]))
+  def «map_returns_list_requires/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
+    Lynx.Result.andAlso («proper_list/1» _0) do
+      let _8 ← pure (Lynx.Term.function 0 1 #[])
+      let _5 ← pure (Lynx.Term.function 1 1 #[])
+      Erlang.lists.«member/2» _1 (Lynx.Term.cons _8 (Lynx.Term.cons _5 Lynx.Term.nil))
 
 def «map_returns_list_ensures/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result := do
   let _2 ← «map/2» _0 _1

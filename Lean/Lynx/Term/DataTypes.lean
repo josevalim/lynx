@@ -251,6 +251,38 @@ continuation propagate to an enclosing handler. -/
 @[simp] theorem tryWith_exhausted (next : α → Result β) (handler : Exception → Result β) :
     Result.tryWith .exhausted next handler = .exhausted := rfl
 
+/-- Erlang `orelse`. The right operand is selected only after the left one
+returns `false`; other values raise `badarg`. Like `||`, compiled code inlines
+it so that the right operand is not evaluated before the choice. -/
+@[expose, macro_inline] def orElse (left right : Result) : Result :=
+  Result.bind left fun value => match value with
+    | .atom "true" => .ok (.atom "true")
+    | .atom "false" => right
+    | other => .error (.error (.tuple #[.atom "badarg", other]))
+
+/-- Erlang `andalso`. The right operand is selected only after the left one
+returns `true`; other values raise `badarg`. Like `&&`, compiled code inlines
+it so that the right operand is not evaluated before the choice. -/
+@[expose, macro_inline] def andAlso (left right : Result) : Result :=
+  Result.bind left fun value => match value with
+    | .atom "true" => right
+    | .atom "false" => .ok (.atom "false")
+    | other => .error (.error (.tuple #[.atom "badarg", other]))
+
+/-- Proofs see the case on the left operand that Core's lowering produces. -/
+@[simp] theorem orElse_eq (left right : Result) :
+    orElse left right = left >>= fun value => match value with
+      | .atom "true" => .ok (.atom "true")
+      | .atom "false" => right
+      | other => .error (.error (.tuple #[.atom "badarg", other])) := rfl
+
+/-- Proofs see the case on the left operand that Core's lowering produces. -/
+@[simp] theorem andAlso_eq (left right : Result) :
+    andAlso left right = left >>= fun value => match value with
+      | .atom "true" => right
+      | .atom "false" => .ok (.atom "false")
+      | other => .error (.error (.tuple #[.atom "badarg", other])) := rfl
+
 instance : MonadExceptOf Exception @Result where
   throw := .error
   tryCatch := Result.handle
@@ -396,6 +428,18 @@ theorem IsPure.shared (next : α → Result β) (body : (α → Result β) → R
     IsPure (Result.tryWith computation next handler) := by
   cases computation <;> simp_all [IsPure, Result.tryWith, Result.bind, Result.handle]
 
+@[simp↓] theorem IsPure.orElse (left right : Result) (leftPure : IsPure left)
+    (rightPure : IsPure right) : IsPure (Result.orElse left right) := by
+  apply IsPure.bind_explicit _ _ leftPure
+  intro value
+  split <;> simp_all [IsPure]
+
+@[simp↓] theorem IsPure.andAlso (left right : Result) (leftPure : IsPure left)
+    (rightPure : IsPure right) : IsPure (Result.andAlso left right) := by
+  apply IsPure.bind_explicit _ _ leftPure
+  intro value
+  split <;> simp_all [IsPure]
+
 /-- A partial computation makes no runtime requests, but may not return: it is
 pure or exhausted. Definitions with termination suffixes or cutoffs are partial. -/
 @[expose] def IsPartial : Result α → Prop
@@ -457,6 +501,18 @@ theorem IsPartial.tryWith (computation : Result α) (next : α → Result β)
     IsPartial (Result.tryWith computation next handler) := by
   cases computation <;> simp_all [IsPartial, Result.tryWith, Result.bind, Result.handle]
 
+theorem IsPartial.orElse (left right : Result) (leftPartial : IsPartial left)
+    (rightPartial : IsPartial right) : IsPartial (Result.orElse left right) := by
+  apply IsPartial.bind_explicit _ _ leftPartial
+  intro value
+  split <;> simp_all [IsPartial]
+
+theorem IsPartial.andAlso (left right : Result) (leftPartial : IsPartial left)
+    (rightPartial : IsPartial right) : IsPartial (Result.andAlso left right) := by
+  apply IsPartial.bind_explicit _ _ leftPartial
+  intro value
+  split <;> simp_all [IsPartial]
+
 /-- A guard may read its process environment, but cannot modify it, schedule,
 or make unresolved calls. Every environment read must eventually terminate. -/
 @[expose] def IsReadOnly : Result α → Prop
@@ -513,6 +569,18 @@ or make unresolved calls. Every environment read must eventually terminate. -/
     cases reply with
     | ok value => exact nextReadOnly value
     | error exception => exact handlerReadOnly exception
+
+@[simp↓] theorem IsReadOnly.orElse (left right : Result) (leftReadOnly : IsReadOnly left)
+    (rightReadOnly : IsReadOnly right) : IsReadOnly (Result.orElse left right) := by
+  apply IsReadOnly.bind _ _ leftReadOnly
+  intro value
+  split <;> simp_all
+
+@[simp↓] theorem IsReadOnly.andAlso (left right : Result) (leftReadOnly : IsReadOnly left)
+    (rightReadOnly : IsReadOnly right) : IsReadOnly (Result.andAlso left right) := by
+  apply IsReadOnly.bind _ _ leftReadOnly
+  intro value
+  split <;> simp_all
 
 /-- Evaluate a proven read-only computation without invoking the scheduler. -/
 @[expose] def toExceptRead (computation : Result α) (env : Environment)

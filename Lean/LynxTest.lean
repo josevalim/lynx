@@ -8,6 +8,7 @@ import LynxTest.Term.Bitstring.Matching
 import LynxTest.Term.Compare
 import LynxTest.Term.Maps
 import LynxTest.Term.Order
+import LynxTest.Term.ShortCircuit
 import LynxTest.Modules.Erlang
 import LynxTest.Modules.Maps
 import LynxTest.Modules.ErtsInternal
