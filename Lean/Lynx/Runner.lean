@@ -1332,7 +1332,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       let option := mkIdent `maxHeartbeats
       pure (Unhygienic.run `(set_option $option:ident $limit:num in $declaration:command))
   | "def" => do
-    fields j ["kind", "name", "params", "body", "purity", "span", "termination_suffix"]
+    fields j ["kind", "name", "params", "body", "purity", "span", "termination_suffix", "measure"]
     let params ← (← arr j "params").mapM (param map info)
     let name := functionName (← str j "name") params.size
     let termType := mkIdent ``Lynx.Term
@@ -1340,15 +1340,33 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     let binders := params.map fun p => Unhygienic.run `(bracketedBinder| ($p : $termType))
     let body ← term map info false (← field j "body")
     let declaration := Unhygienic.run `(def $name $binders:bracketedBinder* : $resultType := $body)
-    match field j "termination_suffix" with
-    | .error _ => pure declaration
-    | .ok annotation =>
-      if (← purity j "purity") == "pure" then throw "a function with a termination suffix cannot be pure"
-      let suffix ← leanSuffix map info name.getId annotation
-      -- A simple definition has a declValSimple containing :=, body, suffix, and where.
+    -- A simple definition has a declValSimple containing :=, body, suffix, and where.
+    let attach (suffix : Syntax) : TSyntax `command :=
       let definition := declaration.raw[1]
       let value := definition[3].setArg 2 suffix
-      pure ⟨declaration.raw.setArg 1 (definition.setArg 3 value)⟩
+      ⟨declaration.raw.setArg 1 (definition.setArg 3 value)⟩
+    match field j "termination_suffix", field j "measure" with
+    | .ok annotation, _ =>
+      if (← purity j "purity") == "pure" then throw "a function with a termination suffix cannot be pure"
+      pure (attach (← leanSuffix map info name.getId annotation))
+    | .error _, .ok coordinates =>
+      -- Lexicographic coordinates are constants or a parameter's size plus an offset.
+      let coordinates ← (← coordinates.getArr?).mapM fun coordinate => do
+        if let .ok value := field coordinate "const" then
+          fields coordinate ["const"]
+          pure (⟨Syntax.mkNumLit (toString (← value.getNat?))⟩ : TSyntax `term)
+        else
+          fields coordinate ["param", "offset"]
+          let index ← (← field coordinate "param").getNat?
+          let offset ← (← field coordinate "offset").getNat?
+          let some p := params[index]? | throw "measure parameter is out of range"
+          let size := Unhygienic.run `(sizeOf $p)
+          if offset == 0 then pure size
+          else pure (Unhygienic.run `($(Syntax.mkNumLit (toString offset)) + $size))
+      if coordinates.isEmpty then throw "measure must have at least one coordinate"
+      let measure ← product coordinates
+      pure (attach (Unhygienic.run `(Parser.Termination.suffix| termination_by $measure)))
+    | .error _, .error _ => pure declaration
   | _ => throw s!"unsupported command kind '{kind}'"
   let level ← if kind ∈ ["def", "mutual"] then purity j "purity" else pure "sequential"
   -- A mutual group gets one joint purity proof, rather than wrapping its members.

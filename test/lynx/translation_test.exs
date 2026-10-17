@@ -110,6 +110,43 @@ defmodule Lynx.TranslationTest do
     assert Enum.find_index(groups, &("first" in &1)) < caller
   end
 
+  test "termination suffixes take precedence over inferred group measures" do
+    core =
+      cerl("""
+      -module(example).
+      -export([outer/3]).
+
+      outer([X | Xs], Ys, Zs) -> middle(Ys, Xs, Ys, Zs, X);
+      outer([], _, _) -> [].
+      middle([Y | Rest], Xs, Ys, Zs, X) -> inner(Zs, Rest, Xs, Ys, Zs, {X, Y});
+      middle([], Xs, Ys, Zs, _) -> outer(Xs, Ys, Zs).
+      inner([Z | Rest], Pending, Xs, Ys, Zs, Pair) ->
+          [{Pair, Z} | inner(Rest, Pending, Xs, Ys, Zs, Pair)];
+      inner([], Pending, Xs, Ys, Zs, {X, _}) -> middle(Pending, Xs, Ys, Zs, X).
+      """)
+
+    measures = fn suffixes ->
+      assert [%{"contents" => [%{"kind" => "mutual", "defs" => defs}]}] =
+               Translation.new(termination_suffixes: suffixes)
+               |> Translation.add({"example.erl", core})
+               |> Translation.translate(:example, [{:outer, 3}])
+               |> Translation.assemble(cache: false)
+
+      Map.new(defs, &{&1["name"], &1["measure"]})
+    end
+
+    assert %{
+             "outer" => [%{"param" => 0, "offset" => 0}, %{"const" => 0}, %{"const" => 0}],
+             "middle" => [_, _, _],
+             "inner" => [_, _, _]
+           } = measures.(%{})
+
+    suffix = %Lynx.Lean{source: "termination_by 0", file: "example.erl", span: 1, indentation: 0}
+
+    assert %{"outer" => nil, "middle" => nil, "inner" => nil} =
+             measures.(%{{:example, :inner, 6} => suffix})
+  end
+
   test "only translates requested roots" do
     core =
       cerl("""

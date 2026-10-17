@@ -550,8 +550,8 @@ defmodule Lynx.Translation do
     graph = :digraph.new()
 
     try do
-      for {name, %{translation: translation, purity: purity}} <- functions do
-        :digraph.add_vertex(graph, name, {translation, purity})
+      for {name, _definition} <- functions do
+        :digraph.add_vertex(graph, name)
       end
 
       # Edges point from callees to callers, so dependencies are emitted first.
@@ -565,7 +565,7 @@ defmodule Lynx.Translation do
 
       groups = topsort(components, &declaration_location(functions, &1))
       :digraph.delete(components)
-      for group <- groups, do: emit_group(group, graph)
+      for group <- groups, do: emit_group(group, functions)
     after
       :digraph.delete(graph)
     end
@@ -621,10 +621,10 @@ defmodule Lynx.Translation do
     end
   end
 
-  defp emit_group(names, graph) do
+  defp emit_group(names, functions) do
     {defs, purity} =
       Enum.map_reduce(names, :pure, fn name, purity ->
-        {^name, {translation, definition_purity}} = :digraph.vertex(graph, name)
+        %{translation: translation, purity: definition_purity} = Map.fetch!(functions, name)
 
         definition =
           if translation["kind"] == "def",
@@ -642,7 +642,152 @@ defmodule Lynx.Translation do
         definition
 
       _ ->
+        defs = group_measures(names, defs, functions)
         %{"kind" => "mutual", "span" => span, "defs" => defs, "purity" => Atom.to_string(purity)}
     end
+  end
+
+  # Lean infers termination from parameter sizes and from an order between the
+  # functions of a mutual group. Some groups need each function to weigh its
+  # parameters differently, such as nested loops that resume their enclosing
+  # loop: the outer loop has no counterpart for the inner loop's progress, as in
+  # comprehensions with three generators. For those groups, each definition gets
+  # a lexicographic measure whose coordinates are constants or `sizeOf` of a
+  # parameter plus an offset. Lean still checks every descent.
+  @measure_budget 100_000
+
+  defp group_measures(names, defs, functions) do
+    if Enum.any?(defs, &Map.has_key?(&1, "termination_suffix")) do
+      defs
+    else
+      index = names |> Enum.with_index() |> Map.new()
+
+      calls =
+        for {name, caller} <- Enum.with_index(names),
+            {callee, args} <- Map.fetch!(functions, name).size_calls,
+            Map.has_key?(index, callee),
+            # A self-call decreases only through an argument bound strictly inside
+            # its parameter. Lean checks every call of the resulting measures, so
+            # self-calls without one, such as those removed by Lean's preprocessing,
+            # are not searched.
+            caller != index[callee] or Enum.any?(args, &match?({_, :lt}, &1)),
+            do: {caller, index[callee], args}
+
+      sizes = fn offsets ->
+        for definition <- defs do
+          for param <- 0..(length(definition["params"]) - 1)//1,
+              offset <- offsets,
+              do: {:size, param, offset}
+        end
+      end
+
+      # Lean finds measures from parameter sizes and function orders on its own.
+      with :error <- lexicographic(sizes.([0]), length(defs), calls),
+           {:ok, coordinates} <-
+             lexicographic(Enum.map(sizes.([0, 1]), &[{:const, 0} | &1]), length(defs), calls) do
+        for {definition, index} <- Enum.with_index(defs) do
+          measure =
+            Enum.map(coordinates, fn coordinate ->
+              case Enum.at(coordinate, index) do
+                {:const, value} -> %{"const" => value}
+                {:size, param, offset} -> %{"param" => param, "offset" => offset}
+              end
+            end)
+
+          Map.put(definition, "measure", measure)
+        end
+      else
+        _ -> defs
+      end
+    end
+  end
+
+  # Whether a call strictly decreases a coordinate, keeps it equal, or neither.
+  # Only equal coordinates move on to the next one, so Lean's default tactic
+  # proves each descent.
+  defp compare_rank(_args, {:const, a}, {:const, b}),
+    do: if(a > b, do: :gt, else: if(a == b, do: :eq, else: :fail))
+
+  defp compare_rank(_args, {:size, _, offset}, {:const, value}),
+    do: if(offset > value, do: :gt, else: :fail)
+
+  defp compare_rank(_args, {:const, _}, {:size, _, _}), do: :fail
+
+  defp compare_rank(args, {:size, param, offset}, {:size, callee, callee_offset}) do
+    case Enum.at(args, callee) do
+      {^param, :lt} when offset >= callee_offset -> :gt
+      {^param, :eq} when offset > callee_offset -> :gt
+      {^param, :eq} when offset == callee_offset -> :eq
+      _ -> :fail
+    end
+  end
+
+  defp compare_call({caller, callee, args}, coordinate),
+    do: compare_rank(args, Enum.at(coordinate, caller), Enum.at(coordinate, callee))
+
+  # Greedily build coordinates until every call strictly decreases.
+  defp lexicographic(_candidates, _functions, []), do: {:ok, []}
+
+  defp lexicographic(candidates, functions, calls) do
+    # Ordering the functions is a coordinate Lean always considers.
+    orders =
+      for function <- 0..(functions - 1)//1 do
+        for other <- 0..(functions - 1)//1, do: {:const, if(function == other, do: 1, else: 0)}
+      end
+
+    options =
+      List.wrap(best_coordinate(candidates, calls)) ++
+        for order <- orders,
+            results = Enum.map(calls, &compare_call(&1, order)),
+            :fail not in results,
+            do: {order, Enum.count(results, &(&1 == :gt))}
+
+    case Enum.max_by(options, &elem(&1, 1), fn -> nil end) do
+      {coordinate, strict} when strict > 0 ->
+        remaining = Enum.reject(calls, &(compare_call(&1, coordinate) == :gt))
+
+        with {:ok, coordinates} <- lexicographic(candidates, functions, remaining),
+             do: {:ok, [coordinate | coordinates]}
+
+      _ ->
+        :error
+    end
+  end
+
+  # The coordinate deciding the most calls while keeping the others equal,
+  # assigning ranks function by function and pruning failed calls early.
+  defp best_coordinate(candidates, calls) do
+    {best, _budget} = assign_ranks(candidates, [], calls, {nil, @measure_budget})
+    best
+  end
+
+  defp assign_ranks([], chosen, calls, {best, budget}) do
+    strict = Enum.count(calls, &(compare_call(&1, chosen) == :gt))
+
+    if strict > 0 and strict > elem(best || {nil, 0}, 1),
+      do: {{chosen, strict}, budget},
+      else: {best, budget}
+  end
+
+  defp assign_ranks([ranks | rest], chosen, calls, acc) do
+    index = length(chosen)
+
+    Enum.reduce_while(ranks, acc, fn rank, {best, budget} ->
+      chosen = chosen ++ [rank]
+
+      cond do
+        budget == 0 ->
+          {:halt, {best, 0}}
+
+        Enum.any?(calls, fn {caller, callee, _} = call ->
+          caller <= index and callee <= index and index in [caller, callee] and
+              compare_call(call, chosen) == :fail
+        end) ->
+          {:cont, {best, budget - 1}}
+
+        true ->
+          {:cont, assign_ranks(rest, chosen, calls, {best, budget - 1})}
+      end
+    end)
   end
 end

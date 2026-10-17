@@ -13,9 +13,12 @@
 
 %% Anonymous functions use integer keys; named functions use {Module, {Name, Arity}}.
 %% Every entry carries a global integer ID for ordering and dispatch.
+%% size_facts maps variables to the parameter they equal or are strictly
+%% smaller than; size_calls records what each local call passes, so groups
+%% of recursive definitions can be given termination measures.
 -record(state, {module, name, defs, translated, laws = #{}, funs = #{},
                 local_calls = #{}, purity = pure, remote, next_var = 0, labels = #{},
-                local_funs = #{}}).
+                local_funs = #{}, size_facts = #{}, size_calls = []}).
 
 -spec module_name(module()) -> binary().
 module_name(Module) ->
@@ -199,7 +202,10 @@ translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensure
     State2#state{laws = (State2#state.laws)#{Name => Theorem}}.
 
 translate_definition(Name, Anno, Vars, Definition, State0) ->
+    Facts = maps:from_list([{Var, {Index, eq}} ||
+        {#c_var{name = Var}, Index} <- lists:zip(Vars, lists:seq(0, length(Vars) - 1))]),
     State1 = State0#state{name = Name, local_calls = #{}, purity = pure, next_var = 0, labels = #{},
+                          size_facts = Facts, size_calls = [],
                           translated = (State0#state.translated)#{Name => pending}},
     {Def, State2} = case Definition of
         cutoff ->
@@ -217,6 +223,7 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
             }), Next}
     end,
     Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls),
+              size_calls => lists:reverse(State2#state.size_calls),
               purity => State2#state.purity},
     State0#state{translated = (State2#state.translated)#{Name => Entry},
                  funs = State2#state.funs, remote = State2#state.remote}.
@@ -295,7 +302,19 @@ expression(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
             end, Next, lists:seq(1, length(Patterns))),
             {Vars, {Vars, Translated}, BoundState}
     end,
-    {TranslatedClauses, State2} = lists:mapfoldl(fun clause/2, State1, Clauses),
+    Scrutinees = case Arg of
+        #c_values{es = Elements} -> Elements;
+        _ -> [Arg]
+    end,
+    {TranslatedClauses, State2} = lists:mapfoldl(fun(#c_clause{pats = Patterns} = Clause, Acc) ->
+        Facts = Acc#state.size_facts,
+        Bound = [Binding || {Scrutinee, Pattern} <- lists:zip(Scrutinees, Patterns, trim),
+                            Fact <- [size_fact(Scrutinee, Facts)], Fact =/= unknown,
+                            Binding <- pattern_facts(Pattern, Fact, false)],
+        {TranslatedClause, ClauseState} =
+            clause(Clause, Acc#state{size_facts = maps:merge(Facts, maps:from_list(Bound))}),
+        {TranslatedClause, ClauseState#state{size_facts = Facts}}
+    end, State1, Clauses),
     Match = node(~"match", Anno, #{~"expressions" => Args, ~"cases" => TranslatedClauses}),
     case Bind of
         none -> {Match, State2};
@@ -426,8 +445,9 @@ expression_apply(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args} = 
                 Name -> State2#state.local_calls;
                 _ -> (State2#state.local_calls)#{Name => true}
             end,
+            SizeCall = {Name, [size_fact(Arg, State2#state.size_facts) || Arg <- Args]},
             {local_call_node(function_name(Name), TranslatedArgs, Anno),
-             State2#state{local_calls = Calls}}
+             State2#state{local_calls = Calls, size_calls = [SizeCall | State2#state.size_calls]}}
     end.
 
 %% Erlang: f([]) -> ok.
@@ -461,6 +481,24 @@ prim_op(match_fail, Anno, [Reason], State0) ->
     {node(~"raise", Anno, #{~"class" => ~"error", ~"reason" => Translated}), State1};
 prim_op(Op, Anno, Args, _State) ->
     unsupported(#c_primop{anno = Anno, name = #c_literal{val = Op}, args = Args}).
+
+%% What is known about a value's size: equal to a parameter, strictly smaller
+%% than one when bound inside a pattern matching it, or unknown.
+size_fact(#c_var{name = Name}, Facts) -> maps:get(Name, Facts, unknown);
+size_fact(_, _Facts) -> unknown.
+
+pattern_facts(#c_var{name = Name}, {Param, _} = Fact, Inside) ->
+    [{Name, case Inside of true -> {Param, lt}; false -> Fact end}];
+pattern_facts(#c_alias{var = Var, pat = Pattern}, Fact, Inside) ->
+    pattern_facts(Var, Fact, Inside) ++ pattern_facts(Pattern, Fact, Inside);
+pattern_facts(#c_cons{hd = Head, tl = Tail}, Fact, _Inside) ->
+    pattern_facts(Head, Fact, true) ++ pattern_facts(Tail, Fact, true);
+pattern_facts(#c_tuple{es = Elements}, Fact, _Inside) ->
+    lists:append([pattern_facts(Element, Fact, true) || Element <- Elements]);
+pattern_facts(#c_map{es = Pairs}, Fact, _Inside) ->
+    lists:append([pattern_facts(Value, Fact, true) || #c_map_pair{val = Value} <- Pairs]);
+pattern_facts(_Pattern, _Fact, _Inside) ->
+    [].
 
 clause(#c_clause{anno = Anno, pats = Patterns, guard = #c_literal{val = true}, body = Body}, State0) ->
     {Pats, State1} = lists:mapfoldl(fun value/2, State0, Patterns),
@@ -739,7 +777,8 @@ local_function_value(Lifted, Captures, Arity, Anno, State0) ->
             Definition = node(~"def", Anno, #{
                 ~"name" => function_name(Name), ~"params" => CaptureArgs ++ Args,
                 ~"body" => local_call_node(function_name(Lifted), Args ++ CaptureArgs, Anno)}),
-            Wrapper = #{translation => Definition, local_calls => [Lifted], purity => pure},
+            Wrapper = #{translation => Definition, local_calls => [Lifted], size_calls => [],
+                        purity => pure},
             State4 = State3#state{translated = (State3#state.translated)#{Name => Wrapper}},
             function_node(Entry, Anno, State4)
     end.
