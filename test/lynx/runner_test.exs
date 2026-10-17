@@ -46,7 +46,7 @@ defmodule Lynx.RunnerTest do
   test "imports both dependency branches and theorems from their shared dependency" do
     contents = [
       definition("ensures", success()),
-      theorem("law", "exact Elixir.Source.«law/0»", "sequential")
+      theorem("law", "exact Elixir.Source.«law/0»")
     ]
 
     files = [
@@ -61,9 +61,9 @@ defmodule Lynx.RunnerTest do
         "Elixir.Join",
         [
           definition("ensures", success()),
-          theorem("left", "exact Elixir.Left.«law/0»", "sequential"),
-          theorem("right", "exact Elixir.Right.«law/0»", "sequential"),
-          theorem("source", "exact Elixir.Source.«law/0»", "sequential")
+          theorem("left", "exact Elixir.Left.«law/0»"),
+          theorem("right", "exact Elixir.Right.«law/0»"),
+          theorem("source", "exact Elixir.Source.«law/0»")
         ],
         ["Elixir.Left", "Elixir.Right"]
       )
@@ -268,8 +268,6 @@ defmodule Lynx.RunnerTest do
     }
   end
 
-  # Pure and partial laws receive the direct statement; the others prove it
-  # through `Lynx.run`.
   defp theorem(name, proof, purity \\ "pure") do
     %{
       "kind" => "theorem",
@@ -839,8 +837,6 @@ defmodule Lynx.RunnerDiagnosticsTest do
     }
   end
 
-  # Pure and partial laws receive the direct statement; the others prove it
-  # through `Lynx.run`.
   defp theorem(name, proof, purity \\ "pure") do
     %{
       "kind" => "theorem",

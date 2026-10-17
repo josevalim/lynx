@@ -37,21 +37,9 @@ defmodule Lynx do
 
       def «sum/1» (_0 : Lynx.Term) : Lynx.Result
 
-  Each law becomes a Lean theorem stating that its helpers return `true` through
-  `Lynx.run`, which executes a computation against the program's function table:
-
-      theorem «law/1» (x : Lynx.Term)
-          (requires : Lynx.run («law:requires/1» x) table 100 = .ok Lynx.Term.true) :
-          Lynx.run («law:ensures/1» x) table 100 = .ok Lynx.Term.true
-
-  Helpers that may spawn, send, or receive are stated through `Lynx.schedule`
-  instead: the precondition under some scheduler choices, and the expectation
-  under all of them. When the expectation makes no runtime requests, the proof
-  receives the direct goal `«law:ensures/1» x = .ok Lynx.Term.true`, together with
-  a direct `requires` hypothesis when the precondition is pure. Otherwise,
-  `Lynx.IsPure.run_eq_ok_iff` reduces a pure precondition to that form, and
-  `Lynx.run_of_resolve` proves goals whose function calls resolve through the
-  table. Proofs citing other laws receive their `Lynx.run` statements.
+  Each law becomes a Lean theorem whose parameters are the law's arguments, whose
+  hypothesis states that `requires:` returns `true`, and whose goal states that
+  `expects:` returns `true`. Your proof is elaborated against that theorem as is.
 
   The Lean source code is present in the "Lean" folder of the Lynx project. Besides
   the basic definition of Erlang terms, it also contains the implementation of Erlang
@@ -61,7 +49,61 @@ defmodule Lynx do
   Furthermore, when running proofs with ExUnit, the error reports include the path to
   folder with all `.lean` files. Use this to debug and guide your proofs.
 
-  ## Guidelines
+  ### Purity model
+
+  To choose how each side of a law is stated, Lynx tracks the purity of every
+  translated function. A function has the purity of the most impure code it
+  reaches, through its own body and every function it calls:
+
+    * `pure` — returns a value or raises an exception without consulting the
+      runtime. Exceptions are part of the result, so code that raises is pure.
+
+    * `partial` — pure, except that it may not return. Functions with a
+      `termination_suffix` or a `cutoff`, and their callers, are partial.
+
+    * `sequential` — runs in a single process, but uses the process dictionary,
+      references, `self()`, or invokes anonymous functions, which are resolved
+      against the program's function table.
+
+    * `concurrent` — may spawn processes, send messages, or receive them.
+      Invoking anonymous functions is concurrent when any function in the
+      program's table is.
+
+  Each law then uses the strongest construction its purity allows:
+
+    * Pure and partial expectations, and pure preconditions, are stated directly:
+
+          theorem «law/1» (x : Lynx.Term)
+              (requires : «law:requires/1» x = .ok Lynx.Term.true) :
+              «law:ensures/1» x = .ok Lynx.Term.true
+
+    * Sequential code, and partial preconditions, are stated through `Lynx.run`,
+      which executes the code from a fresh runtime against the function table:
+
+          Lynx.run («law:ensures/1» x) table 100 = .ok Lynx.Term.true
+
+    * Concurrent code is stated through `Lynx.schedule`, which also takes the
+      scheduler's choices. The precondition must hold under some schedule, and
+      the expectation under all of them:
+
+          (requires : ∃ schedule, Lynx.schedule («law:requires/1» x) schedule table 100 = .ok Lynx.Term.true)
+          (schedule : List Lynx.ScheduleChoice) :
+          Lynx.schedule («law:ensures/1» x) schedule table 100 = .ok Lynx.Term.true
+
+  Both `Lynx.run` and `Lynx.schedule` start from a fresh runtime: a single
+  process, with an empty process dictionary, and an empty mailbox. The
+  precondition and the expectation each start from this runtime separately,
+  so nothing stored or sent by one is visible to the other. Laws over sequential
+  and concurrent code therefore describe a freshly started process. For example,
+  `Process.get(:key) == nil` is provable, even though it does not hold in a
+  process that has stored `:key`.
+
+  A direct statement is the strongest: code that returns `true` directly also does
+  so when run, under every schedule. Partial preconditions are run because Lean
+  cannot confirm that they make no runtime requests. Proofs citing other laws
+  receive the statements of those laws.
+
+  ### Guidelines
 
   A few tools and proof patterns help when working with existing library code:
 
@@ -76,7 +118,8 @@ defmodule Lynx do
       dependencies. It returns an exhausted computation, so a proof of a
       successful result must establish that the cutoff is never reached.
       A cutoff does not assume a return value or an exception. Keep reachable
-      behavior translated and prove the actual implementation.
+      behavior translated and prove the actual implementation. The cutoff
+      function, and every function calling it, is marked as partial.
 
     * Use `termination_suffix &Module.function/arity, ~LEAN"..."` inside a group
       when Lean cannot infer termination of a translated recursive function.
@@ -84,7 +127,8 @@ defmodule Lynx do
       `partial_fixpoint` with a monotonicity proof when totality depends on the
       law's input domain. In the latter case, use the generated `.eq_def`
       equation and induction on a decreasing measure to establish that calls
-      in the domain return. The suffix alone does not prove totality.
+      in the domain return. The suffix alone does not prove totality. The
+      function, and every function calling it, is marked as partial.
 
     * Inspect the generated Lean before writing the proof. BEAM compilation
       can inline helpers or replace arithmetic with bit operations. Prove

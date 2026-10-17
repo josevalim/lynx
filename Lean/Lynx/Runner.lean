@@ -34,13 +34,13 @@ sequentially. Dependent files import the prelude before their embedded proofs
 and termination suffixes are parsed; no declarations leak through request order.
 Theorem nodes contain name, named params, an optional requires helper, an ensures helper,
 and a proof object. Helpers are ordinary Result computations called with the theorem's
-parameters and stated to return true through `Lynx.run` with depth 100. An absent requires
-helper means no assumption. An optional table names the program's function table; it
-defaults to empty. Each helper carries its purity: `pure`, `partial`, `sequential`, or
-`concurrent`. Concurrent helpers are stated through `Lynx.schedule` instead: the requires
-helper under some schedule, and the ensures helper under every schedule. When the ensures
-helper is pure or partial, the proof receives its direct statement, as it does a pure
-requires helper.
+parameters. Each helper carries its purity: `pure`, `partial`, `sequential`, or `concurrent`,
+which selects how it is stated to return true. Pure and partial ensures helpers, and pure
+requires helpers, are stated directly as `= .ok true`. Other helpers are stated through
+`Lynx.run` with depth 100, except concurrent ones, which are stated through `Lynx.schedule`:
+the requires helper under some schedule, and the ensures helper under every schedule.
+An absent requires helper means no assumption. An optional table names the program's
+function table; it defaults to empty. Proofs are elaborated against these statements as given.
 Definitions, mutual groups, and table entries carry the same purity; only `pure` ones receive
 generated purity lemmas.
 A proof object contains tactic source, nonnegative indentation, and a span locating
@@ -1278,12 +1278,8 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     let requirement ← match field j "requires" with
       | .error _ => pure none
       | .ok value => do
-        let helper ← value.getStr?
-        let callee := functionName helper arity
-        -- Pure helpers have `<name>_pure` lemmas.
-        let lemma := mkIdent (Name.mkSimple s!"{helper}/{arity}_pure")
-        pure (some (Unhygienic.run `($callee $args*), Unhygienic.run `($lemma $args*),
-          ← purity j "requires_purity"))
+        let callee := functionName (← value.getStr?) arity
+        pure (some (Unhygienic.run `($callee $args*), ← purity j "requires_purity"))
     let ensuresName := functionName (← str j "ensures") arity
     let ensures := Unhygienic.run `($ensuresName $args*)
     let ensuresPurity ← purity j "ensures_purity"
@@ -1292,43 +1288,41 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     let table ← match field j "table" with
       | .error _ => pure (Unhygienic.run `(#[]))
       | .ok value => pure (⟨(← identifier (← value.getStr?)).raw⟩ : TSyntax `term)
+    let resultOk := mkIdent ``Lynx.Result.ok
     let ok := mkIdent ``Lynx.Outcome.ok
     let run := mkIdent ``Lynx.run
     let scheduled := mkIdent ``Lynx.schedule
-    let lawOfPure := mkIdent ``Lynx.law_of_pure
-    let lawOfPureRequires := mkIdent ``Lynx.law_of_pure_requires
     let trueTerm := mkIdent ``Lynx.Term.true
     let scheduleType := mkIdent ``Lynx.ScheduleChoice
     let schedule := mkIdent `schedule
     let hypothesis := mkIdent `requires
-    -- Only concurrent helpers range over scheduler choices: the precondition
-    -- under some schedule, and the expectation under every one.
-    let holds (computation : TSyntax `term) (level : String) : TSyntax `term :=
-      if level == "concurrent" then
-        Unhygienic.run `($scheduled $computation $schedule $table 100 = $ok $trueTerm)
-      else Unhygienic.run `($run $computation $table 100 = $ok $trueTerm)
+    -- Each helper is stated as strongly as its purity allows: directly when it
+    -- makes no runtime requests, through `Lynx.run` when it needs the table or
+    -- an environment, and through `Lynx.schedule` when it needs scheduler choices.
+    let direct (computation : TSyntax `term) : TSyntax `term :=
+      Unhygienic.run `($computation = $resultOk $trueTerm)
+    let runs (computation : TSyntax `term) : TSyntax `term :=
+      Unhygienic.run `($run $computation $table 100 = $ok $trueTerm)
+    let schedules (computation : TSyntax `term) : TSyntax `term :=
+      Unhygienic.run `($scheduled $computation $schedule $table 100 = $ok $trueTerm)
+    -- A precondition is assumed directly only when pure: its purity lemma makes
+    -- that equivalent to running it. A partial precondition is run instead.
     let binders := match requirement with
       | none => binders
-      | some (requires, _, level) =>
-        let statement := if level == "concurrent" then
-            Unhygienic.run `(∃ $schedule:ident : List $scheduleType, $(holds requires level))
-          else holds requires level
+      | some (requires, level) =>
+        let statement := match level with
+          | "pure" => direct requires
+          | "concurrent" => Unhygienic.run `(∃ $schedule:ident : List $scheduleType, $(schedules requires))
+          | _ => runs requires
         binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $statement)))
-    let binders := if ensuresPurity == "concurrent" then
-        binders.push (Unhygienic.run `(bracketedBinder| ($schedule : List $scheduleType)))
-      else binders
-    -- An expectation that makes no runtime requests is proven directly. A pure
-    -- precondition is likewise given directly, without its run-form binder.
-    let direct := ["pure", "partial"].contains ensuresPurity
-    let proof := match requirement with
-      | none => if direct then Unhygienic.run `($lawOfPure $proof) else proof
-      | some (_, requiresPure, level) =>
-        if direct && level == "pure" then
-          Unhygienic.run `($lawOfPureRequires $requiresPure
-            (by clear $hypothesis; exact fun $hypothesis => $proof) $hypothesis)
-        else proof
-    let declaration := Unhygienic.run `(theorem $name $binders:bracketedBinder*
-      : $(holds ensures ensuresPurity) := $proof)
+    -- A direct expectation implies it holds when run, under every schedule.
+    let (binders, goal) := match ensuresPurity with
+      | "pure" | "partial" => (binders, direct ensures)
+      | "concurrent" =>
+        (binders.push (Unhygienic.run `(bracketedBinder| ($schedule : List $scheduleType))),
+          schedules ensures)
+      | _ => (binders, runs ensures)
+    let declaration := Unhygienic.run `(theorem $name $binders:bracketedBinder* : $goal := $proof)
     match field j "max_heartbeats" with
     | .error _ => pure declaration
     | .ok value =>

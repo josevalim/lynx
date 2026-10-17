@@ -7,7 +7,6 @@
 -law #{name => {map_returns_list, [list, callback]},
        requires => map_returns_list_requires, ensures => map_returns_list_ensures}.
 -proof ~"""
-rw [Lynx.IsPure.run_eq_ok_iff (by simp)] at requires
 have valid : «proper_list/1» list = .ok Lynx.Term.true ∧
     (callback = .function 0 1 #[] ∨ callback = .function 1 1 #[]) := by
   cases proper : «proper_list/1» list <;>

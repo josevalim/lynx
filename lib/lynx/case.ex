@@ -98,10 +98,11 @@ defmodule Lynx.Case do
       termination_suffix &:calendar.mod/2, ~LEAN"partial_fixpoint"
 
   The source is a `Lynx.Lean` value. It is parsed as part of the function's
-  declaration, after its body. Providing a suffix disables automatic purity
-  proofs (`#lynx_pure`) for the function and its callers, regardless of the suffix
-  contents. They are conservatively classified as impure; purity may be proved
-  separately when needed.
+  declaration, after its body. Regardless of the suffix contents, the function
+  and every function calling it are marked as partial (see the purity model in
+  `Lynx`): they receive no automatic purity proofs (`#lynx_pure`). Laws still
+  state partial expectations directly, but a precondition reaching the function
+  is stated through `Lynx.run`.
   Raises if the target function is not translated by the group's laws.
   """
   defmacro termination_suffix(target, source) do
@@ -190,6 +191,10 @@ defmodule Lynx.Case do
   Erlang exception. A successful-return proof must establish that the cutoff
   is never reached. This supports proofs whose unreachable error paths depend
   on libraries outside the model; it makes no claim about executing those paths.
+
+  The function and every function calling it are marked as partial (see the
+  purity model in `Lynx`). Laws still state partial expectations directly, but
+  a precondition reaching a cutoff is stated through `Lynx.run`.
   """
   defmacro cutoff(target) do
     mfa =

@@ -104,19 +104,4 @@ public theorem run_of_resolve {computation : Result α} {table : Term.FunTable}
     run computation table callDepth = .ok value ↔ computation = .ok value :=
   IsPure.schedule_eq_ok_iff pure
 
-/-- A law holds once its expectation returns `true`. -/
-public theorem law_of_pure {ensures : Result} (proof : ensures = .ok Term.true)
-    {table : Term.FunTable} {callDepth : Nat} :
-    run ensures table callDepth = .ok Term.true := by
-  simp [proof]
-
-/-- A law with a pure precondition holds when the precondition implies the expectation. -/
-public theorem law_of_pure_requires {requires ensures : Result}
-    (requiresPure : requires.IsPure)
-    (proof : requires = .ok Term.true → ensures = .ok Term.true)
-    {table : Term.FunTable} {callDepth : Nat}
-    (holds : run requires table callDepth = .ok Term.true) :
-    run ensures table callDepth = .ok Term.true :=
-  law_of_pure (proof ((IsPure.run_eq_ok_iff requiresPure).mp holds))
-
 end Lynx

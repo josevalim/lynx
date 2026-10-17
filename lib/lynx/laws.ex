@@ -112,16 +112,18 @@ defmodule Lynx.Laws do
   milliseconds. Cached and skipped modules have an empty list.
 
   Pass `termination_suffixes: %{{module, function, arity} => lean_source}` to attach
-  a `Lynx.Lean` termination suffix to a translated function. Providing a suffix
-  disables automatic purity proofs (`#lynx_pure`) for that function and its
-  callers: they are conservatively classified as impure, regardless of the suffix
-  contents. Purity may be proved separately when needed. Targets must be
-  translated by the laws being verified; annotations do not add translation roots.
+  a `Lynx.Lean` termination suffix to a translated function. Regardless of the
+  suffix contents, the function and every function calling it are marked as
+  partial (see the purity model in `Lynx`): they receive no automatic purity
+  proofs (`#lynx_pure`), and preconditions reaching them are stated through
+  `Lynx.run`. Targets must be translated by the laws being verified; annotations
+  do not add translation roots.
 
   Pass `cutoffs: [{module, function, arity}]` to leave selected functions
   untranslated. Calls to these functions evaluate to `Lynx.Result.exhausted`;
   successful-return proofs must show they are unreachable. No return values or
-  exceptions are assumed for a cutoff.
+  exceptions are assumed for a cutoff. Like termination suffixes, cutoffs mark the
+  function and every function calling it as partial.
 
   Pass `preludes: [source, ...]` to load `Lynx.Lean` declaration blocks before
   translated definitions and proofs, as with `Lynx.Case.prelude/1`.
