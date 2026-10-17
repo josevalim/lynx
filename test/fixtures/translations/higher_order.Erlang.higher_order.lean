@@ -12,14 +12,14 @@ section
 
 set_option «match».ignoreUnusedAlts true
 
-def «map/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
-  match _0, _1 with
-  | Lynx.Term.nil, _v_F => pure Lynx.Term.nil
-  | Lynx.Term.cons vHead vTail, vF => do
-    let _3 ← Lynx.Term.apply vF #[vHead]
-    let _2 ← «map/2» vTail vF
+def «map/2» (_0 : Lynx.Term) (_v_F : Lynx.Term) : Lynx.Result :=
+  match _0 with
+  | Lynx.Term.nil => pure Lynx.Term.nil
+  | Lynx.Term.cons vHead vTail => do
+    let _3 ← Lynx.Term.apply _v_F #[vHead]
+    let _2 ← «map/2» vTail _v_F
     pure (Lynx.Term.cons _3 _2)
-  | _5, _4 => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
+  | _5 => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
 
 #lynx_pure
   def «proper_list/1» (_0 : Lynx.Term) : Lynx.Result :=

@@ -1,6 +1,6 @@
 -module(lynx_core_to_leanj).
 
--export([module_name/1, to_definitions/1, translate/6, fun_table/2, join_purity/2]).
+-export([module_name/1, to_definitions/1, translate/7, fun_table/2, join_purity/2]).
 
 %% Purity levels, ordered by what running a definition requires: `pure` needs
 %% nothing, `partial` may not return, `sequential` needs the function table and
@@ -18,7 +18,7 @@
 %% of recursive definitions can be given termination measures.
 -record(state, {module, name, defs, translated, laws = #{}, funs = #{},
                 local_calls = #{}, purity = pure, remote, next_var = 0, labels = #{},
-                local_funs = #{}, size_facts = #{}, size_calls = []}).
+                local_funs = #{}, size_facts = #{}, size_calls = [], suffixed = []}).
 
 -spec module_name(module()) -> binary().
 module_name(Module) ->
@@ -131,19 +131,22 @@ purity_rank(concurrent) -> 4.
 %% Translate the requested functions and laws, plus their reachable local callees.
 %% Laws are returned separately from definitions, keyed by name.
 %% The supplied maps contain this module's definitions and the program-wide function registry.
+%% Suffixed functions have user termination suffixes, which refer to Core's parameter names.
 %% The callback returns remote callee purity. Local purity is propagated by Lynx.Translation.
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
 -spec translate(module(), #{{atom(), arity()} => {function | cutoff, cerl:c_fun()} | {law, map()}}, [{atom(), arity()}], map(), map(),
+                [{atom(), arity()}],
                 {term(), fun((term(), module(), atom(), arity(), list(), map()) ->
                     {purity(), map(), term()} | local)}) ->
     {ok, map(), map(), map(), term()} | {error, list(), binary()}.
-translate(Module, Definitions, Names, Translated, Funs, Remote) ->
+translate(Module, Definitions, Names, Translated, Funs, Suffixed, Remote) ->
     try
         State = #state{
           module = Module,
           defs = Definitions,
           translated = Translated,
           funs = Funs,
+          suffixed = Suffixed,
           remote = Remote
         },
 
@@ -165,7 +168,11 @@ translate_def(Name, #state{translated = Translated, laws = Laws} = State) ->
         false -> translate_def(Name, maps:get(Name, State#state.defs), State)
     end.
 
-translate_def(Name, {function, #c_fun{anno = Anno, vars = Vars, body = Body}}, State) ->
+translate_def(Name, {function, #c_fun{anno = Anno, vars = Vars0, body = Body0}}, State) ->
+    {Vars, Body} = case lists:member(Name, State#state.suffixed) of
+        true -> {Vars0, Body0};
+        false -> rename_parameters(Vars0, Body0)
+    end,
     try translate_definition(Name, Anno, Vars, {function, Body}, State)
     catch
         throw:{error, Core, Reason} ->
@@ -191,6 +198,97 @@ translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensure
         ~"ensures" => atom_to_binary(Ensures, utf8), ~"proof" => Proof
     }),
     State2#state{laws = (State2#state.laws)#{Name => Theorem}}.
+
+%% Core names parameters _0, _1, ... and binds them again in every clause of the
+%% body's case, as in case <_0, _1> of <[H | T], Acc> -> ... When every clause binds
+%% a parameter to a variable, the parameter takes the first source name and the
+%% rebinding is dropped, keeping readable names without matching on it.
+rename_parameters(Vars, #c_case{arg = Arg, clauses = Clauses} = Case) ->
+    Scrutinees = case Arg of
+        #c_values{es = Elements} -> Elements;
+        _ -> [Arg]
+    end,
+    Params = [Param || #c_var{name = Param} <- Vars],
+    Positions = lists:seq(1, length(Scrutinees)),
+    {Renames, Dropped} = lists:foldl(fun(Position, {RenamesAcc, DroppedAcc}) ->
+        case {lists:nth(Position, Scrutinees), clause_variables(Clauses, Position)} of
+            {#c_var{name = Param}, [_ | _] = Bound} ->
+                case lists:member(Param, Params) of
+                    true ->
+                        Name = case [Source || Source <- Bound, is_atom(Source)] of
+                            [Source | _] -> Source;
+                            [] -> Param
+                        end,
+                        Used = maps:values(RenamesAcc),
+                        %% Guards type-testing the variable refine its pattern instead.
+                        Free = lists:all(fun({#c_clause{guard = Guard} = Clause, Var}) ->
+                            (Var =:= Name orelse
+                                not lists:member(Name, cerl_trees:variables(Clause))) andalso
+                                not lists:any(fun(Referenced) -> lists:member(Referenced, [Var, Param]) end,
+                                              cerl_trees:free_variables(Guard))
+                        end, lists:zip(Clauses, Bound)),
+                        case Free andalso not lists:member(Name, Used) andalso
+                                (Name =:= Param orelse not lists:member(Name, Params)) of
+                            true -> {RenamesAcc#{Param => Name}, [Position | DroppedAcc]};
+                            false -> {RenamesAcc, DroppedAcc}
+                        end;
+                    false ->
+                        {RenamesAcc, DroppedAcc}
+                end;
+            _ ->
+                {RenamesAcc, DroppedAcc}
+        end
+    end, {#{}, []}, Positions),
+    case Dropped of
+        [] ->
+            {Vars, Case};
+        _ ->
+            Kept = [Position || Position <- Positions, not lists:member(Position, Dropped)],
+            NewClauses = [begin
+                #c_clause{pats = Patterns} = Clause,
+                Substitution = maps:from_list(
+                    [{Param, Name} || Param := Name <- Renames] ++
+                    [{Var, maps:get(Param, Renames)} ||
+                        Position <- Dropped,
+                        #c_var{name = Param} <- [lists:nth(Position, Scrutinees)],
+                        #c_var{name = Var} <- [lists:nth(Position, Patterns)]]),
+                Renamed = rename_variables(Clause, Substitution),
+                Renamed#c_clause{pats = [lists:nth(Position, cerl:clause_pats(Renamed)) || Position <- Kept]}
+            end || Clause <- Clauses],
+            NewScrutinees = [lists:nth(Position, Scrutinees) || Position <- Kept],
+            NewArg = case Arg of
+                #c_values{} -> Arg#c_values{es = NewScrutinees};
+                _ when NewScrutinees =:= [] -> cerl:c_values([]);
+                _ -> hd(NewScrutinees)
+            end,
+            NewVars = [case Renames of
+                           #{Param := Name} -> Var#c_var{name = Name};
+                           #{} -> Var
+                       end || #c_var{name = Param} = Var <- Vars],
+            {NewVars, Case#c_case{arg = NewArg, clauses = NewClauses}}
+    end;
+rename_parameters(Vars, Body) ->
+    {Vars, Body}.
+
+%% The variable each clause binds at a position, or [] unless every clause binds one.
+clause_variables(Clauses, Position) ->
+    Bound = [case lists:nth(Position, Patterns) of
+                 #c_var{name = Name} -> Name;
+                 _ -> none
+             end || #c_clause{pats = Patterns} <- Clauses],
+    case lists:member(none, Bound) of
+        true -> [];
+        false -> Bound
+    end.
+
+rename_variables(Tree, Substitution) ->
+    cerl_trees:map(fun(#c_var{name = Name} = Var) ->
+        case Substitution of
+            #{Name := New} -> Var#c_var{name = New};
+            #{} -> Var
+        end;
+    (Node) -> Node
+    end, Tree).
 
 translate_definition(Name, Anno, Vars, Definition, State0) ->
     Facts = maps:from_list([{Var, {Index, eq}} ||
@@ -681,13 +779,27 @@ clause(#c_clause{anno = Anno, pats = Patterns, guard = #c_literal{val = true}, b
        ~"body" => TranslatedBody}, State2};
 clause(#c_clause{anno = Anno, pats = Patterns, guard = Guard, body = Body}, State0) ->
     {Pats, State1} = lists:mapfoldl(fun value/2, State0, Patterns),
-    {TranslatedGuard, State2} = expression(Guard, State1),
+    {TranslatedGuard, State2} = expression(guard_test(Guard), State1),
     {TranslatedBody, State3} = expression(Body, State2),
     {#{~"span" => span(Anno), ~"patterns" => Pats,
        ~"guard" => TranslatedGuard,
        ~"body" => TranslatedBody}, State3};
 clause(Core, _State) ->
     unsupported(Core).
+
+%% Core wraps guards that may raise as
+%% try (let V = Test in V =:= true) of Try -> Try catch _ -> false.
+%% Guards already select their body only on true and fall through on exceptions,
+%% so the test is enough.
+guard_test(#c_try{arg = #c_let{vars = [#c_var{name = Value}], arg = Test,
+                               body = #c_call{module = #c_literal{val = erlang},
+                                              name = #c_literal{val = '=:='},
+                                              args = [#c_var{name = Value}, #c_literal{val = true}]}},
+                  vars = [#c_var{name = Try}], body = #c_var{name = Try},
+                  handler = #c_literal{val = false}}) ->
+    Test;
+guard_test(Guard) ->
+    Guard.
 
 receive_parts(#c_let{vars = [#c_var{name = Available}, Message],
         arg = #c_primop{name = #c_literal{val = recv_peek_message}, args = []},
@@ -734,7 +846,7 @@ receive_scan_clauses(_, _, Core) -> unsupported(Core).
 
 receive_clause(#c_clause{anno = Anno, pats = [Pattern], guard = Guard, body = Body}, State0) ->
     {Pat, State1} = value(Pattern, State0),
-    {TranslatedGuard, State2} = expression(Guard, State1),
+    {TranslatedGuard, State2} = expression(guard_test(Guard), State1),
     {TranslatedBody, State3} = expression(Body, State2),
     Bound = ordsets:intersection(cerl_trees:variables(Pattern), cerl_trees:free_variables(Body)),
     Vars = [variable(#c_var{name = Name}) || Name <- Bound],

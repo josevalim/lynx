@@ -468,7 +468,7 @@ defmodule Lynx.CoreToLeanjTest do
   test "translates Core values into separate match expressions and patterns" do
     body =
       :cerl.c_case(:cerl.c_values([:cerl.c_var(0), :cerl.c_nil()]), [
-        :cerl.c_clause([:cerl.c_var(:X), :cerl.c_nil()], :cerl.c_var(:X))
+        :cerl.c_clause([:cerl.c_tuple([:cerl.c_var(:X)]), :cerl.c_nil()], :cerl.c_var(:X))
       ])
 
     assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
@@ -483,9 +483,37 @@ defmodule Lynx.CoreToLeanjTest do
                "cases" => [
                  %{
                    "patterns" => [
-                     %{"kind" => "var", "name" => "X"},
+                     %{"kind" => "tuple", "elements" => [%{"kind" => "var", "name" => "X"}]},
                      %{"kind" => "nil"}
                    ]
+                 }
+               ]
+             }
+           } = functions[{:entry, 1}].translation
+  end
+
+  test "names parameters after the variables every clause binds them to" do
+    body =
+      :cerl.c_case(:cerl.c_values([:cerl.c_var(0), :cerl.c_nil()]), [
+        :cerl.c_clause([:cerl.c_var(:Acc), :cerl.c_nil()], :cerl.c_var(:Acc)),
+        :cerl.c_clause([:cerl.c_var(2), :cerl.c_var(:Other)], :cerl.c_var(2))
+      ])
+
+    assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
+
+    assert %{
+             "params" => [%{"name" => "Acc"}],
+             "body" => %{
+               "kind" => "match",
+               "expressions" => [%{"kind" => "nil"}],
+               "cases" => [
+                 %{
+                   "patterns" => [%{"kind" => "nil"}],
+                   "body" => %{"values" => [%{"name" => "Acc"}]}
+                 },
+                 %{
+                   "patterns" => [%{"kind" => "var", "name" => "Other"}],
+                   "body" => %{"values" => [%{"name" => "Acc"}]}
                  }
                ]
              }
@@ -766,6 +794,7 @@ defmodule Lynx.CoreToLeanjTest do
                roots,
                %{},
                %{},
+               [],
                {[], callback}
              )
 
@@ -1239,6 +1268,7 @@ defmodule Lynx.CoreToLeanjTest do
            [{:entry, 1}],
            translated,
            %{},
+           [],
            {[], callback}
          ) do
       {:ok, functions, _laws, _funs, calls} -> {:ok, functions, calls}
@@ -1256,6 +1286,7 @@ defmodule Lynx.CoreToLeanjTest do
                [{:entry, 1}],
                %{},
                %{},
+               [],
                {[], callback}
              )
 

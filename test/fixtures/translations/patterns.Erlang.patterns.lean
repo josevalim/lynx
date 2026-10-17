@@ -167,7 +167,7 @@ set_option «match».ignoreUnusedAlts true
           | _2 => pure (Lynx.Term.atom "other"))
 
 #lynx_pure
-  def «map_fallthrough/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
+  def «map_fallthrough/2» (vValue : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result :=
     (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
           (lynxNext : Unit → Lynx.Result lynxValue) =>
         lynxBody lynxNext)
@@ -176,9 +176,9 @@ set_option «match».ignoreUnusedAlts true
               (lynxNext : Unit → Lynx.Result lynxValue) =>
             lynxBody lynxNext)
           (fun lynxMatchNext =>
-            match _0, _1 with
-            | _4, lynxMap278 =>
-              match (Lynx.Term.getMapKeys [Lynx.Term.atom "b"] lynxMap278) with
+            match _1 with
+            | lynxMap274 =>
+              match (Lynx.Term.getMapKeys [Lynx.Term.atom "b"] lynxMap274) with
               | [vB] =>
                 Lynx.Result.guard (Erlang.erlang.«/=/2» vB (Lynx.Term.integer 1))
                   (fun _ => pure (Lynx.Term.atom "b")) lynxMatchNext
@@ -189,30 +189,30 @@ set_option «match».ignoreUnusedAlts true
                   (lynxNext : Unit → Lynx.Result lynxValue) =>
                 lynxBody lynxNext)
               (fun lynxMatchNext =>
-                match _0, _1 with
-                | lynxMapGroup263_0, lynxMap287 =>
-                  match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap287) with
-                  | [lynxMapGroup263_1] =>
+                match _1 with
+                | lynxMap282 =>
+                  match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap282) with
+                  | [lynxMapGroup263_0] =>
                     (fun {lynxValue : Type}
                           (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
                           (lynxNext : Unit → Lynx.Result lynxValue) =>
                         lynxBody lynxNext)
                       (fun lynxMatchNext =>
-                        match lynxMapGroup263_0, lynxMapGroup263_1 with
-                        | vValue, vA =>
+                        match lynxMapGroup263_0 with
+                        | vA =>
                           Lynx.Result.guard (Erlang.erlang.«</2» vA (Lynx.Term.integer 0))
                             (fun _ => pure vValue) lynxMatchNext)
                       (fun (_ : Unit) =>
-                        match lynxMapGroup263_0, lynxMapGroup263_1 with
-                        | _5, vA => pure vA
-                        | _, _ => lynxLabel_map_group_263 ())
+                        match lynxMapGroup263_0 with
+                        | vA => pure vA
+                        | _ => lynxLabel_map_group_263 ())
                   | _ => lynxMatchNext ())
               (fun (_ : Unit) =>
-                match _0, _1 with
-                | _, _ => lynxLabel_map_group_263 ())))
+                match _1 with
+                | _ => lynxLabel_map_group_263 ())))
       (fun (_ : Unit) =>
-        match _0, _1 with
-        | _3, _2 => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause")))
+        match _1 with
+        | _2 => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause")))
 
 end
 

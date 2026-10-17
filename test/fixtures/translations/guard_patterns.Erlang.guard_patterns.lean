@@ -181,18 +181,9 @@ set_option «match».ignoreUnusedAlts true
         match _0 with
         | vX =>
           Lynx.Result.guard
-            (Lynx.Result.tryWith
-              (do
-                let _5 ←
-                  Lynx.Result.ok
-                      (Lynx.Term.isMember _0
-                        [Lynx.Term.integer 1, Lynx.Term.integer 2, Lynx.Term.integer 3])
-                Erlang.erlang.«=:=/2» _5 (Lynx.Term.atom "true"))
-              (fun vTry => pure vTry)
-              (fun lynxException =>
-                let vT := Lynx.Exception.classTerm lynxException
-                let vR := Lynx.Exception.reason lynxException
-                pure (Lynx.Term.atom "false")))
+            (Lynx.Result.ok
+              (Lynx.Term.isMember _0
+                [Lynx.Term.integer 1, Lynx.Term.integer 2, Lynx.Term.integer 3]))
             (fun _ => pure (Lynx.Term.atom "yes")) lynxMatchNext)
       (fun (_ : Unit) =>
         match _0 with
@@ -207,19 +198,10 @@ set_option «match».ignoreUnusedAlts true
         match _0 with
         | vX =>
           Lynx.Result.guard
-            (Lynx.Result.tryWith
-              (do
-                let _5 ←
-                  Lynx.Result.ok
-                      (Lynx.Term.isMember _0
-                        [Lynx.Term.atom "ok", Lynx.Term.atom "error",
-                          Lynx.Term.bitstring ⟨#[120]⟩ 0 (by decide)])
-                Erlang.erlang.«=:=/2» _5 (Lynx.Term.atom "true"))
-              (fun vTry => pure vTry)
-              (fun lynxException =>
-                let vT := Lynx.Exception.classTerm lynxException
-                let vR := Lynx.Exception.reason lynxException
-                pure (Lynx.Term.atom "false")))
+            (Lynx.Result.ok
+              (Lynx.Term.isMember _0
+                [Lynx.Term.atom "ok", Lynx.Term.atom "error",
+                  Lynx.Term.bitstring ⟨#[120]⟩ 0 (by decide)]))
             (fun _ => pure (Lynx.Term.atom "yes")) lynxMatchNext)
       (fun (_ : Unit) =>
         match _0 with
@@ -234,17 +216,8 @@ set_option «match».ignoreUnusedAlts true
         match _0 with
         | vX =>
           Lynx.Result.guard
-            (Lynx.Result.tryWith
-              (do
-                let _3 ←
-                  Lynx.Result.orElse (Erlang.erlang.«==/2» _0 (Lynx.Term.integer 1))
-                      (Erlang.erlang.«==/2» _0 (Lynx.Term.integer 2))
-                Erlang.erlang.«=:=/2» _3 (Lynx.Term.atom "true"))
-              (fun vTry => pure vTry)
-              (fun lynxException =>
-                let vT := Lynx.Exception.classTerm lynxException
-                let vR := Lynx.Exception.reason lynxException
-                pure (Lynx.Term.atom "false")))
+            (Lynx.Result.orElse (Erlang.erlang.«==/2» _0 (Lynx.Term.integer 1))
+              (Erlang.erlang.«==/2» _0 (Lynx.Term.integer 2)))
             (fun _ => pure (Lynx.Term.atom "yes")) lynxMatchNext)
       (fun (_ : Unit) =>
         match _0 with

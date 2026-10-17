@@ -111,7 +111,19 @@ defmodule Lynx.Translation do
     %{translations: translations} = module
     %{funs: funs} = translation
 
-    case :lynx_core_to_leanj.translate(name, definitions, names, translations, funs, context) do
+    suffixed =
+      for {^name, function, arity} <- Map.keys(translation.termination_suffixes),
+          do: {function, arity}
+
+    case :lynx_core_to_leanj.translate(
+           name,
+           definitions,
+           names,
+           translations,
+           funs,
+           suffixed,
+           context
+         ) do
       {:ok, functions, laws, funs, translation} ->
         updated = %{
           module
