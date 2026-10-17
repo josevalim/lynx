@@ -46,7 +46,7 @@ defmodule Lynx.RunnerTest do
   test "imports both dependency branches and theorems from their shared dependency" do
     contents = [
       definition("ensures", success()),
-      theorem("law", "exact Elixir.Source.«law/0» schedule", false)
+      theorem("law", "exact Elixir.Source.«law/0»", "sequential")
     ]
 
     files = [
@@ -61,9 +61,9 @@ defmodule Lynx.RunnerTest do
         "Elixir.Join",
         [
           definition("ensures", success()),
-          theorem("left", "exact Elixir.Left.«law/0» schedule", false),
-          theorem("right", "exact Elixir.Right.«law/0» schedule", false),
-          theorem("source", "exact Elixir.Source.«law/0» schedule", false)
+          theorem("left", "exact Elixir.Left.«law/0»", "sequential"),
+          theorem("right", "exact Elixir.Right.«law/0»", "sequential"),
+          theorem("source", "exact Elixir.Source.«law/0»", "sequential")
         ],
         ["Elixir.Left", "Elixir.Right"]
       )
@@ -156,7 +156,7 @@ defmodule Lynx.RunnerTest do
     [table] = table_file["contents"]
     entries = table["entries"]
     entry = Enum.find(entries, &(&1["body"]["name"] == "remember"))
-    assert %{"pure" => false} = entry
+    assert %{"purity" => "sequential"} = entry
 
     # Only the effectful callee and its falsely pure entry are needed here;
     # the translation integration test verifies the complete function table.
@@ -167,7 +167,7 @@ defmodule Lynx.RunnerTest do
         &Enum.filter(&1, fn defn -> defn["name"] == "remember" end)
       )
 
-    wrong_table = Map.put(table, "entries", [Map.put(entry, "pure", true)])
+    wrong_table = Map.put(table, "entries", [Map.put(entry, "purity", "pure")])
     wrong_file = Map.update!(source_file, "contents", &(&1 ++ [wrong_table]))
 
     assert [
@@ -244,7 +244,7 @@ defmodule Lynx.RunnerTest do
       "kind" => "def",
       "name" => name,
       "params" => [],
-      "pure" => false,
+      "purity" => "sequential",
       "span" => [4, 1],
       "body" => body
     }
@@ -268,14 +268,15 @@ defmodule Lynx.RunnerTest do
     }
   end
 
-  # Pure laws receive the direct statement; the others prove it through `Lynx.run`.
-  defp theorem(name, proof, pure \\ true) do
+  # Pure and partial laws receive the direct statement; the others prove it
+  # through `Lynx.run`.
+  defp theorem(name, proof, purity \\ "pure") do
     %{
       "kind" => "theorem",
       "name" => name,
       "params" => [],
       "ensures" => "ensures",
-      "pure" => pure,
+      "ensures_purity" => purity,
       "span" => [4, 1],
       "proof" => %{"source" => proof, "indentation" => 0, "span" => [4, 15]}
     }
@@ -442,7 +443,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
             theorem(
               "law",
               if(name == "Success", do: "fail \"deliberate failure\"", else: proof),
-              false
+              "concurrent"
             )
           ],
           ["Erlang.erlang"]
@@ -474,7 +475,10 @@ defmodule Lynx.RunnerDiagnosticsTest do
             {"TrueRequirement", success()}
           ] do
         law =
-          Map.put(theorem("law", "fail \"deliberate failure\"", false), "requires", "requires")
+          Map.merge(theorem("law", "fail \"deliberate failure\"", "sequential"), %{
+            "requires" => "requires",
+            "requires_purity" => "sequential"
+          })
 
         file(@literal_erl, "Elixir.#{name}", [
           definition("requires", requirement),
@@ -511,7 +515,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
           "kind" => "def",
           "name" => "broken",
           "params" => [],
-          "pure" => false,
+          "purity" => "sequential",
           "span" => [4, 1],
           "body" => %{
             "kind" => "return",
@@ -613,6 +617,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
           "name" => name,
           "params" => [],
           "ensures" => "ensures",
+          "ensures_purity" => "sequential",
           "span" => [],
           "proof" => %{"source" => proof, "indentation" => 4, "span" => span}
         }
@@ -730,6 +735,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
           "name" => name,
           "params" => [],
           "ensures" => "ensures",
+          "ensures_purity" => "sequential",
           "span" => [],
           "proof" => %{"source" => "exact )", "indentation" => 4, "span" => span}
         }
@@ -809,7 +815,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
       "kind" => "def",
       "name" => name,
       "params" => [],
-      "pure" => false,
+      "purity" => "sequential",
       "span" => [4, 1],
       "body" => body
     }
@@ -833,14 +839,15 @@ defmodule Lynx.RunnerDiagnosticsTest do
     }
   end
 
-  # Pure laws receive the direct statement; the others prove it through `Lynx.run`.
-  defp theorem(name, proof, pure \\ true) do
+  # Pure and partial laws receive the direct statement; the others prove it
+  # through `Lynx.run`.
+  defp theorem(name, proof, purity \\ "pure") do
     %{
       "kind" => "theorem",
       "name" => name,
       "params" => [],
       "ensures" => "ensures",
-      "pure" => pure,
+      "ensures_purity" => purity,
       "span" => [4, 1],
       "proof" => %{"source" => proof, "indentation" => 0, "span" => [4, 15]}
     }

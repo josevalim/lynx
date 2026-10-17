@@ -10,7 +10,7 @@ defmodule Lynx.CoreToLeanjTest do
     assert {:ok,
             %{
               {:entry, 1} => %{
-                pure: false,
+                purity: :partial,
                 local_calls: [],
                 translation: %{
                   "kind" => "def",
@@ -28,7 +28,7 @@ defmodule Lynx.CoreToLeanjTest do
     assert {:ok,
             %{
               {:entry, 1} => %{
-                pure: true,
+                purity: :pure,
                 translation: %{
                   "body" => %{
                     "kind" => "return",
@@ -62,7 +62,7 @@ defmodule Lynx.CoreToLeanjTest do
                 }
               },
               {:"$lynx_fun_0", 2} => %{
-                pure: true,
+                purity: :pure,
                 translation: %{
                   "params" => [%{"name" => 0}, %{"name" => 1}],
                   "body" => %{
@@ -100,7 +100,7 @@ defmodule Lynx.CoreToLeanjTest do
     assert {:ok,
             %{
               {:entry, 1} => %{
-                pure: true,
+                purity: :pure,
                 local_calls: [{:lynx_local_1, 2}],
                 translation: %{
                   "body" => %{
@@ -111,7 +111,7 @@ defmodule Lynx.CoreToLeanjTest do
                 }
               },
               {:lynx_local_1, 2} => %{
-                pure: true,
+                purity: :pure,
                 local_calls: [],
                 translation: %{
                   "params" => [%{"name" => "input"}, %{"name" => 0}],
@@ -274,7 +274,7 @@ defmodule Lynx.CoreToLeanjTest do
       assert {:ok,
               %{
                 {:entry, 1} => %{
-                  pure: true,
+                  purity: :pure,
                   translation: %{
                     "body" => %{
                       "kind" => "bitstring_constructor",
@@ -446,7 +446,7 @@ defmodule Lynx.CoreToLeanjTest do
       )
 
     assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
-    assert functions[{:entry, 1}].pure == false
+    assert functions[{:entry, 1}].purity == :concurrent
 
     assert %{
              "body" => %{
@@ -502,7 +502,7 @@ defmodule Lynx.CoreToLeanjTest do
       ])
 
     assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
-    assert functions[{:entry, 1}].pure
+    assert functions[{:entry, 1}].purity == :pure
 
     assert %{
              "kind" => "return",
@@ -524,7 +524,7 @@ defmodule Lynx.CoreToLeanjTest do
     body = :cerl.c_case(update, [:cerl.c_clause([:cerl.c_var(:result)], :cerl.c_var(:result))])
 
     assert {:ok, functions, calls} = translate(definitions([definition(:entry, body)]))
-    assert functions[{:entry, 1}].pure
+    assert functions[{:entry, 1}].purity == :pure
     assert calls == [{:maps, :put, 3, [10]}, {:maps, :update, 3, [11]}, {:maps, :put, 3, [10]}]
     outer = functions[{:entry, 1}].translation["body"]
     first = outer["computation"]
@@ -549,10 +549,10 @@ defmodule Lynx.CoreToLeanjTest do
 
     assert {:ok, impure, _} =
              translate(definitions([definition(:entry, update)]), %{}, %{
-               {:maps, :update, 3} => false
+               {:maps, :update, 3} => :sequential
              })
 
-    refute impure[{:entry, 1}].pure
+    assert impure[{:entry, 1}].purity == :sequential
   end
 
   test "lowers exact updates even with an empty literal base" do
@@ -859,9 +859,9 @@ defmodule Lynx.CoreToLeanjTest do
     defs = definitions([definition(:entry, body)])
 
     assert {:ok, functions, [{:other, :entry, 1, []}]} =
-             translate(defs, %{}, %{{:other, :entry, 1} => false})
+             translate(defs, %{}, %{{:other, :entry, 1} => :sequential})
 
-    assert %{pure: false, local_calls: [], translation: translation} =
+    assert %{purity: :sequential, local_calls: [], translation: translation} =
              functions[{:entry, 1}]
 
     assert %{
@@ -963,11 +963,11 @@ defmodule Lynx.CoreToLeanjTest do
         definition(:helper, remote.(:pure))
       ])
 
-    assert {:ok, functions, calls} = translate(defs, %{}, %{{:impure, :entry, 1} => false})
+    assert {:ok, functions, calls} = translate(defs, %{}, %{{:impure, :entry, 1} => :sequential})
 
     assert %{
-             {:entry, 1} => %{pure: false},
-             {:helper, 1} => %{pure: true}
+             {:entry, 1} => %{purity: :sequential},
+             {:helper, 1} => %{purity: :pure}
            } = functions
 
     assert calls == [{:pure, :entry, 1, []}, {:impure, :entry, 1, []}]
@@ -1223,13 +1223,13 @@ defmodule Lynx.CoreToLeanjTest do
     )
   end
 
-  defp translate(definitions, translated \\ %{}, pure \\ %{}) do
+  defp translate(definitions, translated \\ %{}, purity \\ %{}) do
     callback = fn calls, module, function, arity, span_anno, funs ->
       if module == :example do
         :local
       else
-        pure = Map.get(pure, {module, function, arity}, true)
-        {pure, funs, [{module, function, arity, span_anno} | calls]}
+        purity = Map.get(purity, {module, function, arity}, :pure)
+        {purity, funs, [{module, function, arity, span_anno} | calls]}
       end
     end
 

@@ -253,7 +253,7 @@ defmodule Lynx.LawsTest do
                      "kind" => "def",
                      "name" => "identity",
                      "params" => [%{"name" => 0}],
-                     "pure" => true,
+                     "purity" => "pure",
                      "body" => %{
                        "kind" => "return",
                        "values" => [%{"kind" => "var", "name" => 0}]
@@ -263,19 +263,19 @@ defmodule Lynx.LawsTest do
                      "kind" => "def",
                      "name" => "checked:ensures",
                      "params" => [%{"name" => 0}, %{"name" => 1}],
-                     "pure" => true,
+                     "purity" => "pure",
                      "body" => %{
                        "kind" => "local_call",
                        "name" => "identity",
                        "args" => [%{"kind" => "var", "name" => 1}]
                      }
                    },
-                   %{"kind" => "def", "name" => "allowed", "params" => [_], "pure" => true},
+                   %{"kind" => "def", "name" => "allowed", "params" => [_], "purity" => "pure"},
                    %{
                      "kind" => "def",
                      "name" => "checked:requires",
                      "params" => [%{"name" => 0}, %{"name" => 1}],
-                     "pure" => true,
+                     "purity" => "pure",
                      "body" => %{
                        "kind" => "local_call",
                        "name" => "allowed",

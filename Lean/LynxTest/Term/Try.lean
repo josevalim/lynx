@@ -99,18 +99,18 @@ private def failingTable : Term.FunTable := #[
   .effectful fun _ _ => «throw/1» (.atom "dispatched")]
 
 theorem dispatched_exception_is_caught :
-    Lynx.run (Result.tryWith (Term.apply (.function 0 0 #[]) #[])
+    Lynx.schedule (Result.tryWith (Term.apply (.function 0 0 #[]) #[])
       Result.ok (fun exception => .ok exception.reason)) [] failingTable =
       .ok (.atom "dispatched") := by cbv
 
 theorem dispatched_success_body_exception_escapes :
-    Lynx.run (Result.tryWith (.ok Term.nil)
+    Lynx.schedule (Result.tryWith (.ok Term.nil)
       (fun _ => Term.apply (.function 0 0 #[]) #[])
       (fun _ => .ok (Term.atom "caught"))) [] failingTable =
       .error (.throw (.atom "dispatched")) := by cbv
 
 theorem exhaustion_is_not_caught :
-    Lynx.run (Result.tryWith (Term.apply (.function 0 0 #[]) #[])
+    Lynx.schedule (Result.tryWith (Term.apply (.function 0 0 #[]) #[])
       Result.ok (fun _ => .ok (Term.atom "caught"))) [] failingTable 0 =
       .exhausted := by cbv
 

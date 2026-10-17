@@ -94,9 +94,11 @@ example (entry : Array Lynx.Term → Array Lynx.Term → Except Lynx.Exception L
 example : Lynx.Result → Lynx.Term.FunTable → Nat → Lynx.Environment →
     Lynx.Outcome Lynx.Term × Lynx.Environment :=
   Lynx.Result.runWith
+example : Lynx.Result → Lynx.Term.FunTable → Nat → Lynx.Outcome Lynx.Term :=
+  fun computation table callDepth => Lynx.run computation table callDepth
 example : Lynx.Result → List Lynx.ScheduleChoice → Lynx.Term.FunTable → Nat →
     Lynx.Outcome Lynx.Term :=
-  fun computation schedule table callDepth => Lynx.run computation schedule table callDepth
+  fun computation schedule table callDepth => Lynx.schedule computation schedule table callDepth
 example : Lynx.Term → Lynx.Term → Lynx.Result := Erlang.erlang.«apply/2»
 example : Lynx.Term → Array Lynx.Term → Lynx.Result := Lynx.Term.apply
 example : Lynx.Term → Lynx.Result := Erlang.erlang.«spawn/1»
@@ -425,6 +427,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.instReprScheduleChoice",
   "Lynx.instReprTerm",
   "Lynx.run",
+  "Lynx.schedule",
   "main"
 ]
 

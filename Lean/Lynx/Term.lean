@@ -15,10 +15,17 @@ An `ok` or `error` outcome means every spawned process has finished.
 `deadlock` means the modeled process tree is stuck. `exhausted` means a dynamic
 call exceeded `callDepth`; it is not an Erlang exception. The immutable table
 is separate from process state. -/
-public def run (computation : Result α) (schedule : List ScheduleChoice := [])
+public def schedule (computation : Result α) (schedule : List ScheduleChoice := [])
     (table : Term.FunTable := #[]) (callDepth : Nat := 100) : Outcome α :=
   if table.isEmpty then (computation.run { schedule }).1
   else (computation.runWith table callDepth { schedule }).1
+
+/-- Run a computation from a fresh runtime without scheduler choices, resolving
+its dynamic calls against the table. Computations that make no process requests
+never consult a schedule; use `schedule` to range over scheduler choices. -/
+public def run (computation : Result α) (table : Term.FunTable := #[])
+    (callDepth : Nat := 100) : Outcome α :=
+  schedule computation [] table callDepth
 
 end Lynx
 
@@ -33,56 +40,83 @@ end Lynx.Term
 namespace Lynx
 
 /-- Pure computations ignore the scheduler and the program table. -/
-public theorem run_of_isPure (computation : Result α) (pure : computation.IsPure)
-    (schedule : List ScheduleChoice) (table : Term.FunTable) (callDepth : Nat) :
-    run computation schedule table callDepth = (computation { schedule }).1 := by
-  unfold run
+public theorem schedule_of_isPure (computation : Result α) (pure : computation.IsPure)
+    (choices : List ScheduleChoice) (table : Term.FunTable) (callDepth : Nat) :
+    schedule computation choices table callDepth = (computation { schedule := choices }).1 := by
+  unfold schedule
   split
   · rfl
   · rw [Result.runWith_apply, Result.resolve_of_isPure _ _ _ pure]
 
-@[simp] public theorem run_ok (value : α) (schedule : List ScheduleChoice)
+@[simp] public theorem schedule_ok (value : α) (choices : List ScheduleChoice)
     (table : Term.FunTable) (callDepth : Nat) :
-    run (.ok value) schedule table callDepth = .ok value := by
-  simp [run_of_isPure]
+    schedule (.ok value) choices table callDepth = .ok value := by
+  simp [schedule_of_isPure]
 
-@[simp] public theorem run_error (exception : Exception) (schedule : List ScheduleChoice)
+@[simp] public theorem schedule_error (exception : Exception) (choices : List ScheduleChoice)
     (table : Term.FunTable) (callDepth : Nat) :
-    run (.error exception : Result α) schedule table callDepth = .error exception := by
-  simp [run_of_isPure]
+    schedule (.error exception : Result α) choices table callDepth = .error exception := by
+  simp [schedule_of_isPure]
 
 /-- A computation whose dynamic calls resolve to a value against a program table
 runs to that value under every schedule. -/
-public theorem run_of_resolve {computation : Result α} {table : Term.FunTable}
+public theorem schedule_of_resolve {computation : Result α} {table : Term.FunTable}
     {callDepth : Nat} {value : α} (nonempty : table.isEmpty = false)
     (resolved : Result.resolve table callDepth computation = .ok value)
-    (schedule : List ScheduleChoice) :
-    run computation schedule table callDepth = .ok value := by
-  simp [run, nonempty, Result.runWith_apply, resolved]
+    (choices : List ScheduleChoice) :
+    schedule computation choices table callDepth = .ok value := by
+  simp [schedule, nonempty, Result.runWith_apply, resolved]
+
+/-- A pure computation runs to `ok` exactly when it returns that value. -/
+@[simp] public theorem IsPure.schedule_eq_ok_iff {computation : Result α}
+    (pure : computation.IsPure) {choices : List ScheduleChoice} {table : Term.FunTable}
+    {callDepth : Nat} {value : α} :
+    schedule computation choices table callDepth = .ok value ↔ computation = .ok value := by
+  rw [schedule_of_isPure _ pure]
+  cases computation <;> simp_all [Result.IsPure]
+
+/-- Pure computations ignore the program table. -/
+public theorem run_of_isPure (computation : Result α) (pure : computation.IsPure)
+    (table : Term.FunTable) (callDepth : Nat) :
+    run computation table callDepth = (computation {}).1 :=
+  schedule_of_isPure computation pure [] table callDepth
+
+@[simp] public theorem run_ok (value : α) (table : Term.FunTable) (callDepth : Nat) :
+    run (.ok value) table callDepth = .ok value :=
+  schedule_ok value [] table callDepth
+
+@[simp] public theorem run_error (exception : Exception) (table : Term.FunTable)
+    (callDepth : Nat) :
+    run (.error exception : Result α) table callDepth = .error exception :=
+  schedule_error exception [] table callDepth
+
+/-- A computation whose dynamic calls resolve to a value against a program table
+runs to that value. -/
+public theorem run_of_resolve {computation : Result α} {table : Term.FunTable}
+    {callDepth : Nat} {value : α} (nonempty : table.isEmpty = false)
+    (resolved : Result.resolve table callDepth computation = .ok value) :
+    run computation table callDepth = .ok value :=
+  schedule_of_resolve nonempty resolved []
 
 /-- A pure computation runs to `ok` exactly when it returns that value. -/
 @[simp] public theorem IsPure.run_eq_ok_iff {computation : Result α} (pure : computation.IsPure)
-    {schedule : List ScheduleChoice} {table : Term.FunTable} {callDepth : Nat} {value : α} :
-    run computation schedule table callDepth = .ok value ↔ computation = .ok value := by
-  rw [run_of_isPure _ pure]
-  cases computation <;> simp_all [Result.IsPure]
+    {table : Term.FunTable} {callDepth : Nat} {value : α} :
+    run computation table callDepth = .ok value ↔ computation = .ok value :=
+  IsPure.schedule_eq_ok_iff pure
 
-/-- A law holds under every schedule once its expectation returns `true`. -/
+/-- A law holds once its expectation returns `true`. -/
 public theorem law_of_pure {ensures : Result} (proof : ensures = .ok Term.true)
-    {schedule : List ScheduleChoice} {table : Term.FunTable} {callDepth : Nat} :
-    run ensures schedule table callDepth = .ok Term.true := by
+    {table : Term.FunTable} {callDepth : Nat} :
+    run ensures table callDepth = .ok Term.true := by
   simp [proof]
 
-/-- A law with a pure precondition holds under every schedule when the precondition,
-holding under some schedule, implies the expectation. -/
+/-- A law with a pure precondition holds when the precondition implies the expectation. -/
 public theorem law_of_pure_requires {requires ensures : Result}
     (requiresPure : requires.IsPure)
     (proof : requires = .ok Term.true → ensures = .ok Term.true)
     {table : Term.FunTable} {callDepth : Nat}
-    (holds : ∃ schedule, run requires schedule table callDepth = .ok Term.true)
-    {schedule : List ScheduleChoice} :
-    run ensures schedule table callDepth = .ok Term.true :=
-  let ⟨_, holds⟩ := holds
+    (holds : run requires table callDepth = .ok Term.true) :
+    run ensures table callDepth = .ok Term.true :=
   law_of_pure (proof ((IsPure.run_eq_ok_iff requiresPure).mp holds))
 
 end Lynx

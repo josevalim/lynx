@@ -34,10 +34,15 @@ sequentially. Dependent files import the prelude before their embedded proofs
 and termination suffixes are parsed; no declarations leak through request order.
 Theorem nodes contain name, named params, an optional requires helper, an ensures helper,
 and a proof object. Helpers are ordinary Result computations called with the theorem's
-parameters and stated through `Lynx.run` with depth 100: the requires helper returns true
-under some schedule, and the ensures helper under every schedule. An absent requires helper
-means no assumption. An optional table names the program's function table; it defaults to empty.
-When `pure` is true, both helpers are pure and the proof receives the direct statement.
+parameters and stated to return true through `Lynx.run` with depth 100. An absent requires
+helper means no assumption. An optional table names the program's function table; it
+defaults to empty. Each helper carries its purity: `pure`, `partial`, `sequential`, or
+`concurrent`. Concurrent helpers are stated through `Lynx.schedule` instead: the requires
+helper under some schedule, and the ensures helper under every schedule. When the ensures
+helper is pure or partial, the proof receives its direct statement, as it does a pure
+requires helper.
+Definitions, mutual groups, and table entries carry the same purity; only `pure` ones receive
+generated purity lemmas.
 A proof object contains tactic source, nonnegative indentation, and a span locating
 the first character of that source. The producer handles host delimiters and line offsets. Proof syntax keeps
 its own source ranges, mapped to the supplied host locations using a synthetic file map.
@@ -45,7 +50,7 @@ Original source files are not read.
 Definitions may carry a termination_suffix object with Lean source, file, indentation,
 and span. It is parsed as the declaration's termination clause before elaboration;
 suffix diagnostics retain the supplied origin, even when it differs from the module file.
-Function tables carry entry metadata: body, captures, args, pure, and span.
+Function tables carry entry metadata: body, captures, args, purity, and span.
 The decoder builds typed pure/effectful callables; a pure entry must prove
 the translated body's purity during elaboration. Each entry also generates checked
 application equations for standalone calls and binds. Pure calls preserve depth;
@@ -1199,15 +1204,22 @@ private structure TableEntry where
   adapter : TSyntax `term
   isPure : Bool
 
+/-- Decode a purity level: `pure`, `partial`, `sequential`, or `concurrent`. -/
+private def purity (j : Json) (key : String) : DecodeM String := do
+  let level ← str j key
+  unless ["pure", "partial", "sequential", "concurrent"].contains level do
+    throw s!"{key} must be pure, partial, sequential, or concurrent"
+  return level
+
 private def tableEntry (map : FileMap) (info : Span) (entry : Json) : DecodeM TableEntry := do
-  fields entry ["body", "captures", "args", "pure", "span"]
+  fields entry ["body", "captures", "args", "purity", "span"]
   let entryInfo ← span map entry info
   let captureIds ← (← arr entry "captures").mapM (param map entryInfo)
   let argumentIds ← (← arr entry "args").mapM (param map entryInfo)
   let captures := captureIds.map fun id => (⟨id.raw⟩ : TSyntax `term)
   let arguments := argumentIds.map fun id => (⟨id.raw⟩ : TSyntax `term)
   let body ← term map entryInfo false (← field entry "body")
-  let isPure ← (← field entry "pure").getBool?
+  let isPure := (← purity entry "purity") == "pure"
   let toExcept := mkIdent ``Lynx.Result.toExcept
   let exceptError := mkIdent ``Except.error
   let resultError := mkIdent ``Lynx.Result.error
@@ -1244,18 +1256,18 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     let tableType := mkIdent ``Lynx.Term.FunTable
     pure (Unhygienic.run `(def $name : $tableType := $body))
   | "mutual" => do
-    fields j ["kind", "defs", "pure", "span"]
+    fields j ["kind", "defs", "purity", "span"]
     let defs ← arr j "defs"
     if defs.isEmpty then throw "mutual requires at least one definition"
     let decls ← defs.mapM fun decl => do
       unless (← str decl "kind") == "def" do throw "mutual requires def declarations"
-      unless (← (← field decl "pure").getBool?) == (← (← field j "pure").getBool?) do
+      unless (← purity decl "purity") == (← purity j "purity") do
         throw "mutual definitions must agree with the group purity"
       command map decl info false
     pure (Unhygienic.run `(mutual $decls:command* end))
   | "theorem" => do
     fields j ["kind", "name", "params", "requires", "ensures", "proof", "span", "max_heartbeats",
-      "table", "pure"]
+      "table", "requires_purity", "ensures_purity"]
     let params ← (← arr j "params").mapM fun p => do
       pure (mkIdent (Name.mkSimple (← p.getStr?)))
     let arity := params.size
@@ -1269,45 +1281,54 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
         let helper ← value.getStr?
         let callee := functionName helper arity
         -- Pure helpers have `<name>_pure` lemmas.
-        let purity := mkIdent (Name.mkSimple s!"{helper}/{arity}_pure")
-        pure (some (Unhygienic.run `($callee $args*), Unhygienic.run `($purity $args*)))
+        let lemma := mkIdent (Name.mkSimple s!"{helper}/{arity}_pure")
+        pure (some (Unhygienic.run `($callee $args*), Unhygienic.run `($lemma $args*),
+          ← purity j "requires_purity"))
     let ensuresName := functionName (← str j "ensures") arity
     let ensures := Unhygienic.run `($ensuresName $args*)
+    let ensuresPurity ← purity j "ensures_purity"
     let (proof, proofInfo) ← leanProof map info name.getId (← field j "proof")
     modify fun s => { s with theorems := s.theorems.push (name.getId, proofInfo) }
     let table ← match field j "table" with
       | .error _ => pure (Unhygienic.run `(#[]))
       | .ok value => pure (⟨(← identifier (← value.getStr?)).raw⟩ : TSyntax `term)
-    let isPure ← match field j "pure" with
-      | .error _ => pure false
-      | .ok value => value.getBool?
     let ok := mkIdent ``Lynx.Outcome.ok
     let run := mkIdent ``Lynx.run
+    let scheduled := mkIdent ``Lynx.schedule
     let lawOfPure := mkIdent ``Lynx.law_of_pure
     let lawOfPureRequires := mkIdent ``Lynx.law_of_pure_requires
     let trueTerm := mkIdent ``Lynx.Term.true
     let scheduleType := mkIdent ``Lynx.ScheduleChoice
     let schedule := mkIdent `schedule
     let hypothesis := mkIdent `requires
-    let holds (computation : TSyntax `term) : TSyntax `term :=
-      Unhygienic.run `($run $computation $schedule $table 100 = $ok $trueTerm)
-    -- The precondition holds under some schedule; the expectation under every one.
+    -- Only concurrent helpers range over scheduler choices: the precondition
+    -- under some schedule, and the expectation under every one.
+    let holds (computation : TSyntax `term) (level : String) : TSyntax `term :=
+      if level == "concurrent" then
+        Unhygienic.run `($scheduled $computation $schedule $table 100 = $ok $trueTerm)
+      else Unhygienic.run `($run $computation $table 100 = $ok $trueTerm)
     let binders := match requirement with
       | none => binders
-      | some (requires, _) =>
-        binders.push (Unhygienic.run
-          `(bracketedBinder| ($hypothesis : ∃ $schedule:ident : List $scheduleType, $(holds requires))))
-    let binders := binders.push (Unhygienic.run `(bracketedBinder| ($schedule : List $scheduleType)))
-    -- Laws with pure helpers are proven against their direct statements,
-    -- without the run-form binders in scope.
-    let proof := if !isPure then proof else
-      match requirement with
-      | none => Unhygienic.run `($lawOfPure (by clear $schedule; exact $proof))
-      | some (_, requiresPure) =>
-        Unhygienic.run `($lawOfPureRequires $requiresPure
-          (by clear $hypothesis $schedule; exact fun $hypothesis => $proof) $hypothesis)
+      | some (requires, _, level) =>
+        let statement := if level == "concurrent" then
+            Unhygienic.run `(∃ $schedule:ident : List $scheduleType, $(holds requires level))
+          else holds requires level
+        binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $statement)))
+    let binders := if ensuresPurity == "concurrent" then
+        binders.push (Unhygienic.run `(bracketedBinder| ($schedule : List $scheduleType)))
+      else binders
+    -- An expectation that makes no runtime requests is proven directly. A pure
+    -- precondition is likewise given directly, without its run-form binder.
+    let direct := ["pure", "partial"].contains ensuresPurity
+    let proof := match requirement with
+      | none => if direct then Unhygienic.run `($lawOfPure $proof) else proof
+      | some (_, requiresPure, level) =>
+        if direct && level == "pure" then
+          Unhygienic.run `($lawOfPureRequires $requiresPure
+            (by clear $hypothesis; exact fun $hypothesis => $proof) $hypothesis)
+        else proof
     let declaration := Unhygienic.run `(theorem $name $binders:bracketedBinder*
-      : $(holds ensures) := $proof)
+      : $(holds ensures ensuresPurity) := $proof)
     match field j "max_heartbeats" with
     | .error _ => pure declaration
     | .ok value =>
@@ -1317,7 +1338,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       let option := mkIdent `maxHeartbeats
       pure (Unhygienic.run `(set_option $option:ident $limit:num in $declaration:command))
   | "def" => do
-    fields j ["kind", "name", "params", "body", "pure", "span", "termination_suffix"]
+    fields j ["kind", "name", "params", "body", "purity", "span", "termination_suffix"]
     let params ← (← arr j "params").mapM (param map info)
     let name := functionName (← str j "name") params.size
     let termType := mkIdent ``Lynx.Term
@@ -1328,14 +1349,14 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     match field j "termination_suffix" with
     | .error _ => pure declaration
     | .ok annotation =>
-      if ← (← field j "pure").getBool? then throw "a function with a termination suffix must be classified as impure"
+      if (← purity j "purity") == "pure" then throw "a function with a termination suffix cannot be pure"
       let suffix ← leanSuffix map info name.getId annotation
       -- A simple definition has a declValSimple containing :=, body, suffix, and where.
       let definition := declaration.raw[1]
       let value := definition[3].setArg 2 suffix
       pure ⟨declaration.raw.setArg 1 (definition.setArg 3 value)⟩
   | _ => throw s!"unsupported command kind '{kind}'"
-  let isPure ← if kind ∈ ["def", "mutual"] then (← field j "pure").getBool? else pure false
+  let isPure ← if kind ∈ ["def", "mutual"] then pure ((← purity j "purity") == "pure") else pure false
   -- A mutual group gets one joint purity proof, rather than wrapping its members.
   let result := if wrapPurity && isPure then
     Unhygienic.run `(#lynx_pure $result:command)
@@ -1489,8 +1510,10 @@ and of simplification that may have reduced the proof goal to `False`. -/
 private def comparisonDescription (type : Expr) : MetaM (Option String) := do
   unless type.isAppOfArity ``Eq 3 do return none
   let args := type.getAppArgs
-  -- Laws state their helpers through `Lynx.run`; show the computation it runs.
-  let (actual, expected) ← if args[1]!.isAppOfArity ``Lynx.run 5 then
+  -- Laws state their helpers through `Lynx.run` or `Lynx.schedule`; show the
+  -- computation they run.
+  let (actual, expected) ← if args[1]!.isAppOfArity ``Lynx.run 4 ||
+      args[1]!.isAppOfArity ``Lynx.schedule 5 then
       let expected ← if args[2]!.isAppOfArity ``Lynx.Outcome.ok 2 then
           let outcome := args[2]!.getAppArgs
           pure (mkAppN args[2]!.getAppFn

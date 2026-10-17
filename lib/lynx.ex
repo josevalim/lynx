@@ -37,19 +37,20 @@ defmodule Lynx do
 
       def «sum/1» (_0 : Lynx.Term) : Lynx.Result
 
-  Each law becomes a Lean theorem stated through `Lynx.run`, which executes a
-  computation against the program's function table. Its precondition must return
-  `true` under some scheduler choices, and its expectation under all of them:
+  Each law becomes a Lean theorem stating that its helpers return `true` through
+  `Lynx.run`, which executes a computation against the program's function table:
 
       theorem «law/1» (x : Lynx.Term)
-          (requires : ∃ schedule, Lynx.run («law:requires/1» x) schedule table 100 = .ok Lynx.Term.true)
-          (schedule : List Lynx.ScheduleChoice) :
-          Lynx.run («law:ensures/1» x) schedule table 100 = .ok Lynx.Term.true
+          (requires : Lynx.run («law:requires/1» x) table 100 = .ok Lynx.Term.true) :
+          Lynx.run («law:ensures/1» x) table 100 = .ok Lynx.Term.true
 
-  When both helpers are pure, the proof instead receives the direct goal
-  `«law:ensures/1» x = .ok Lynx.Term.true`, with `requires` stated the same way.
-  Otherwise, `Lynx.law_of_pure_requires` reduces a pure precondition to that form,
-  and `Lynx.run_of_resolve` proves goals whose function calls resolve through the
+  Helpers that may spawn, send, or receive are stated through `Lynx.schedule`
+  instead: the precondition under some scheduler choices, and the expectation
+  under all of them. When the expectation makes no runtime requests, the proof
+  receives the direct goal `«law:ensures/1» x = .ok Lynx.Term.true`, together with
+  a direct `requires` hypothesis when the precondition is pure. Otherwise,
+  `Lynx.IsPure.run_eq_ok_iff` reduces a pure precondition to that form, and
+  `Lynx.run_of_resolve` proves goals whose function calls resolve through the
   table. Proofs citing other laws receive their `Lynx.run` statements.
 
   The Lean source code is present in the "Lean" folder of the Lynx project. Besides

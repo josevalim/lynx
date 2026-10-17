@@ -1,13 +1,20 @@
 -module(lynx_core_to_leanj).
 
--export([module_name/1, to_definitions/1, translate/6, fun_table/2]).
+-export([module_name/1, to_definitions/1, translate/6, fun_table/2, join_purity/2]).
+
+%% Purity levels, ordered by what running a definition requires: `pure` needs
+%% nothing, `partial` may not return, `sequential` needs the function table and
+%% an environment, and `concurrent` also needs scheduler choices. `dynamic` marks
+%% calls to function values, whose purity depends on the complete program table;
+%% Lynx.Translation resolves it to `sequential` or `concurrent` before assembly.
+-type purity() :: pure | partial | sequential | dynamic | concurrent.
 
 -include_lib("compiler/src/core_parse.hrl").
 
 %% Anonymous functions use integer keys; named functions use {Module, {Name, Arity}}.
 %% Every entry carries a global integer ID for ordering and dispatch.
 -record(state, {module, name, defs, translated, laws = #{}, funs = #{},
-                local_calls = #{}, pure = true, remote, next_var = 0, labels = #{},
+                local_calls = #{}, purity = pure, remote, next_var = 0, labels = #{},
                 local_funs = #{}}).
 
 -spec module_name(module()) -> binary().
@@ -96,19 +103,32 @@ attribute_proof(Core) -> core_error(Core, ~"proof must be a binary").
 -spec fun_table(map(), map()) -> [map()].
 fun_table(Funs, Modules) ->
     Entries = [begin
-        #{Module := #{translations := #{Name := #{translation := Definition, pure := Pure}}}} = Modules,
-        {Id, Module, Fun, Definition, Pure}
+        #{Module := #{translations := #{Name := #{translation := Definition, purity := Purity}}}} = Modules,
+        {Id, Module, Fun, Definition, Purity}
     end || _ := #{id := Id, module := Module, name := Name} = Fun <- Funs],
     [fun_entry(Entry) || Entry <- lists:sort(Entries)].
 
-fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Name}, Pure}) ->
+fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Name}, Purity}) ->
     Captures = [var_node(<<"cap", (integer_to_binary(I))/binary>>, [])
                 || I <- lists:seq(1, length(Params) - Arity)],
     Args = [var_node(<<"arg", (integer_to_binary(I))/binary>>, [])
             || I <- lists:seq(1, Arity)],
     Body = remote_call_node(module_name(Module), Name, Captures ++ Args, []),
     #{~"body" => Body, ~"captures" => Captures, ~"args" => Args,
-      ~"pure" => Pure, ~"span" => []}.
+      ~"purity" => atom_to_binary(Purity), ~"span" => []}.
+
+-spec join_purity(purity(), purity()) -> purity().
+join_purity(Left, Right) ->
+    case purity_rank(Left) >= purity_rank(Right) of
+        true -> Left;
+        false -> Right
+    end.
+
+purity_rank(pure) -> 0;
+purity_rank(partial) -> 1;
+purity_rank(sequential) -> 2;
+purity_rank(dynamic) -> 3;
+purity_rank(concurrent) -> 4.
 
 %% Translate the requested functions and laws, plus their reachable local callees.
 %% Laws are returned separately from definitions, keyed by name.
@@ -117,7 +137,7 @@ fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Nam
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
 -spec translate(module(), #{{atom(), arity()} => {function | cutoff, cerl:c_fun()} | {law, map()}}, [{atom(), arity()}], map(), map(),
                 {term(), fun((term(), module(), atom(), arity(), list(), map()) ->
-                    {boolean(), map(), term()} | local)}) ->
+                    {purity(), map(), term()} | local)}) ->
     {ok, map(), map(), map(), term()} | {error, list(), binary()}.
 translate(Module, Definitions, Names, Translated, Funs, Remote) ->
     try
@@ -179,7 +199,7 @@ translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensure
     State2#state{laws = (State2#state.laws)#{Name => Theorem}}.
 
 translate_definition(Name, Anno, Vars, Definition, State0) ->
-    State1 = State0#state{name = Name, local_calls = #{}, pure = true, next_var = 0, labels = #{},
+    State1 = State0#state{name = Name, local_calls = #{}, purity = pure, next_var = 0, labels = #{},
                           translated = (State0#state.translated)#{Name => pending}},
     {Def, State2} = case Definition of
         cutoff ->
@@ -187,7 +207,7 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
                 ~"name" => function_name(Name),
                 ~"params" => [variable(Var) || Var <- Vars],
                 ~"body" => node(~"cutoff", Anno, #{})
-            }), State1#state{pure = false}};
+            }), State1#state{purity = partial}};
         {function, Body} ->
             {TranslatedBody, Next} = expression(Body, State1),
             {node(~"def", Anno, #{
@@ -197,7 +217,7 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
             }), Next}
     end,
     Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls),
-              pure => State2#state.pure},
+              purity => State2#state.purity},
     State0#state{translated = (State2#state.translated)#{Name => Entry},
                  funs = State2#state.funs, remote = State2#state.remote}.
 
@@ -225,7 +245,7 @@ expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
     end,
     {node(~"receive", Anno, #{~"message" => TranslatedMessage,
         ~"cases" => TranslatedClauses, ~"timeout" => TranslatedTimeout,
-        ~"after" => TranslatedAction}), State4#state{pure = false}};
+        ~"after" => TranslatedAction}), State4#state{purity = concurrent}};
 %% Preserve nonrecursive compiler labels; Lean renders the shared continuation.
 expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Label},
              #c_fun{vars = [], body = Fallback}}], body = Body} = Core, State0) ->
@@ -313,7 +333,7 @@ expression(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->
     {Function, State1} = value(Op, State0),
     {TranslatedArgs, State2} = lists:mapfoldl(fun value/2, State1, Args),
     {node(~"fun_call", Anno, #{~"function" => Function, ~"args" => TranslatedArgs}),
-     State2#state{pure = false}};
+     State2#state{purity = join_purity(State2#state.purity, dynamic)}};
 %% Erlang: error(Reason)
 %% Lean: Lynx.Result.error (Lynx.Exception.error reason)
 expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
@@ -334,10 +354,10 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
         local when Module =:= State0#state.module ->
             expression(#c_apply{anno = Anno, op = #c_var{name = {Name, Arity}}, args = Args},
                 State0);
-        {Pure, NewFuns, NewContext} ->
+        {Purity, NewFuns, NewContext} ->
             {TranslatedArgs, State1} = lists:mapfoldl(fun value/2,
                 State0#state{funs = NewFuns, remote = {NewContext, Callback}}, Args),
-            {remote_call_node(module_name(Module), atom_to_binary(Name, utf8), TranslatedArgs, Anno), State1#state{pure = State1#state.pure andalso Pure}}
+            {remote_call_node(module_name(Module), atom_to_binary(Name, utf8), TranslatedArgs, Anno), State1#state{purity = join_purity(State1#state.purity, Purity)}}
     end;
 expression(#c_primop{anno = Anno, name = #c_literal{val = Op}, args = Args}, State) ->
     prim_op(Op, Anno, Args, State);
@@ -719,7 +739,7 @@ local_function_value(Lifted, Captures, Arity, Anno, State0) ->
             Definition = node(~"def", Anno, #{
                 ~"name" => function_name(Name), ~"params" => CaptureArgs ++ Args,
                 ~"body" => local_call_node(function_name(Lifted), Args ++ CaptureArgs, Anno)}),
-            Wrapper = #{translation => Definition, local_calls => [Lifted], pure => true},
+            Wrapper = #{translation => Definition, local_calls => [Lifted], purity => pure},
             State4 = State3#state{translated = (State3#state.translated)#{Name => Wrapper}},
             function_node(Entry, Anno, State4)
     end.
@@ -765,13 +785,13 @@ map_updates([#c_map_pair{anno = Anno, op = #c_literal{val = Op},
         when Op =:= assoc; Op =:= exact ->
     Name = case Op of assoc -> put; exact -> update end,
     {Context, Callback} = State0#state.remote,
-    {Pure, NewFuns, NewContext} = Callback(Context, maps, Name, 3, Anno, State0#state.funs),
+    {Purity, NewFuns, NewContext} = Callback(Context, maps, Name, 3, Anno, State0#state.funs),
     {TranslatedKey, State1} = value(Key,
         State0#state{funs = NewFuns, remote = {NewContext, Callback}}),
     {TranslatedValue, State2} = value(Value, State1),
     Call = remote_call_node(module_name(maps), atom_to_binary(Name, utf8),
         [TranslatedKey, TranslatedValue, Base], Anno),
-    State3 = State2#state{pure = State2#state.pure andalso Pure},
+    State3 = State2#state{purity = join_purity(State2#state.purity, Purity)},
     case Rest of
         [] -> {Call, State3};
         _ ->

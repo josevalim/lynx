@@ -173,8 +173,8 @@ private def timeoutRace : Result := do
 
 /-- Blocking consumes a choice: the same program can receive or time out first. -/
 theorem timeout_is_a_scheduler_choice :
-    Lynx.run timeoutRace [.current, .swap 2] = .ok (.atom "wanted") ∧
-    Lynx.run timeoutRace [.current, .timeout 1] = .ok (.atom "timeout") := by cbv
+    Lynx.schedule timeoutRace [.current, .swap 2] = .ok (.atom "wanted") ∧
+    Lynx.schedule timeoutRace [.current, .timeout 1] = .ok (.atom "timeout") := by cbv
 
 /-- Timer choices target waiting children as well as the root process. -/
 theorem timeout_can_expire_child :
@@ -275,9 +275,9 @@ private def interleavedSends : Result := do
 /-- Only the choice after the first send changes: the child runs between the
 parent's two sends, despite the parent winning the spawn decision. -/
 theorem send_is_a_scheduling_boundary :
-    Lynx.run interleavedSends [.current, .current] =
+    Lynx.schedule interleavedSends [.current, .current] =
       .ok (.tuple #[.atom "first", .atom "second", .atom "child"]) ∧
-    Lynx.run interleavedSends [.current, .swap 2] =
+    Lynx.schedule interleavedSends [.current, .swap 2] =
       .ok (.tuple #[.atom "first", .atom "child", .atom "second"]) := by
   cbv
 
@@ -290,15 +290,15 @@ private def twoSenders : Result := do
 
 /-- With three processes, swap can select either worker at the same boundary. -/
 theorem swap_selects_the_named_process :
-    Lynx.run twoSenders [.current, .swap 2] =
+    Lynx.schedule twoSenders [.current, .swap 2] =
       .ok (.tuple #[.atom "left", .atom "right"]) ∧
-    Lynx.run twoSenders [.current, .swap 3] =
+    Lynx.schedule twoSenders [.current, .swap 3] =
       .ok (.tuple #[.atom "right", .atom "left"]) := by
   cbv
 
 /-- An unavailable PID choice must not strand runnable processes. -/
 theorem invalid_schedule_falls_back :
-    Lynx.run interleavedSends [.swap 999] =
+    Lynx.schedule interleavedSends [.swap 999] =
       .ok (.tuple #[.atom "first", .atom "second", .atom "child"]) := by cbv
 
 /-- Empty receive blocks, rather than raising or returning a fabricated value. -/
@@ -354,7 +354,7 @@ private def isolatedDictionaries : Result := do
   pure (.tuple #[own, reply])
 
 theorem suspended_processes_keep_their_dictionaries :
-    Lynx.run isolatedDictionaries [.swap 2] =
+    Lynx.schedule isolatedDictionaries [.swap 2] =
       .ok (.tuple #[.atom "parent", .atom "child"]) := by cbv
 
 private def receiveBoundary : Result := do
@@ -368,8 +368,8 @@ private def receiveBoundary : Result := do
   receiveAny
 
 theorem successful_receive_is_a_scheduling_boundary :
-    Lynx.run receiveBoundary [] = .ok (.atom "parent") ∧
-    Lynx.run receiveBoundary
+    Lynx.schedule receiveBoundary [] = .ok (.atom "parent") ∧
+    Lynx.schedule receiveBoundary
       [.current, .current, .current, .swap 2] = .ok (.atom "child") := by
   cbv
 

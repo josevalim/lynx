@@ -7,7 +7,6 @@
 -law #{name => {map_returns_list, [list, callback]},
        requires => map_returns_list_requires, ensures => map_returns_list_ensures}.
 -proof ~"""
-obtain ⟨_, requires⟩ := requires
 rw [Lynx.IsPure.run_eq_ok_iff (by simp)] at requires
 have valid : «proper_list/1» list = .ok Lynx.Term.true ∧
     (callback = .function 0 1 #[] ∨ callback = .function 1 1 #[]) := by
@@ -32,7 +31,7 @@ have maps : ∀ input, «proper_list/1» input = .ok Lynx.Term.true →
   | case3 => simp_all [«proper_list/1»]
 obtain ⟨out, resolved, list⟩ := maps list valid.1
 exact Lynx.run_of_resolve rfl
-  (by simp [«map_returns_list_ensures/2», Lynx.Result.resolve_bind, resolved, list]) _
+  (by simp [«map_returns_list_ensures/2», Lynx.Result.resolve_bind, resolved, list])
 """.
 
 map([], _F) -> [];

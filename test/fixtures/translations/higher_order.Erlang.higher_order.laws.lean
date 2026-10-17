@@ -10,15 +10,11 @@ namespace Erlang.higher_order.laws
 
 theorem «map_returns_list/2» (list : Lynx.Term) (callback : Lynx.Term)
     (requires :
-      ∃ schedule : List✝ Lynx.ScheduleChoice,
-        Lynx.run («map_returns_list_requires/2» list callback) schedule Erlang.program.fun_table
-            100 =
-          Lynx.Outcome.ok Lynx.Term.true)
-    (schedule : List✝ Lynx.ScheduleChoice) :
-    Lynx.run («map_returns_list_ensures/2» list callback) schedule Erlang.program.fun_table 100 =
+      Lynx.run («map_returns_list_requires/2» list callback) Erlang.program.fun_table 100 =
+        Lynx.Outcome.ok Lynx.Term.true) :
+    Lynx.run («map_returns_list_ensures/2» list callback) Erlang.program.fun_table 100 =
       Lynx.Outcome.ok Lynx.Term.true :=
   by
-  obtain ⟨_, requires⟩ := requires
   rw [Lynx.IsPure.run_eq_ok_iff (by simp)] at requires
   have valid :
     «proper_list/1» list = .ok Lynx.Term.true ∧
@@ -53,6 +49,6 @@ theorem «map_returns_list/2» (list : Lynx.Term) (callback : Lynx.Term)
   obtain ⟨out, resolved, list⟩ := maps list valid.1
   exact
     Lynx.run_of_resolve rfl
-      (by simp [«map_returns_list_ensures/2», Lynx.Result.resolve_bind, resolved, list]) _
+      (by simp [«map_returns_list_ensures/2», Lynx.Result.resolve_bind, resolved, list])
 
 end Erlang.higher_order.laws

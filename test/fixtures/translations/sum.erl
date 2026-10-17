@@ -13,7 +13,7 @@ cases x <;> simp [«sum_singleton_requires/1», «sum_singleton_ensures/1», Erl
 
 -law #{name => {sum_empty_again, []}, ensures => sum_empty_ensures}.
 -proof ~"""
-exact (Lynx.IsPure.run_eq_ok_iff (by simp)).mp («sum_empty/0» [])
+exact (Lynx.IsPure.run_eq_ok_iff (by simp)).mp «sum_empty/0»
 """.
 
 sum(List) -> lists:sum(List).

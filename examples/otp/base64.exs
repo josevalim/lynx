@@ -66,11 +66,6 @@ defmodule Base64ProofsTest do
       expects: encoding_contract(bytes),
       max_heartbeats: 800_000,
       proof: ~LEAN"""
-      -- The expectation reaches functions with termination suffixes, so it has no
-      -- purity lemma; prove its direct statement under a pure precondition.
-      refine Lynx.law_of_pure_requires (by simp) ?_ requires
-      clear requires schedule
-      intro requires
       open Lynx.Term.Bitstring in
         set_option maxRecDepth 8192 in
           let encodeTable : Lynx.Term := by

@@ -234,11 +234,6 @@ defmodule RangeProofsTest do
           is_integer(cut) and is_integer(index) and index >= 0,
       expects: split_contract(first, last, step, cut, index),
       proof: ~LEAN"""
-      -- The expectation reaches functions with termination suffixes, so it has no
-      -- purity lemma; prove its direct statement under a pure precondition.
-      refine Lynx.law_of_pure_requires (by simp) ?_ requires
-      clear requires schedule
-      intro requires
       let range (f l s : Int) : Lynx.Term := .map [
         (.atom "step", .integer s), (.atom "last", .integer l),
         (.atom "first", .integer f), (.atom "__struct__", .atom "Elixir.Range")]

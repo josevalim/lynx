@@ -160,7 +160,7 @@ defmodule Lynx.TranslationTest do
                "cache_key" => <<_::binary>>,
                "file" => "dependency.erl",
                "imports" => [],
-               "contents" => [%{"name" => "entry", "pure" => true}]
+               "contents" => [%{"name" => "entry", "purity" => "pure"}]
              },
              %{
                "module" => "Erlang.a_caller",
@@ -263,7 +263,8 @@ defmodule Lynx.TranslationTest do
                    "requires" => "allowed",
                    "ensures" => "identity_ensures",
                    "proof" => %{"source" => "rfl", "indentation" => 0, "span" => [5]},
-                   "pure" => true
+                   "requires_purity" => "pure",
+                   "ensures_purity" => "pure"
                  } = law
                ]
              }
@@ -326,7 +327,7 @@ defmodule Lynx.TranslationTest do
              "params" => ["x"],
              "ensures" => "expected",
              "proof" => %{"source" => "rfl", "indentation" => 0, "span" => [4]},
-             "pure" => true,
+             "ensures_purity" => "pure",
              "span" => [2, 2]
            }
   end
@@ -402,7 +403,7 @@ defmodule Lynx.TranslationTest do
       |> Translation.translate(:example, [{:entry, 2}])
 
     assert %{
-             pure: false,
+             purity: :dynamic,
              translation: %{
                "body" => %{
                  "kind" => "remote_call",
@@ -438,19 +439,19 @@ defmodule Lynx.TranslationTest do
       translation = Translation.translate(translation, :example, [{:later, 1}])
       functions = translation.modules.example.translations
 
-      assert %{pure: true} = functions[{:pure, 1}]
+      assert %{purity: :pure} = functions[{:pure, 1}]
 
       for name <- [:entry, :first, :second, :later],
-          do: assert(%{pure: false} = functions[{name, 1}])
+          do: assert(%{purity: :sequential} = functions[{name, 1}])
 
       assert Translation.translate(translation, :example, roots) == translation
 
       assert [%{"contents" => contents}] = Translation.assemble(translation)
-      assert Enum.count(contents, & &1["pure"]) == 1
+      assert Enum.count(contents, &(&1["purity"] == "pure")) == 1
       assert Enum.any?(contents, &(&1["kind"] == "mutual"))
 
-      for %{"kind" => "mutual", "pure" => pure, "defs" => defs} <- contents do
-        assert Enum.all?(defs, &(&1["pure"] == pure))
+      for %{"kind" => "mutual", "purity" => purity, "defs" => defs} <- contents do
+        assert Enum.all?(defs, &(&1["purity"] == purity))
       end
     end
   end
@@ -491,15 +492,15 @@ defmodule Lynx.TranslationTest do
 
     for module <- [:caller, :middle, :dependency] do
       assert %{
-               {:pure, 1} => %{pure: true},
-               {:impure, 1} => %{pure: false}
+               {:pure, 1} => %{purity: :pure},
+               {:impure, 1} => %{purity: :sequential}
              } = translation.modules[module].translations
     end
 
     for %{"contents" => contents} <- Translation.assemble(translation) do
       assert Enum.any?(
                contents,
-               &match?(%{"kind" => "def", "name" => "pure", "pure" => true}, &1)
+               &match?(%{"kind" => "def", "name" => "pure", "purity" => "pure"}, &1)
              )
 
       assert Enum.any?(contents, &match?(%{"kind" => "def", "name" => "impure"}, &1))
@@ -550,11 +551,11 @@ defmodule Lynx.TranslationTest do
       assert Translation.assemble(translation) == Translation.assemble(direct)
 
       for name <- [:entry, :helper] do
-        assert %{pure: false} = translation.modules.caller.translations[{name, 1}]
+        assert %{purity: :dynamic} = translation.modules.caller.translations[{name, 1}]
       end
 
       for {_, definition} <- translation.modules.dependency.translations do
-        assert %{pure: false} = definition
+        assert %{purity: :dynamic} = definition
       end
 
       assert translation.builtin_modules ==
@@ -593,10 +594,34 @@ defmodule Lynx.TranslationTest do
 
       commands =
         for %{"contents" => contents} <- files,
-            %{"pure" => true} = command <- contents,
+            %{"purity" => "pure"} = command <- contents,
             do: command
 
-      assert [%{"kind" => "def", "name" => "pure", "pure" => true}] = commands
+      assert [%{"kind" => "def", "name" => "pure", "purity" => "pure"}] = commands
+    end
+  end
+
+  test "dynamic calls are concurrent only when a table entry is" do
+    core =
+      cerl("""
+      -module(example).
+      -export([call/1, waiter/0, sender/0]).
+      call(F) -> F(1).
+      waiter() -> fun(_) -> receive Message -> Message end end.
+      sender() -> fun(X) -> X end.
+      """)
+
+    base = Translation.new() |> Translation.add({"example.erl", core})
+
+    for {roots, purity} <- [
+          {[{:call, 1}, {:sender, 0}], "sequential"},
+          {[{:call, 1}, {:sender, 0}, {:waiter, 0}], "concurrent"}
+        ] do
+      translation = Translation.translate(base, :example, roots)
+      assert %{purity: :dynamic} = translation.modules.example.translations[{:call, 1}]
+
+      assert [%{"contents" => contents} | _] = Translation.assemble(translation)
+      assert %{"purity" => ^purity} = Enum.find(contents, &(&1["name"] == "call"))
     end
   end
 
@@ -649,9 +674,9 @@ defmodule Lynx.TranslationTest do
     assert %{id: 4, module: :caller, name: {:"$lynx_fun_4", 1}, arity: 0, captures: [_]} =
              updated.funs[4]
 
-    assert %{pure: true, local_calls: []} = updated.modules.caller.translations[{:extra, 1}]
-    assert %{pure: false} = updated.modules.caller.translations[{:"$lynx_fun_4", 1}]
-    assert %{pure: false} = updated.modules.dependency.translations[{:"$lynx_fun_2", 3}]
+    assert %{purity: :pure, local_calls: []} = updated.modules.caller.translations[{:extra, 1}]
+    assert %{purity: :sequential} = updated.modules.caller.translations[{:"$lynx_fun_4", 1}]
+    assert %{purity: :dynamic} = updated.modules.dependency.translations[{:"$lynx_fun_2", 3}]
 
     assert %{
              "body" => %{"kind" => "return", "values" => [function]}
@@ -670,13 +695,13 @@ defmodule Lynx.TranslationTest do
              ]
            } = List.last(files)
 
-    refute Map.has_key?(table, "pure")
+    refute Map.has_key?(table, "purity")
 
     %{"contents" => contents} = Enum.find(files, &(&1["module"] == "Erlang.caller"))
 
     assert Enum.any?(
              contents,
-             &match?(%{"kind" => "def", "name" => "extra", "pure" => true}, &1)
+             &match?(%{"kind" => "def", "name" => "extra", "purity" => "pure"}, &1)
            )
 
     assert Enum.map(entries, fn %{
@@ -695,7 +720,8 @@ defmodule Lynx.TranslationTest do
              {"Erlang.caller", "$lynx_fun_4"}
            ]
 
-    assert Enum.map(entries, & &1["pure"]) == [true, true, false, false, false]
+    assert Enum.map(entries, & &1["purity"]) ==
+             ["pure", "pure", "sequential", "sequential", "sequential"]
   end
 
   test "imports a module BIF if used" do
@@ -742,7 +768,7 @@ defmodule Lynx.TranslationTest do
                %{
                  "module" => "Erlang.lists",
                  "imports" => ["Erlang.erlang", "Erlang.lists"],
-                 "contents" => [%{"name" => "sum", "pure" => true}]
+                 "contents" => [%{"name" => "sum", "purity" => "pure"}]
                },
                %{"module" => "Erlang.caller", "imports" => ["Erlang.lists"]}
              ] = Translation.assemble(mixed)
@@ -767,7 +793,7 @@ defmodule Lynx.TranslationTest do
     assert translation.external_calls == %{}
     assert Map.keys(translation.modules.lists.translations) == [{:reverse, 1}]
 
-    assert %{pure: true, local_calls: []} =
+    assert %{purity: :pure, local_calls: []} =
              translation.modules.lists.translations[{:reverse, 1}]
 
     assert [%{"imports" => ["Erlang.lists"], "contents" => [definition]}] =

@@ -459,11 +459,11 @@ theorem completed_nested_processes_are_removed :
   cbv
 
 theorem spawn_rejects_invalid_fun :
-    Lynx.run («spawn/1» (.atom "not_a_fun")) [] functions =
+    Lynx.schedule («spawn/1» (.atom "not_a_fun")) [] functions =
       .error (.error (.atom "badarg")) ∧
-    Lynx.run («spawn/1» (.function 9 0 #[])) [] functions =
+    Lynx.schedule («spawn/1» (.function 9 0 #[])) [] functions =
       .error (.error (.atom "badarg")) ∧
-    Lynx.run («spawn/1» (.function 0 1 #[])) [] functions =
+    Lynx.schedule («spawn/1» (.function 0 1 #[])) [] functions =
       .error (.error (.atom "badarg")) := by
   repeat' apply And.intro
   all_goals cbv

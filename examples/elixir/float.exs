@@ -84,11 +84,6 @@ defmodule FloatProofsTest do
       requires: is_float(number),
       expects: ratio_contract(number),
       proof: ~LEAN"""
-      -- The expectation reaches functions with termination suffixes, so it has no
-      -- purity lemma; prove its direct statement under a pure precondition.
-      refine Lynx.law_of_pure_requires (by simp) ?_ requires
-      clear requires schedule
-      intro requires
       let ratioPair (n : Nat) (e : Int) (negative : Bool) : Lynx.Term :=
         let signed : Int := if negative then -(n : Int) else n
         let numerator := if e < 0 then signed else signed <<< e.toNat
