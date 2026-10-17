@@ -103,6 +103,27 @@ theorem is_map_guard (entries : List (Term × Term)) :
     Erlang.erlang.«is_map/1» (.map entries) = .ok Term.true ∧
     Erlang.erlang.«is_map/1» one = .ok Term.false := ⟨rfl, rfl⟩
 
+/-- Later pairs shadow earlier ones; anything but a proper list of pairs is badarg. -/
+theorem from_list_pairs :
+    Erlang.maps.«from_list/1» .nil = .ok (.map []) ∧
+    (Erlang.maps.«from_list/1» (.cons (.tuple #[a, one]) (.cons (.tuple #[a, two]) .nil)) >>=
+      Erlang.maps.«get/2» a) = .ok two ∧
+    Erlang.maps.«from_list/1» (.cons (.tuple #[a, one]) one) = .error (.error (.atom "badarg")) ∧
+    Erlang.maps.«from_list/1» (.cons (.tuple #[a]) .nil) = .error (.error (.atom "badarg")) ∧
+    Erlang.maps.«from_list/1» one = .error (.error (.atom "badarg")) := by
+  repeat' first | apply And.intro | rfl
+
+/-- Map enumeration has no specified order, but keeps each visible binding once. -/
+theorem enumeration_lookup (entries : List (Term × Term)) (key : Term) :
+    Term.mapLookup (Term.mapEntries entries) key = Term.mapLookup entries key ∧
+    (Term.mapEntries entries).Pairwise (fun x y => Term.exactCompare x.1 y.1 ≠ .eq) :=
+  ⟨Term.mapLookup_mapEntries entries key, Term.mapEntries_distinct entries⟩
+
+theorem enumeration_shadowed :
+    Term.mapLookup (Term.mapEntries [(a, two), (a, one)]) a = some two := by
+  rw [Term.mapLookup_mapEntries]
+  rfl
+
 end LynxTest.Modules.Maps
 
 run_cmd do

@@ -6,6 +6,7 @@ public import Lynx
 public import Lynx.Modules.Erlang.erlang
 public import Lynx.Modules.Erlang.lists
 public import Lynx.Modules.Erlang.maps
+public import Lynx.Modules.Erlang.erts_internal
 public import Lynx.Modules.Erlang.math
 
 -- Keep constructor and table adapter signatures part of the API check.
@@ -275,8 +276,11 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«trunc/1»",
   "Erlang.erlang.«tuple_size/1»",
   "Erlang.erlang.«xor/2»",
+  "Erlang.erts_internal.«mc_iterator/1»",
+  "Erlang.erts_internal.«mc_refill/1»",
   "Erlang.lists.«member/2»",
   "Erlang.lists.«reverse/2»",
+  "Erlang.maps.«from_list/1»",
   "Erlang.maps.«get/2»",
   "Erlang.maps.«merge/2»",
   "Erlang.maps.«new/0»",
@@ -409,7 +413,11 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.instReprFiniteFloat",
   "Lynx.Term.integer",
   "Lynx.Term.map",
+  "Lynx.Term.mapEntries",
+  "Lynx.Term.mapEnumeration",
+  "Lynx.Term.mapLookup",
   "Lynx.Term.nil",
+  "Lynx.Term.pairList?",
   "Lynx.Term.pid",
   "Lynx.Term.reference",
   "Lynx.Term.true",

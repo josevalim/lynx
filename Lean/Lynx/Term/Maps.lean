@@ -6,6 +6,12 @@ public section
 
 namespace Lynx.Term
 
+/-- The pairs of a proper list of 2-tuples, as accepted by `maps:from_list/1`. -/
+@[expose] def pairList? : Term → Option (List (Term × Term))
+  | .nil => some []
+  | .cons (.tuple #[key, value]) tail => (pairList? tail).map ((key, value) :: ·)
+  | _ => none
+
 /-- Collect map values in key order, including repeated keys. Return an empty
 Lean list if the input is not a map or any key is missing. The clause decoder
 uses this for nonempty key lists; empty map patterns match the map constructor. -/

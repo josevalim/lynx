@@ -860,4 +860,41 @@ theorem map_compare_eq_of_lookup (a b : List (Term × Term))
   simp only [Compare.mapViewLookup_view]
   exact h q
 
+/-- First-binding lookup of a key in a map's entries. -/
+@[expose] def mapLookup (entries : List (Term × Term)) (key : Term) : Option Term :=
+  (entries.find? fun entry => decide (exactCompare key entry.1 = .eq)).map Prod.snd
+
+/-- The visible bindings of a map, each key once, in an unspecified order.
+Erlang does not specify map iteration order, so proofs may rely only on the
+distinct keys and lookups below. Execution enumerates the keys in ascending order. -/
+opaque mapEnumeration (entries : List (Term × Term)) :
+    { enumerated : List (Term × Term) //
+      enumerated.Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq) ∧
+      ∀ key, mapLookup enumerated key = mapLookup entries key } :=
+  ⟨Compare.mapView exactCompare entries,
+    (Compare.mapView_sorted exactCompare entries).imp fun lt => by simp [lt],
+    Compare.mapViewLookup_view exactCompare entries⟩
+
+/-- The visible bindings of a map, in an unspecified order. -/
+def mapEntries (entries : List (Term × Term)) : List (Term × Term) :=
+  (mapEnumeration entries).val
+
+/-- Enumeration keeps the first binding of each key. -/
+@[simp] theorem mapLookup_mapEntries (entries : List (Term × Term)) (key : Term) :
+    mapLookup (mapEntries entries) key = mapLookup entries key :=
+  (mapEnumeration entries).property.2 key
+
+/-- Enumerated keys are distinct. -/
+theorem mapEntries_distinct (entries : List (Term × Term)) :
+    (mapEntries entries).Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq) :=
+  (mapEnumeration entries).property.1
+
+/-- The empty map enumerates no bindings. -/
+@[simp] theorem mapEntries_nil : mapEntries [] = [] := by
+  cases enumerated : mapEntries [] with
+  | nil => rfl
+  | cons entry rest =>
+    have found := mapLookup_mapEntries [] entry.1
+    simp [enumerated, mapLookup] at found
+
 end Lynx.Term

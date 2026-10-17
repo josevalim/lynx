@@ -179,6 +179,10 @@ defmodule Lynx do
 
     * Exception stack traces are not recorded and are represented by `[]`.
 
+    * Map iteration order is unspecified, as in Erlang. Map generators and
+      other enumerations visit each key once, but proofs cannot rely on any
+      particular order.
+
     * Laws cannot quantify over arbitrary functions. A function parameter ranges
       over every function term, with no behavior of its own; calling one resolves
       only against the functions the program defines. Restrict function

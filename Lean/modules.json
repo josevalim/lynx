@@ -4,8 +4,11 @@
   "put/3": {"pure": true},
   "new/0": {"pure": true},
   "merge/2": {"pure": true},
-  "get/2": {"pure": true}},
+  "get/2": {"pure": true},
+  "from_list/1": {"pure": true}},
  "lists": {"reverse/2": {"pure": true}, "member/2": {"pure": true}},
+ "erts_internal":
+ {"mc_refill/1": {"pure": true}, "mc_iterator/1": {"pure": true}},
  "erlang":
  {"xor/2": {"pure": true},
   "tuple_size/1": {"pure": true},

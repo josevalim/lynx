@@ -32,6 +32,12 @@ open Lynx
       .error (.error (.tuple #[.atom "badkey", key]))
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
+/-- Later pairs take precedence, so they shadow earlier ones. -/
+#lynx_pure @[expose] def «from_list/1» (list : Term) : Result :=
+  match Term.pairList? list with
+  | some entries => .ok (.map entries.reverse)
+  | none => .error (.error (.atom "badarg"))
+
 #lynx_pure @[expose] def «merge/2» (left right : Term) : Result :=
   match left, right with
   | .map a, .map b => .ok (.map (b ++ a))
