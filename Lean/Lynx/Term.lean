@@ -51,6 +51,15 @@ public theorem run_of_isPure (computation : Result α) (pure : computation.IsPur
     run (.error exception : Result α) schedule table callDepth = .error exception := by
   simp [run_of_isPure]
 
+/-- A computation whose dynamic calls resolve to a value against a program table
+runs to that value under every schedule. -/
+public theorem run_of_resolve {computation : Result α} {table : Term.FunTable}
+    {callDepth : Nat} {value : α} (nonempty : table.isEmpty = false)
+    (resolved : Result.resolve table callDepth computation = .ok value)
+    (schedule : List ScheduleChoice) :
+    run computation schedule table callDepth = .ok value := by
+  simp [run, nonempty, Result.runWith_apply, resolved]
+
 /-- A pure computation runs to `ok` exactly when it returns that value. -/
 @[simp] public theorem IsPure.run_eq_ok_iff {computation : Result α} (pure : computation.IsPure)
     {schedule : List ScheduleChoice} {table : Term.FunTable} {callDepth : Nat} {value : α} :

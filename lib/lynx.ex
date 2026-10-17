@@ -37,6 +37,21 @@ defmodule Lynx do
 
       def «sum/1» (_0 : Lynx.Term) : Lynx.Result
 
+  Each law becomes a Lean theorem stated through `Lynx.run`, which executes a
+  computation against the program's function table. Its precondition must return
+  `true` under some scheduler choices, and its expectation under all of them:
+
+      theorem «law/1» (x : Lynx.Term)
+          (requires : ∃ schedule, Lynx.run («law:requires/1» x) schedule table 100 = .ok Lynx.Term.true)
+          (schedule : List Lynx.ScheduleChoice) :
+          Lynx.run («law:ensures/1» x) schedule table 100 = .ok Lynx.Term.true
+
+  When both helpers are pure, the proof instead receives the direct goal
+  `«law:ensures/1» x = .ok Lynx.Term.true`, with `requires` stated the same way.
+  Otherwise, `Lynx.law_of_pure_requires` reduces a pure precondition to that form,
+  and `Lynx.run_of_resolve` proves goals whose function calls resolve through the
+  table. Proofs citing other laws receive their `Lynx.run` statements.
+
   The Lean source code is present in the "Lean" folder of the Lynx project. Besides
   the basic definition of Erlang terms, it also contains the implementation of Erlang
   NIFs within `Lynx/Modules/Erlang`. It may be necessary to navigate the source code
@@ -115,6 +130,12 @@ defmodule Lynx do
       according to the modeled scheduler's choices, or when no process can run.
 
     * Exception stack traces are not recorded and are represented by `[]`.
+
+    * Laws cannot quantify over arbitrary functions. A function parameter ranges
+      over every function term, with no behavior of its own; calling one resolves
+      only against the functions the program defines. Restrict function
+      parameters in `requires:` to explicitly listed functions, for example
+      `fun in [fn x -> x end, fn x -> {x} end]`.
 
   Missing constructs or BIFs produce translation errors. Feel free to
   [open an issue](https://github.com/josevalim/lynx/issues) for missing functionality.

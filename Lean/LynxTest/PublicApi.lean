@@ -273,6 +273,7 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«trunc/1»",
   "Erlang.erlang.«tuple_size/1»",
   "Erlang.erlang.«xor/2»",
+  "Erlang.lists.«member/2»",
   "Erlang.lists.«reverse/2»",
   "Erlang.maps.«get/2»",
   "Erlang.maps.«merge/2»",

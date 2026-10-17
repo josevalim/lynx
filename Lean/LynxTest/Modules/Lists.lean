@@ -19,6 +19,25 @@ theorem reverse_improper (a tail : Term) :
 theorem reverse_non_list (tail : Term) :
     «reverse/2» (.integer 1) tail = .error (.error (.atom "badarg")) := rfl
 
+theorem member_found (a b : Term) :
+    «member/2» (.atom "b") (.cons a (.cons (.atom "b") (.atom "improper"))) = .ok Term.true := by
+  cases a <;> simp [«member/2»]
+
+private def floatOne : Term.FiniteFloat :=
+  ⟨false, 1023, 0⟩
+
+/-- Membership uses exact equality, so an integer does not match an equal float. -/
+theorem member_exact :
+    «member/2» (.integer 1) (.cons (.float floatOne) .nil) = .ok Term.false := by
+  simp [«member/2»]
+
+theorem member_improper :
+    «member/2» (.atom "c") (.cons (.atom "a") (.atom "b")) = .error (.error (.atom "badarg")) := by
+  simp [«member/2»]
+
+theorem member_non_list :
+    «member/2» (.atom "a") (.atom "foo") = .error (.error (.atom "badarg")) := rfl
+
 run_cmd do
   LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.lists
   LynxTest.ProofAudit.checkModule `LynxTest.Modules.Lists
