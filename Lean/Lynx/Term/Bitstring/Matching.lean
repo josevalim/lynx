@@ -1,5 +1,6 @@
 module
 
+public meta import Lean
 public import Lynx.Term.Bitstring.Construction
 
 namespace Lynx.Term.Bitstring
@@ -259,5 +260,207 @@ public theorem matchTail_bits (bits : List Bool) :
 public theorem matchEnd_bits (bits : List Bool) :
     matchEnd (ofBits bits) = (bits.length == 0) := by
   simp [matchEnd, ofBits, pack_bitSize]
+
+/-! ## Consumed bits
+
+Every successful extraction removes its width from the measure of the input.
+These facts let recursion over the remaining bits prove termination. -/
+
+private theorem toBits_length (bytes : ByteArray) (last : Fin 8) :
+    (toBits bytes last).length = bitSize bytes last := by
+  simp [toBits]
+
+private theorem matchInteger_sizeOf {input size value rest : Term} {unit : Nat} {signed little : Bool}
+    (matched : matchInteger input size unit signed little = some (value, rest)) :
+    ∃ width : Int, size = .integer width ∧ 0 ≤ width ∧ 1 ≤ unit ∧
+      sizeOf rest + width.toNat * unit = sizeOf input := by
+  unfold matchInteger at matched
+  split at matched
+  · rename_i bytes last _ width
+    dsimp only at matched
+    split at matched <;> try contradiction
+    rename_i bounds
+    split at matched <;> try contradiction
+    cases matched
+    refine ⟨width, rfl, bounds.1, bounds.2.1, ?_⟩
+    simp only [ofBits_sizeOf, bitstring_sizeOf, List.length_drop, toBits_length] at *
+    omega
+  · contradiction
+
+private theorem matchBinary_sizeOf {input size value rest : Term} {unit : Nat}
+    (matched : matchBinary input size unit = some (value, rest)) :
+    ∃ width : Int, size = .integer width ∧ 0 ≤ width ∧ 1 ≤ unit ∧
+      sizeOf rest + width.toNat * unit = sizeOf input := by
+  unfold matchBinary at matched
+  split at matched
+  · rename_i bytes last _ width
+    dsimp only at matched
+    split at matched <;> try contradiction
+    rename_i bounds
+    cases matched
+    refine ⟨width, rfl, bounds.1, bounds.2.1, ?_⟩
+    simp only [ofBits_sizeOf, bitstring_sizeOf, List.length_drop, toBits_length] at *
+    omega
+  · contradiction
+
+public theorem matchInteger_sizeOf_integer {input value rest : Term} {width : Int} {unit : Nat}
+    {signed little : Bool}
+    (matched : matchInteger input (.integer width) unit signed little = some (value, rest)) :
+    sizeOf rest + width.toNat * unit = sizeOf input := by
+  obtain ⟨_, same, -, -, length⟩ := matchInteger_sizeOf matched
+  cases same
+  exact length
+
+public theorem matchBinary_sizeOf_integer {input value rest : Term} {width : Int} {unit : Nat}
+    (matched : matchBinary input (.integer width) unit = some (value, rest)) :
+    sizeOf rest + width.toNat * unit = sizeOf input := by
+  obtain ⟨_, same, -, -, length⟩ := matchBinary_sizeOf matched
+  cases same
+  exact length
+
+public theorem matchInteger_sizeOf_le {input size value rest : Term} {unit : Nat}
+    {signed little : Bool} (matched : matchInteger input size unit signed little = some (value, rest)) :
+    sizeOf rest ≤ sizeOf input := by
+  obtain ⟨_, -, -, -, length⟩ := matchInteger_sizeOf matched
+  omega
+
+public theorem matchBinary_sizeOf_le {input size value rest : Term} {unit : Nat}
+    (matched : matchBinary input size unit = some (value, rest)) :
+    sizeOf rest ≤ sizeOf input := by
+  obtain ⟨_, -, -, -, length⟩ := matchBinary_sizeOf matched
+  omega
+
+/-- Whether a segment size is zero. Comprehensions raise on zero-width generator
+segments, which would otherwise repeat forever. -/
+@[expose] public def zeroWidth : Term → Bool
+  | .integer width => width == 0
+  | _ => Bool.false
+
+public theorem matchInteger_sizeOf_nonzero {input size value rest : Term} {unit : Nat}
+    {signed little : Bool} (nonzero : ¬zeroWidth size = Bool.true)
+    (matched : matchInteger input size unit signed little = some (value, rest)) :
+    sizeOf rest < sizeOf input := by
+  obtain ⟨width, rfl, positive, unit, length⟩ := matchInteger_sizeOf matched
+  simp only [zeroWidth, beq_iff_eq] at nonzero
+  have : 1 ≤ width.toNat := by omega
+  have := Nat.mul_le_mul this unit
+  omega
+
+public theorem matchBinary_sizeOf_nonzero {input size value rest : Term} {unit : Nat}
+    (nonzero : ¬zeroWidth size = Bool.true) (matched : matchBinary input size unit = some (value, rest)) :
+    sizeOf rest < sizeOf input := by
+  obtain ⟨width, rfl, positive, unit, length⟩ := matchBinary_sizeOf matched
+  simp only [zeroWidth, beq_iff_eq] at nonzero
+  have : 1 ≤ width.toNat := by omega
+  have := Nat.mul_le_mul this unit
+  omega
+
+public theorem matchFloat_sizeOf {input value rest : Term} {width : Nat} {little : Bool}
+    (matched : matchFloat input width little = some (value, rest)) :
+    sizeOf rest + 64 = sizeOf input := by
+  unfold matchFloat at matched
+  split at matched <;> try contradiction
+  cases extracted : matchInteger input (.integer 64) 1 Bool.false little with
+  | none => simp [extracted] at matched
+  | some pair =>
+    obtain ⟨integer, suffix⟩ := pair
+    have length := matchInteger_sizeOf_integer extracted
+    cases integer <;> simp [extracted] at matched
+    obtain ⟨_, _, rfl⟩ := matched
+    simpa using length
+
+public theorem matchUtf8_sizeOf {input value rest : Term}
+    (matched : matchUtf8 input = some (value, rest)) :
+    sizeOf rest + 8 ≤ sizeOf input := by
+  unfold matchUtf8 at matched
+  split at matched
+  · rename_i bytes last _
+    dsimp only at matched
+    simp only [Option.ite_none_right_eq_some, Option.some.injEq, Prod.mk.injEq] at matched
+    obtain ⟨valid, -, rfl⟩ := matched
+    simp only [ofBits_sizeOf, bitstring_sizeOf, List.length_drop, ← toBits_length]
+    have := valid.1
+    have := valid.2.1
+    omega
+  · contradiction
+
+public theorem matchUtf16_sizeOf {input value rest : Term} {little : Bool}
+    (matched : matchUtf16 input little = some (value, rest)) :
+    sizeOf rest + 16 ≤ sizeOf input := by
+  unfold matchUtf16 at matched
+  split at matched
+  · rename_i bytes last _
+    dsimp only at matched
+    simp only [Option.ite_none_right_eq_some, Option.some.injEq, Prod.mk.injEq] at matched
+    obtain ⟨valid, -, rfl⟩ := matched
+    have enough := valid.1
+    simp only [ofBits_sizeOf, bitstring_sizeOf, List.length_drop, ← toBits_length]
+    split <;> split at enough <;> omega
+  · contradiction
+
+public theorem matchUtf32_sizeOf {input value rest : Term} {little : Bool}
+    (matched : matchUtf32 input little = some (value, rest)) :
+    sizeOf rest + 32 = sizeOf input := by
+  unfold matchUtf32 at matched
+  split at matched
+  · rename_i bytes last _
+    dsimp only at matched
+    split at matched <;> try contradiction
+    cases matched
+    simp only [ofBits_sizeOf, bitstring_sizeOf, List.length_drop, toBits_length] at *
+    omega
+  · contradiction
+
+/-! ## Termination
+
+Recursion over the bits left by named extractions, such as bitstring
+generators, decreases `sizeOf` by the consumed bits. Lean's default
+`decreasing_tactic` tries `decreasing_trivial`, which this extends. -/
+
+section Termination
+open Lean Meta Elab Tactic
+
+/-- Facts about the measure left by a successful extraction. -/
+private meta def extractionFacts : Array Name := #[
+  ``matchInteger_sizeOf_integer,
+  ``matchInteger_sizeOf_le,
+  ``matchBinary_sizeOf_integer,
+  ``matchBinary_sizeOf_le,
+  ``matchFloat_sizeOf,
+  ``matchUtf8_sizeOf,
+  ``matchUtf16_sizeOf,
+  ``matchUtf32_sizeOf]
+
+/-- Facts about extractions whose variable size was checked to be nonzero. -/
+private meta def nonzeroFacts : Array Name := #[
+  ``matchInteger_sizeOf_nonzero,
+  ``matchBinary_sizeOf_nonzero]
+
+/-- Record the measure left by every named extraction in context. Local
+definitions are unfolded in the goal and the new facts, so `omega` relates
+the extracted bits to the recursive arguments. -/
+elab "lynx_extraction_facts" : tactic => do
+  liftMetaTactic fun goal => goal.withContext do
+    let mut goal ← goal.change (← zetaReduce (← instantiateMVars (← goal.getType)))
+    let declarations := (← getLCtx).foldl (init := #[]) fun acc declaration =>
+      if declaration.isImplementationDetail then acc else acc.push declaration
+    let assert (goal : MVarId) (proof : Expr) : MetaM MVarId := do
+      let fact ← zetaReduce (← instantiateMVars (← inferType proof))
+      let (_, next) ← (← goal.assert `consumed fact proof).intro1P
+      return next
+    for declaration in declarations do
+      unless (← instantiateMVars declaration.type).isAppOfArity ``Eq 3 do continue
+      for lemma in extractionFacts do
+        try goal ← assert goal (← mkAppM lemma #[declaration.toExpr]) catch _ => pure ()
+      for check in declarations do
+        unless (← instantiateMVars check.type).isAppOfArity ``Not 1 do continue
+        for lemma in nonzeroFacts do
+          try goal ← assert goal (← mkAppM lemma #[check.toExpr, declaration.toExpr])
+          catch _ => pure ()
+    return [goal]
+
+macro_rules | `(tactic| decreasing_trivial) => `(tactic| (lynx_extraction_facts; omega))
+
+end Termination
 
 end Lynx.Term.Bitstring

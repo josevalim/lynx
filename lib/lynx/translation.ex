@@ -634,6 +634,7 @@ defmodule Lynx.Translation do
         {definition, join_purity(purity, definition_purity)}
       end)
 
+    defs = name_matches(names, defs, functions)
     [first | _] = defs
     span = first["span"]
 
@@ -644,6 +645,22 @@ defmodule Lynx.Translation do
       _ ->
         defs = group_measures(names, defs, functions)
         %{"kind" => "mutual", "span" => span, "defs" => defs, "purity" => Atom.to_string(purity)}
+    end
+  end
+
+  # Recursion over the bits left by a bitstring match decreases `sizeOf` by
+  # the bits it consumes. Lean's termination proof needs the equation of each
+  # match, so those definitions name their matches.
+  defp name_matches(names, defs, functions) do
+    for {name, definition} <- Enum.zip(names, defs) do
+      bits? =
+        Enum.any?(Map.fetch!(functions, name).size_calls, fn {callee, args} ->
+          callee in names and Enum.any?(args, &match?({_, :bits}, &1))
+        end)
+
+      if bits? and not Map.has_key?(definition, "termination_suffix"),
+        do: Map.put(definition, "named_matches", true),
+        else: definition
     end
   end
 
@@ -670,7 +687,8 @@ defmodule Lynx.Translation do
             # its parameter. Lean checks every call of the resulting measures, so
             # self-calls without one, such as those removed by Lean's preprocessing,
             # are not searched.
-            caller != index[callee] or Enum.any?(args, &match?({_, :lt}, &1)),
+            caller != index[callee] or
+              Enum.any?(args, &match?({_, kind} when kind in [:lt, :bits], &1)),
             do: {caller, index[callee], args}
 
       sizes = fn offsets ->
@@ -715,7 +733,7 @@ defmodule Lynx.Translation do
 
   defp compare_rank(args, {:size, param, offset}, {:size, callee, callee_offset}) do
     case Enum.at(args, callee) do
-      {^param, :lt} when offset >= callee_offset -> :gt
+      {^param, kind} when kind in [:lt, :bits] and offset >= callee_offset -> :gt
       {^param, :eq} when offset > callee_offset -> :gt
       {^param, :eq} when offset == callee_offset -> :eq
       _ -> :fail

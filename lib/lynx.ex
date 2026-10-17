@@ -166,6 +166,10 @@ defmodule Lynx do
       sizes is rejected during translation. Float segment sizes must be known
       at translation time.
 
+    * Bitstring generators whose segment widths may all be zero, such as
+      `for <<x::size(n) <- bits>>` with `n = 0`, raise `badarg` instead of
+      repeating forever as Erlang does.
+
     * `native` endianness in bitstring construction and matching is resolved to
       `little` or `big` during translation, according to the platform running
       Lynx. The generated Lean code retains that choice when used elsewhere.

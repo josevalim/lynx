@@ -215,7 +215,11 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
                 ~"body" => node(~"cutoff", Anno, #{})
             }), State1#state{purity = partial}};
         {function, Body} ->
-            {TranslatedBody, Next} = expression(Body, State1),
+            {Translated, Next0} = expression(Body, State1),
+            {TranslatedBody, Next} = lists:foldr(fun(Size, {Acc, AccState}) ->
+                {TranslatedSize, NextState} = value(Size, AccState),
+                {node(~"nonzero_width", Anno, #{~"size" => TranslatedSize, ~"body" => Acc}), NextState}
+            end, {Translated, Next0}, proplists:get_value(lynx_nonzero_widths, Anno, [])),
             {node(~"def", Anno, #{
                 ~"name" => function_name(Name),
                 ~"params" => [variable(Var) || Var <- Vars],
@@ -402,18 +406,63 @@ expression(Value, State0) ->
     {Translated, State1} = value(Value, State0),
     {node(~"return", cerl:get_ann(Value), #{~"values" => [Translated]}), State1}.
 
-expression_local_function(#c_letrec{defs = [{#c_var{name = Loop},
+expression_local_function(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
              #c_fun{vars = Vars} = Fun}], body = Body}, State0) ->
     Captures = local_captures(Fun, State0, [Loop]),
     Name = local_function_name(map_size(State0#state.translated),
                               length(Captures) + length(Vars), State0#state.defs),
     %% Keep recursive arguments first for structural purity proofs.
-    LiftedFun = Fun#c_fun{vars = Vars ++ Captures},
+    LiftedFun = generator_widths(Anno, Fun#c_fun{vars = Vars ++ Captures}),
     State1 = State0#state{
         local_funs = (State0#state.local_funs)#{Loop => {Name, Captures}},
         defs = (State0#state.defs)#{Name => {function, LiftedFun}}},
     {TranslatedBody, State2} = expression(Body, State1),
     {TranslatedBody, State2#state{local_funs = State0#state.local_funs}}.
+
+%% Erlang repeats a bitstring generator forever when its pattern consumes no
+%% bits. Comprehensions raise badarg instead: patterns whose widths are all zero
+%% literals always raise, and variable widths that may be zero are checked on
+%% each iteration. The checks also give Lean the facts to prove that the loop
+%% consumes bits.
+generator_widths(Anno, #c_fun{body = #c_case{clauses = Clauses} = Case} = Fun) ->
+    case lists:member(list_comprehension, Anno) of
+        true ->
+            Sizes = lists:usort([cerl:set_ann(Size, []) ||
+                #c_clause{pats = Patterns} <- Clauses, #c_binary{segments = Segments} = Pattern <- Patterns,
+                Consumed <- [generator_segments(Segments)], Consumed =/= [],
+                not lists:any(fun consumes_bits/1, Consumed),
+                #c_bitstr{size = Size} <- Consumed,
+                not lists:member(cerl:set_ann(Size, []),
+                                 [cerl:set_ann(Var, []) || Var <- cerl:pat_vars(Pattern)])]),
+            case lists:partition(fun cerl:is_c_var/1, Sizes) of
+                {[], []} ->
+                    Fun;
+                {Variables, []} ->
+                    Fun#c_fun{anno = cerl:get_ann(Fun) ++ [{lynx_nonzero_widths, Variables}]};
+                {_, _Literals} ->
+                    %% Literal zero widths never consume bits, even from an empty input.
+                    Fun#c_fun{body = cerl:ann_c_call(cerl:get_ann(Case), cerl:c_atom(erlang),
+                                                     cerl:c_atom(error), [cerl:c_atom(badarg)])}
+            end;
+        false ->
+            Fun
+    end;
+generator_widths(_Anno, Fun) ->
+    Fun.
+
+%% Segments matched before the remaining bits, which are passed to the next iteration.
+generator_segments(Segments) ->
+    case lists:reverse(Segments) of
+        [#c_bitstr{size = #c_literal{val = all}} | Consumed] -> lists:reverse(Consumed);
+        _ -> Segments
+    end.
+
+consumes_bits(#c_bitstr{type = #c_literal{val = Type}}) when Type =:= utf8; Type =:= utf16; Type =:= utf32 ->
+    true;
+consumes_bits(#c_bitstr{size = #c_literal{val = Size}}) ->
+    is_integer(Size) andalso Size > 0;
+consumes_bits(#c_bitstr{}) ->
+    false.
 
 local_function_name(Index, Arity, Definitions) ->
     Name = {list_to_atom("lynx_local_" ++ integer_to_list(Index)), Arity},
@@ -425,13 +474,32 @@ local_function_name(Index, Arity, Definitions) ->
 %% A closure calling an enclosing local function also needs that function's
 %% captured environment, even when those variables are absent from its syntax.
 local_captures(Fun, State, Ignored) ->
-    Free = cerl_trees:free_variables(Fun),
+    Free = cerl_trees:free_variables(Fun) ++ pattern_size_variables(Fun),
     Indirect = lists:append([Captures || Name <- Free,
         not lists:member(Name, Ignored),
         {ok, {_, Captures}} <- [maps:find(Name, State#state.local_funs)]]),
     Names = lists:usort([V || V <- Free, not is_tuple(V)] ++
                         [V || #c_var{name = V} <- Indirect]),
     [#c_var{name = V} || V <- Names].
+
+%% cerl_trees:free_variables/1 omits variables used as sizes in bitstring
+%% patterns, such as N in <<X:N>>. Those bound outside the function are captures.
+pattern_size_variables(Fun) ->
+    {Sizes, Bound} = cerl_trees:fold(fun
+        (#c_bitstr{size = #c_var{name = Name}}, {Sizes, Bound}) -> {[Name | Sizes], Bound};
+        (#c_fun{vars = Vars}, {Sizes, Bound}) -> {Sizes, var_names(Vars) ++ Bound};
+        (#c_let{vars = Vars}, {Sizes, Bound}) -> {Sizes, var_names(Vars) ++ Bound};
+        (#c_try{vars = Vars, evars = EVars}, {Sizes, Bound}) ->
+            {Sizes, var_names(Vars ++ EVars) ++ Bound};
+        (#c_letrec{defs = Defs}, {Sizes, Bound}) ->
+            {Sizes, var_names([Name || {Name, _} <- Defs]) ++ Bound};
+        (#c_clause{} = Clause, {Sizes, Bound}) ->
+            {Sizes, var_names(cerl:pat_list_vars(cerl:clause_pats(Clause))) ++ Bound};
+        (_, Acc) -> Acc
+    end, {[], []}, Fun),
+    lists:usort(Sizes) -- Bound.
+
+var_names(Vars) -> [Name || #c_var{name = Name} <- Vars].
 
 expression_apply(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args} = Core, State0) ->
     case maps:is_key(Name, State0#state.labels) of
@@ -483,7 +551,8 @@ prim_op(Op, Anno, Args, _State) ->
     unsupported(#c_primop{anno = Anno, name = #c_literal{val = Op}, args = Args}).
 
 %% What is known about a value's size: equal to a parameter, strictly smaller
-%% than one when bound inside a pattern matching it, or unknown.
+%% than one when bound inside a pattern matching it (bits when left after a
+%% bitstring's segments), or unknown.
 size_fact(#c_var{name = Name}, Facts) -> maps:get(Name, Facts, unknown);
 size_fact(_, _Facts) -> unknown.
 
@@ -497,6 +566,15 @@ pattern_facts(#c_tuple{es = Elements}, Fact, _Inside) ->
     lists:append([pattern_facts(Element, Fact, true) || Element <- Elements]);
 pattern_facts(#c_map{es = Pairs}, Fact, _Inside) ->
     lists:append([pattern_facts(Value, Fact, true) || #c_map_pair{val = Value} <- Pairs]);
+%% The bits left after a bitstring's segments are fewer than the bitstring's.
+pattern_facts(#c_binary{segments = [_ | _] = Segments}, {Param, _}, _Inside) ->
+    case lists:last(Segments) of
+        #c_bitstr{val = #c_var{name = Name}, type = #c_literal{val = binary}}
+                when length(Segments) > 1 ->
+            [{Name, {Param, bits}}];
+        _ ->
+            []
+    end;
 pattern_facts(_Pattern, _Fact, _Inside) ->
     [].
 

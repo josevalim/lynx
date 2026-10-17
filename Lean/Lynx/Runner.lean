@@ -103,6 +103,9 @@ private structure PatternExtraction where
   lookup : TSyntax `term
   pattern : TSyntax `term
   catchAll : Bool := false
+  /-- Keep the extraction's equation, from which recursion over the remaining
+  bits proves termination. -/
+  named : Bool := false
 
 private structure DecodeState where
   spans : Array Span := #[]
@@ -110,6 +113,9 @@ private structure DecodeState where
   theorems : Array (Name × Span) := #[]
   patternExtractions : Array PatternExtraction := #[]
   nextBitstringPattern : Nat := 0
+  /-- Whether the definition being decoded recurses over the bits left by its
+  bitstring matches, so Lean's termination proof needs their equations. -/
+  namedMatches : Bool := false
 
 private abbrev DecodeM := ReaderT Lean.Environment (StateT DecodeState (Except String))
 
@@ -223,19 +229,22 @@ private def withExtractions (decode : DecodeM α) : DecodeM (α × Array Pattern
 
 /-- Queue a decoded pattern before the checks that depend on its bindings. -/
 private def addExtraction (lookup pattern : TSyntax `term) (catchAll : Bool := false)
-    (nested : Array PatternExtraction := #[]) : DecodeM Unit :=
+    (nested : Array PatternExtraction := #[]) (named : Bool := false) : DecodeM Unit :=
   modify fun s => { s with patternExtractions :=
-    (s.patternExtractions.push ⟨lookup, pattern, catchAll⟩) ++ nested }
+    (s.patternExtractions.push ⟨lookup, pattern, catchAll, named⟩) ++ nested }
 
 /-- Match extracted values with the clause's fallthrough continuation. -/
 private def patternMatches (patterns : Array PatternExtraction)
     (body fallback : TSyntax `term) : TSyntax `term := Id.run do
   let mut branch := body
+  let matched := mkIdent `lynxMatched
   for extraction in patterns.reverse do
     let lookup := extraction.lookup
     let pat := extraction.pattern
     branch := if extraction.catchAll then
       Unhygienic.run `(match ($lookup) with | $pat => $branch)
+    else if extraction.named then
+      Unhygienic.run `(match $matched:ident : ($lookup) with | $pat => $branch | _ => $fallback)
     else
       Unhygienic.run `(match ($lookup) with | $pat => $branch | _ => $fallback)
   return branch
@@ -530,7 +539,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     (j : Json) : DecodeM (TSyntax `term) := do
   let info ← span map j parent
   let kind ← str j "kind"
-  if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "raise_dynamic", "reraise", "match", "receive", "try", "stacktrace", "label", "jump"] then
+  if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "raise_dynamic", "reraise", "nonzero_width", "match", "receive", "try", "stacktrace", "label", "jump"] then
     throw s!"{kind} is not valid in patterns"
   let result ← match kind with
   | "$type" => do
@@ -587,7 +596,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let ctor := mkIdent ``Lynx.Term.atom
     pure (Unhygienic.run `($ctor $literal))
   | "bitstring_pattern" => do
-    fields j ["kind", "segments", "span"]
+    fields j ["kind", "segments", "span", "input"]
     unless pattern do throw "bitstring pattern is only valid in patterns"
     let nodeSpan ← field j "span"
     let fresh : DecodeM Json := do
@@ -595,7 +604,10 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       modify fun s => { s with nextBitstringPattern := index + 1 }
       pure (Json.mkObj [("kind", toJson "var"), ("span", nodeSpan),
         ("name", Json.mkObj [("bitstring", toJson index)])])
-    let binder ← fresh
+    -- A matched variable is extracted from directly, without rebinding it.
+    let binder ← match field j "input" with
+      | .ok input => pure input
+      | .error _ => fresh
     let input ← term map info true binder
     let mut remaining := input
     let accepted := Unhygienic.run `(Bool.true)
@@ -664,7 +676,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
         remaining := rest
         let (pat, nested) ← withExtractions (term map si true value)
         let pair := Unhygienic.run `(Option.some ($pat, $rest))
-        addExtraction extract pair false nested
+        addExtraction extract pair false nested (named := (← get).namedMatches)
     unless trailing do
       let finish := mkIdent ``Lynx.Term.Bitstring.matchEnd
       let lookup := Unhygienic.run `($finish $remaining)
@@ -866,6 +878,15 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let reason ← term map info false (← field j "reason")
     let error := mkIdent ``Lynx.Result.error
     pure (Unhygienic.run `($error ($ctor $reason)))
+  | "nonzero_width" => do
+    fields j ["kind", "size", "body", "span"]
+    let size ← term map info false (← field j "size")
+    let body ← term map info false (← field j "body")
+    let zero := mkIdent ``Lynx.Term.Bitstring.zeroWidth
+    -- The named check lets termination proofs use the nonzero width.
+    let nonzero := mkIdent `lynxNonzero
+    pure (Unhygienic.run `(if $nonzero:ident : $zero $size = Bool.true then
+      Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "badarg")) else $body))
   | "try" => do
     fields j ["kind", "computation", "vars", "body", "exception_vars", "handler", "span"]
     let vars ← (← arr j "vars").mapM (param map info)
@@ -1033,6 +1054,17 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let exprs ← exprJson.mapM (term map info false)
     let unit : TSyntax `term := ⟨(mkIdent ``Unit.unit).raw⟩
     let clauses ← (← arr j "cases").mapM (fun c => refineGuardClause c exprJson)
+    -- Bitstring patterns on variables extract from them directly. Their positions
+    -- are dropped from the match: Lean cannot derive functional induction when
+    -- a match only rebinds several of a recursive function's parameters.
+    let namedMatches := (← get).namedMatches
+    let direct (pattern : Json) (i : Nat) : Bool :=
+      namedMatches && (str pattern "kind").toOption == some "bitstring_pattern" &&
+        (exprJson[i]? >>= fun e => (str e "kind").toOption) == some "var"
+    let clauses ← clauses.mapM fun c => do
+      let patterns ← arr c "patterns"
+      pure (c.setObjVal! "patterns" (toJson (patterns.mapIdx fun i pattern =>
+        if direct pattern i then pattern.setObjVal! "input" exprJson[i]! else pattern)))
     let mut nests : Array Bool := #[]
     let mut lookups : Array (Array PatternExtraction) := #[]
     let mut cases : Array (TSyntax ``Lean.Parser.Term.matchAlt) := #[]
@@ -1087,11 +1119,21 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
               pure (Unhygienic.run `($guardCall $guard (fun _ => $body) $fallback))
               else pure body
             let branch := patternMatches lookups[i]! branch (Unhygienic.run `($fallback ()))
-            let catchAll ← (← arr c "patterns").allM fun pat => do return ← catchAllPattern pat
-            let matched := if catchAll then Unhygienic.run `(
-              match $[$exprs:term],* with | $pats,* => $branch)
-              else Unhygienic.run `(
-                match $[$exprs:term],* with | $pats,* => $branch | $wildcards,* => $fallback ())
+            let patterns ← arr c "patterns"
+            let keep := (List.range pats.getElems.size).toArray.filter fun k =>
+              !(patterns[k]?.map (direct · k)).getD false
+            let kept := keep.map (pats.getElems[·]!)
+            let keptExprs := keep.map (exprs[·]!)
+            let keptWildcards := keep.map (wildcards[·]!)
+            let catchAll ← keep.allM fun k => do
+              match patterns[k]? with
+              | some pattern => catchAllPattern pattern
+              | none => pure true
+            let matched := if keep.isEmpty then branch
+              else if catchAll then Unhygienic.run `(
+                match $[$keptExprs:term],* with | $[$kept:term],* => $branch)
+              else Unhygienic.run `(match $[$keptExprs:term],* with
+                | $[$kept:term],* => $branch | $[$keptWildcards:term],* => $fallback ())
             -- An applied lambda shares the continuation without leaving a recursive
             -- let-bound thunk in Lean's generated induction principle.
             result := withContinuation fallback matched result
@@ -1332,13 +1374,19 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       let option := mkIdent `maxHeartbeats
       pure (Unhygienic.run `(set_option $option:ident $limit:num in $declaration:command))
   | "def" => do
-    fields j ["kind", "name", "params", "body", "purity", "span", "termination_suffix", "measure"]
+    fields j ["kind", "name", "params", "body", "purity", "span", "termination_suffix", "measure",
+      "named_matches"]
     let params ← (← arr j "params").mapM (param map info)
     let name := functionName (← str j "name") params.size
     let termType := mkIdent ``Lynx.Term
     let resultType := mkIdent ``Lynx.Result
     let binders := params.map fun p => Unhygienic.run `(bracketedBinder| ($p : $termType))
+    let namedMatches ← match field j "named_matches" with
+      | .ok value => value.getBool?
+      | .error _ => pure false
+    modify fun s => { s with namedMatches }
     let body ← term map info false (← field j "body")
+    modify fun s => { s with namedMatches := false }
     let declaration := Unhygienic.run `(def $name $binders:bracketedBinder* : $resultType := $body)
     -- A simple definition has a declValSimple containing :=, body, suffix, and where.
     let attach (suffix : Syntax) : TSyntax `command :=

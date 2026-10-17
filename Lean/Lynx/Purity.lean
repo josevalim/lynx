@@ -423,6 +423,115 @@ private def fixpointProof (function : Name) (arity : Nat) : Command.CommandElabM
         | split
         | simp_all)
 
+/-- Prove the predicate for a recursive group through its induction principle,
+generating one theorem per function. -/
+private def proveGroup (predicate : Predicate) (declaration : TSyntax `command)
+    (functions : Array Name) (guard : Ident) : Command.CommandElabM Unit := do
+  -- The equation compiler can reorder a mutual group. Its induction theorem
+  -- uses that order for motives and conjunction projections.
+  let env ← getEnv
+  let declaredFunctions := functions
+  let (functions, perms) : Array Name × Option FixedParamPerms :=
+    if let some info := Structural.eqnInfoExt.find? env functions[0]! then
+      (info.declNames, some info.fixedParamPerms)
+    else if let some info := WF.eqnInfoExt.find? env functions[0]! then
+      (info.declNames, some info.fixedParamPerms)
+    else (functions, none)
+  unless functions.size == declaredFunctions.size && functions.all declaredFunctions.contains do
+    throwErrorAt declaration "mutual block must be a single recursive group"
+  let types : Array Expr ← functions.mapM (predicateType predicate)
+  -- Parameters passed unchanged by every recursive call are fixed: the
+  -- induction principle takes them first, and its motives range over the rest.
+  let perms ← Command.liftTermElabM do
+    functions.mapIdxM fun i function => do
+      let arity ← forallTelescopeReducing (← getConstInfo function).type fun args _ =>
+        pure args.size
+      let perm := (perms.bind (·.perms[i]?)).getD (Array.replicate arity none)
+      unless perm.size == arity do throwError "unexpected fixed parameters for {function}"
+      pure perm
+  let numFixed := (perms[0]!.filter Option.isSome).size
+  let jointType ← Command.liftTermElabM do
+    let termType := mkConst ``Lynx.Term
+    withLocalDeclsDND ((List.range numFixed).toArray.map fun k =>
+        (Name.mkSimple s!"fixed{k}", termType)) fun fixed => do
+      let parts ← functions.mapIdxM fun i function => do
+        let info ← getConstInfo function
+        forallTelescopeReducing info.type fun arguments _ => do
+          let args := arguments.mapIdx fun j argument =>
+            match perms[i]![j]! with
+            | some k => fixed[k]!
+            | none => argument
+          let varying := (arguments.zip perms[i]!).filterMap fun (argument, perm) =>
+            if perm.isNone then some argument else none
+          let proposition ← mkAppM predicate.name
+            #[mkAppN (mkConst function (info.levelParams.map Level.param)) args]
+          mkForallFVars varying proposition
+      mkForallFVars fixed (parts.toList.dropLast.foldr (mkApp2 (mkConst ``And)) parts.back!)
+  let tryWith := rule predicate "tryWith"
+  let handle := rule predicate "handle"
+  -- Keep successful-return equations, so impossible returns close branches.
+  let bind := rule predicate "bind_return"
+  let bindExplicit := rule predicate "bind_return_explicit"
+  let lemmaStep ← if predicate.name == ``Result.IsPartial then `(tactic| lynx_partial_lemma)
+    else `(tactic| fail)
+  let proof ← Command.liftTermElabM do
+    let inductionName := functions[0]! ++
+      if functions.size == 1 then `induct else `mutual_induct
+    let induction := mkIdent inductionName
+    let definitions := functions.map mkIdent
+    let unfoldings ← definitions.mapM fun definition => `(tactic| unfold $definition:ident)
+    let fixed := (List.range numFixed).toArray.map fun k => mkIdent (Name.mkSimple s!"fixed{k}")
+    let introduce ← if fixed.isEmpty then `(tactic| skip) else `(tactic| intro $fixed:ident*)
+    -- The principle takes the fixed parameters its cases use before its
+    -- motives, named after the first function's parameters.
+    discard <| realizeGlobalConstNoOverload induction
+    let leading ← forallTelescope (← inferType (← mkConstWithLevelParams inductionName))
+      fun binders _ => do
+        let names ← binders.mapM fun binder => return (← binder.fvarId!.getDecl).userName
+        return names.toList.takeWhile (!·.toString.startsWith "motive")
+    let parameterNames ← forallTelescopeReducing (← getConstInfo functions[0]!).type
+      fun arguments _ => arguments.mapM fun argument => return (← argument.fvarId!.getDecl).userName
+    let fixedArgs ← leading.toArray.mapM fun name => do
+      let some position := parameterNames.findIdx? (· == name) |
+        throwError "unexpected fixed parameter {name} in {inductionName}"
+      let some (some k) := perms[0]![position]? |
+        throwError "unexpected fixed parameter {name} in {inductionName}"
+      pure fixed[k]!
+    let proofSyntax ← `(by
+      $introduce:tactic
+      apply $induction:ident $fixedArgs:ident*
+      all_goals
+        intros
+        -- Unfold only the goal: recursive hypotheses may themselves be matches
+        -- (for example under a shared guard continuation).
+        first $[| $unfoldings:tactic]*
+        repeat' first
+          | $lemmaStep:tactic
+          | apply $guard:ident
+          | apply $tryWith:ident
+          | apply $handle:ident
+          | apply $bind:ident
+          | apply $bindExplicit:ident
+          | (intro)
+          | (solve | grind)
+          | split at *
+          | simp_all)
+    let proof ← Term.elabTermEnsuringType proofSyntax jointType
+    Term.synthesizeSyntheticMVarsNoPostponing
+    instantiateMVars proof
+  for i in [:functions.size] do
+    let part ← Command.liftTermElabM do
+      forallTelescopeReducing types[i]! fun arguments _ => do
+        let fixed := (List.range numFixed).toArray.map fun k =>
+          arguments[(perms[i]!.findIdx? (· == some k)).get!]!
+        let mut part := mkAppN proof fixed
+        for _ in [:i] do part ← mkAppM ``And.right #[part]
+        if i + 1 < functions.size then part ← mkAppM ``And.left #[part]
+        let varying := (arguments.zip perms[i]!).filterMap fun (argument, perm) =>
+          if perm.isNone then some argument else none
+        mkLambdaFVars arguments (mkAppN part varying)
+    registerProof predicate functions[i]! types[i]! part
+
 /-- Elaborate translated definitions and prove the predicate for each fully
 applied computation. Mutually recursive definitions are proved together using
 their generated mutual induction principle. Each generated theorem is a simp rule. -/
@@ -447,108 +556,7 @@ private def elaborateWith (predicate : Predicate) (doc? : Option (TSyntax ``Pars
           instantiateMVars proof
         registerProof predicate function type proof
       return
-    -- The equation compiler can reorder a mutual group. Its induction theorem
-    -- uses that order for motives and conjunction projections.
-    let env ← getEnv
-    let declaredFunctions := functions
-    let (functions, perms) : Array Name × Option FixedParamPerms :=
-      if let some info := Structural.eqnInfoExt.find? env functions[0]! then
-        (info.declNames, some info.fixedParamPerms)
-      else if let some info := WF.eqnInfoExt.find? env functions[0]! then
-        (info.declNames, some info.fixedParamPerms)
-      else (functions, none)
-    unless functions.size == declaredFunctions.size && functions.all declaredFunctions.contains do
-      throwErrorAt declaration "mutual block must be a single recursive group"
-    let types : Array Expr ← functions.mapM (predicateType predicate)
-    -- Parameters passed unchanged by every recursive call are fixed: the
-    -- induction principle takes them first, and its motives range over the rest.
-    let perms ← Command.liftTermElabM do
-      functions.mapIdxM fun i function => do
-        let arity ← forallTelescopeReducing (← getConstInfo function).type fun args _ =>
-          pure args.size
-        let perm := (perms.bind (·.perms[i]?)).getD (Array.replicate arity none)
-        unless perm.size == arity do throwError "unexpected fixed parameters for {function}"
-        pure perm
-    let numFixed := (perms[0]!.filter Option.isSome).size
-    let jointType ← Command.liftTermElabM do
-      let termType := mkConst ``Lynx.Term
-      withLocalDeclsDND ((List.range numFixed).toArray.map fun k =>
-          (Name.mkSimple s!"fixed{k}", termType)) fun fixed => do
-        let parts ← functions.mapIdxM fun i function => do
-          let info ← getConstInfo function
-          forallTelescopeReducing info.type fun arguments _ => do
-            let args := arguments.mapIdx fun j argument =>
-              match perms[i]![j]! with
-              | some k => fixed[k]!
-              | none => argument
-            let varying := (arguments.zip perms[i]!).filterMap fun (argument, perm) =>
-              if perm.isNone then some argument else none
-            let proposition ← mkAppM predicate.name
-              #[mkAppN (mkConst function (info.levelParams.map Level.param)) args]
-            mkForallFVars varying proposition
-        mkForallFVars fixed (parts.toList.dropLast.foldr (mkApp2 (mkConst ``And)) parts.back!)
-    let guard := rule predicate "guard"
-    let tryWith := rule predicate "tryWith"
-    let handle := rule predicate "handle"
-    -- Keep successful-return equations, so impossible returns close branches.
-    let bind := rule predicate "bind_return"
-    let bindExplicit := rule predicate "bind_return_explicit"
-    let lemmaStep ← if predicate.name == ``Result.IsPartial then `(tactic| lynx_partial_lemma)
-      else `(tactic| fail)
-    let proof ← Command.liftTermElabM do
-      let inductionName := functions[0]! ++ `mutual_induct
-      let induction := mkIdent inductionName
-      let definitions := functions.map mkIdent
-      let unfoldings ← definitions.mapM fun definition => `(tactic| unfold $definition:ident)
-      let fixed := (List.range numFixed).toArray.map fun k => mkIdent (Name.mkSimple s!"fixed{k}")
-      let introduce ← if fixed.isEmpty then `(tactic| skip) else `(tactic| intro $fixed:ident*)
-      -- The principle takes the fixed parameters its cases use before its
-      -- motives, named after the first function's parameters.
-      discard <| realizeGlobalConstNoOverload induction
-      let leading ← forallTelescope (← inferType (← mkConstWithLevelParams inductionName))
-        fun binders _ => do
-          let names ← binders.mapM fun binder => return (← binder.fvarId!.getDecl).userName
-          return names.toList.takeWhile (!·.toString.startsWith "motive")
-      let parameterNames ← forallTelescopeReducing (← getConstInfo functions[0]!).type
-        fun arguments _ => arguments.mapM fun argument => return (← argument.fvarId!.getDecl).userName
-      let fixedArgs ← leading.toArray.mapM fun name => do
-        let some position := parameterNames.findIdx? (· == name) |
-          throwError "unexpected fixed parameter {name} in {inductionName}"
-        let some (some k) := perms[0]![position]? |
-          throwError "unexpected fixed parameter {name} in {inductionName}"
-        pure fixed[k]!
-      let proofSyntax ← `(by
-        $introduce:tactic
-        apply $induction:ident $fixedArgs:ident*
-        all_goals
-          intros
-          first $[| $unfoldings:tactic]*
-          repeat' first
-            | $lemmaStep:tactic
-            | apply $guard:ident
-            | apply $tryWith:ident
-            | apply $handle:ident
-            | apply $bind:ident
-            | apply $bindExplicit:ident
-            | (intro)
-            | (solve | grind)
-            | split at *
-            | simp_all)
-      let proof ← Term.elabTermEnsuringType proofSyntax jointType
-      Term.synthesizeSyntheticMVarsNoPostponing
-      instantiateMVars proof
-    for i in [:functions.size] do
-      let part ← Command.liftTermElabM do
-        forallTelescopeReducing types[i]! fun arguments _ => do
-          let fixed := (List.range numFixed).toArray.map fun k =>
-            arguments[(perms[i]!.findIdx? (· == some k)).get!]!
-          let mut part := mkAppN proof fixed
-          for _ in [:i] do part ← mkAppM ``And.right #[part]
-          if i + 1 < functions.size then part ← mkAppM ``And.left #[part]
-          let varying := (arguments.zip perms[i]!).filterMap fun (argument, perm) =>
-            if perm.isNone then some argument else none
-          mkLambdaFVars arguments (mkAppN part varying)
-      registerProof predicate functions[i]! types[i]! part
+    proveGroup predicate declaration functions (rule predicate "guard")
     return
   if let some doc := doc? then
     unless declaration.raw.getArg 0 |>.getArg 0 |>.isNone do
@@ -571,38 +579,14 @@ private def elaborateWith (predicate : Predicate) (doc? : Option (TSyntax ``Pars
   let parameters := (List.range arity).toArray.map fun i => mkIdent (Name.mkSimple s!"_pure_arg_{i}")
   let introduce ← if parameters.isEmpty then `(tactic| skip)
     else `(tactic| intro $parameters:ident*)
+  if !(← isFixpoint function) && (← Command.liftCoreM (isRecursiveDefinition function)) then
+    proveGroup predicate declaration #[function] (rule predicate "guard_cases")
+    return
   let steps ← bodySteps predicate
-  let guardCases := rule predicate "guard_cases"
-  let tryWith := rule predicate "tryWith"
-  let handle := rule predicate "handle"
-  let bindReturn := rule predicate "bind_return"
-  let bindReturnExplicit := rule predicate "bind_return_explicit"
-  -- Close calls through generated lemmas, including pure ones under partiality.
-  let lemmaStep ← if predicate.name == ``Result.IsPartial then `(tactic| lynx_partial_lemma)
-    else `(tactic| fail)
   let proofSyntax ← if ← isFixpoint function then
       unless predicate.name == ``Result.IsPartial do
         throwError "a partial fixed point cannot be proved pure"
       fixpointProof function arity
-    else if ← Command.liftCoreM (isRecursiveDefinition function) then
-      `(by
-        apply $(mkIdent (function ++ `induct)):ident
-        all_goals
-          intros
-          -- Unfold only the goal: recursive hypotheses may themselves be matches
-          -- (for example under a shared guard continuation).
-          unfold $functionId:ident
-          repeat' first
-            | $lemmaStep:tactic
-            | apply $guardCases:ident
-            | apply $tryWith:ident
-            | apply $handle:ident
-            | apply $bindReturn:ident
-            | apply $bindReturnExplicit:ident
-            | (intro)
-            | (solve | grind)
-            | split at *
-            | simp_all)
     else
       `(by
         $introduce:tactic

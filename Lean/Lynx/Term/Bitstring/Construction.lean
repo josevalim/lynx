@@ -16,6 +16,23 @@ namespace Lynx.Term.Bitstring
       | _ => 0) = bits.length := by
   exact pack_bitSize bits
 
+/-- Bitstrings measure their meaningful bits, offset by a constant. -/
+public theorem bitstring_sizeOf (bytes : ByteArray) (last : Fin 8) (valid : Valid bytes last) :
+    sizeOf (Term.bitstring bytes last valid) = 9 + bitSize bytes last := by
+  simp only [Term.bitstring.sizeOf_spec]
+  show 1 + 8 * bytes.size + (if last = 0 then 8 else last.val) + 0 = _
+  unfold bitSize
+  by_cases empty : bytes.size = 0
+  · simp [empty, valid.1 empty]
+  · by_cases aligned : last = 0
+    · simp [empty, aligned]
+      omega
+    · simp [empty, aligned]
+      omega
+
+public theorem ofBits_sizeOf (bits : List Bool) : sizeOf (ofBits bits) = 9 + bits.length := by
+  simp only [ofBits, bitstring_sizeOf, pack_bitSize]
+
 /-- Packing preserves every bit in transmission order. -/
 @[simp] public theorem ofBits_toBits (bits : List Bool) :
     (match ofBits bits with

@@ -29,6 +29,21 @@ to be zero. -/
   else if lastBits = 0 then bytes.size * 8
   else (bytes.size - 1) * 8 + lastBits.val
 
+namespace Measure
+
+/-! Field measures used while deriving `SizeOf Term`. The default measures
+follow byte values, which can grow when a match shifts bits. Here `bytes`
+counts every byte as whole, and `lastBits` subtracts the unused bits of a
+partial final byte. Both are offset by eight to stay in `Nat`, so a bitstring
+measures its meaningful bits plus a constant, and matching a prefix decreases
+`sizeOf`. -/
+
+public scoped instance (priority := high) bytes : SizeOf ByteArray := ⟨fun bytes => 8 * bytes.size⟩
+public scoped instance (priority := high) lastBits : SizeOf (Fin 8) :=
+  ⟨fun lastBits => if lastBits = 0 then 8 else lastBits.val⟩
+
+end Measure
+
 /-- Meaningful bits in transmission order, most significant bit first.
 This view also gives Erlang's lexicographic bitstring ordering. -/
 @[expose] public def toBits (bytes : ByteArray) (lastBits : Fin 8) : List Bool :=

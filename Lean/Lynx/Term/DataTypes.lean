@@ -14,6 +14,7 @@ namespace Lynx
 /-- Process identifiers are monotonically allocated natural numbers. -/
 abbrev PID := Nat
 
+open _root_.Lynx.Term.Bitstring.Measure in
 inductive Term where
   | integer : Int → Term
   | float : _root_.Lynx.Term.FiniteFloat → Term
