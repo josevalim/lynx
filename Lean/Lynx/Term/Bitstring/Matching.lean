@@ -261,6 +261,64 @@ public theorem matchEnd_bits (bits : List Bool) :
     matchEnd (ofBits bits) = (bits.length == 0) := by
   simp [matchEnd, ofBits, pack_bitSize]
 
+/-! ## Bytes
+
+Byte-aligned binaries are matched one byte at a time by parsers. -/
+
+private theorem decode_byte_bits_fin : ∀ n : Fin 256,
+    decodeInteger ((List.range 8).map fun i => (UInt8.ofNat n.val).toBitVec.getMsbD i) Bool.false = n.val := by
+  decide +kernel
+
+private theorem decode_byte_bits (b : UInt8) :
+    decodeInteger ((List.range 8).map fun i => b.toBitVec.getMsbD i) Bool.false = b.toNat := by
+  simpa using decode_byte_bits_fin ⟨b.toNat, b.toNat_lt⟩
+
+private theorem size_list (bs : List UInt8) : (ByteArray.mk bs.toArray).size = bs.length := by
+  simp [ByteArray.size]
+
+private theorem toBits_cons_take (b : UInt8) (bs : List UInt8) :
+    (toBits ⟨(b :: bs).toArray⟩ 0).take 8 = (List.range 8).map fun i => b.toBitVec.getMsbD i := by
+  apply List.ext_getElem
+  · simp [toBits_length_aligned, size_list]; omega
+  · intro i h₁ h₂
+    simp at h₂
+    have hi : i / 8 = 0 := by omega
+    have hm : i % 8 = i := by omega
+    simp only [List.getElem_take, toBits, List.getElem_map, List.getElem_range, hi, hm]
+    have hj : 0 < (ByteArray.mk (b :: bs).toArray).size := by simp [size_list]
+    simp [getElem!_pos (ByteArray.mk (b :: bs).toArray) 0 hj, ByteArray.getElem_eq_getElem_data]
+
+private theorem toBits_cons_drop (b : UInt8) (bs : List UInt8) :
+    (toBits ⟨(b :: bs).toArray⟩ 0).drop 8 = toBits ⟨bs.toArray⟩ 0 := by
+  apply List.ext_getElem
+  · simp [toBits_length_aligned, size_list]; omega
+  · intro i h₁ h₂
+    have hl := toBits_length_aligned (ByteArray.mk bs.toArray)
+    simp only [size_list] at hl
+    have hq : (8 + i) / 8 = i / 8 + 1 := by omega
+    have hr : (8 + i) % 8 = i % 8 := by omega
+    simp only [List.getElem_drop, toBits, List.getElem_map, List.getElem_range, hq, hr]
+    have h1 : i / 8 + 1 < (ByteArray.mk (b :: bs).toArray).size := by simp [size_list]; omega
+    have h2 : i / 8 < (ByteArray.mk bs.toArray).size := by simp [size_list]; omega
+    simp [getElem!_pos (ByteArray.mk (b :: bs).toArray) (i / 8 + 1) h1,
+      getElem!_pos (ByteArray.mk bs.toArray) (i / 8) h2, ByteArray.getElem_eq_getElem_data]
+
+/-- Matching an unsigned byte at the front of a binary returns it and the remaining bytes. -/
+public theorem matchInteger_byte (b : UInt8) (bs : List UInt8) (valid : Valid ⟨(b :: bs).toArray⟩ 0) :
+    matchInteger (.bitstring ⟨(b :: bs).toArray⟩ 0 valid) (.integer 8) 1 Bool.false Bool.false =
+      some (.integer b.toNat, .bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) := by
+  have whole : Term.bitstring ⟨(b :: bs).toArray⟩ 0 valid = ofBits (toBits ⟨(b :: bs).toArray⟩ 0) :=
+    (ofBits_toBits_aligned _).symm
+  have rest : Term.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _) = ofBits (toBits ⟨bs.toArray⟩ 0) :=
+    (ofBits_toBits_aligned _).symm
+  have length : ((toBits ⟨(b :: bs).toArray⟩ 0).take 8).length = 8 := by
+    rw [toBits_cons_take]; simp
+  rw [whole, rest, ← List.take_append_drop 8 (toBits ⟨(b :: bs).toArray⟩ 0)]
+  have := matchInteger_prefix ((toBits ⟨(b :: bs).toArray⟩ 0).take 8) ((toBits ⟨(b :: bs).toArray⟩ 0).drop 8)
+  rw [length] at this
+  norm_cast at this
+  rw [this, toBits_cons_take, toBits_cons_drop, decode_byte_bits]
+
 /-! ## Consumed bits
 
 Every successful extraction removes its width from the measure of the input.

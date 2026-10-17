@@ -429,6 +429,12 @@ theorem utf_nonbitstring_inputs (input : Term) (little : Bool)
   cases input <;> try { exact ⟨rfl, rfl, rfl⟩ }
   exact False.elim (nonbitstring _ _ _ rfl)
 
+/-- Byte-aligned binaries are matched one byte at a time. -/
+theorem match_leading_byte :
+    Lynx.Term.Bitstring.matchInteger (.bitstring ⟨#[110, 117]⟩ 0) (.integer 8) 1 false false =
+      some (.integer 110, .bitstring ⟨#[117]⟩ 0) :=
+  Lynx.Term.Bitstring.matchInteger_byte 110 [117] _
+
 end LynxTest.Term.Bitstring.Matching
 
 run_cmd do

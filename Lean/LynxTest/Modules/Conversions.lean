@@ -114,6 +114,12 @@ private meta def shortCases : List (String × String) := [
 #guard rendered (Erlang.erlang.«atom_to_binary/2» (.atom "café") (.atom "latin1")) == "caf\xe9"
 #guard rendered (Erlang.erlang.«atom_to_binary/2» (.atom "π") (.atom "latin1")) == "badarg"
 
+/-- Decimal text produced by `integer_to_binary/1` reads back as the same integer. -/
+theorem integer_binary_round_trip (n : Int) :
+    (Erlang.erlang.«integer_to_binary/1» (.integer n) >>= Erlang.erlang.«binary_to_integer/1») =
+      .ok (.integer n) :=
+  Erlang.erlang.binary_to_integer_integer_to_binary n
+
 end LynxTest.Modules.Conversions
 
 run_cmd do

@@ -70,6 +70,113 @@ private def splitSign : List UInt8 → Bool × List UInt8
     | none => .error (.error (.atom "badarg"))
   | _ => .error (.error (.atom "badarg"))
 
+/-! The bytes of `ByteArray.toList`, defined by an index loop, are those of its array. -/
+
+private theorem toList_loop (bs : ByteArray) (i : Nat) (r : List UInt8) :
+    ByteArray.toList.loop bs i r = r.reverse ++ bs.data.toList.drop i := by
+  induction i, r using ByteArray.toList.loop.induct bs with
+  | case1 i r h ih =>
+    rw [ByteArray.toList.loop, if_pos h, ih]
+    have hi : i < bs.data.size := h
+    have hd : i < bs.data.toList.length := by rw [Array.length_toList]; exact hi
+    rw [List.drop_eq_getElem_cons hd]
+    simp [ByteArray.get!, getElem!_pos bs.data i hi]
+  | case2 i r h =>
+    rw [ByteArray.toList.loop, if_neg h]
+    have : bs.data.toList.length ≤ i := by
+      rw [Array.length_toList]; exact Nat.le_of_not_lt h
+    rw [List.drop_eq_nil_of_le this, List.append_nil]
+
+private theorem toList_eq_data (bs : ByteArray) : bs.toList = bs.data.toList := by
+  rw [ByteArray.toList, toList_loop]; simp
+
+/-- ASCII digits of a natural number, most significant first. -/
+private def decimalBytes (m : Nat) : List UInt8 :=
+  if m < 10 then [UInt8.ofNat (48 + m)] else decimalBytes (m / 10) ++ [UInt8.ofNat (48 + m % 10)]
+decreasing_by omega
+
+private theorem digitChar_bytes (d : Nat) (h : d < 10) :
+    String.utf8EncodeChar d.digitChar = [UInt8.ofNat (48 + d)] := by
+  have hc : d.digitChar.val.toNat = 48 + d := Nat.toNat_digitChar_of_lt_ten h
+  have small : 48 + d ≤ 127 := by omega
+  simp only [String.utf8EncodeChar, hc, small, if_true]
+
+private theorem toDigits_utf8Encode (m : Nat) :
+    (Nat.toDigits 10 m).utf8Encode = (decimalBytes m).toByteArray := by
+  induction m using Nat.strongRecOn with
+  | ind m ih =>
+    rw [Nat.toDigits_eq_if (by decide), decimalBytes]
+    split
+    · simp [List.utf8Encode_singleton, digitChar_bytes m ‹_›]
+    · rw [List.utf8Encode_append, ih (m / 10) (by omega), List.utf8Encode_singleton,
+        digitChar_bytes (m % 10) (Nat.mod_lt _ (by decide))]
+      simp [List.toByteArray_append]
+
+private theorem decimalBytes_value (m : Nat) :
+    (decimalBytes m).foldl (fun value byte => value * 10 + (byte.toNat - 48)) 0 = m := by
+  induction m using Nat.strongRecOn with
+  | ind m ih =>
+    rw [decimalBytes]
+    split
+    · simp [UInt8.toNat_ofNat]; omega
+    · rw [List.foldl_append, ih (m / 10) (by omega)]
+      simp [UInt8.toNat_ofNat]
+      have := Nat.mod_lt m (show 10 > 0 by decide)
+      omega
+
+private theorem decimalBytes_digits (m : Nat) : ∀ byte ∈ decimalBytes m, isDigit byte = true := by
+  induction m using Nat.strongRecOn with
+  | ind m ih =>
+    rw [decimalBytes]
+    split
+    · simp [isDigit]; constructor <;> (apply UInt8.le_iff_toNat_le.mpr; simp [UInt8.toNat_ofNat]; omega)
+    · intro byte mem
+      simp only [List.mem_append, List.mem_singleton] at mem
+      rcases mem with mem | rfl
+      · exact ih (m / 10) (by omega) byte mem
+      · have := Nat.mod_lt m (show 10 > 0 by decide)
+        simp [isDigit]; constructor <;> (apply UInt8.le_iff_toNat_le.mpr; simp [UInt8.toNat_ofNat]; omega)
+
+private theorem decimalBytes_ne_nil (m : Nat) : decimalBytes m ≠ [] := by
+  rw [decimalBytes]; split <;> simp
+
+private theorem splitSign_decimalBytes (m : Nat) : splitSign (decimalBytes m) = (false, decimalBytes m) := by
+  match h : decimalBytes m with
+  | [] => exact absurd h (decimalBytes_ne_nil m)
+  | byte :: rest =>
+    have digit := decimalBytes_digits m byte (by simp [h])
+    unfold splitSign
+    split
+    · rename_i r eq; cases eq; simp [isDigit] at digit
+    · rename_i r eq; cases eq; simp [isDigit] at digit
+    · rfl
+
+private theorem digitsValue_decimalBytes (m : Nat) : digitsValue (decimalBytes m) = some m := by
+  have nonempty := decimalBytes_ne_nil m
+  have digits := decimalBytes_digits m
+  have empty : (decimalBytes m).isEmpty = false := by cases h : decimalBytes m <;> simp_all
+  simp [digitsValue, empty, List.all_eq_true.mpr digits, decimalBytes_value]
+
+private theorem repr_bytes (m : Nat) : (Nat.repr m).toByteArray = (decimalBytes m).toByteArray := by
+  rw [Nat.repr_eq_ofList_toDigits, String.toByteArray_ofList, toDigits_utf8Encode]
+
+/-- `binary_to_integer/1` reads back the decimal text of `integer_to_binary/1`. -/
+public theorem binary_to_integer_integer_to_binary (n : Int) :
+    («integer_to_binary/1» (.integer n) >>= «binary_to_integer/1») = .ok (.integer n) := by
+  simp only [«integer_to_binary/1», Result.ok_bind, «binary_to_integer/1», String.toUTF8_eq_toByteArray,
+    Int.toString_eq_repr, Int.repr_eq_if]
+  by_cases nonneg : 0 ≤ n
+  · have bytes : n.toNat.repr.toByteArray.toList = decimalBytes n.toNat := by
+      rw [repr_bytes, toList_eq_data, List.toList_data_toByteArray]
+    simp only [nonneg, if_true, bytes, splitSign_decimalBytes, digitsValue_decimalBytes]
+    simp; omega
+  · have bytes : ("-" ++ (-n).toNat.repr).toByteArray.toList = 45 :: decimalBytes (-n).toNat := by
+      rw [String.toByteArray_append, repr_bytes, toList_eq_data]
+      simp [ByteArray.data_append]
+      rfl
+    simp only [nonneg, if_false, bytes, splitSign, digitsValue_decimalBytes]
+    simp; omega
+
 /-- Erlang float syntax: a signed mantissa with digits on both sides of the
 point and an optional signed exponent. Returns the sign, the digits as an
 integer, and the decimal exponent applied to them. -/
