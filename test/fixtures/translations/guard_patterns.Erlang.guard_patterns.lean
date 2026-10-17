@@ -184,9 +184,9 @@ set_option «match».ignoreUnusedAlts true
             (Lynx.Result.tryWith
               (do
                 let _5 ←
-                  Lynx.Result.orElse (Erlang.erlang.«=:=/2» _0 (Lynx.Term.integer 1))
-                      (Lynx.Result.orElse (Erlang.erlang.«=:=/2» _0 (Lynx.Term.integer 2))
-                        (Erlang.erlang.«=:=/2» _0 (Lynx.Term.integer 3)))
+                  Lynx.Result.ok
+                      (Lynx.Term.isMember _0
+                        [Lynx.Term.integer 1, Lynx.Term.integer 2, Lynx.Term.integer 3])
                 Erlang.erlang.«=:=/2» _5 (Lynx.Term.atom "true"))
               (fun vTry => pure vTry)
               (fun lynxException =>
@@ -197,6 +197,58 @@ set_option «match».ignoreUnusedAlts true
       (fun (_ : Unit) =>
         match _0 with
         | _7 => pure (Lynx.Term.atom "no"))
+
+#lynx_pure
+  def «names/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _0 with
+        | vX =>
+          Lynx.Result.guard
+            (Lynx.Result.tryWith
+              (do
+                let _5 ←
+                  Lynx.Result.ok
+                      (Lynx.Term.isMember _0
+                        [Lynx.Term.atom "ok", Lynx.Term.atom "error",
+                          Lynx.Term.bitstring ⟨#[120]⟩ 0 (by decide)])
+                Erlang.erlang.«=:=/2» _5 (Lynx.Term.atom "true"))
+              (fun vTry => pure vTry)
+              (fun lynxException =>
+                let vT := Lynx.Exception.classTerm lynxException
+                let vR := Lynx.Exception.reason lynxException
+                pure (Lynx.Term.atom "false")))
+            (fun _ => pure (Lynx.Term.atom "yes")) lynxMatchNext)
+      (fun (_ : Unit) =>
+        match _0 with
+        | _7 => pure (Lynx.Term.atom "no"))
+
+#lynx_pure
+  def «numbers/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        match _0 with
+        | vX =>
+          Lynx.Result.guard
+            (Lynx.Result.tryWith
+              (do
+                let _3 ←
+                  Lynx.Result.orElse (Erlang.erlang.«==/2» _0 (Lynx.Term.integer 1))
+                      (Erlang.erlang.«==/2» _0 (Lynx.Term.integer 2))
+                Erlang.erlang.«=:=/2» _3 (Lynx.Term.atom "true"))
+              (fun vTry => pure vTry)
+              (fun lynxException =>
+                let vT := Lynx.Exception.classTerm lynxException
+                let vR := Lynx.Exception.reason lynxException
+                pure (Lynx.Term.atom "false")))
+            (fun _ => pure (Lynx.Term.atom "yes")) lynxMatchNext)
+      (fun (_ : Unit) =>
+        match _0 with
+        | _5 => pure (Lynx.Term.atom "no"))
 
 #lynx_pure
   def «short_circuit/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result := do

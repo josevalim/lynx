@@ -2,6 +2,7 @@ module
 
 meta import LynxTest.ProofAudit
 import Lynx
+import Lynx.Modules.Erlang.erlang
 
 namespace LynxTest.Term.ShortCircuit
 open Lynx
@@ -37,6 +38,18 @@ theorem andAlso_rejects_non_boolean :
 /-- Runtime requests in the left operand happen before either branch is selected. -/
 theorem orElse_keeps_left_requests (next : Environment → Result) (right : Result) :
     Result.orElse (.get next) right = .get fun env => Result.orElse (next env) right := by rfl
+
+/-- Membership compares exactly, like `=:=`: an integer does not match a float. -/
+theorem isMember_exact :
+    Term.isMember (.integer 1) [.float ⟨false, 1023, 0⟩, .integer 2] = .atom "false" := by simp
+
+/-- A membership test agrees with the chain of comparisons it replaces. -/
+theorem isMember_agrees_with_chain (value : Term) :
+    Result.ok (Term.isMember value [.integer 1, .integer 2]) =
+      Result.orElse (Erlang.erlang.«=:=/2» value (.integer 1))
+        (Erlang.erlang.«=:=/2» value (.integer 2)) := by
+  simp only [Term.isMember_cons, Term.isMember_nil, Result.orElse_eq, Erlang.erlang.«=:=/2»]
+  split <;> split <;> simp_all
 
 end LynxTest.Term.ShortCircuit
 

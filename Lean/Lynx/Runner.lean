@@ -542,7 +542,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     (j : Json) : DecodeM (TSyntax `term) := do
   let info ← span map j parent
   let kind ← str j "kind"
-  if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "raise_dynamic", "reraise", "nonzero_width", "orelse", "andalso", "match", "receive", "try", "stacktrace", "label", "jump"] then
+  if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "raise_dynamic", "reraise", "nonzero_width", "orelse", "andalso", "in", "match", "receive", "try", "stacktrace", "label", "jump"] then
     throw s!"{kind} is not valid in patterns"
   let result ← match kind with
   | "$type" => do
@@ -881,6 +881,13 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let reason ← term map info false (← field j "reason")
     let error := mkIdent ``Lynx.Result.error
     pure (Unhygienic.run `($error ($ctor $reason)))
+  | "in" => do
+    fields j ["kind", "value", "elements", "span"]
+    let value ← term map info false (← field j "value")
+    let elements ← (← arr j "elements").mapM (term map info false)
+    let member := mkIdent ``Lynx.Term.isMember
+    let ok := mkIdent ``Lynx.Result.ok
+    pure (Unhygienic.run `($ok ($member $value [$elements,*])))
   | "orelse" | "andalso" => do
     fields j ["kind", "left", "right", "span"]
     let left ← term map info false (← field j "left")

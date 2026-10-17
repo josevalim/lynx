@@ -897,4 +897,17 @@ theorem mapEntries_distinct (entries : List (Term × Term)) :
     have found := mapLookup_mapEntries [] entry.1
     simp [enumerated, mapLookup] at found
 
+/-- Whether a term is exactly equal to one of the candidates, as a Boolean atom.
+Guards test membership in sets of literals as chains of `=:=` comparisons. -/
+@[expose] def isMember (value : Term) : List Term → Term
+  | [] => .atom "false"
+  | candidate :: rest =>
+    if exactCompare value candidate = .eq then .atom "true" else isMember value rest
+
+@[simp] theorem isMember_nil (value : Term) : isMember value [] = .atom "false" := rfl
+
+@[simp] theorem isMember_cons (value candidate : Term) (rest : List Term) :
+    isMember value (candidate :: rest) =
+      if exactCompare value candidate = .eq then .atom "true" else isMember value rest := rfl
+
 end Lynx.Term

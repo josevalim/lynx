@@ -288,6 +288,8 @@ expression(#c_values{anno = Anno, es = Values}, State0) ->
 %% Lean: Lynx.Result.orElse a b
 expression(#c_case{anno = Anno} = Case, State0) ->
     case short_circuit(Case) of
+        {~"orelse", _} ->
+            short_circuit_chain(~"orelse", Anno, membership(operands(~"orelse", Case)), State0);
         {Kind, _} -> short_circuit_chain(Kind, Anno, operands(Kind, Case), State0);
         none -> expression_case(Case, State0)
     end;
@@ -403,11 +405,62 @@ operands(Kind, Expression) ->
     end.
 
 short_circuit_chain(_Kind, _Anno, [Last], State) ->
-    expression(Last, State);
+    operand(Last, State);
 short_circuit_chain(Kind, Anno, [Left | Rest], State0) ->
-    {TranslatedLeft, State1} = expression(Left, State0),
+    {TranslatedLeft, State1} = operand(Left, State0),
     {TranslatedRight, State2} = short_circuit_chain(Kind, Anno, Rest, State1),
     {node(Kind, Anno, #{~"left" => TranslatedLeft, ~"right" => TranslatedRight}), State2}.
+
+operand({in, Anno, Var, Literals}, State0) ->
+    {Value, State1} = value(Var, State0),
+    {Elements, State2} = lists:mapfoldl(fun(Literal, Acc) -> value(cerl:abstract(Literal), Acc) end,
+                                        State1, Literals),
+    {node(~"in", Anno, #{~"value" => Value, ~"elements" => Elements}), State2};
+operand(Expression, State) ->
+    expression(Expression, State).
+
+%% Runs of exact comparisons between one variable and literals, as expanded from
+%% guard macros such as X =:= $1 orelse X =:= $2, become a single membership test
+%% over a flat list of the literals, compared exactly. Neither form raises.
+membership([]) ->
+    [];
+membership([Operand | Rest] = Operands) ->
+    case literal_equality(Operand) of
+        {Name, Var, _} ->
+            {Run, After} = lists:splitwith(fun(Other) ->
+                case literal_equality(Other) of
+                    {Name, _, _} -> true;
+                    _ -> false
+                end
+            end, Operands),
+            case Run of
+                [_, _ | _] ->
+                    Literals = [Literal || Equality <- Run, {_, _, Literal} <- [literal_equality(Equality)]],
+                    [{in, cerl:get_ann(Operand), Var, Literals} | membership(After)];
+                _ ->
+                    [Operand | membership(Rest)]
+            end;
+        none ->
+            [Operand | membership(Rest)]
+    end.
+
+%% == only differs from =:= on numbers, so it is exact for atoms and bitstrings.
+literal_equality(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = Op},
+                         args = [Left, Right]}) when Op =:= '=:='; Op =:= '==' ->
+    case {Left, Right} of
+        {#c_var{name = Name} = Var, #c_literal{val = Literal}} -> exact_equality(Op, Name, Var, Literal);
+        {#c_literal{val = Literal}, #c_var{name = Name} = Var} -> exact_equality(Op, Name, Var, Literal);
+        _ -> none
+    end;
+literal_equality(_) ->
+    none.
+
+exact_equality('=:=', Name, Var, Literal) ->
+    {Name, Var, Literal};
+exact_equality('==', Name, Var, Literal) when is_atom(Literal); is_bitstring(Literal) ->
+    {Name, Var, Literal};
+exact_equality('==', _Name, _Var, _Literal) ->
+    none.
 
 badarg_raise(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = error},
                      args = [#c_tuple{es = [#c_literal{val = badarg}, #c_var{name = Var}]}]}, Var) ->
