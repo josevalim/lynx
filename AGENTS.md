@@ -52,8 +52,10 @@ and for proof audits that inspect private declarations in test modules.
 
 Functions that neither inspect nor change the environment and perform no process
 effects should be tagged with `#lynx_pure`. They may still raise exceptions.
-`Lynx/Pure.lean` generates ordinary kernel-checked `<name>_pure` lemmas,
-registered for simplification, without a contract verification tactic.
+Those that may additionally not return, such as partial fixed points, should be
+tagged with `#lynx_partial`. `Lynx/Purity.lean` generates ordinary kernel-checked
+`<name>_pure` and `<name>_partial` lemmas, registered for simplification,
+without a contract verification tactic.
 
 Proofs must not introduce untrusted axioms or `sorry`
 

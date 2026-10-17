@@ -390,6 +390,11 @@ theorem runWith_apply (computation : Result α) (table : Term.FunTable) (callDep
   change Term.Runner.run (.error exception) env = _
   rw [Term.Runner.run]
 
+@[simp] theorem exhausted_apply (env : Environment) :
+    (Result.exhausted : Result α) env = (.exhausted, env) := by
+  change Term.Runner.run .exhausted env = _
+  rw [Term.Runner.run]
+
 @[simp] theorem get_continuation_apply (continuation : Environment → Result α)
     (env : Environment) :
     (Result.get continuation) env = continuation env env := by

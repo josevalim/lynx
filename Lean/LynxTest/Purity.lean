@@ -4,7 +4,7 @@ import Lynx.Modules.Erlang.erlang
 import Lynx
 meta import LynxTest.ProofAudit
 
-namespace LynxTest.Pure
+namespace LynxTest.Purity
 open Lynx
 
 -- The coercion exposes only the named operation, not the scheduler body.
@@ -178,7 +178,7 @@ theorem execution_reuses_purity (input : Term) (env final : Environment) :
   simp
 
 run_cmd do
-  let some doc ← Lean.findSimpleDocString? (← Lean.getEnv) ``LynxTest.Pure.classifyTwice
+  let some doc ← Lean.findSimpleDocString? (← Lean.getEnv) ``LynxTest.Purity.classifyTwice
     | throwError "classifyTwice documentation was not registered"
   unless doc.startsWith "Purity composes through calls already checked by `#lynx_pure`." do
     throwError "unexpected classifyTwice documentation: {doc}"
@@ -202,6 +202,60 @@ error: #lynx_pure could not prove purity; refusing an incomplete proof
 #guard_msgs in
 #lynx_pure def writesEnvironment : Result := .set {} (.ok .nil)
 
-end LynxTest.Pure
+-- A partial fixed point shaped like OTP's array:find_bits/2: its first
+-- parameter is fixed, and the induction ranges over the second.
+#lynx_partial def «find/2» (_0 : Term) (_1 : Term) : Result := do
+  let _2 ← Erlang.erlang.«</2» _0 _1
+  match _2 with
+  | .atom "true" => pure _1
+  | _ => do
+    let _3 ← Erlang.erlang.«+/2» _1 (.integer 4)
+    «find/2» _0 _3
+partial_fixpoint monotonicity by
+  intro f g h
+  repeat' first
+    | exact Lean.Order.PartialOrder.rel_refl
+    | exact h _ _
+    | exact h _
+    | apply Lynx.Result.bind_mono_pure
+    | (intro)
+    | split
+    | simp_all
 
-run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Pure
+-- Callers compose partiality through exception handlers and structural recursion.
+#lynx_partial def «succeeds/1» (_0 : Term) : Result :=
+  Result.tryWith («find/2» _0 (.integer 0) >>= fun _ => pure (Term.atom "true"))
+    (fun value => .ok value) (fun _ => pure (Term.atom "false"))
+
+#lynx_partial def «each/1» (_0 : Term) : Result :=
+  match _0 with
+  | .cons head tail => do
+    let _ ← «find/2» head (.integer 0)
+    «each/1» tail
+  | _ => pure .nil
+
+-- A cutoff is exhausted, which is partial.
+#lynx_partial def «cutoff/1» (_0 : Term) : Result := .exhausted
+
+example (a b : Term) : Result.IsPartial («find/2» a b) := «find/2_partial» a b
+example (a : Term) : Result.IsPartial («succeeds/1» a) := «succeeds/1_partial» a
+example (a : Term) : Result.IsPartial («each/1» a) := «each/1_partial» a
+example (a : Term) : Result.IsPartial («cutoff/1» a) := «cutoff/1_partial» a
+
+-- A partial computation is only `ok` when run if it already returns that value.
+example (a : Term) :
+    Lynx.run («succeeds/1» a) = .ok Term.true ↔ «succeeds/1» a = .ok Term.true :=
+  IsPartial.run_eq_ok_iff («succeeds/1_partial» a)
+
+/--
+error: unsolved goals
+⊢ False
+---
+error: #lynx_partial could not prove partiality; refusing an incomplete proof
+-/
+#guard_msgs in
+#lynx_partial def readsPartially : Result := .get fun _ => .exhausted
+
+end LynxTest.Purity
+
+run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Purity

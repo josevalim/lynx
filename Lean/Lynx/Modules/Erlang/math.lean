@@ -1,6 +1,6 @@
 module
 
-public import Lynx.Pure
+public import Lynx.Purity
 
 namespace Erlang.math
 open Lynx

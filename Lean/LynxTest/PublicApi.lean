@@ -318,6 +318,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.ReceiveTimeout.infinity",
   "Lynx.ReceiveTimeout.ofTerm",
   "Lynx.Result",
+  "Lynx.Result.IsPartial",
   "Lynx.Result.IsPure",
   "Lynx.Result.IsReadOnly",
   "Lynx.Result.apply",

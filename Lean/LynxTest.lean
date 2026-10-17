@@ -13,4 +13,4 @@ import LynxTest.Modules.Maps
 import LynxTest.Modules.Math
 import LynxTest.Modules.Conversions
 import LynxTest.Modules.Process
-import LynxTest.Pure
+import LynxTest.Purity

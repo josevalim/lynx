@@ -136,6 +136,12 @@ public theorem resolve_apply_effectful (table : Term.FunTable) (depth id arity :
     resolve table depth computation = computation := by
   cases computation <;> first | (rw [resolve]; rfl) | exact False.elim pure
 
+/-- Resolving calls also leaves partial computations unchanged: they make no calls. -/
+public theorem resolve_of_isPartial (table : Term.FunTable) (depth : Nat)
+    (computation : Result α) (partiality : IsPartial computation) :
+    resolve table depth computation = computation := by
+  cases computation <;> first | (rw [resolve]; rfl) | exact False.elim partiality
+
 /-- A pure table entry executes before its caller's continuation, without using
 call depth. Table dispatch belongs to the runtime, rather than translated code. -/
 public theorem resolve_apply_pure (table : Term.FunTable) (depth id arity : Nat)

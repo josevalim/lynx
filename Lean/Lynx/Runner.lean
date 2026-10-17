@@ -35,14 +35,14 @@ and termination suffixes are parsed; no declarations leak through request order.
 Theorem nodes contain name, named params, an optional requires helper, an ensures helper,
 and a proof object. Helpers are ordinary Result computations called with the theorem's
 parameters. Each helper carries its purity: `pure`, `partial`, `sequential`, or `concurrent`,
-which selects how it is stated to return true. Pure and partial ensures helpers, and pure
-requires helpers, are stated directly as `= .ok true`. Other helpers are stated through
+which selects how it is stated to return true. Pure and partial helpers are stated directly
+as `= .ok true`. Other helpers are stated through
 `Lynx.run` with depth 100, except concurrent ones, which are stated through `Lynx.schedule`:
 the requires helper under some schedule, and the ensures helper under every schedule.
 An absent requires helper means no assumption. An optional table names the program's
 function table; it defaults to empty. Proofs are elaborated against these statements as given.
-Definitions, mutual groups, and table entries carry the same purity; only `pure` ones receive
-generated purity lemmas.
+Definitions, mutual groups, and table entries carry the same purity. Pure definitions are
+wrapped in `#lynx_pure`, and partial ones in `#lynx_partial`, generating their lemmas.
 A proof object contains tactic source, nonnegative indentation, and a span locating
 the first character of that source. The producer handles host delimiters and line offsets. Proof syntax keeps
 its own source ranges, mapped to the supplied host locations using a synthetic file map.
@@ -1305,13 +1305,13 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       Unhygienic.run `($run $computation $table 100 = $ok $trueTerm)
     let schedules (computation : TSyntax `term) : TSyntax `term :=
       Unhygienic.run `($scheduled $computation $schedule $table 100 = $ok $trueTerm)
-    -- A precondition is assumed directly only when pure: its purity lemma makes
-    -- that equivalent to running it. A partial precondition is run instead.
+    -- A precondition is assumed directly only when it makes no runtime requests:
+    -- its generated purity or partiality lemma makes that equivalent to running it.
     let binders := match requirement with
       | none => binders
       | some (requires, level) =>
         let statement := match level with
-          | "pure" => direct requires
+          | "pure" | "partial" => direct requires
           | "concurrent" => Unhygienic.run `(∃ $schedule:ident : List $scheduleType, $(schedules requires))
           | _ => runs requires
         binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $statement)))
@@ -1350,11 +1350,12 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       let value := definition[3].setArg 2 suffix
       pure ⟨declaration.raw.setArg 1 (definition.setArg 3 value)⟩
   | _ => throw s!"unsupported command kind '{kind}'"
-  let isPure ← if kind ∈ ["def", "mutual"] then pure ((← purity j "purity") == "pure") else pure false
+  let level ← if kind ∈ ["def", "mutual"] then purity j "purity" else pure "sequential"
   -- A mutual group gets one joint purity proof, rather than wrapping its members.
-  let result := if wrapPurity && isPure then
-    Unhygienic.run `(#lynx_pure $result:command)
-    else result
+  let result := if !wrapPurity then result else match level with
+    | "pure" => Unhygienic.run `(#lynx_pure $result:command)
+    | "partial" => Unhygienic.run `(#lynx_partial $result:command)
+    | _ => result
   return withSpan info.info result
 
 /-- Table metadata also gives kernel-checked application equations for both pure

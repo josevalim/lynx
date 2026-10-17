@@ -36,6 +36,12 @@ theorem admissible_success (post : α → Prop) :
   change ∀ value, (Result.exhausted : Result α) = .ok value → post value
   simp
 
+/-- Partiality holds at the bottom, so fixed-point induction can establish it. -/
+theorem admissible_isPartial : admissible (fun computation : Result α => computation.IsPartial) := by
+  apply admissible_flatOrder
+  change (Result.exhausted : Result α).IsPartial
+  trivial
+
 theorem bind_mono_left {left right : Result α} (next : α → Result β)
     (below : PartialOrder.rel left right) :
     PartialOrder.rel (left >>= next) (right >>= next) := by

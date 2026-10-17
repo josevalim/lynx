@@ -395,6 +395,67 @@ theorem IsPure.shared (next : α → Result β) (body : (α → Result β) → R
     IsPure (Result.tryWith computation next handler) := by
   cases computation <;> simp_all [IsPure, Result.tryWith, Result.bind, Result.handle]
 
+/-- A partial computation makes no runtime requests, but may not return: it is
+pure or exhausted. Definitions with termination suffixes or cutoffs are partial. -/
+@[expose] def IsPartial : Result α → Prop
+  | .ok _ | .error _ | .exhausted => True
+  | _ => False
+
+@[simp] theorem isPartial_ok (value : α) : IsPartial (.ok value) := trivial
+@[simp] theorem isPartial_error (exception : Exception) :
+    IsPartial (.error exception : Result α) := trivial
+@[simp] theorem isPartial_exhausted : IsPartial (.exhausted : Result α) := trivial
+@[simp] theorem not_isPartial_apply (function : Term) (arguments : Array Term)
+    (next : Except Exception Term → Result α) :
+    ¬ IsPartial (.apply function arguments next) := by simp [IsPartial]
+@[simp] theorem not_isPartial_get (next : Environment → Result α) :
+    ¬ IsPartial (.get next) := by simp [IsPartial]
+@[simp] theorem not_isPartial_set (env : Environment) (next : Result α) :
+    ¬ IsPartial (.set env next) := by simp [IsPartial]
+@[simp] theorem not_isPartial_spawn (child : Term) (next : Except Exception Term → Result α) :
+    ¬ IsPartial (.spawn child next) := by simp [IsPartial]
+@[simp] theorem not_isPartial_schedule (child : Result Term) (next : PID → Result α) :
+    ¬ IsPartial (Result.schedule child next) := by simp [IsPartial]
+@[simp] theorem not_isPartial_send (pid : PID) (message : Term) (next : Result α) :
+    ¬ IsPartial (.send pid message next) := by simp [IsPartial]
+@[simp] theorem not_isPartial_receive (timeout : ReceiveTimeout)
+    (select : Environment → Term → Option β) (next : Option β → Result α) :
+    ¬ IsPartial (.receive timeout select next) := by simp [IsPartial]
+
+theorem IsPure.isPartial {computation : Result α} (pure : IsPure computation) :
+    IsPartial computation := by
+  cases computation <;> simp_all [IsPure, IsPartial]
+
+/-- Prove a shared continuation once, then use its partiality throughout the body. -/
+theorem IsPartial.shared (next : α → Result β) (body : (α → Result β) → Result γ)
+    (nextPartial : ∀ value, IsPartial (next value))
+    (bodyPartial : ∀ next, (∀ value, IsPartial (next value)) → IsPartial (body next)) :
+    IsPartial (body next) := bodyPartial next nextPartial
+
+theorem IsPartial.handle (computation : Result α) (handler : Exception → Result α)
+    (computationPartial : IsPartial computation)
+    (handlerPartial : ∀ exception, IsPartial (handler exception)) :
+    IsPartial (Result.handle computation handler) := by
+  cases computation <;> simp_all [IsPartial, Result.handle]
+
+theorem IsPartial.bind (computation : Result α) (next : α → Result β)
+    (computationPartial : IsPartial computation) (nextPartial : ∀ value, IsPartial (next value)) :
+    IsPartial (computation >>= next) := by
+  change IsPartial (Result.bind computation next)
+  cases computation <;> simp_all [IsPartial, Result.bind]
+
+theorem IsPartial.bind_explicit (computation : Result α) (next : α → Result β)
+    (computationPartial : IsPartial computation) (nextPartial : ∀ value, IsPartial (next value)) :
+    IsPartial (Result.bind computation next) :=
+  IsPartial.bind computation next computationPartial nextPartial
+
+theorem IsPartial.tryWith (computation : Result α) (next : α → Result β)
+    (handler : Exception → Result β) (protectedPartial : IsPartial computation)
+    (nextPartial : ∀ value, IsPartial (next value))
+    (handlerPartial : ∀ exception, IsPartial (handler exception)) :
+    IsPartial (Result.tryWith computation next handler) := by
+  cases computation <;> simp_all [IsPartial, Result.tryWith, Result.bind, Result.handle]
+
 /-- A guard may read its process environment, but cannot modify it, schedule,
 or make unresolved calls. Every environment read must eventually terminate. -/
 @[expose] def IsReadOnly : Result α → Prop
