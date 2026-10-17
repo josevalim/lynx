@@ -435,6 +435,14 @@ theorem match_leading_byte :
       some (.integer 110, .bitstring ⟨#[117]⟩ 0) :=
   Lynx.Term.Bitstring.matchInteger_byte 110 [117] _
 
+/-- Simp rewrites an extraction inside `Result.extract`, then selects its branch. -/
+theorem extract_rewrites (found : Lynx.Term → Lynx.Term → Lynx.Result) (missing : Unit → Lynx.Result) :
+    Lynx.Result.extract
+        (Lynx.Term.Bitstring.matchInteger (.bitstring ⟨#[110, 117]⟩ 0) (.integer 8) 1 false false)
+        found missing =
+      found (.integer 110) (.bitstring ⟨#[117]⟩ 0) := by
+  simp [Lynx.Term.Bitstring.matchInteger_byte 110 [117]]
+
 end LynxTest.Term.Bitstring.Matching
 
 run_cmd do

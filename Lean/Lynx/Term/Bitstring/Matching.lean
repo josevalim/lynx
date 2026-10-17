@@ -471,9 +471,11 @@ public theorem matchUtf32_sizeOf {input value rest : Term} {little : Bool}
 
 /-! ## Termination
 
-Recursion over the bits left by named extractions, such as bitstring
-generators, decreases `sizeOf` by the consumed bits. Lean's default
-`decreasing_tactic` tries `decreasing_trivial`, which this extends. -/
+Recursion over the bits left by an extraction, such as bitstring generators,
+decreases `sizeOf` by the consumed bits. Such extractions continue through
+`Lynx.Result.extract`, whose well-founded preprocessing passes the extraction's
+equation to its continuation. Lean's default `decreasing_tactic` tries
+`decreasing_trivial`, which this extends. -/
 
 section Termination
 open Lean Meta Elab Tactic
@@ -494,7 +496,7 @@ private meta def nonzeroFacts : Array Name := #[
   ``matchInteger_sizeOf_nonzero,
   ``matchBinary_sizeOf_nonzero]
 
-/-- Record the measure left by every named extraction in context. Local
+/-- Record the measure left by every extraction equation in context. Local
 definitions are unfolded in the goal and the new facts, so `omega` relates
 the extracted bits to the recursive arguments. -/
 elab "lynx_extraction_facts" : tactic => do

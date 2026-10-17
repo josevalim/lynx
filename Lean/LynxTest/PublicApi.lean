@@ -331,6 +331,8 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.bindPure",
   "Lynx.Result.error",
   "Lynx.Result.exhausted",
+  "Lynx.Result.extract",
+  "Lynx.Result.extractWith",
   "Lynx.Result.get",
   "Lynx.Result.guard",
   "Lynx.Result.guardPassed",
