@@ -87,7 +87,7 @@ set_option «match».ignoreUnusedAlts true
             | [vValue@(Lynx.Term.integer _)] => pure (Lynx.Term.tuple #[vValue, vInner, vOuter])
             | _ => lynxMatchNext ()
           | _ => lynxMatchNext ()
-        | _ => lynxMatchNext ())
+        | _0 => lynxMatchNext ())
       (fun (_ : Unit) =>
         match _0 with
         | _2 => pure (Lynx.Term.atom "other"))
@@ -132,7 +132,7 @@ set_option «match».ignoreUnusedAlts true
                   match (Lynx.Term.getMapKeys [_7] lynxMap200) with
                   | [vValue] => pure vValue
                   | _ => lynxMatchNext ()
-                | _, _ => lynxMatchNext ())
+                | _11, _6 => lynxMatchNext ())
               (fun (_ : Unit) =>
                 match _11, _6 with
                 | _15, _16 => «lynxLabel_label^0» ())
@@ -152,7 +152,7 @@ set_option «match».ignoreUnusedAlts true
         ⟨[Lynx.Term.float ⟨Bool.false, 1019, 2702159776422298⟩,
             Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 0, 1⟩) Lynx.Term.nil]⟩ =>
       pure (Lynx.Term.atom "nested")
-    | _ =>
+    | _0 =>
       (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
             (lynxNext : Unit → Lynx.Result lynxValue) =>
           lynxBody lynxNext)

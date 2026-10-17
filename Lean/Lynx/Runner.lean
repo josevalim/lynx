@@ -1116,7 +1116,12 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       let body := Unhygienic.run `($error ($exception ($tuple #[$atom "case_clause", $value])))
       cases := cases.push (Unhygienic.run `(Lean.Parser.Term.matchAltExpr| | $unmatched,* => $body))
     let exprs := if exprs.isEmpty then #[unit] else exprs
-    let wildcards : Array (TSyntax `term) := exprs.map fun _ => Unhygienic.run `(_)
+    -- Fallthrough alternatives rebind variable discriminants to their own names.
+    -- Lean generalizes a matched parameter, and the remaining clauses refer to
+    -- it again; with a wildcard, termination goals would lose that they are equal.
+    let wildcards : Array (TSyntax `term) := exprs.mapIdx fun i expr =>
+      if (exprJson[i]? >>= fun e => (str e "kind").toOption) == some "var" then expr
+      else Unhygienic.run `(_)
     if nests.contains true then
       let fallback := mkIdent `lynxMatchNext
       let guardCall := mkIdent ``Lynx.Result.guard

@@ -88,7 +88,7 @@ set_option «match».ignoreUnusedAlts true
           match (Lynx.Term.getMapKeys [Lynx.Term.atom "a"] lynxMap169) with
           | [vX@(Lynx.Term.bitstring _ 0 _)] => pure vX
           | _ => lynxMatchNext ()
-        | _ => lynxMatchNext ())
+        | _0 => lynxMatchNext ())
       (fun (_ : Unit) =>
         match _0 with
         | _2 => pure (Lynx.Term.atom "no"))
@@ -106,7 +106,7 @@ set_option «match».ignoreUnusedAlts true
               let _2 ← Erlang.erlang.«is_float/1» vX
               Erlang.erlang.«and/2» (Lynx.Term.atom "true") _2)
             (fun _ => pure vX) lynxMatchNext
-        | _ => lynxMatchNext ())
+        | _0 => lynxMatchNext ())
       (fun (_ : Unit) =>
         match _0 with
         | _4 => pure (Lynx.Term.atom "no"))
@@ -124,7 +124,7 @@ set_option «match».ignoreUnusedAlts true
               let _3 ← Erlang.erlang.«=:=/2» _2 vX
               Erlang.erlang.«and/2» _3 (Lynx.Term.atom "true"))
             (fun _ => pure vX) lynxMatchNext
-        | _ => lynxMatchNext ())
+        | _0 => lynxMatchNext ())
       (fun (_ : Unit) =>
         match _0 with
         | _5 => pure (Lynx.Term.atom "no"))
@@ -167,7 +167,7 @@ set_option «match».ignoreUnusedAlts true
                 let vR := Lynx.Exception.reason lynxException
                 pure (Lynx.Term.atom "false")))
             (fun _ => pure vX) lynxMatchNext
-        | _, _ => lynxMatchNext ())
+        | _0, _1 => lynxMatchNext ())
       (fun (_ : Unit) =>
         match _0, _1 with
         | _9, _10 => pure (Lynx.Term.atom "no"))
@@ -241,7 +241,7 @@ set_option «match».ignoreUnusedAlts true
         match _1 with
         | Lynx.Term.tuple ⟨[vZ]⟩ =>
           Lynx.Result.guard (Erlang.erlang.«is_integer/1» _0) (fun _ => pure vZ) lynxMatchNext
-        | _ => lynxMatchNext ())
+        | _1 => lynxMatchNext ())
       (fun (_ : Unit) =>
         match _1 with
         | _5 => pure (Lynx.Term.atom "no"))

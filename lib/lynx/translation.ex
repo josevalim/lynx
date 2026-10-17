@@ -650,12 +650,11 @@ defmodule Lynx.Translation do
     [first | _] = defs
     span = first["span"]
 
-    case defs do
+    case group_measures(names, defs, functions) do
       [definition] ->
         definition
 
-      _ ->
-        defs = group_measures(names, defs, functions)
+      defs ->
         %{"kind" => "mutual", "span" => span, "defs" => defs, "purity" => Atom.to_string(purity)}
     end
   end
@@ -676,13 +675,18 @@ defmodule Lynx.Translation do
     end
   end
 
-  # Lean infers termination from parameter sizes and from an order between the
-  # functions of a mutual group. Some groups need each function to weigh its
-  # parameters differently, such as nested loops that resume their enclosing
-  # loop: the outer loop has no counterpart for the inner loop's progress, as in
-  # comprehensions with three generators. For those groups, each definition gets
-  # a lexicographic measure whose coordinates are constants or `sizeOf` of a
-  # parameter plus an offset. Lean still checks every descent.
+  # Recursive groups get a lexicographic measure whose coordinates are constants
+  # or `sizeOf` of a parameter plus an offset, ordered by the facts each call
+  # carries. Lean still checks every descent. Some groups need each function to
+  # weigh its parameters differently, such as nested loops that resume their
+  # enclosing loop, which Lean's own search cannot find. Lean's search also
+  # gives up on large groups, such as state machines over a bitstring.
+  #
+  # Groups whose calls all pass a value bound inside a constructor pattern are
+  # left to Lean, which then recurses structurally, so their definitions keep
+  # reducing by evaluation. Remaining bits of a bitstring, and calls passing a
+  # parameter unchanged to another function, rule out structural recursion, so
+  # emitting a measure there loses nothing.
   @measure_budget 100_000
 
   defp group_measures(names, defs, functions) do
@@ -711,10 +715,16 @@ defmodule Lynx.Translation do
         end
       end
 
-      # Lean finds measures from parameter sizes and function orders on its own.
-      with :error <- lexicographic(sizes.([0]), length(defs), calls),
-           {:ok, coordinates} <-
-             lexicographic(Enum.map(sizes.([0, 1]), &[{:const, 0} | &1]), length(defs), calls) do
+      structural? =
+        Enum.all?(calls, fn {_, _, args} -> Enum.any?(args, &match?({_, :lt}, &1)) end)
+
+      search = fn ->
+        with :error <- lexicographic(sizes.([0]), length(defs), calls),
+             do: lexicographic(Enum.map(sizes.([0, 1]), &[{:const, 0} | &1]), length(defs), calls)
+      end
+
+      with false <- calls == [] or structural?,
+           {:ok, coordinates} <- search.() do
         for {definition, index} <- Enum.with_index(defs) do
           measure =
             Enum.map(coordinates, fn coordinate ->

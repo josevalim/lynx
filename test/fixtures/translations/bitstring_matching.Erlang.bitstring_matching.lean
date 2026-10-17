@@ -345,7 +345,7 @@ set_option «match».ignoreUnusedAlts true
               | _ => lynxMatchNext ()
             | _ => lynxMatchNext ()
           | _ => lynxMatchNext ()
-        | _ => lynxMatchNext ())
+        | _0 => lynxMatchNext ())
       (fun (_ : Unit) =>
         match _0 with
         | _2 => pure (Lynx.Term.atom "other"))

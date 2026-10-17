@@ -760,6 +760,10 @@ pattern_facts(#c_tuple{es = Elements}, Fact, _Inside) ->
     lists:append([pattern_facts(Element, Fact, true) || Element <- Elements]);
 pattern_facts(#c_map{es = Pairs}, Fact, _Inside) ->
     lists:append([pattern_facts(Value, Fact, true) || #c_map_pair{val = Value} <- Pairs]);
+%% A pattern of only the remaining bits, such as <<Rest/bits>>, is the whole bitstring.
+pattern_facts(#c_binary{segments = [#c_bitstr{val = #c_var{} = Var, size = #c_literal{val = all}}]},
+              Fact, Inside) ->
+    pattern_facts(Var, Fact, Inside);
 %% The bits left after a bitstring's segments are fewer than the bitstring's.
 pattern_facts(#c_binary{segments = [_ | _] = Segments}, {Param, _}, _Inside) ->
     case lists:last(Segments) of

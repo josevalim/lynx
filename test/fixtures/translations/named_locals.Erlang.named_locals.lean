@@ -47,6 +47,7 @@ set_option «match».ignoreUnusedAlts true
       | _7 =>
         Lynx.Result.error
           (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _7]))
+    termination_by (sizeOf✝ _6, (0, sizeOf✝ _6))
     def «lynx_local_28/4» (_8 : Lynx.Term) (_1 : Lynx.Term) (_3 : Lynx.Term) (vX : Lynx.Term) :
         Lynx.Result :=
       match _8 with
@@ -58,6 +59,7 @@ set_option «match».ignoreUnusedAlts true
       | _9 =>
         Lynx.Result.error
           (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _9]))
+    termination_by (sizeOf✝ _3, (1, sizeOf✝ _8))
   end
 
 #lynx_pure
@@ -125,7 +127,7 @@ set_option «match».ignoreUnusedAlts true
           | Lynx.Term.tuple ⟨[vK, vV, _7]⟩ =>
             Lynx.Result.guard (Erlang.erlang.«>/2» vV vX)
               (fun _ => «lynx_local_39/7» _2 _1 _2 _4 _7 vK vX) lynxMatchNext
-          | _ => lynxMatchNext ())
+          | _14 => lynxMatchNext ())
         (fun (_ : Unit) =>
           match _14 with
           | Lynx.Term.tuple ⟨[_9, _8, _7]⟩ => «lynx_local_38/5» _7 _1 _2 _4 vX
@@ -243,6 +245,7 @@ set_option «match».ignoreUnusedAlts true
       | _10 =>
         Lynx.Result.error
           (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _10]))
+    termination_by (sizeOf✝ _9, (0, sizeOf✝ _9))
     def «lynx_local_25/4» (_11 : Lynx.Term) (_1 : Lynx.Term) (_3 : Lynx.Term) (vX : Lynx.Term) :
         Lynx.Result :=
       match _11 with
@@ -257,6 +260,7 @@ set_option «match».ignoreUnusedAlts true
       | _12 =>
         Lynx.Result.error
           (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _12]))
+    termination_by (sizeOf✝ _3, (1, sizeOf✝ _11))
   end
 
 #lynx_pure
@@ -272,6 +276,7 @@ set_option «match».ignoreUnusedAlts true
       | _10 =>
         Lynx.Result.error
           (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _10]))
+    termination_by (sizeOf✝ _9, (0, sizeOf✝ _9))
     def «lynx_local_35/5» (_11 : Lynx.Term) (_1 : Lynx.Term) (_4 : Lynx.Term) (vK : Lynx.Term)
         (vV : Lynx.Term) : Lynx.Result :=
       match _11 with
@@ -283,6 +288,7 @@ set_option «match».ignoreUnusedAlts true
       | _12 =>
         Lynx.Result.error
           (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _12]))
+    termination_by (sizeOf✝ _4, (1, sizeOf✝ _11))
   end
 
 #lynx_pure
@@ -304,6 +310,7 @@ set_option «match».ignoreUnusedAlts true
       | _10 =>
         Lynx.Result.error
           (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _10]))
+    termination_by (sizeOf✝ _9, (0, sizeOf✝ _9))
     def «lynx_local_22/4» (_11 : Lynx.Term) (_1 : Lynx.Term) (_3 : Lynx.Term) (vX : Lynx.Term) :
         Lynx.Result :=
       (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
@@ -317,7 +324,7 @@ set_option «match».ignoreUnusedAlts true
                 let _13 ← «lynx_local_22/4» _6 _1 _3 vX
                 pure (Lynx.Term.cons vV _13))
               lynxMatchNext
-          | _ => lynxMatchNext ())
+          | _11 => lynxMatchNext ())
         (fun (_ : Unit) =>
           match _11 with
           | Lynx.Term.tuple ⟨[_8, _7, _6]⟩ => «lynx_local_22/4» _6 _1 _3 vX
@@ -328,6 +335,7 @@ set_option «match».ignoreUnusedAlts true
           | _12 =>
             Lynx.Result.error
               (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _12])))
+    termination_by (sizeOf✝ _3, (1, sizeOf✝ _11))
   end
 
 #lynx_pure
@@ -379,6 +387,7 @@ set_option «match».ignoreUnusedAlts true
                   Lynx.Result.error
                     (Lynx.Exception.error
                       (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _3])))))
+  termination_by sizeOf✝ _2
 
 #lynx_pure
   def «lynx_local_17/1» (_2 : Lynx.Term) : Lynx.Result :=
@@ -442,6 +451,7 @@ set_option «match».ignoreUnusedAlts true
                   Lynx.Result.error
                     (Lynx.Exception.error
                       (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _3])))))
+  termination_by sizeOf✝ _2
 
 #lynx_pure
   def «lynx_local_5/1» (_2 : Lynx.Term) : Lynx.Result :=
@@ -463,7 +473,7 @@ set_option «match».ignoreUnusedAlts true
       (fun (_ : Unit) =>
         match _2 with
         | Lynx.Term.bitstring ⟨⟨[]⟩⟩ 0 _ => pure Lynx.Term.nil
-        | _ =>
+        | _2 =>
           (fun {lynxValue : Type}
                 (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
                 (lynxNext : Unit → Lynx.Result lynxValue) =>
@@ -481,6 +491,7 @@ set_option «match».ignoreUnusedAlts true
               | _3 =>
                 Lynx.Result.error
                   (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _3]))))
+  termination_by sizeOf✝ _2
 
 #lynx_pure
   def «lynx_local_62/1» (_2 : Lynx.Term) : Lynx.Result :=
@@ -528,6 +539,7 @@ set_option «match».ignoreUnusedAlts true
                   Lynx.Result.error
                     (Lynx.Exception.error
                       (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _3])))))
+  termination_by sizeOf✝ _2
 
 #lynx_pure
   def «lynx_local_60/2» (_3 : Lynx.Term) (_0 : Lynx.Term) : Lynx.Result :=
@@ -579,6 +591,7 @@ set_option «match».ignoreUnusedAlts true
                     Lynx.Result.error
                       (Lynx.Exception.error
                         (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _4])))))
+  termination_by sizeOf✝ _3
 
 #lynx_pure
   def «lynx_local_64/1» (_2 : Lynx.Term) : Lynx.Result :=
@@ -681,6 +694,7 @@ set_option «match».ignoreUnusedAlts true
                   Lynx.Result.error
                     (Lynx.Exception.error
                       (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _6])))))
+  termination_by sizeOf✝ _4
 
 #lynx_pure
   mutual
@@ -731,6 +745,7 @@ set_option «match».ignoreUnusedAlts true
                     Lynx.Result.error
                       (Lynx.Exception.error
                         (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _5])))))
+    termination_by (sizeOf✝ _4, (0, sizeOf✝ _4))
     def «lynx_local_11/4» (_6 : Lynx.Term) (_1 : Lynx.Term) (_2 : Lynx.Term) (vX : Lynx.Term) :
         Lynx.Result :=
       (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
@@ -781,6 +796,7 @@ set_option «match».ignoreUnusedAlts true
                     Lynx.Result.error
                       (Lynx.Exception.error
                         (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _7])))))
+    termination_by (sizeOf✝ _2, (1, sizeOf✝ _6))
   end
 
 #lynx_pure
@@ -858,6 +874,7 @@ set_option «match».ignoreUnusedAlts true
                     (Lynx.Exception.error
                       (Lynx.Term.tuple
                         #[Lynx.Term.atom "bad_generators", Lynx.Term.tuple #[_7, _6]])))))
+  termination_by sizeOf✝ _5
 
 #lynx_pure
   mutual
@@ -908,6 +925,7 @@ set_option «match».ignoreUnusedAlts true
                     Lynx.Result.error
                       (Lynx.Exception.error
                         (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _6])))))
+    termination_by (sizeOf✝ _5, (0, sizeOf✝ _5))
     def «lynx_local_8/4» (_7 : Lynx.Term) (_1 : Lynx.Term) (_2 : Lynx.Term) (vX : Lynx.Term) :
         Lynx.Result :=
       match _7 with
@@ -919,6 +937,7 @@ set_option «match».ignoreUnusedAlts true
       | _8 =>
         Lynx.Result.error
           (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _8]))
+    termination_by (sizeOf✝ _2, (1, sizeOf✝ _7))
   end
 
 def «named/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result := do

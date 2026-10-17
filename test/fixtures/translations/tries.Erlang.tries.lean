@@ -67,7 +67,7 @@ set_option «match».ignoreUnusedAlts true
                   let _6 ← Erlang.erlang.«>/2» vR (Lynx.Term.integer 0)
                   Erlang.erlang.«and/2» (Lynx.Term.atom "true") _6)
                 (fun _ => pure (Lynx.Term.atom "positive")) lynxMatchNext
-            | _, _, _ => lynxMatchNext ())
+            | _4, _3, _2 => lynxMatchNext ())
           (fun (_ : Unit) =>
             match _4, _3, _2 with
             | _9, _10, _11 => pure (Lynx.Term.atom "other")))
