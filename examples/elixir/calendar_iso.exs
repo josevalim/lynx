@@ -105,7 +105,7 @@ defmodule CalendarISOProofsTest do
       Calendar.ISO.date_to_iso_days(year, month, day) === days
   end
 
-  laws "Calendar.ISO date round trip" do
+  laws "Calendar.ISO date round trip", options: [maxHeartbeats: 1_000_000] do
     # Error construction uses a dynamic remote call; valid decoded dates must
     # never reach it. Date formatting itself is translated normally.
     cutoff &ArgumentError.exception/1
@@ -132,7 +132,6 @@ defmodule CalendarISOProofsTest do
     """
 
     law date_conversion_roundtrips_every_day(days),
-      max_heartbeats: 1_000_000,
       requires: is_integer(days),
       expects: date_roundtrip(days),
       proof: ~LEAN"""

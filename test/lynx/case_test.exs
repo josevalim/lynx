@@ -218,16 +218,7 @@ defmodule Lynx.CaseTest do
 
     error =
       assert_raise ExUnit.MultiError, fn ->
-        Lynx.Case.__verify__(
-          LawFailure,
-          :"laws invalid / proof: [errors]",
-          [
-            {:passing, 0},
-            {:invalid, 0},
-            {:sum_bar, 2}
-          ],
-          %{}
-        )
+        LawFailure."laws invalid / proof: [errors]"(%{})
       end
 
     assert [
@@ -305,6 +296,30 @@ defmodule Lynx.CaseTest do
           use Lynx.Case
 
           laws "empty" do
+          end
+        end
+      end
+    end
+
+    test "rejects invalid group options" do
+      assert_raise ArgumentError, "unknown laws option :timeout", fn ->
+        defmodule UnknownOption do
+          use ExUnit.Case, register: false
+          use Lynx.Case
+
+          laws "unknown", timeout: 1 do
+            law unknown_option, expects: true
+          end
+        end
+      end
+
+      assert_raise ArgumentError, ~r/laws options must be Lean option names/, fn ->
+        defmodule InvalidOption do
+          use ExUnit.Case, register: false
+          use Lynx.Case
+
+          laws "invalid", options: [maxRecDepth: 1.5] do
+            law invalid_option, expects: true
           end
         end
       end

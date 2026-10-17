@@ -44,11 +44,10 @@ defmodule RangeProofsTest do
       | simp_all
   """
 
-  laws "Range intersection arithmetic" do
+  laws "Range intersection arithmetic", options: [maxHeartbeats: 1_000_000] do
     termination_suffix &Integer.extended_gcd/6, @extended_gcd_fixpoint
 
     law extended_gcd_obeys_bezout(left, right),
-      max_heartbeats: 1_000_000,
       requires: is_integer(left) and is_integer(right),
       expects: bezout_contract(left, right, Integer.extended_gcd(left, right)),
       proof: ~LEAN"""
@@ -221,14 +220,13 @@ defmodule RangeProofsTest do
       | simp_all
   """
 
-  laws "Range split" do
+  laws "Range split", options: [maxHeartbeats: 1_000_000] do
     cutoff &Kernel.inspect/1
     cutoff &ArgumentError.exception/1
 
     termination_suffix &Range.size/1, @range_size_fixpoint
 
     law split_preserves_ordered_partition(first, last, step, cut, index),
-      max_heartbeats: 1_000_000,
       requires:
         is_integer(first) and is_integer(last) and is_integer(step) and step != 0 and
           is_integer(cut) and is_integer(index) and index >= 0,
@@ -467,13 +465,12 @@ defmodule RangeProofsTest do
         member?(first, last, step, point)
   end
 
-  laws "Range shift" do
+  laws "Range shift", options: [maxHeartbeats: 1_000_000] do
     cutoff &Kernel.inspect/1
     cutoff &ArgumentError.exception/1
     termination_suffix &Range.size/1, @range_size_fixpoint
 
     law shift_obeys_translation_laws(first, last, step, left, right, point),
-      max_heartbeats: 1_000_000,
       requires:
         valid_range(first, last, step) and is_integer(left) and is_integer(right) and
           is_integer(point),

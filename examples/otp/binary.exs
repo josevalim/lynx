@@ -47,7 +47,7 @@ defmodule BinaryProofsTest do
       | simp_all
   """
 
-  laws "hexadecimal encoding round trip" do
+  laws "hexadecimal encoding round trip", options: [maxHeartbeats: 1_000_000] do
     prelude @monotonicity_tactics
     termination_suffix &:binary.lynx_local_2/3, @fixpoint
     termination_suffix &:binary.encode_hex2/3, @fixpoint
@@ -57,7 +57,6 @@ defmodule BinaryProofsTest do
     law hex_roundtrip(bytes, mode),
       requires: is_binary(bytes) and (mode === :uppercase or mode === :lowercase),
       expects: hex_contract(bytes, mode),
-      max_heartbeats: 1_000_000,
       proof: ~LEAN"""
       open Lynx.Term.Bitstring in
         set_option maxRecDepth 16384 in

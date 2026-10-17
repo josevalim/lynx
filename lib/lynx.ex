@@ -146,8 +146,8 @@ defmodule Lynx do
       `unfold` followed by selective simplification can avoid expensive
       generation of simplification equations.
 
-    * Use `max_heartbeats: 1_000_000` on an individual law when a proof needs a
-      larger Lean elaboration budget. It does not weaken kernel checking.
+    * Use `options: [maxHeartbeats: 1_000_000]` on a laws group when a proof
+      needs a larger Lean elaboration budget. It does not weaken kernel checking.
       First look for repeated expansion or unnecessary case splits. Measure
       verification with `LYNX_PROFILE=1 LYNX_CACHE=0` so cached results do not
       hide slow proofs.

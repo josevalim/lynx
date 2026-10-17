@@ -69,11 +69,6 @@ law(#c_literal{val = [#{name := {Name, Params}, ensures := Ensures} = Law]} = Co
         {ok, Requires} when is_atom(Requires) -> ok;
         _ -> core_error(Core, ~"law requires must be a function name")
     end,
-    case maps:find(max_heartbeats, Law) of
-        error -> ok;
-        {ok, Limit} when is_integer(Limit), Limit > 0 -> ok;
-        _ -> core_error(Core, ~"law max_heartbeats must be a positive integer")
-    end,
     Anno = case maps:find(span, Law) of
         error -> cerl:get_ann(Core);
         {ok, Span} ->
@@ -191,11 +186,7 @@ translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensure
                          translate_def({Helper, Arity}, State0)}
     end,
     State2 = translate_def({Ensures, Arity}, State1),
-    Options = case maps:find(max_heartbeats, Law) of
-        error -> #{};
-        {ok, Limit} -> #{~"max_heartbeats" => Limit}
-    end,
-    Theorem = node(~"theorem", Anno, (maps:merge(Requirement, Options))#{
+    Theorem = node(~"theorem", Anno, Requirement#{
         ~"name" => function_name(Name), ~"params" => [atom_to_binary(Param, utf8) || Param <- Params],
         ~"ensures" => atom_to_binary(Ensures, utf8), ~"proof" => Proof
     }),

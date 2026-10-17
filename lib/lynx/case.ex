@@ -27,7 +27,10 @@ defmodule Lynx.Case do
   defmacro __using__(_opts) do
     quote do
       Lynx.Case.__register__(__MODULE__)
-      import Lynx.Case, only: [law: 2, laws: 2, termination_suffix: 2, cutoff: 1, prelude: 1]
+
+      import Lynx.Case,
+        only: [law: 2, laws: 2, laws: 3, termination_suffix: 2, cutoff: 1, prelude: 1]
+
       import Lynx.Lean, only: [sigil_LEAN: 2]
     end
   end
@@ -62,8 +65,6 @@ defmodule Lynx.Case do
     * `:requires` (optional) — the precondition expression. Defaults to `true`.
     * `:expects` (required) — the expression to prove.
     * `:proof` (optional) — a `Lynx.Lean` value. Defaults to `rfl`.
-    * `:max_heartbeats` (optional) — a positive integer overriding Lean's
-      elaboration budget for this law only. It does not change proof checking.
 
   ## Executable definition
 
@@ -230,6 +231,13 @@ defmodule Lynx.Case do
   Each group has the `:laws` test type and tag. Run only law groups with
   `mix test --only laws`.
 
+  ## Options
+
+    * `:options` (optional) — a keyword list of Lean options, such as
+      `[maxHeartbeats: 1_000_000, maxRecDepth: 10_000]`, set at the top of every
+      translated module of the group, including its laws. Names are passed to
+      Lean as given. Proofs remain kernel-checked.
+
   ## Example
 
       laws "checked" do
@@ -242,7 +250,7 @@ defmodule Lynx.Case do
   If verifying the laws fail, the error report includes the path to folder with
   all `.lean` files. Use this to debug and guide your proofs.
   """
-  defmacro laws(description, do: block) do
+  defmacro laws(description, opts \\ [], do: block) do
     definition =
       quote unquote: false do
         def unquote(name)(_context) do
@@ -252,18 +260,20 @@ defmodule Lynx.Case do
             unquote(group_laws),
             unquote(Macro.escape(suffixes)),
             unquote(Macro.escape(cutoffs)),
-            unquote(Macro.escape(preludes))
+            unquote(Macro.escape(preludes)),
+            unquote(Macro.escape(options))
           )
         end
       end
 
     quote do
-      {name, group_laws, suffixes, cutoffs, preludes} =
+      {name, group_laws, suffixes, cutoffs, preludes, options} =
         Lynx.Case.__laws__(
           __MODULE__,
           unquote(__CALLER__.file),
           unquote(__CALLER__.line),
           unquote(description),
+          unquote(opts),
           fn -> unquote(block) end
         )
 
@@ -272,9 +282,32 @@ defmodule Lynx.Case do
   end
 
   @doc false
-  def __laws__(module, file, line, description, fun) do
+  def __laws__(module, file, line, description, opts, fun) do
     if Module.get_attribute(module, :lynx_laws) do
       raise ArgumentError, "laws groups cannot be nested"
+    end
+
+    if not Keyword.keyword?(opts) do
+      raise ArgumentError, "laws options must be a keyword list, got: #{inspect(opts)}"
+    end
+
+    options = Keyword.get(opts, :options, [])
+
+    for key <- Keyword.keys(opts), key != :options do
+      raise ArgumentError, "unknown laws option #{inspect(key)}"
+    end
+
+    for option <- options do
+      case option do
+        {name, value}
+        when is_atom(name) and (is_integer(value) or is_boolean(value) or is_binary(value)) ->
+          :ok
+
+        _ ->
+          raise ArgumentError,
+                "laws options must be Lean option names with integer, boolean, " <>
+                  "or string values, got: #{inspect(option)}"
+      end
     end
 
     Module.put_attribute(module, :lynx_laws, [])
@@ -294,7 +327,7 @@ defmodule Lynx.Case do
 
       {name, group_laws, Module.get_attribute(module, :lynx_termination_suffixes),
        Module.get_attribute(module, :lynx_cutoffs),
-       Enum.reverse(Module.get_attribute(module, :lynx_preludes))}
+       Enum.reverse(Module.get_attribute(module, :lynx_preludes)), options}
     after
       Module.delete_attribute(module, :lynx_laws)
       Module.delete_attribute(module, :lynx_termination_suffixes)
@@ -311,7 +344,7 @@ defmodule Lynx.Case do
   end
 
   @doc false
-  def __verify__(module, name, laws, suffixes, cutoffs \\ MapSet.new(), preludes \\ []) do
+  def __verify__(module, name, laws, suffixes, cutoffs, preludes, options) do
     files =
       Lynx.Translation.new(termination_suffixes: suffixes, cutoffs: cutoffs, preludes: preludes)
       |> Lynx.Translation.add(Lynx.Bytecode.fetch!(module))
@@ -325,7 +358,7 @@ defmodule Lynx.Case do
         {{file["module"], "#{name}/#{length(params)}"}, "#{name}(#{Enum.join(params, ", ")})"}
       end
 
-    reports = Lynx.Commands.verify!(@lean_dir, files)
+    reports = Lynx.Commands.verify!(@lean_dir, files, options)
 
     if System.get_env("LYNX_PROFILE") == "1" do
       for report <- reports do

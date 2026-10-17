@@ -23,7 +23,10 @@ Updates are flushed as each file finishes. The runner continues until stdin clos
 Invalid input and runner failures return `{"status": "failure", "message": "..."}`.
 Each verification diagnostic has `file`, `module`, nullable `declaration`, `severity`
 (error/warning/information), and `message`, with `line` and `column` included only when known.
-Requests include `cache_dir`; input files may include a hexadecimal `cache_key` incorporating dependencies.
+Requests include `cache_dir` and may include `options`, an object of Lean options set
+at the top of every translated module. Values are natural numbers, Booleans, or strings.
+Input files may include a hexadecimal `cache_key` incorporating dependencies; cached
+artifacts are kept separately for each set of options.
 Files without a key and their dependents are verified without persistent caching.
 Verified artifacts are cached below `cache_dir/lean-VERSION-HASH`, using Lake’s compiled artifact hashes.
 Only successful elaboration and axiom audits are cached; updates include a `cached` Boolean.
@@ -1308,7 +1311,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       command map decl info false
     pure (Unhygienic.run `(mutual $decls:command* end))
   | "theorem" => do
-    fields j ["kind", "name", "params", "requires", "ensures", "proof", "span", "max_heartbeats",
+    fields j ["kind", "name", "params", "requires", "ensures", "proof", "span",
       "table", "requires_purity", "ensures_purity"]
     let params ← (← arr j "params").mapM fun p => do
       pure (mkIdent (Name.mkSimple (← p.getStr?)))
@@ -1364,15 +1367,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
         (binders.push (Unhygienic.run `(bracketedBinder| ($schedule : List $scheduleType))),
           schedules ensures)
       | _ => (binders, runs ensures)
-    let declaration := Unhygienic.run `(theorem $name $binders:bracketedBinder* : $goal := $proof)
-    match field j "max_heartbeats" with
-    | .error _ => pure declaration
-    | .ok value =>
-      let limit ← value.getNat?
-      unless limit > 0 do throw "max_heartbeats must be positive"
-      let limit : TSyntax `num := ⟨Syntax.mkNumLit (toString limit)⟩
-      let option := mkIdent `maxHeartbeats
-      pure (Unhygienic.run `(set_option $option:ident $limit:num in $declaration:command))
+    pure (Unhygienic.run `(theorem $name $binders:bracketedBinder* : $goal := $proof))
   | "def" => do
     fields j ["kind", "name", "params", "body", "purity", "span", "termination_suffix", "measure",
       "named_matches"]
@@ -1726,8 +1721,25 @@ private def inputImports (files : Array Json) (entry : Json) (env : Lean.Environ
     let id ← (identifier name).run env |>.run' {}
     return id.getId.toString
 
+/-- Lean options set at the top of every translated module. -/
+private def optionCommands (j : Json) : Except String (Array (TSyntax `command)) := do
+  let .ok (.obj options) := j.getObjVal? "options" | return #[]
+  options.toArray.mapM fun (name, value) => do
+    let id := mkIdent name.toName
+    match value with
+    | .num number =>
+      unless number.exponent == 0 && number.mantissa ≥ 0 do
+        throw s!"option {name} must be a natural number"
+      let value := Syntax.mkNumLit (toString number.mantissa)
+      pure (Unhygienic.run `(set_option $id:ident $value:num))
+    | .bool true => pure (Unhygienic.run `(set_option $id:ident true))
+    | .bool false => pure (Unhygienic.run `(set_option $id:ident false))
+    | .str string => pure (Unhygienic.run `(set_option $id:ident $(Syntax.mkStrLit string):str))
+    | _ => throw s!"option {name} must be a number, Boolean, or string"
+
 /-- Decode input files after the selected command requests them. -/
-private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environment) : IO DecodedFile := do
+private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environment)
+    (options : Array (TSyntax `command)) : IO DecodedFile := do
   let file ← IO.ofExcept (str entry "file")
   try
     let moduleName ← IO.ofExcept (str entry "module")
@@ -1769,7 +1781,7 @@ private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environme
       let start := Unhygienic.run `(namespace $namespaceId)
       let stop := Unhygienic.run `(end $namespaceId)
       pure (namespaceId.getId.toString, imports,
-        #[visibility, start] ++ sectionCommands ++ #[stop], state, reexportImports)
+        #[visibility] ++ options ++ #[start] ++ sectionCommands ++ #[stop], state, reexportImports)
     return ⟨file, moduleName, imports, map, commands, key,
       state.spans, state.diagnostics, state.theorems, reexportImports, preludes⟩
   catch err => throw (IO.userError s!"{file}: {err}")
@@ -1893,7 +1905,7 @@ private def elaboratePreludes (env : Lean.Environment) (file : DecodedFile) :
   return (result.commandState, messages, #[])
 
 /-- Verify against explicit imports, reusing only successfully audited module artifacts. -/
-private def verify (files : Array Json) (runtime : Runtime)
+private def verify (files : Array Json) (options : Array (TSyntax `command)) (runtime : Runtime)
     (cacheDirectory : System.FilePath) (emit : Json → IO Unit) : IO Unit := do
   IO.FS.withTempDir fun temporary => do
     let mut artifacts : NameMap ImportArtifacts := {}
@@ -1924,7 +1936,7 @@ private def verify (files : Array Json) (runtime : Runtime)
       -- Syntax extensions are available only after importing this file's declared
       -- dependencies. Never decode all proofs against the bare runtime up front.
       let env ← if missingImport then pure runtime.env else importFile runtime imports artifacts
-      let file ← decodeFile files entry env
+      let file ← decodeFile files entry env options
       let source ← renderFile file env
       let mut fileFailed := !file.proofDiagnostics.isEmpty
       diagnostics := diagnostics ++ parsingDiagnostics file
@@ -1985,16 +1997,19 @@ private def verify (files : Array Json) (runtime : Runtime)
         ("diagnostics", .arr diagnostics)])
 
 private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
-  let files ← IO.ofExcept do
-    fields j ["command", "version", "files", "cache_dir"]
-    arr j "files"
+  let (files, options) ← IO.ofExcept do
+    fields j ["command", "version", "files", "cache_dir", "options"]
+    pure (← arr j "files", ← optionCommands j)
   let directory := System.FilePath.mk (← IO.ofExcept (str j "cache_dir"))
   unless files.isEmpty do
     let runtime ← getRuntime cache
+    -- Options change elaboration, so artifacts are cached per set of options.
+    let optionKey := if options.isEmpty then "" else
+      s!"-{hash ((j.getObjValD "options").compress)}"
     let directory ← if files.any (fun file => (field file "cache_key").isOk) then
-      pure (directory / s!"lean-{Lean.versionString}-{← runtimeFingerprint}")
+      pure (directory / s!"lean-{Lean.versionString}-{← runtimeFingerprint}{optionKey}")
       else pure directory
-    verify files runtime directory emit
+    verify files options runtime directory emit
 
 private def run (request : String) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
   try

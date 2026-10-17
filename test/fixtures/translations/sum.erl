@@ -1,7 +1,7 @@
 -module(sum).
 -export([sum/1, sum_empty_ensures/0, sum_singleton_requires/1, sum_singleton_ensures/1]).
 
--law #{name => {sum_empty, []}, ensures => sum_empty_ensures, max_heartbeats => 1000000}.
+-law #{name => {sum_empty, []}, ensures => sum_empty_ensures}.
 -proof ~"""
 simp [«sum_empty_ensures/0», «sum/1», Erlang.lists.«sum/1», Erlang.lists.«sum/2», Erlang.erlang.«==/2»]
 """.

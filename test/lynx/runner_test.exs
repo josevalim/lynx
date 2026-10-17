@@ -43,6 +43,23 @@ defmodule Lynx.RunnerTest do
     assert runtime.message =~ "Unknown identifier `Erlang.maps.«new/0»`"
   end
 
+  test "sets Lean options in translated modules and caches them separately" do
+    key = :crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)
+
+    files = [
+      file(@literal_erl, "Elixir.Options", [definition("value", success())])
+      |> Map.put("cache_key", key)
+    ]
+
+    assert [%{status: :ok, cached: false}] = Lynx.Commands.verify!(@lean_dir, files)
+
+    assert [%{status: :error, cached: false, source: source}] =
+             Lynx.Commands.verify!(@lean_dir, files, maxRecDepth: 1)
+
+    assert source =~ "set_option maxRecDepth 1"
+    assert [%{status: :ok, cached: true}] = Lynx.Commands.verify!(@lean_dir, files)
+  end
+
   test "imports both dependency branches and theorems from their shared dependency" do
     contents = [
       definition("ensures", success()),

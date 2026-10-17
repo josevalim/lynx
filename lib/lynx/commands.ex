@@ -33,13 +33,28 @@ defmodule Lynx.Commands do
   Reports and diagnostics have atom keys; statuses and severities are atoms.
   Module names, declarations, source, paths, and messages remain strings.
   Uses the current Mix build directory for cached artifacts, falling back to `_build/dev`.
+
+  `options` is a keyword list of Lean options, such as `[maxRecDepth: 10_000]`,
+  set at the top of every translated module. Values are integers, booleans, or
+  strings. They are part of every cache key.
   """
-  @spec verify!(String.t(), [map()]) :: [Lynx.Laws.report()]
-  def verify!(project_dir, files) when is_list(files) do
+  @spec verify!(String.t(), [map()], keyword()) :: [Lynx.Laws.report()]
+  def verify!(project_dir, files, options \\ []) when is_list(files) and is_list(options) do
+    options =
+      Map.new(options, fn
+        {name, value}
+        when is_atom(name) and (is_integer(value) or is_boolean(value) or is_binary(value)) ->
+          {Atom.to_string(name), value}
+
+        option ->
+          raise ArgumentError, "invalid Lean option: #{inspect(option)}"
+      end)
+
     runner!(project_dir, %{
       "command" => "verify",
       "version" => @protocol_version,
       "cache_dir" => cache_dir(),
+      "options" => options,
       "files" => files
     })
     |> Enum.map(&decode_verify!/1)

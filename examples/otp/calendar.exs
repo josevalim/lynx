@@ -180,11 +180,10 @@ defmodule CalendarProofsTest do
       """
   end
 
-  laws "Gregorian day round trip" do
+  laws "Gregorian day round trip", options: [maxHeartbeats: 500_000] do
     law gregorian_days_roundtrip(days),
       requires: is_integer(days),
       expects: gregorian_days_contract(days),
-      max_heartbeats: 500_000,
       proof: ~LEAN"""
       let rawEra (n : Int) := if 0 ≤ n-60 then (n-60).tdiv 146097 else (n-60-146097+1).tdiv 146097
       let rawD (n : Int) := n-60-rawEra n*146097

@@ -46,7 +46,7 @@ defmodule Base64ProofsTest do
       | simp_all
   """
 
-  laws "Base64 encoding round trip" do
+  laws "Base64 encoding round trip", options: [maxHeartbeats: 800_000] do
     prelude @monotonicity_tactics
     cutoff &:base64.encode_list/4
     cutoff &:base64.decode_list/4
@@ -64,7 +64,6 @@ defmodule Base64ProofsTest do
     law encoding_roundtrip(bytes),
       requires: is_binary(bytes),
       expects: encoding_contract(bytes),
-      max_heartbeats: 800_000,
       proof: ~LEAN"""
       open Lynx.Term.Bitstring in
         set_option maxRecDepth 8192 in
