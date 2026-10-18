@@ -12,12 +12,14 @@ defmodule JsonProofsTest do
 
   def roundtrip(data), do: :json.decode(:erlang.iolist_to_binary(:json.encode(data))) === data
 
-  # The data covered so far: integers and lists of them, nested at most 64
-  # deep. The encoder makes one dynamic call per nesting level, and laws run
-  # with a call depth of 100.
+  # The data covered so far: integers, booleans, null, and lists of them,
+  # nested at most 64 deep. The encoder makes one dynamic call per nesting
+  # level, and laws run with a call depth of 100.
   def supported?(data), do: supported?(data, 64)
 
-  def supported?(data, _depth) when is_integer(data), do: true
+  def supported?(data, _depth) when is_integer(data) or data in [true, false, :null],
+    do: true
+
   def supported?(data, depth) when is_list(data) and depth > 0, do: values?(data, depth - 1)
   def supported?(_data, _depth), do: false
 
@@ -43,9 +45,11 @@ defmodule JsonProofsTest do
           #[],
       .function 2 1 #[], .atom "undefined", .atom "null"]
 
-    /-- JSON values made of integers and lists. -/
+    /-- JSON values made of integers, booleans, null, and lists. -/
     inductive Json where
       | int : Int → Json
+      | bool : Bool → Json
+      | null : Json
       | arr : List Json → Json
 
     /-- The decimal text `integer_to_binary/1` writes for an integer. -/
@@ -55,6 +59,8 @@ defmodule JsonProofsTest do
     /-- The Erlang term of a value. -/
     @[expose] def Json.term : Json → Term
       | .int n => .integer n
+      | .bool b => .atom (if b then "true" else "false")
+      | .null => .atom "null"
       | .arr l => Json.terms l
     /-- The Erlang list of values. -/
     @[expose] def Json.terms : List Json → Term
@@ -66,6 +72,9 @@ defmodule JsonProofsTest do
     /-- The text the encoder writes for a value. -/
     @[expose] def Json.text : Json → List UInt8
       | .int n => textOf n
+      | .bool true => [116, 114, 117, 101]
+      | .bool false => [102, 97, 108, 115, 101]
+      | .null => [110, 117, 108, 108]
       | .arr [] => [91, 93]
       | .arr (x :: xs) => 91 :: (x.text ++ Json.tailText xs)
     /-- The text after a list's first element: a comma before each element, then `]`. -/
@@ -77,7 +86,7 @@ defmodule JsonProofsTest do
     mutual
     /-- How deeply lists nest in a value. -/
     @[expose] def Json.depth : Json → Nat
-      | .int _ => 0
+      | .int _ | .bool _ | .null => 0
       | .arr l => Json.depths l + 1
     /-- The deepest nesting among values. -/
     @[expose] def Json.depths : List Json → Nat
@@ -89,6 +98,9 @@ defmodule JsonProofsTest do
     /-- The iodata `do_encode/2` builds for a value. -/
     @[expose] def Json.iodata : Json → Term
       | .int n => .bitstring ⟨(textOf n).toArray⟩ 0 (Term.Bitstring.valid_aligned _)
+      | .bool true => .bitstring ⟨#[116, 114, 117, 101]⟩ 0 (Term.Bitstring.valid_aligned _)
+      | .bool false => .bitstring ⟨#[102, 97, 108, 115, 101]⟩ 0 (Term.Bitstring.valid_aligned _)
+      | .null => .bitstring ⟨#[110, 117, 108, 108]⟩ 0 (Term.Bitstring.valid_aligned _)
       | .arr [] => .bitstring ⟨#[91, 93]⟩ 0 (Term.Bitstring.valid_aligned _)
       | .arr (x :: xs) => .cons (.integer 91) (.cons x.iodata (Json.loopIodata xs))
     /-- The iodata `list_loop/2` builds for the elements after the first. -/
@@ -100,11 +112,12 @@ defmodule JsonProofsTest do
     end JsonProof
     """
 
-    # The encoder writes integers with integer_to_binary/1 and lists as their
-    # elements between brackets, separated by commas. The decoder dispatches on
-    # each byte, reads integers back with binary_to_integer/1, the integer
-    # decoder in its default options, and pushes values onto an array frame,
-    # opening a new frame for each nested list.
+    # The encoder writes integers with integer_to_binary/1, booleans and null
+    # as literals, and lists as their elements between brackets, separated by
+    # commas. The decoder dispatches on each byte, reads integers back with
+    # binary_to_integer/1, the integer decoder in its default options, matches
+    # the remaining letters of a literal at once, and pushes values onto an
+    # array frame, opening a new frame for each nested list.
     law json_roundtrip(data),
       requires: supported?(data),
       expects: roundtrip(data),
@@ -405,7 +418,7 @@ defmodule JsonProofsTest do
         -- An array whose first element starts with a minus sign, a digit, or a bracket.
         have array_start_value : ∀ (b : UInt8) (bs : List UInt8) (orig skip acc stack : Term)
             (len : Int) (start : b.toNat = 45 ∨ (48 ≤ b.toNat ∧ b.toNat ≤ 57) ∨
-            b.toNat = 91),
+            b.toNat = 91 ∨ b.toNat = 116 ∨ b.toNat = 102 ∨ b.toNat = 110),
             «array_start/7» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc
                 stack options (.integer len) =
               (do
@@ -614,6 +627,70 @@ defmodule JsonProofsTest do
           simp only []
           rw [encoded, Result.resolve_of_isPure _ _ _ (by simp), text]
 
+        -- Keywords dispatch on their first letter and match their other letters at once.
+        have value_true : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
+            «value/6» (.bitstring ⟨((116 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
+                acc stack dec =
+              «true/6» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec := by
+          intro orig skip acc stack dec bs
+          unfold «value/6»
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
+
+        have value_false : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
+            «value/6» (.bitstring ⟨((102 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
+                acc stack dec =
+              «false/6» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec := by
+          intro orig skip acc stack dec bs
+          unfold «value/6»
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
+
+        have value_null : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
+            «value/6» (.bitstring ⟨((110 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
+                acc stack dec =
+              «null/6» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec := by
+          intro orig skip acc stack dec bs
+          unfold «value/6»
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
+
+        have true_rest : ∀ (orig skip acc stack dec : Term) (post : List UInt8),
+            «true/6» (.bitstring ⟨([114, 117, 101] ++ post).toArray⟩ 0 (valid_aligned _)) orig
+                skip acc stack dec =
+              (do
+                let next ← Erlang.erlang.«+/2» skip (.integer 4)
+                «continue/7» (.bitstring ⟨post.toArray⟩ 0 (valid_aligned _)) orig next acc stack
+                  dec (.atom "true")) := by
+          intro orig skip acc stack dec post
+          unfold «true/6»
+          simp only [matchInteger_bytes [114, 117, 101] post _ 24 (by decide), extract_some]
+          simp [matchTail, Nat.mod_one]
+
+        have false_rest : ∀ (orig skip acc stack dec : Term) (post : List UInt8),
+            «false/6» (.bitstring ⟨([97, 108, 115, 101] ++ post).toArray⟩ 0 (valid_aligned _))
+                orig skip acc stack dec =
+              (do
+                let next ← Erlang.erlang.«+/2» skip (.integer 5)
+                «continue/7» (.bitstring ⟨post.toArray⟩ 0 (valid_aligned _)) orig next acc stack
+                  dec (.atom "false")) := by
+          intro orig skip acc stack dec post
+          unfold «false/6»
+          simp only [matchInteger_bytes [97, 108, 115, 101] post _ 32 (by decide), extract_some]
+          simp [matchTail, Nat.mod_one]
+
+        have null_rest : ∀ (orig skip acc stack : Term) (post : List UInt8),
+            «null/6» (.bitstring ⟨([117, 108, 108] ++ post).toArray⟩ 0 (valid_aligned _)) orig
+                skip acc stack options =
+              (do
+                let next ← Erlang.erlang.«+/2» skip (.integer 4)
+                «continue/7» (.bitstring ⟨post.toArray⟩ 0 (valid_aligned _)) orig next acc stack
+                  options (.atom "null")) := by
+          intro orig skip acc stack post
+          unfold «null/6»
+          simp only [matchInteger_bytes [117, 108, 108] post _ 24 (by decide), extract_some]
+          simp [matchTail, Nat.mod_one]
+
         have reverse2 : ∀ (l tail : List Term),
             Erlang.lists.«reverse/2» (Term.list l) (Term.list tail) =
               .ok (Term.list (l.reverse ++ tail)) := by
@@ -655,9 +732,10 @@ defmodule JsonProofsTest do
             · exact Nat.le_max_left _ _
             · exact Nat.le_trans (ih mem) (Nat.le_max_right _ _)
 
-        -- Values start with a minus sign, a digit, or an opening bracket.
+        -- Values start with a minus sign, a digit, an opening bracket, or a letter.
         have first_byte : ∀ v : Json, ∃ b bs, v.text = b :: bs ∧
-            (b.toNat = 45 ∨ (48 ≤ b.toNat ∧ b.toNat ≤ 57) ∨ b.toNat = 91) := by
+            (b.toNat = 45 ∨ (48 ≤ b.toNat ∧ b.toNat ≤ 57) ∨ b.toNat = 91 ∨ b.toNat = 116 ∨
+              b.toNat = 102 ∨ b.toNat = 110) := by
           intro v
           cases v with
           | int x =>
@@ -666,7 +744,9 @@ defmodule JsonProofsTest do
             · exact ⟨45, first :: rest, by simp [Json.text, text, negative], Or.inl rfl⟩
             · exact ⟨first, rest, by simp [Json.text, text, negative],
                 Or.inr (Or.inl (digits first (by simp)))⟩
-          | arr l => cases l <;> exact ⟨91, _, rfl, Or.inr (Or.inr rfl)⟩
+          | bool b => cases b <;> exact ⟨_, _, rfl, by decide⟩
+          | null => exact ⟨_, _, rfl, by decide⟩
+          | arr l => cases l <;> exact ⟨91, _, rfl, by decide⟩
 
         -- The elements after the first start with a comma or the closing bracket.
         have tail_start : ∀ xs : List Json, ∃ b post, Json.tailText xs = b :: post ∧
@@ -677,10 +757,10 @@ defmodule JsonProofsTest do
           · exact ⟨44, _, rfl, Or.inl rfl⟩
 
         -- Decoding a value's text continues with its term after the text. Numbers
-        -- need a separator after them, while lists end at their closing bracket.
+        -- need a separator after them, while other values end with their text.
         let Decodes : Json → Prop := fun v => ∀ (pre rest : List UInt8) (acc stack : Term)
             (depth : Nat),
-            ((∃ b post, rest = b :: post ∧ (b.toNat = 44 ∨ b.toNat = 93)) ∨ ∃ l, v = .arr l) →
+            ((∃ b post, rest = b :: post ∧ (b.toNat = 44 ∨ b.toNat = 93)) ∨ ∀ n, v ≠ .int n) →
             Result.resolve Erlang.program.fun_table depth
                 («value/6» (.bitstring ⟨(v.text ++ rest).toArray⟩ 0 (valid_aligned _))
                   (.bitstring ⟨(pre ++ v.text ++ rest).toArray⟩ 0 (valid_aligned _))
@@ -746,9 +826,29 @@ defmodule JsonProofsTest do
           induction v using Json.rec (motive_2 := fun l => ∀ x ∈ l, Decodes x) with
           | int x =>
             intro pre rest acc stack depth separated
-            rcases separated with ⟨b, post, rfl, separator⟩ | ⟨l, absurd⟩
+            rcases separated with ⟨b, post, rfl, separator⟩ | number
             · exact element x pre post b separator acc stack depth
-            · cases absurd
+            · exact absurd rfl (number x)
+          | bool b =>
+            intro pre rest acc stack depth _
+            cases b
+            · rw [show Json.text (.bool false) = [102, 97, 108, 115, 101] from rfl]
+              simp only [List.cons_append, List.nil_append]
+              rw [value_false, show (97 :: 108 :: 115 :: 101 :: rest : List UInt8) =
+                [97, 108, 115, 101] ++ rest from rfl, false_rest]
+              simp [Result.resolve_bind, Json.term, Int.add_assoc]
+            · rw [show Json.text (.bool true) = [116, 114, 117, 101] from rfl]
+              simp only [List.cons_append, List.nil_append]
+              rw [value_true, show (114 :: 117 :: 101 :: rest : List UInt8) =
+                [114, 117, 101] ++ rest from rfl, true_rest]
+              simp [Result.resolve_bind, Json.term, Int.add_assoc]
+          | null =>
+            intro pre rest acc stack depth _
+            rw [show Json.text .null = [110, 117, 108, 108] from rfl]
+            simp only [List.cons_append, List.nil_append]
+            rw [value_null, show (117 :: 108 :: 108 :: rest : List UInt8) =
+              [117, 108, 108] ++ rest from rfl, null_rest]
+            simp [Result.resolve_bind, Json.term, Int.add_assoc]
           | arr l ih =>
             intro pre rest acc stack depth _
             cases l with
@@ -794,12 +894,11 @@ defmodule JsonProofsTest do
             · exact hx
             · exact hxs y mem
 
-        have decode_array : ∀ (l : List Json) (depth : Nat),
+        have decode_value : ∀ (v : Json) (depth : Nat), (∀ n, v ≠ .int n) →
             Result.resolve Erlang.program.fun_table depth
-                («decode/1» (.bitstring ⟨(Json.arr l).text.toArray⟩ 0 (valid_aligned _))) =
-              .ok (Json.arr l).term := by
-          intro l depth
-          have whole := decodes (.arr l) [] [] (.atom "ok") .nil depth (Or.inr ⟨l, rfl⟩)
+                («decode/1» (.bitstring ⟨v.text.toArray⟩ 0 (valid_aligned _))) = .ok v.term := by
+          intro v depth number
+          have whole := decodes v [] [] (.atom "ok") .nil depth (Or.inr number)
           simp only [List.nil_append, List.append_nil, List.length_nil, Int.zero_add] at whole
           rw [show ((0 : Nat) : Int) = 0 from rfl] at whole
           unfold «decode/1»
@@ -833,6 +932,14 @@ defmodule JsonProofsTest do
               Result.resolve Erlang.program.fun_table depth
                 («do_encode/2» x.term (.function 0 2 #[])) = .ok x.iodata) with
           | int x => intro depth _; exact encode_integer x depth
+          | bool b =>
+            intro depth _
+            unfold «do_encode/2»
+            cases b <;> simp [Json.term, Json.iodata]
+          | null =>
+            intro depth _
+            unfold «do_encode/2»
+            simp [Json.term, Json.iodata]
           | arr l ih =>
             intro depth bound
             simp only [Json.depth] at bound
@@ -886,6 +993,11 @@ defmodule JsonProofsTest do
               Erlang.erlang.«iolist_to_binary/1» x.iodata =
                 .ok (.bitstring ⟨x.text.toArray⟩ 0 (valid_aligned _))) with
           | int x => exact Erlang.erlang.iolist_to_binary_binary ⟨(textOf x).toArray⟩
+          | bool b =>
+            cases b
+            · exact Erlang.erlang.iolist_to_binary_binary ⟨#[102, 97, 108, 115, 101]⟩
+            · exact Erlang.erlang.iolist_to_binary_binary ⟨#[116, 114, 117, 101]⟩
+          | null => exact Erlang.erlang.iolist_to_binary_binary ⟨#[110, 117, 108, 108]⟩
           | arr l ih =>
             cases l with
             | nil => exact Erlang.erlang.iolist_to_binary_binary ⟨#[91, 93]⟩
@@ -901,15 +1013,15 @@ defmodule JsonProofsTest do
             · exact hx
             · exact hxs y mem
 
-        have roundtrip_array : ∀ l : List Json, (Json.arr l).depth < 99 →
-            Result.resolve Erlang.program.fun_table 100 («roundtrip/1» (Json.arr l).term) =
-              .ok Term.true := by
-          intro l bound
+        have roundtrip_value : ∀ v : Json, (∀ n, v ≠ .int n) → v.depth < 99 →
+            Result.resolve Erlang.program.fun_table 100 («roundtrip/1» v.term) = .ok Term.true := by
+          intro v number bound
           simp only [«roundtrip/1», «encode/1», «encode/2», Erlang.erlang.«is_function/2»]
           simp
-          rw [encode_value (.arr l) 99 bound, Result.ok_bind]
+          rw [encode_value v 99 bound, Result.ok_bind]
           simp only [Result.resolve_bind]
-          rw [flatten, Result.resolve_of_isPure _ _ _ (by simp), Result.ok_bind, decode_array,
+          rw [flatten, Result.resolve_of_isPure _ _ _ (by simp), Result.ok_bind,
+            decode_value v _ number,
             Result.ok_bind, Result.resolve_of_isPure _ _ _ (by simp)]
           simp [Erlang.erlang.«=:=/2»]
 
@@ -945,23 +1057,34 @@ defmodule JsonProofsTest do
             rw [«supported?/2».eq_def] at returned
             cases t with
             | integer x => exact ⟨.int x, rfl, by simp [Json.depth] <;> omega⟩
+            | atom name =>
+              by_cases yes : name = "true"
+              · subst yes; exact ⟨.bool true, rfl, by simp [Json.depth] <;> omega⟩
+              by_cases no : name = "false"
+              · subst no; exact ⟨.bool false, rfl, by simp [Json.depth] <;> omega⟩
+              by_cases null : name = "null"
+              · subst null; exact ⟨.null, rfl, by simp [Json.depth] <;> omega⟩
+              simp [Erlang.erlang.«is_integer/1», Erlang.erlang.«is_list/1», yes, no, null]
+                at returned
             | nil | cons _ _ =>
               by_cases positive : 0 < n
-              · simp [Erlang.erlang.«is_list/1», Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
-                  Int.compare_eq_gt, positive] at returned
+              · simp [Erlang.erlang.«is_integer/1», Erlang.erlang.«is_list/1»,
+                  Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt, Int.compare_eq_gt, positive]
+                  at returned
                 obtain ⟨l, same, lDepth⟩ := values (n - 1) returned
                 exact ⟨.arr l, same, by simp [Json.depth]; omega⟩
-              · simp [Erlang.erlang.«is_list/1», Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
-                  Int.compare_eq_gt, positive] at returned
-            | _ => simp [Erlang.erlang.«is_list/1»] at returned
+              · simp [Erlang.erlang.«is_integer/1», Erlang.erlang.«is_list/1»,
+                  Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt, Int.compare_eq_gt, positive]
+                  at returned
+            | _ => simp [Erlang.erlang.«is_integer/1», Erlang.erlang.«is_list/1»] at returned
 
         apply Lynx.run_of_resolve rfl
         simp only [«json_roundtrip:requires/1», «supported?/1»] at requires
         obtain ⟨v, rfl, bound⟩ := (extract _ data (Nat.lt_succ_self _)).1 64 requires
         cases v with
         | int n => simpa [«json_roundtrip:ensures/1», Json.term] using roundtrip_integer n
-        | arr l =>
-          simpa [«json_roundtrip:ensures/1»] using roundtrip_array l (by omega))
+        | _ =>
+          simpa [«json_roundtrip:ensures/1»] using roundtrip_value _ (by simp) (by omega))
       """
   end
 end
