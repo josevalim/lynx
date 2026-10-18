@@ -285,6 +285,7 @@ private def expectedDeclarations : Array String := #[
   "Erlang.maps.«merge/2»",
   "Erlang.maps.«new/0»",
   "Erlang.maps.«put/3»",
+  "Erlang.maps.«to_list/1»",
   "Erlang.maps.«update/3»",
   "Erlang.math.«ceil/1»",
   "Erlang.math.«floor/1»",

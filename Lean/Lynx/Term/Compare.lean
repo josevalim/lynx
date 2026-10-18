@@ -827,6 +827,12 @@ theorem compare_tuple (a b : Array Term) :
   rw [compare_eq_step]
   rfl
 
+/-- Lists exactCompare their heads before their tails. -/
+theorem exactCompare_cons (a as b bs : Term) :
+    exactCompare (.cons a as) (.cons b bs) = (exactCompare a b).then (exactCompare as bs) := by
+  rw [exactCompare_eq_step]
+  rfl
+
 /-- Lists compare their heads before their tails. -/
 theorem compare_cons (a as b bs : Term) :
     compare (.cons a as) (.cons b bs) = (compare a b).then (compare as bs) := by
@@ -855,6 +861,20 @@ theorem map_compare_eq_of_lookup (a b : List (Term × Term))
     compare (.map a) (.map b) = .eq := by
   rw [compare_eq_step]
   apply Compare.compareMapViews_eq_of_lookup (cmp := exactCompare) compare _ _
+    (Compare.mapView_sorted _ _) (Compare.mapView_sorted _ _)
+  intro q
+  simp only [Compare.mapViewLookup_view]
+  exact h q
+
+/-- Matching first-binding lookups, up to exact equality of values, suffice for
+exact map equality. -/
+theorem map_exactCompare_eq_of_lookup (a b : List (Term × Term))
+    (h : ∀ q, Option.Rel (fun a b => exactCompare a b = .eq)
+      ((a.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd)
+      ((b.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd)) :
+    exactCompare (.map a) (.map b) = .eq := by
+  rw [exactCompare_eq_step]
+  apply Compare.compareMapViews_eq_of_lookup (cmp := exactCompare) exactCompare _ _
     (Compare.mapView_sorted _ _) (Compare.mapView_sorted _ _)
   intro q
   simp only [Compare.mapViewLookup_view]
