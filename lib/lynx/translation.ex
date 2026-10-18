@@ -762,6 +762,7 @@ defmodule Lynx.Translation do
 
     options =
       List.wrap(best_coordinate(candidates, calls)) ++
+        List.wrap(call_depths(functions, calls)) ++
         for order <- orders,
             results = Enum.map(calls, &compare_call(&1, order)),
             :fail not in results,
@@ -776,6 +777,53 @@ defmodule Lynx.Translation do
 
       _ ->
         :error
+    end
+  end
+
+  # When the calls are acyclic, ranking each function above its callees decides
+  # all of them in a single coordinate. Otherwise every function would need its
+  # own order coordinate, and each descent proof would traverse all of them.
+  defp call_depths(functions, calls) do
+    callees = Enum.group_by(calls, &elem(&1, 0), &elem(&1, 1))
+
+    depths =
+      Enum.reduce_while(0..(functions - 1)//1, %{}, fn function, depths ->
+        case call_depth(function, callees, depths, MapSet.new()) do
+          {:ok, _depth, depths} -> {:cont, depths}
+          :cycle -> {:halt, :cycle}
+        end
+      end)
+
+    if depths != :cycle do
+      {for(function <- 0..(functions - 1)//1, do: {:const, Map.fetch!(depths, function)}),
+       length(calls)}
+    end
+  end
+
+  defp call_depth(function, callees, depths, visiting) do
+    cond do
+      Map.has_key?(depths, function) ->
+        {:ok, depths[function], depths}
+
+      function in visiting ->
+        :cycle
+
+      true ->
+        visiting = MapSet.put(visiting, function)
+
+        result =
+          Enum.reduce_while(Map.get(callees, function, []), {:ok, -1, depths}, fn callee,
+                                                                                  {:ok, max,
+                                                                                   depths} ->
+            case call_depth(callee, callees, depths, visiting) do
+              {:ok, depth, depths} -> {:cont, {:ok, max(max, depth), depths}}
+              :cycle -> {:halt, :cycle}
+            end
+          end)
+
+        with {:ok, max, depths} <- result do
+          {:ok, max + 1, Map.put(depths, function, max + 1)}
+        end
     end
   end
 

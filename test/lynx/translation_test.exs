@@ -147,6 +147,33 @@ defmodule Lynx.TranslationTest do
              measures.(%{{:example, :inner, 6} => suffix})
   end
 
+  test "acyclic calls passing a parameter unchanged share one rank coordinate" do
+    core =
+      cerl("""
+      -module(example).
+      -export([start/1]).
+
+      start(<<$a, Rest/binary>>) -> start(Rest);
+      start(Bin) -> middle(Bin).
+      middle(<<$b, Rest/binary>>) -> start(Rest);
+      middle(Bin) -> finish(Bin).
+      finish(<<$c, Rest/binary>>) -> start(Rest);
+      finish(_) -> done.
+      """)
+
+    assert [%{"contents" => [%{"kind" => "mutual", "defs" => defs}]}] =
+             Translation.new()
+             |> Translation.add({"example.erl", core})
+             |> Translation.translate(:example, [{:start, 1}])
+             |> Translation.assemble(cache: false)
+
+    assert %{
+             "start" => [%{"param" => 0, "offset" => 0}, %{"const" => 2}],
+             "middle" => [%{"param" => 0, "offset" => 0}, %{"const" => 1}],
+             "finish" => [%{"param" => 0, "offset" => 0}, %{"const" => 0}]
+           } = Map.new(defs, &{&1["name"], &1["measure"]})
+  end
+
   test "only translates requested roots" do
     core =
       cerl("""
