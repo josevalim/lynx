@@ -15,6 +15,8 @@ theorem classify_partial (input : Term) : Result.IsPartial (lazyClassify input) 
 
 theorem nodes_pure (t : Term) : Result.IsPure (lazyNodes t) := by simp
 
+theorem items_pure (a b : Term) : Result.IsPure (lazyItems a b) := by simp
+
 end LynxTest.Purity.LazyImport
 
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Purity.LazyImport

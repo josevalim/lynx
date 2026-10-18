@@ -72,6 +72,20 @@ end
     Erlang.erlang.«+/2» a b
   | _ => .error (.error (.atom "function_clause"))
 
+-- Well-founded recursion, where a call passes its parameter unchanged.
+#lynx_pure mutual
+  def lazyCheck : Term → Term → Result
+    | .cons x xs, depth => lazyItems (.cons x xs) depth
+    | _, _ => .ok (.atom "true")
+  termination_by data _ => (sizeOf data, 1)
+  def lazyItems : Term → Term → Result
+    | .cons x xs, depth => do
+      let _ ← lazyCheck x depth
+      lazyItems xs depth
+    | _, _ => .ok (.atom "true")
+  termination_by data _ => (sizeOf data, 0)
+end
+
 -- Nothing is proved until a lemma is requested.
 run_meta do
   for name in [`lazyClassify_pure, `lazyClassifyTwice_pure, `lazyRotateFirst_pure] do
