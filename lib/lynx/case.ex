@@ -17,7 +17,8 @@ defmodule Lynx.Case do
 
   Set `LYNX_PROFILE=1` to print each translated module's reported
   verification time in milliseconds, status, and whether it was cached,
-  as well as the elaboration time of any law.
+  as well as the elaboration time of any law. The translated .lean files are
+  also written to `tmp/` for inspection.
 
   Set `LYNX_CACHE=0` to disable the verification cache.
   """
@@ -379,6 +380,8 @@ defmodule Lynx.Case do
           IO.puts("#{branch} #{theorem.name} (#{theorem.time_ms}ms)")
         end
       end
+
+      IO.puts("Translated .lean files written to #{write_translations!(module, name, reports)}")
     end
 
     errors =
