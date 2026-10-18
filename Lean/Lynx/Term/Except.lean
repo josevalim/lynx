@@ -5,7 +5,8 @@ public import Lynx.Term.DataTypes
 /-! Pure computations return a value or raise an exception, and make no
 runtime requests. Pure functions return `Except Exception`, which makes their
 purity hold by construction. Other computations embed their calls with
-`Result.ofExcept`. -/
+`Result.ofExcept`. A pure computation may also not return, raising
+`Exception.exhausted`, which handlers propagate without catching. -/
 
 public section
 
@@ -24,12 +25,20 @@ namespace Lynx.Except
 @[simp] theorem error_bind (exception : Exception) (next : α → Except Exception β) :
     (Except.error exception >>= next) = Except.error exception := rfl
 
+/-- A sequence returns exactly when both steps return. -/
+theorem bind_eq_ok (computation : Except Exception α) (next : α → Except Exception β) (value : β) :
+    (computation >>= next) = .ok value ↔
+      ∃ input, computation = .ok input ∧ next input = .ok value := by
+  cases computation <;> simp
+
 /-- Catch only the protected computation. Exceptions raised by either
-continuation propagate to an enclosing handler. -/
+continuation propagate to an enclosing handler. `exhausted` is not an Erlang
+exception, so it propagates without reaching the handler. -/
 @[expose] def tryWith (computation : Except Exception α) (next : α → Except Exception β)
     (handler : Exception → Except Exception β) : Except Exception β :=
   match computation with
   | .ok value => next value
+  | .error .exhausted => .error .exhausted
   | .error exception => handler exception
 
 @[simp] theorem tryWith_ok (value : α) (next : α → Except Exception β)
@@ -37,8 +46,27 @@ continuation propagate to an enclosing handler. -/
     tryWith (.ok value) next handler = next value := rfl
 
 @[simp] theorem tryWith_error (exception : Exception) (next : α → Except Exception β)
+    (handler : Exception → Except Exception β) (raised : exception ≠ .exhausted) :
+    tryWith (.error exception) next handler = handler exception := by
+  cases exception <;> first | rfl | contradiction
+
+@[simp] theorem tryWith_exhausted (next : α → Except Exception β)
     (handler : Exception → Except Exception β) :
-    tryWith (.error exception) next handler = handler exception := rfl
+    tryWith (.error .exhausted) next handler = .error .exhausted := rfl
+
+/-- Whether a computation did not return. -/
+@[expose] def isExhausted : Except Exception α → Bool
+  | .error .exhausted => true
+  | _ => false
+
+private def cutoffImpl : Except Exception α :=
+  panic! "Lynx: reached a translation cutoff"
+
+/-- A translation cutoff does not return. Compiled code panics instead, to
+report reaching untranslated code. -/
+@[expose, implemented_by cutoffImpl] def cutoff : Except Exception α := .error .exhausted
+
+@[simp] theorem cutoff_eq : (cutoff : Except Exception α) = .error .exhausted := rfl
 
 /-- Erlang `orelse`. The right operand is selected only after the left one
 returns `false`; other values raise `badarg`. -/
@@ -91,11 +119,13 @@ returns `true`; other values raise `badarg`. -/
 -- Termination proofs see which branch a guard selected.
 @[wf_preprocess] theorem guard_wf (computation : Except Exception Term)
     (body next : Unit → Except Exception α) :
-    guard computation body next = if guardPassed computation then body () else next () := by
+    guard computation body next =
+      if isExhausted computation then .error .exhausted
+      else if guardPassed computation then body () else next () := by
   cases computation with
-  | error exception => rfl
+  | error exception => cases exception <;> rfl
   | ok value =>
-    cases value <;> simp [guardPassed]
+    cases value <;> simp [guardPassed, isExhausted]
     rename_i value
     by_cases accepted : value = "true" <;> simp_all
 
@@ -126,10 +156,6 @@ namespace Lynx.Result
 recursion uses this to retain the equations of their binds. -/
 @[simp, wf_preprocess] theorem isPure_ofExcept (reply : Except Exception α) :
     IsPure (ofExcept reply) := by
-  cases reply <;> trivial
-
-@[simp] theorem isPartial_ofExcept (reply : Except Exception α) :
-    IsPartial (ofExcept reply) := by
   cases reply <;> trivial
 
 @[simp] theorem ofExcept_eq_ok (reply : Except Exception α) (value : α) :

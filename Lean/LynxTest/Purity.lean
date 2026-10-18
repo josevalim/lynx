@@ -110,111 +110,74 @@ decreasing_by
   simp [Int.tdiv_eq_ediv_of_nonneg (Int.le_of_lt positive)]
   omega
 
--- Explicit binds in translated mutual calls retain the group's induction
--- hypotheses, and embedded pure calls are partial.
-#lynx_partial mutual
-  def sumLeft : Term → Result
-    | .nil => .ok (.integer 0)
-    | .cons x xs => Result.bind (sumRight xs) fun total =>
-      Result.ofExcept (Erlang.erlang.«+/2» x total)
-    | _ => .error (.error (.atom "function_clause"))
-  def sumRight : Term → Result
-    | .nil => .ok (.integer 0)
-    | .cons x xs => Result.bind (sumLeft xs) fun total =>
-      Result.ofExcept (Erlang.erlang.«+/2» x total)
-    | _ => .error (.error (.atom "function_clause"))
-end
-
-example (input : Term) : Result.IsPartial (sumLeft input) := sumLeft_partial input
-example (input : Term) : Result.IsPartial (sumRight input) := sumRight_partial input
-
--- Same-arity members can be reordered by Lean's equation compiler. Their
--- motives and conjunction projections must follow the compiler's order.
-#lynx_partial mutual
-  def rotateFirst (left right : Term) : Result :=
-    match left with
-    | .cons _ tail => rotateThird tail right
-    | _ => .ok right
-  def rotateSecond (left right : Term) : Result :=
-    match right with
-    | .cons _ tail => rotateFirst left tail
-    | _ => .ok left
-  def rotateThird (left right : Term) : Result :=
-    match left with
-    | .cons _ tail => rotateSecond tail right
-    | _ => .ok right
-end
-
 theorem guard_retains_environment (value : Term) (env : Environment) :
     (Result.guard (.get fun _ => .ok Term.true)
       (fun _ => .ok value) (fun _ => .error (.error (.atom "unexpected")))).run env =
         (.ok value, env) := by
   simp [Result.tryWith, Result.bind, Result.handle]
 
-/-- Partiality composes through embedded pure calls. -/
-#lynx_partial def classifyTwice (input : Term) : Result := do
-  let first ← Result.ofExcept (Erlang.erlang.«is_integer/1» input)
-  Result.ofExcept (Erlang.erlang.«is_atom/1» first)
-
-run_cmd do
-  let some doc ← Lean.findSimpleDocString? (← Lean.getEnv) ``LynxTest.Purity.classifyTwice
-    | throwError "classifyTwice documentation was not registered"
-  unless doc.startsWith "Partiality composes through embedded pure calls." do
-    throwError "unexpected classifyTwice documentation: {doc}"
-
 -- A partial fixed point shaped like OTP's array:find_bits/2: its first
--- parameter is fixed, and the induction ranges over the second.
-#lynx_partial def «find/2» (_0 : Term) (_1 : Term) : Result := do
-  let _2 ← Result.ofExcept (Erlang.erlang.«</2» _0 _1)
+-- parameter is fixed. `partial_fixpoint` proves monotonicity itself.
+private def «find/2» (_0 : Term) (_1 : Term) : Except Exception Term := do
+  let _2 ← Erlang.erlang.«</2» _0 _1
   match _2 with
   | .atom "true" => pure _1
   | _ => do
-    let _3 ← Result.ofExcept (Erlang.erlang.«+/2» _1 (.integer 4))
+    let _3 ← Erlang.erlang.«+/2» _1 (.integer 4)
     «find/2» _0 _3
-partial_fixpoint monotonicity by
-  intro f g h
-  repeat' first
-    | exact Lean.Order.PartialOrder.rel_refl
-    | exact h _ _
-    | exact h _
-    | apply Lynx.Result.bind_mono_pure
-    | (intro)
-    | split
-    | simp_all
+partial_fixpoint
 
--- Callers compose partiality through exception handlers and structural recursion.
-#lynx_partial def «succeeds/1» (_0 : Term) : Result :=
-  Result.tryWith («find/2» _0 (.integer 0) >>= fun _ => pure (Term.atom "true"))
-    (fun value => .ok value) (fun _ => pure (Term.atom "false"))
+theorem find_returns : «find/2» (.integer 6) (.integer 0) = .ok (.integer 8) := by
+  repeat (rw [«find/2».eq_1]; simp)
 
-#lynx_partial def «each/1» (_0 : Term) : Result :=
-  match _0 with
-  | .cons head tail => do
-    let _ ← «find/2» head (.integer 0)
-    «each/1» tail
-  | _ => pure .nil
+-- Recursive calls may appear under handlers, guards, and short-circuit operators.
+private def «walk/1» (_0 : Term) : Except Exception Term :=
+  Except.guard (Erlang.erlang.«is_integer/1» _0)
+    (fun _ => Except.tryWith («walk/1» _0)
+      (fun value => Except.andAlso (Except.orElse («walk/1» value) («walk/1» value))
+        («walk/1» value))
+      (fun _ => «walk/1» _0))
+    (fun _ => .ok _0)
+partial_fixpoint
 
--- A cutoff is exhausted, which is partial.
-#lynx_partial def «cutoff/1» (_0 : Term) : Result := .exhausted
+/-- A diverging partial fixed point does not return. -/
+theorem walk_diverges (n : Int) : «walk/1» (.integer n) = .error .exhausted := by
+  refine «walk/1».fixpoint_induct
+    (fun walk => ∀ n, walk (.integer n) = .error .exhausted) ?_ ?_ n
+  · apply Lean.Order.admissible_pi
+    intro n
+    exact Lean.Order.admissible_apply
+      (fun (_ : Term) (computation : Except Exception Term) => computation = .error .exhausted)
+      (.integer n) (Except.admissible_of_bottom _ rfl)
+  · intro walk diverges n
+    simp [Erlang.erlang.«is_integer/1», diverges]
 
-example (a b : Term) : Result.IsPartial («find/2» a b) := «find/2_partial» a b
-example (a : Term) : Result.IsPartial («succeeds/1» a) := «succeeds/1_partial» a
-example (a : Term) : Result.IsPartial («each/1» a) := «each/1_partial» a
-example (a : Term) : Result.IsPartial («cutoff/1» a) := «cutoff/1_partial» a
+theorem walk_returns : «walk/1» .nil = .ok .nil := by
+  rw [«walk/1»]; rfl
 
--- A partial computation is only `ok` when run if it already returns that value.
-example (a : Term) :
-    Lynx.run («succeeds/1» a) = .ok Term.true ↔ «succeeds/1» a = .ok Term.true :=
-  IsPartial.run_eq_ok_iff («succeeds/1_partial» a)
+-- A cutoff does not return, and no handler catches it.
+private def «cutoff/1» (_0 : Term) : Except Exception Term := Except.cutoff
 
-/--
-error: unsolved goals
-⊢ False
----
-error: #lynx_partial could not prove partiality; refusing an incomplete proof
--/
-#guard_msgs in
-#lynx_partial def readsPartially : Result := .get fun _ => .exhausted
+private def «succeeds/1» (_0 : Term) : Except Exception Term :=
+  Except.tryWith («cutoff/1» _0) (fun value => .ok value) (fun _ => pure (Term.atom "caught"))
+
+theorem cutoff_is_not_caught (a : Term) : «succeeds/1» a = .error .exhausted := by
+  simp [«succeeds/1», «cutoff/1»]
+
+theorem exhausted_guard_does_not_fall_through :
+    Except.guard (.error .exhausted) (fun _ => .ok Term.true) (fun _ => .ok Term.false) =
+      .error .exhausted := rfl
+
+theorem exhausted_result_is_not_caught (next : Term → Result) (handler : Exception → Result) :
+    Result.tryWith (.error .exhausted) next handler = .error .exhausted ∧
+    Result.handle (.error .exhausted) handler = .error .exhausted ∧
+    Result.guard (.error .exhausted) (fun _ => .ok Term.true) (fun _ => .ok Term.false) =
+      .error .exhausted := ⟨rfl, rfl, rfl⟩
+
+-- Embedded in a process, a computation that does not return ends the run.
+theorem exhausted_run (a : Term) :
+    Lynx.run (Result.ofExcept («succeeds/1» a)) = .error .exhausted := by
+  simp [cutoff_is_not_caught]
 
 end LynxTest.Purity
 

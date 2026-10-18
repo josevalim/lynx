@@ -23,13 +23,14 @@ end Lynx.Term
 namespace Lynx.Result
 
 /-- Continue with either the returned value or exception. Unlike `bind`, this
-also catches exceptions raised by a dispatched implementation. -/
+also catches exceptions raised by a dispatched implementation. An exhausted
+implementation does not return, so it does not resume its caller. -/
 private def resume (computation : Result β)
     (next : Except Exception β → Result α) : Result α :=
   match computation with
   | .ok value => next (.ok value)
+  | .error .exhausted => .error .exhausted
   | .error exception => next (.error exception)
-  | .exhausted => .exhausted
   | .get continuation => .get fun env => resume (continuation env) next
   | .set env continuation => .set env (resume continuation next)
   | .spawn child continuation =>
@@ -44,7 +45,6 @@ private def resume (computation : Result β)
 private def expand (dispatch : Bool → Term → Array Term → Result Term) : Result α → Result α
   | .ok value => .ok value
   | .error exception => .error exception
-  | .exhausted => .exhausted
   | .get next => .get fun env => expand dispatch (next env)
   | .set env next => .set env (expand dispatch next)
   | .spawn child next =>
@@ -60,11 +60,13 @@ private theorem resume_bind (computation : Result β) (next : Except Exception �
     (following : α → Result γ) :
     resume computation next >>= following =
       resume computation (fun reply => next reply >>= following) := by
-  induction computation <;> simp_all [resume]
+  induction computation <;> try (rename_i exception; cases exception)
+  all_goals simp_all [resume]
 
 private theorem resume_identity (computation : Result α) :
     resume computation ofExcept = computation := by
-  induction computation <;> simp_all [resume, ofExcept]
+  induction computation <;> try (rename_i exception; cases exception)
+  all_goals simp_all [resume, ofExcept]
 
 private theorem expand_bind (dispatch : Bool → Term → Array Term → Result Term)
     (computation : Result α) (next : α → Result β) :
@@ -96,7 +98,7 @@ public def resolve (table : Term.FunTable) (depth : Nat) (computation : Result �
               if spawn then Result.schedule body (fun pid => .ok (.pid pid)) else body
           | .effectful body =>
               match depth with
-              | 0 => .exhausted
+              | 0 => .error .exhausted
               | depth + 1 =>
                   let resolved := resolve table depth (body captures arguments)
                   if spawn then Result.schedule resolved (fun pid => .ok (.pid pid)) else resolved
@@ -136,12 +138,6 @@ public theorem resolve_apply_effectful (table : Term.FunTable) (depth id arity :
     resolve table depth computation = computation := by
   cases computation <;> first | (rw [resolve]; rfl) | exact False.elim pure
 
-/-- Resolving calls also leaves partial computations unchanged: they make no calls. -/
-public theorem resolve_of_isPartial (table : Term.FunTable) (depth : Nat)
-    (computation : Result α) (partiality : IsPartial computation) :
-    resolve table depth computation = computation := by
-  cases computation <;> first | (rw [resolve]; rfl) | exact False.elim partiality
-
 /-- A pure table entry executes before its caller's continuation, without using
 call depth. Table dispatch belongs to the runtime, rather than translated code. -/
 public theorem resolve_apply_pure (table : Term.FunTable) (depth id arity : Nat)
@@ -152,9 +148,15 @@ public theorem resolve_apply_pure (table : Term.FunTable) (depth id arity : Nat)
       resolve table depth (ofExcept (body captures arguments) >>= next) := by
   simp only [Term.apply, size, ite_true, Result.apply_bind]
   conv => lhs; rw [resolve]
-  cases reply : body captures arguments <;>
+  cases reply : body captures arguments with
+  | ok value =>
     simp only [expand, entry, size, bne_self_eq_false, Bool.false_eq_true, ite_false,
-      reply, ofExcept, resume, Result.ok_bind, Result.error_bind]
-  all_goals rw [resolve]; rfl
+      reply, ofExcept, resume, Result.ok_bind]
+    rw [resolve]; rfl
+  | error exception =>
+    cases exception <;>
+      simp only [expand, entry, size, bne_self_eq_false, Bool.false_eq_true, ite_false,
+        reply, ofExcept, resume, Result.error_bind] <;>
+      rw [resolve] <;> rfl
 
 end Lynx.Result

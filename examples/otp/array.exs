@@ -27,23 +27,7 @@ defmodule ArrayProofsTest do
   end
 
   @array_fixpoint ~LEAN"""
-  partial_fixpoint monotonicity by
-    intro f g h
-    repeat' first
-      | exact Lean.Order.PartialOrder.rel_refl
-      | exact h _ _
-      | exact h _ _ _
-      | exact h _ _ _ _
-      | apply Lynx.Result.tryWith_mono_pure
-      | apply Lynx.Result.bind_mono_left
-      | apply Lynx.Result.bind_mono_pure
-      | apply Lynx.Result.IsPure.tryWith
-      | apply Lynx.Result.IsPure.handle
-      | apply Lynx.Result.IsPure.bind
-      | apply Lynx.Result.IsPure.bind_explicit
-      | (intro)
-      | split
-      | simp_all
+  partial_fixpoint
   """
 
   laws "array updates" do
@@ -120,10 +104,10 @@ defmodule ArrayProofsTest do
             apply Lean.Order.admissible_pi
             intro s
             exact Lean.Order.admissible_apply
-              (fun (_ : Lynx.Term) (f : Lynx.Term → Lynx.Result) => ∀ out, f (.integer s) = .ok out → ∃ n : Int, out = .integer n) i
+              (fun (_ : Lynx.Term) (f : Lynx.Term → Except Lynx.Exception Lynx.Term) => ∀ out, f (.integer s) = .ok out → ∃ n : Int, out = .integer n) i
               (Lean.Order.admissible_apply
-                (fun (_ : Lynx.Term) (r : Lynx.Result) => ∀ out, r = .ok out → ∃ n : Int, out = .integer n) (.integer s)
-                (Lynx.Result.admissible_success _))
+                (fun (_ : Lynx.Term) (r : Except Lynx.Exception Lynx.Term) => ∀ out, r = .ok out → ∃ n : Int, out = .integer n) (.integer s)
+                (Lynx.Except.admissible_success _))
           · intro f ih i s out returned
             dsimp only at returned
             cases shifted : s + 4 with
@@ -149,10 +133,10 @@ defmodule ArrayProofsTest do
             apply Lean.Order.admissible_pi
             intro s
             exact Lean.Order.admissible_apply
-              (fun (_ : Lynx.Term) (f : Lynx.Term → Lynx.Result) => ∀ out, f (.integer s) = .ok out → ∃ tree' n, out = .tuple #[tree', .integer n]) tree
+              (fun (_ : Lynx.Term) (f : Lynx.Term → Except Lynx.Exception Lynx.Term) => ∀ out, f (.integer s) = .ok out → ∃ tree' n, out = .tuple #[tree', .integer n]) tree
               (Lean.Order.admissible_apply
-                (fun (_ : Lynx.Term) (r : Lynx.Result) => ∀ out, r = .ok out → ∃ tree' n, out = .tuple #[tree', .integer n]) (.integer s)
-                (Lynx.Result.admissible_success _))
+                (fun (_ : Lynx.Term) (r : Except Lynx.Exception Lynx.Term) => ∀ out, r = .ok out → ∃ tree' n, out = .tuple #[tree', .integer n]) (.integer s)
+                (Lynx.Except.admissible_success _))
           · intro f ih tree s out returned
             dsimp only at returned
             cases shifted : s + 4 with
@@ -171,7 +155,7 @@ defmodule ArrayProofsTest do
             ∃ tree' n, out = .tuple #[tree', .integer n] := by
           simp only [Erlang.array.«grow/3»] at returned
           split at returned
-          · simp [Erlang.erlang.«is_integer/1», Lynx.Result.bind_eq_ok] at returned
+          · simp [Erlang.erlang.«is_integer/1», Lynx.Except.bind_eq_ok] at returned
             obtain ⟨bits, found, returned⟩ := returned
             obtain ⟨n, rfl⟩ := findShape _ _ _ found
             exact ⟨.nil, n, by simpa using returned.symm⟩
@@ -199,17 +183,17 @@ defmodule ArrayProofsTest do
             · have maxSize : max n (i + 1) = n := by omega
               by_cases hit : ci ≤ i + z ∧ i + z < ci + 16 <;>
                 simp [hit, boolAnd, andTT, andTF, andFT, masked] at returned
-              · obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp returned
-                obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ ((Lynx.Result.ofExcept_eq_ok _ _).mp cacheWrite)
+              · obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp returned
+                obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ cacheWrite
                 refine ⟨i, n, z, ci, bits, fixed, default, tree, entries, by omega, rfl,
                   by simp [Erlang.array.«size/1»], nonnegative, hit.1, hit.2, ?_⟩
                 intro replacement
                 simp [Erlang.array.«set/3», nonnegative, existing, hit,
                   boolAnd, andTT, andTF, andFT, Erlang.erlang.«setelement/3», lo, bound, maxSize, pack]
-              · obtain ⟨newTree, treeReturned, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp returned
-                obtain ⟨newCache, cacheReturned, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
-                obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
-                obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ ((Lynx.Result.ofExcept_eq_ok _ _).mp cacheWrite)
+              · obtain ⟨newTree, treeReturned, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp returned
+                obtain ⟨newCache, cacheReturned, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp rest
+                obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp rest
+                obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ cacheWrite
                 have position : 1 + (i + z) - (i + z - r) = 1 + (r : Int) := by omega
                 refine ⟨i, n, z, i + z - r, bits, fixed, default, newTree, entries, by omega, rfl,
                   by simp [Erlang.array.«size/1»], nonnegative, by omega, by omega, ?_⟩
@@ -228,8 +212,8 @@ defmodule ArrayProofsTest do
               by_cases fits : i + z < capacity <;> simp [fits, masked] at returned
               · by_cases same : i + z - (r : Int) = ci <;>
                   simp [same, Erlang.erlang.«=/=/2»] at returned
-                · obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp returned
-                  obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ ((Lynx.Result.ofExcept_eq_ok _ _).mp cacheWrite)
+                · obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp returned
+                  obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ cacheWrite
                   have position : 1 + (i + z) - ci = 1 + (r : Int) := by omega
                   refine ⟨i, n, z, ci, bits, fixed, default, tree, entries, by omega, rfl,
                     by simp [Erlang.array.«size/1»], nonnegative, by omega, by omega, ?_⟩
@@ -237,10 +221,10 @@ defmodule ArrayProofsTest do
                   simp [Erlang.array.«set/3», nonnegative, existing, boolAnd, andTT, andTF, andFT,
                     Erlang.erlang.«=:=/2», fixedTrue, shifted, fits, masked, same,
                     Erlang.erlang.«=/=/2», Erlang.erlang.«setelement/3», lo, bound, maxSize, pack, position]
-                · obtain ⟨newTree, treeReturned, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp returned
-                  obtain ⟨newCache, cacheReturned, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
-                  obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
-                  obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ ((Lynx.Result.ofExcept_eq_ok _ _).mp cacheWrite)
+                · obtain ⟨newTree, treeReturned, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp returned
+                  obtain ⟨newCache, cacheReturned, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp rest
+                  obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp rest
+                  obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ cacheWrite
                   have position : 1 + (i + z) - (i + z - r) = 1 + (r : Int) := by omega
                   refine ⟨i, n, z, i + z - r, bits, fixed, default, newTree, entries, by omega, rfl,
                     by simp [Erlang.array.«size/1»], nonnegative, by omega, by omega, ?_⟩
@@ -249,13 +233,13 @@ defmodule ArrayProofsTest do
                     Erlang.erlang.«=:=/2», fixedTrue, shifted, fits, masked, same,
                     Erlang.erlang.«=/=/2», treeReturned, cacheReturned,
                     Erlang.erlang.«setelement/3», lo, bound, maxSize, pack, position]
-              · obtain ⟨grown, grew, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp returned
+              · obtain ⟨grown, grew, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp returned
                 obtain ⟨grownTree, grownBits, rfl⟩ := growth _ _ _ _ grew
                 simp at rest
-                obtain ⟨newTree, treeReturned, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
-                obtain ⟨newCache, cacheReturned, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
-                obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
-                obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ ((Lynx.Result.ofExcept_eq_ok _ _).mp cacheWrite)
+                obtain ⟨newTree, treeReturned, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp rest
+                obtain ⟨newCache, cacheReturned, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp rest
+                obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp rest
+                obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ cacheWrite
                 have position : 1 + (i + z) - (i + z - r) = 1 + (r : Int) := by omega
                 refine ⟨i, n, z, i + z - r, grownBits, fixed, default, newTree, entries, by omega, rfl,
                   by simp [Erlang.array.«size/1»], nonnegative, by omega, by omega, ?_⟩
@@ -264,16 +248,16 @@ defmodule ArrayProofsTest do
                   Erlang.erlang.«=:=/2», fixedTrue, shifted, fits, masked, grew,
                   treeReturned, cacheReturned, Erlang.erlang.«setelement/3», lo, bound, maxSize, pack, position]
           · simp at returned
-        have success (computation : Lynx.Result)
-            (valid : Lynx.Result.tryWith (computation >>= fun _ => .ok Lynx.Term.true)
-              Lynx.Result.ok (fun _ => .ok Lynx.Term.false) = .ok Lynx.Term.true) :
+        have success (computation : Except Lynx.Exception Lynx.Term)
+            (valid : Lynx.Except.tryWith (computation >>= fun _ => .ok Lynx.Term.true)
+              Except.ok (fun _ => .ok Lynx.Term.false) = .ok Lynx.Term.true) :
             ∃ out, computation = .ok out := by
-          cases computation <;>
-            simp [Lynx.Result.tryWith, Lynx.Result.handle, Lynx.Result.bind] at valid
-          exact ⟨_, rfl⟩
-        change Lynx.Result.tryWith
+          cases computation with
+          | ok out => exact ⟨out, rfl⟩
+          | error exception => cases exception <;> simp [Lynx.Except.tryWith] at valid
+        change Lynx.Except.tryWith
           (Erlang.array.«set/3» index first array >>= fun _ => .ok Lynx.Term.true)
-          Lynx.Result.ok (fun _ => .ok Lynx.Term.false) = .ok Lynx.Term.true at requires
+          Except.ok (fun _ => .ok Lynx.Term.false) = .ok Lynx.Term.true at requires
         obtain ⟨out, returned⟩ := success _ requires
         obtain ⟨i, n, z, ci, bits, fixed, default, tree, cache, valid,
           rfl, originalSize, nonnegative, lower, upper, writes⟩ := prepared _ _ _ _ returned

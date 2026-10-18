@@ -114,21 +114,7 @@ defmodule CalendarISOProofsTest do
     # zero_pad/2 can diverge for unsupported widths; this law never formats
     # an invalid date, so keep that helper partial instead of assuming totality.
     termination_suffix &Calendar.ISO.zero_pad/2, ~LEAN"""
-    partial_fixpoint monotonicity by
-      intro f g h
-      repeat' first
-        | exact Lean.Order.PartialOrder.rel_refl
-        | exact h _ _
-        | apply Lynx.Result.tryWith_mono_pure
-        | apply Lynx.Result.bind_mono_left
-        | apply Lynx.Result.bind_mono_pure
-        | apply Lynx.Result.IsPure.tryWith
-        | apply Lynx.Result.IsPure.handle
-        | apply Lynx.Result.IsPure.bind
-        | apply Lynx.Result.IsPure.bind_explicit
-        | (intro)
-        | split
-        | simp_all
+    partial_fixpoint
     """
 
     law date_conversion_roundtrips_every_day(days),

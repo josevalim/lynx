@@ -10,7 +10,7 @@ defmodule Lynx.CoreToLeanjTest do
     assert {:ok,
             %{
               {:entry, 1} => %{
-                purity: :partial,
+                purity: :pure,
                 local_calls: [],
                 translation: %{
                   "kind" => "def",

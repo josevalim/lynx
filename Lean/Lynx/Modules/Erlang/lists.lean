@@ -1,7 +1,6 @@
 module
 
 public import Lynx.Term
-public import Lynx.Purity
 
 public section
 

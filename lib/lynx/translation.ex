@@ -128,7 +128,7 @@ defmodule Lynx.Translation do
       {:ok, functions, literals, laws, funs, translation} ->
         updated = %{
           module
-          | translations: propagate_purity(functions, name, translation.termination_suffixes),
+          | translations: propagate_purity(functions),
             literals: literals,
             laws: Map.merge(module.laws, laws)
         }
@@ -508,19 +508,12 @@ defmodule Lynx.Translation do
     _ -> :erlang.md5(contents)
   end
 
-  # A definition is as impure as its callees. Termination suffixes make it
-  # partial, since a pure definition must return.
-  defp propagate_purity(functions, module, suffixes) do
+  # A definition is as impure as its callees.
+  defp propagate_purity(functions) do
     {functions, changed?} =
-      Enum.reduce(functions, {functions, false}, fn {{function, arity} = name, definition},
-                                                    {functions, changed?} ->
-        own =
-          if Map.has_key?(suffixes, {module, function, arity}),
-            do: join_purity(definition.purity, :partial),
-            else: definition.purity
-
+      Enum.reduce(functions, {functions, false}, fn {name, definition}, {functions, changed?} ->
         purity =
-          Enum.reduce(definition.local_calls, own, fn callee, purity ->
+          Enum.reduce(definition.local_calls, definition.purity, fn callee, purity ->
             join_purity(purity, Map.fetch!(functions, callee).purity)
           end)
 
@@ -531,7 +524,7 @@ defmodule Lynx.Translation do
         end
       end)
 
-    if changed?, do: propagate_purity(functions, module, suffixes), else: functions
+    if changed?, do: propagate_purity(functions), else: functions
   end
 
   # Calls to function values may reach any entry in the complete program table,

@@ -100,11 +100,9 @@ defmodule Lynx.Case do
       termination_suffix &:calendar.mod/2, ~LEAN"partial_fixpoint"
 
   The source is a `Lynx.Lean` value. It is parsed as part of the function's
-  declaration, after its body. Regardless of the suffix contents, the function
-  and every function calling it are marked as partial (see the purity model in
-  `Lynx`): instead of returning `Except`, they return `Lynx.Result` with
-  partiality proofs (`#lynx_partial`), and laws reaching them are still stated
-  directly.
+  declaration, after its body. The suffix does not change the function's purity
+  (see the purity model in `Lynx`). With `partial_fixpoint`, inputs on which
+  the function diverges raise `Lynx.Exception.exhausted`.
   Raises if the target function is not translated by the group's laws.
   """
   defmacro termination_suffix(target, source) do
@@ -189,14 +187,12 @@ defmodule Lynx.Case do
 
       cutoff &Float.invalid_precision_message/1
 
-  The function's body becomes `Lynx.Result.exhausted`, not a return value or an
-  Erlang exception. A successful-return proof must establish that the cutoff
-  is never reached. This supports proofs whose unreachable error paths depend
-  on libraries outside the model; it makes no claim about executing those paths.
-
-  The function and every function calling it are marked as partial (see the
-  purity model in `Lynx`): they receive partiality proofs (`#lynx_partial`), and
-  laws reaching a cutoff are still stated directly.
+  The function's body becomes `Lynx.Except.cutoff`, which raises
+  `Lynx.Exception.exhausted`: not a return value or an Erlang exception, and
+  no handler catches it. A successful-return proof must establish that the
+  cutoff is never reached. This supports proofs whose unreachable error paths
+  depend on libraries outside the model; it makes no claim about executing those
+  paths. The function remains pure (see the purity model in `Lynx`).
   """
   defmacro cutoff(target) do
     mfa =

@@ -27,21 +27,7 @@ defmodule RangeProofsTest do
   end
 
   @extended_gcd_fixpoint ~LEAN"""
-  partial_fixpoint monotonicity by
-    intro f g h
-    repeat' first
-      | exact Lean.Order.PartialOrder.rel_refl
-      | exact h _ _ _ _ _ _
-      | apply Lynx.Result.tryWith_mono_pure
-      | apply Lynx.Result.bind_mono_left
-      | apply Lynx.Result.bind_mono_pure
-      | apply Lynx.Result.IsPure.tryWith
-      | apply Lynx.Result.IsPure.handle
-      | apply Lynx.Result.IsPure.bind
-      | apply Lynx.Result.IsPure.bind_explicit
-      | (intro)
-      | split
-      | simp_all
+  partial_fixpoint
   """
 
   laws "Range intersection arithmetic", options: [maxHeartbeats: 1_000_000] do
@@ -203,21 +189,7 @@ defmodule RangeProofsTest do
   end
 
   @range_size_fixpoint ~LEAN"""
-  partial_fixpoint monotonicity by
-    intro f g h
-    repeat' first
-      | exact Lean.Order.PartialOrder.rel_refl
-      | exact h _
-      | apply Lynx.Result.tryWith_mono_pure
-      | apply Lynx.Result.bind_mono_left
-      | apply Lynx.Result.bind_mono_pure
-      | apply Lynx.Result.IsPure.tryWith
-      | apply Lynx.Result.IsPure.handle
-      | apply Lynx.Result.IsPure.bind
-      | apply Lynx.Result.IsPure.bind_explicit
-      | (intro)
-      | split
-      | simp_all
+  partial_fixpoint
   """
 
   laws "Range split", options: [maxHeartbeats: 1_000_000] do

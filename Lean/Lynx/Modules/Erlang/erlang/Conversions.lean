@@ -1,6 +1,6 @@
 module
 
-public import Lynx.Purity
+public import Lynx.Term
 
 namespace Erlang.erlang
 open Lynx

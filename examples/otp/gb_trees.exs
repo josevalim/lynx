@@ -34,8 +34,8 @@ defmodule GbTreesProofsTest do
     termination_by match _1 with | .integer n => n.toNat | _ => 0
     decreasing_by
       all_goals
-        have passed : Lynx.Result.guardPassed
-            (.ofExcept (Erlang.erlang.«>/2» vS (.integer 1))) = true := by assumption
+        have passed : Lynx.Except.guardPassed
+            (Erlang.erlang.«>/2» vS (.integer 1)) = true := by assumption
         have divisionShape (input output : Lynx.Term)
             (returned : Erlang.erlang.«div/2» input (.integer 2) = .ok output) :
             ∃ value : Int, input = .integer value ∧ output = .integer (value.tdiv 2) := by
@@ -50,7 +50,7 @@ defmodule GbTreesProofsTest do
             Int.compare_eq_gt] at passed
           by_cases h : 1 < sm+1
           · omega
-          · simp [h, Lynx.Result.guardPassed] at passed
+          · simp [h, Lynx.Except.guardPassed] at passed
         first
         | have next : vS1 = .integer (sm - sm.tdiv 2) := by
             have returned : Erlang.erlang.«-/2» vSm vS2 = .ok vS1 := by assumption
@@ -210,11 +210,11 @@ defmodule GbTreesProofsTest do
                   have input : encode (xs ++ tail) =
                       encode (xs.take ln ++ (((key, value) :: restXs) ++ tail)) := by
                     rw [← List.append_assoc, ← joined]
-                  simp only [greater, positive, if_true, Lynx.Result.guard_eq, Lynx.Result.tryWith_ok,
-                    Lynx.Term.true, Erlang.erlang.«-/2_integers», Lynx.Result.ofExcept_ok,
-                    Lynx.Result.ok_bind, divided, subtracted, input, leftReturned]
+                  simp only [greater, positive, if_true, Lynx.Except.guard_eq, Lynx.Except.tryWith_ok,
+                    Lynx.Term.true, Erlang.erlang.«-/2_integers»,
+                    Lynx.Except.ok_bind, divided, subtracted, input, leftReturned]
                   simp only [encode, List.foldr_cons, pair, List.cons_append] at rightReturned ⊢
-                  simp only [rightReturned, Lynx.Result.ok_bind]
+                  simp only [rightReturned, Lynx.Except.ok_bind]
                   rfl
                 · rw [joined]
                   exact nodeSpec key value left right (xs.take ln) restXs leftSpec rightSpec

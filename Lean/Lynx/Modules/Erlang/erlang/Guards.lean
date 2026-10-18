@@ -2,7 +2,6 @@ module
 
 public import Lynx.Term
 public import Lynx.Term.Bitstring
-public import Lynx.Purity
 
 public section
 

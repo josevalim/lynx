@@ -1,6 +1,6 @@
 module
 
-public import Lynx.Purity
+public import Lynx.Term
 public import Lynx.Term.Bitstring
 
 namespace Lynx.Term.Bitstring

@@ -27,10 +27,10 @@ theorem success_binds_no_values :
       (fun _ => .ok (Term.atom "caught")) = .ok (.atom "success") := by rfl
 
 /-- All exception classes expose their class and reason to the handler. -/
-theorem exception_bindings (exception : Exception) :
+theorem exception_bindings (exception : Exception) (raised : exception ≠ .exhausted) :
     Result.tryWith (.error exception : Result)
       Result.ok (fun caught => .ok (.tuple #[caught.classTerm, caught.reason])) =
-      .ok (.tuple #[exception.classTerm, exception.reason]) := by simp
+      .ok (.tuple #[exception.classTerm, exception.reason]) := by simp [raised]
 
 theorem success_body_is_outside_handler :
     Result.tryWith (.ok (.integer 7))
@@ -54,10 +54,11 @@ theorem unmatched_handler_reraises (exception : Exception) :
       (fun caught => .error (caught.withReason caught.reason)) = .error exception := by
   cases exception <;> rfl
 
-theorem reraise_preserves_class (exception : Exception) (reason : Term) :
+theorem reraise_preserves_class (exception : Exception) (reason : Term)
+    (raised : exception ≠ .exhausted) :
     (exception.withReason reason).classTerm = exception.classTerm ∧
       (exception.withReason reason).reason = reason := by
-  cases exception <;> exact ⟨rfl, rfl⟩
+  cases exception <;> first | exact ⟨rfl, rfl⟩ | contradiction
 
 theorem stacktrace_is_empty (exception : Exception) : exception.stacktrace = .nil := rfl
 
@@ -112,7 +113,7 @@ theorem dispatched_success_body_exception_escapes :
 theorem exhaustion_is_not_caught :
     Lynx.schedule (Result.tryWith (Term.apply (.function 0 0 #[]) #[])
       Result.ok (fun _ => .ok (Term.atom "caught"))) [] failingTable 0 =
-      .exhausted := by cbv
+      .error .exhausted := by cbv
 
 theorem blocking_is_not_caught :
     Lynx.run (Result.tryWith (Result.receiveWith (.atom "infinity") (fun _ => some)
