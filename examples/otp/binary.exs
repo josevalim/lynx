@@ -192,7 +192,7 @@ defmodule BinaryProofsTest do
               conv => lhs; unfold Erlang.binary.«decode_hex2/2»
               lynx_fold_tuple decodeTable
               simp (disch := (try simp only [wireLength]); omega) only
-                [field8, tailMatch, decodeLookup, okBind, construct4, segment, Lynx.Result.bind, append_bits]
+                [field8, extract_some, tailMatch, decodeLookup, okBind, construct4, segment, Lynx.Result.bind, append_bits]
               rw [ih _ (by simp only [List.length_append, integerBits_length]; omega)]
               simp only [sourceCons, List.append_assoc]
           have encTail (lower : Bool) (ns : List (Fin 16)) (even : ns.length%2=0) :
@@ -214,7 +214,7 @@ defmodule BinaryProofsTest do
                 conv => lhs; unfold Erlang.binary.«encode_hex2/3»
                 lynx_fold_tuple encodeTable
                 simp (disch := (try simp only [sourceLength]); omega) only
-                  [field8, tailMatch, Erlang.erlang.«+/2_integers», encodePair, okBind,
+                  [field8, extract_some, tailMatch, Erlang.erlang.«+/2_integers», encodePair, okBind,
                    codePair, segment, Lynx.Result.bind, append_bits]
                 rw [ih rest.length (by simp only [List.length_cons] at length; omega) rest restEven rfl _
                   (by simp only [List.length_append, integerBits_length]; omega)]
@@ -242,7 +242,7 @@ defmodule BinaryProofsTest do
             have cg := digitBound lower g.val hg
             have ch := digitBound lower h.val hh
             simp (disch := (try simp only [sourceLength, wireLength]); omega) only
-              [field8, tailMatch, decodeLookup, okBind, construct4, binarySegment_bits, Lynx.Result.bind, append_bits, sourceCons, sourceNil, List.append_nil, List.append_assoc]
+              [field8, extract_some, tailMatch, decodeLookup, okBind, construct4, binarySegment_bits, Lynx.Result.bind, append_bits, sourceCons, sourceNil, List.append_nil, List.append_assoc]
           have decBlockEmpty (lower : Bool) (acc : List Bool) :
               Erlang.binary.«lynx_local_6/2» (ofBits []) (ofBits acc) = .ok (ofBits acc) := by
             conv => lhs; unfold Erlang.binary.«lynx_local_6/2»
@@ -284,7 +284,7 @@ defmodule BinaryProofsTest do
             have ho := o.isLt
             have hp := p.isLt
             simp (disch := (try simp only [sourceLength, wireLength]); omega) only
-              [field8, tailMatch, Erlang.erlang.«+/2_integers», encodePair, okBind, codePair, binarySegment_bits, Lynx.Result.bind, append_bits, wireCons, wireNil, List.append_nil, List.append_assoc]
+              [field8, extract_some, tailMatch, Erlang.erlang.«+/2_integers», encodePair, okBind, codePair, binarySegment_bits, Lynx.Result.bind, append_bits, wireCons, wireNil, List.append_nil, List.append_assoc]
           have encBlockEmpty (lower : Bool) (acc : List Bool) :
               Erlang.binary.«lynx_local_2/3» (ofBits []) (ofBits acc) (.integer (offset lower)) = .ok (ofBits acc) := by
             conv => lhs; unfold Erlang.binary.«lynx_local_2/3»
@@ -344,7 +344,7 @@ defmodule BinaryProofsTest do
             simp only [matchTail_bits, sourceSize, sourceDiv, Lynx.Result.tryWith_ok, okBind, pure_bind]
             rw [represented]
             rw [matchPrefix _ _ count prefixSize]
-            simp only [tailMatch _ 8 (by decide) (by decide) restAligned, pure_bind]
+            simp only [extract_some, tailMatch _ 8 (by decide) (by decide) restAligned, pure_bind]
             change (Erlang.binary.«lynx_local_2/3» (ofBits (source first)) (ofBits []) (.integer (offset lower)) >>=
               fun value => Erlang.binary.«encode_hex2/3» (ofBits (source rest)) (.integer (offset lower)) value) = _
             rw [encBlock lower first (by omega) []]
@@ -366,7 +366,7 @@ defmodule BinaryProofsTest do
             simp only [matchTail_bits, wireSize, wireDiv, Lynx.Result.tryWith_ok, okBind, pure_bind]
             rw [represented]
             rw [matchPrefix _ _ count prefixSize]
-            simp only [tailMatch _ 8 (by decide) (by decide) restAligned, pure_bind]
+            simp only [extract_some, tailMatch _ 8 (by decide) (by decide) restAligned, pure_bind]
             change (Erlang.binary.«lynx_local_6/2» (ofBits (wire lower first)) (ofBits []) >>=
               fun value => Erlang.binary.«decode_hex2/2» (ofBits (wire lower rest)) value) = _
             rw [decBlock lower first (by omega) []]

@@ -646,7 +646,6 @@ defmodule Lynx.Translation do
         {definition, join_purity(purity, definition_purity)}
       end)
 
-    defs = mark_bitstring_recursion(names, defs, functions)
     [first | _] = defs
     span = first["span"]
 
@@ -656,22 +655,6 @@ defmodule Lynx.Translation do
 
       defs ->
         %{"kind" => "mutual", "span" => span, "defs" => defs, "purity" => Atom.to_string(purity)}
-    end
-  end
-
-  # Recursion over the bits left by a bitstring match decreases `sizeOf` by
-  # the bits it consumes. Lean's termination proof needs the equation of each
-  # extraction, so those definitions are flagged for the decoder.
-  defp mark_bitstring_recursion(names, defs, functions) do
-    for {name, definition} <- Enum.zip(names, defs) do
-      bits? =
-        Enum.any?(Map.fetch!(functions, name).size_calls, fn {callee, args} ->
-          callee in names and Enum.any?(args, &match?({_, :bits}, &1))
-        end)
-
-      if bits? and not Map.has_key?(definition, "termination_suffix"),
-        do: Map.put(definition, "bitstring_recursion", true),
-        else: definition
     end
   end
 

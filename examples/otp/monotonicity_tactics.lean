@@ -81,6 +81,8 @@ elab "lynx_mono_step" : tactic => do
         else if leftArgs.back! == rightArgs.back! then pure ``Lynx.Result.bind_mono_left
         else throwError "both sides of this bind vary"
       return ← goal.apply (← mkConstWithFreshMVarLevels rule)
+    if name == ``Lynx.Term.Bitstring.extract then
+      return ← goal.apply (← mkConstWithFreshMVarLevels ``Lynx.Term.Bitstring.extract_mono)
     if name == ``Lynx.Result.tryWith || name == ``Lynx.Result.guard then
       return ← goal.apply (← mkConstWithFreshMVarLevels ``Lynx.Result.tryWith_mono_pure)
     throwError "no monotonicity rule for this computation"

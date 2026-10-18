@@ -477,11 +477,84 @@ public theorem matchUtf32_sizeOf {input value rest : Term} {little : Bool}
     omega
   · contradiction
 
+/-! ## Extraction -/
+
+/-- Continue with a value and the remaining bits extracted from a bitstring, or
+fall through. The extraction is an ordinary argument, so simp can rewrite it
+before selecting a branch. -/
+@[expose] public def extract (lookup : Option (Term × Term))
+    (found : Term → Term → Result α) (missing : Unit → Result α) :
+    Result α :=
+  match lookup with
+  | some (value, rest) => found value rest
+  | none => missing ()
+
+@[simp] public theorem extract_some (value rest : Term)
+    (found : Term → Term → Result α) (missing : Unit → Result α) :
+    extract (some (value, rest)) found missing = found value rest := rfl
+
+@[simp] public theorem extract_none
+    (found : Term → Term → Result α) (missing : Unit → Result α) :
+    extract none found missing = missing () := rfl
+
+/-- Like a `match`, simp rewrites the extraction before its continuations. They
+hold every later clause of a pattern match, which simp would otherwise
+simplify before selecting a branch. -/
+@[congr] public theorem extract_congr {lookup lookup' : Option (Term × Term)}
+    (same : lookup = lookup') (found : Term → Term → Result α) (missing : Unit → Result α) :
+    extract lookup found missing = extract lookup' found missing := by
+  rw [same]
+
+/-- An extraction whose continuation also receives its equation. -/
+@[expose] public def extractWith (lookup : Option (Term × Term))
+    (found : (value rest : Term) → lookup = some (value, rest) → Result α)
+    (missing : Unit → Result α) : Result α :=
+  match (generalizing := false) equation : lookup with
+  | some (value, rest) => found value rest equation
+  | none => missing ()
+
+-- Termination proofs over the remaining bits need the equation of each extraction.
+@[wf_preprocess] public theorem extract_wf (lookup : Option (Term × Term))
+    (found : Term → Term → Result α) (missing : Unit → Result α) :
+    extract lookup found missing =
+      extractWith lookup (fun value rest _ => found value rest) missing := by
+  cases lookup with
+  | none => rfl
+  | some pair => cases pair; rfl
+
+/-- Extraction is monotone in its continuations, for `partial_fixpoint` proofs. -/
+public theorem extract_mono (lookup : Option (Term × Term))
+    {found found' : Term → Term → Result α} {missing missing' : Unit → Result α}
+    (foundBelow : ∀ value rest, Lean.Order.PartialOrder.rel (found value rest) (found' value rest))
+    (missingBelow : ∀ token, Lean.Order.PartialOrder.rel (missing token) (missing' token)) :
+    Lean.Order.PartialOrder.rel (extract lookup found missing) (extract lookup found' missing') := by
+  cases lookup with
+  | none => exact missingBelow ()
+  | some pair => cases pair; exact foundBelow _ _
+
+public theorem _root_.Lynx.Result.IsPure.extract (lookup : Option (Term × Term))
+    (found : Term → Term → Result α) (missing : Unit → Result α)
+    (foundPure : ∀ value rest, lookup = some (value, rest) → (found value rest).IsPure)
+    (missingPure : lookup = none → ∀ token, (missing token).IsPure) :
+    (extract lookup found missing).IsPure := by
+  cases lookup with
+  | none => exact missingPure rfl ()
+  | some pair => cases pair; exact foundPure _ _ rfl
+
+public theorem _root_.Lynx.Result.IsPartial.extract (lookup : Option (Term × Term))
+    (found : Term → Term → Result α) (missing : Unit → Result α)
+    (foundPartial : ∀ value rest, lookup = some (value, rest) → (found value rest).IsPartial)
+    (missingPartial : lookup = none → ∀ token, (missing token).IsPartial) :
+    (extract lookup found missing).IsPartial := by
+  cases lookup with
+  | none => exact missingPartial rfl ()
+  | some pair => cases pair; exact foundPartial _ _ rfl
+
 /-! ## Termination
 
 Recursion over the bits left by an extraction, such as bitstring generators,
-decreases `sizeOf` by the consumed bits. Such extractions continue through
-`Lynx.Result.extract`, whose well-founded preprocessing passes the extraction's
+decreases `sizeOf` by the consumed bits. Bitstring extractions continue through
+`extract`, whose well-founded preprocessing passes the extraction's
 equation to its continuation. Lean's default `decreasing_tactic` tries
 `decreasing_trivial`, which this extends. -/
 

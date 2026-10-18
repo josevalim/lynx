@@ -70,59 +70,6 @@ public section
   | error exception => rfl
   | _ => exact False.elim pure
 
-/-- Continue with a value and the remaining bits extracted from a bitstring, or
-fall through. The extraction is an ordinary argument, so simp can rewrite it
-before selecting a branch. -/
-@[expose] public def Lynx.Result.extract (lookup : Option (Lynx.Term × Lynx.Term))
-    (found : Lynx.Term → Lynx.Term → Lynx.Result α) (missing : Unit → Lynx.Result α) :
-    Lynx.Result α :=
-  match lookup with
-  | some (value, rest) => found value rest
-  | none => missing ()
-
-@[simp] public theorem Lynx.Result.extract_some (value rest : Lynx.Term)
-    (found : Lynx.Term → Lynx.Term → Lynx.Result α) (missing : Unit → Lynx.Result α) :
-    Lynx.Result.extract (some (value, rest)) found missing = found value rest := rfl
-
-@[simp] public theorem Lynx.Result.extract_none
-    (found : Lynx.Term → Lynx.Term → Lynx.Result α) (missing : Unit → Lynx.Result α) :
-    Lynx.Result.extract none found missing = missing () := rfl
-
-/-- An extraction whose continuation also receives its equation. -/
-@[expose] public def Lynx.Result.extractWith (lookup : Option (Lynx.Term × Lynx.Term))
-    (found : (value rest : Lynx.Term) → lookup = some (value, rest) → Lynx.Result α)
-    (missing : Unit → Lynx.Result α) : Lynx.Result α :=
-  match (generalizing := false) equation : lookup with
-  | some (value, rest) => found value rest equation
-  | none => missing ()
-
--- Termination proofs over the remaining bits need the equation of each extraction.
-@[wf_preprocess] public theorem Lynx.Result.extract_wf (lookup : Option (Lynx.Term × Lynx.Term))
-    (found : Lynx.Term → Lynx.Term → Lynx.Result α) (missing : Unit → Lynx.Result α) :
-    Lynx.Result.extract lookup found missing =
-      Lynx.Result.extractWith lookup (fun value rest _ => found value rest) missing := by
-  cases lookup with
-  | none => rfl
-  | some pair => cases pair; rfl
-
-public theorem Lynx.Result.IsPure.extract (lookup : Option (Lynx.Term × Lynx.Term))
-    (found : Lynx.Term → Lynx.Term → Lynx.Result α) (missing : Unit → Lynx.Result α)
-    (foundPure : ∀ value rest, lookup = some (value, rest) → (found value rest).IsPure)
-    (missingPure : lookup = none → ∀ token, (missing token).IsPure) :
-    (Lynx.Result.extract lookup found missing).IsPure := by
-  cases lookup with
-  | none => exact missingPure rfl ()
-  | some pair => cases pair; exact foundPure _ _ rfl
-
-public theorem Lynx.Result.IsPartial.extract (lookup : Option (Lynx.Term × Lynx.Term))
-    (found : Lynx.Term → Lynx.Term → Lynx.Result α) (missing : Unit → Lynx.Result α)
-    (foundPartial : ∀ value rest, lookup = some (value, rest) → (found value rest).IsPartial)
-    (missingPartial : lookup = none → ∀ token, (missing token).IsPartial) :
-    (Lynx.Result.extract lookup found missing).IsPartial := by
-  cases lookup with
-  | none => exact missingPartial rfl ()
-  | some pair => cases pair; exact foundPartial _ _ rfl
-
 /-- Recursive purity proofs can use the equation for a successful bind. -/
 public theorem Lynx.Result.IsPure.bind_return (computation : Lynx.Result α)
     (next : α → Lynx.Result β) (pure : computation.IsPure)
@@ -218,7 +165,9 @@ private def purePredicate : Predicate where
   rules := [(``Bind.bind, ``Result.IsPure.bind), (``Result.bind, ``Result.IsPure.bind_explicit),
     (``Result.guard, ``Result.IsPure.guard), (``Result.tryWith, ``Result.IsPure.tryWith),
     (``Result.handle, ``Result.IsPure.handle), (``Result.orElse, ``Result.IsPure.orElse),
-    (``Result.andAlso, ``Result.IsPure.andAlso), (``Result.extract, ``Result.IsPure.extract)]
+    (``Result.andAlso, ``Result.IsPure.andAlso),
+    -- Bitstring extraction is defined later, with its rule.
+    (`Lynx.Term.Bitstring.extract, `Lynx.Result.IsPure.extract)]
 
 private def partialPredicate : Predicate where
   name := ``Result.IsPartial
@@ -231,7 +180,7 @@ private def partialPredicate : Predicate where
     (``Result.bind, ``Result.IsPartial.bind_explicit), (``Result.guard, ``Result.IsPartial.guard),
     (``Result.tryWith, ``Result.IsPartial.tryWith), (``Result.handle, ``Result.IsPartial.handle),
     (``Result.orElse, ``Result.IsPartial.orElse), (``Result.andAlso, ``Result.IsPartial.andAlso),
-    (``Result.extract, ``Result.IsPartial.extract)]
+    (`Lynx.Term.Bitstring.extract, `Lynx.Result.IsPartial.extract)]
   stronger := some ("_pure", ``Result.IsPure.isPartial)
 
 -- Core's guard fallthroughs are applied lambdas. Abstract their continuation

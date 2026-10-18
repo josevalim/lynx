@@ -435,13 +435,23 @@ theorem match_leading_byte :
       some (.integer 110, .bitstring ⟨#[117]⟩ 0) :=
   Lynx.Term.Bitstring.matchInteger_byte 110 [117] _
 
-/-- Simp rewrites an extraction inside `Result.extract`, then selects its branch. -/
+/-- Simp rewrites an extraction inside `extract`, then selects its branch. -/
 theorem extract_rewrites (found : Lynx.Term → Lynx.Term → Lynx.Result) (missing : Unit → Lynx.Result) :
-    Lynx.Result.extract
+    Lynx.Term.Bitstring.extract
         (Lynx.Term.Bitstring.matchInteger (.bitstring ⟨#[110, 117]⟩ 0) (.integer 8) 1 false false)
         found missing =
       found (.integer 110) (.bitstring ⟨#[117]⟩ 0) := by
   simp [Lynx.Term.Bitstring.matchInteger_byte 110 [117]]
+
+-- Partial fixed points relate extractions through their continuations.
+private def skipBytes (input : Lynx.Term) : Lynx.Result :=
+  Lynx.Term.Bitstring.extract
+    (Lynx.Term.Bitstring.matchInteger input (.integer 8) 1 false false)
+    (fun _ rest => skipBytes rest) (fun _ => .ok input)
+partial_fixpoint monotonicity by
+  intro f g below input
+  exact Lynx.Term.Bitstring.extract_mono _ (fun _ rest => below rest)
+    (fun _ => Lean.Order.PartialOrder.rel_refl)
 
 /-- An empty binary has no leading byte. -/
 theorem match_byte_empty :

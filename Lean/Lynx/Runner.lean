@@ -106,8 +106,8 @@ private structure PatternExtraction where
   lookup : TSyntax `term
   pattern : TSyntax `term
   catchAll : Bool := false
-  /-- The binder for the remaining bits of a bitstring extraction whose equation
-  termination proofs need. The pattern then matches the extracted value only. -/
+  /-- The binder for the remaining bits of a bitstring extraction. The pattern
+  then matches the extracted value only. -/
   rest : Option (TSyntax `term) := none
 
 private structure DecodeState where
@@ -116,10 +116,6 @@ private structure DecodeState where
   theorems : Array (Name × Span) := #[]
   patternExtractions : Array PatternExtraction := #[]
   nextBitstringPattern : Nat := 0
-  /-- Whether the definition being decoded recurses over the bits left by its
-  bitstring matches, so Lean's termination proof needs their equations. Those
-  extractions continue through `Lynx.Result.extract`. -/
-  bitstringRecursion : Bool := false
 
 private abbrev DecodeM := ReaderT Lean.Environment (StateT DecodeState (Except String))
 
@@ -242,7 +238,7 @@ private def patternMatches (patterns : Array PatternExtraction)
     (body fallback : TSyntax `term) : TSyntax `term := Id.run do
   let mut branch := body
   let extracted := mkIdent `lynxExtracted
-  let extract := mkIdent ``Lynx.Result.extract
+  let extract := mkIdent ``Lynx.Term.Bitstring.extract
   for extraction in patterns.reverse do
     let lookup := extraction.lookup
     let pat := extraction.pattern
@@ -683,11 +679,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
         else throw s!"unsupported bitstring pattern segment '{segmentType}'"
         remaining := rest
         let (pat, nested) ← withExtractions (term map si true value)
-        if (← get).bitstringRecursion then
-          addExtraction extract pat false nested (rest := some rest)
-        else
-          let pair := Unhygienic.run `(Option.some ($pat, $rest))
-          addExtraction extract pair false nested
+        addExtraction extract pat false nested (rest := some rest)
     unless trailing do
       let finish := mkIdent ``Lynx.Term.Bitstring.matchEnd
       let lookup := Unhygienic.run `($finish $remaining)
@@ -1081,9 +1073,8 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     -- Bitstring patterns on variables extract from them directly. Their positions
     -- are dropped from the match: Lean cannot derive functional induction when
     -- a match only rebinds several of a recursive function's parameters.
-    let bitstringRecursion := (← get).bitstringRecursion
     let direct (pattern : Json) (i : Nat) : Bool :=
-      bitstringRecursion && (str pattern "kind").toOption == some "bitstring_pattern" &&
+      (str pattern "kind").toOption == some "bitstring_pattern" &&
         (exprJson[i]? >>= fun e => (str e "kind").toOption) == some "var"
     let clauses ← clauses.mapM fun c => do
       let patterns ← arr c "patterns"
@@ -1395,19 +1386,13 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       | _ => (binders, runs ensures)
     pure (Unhygienic.run `(theorem $name $binders:bracketedBinder* : $goal := $proof))
   | "def" => do
-    fields j ["kind", "name", "params", "body", "purity", "span", "termination_suffix", "measure",
-      "bitstring_recursion"]
+    fields j ["kind", "name", "params", "body", "purity", "span", "termination_suffix", "measure"]
     let params ← (← arr j "params").mapM (param map info)
     let name := functionName (← str j "name") params.size
     let termType := mkIdent ``Lynx.Term
     let resultType := mkIdent ``Lynx.Result
     let binders := params.map fun p => Unhygienic.run `(bracketedBinder| ($p : $termType))
-    let bitstringRecursion ← match field j "bitstring_recursion" with
-      | .ok value => value.getBool?
-      | .error _ => pure false
-    modify fun s => { s with bitstringRecursion }
     let body ← term map info false (← field j "body")
-    modify fun s => { s with bitstringRecursion := false }
     let declaration := Unhygienic.run `(def $name $binders:bracketedBinder* : $resultType := $body)
     -- A simple definition has a declValSimple containing :=, body, suffix, and where.
     let attach (suffix : Syntax) : TSyntax `command :=
