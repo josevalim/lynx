@@ -464,20 +464,7 @@ defmodule CalendarProofsTest do
   # Includes dates whose ISO week belongs to the preceding, negative year.
   laws "ISO week totality" do
     termination_suffix &:calendar.mod/2, ~LEAN"""
-    partial_fixpoint monotonicity by
-      intro f g h n
-      cases n <;> cases _1 <;>
-        simp [Erlang.erlang.«rem/2», Erlang.erlang.«</2»,
-          Lynx.Result.tryWith, Lynx.Result.handle, Lynx.Result.bind]
-      all_goals try exact Lean.Order.PartialOrder.rel_refl
-      rename_i n d
-      by_cases zero : d = 0
-      · simp [zero]
-        exact Lean.Order.PartialOrder.rel_refl
-      · by_cases negative : n.tmod d < 0 <;>
-          simp [zero, negative, Int.compare_eq_lt]
-        · exact h _
-        · exact Lean.Order.PartialOrder.rel_refl
+    partial_fixpoint
     """
 
     law iso_week_number_valid_date(date),

@@ -53,11 +53,10 @@ and for proof audits that inspect private declarations in test modules.
 Functions that neither inspect nor change the environment and perform no process
 effects return `Except Exception Term`. They may still raise exceptions. Other
 computations embed their calls with `Result.ofExcept`. Functions that may
-additionally not return, such as partial fixed points, return `Result` and
-should be tagged with `#lynx_partial`. `Lynx/Purity.lean` generates ordinary
-kernel-checked `<name>_partial` lemmas without a contract verification tactic.
-Lemmas about exported definitions are proved on first use: by name, by `simp`,
-or by the partiality proofs of callers.
+additionally not return, such as cutoffs and partial fixed points, also return
+`Except`: not returning raises `Exception.exhausted`, the least element of the
+order used by `partial_fixpoint`. It is not an Erlang exception. Every handler,
+guard, and the scheduler must propagate it without catching it.
 
 Proofs must not introduce untrusted axioms or `sorry`
 

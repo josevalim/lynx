@@ -400,15 +400,15 @@ defmodule Base64ProofsTest do
               congr 1
             have encodedReturned : Erlang.base64.«encode/1» (.bitstring storage 0 valid) = .ok (ofBits encoded) := by
               simp only [Erlang.base64.«encode/1», Erlang.base64.«encode/2»]
-              change Lynx.Result.ofExcept (Erlang.base64.«encode_binary/4» (.integer 1) Lynx.Term.true
-                (.bitstring storage 0 valid) (ofBits [])) = _
-              simpa only [represented, List.nil_append, Lynx.Result.ofExcept_eq_ok] using enc []
+              change Erlang.base64.«encode_binary/4» (.integer 1) Lynx.Term.true
+                (.bitstring storage 0 valid) (ofBits []) = _
+              simpa only [represented, List.nil_append] using enc []
             have decodedReturned : Erlang.base64.«decode/1» (ofBits encoded) = .ok (.bitstring storage 0 valid) := by
               rw [encodedBinary]
               simp only [Erlang.base64.«decode/1», Erlang.base64.«decode/2»]
-              change Lynx.Result.ofExcept (Erlang.base64.«decode_binary/4» (.integer 1) Lynx.Term.true
-                (.bitstring (pack encoded) 0 (valid_aligned _)) (ofBits [])) = _
-              simpa only [encodedBinary, represented, List.nil_append, Lynx.Result.ofExcept_eq_ok]
+              change Erlang.base64.«decode_binary/4» (.integer 1) Lynx.Term.true
+                (.bitstring (pack encoded) 0 (valid_aligned _)) (ofBits []) = _
+              simpa only [encodedBinary, represented, List.nil_append]
                 using dec []
             have encodedSize : (pack encoded).size=((storage.size+2)/3)*4 := by
               rw [pack_size]
@@ -419,7 +419,7 @@ defmodule Base64ProofsTest do
                 Int.tdiv_eq_ediv_of_nonneg (show 0≤(storage.size:Int)+2 by omega)] using result
             simp only [«encoding_roundtrip:ensures/1», «encoding_contract/1»]
             rw [encodedReturned]
-            simp only [Lynx.Result.ok_bind, decodedReturned]
+            simp only [Lynx.Except.ok_bind, decodedReturned]
             simp [Erlang.erlang.«=:=/2», Lynx.Term.true, Erlang.erlang.«byte_size/1»,
               ofBits, Erlang.erlang.«+/2_integers», Erlang.erlang.«div/2», Erlang.erlang.«*/2_integers»,
               integerSize]

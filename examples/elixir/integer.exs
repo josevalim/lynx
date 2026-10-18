@@ -64,22 +64,7 @@ defmodule IntegerProofsTest do
   # Private helpers have broader domains than the public API: popcount/2 can
   # diverge on negative inputs. Prove totality separately on each API's domain.
   @integer_fixpoint ~LEAN"""
-  partial_fixpoint monotonicity by
-    intro f g h
-    repeat' first
-      | exact Lean.Order.PartialOrder.rel_refl
-      | exact h _ _
-      | exact h _ _ _
-      | apply Lynx.Result.tryWith_mono_pure
-      | apply Lynx.Result.bind_mono_left
-      | apply Lynx.Result.bind_mono_pure
-      | apply Lynx.Result.IsPure.tryWith
-      | apply Lynx.Result.IsPure.handle
-      | apply Lynx.Result.IsPure.bind
-      | apply Lynx.Result.IsPure.bind_explicit
-      | (intro)
-      | split
-      | simp_all
+  partial_fixpoint
   """
 
   laws "Integer digits" do

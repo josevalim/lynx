@@ -64,7 +64,6 @@ private inductive Pool (α : Type) where
 /-- Each step replaces a computation by its continuations, possibly in either
 parallel branch. This relation ignores scheduler and mailbox contents. -/
 private inductive Progress : Pool α → Pool α → Prop where
-  | exhausted : Progress .empty (.process processId .exhausted finish)
   | apply : Progress (.process processId (next (.error (.error (.tuple #[.atom "badfun", callee])))) finish)
       (.process processId (.apply callee arguments next) finish)
   | spawn : Progress (.process processId (next (.error (.error (.atom "badarg")))) finish)
@@ -102,12 +101,6 @@ private theorem accProcess {β : Type} (computation : Result β) :
     ∀ (processId : PID) (finish : Except Exception β → Option (Except Exception α)),
       Acc Progress (.process processId computation finish) := by
   induction computation with
-  | exhausted =>
-    intro processId finish
-    constructor
-    intro p h
-    cases h
-    exact accEmpty
   | apply callee arguments next ih | spawn child next ih =>
     intro processId finish
     constructor
@@ -255,8 +248,9 @@ private def step (pool : Pool α) (env : Environment) (chosen : PID) (expire : B
       if processId != chosen then none else
       let active := activate env processId
       match computation with
-      | .exhausted => some {
-          next := .empty, decreases := .exhausted, environment := active, exhausted := true }
+      -- A process that does not return ends the whole run.
+      | .error .exhausted => some {
+          next := .empty, decreases := .error, environment := active, exhausted := true }
       | .apply callee _ next => some {
           next := .process processId
             (next (.error (.error (.tuple #[.atom "badfun", callee])))) finish
@@ -326,7 +320,8 @@ private def execute (root : PID) (env : Environment) (pool : Pool α)
       | true, some (.error exception, _) => (.error exception, final)
       | _, _ => (.deadlock, final)
   | some transition =>
-      if transition.exhausted then (.exhausted, restore root finished (save transition.environment)) else
+      if transition.exhausted then
+        (.error .exhausted, restore root finished (save transition.environment)) else
       let finished := transition.finished.orElse fun _ => finished
       let (scheduled, preferred) := if transition.boundary then
           schedule transition.environment
@@ -339,7 +334,6 @@ decreasing_by exact transition.decreases
 through the process tree, without an execution budget. -/
 def run (computation : Result α) (env : Environment) : Outcome α × Environment :=
   match computation with
-  | .exhausted => (.exhausted, env)
   | .apply callee _ next =>
       run (next (.error (.error (.tuple #[.atom "badfun", callee])))) env
   | .spawn _ next => run (next (.error (.error (.atom "badarg")))) env
@@ -388,11 +382,6 @@ theorem runWith_apply (computation : Result α) (table : Term.FunTable) (callDep
 @[simp] theorem error_apply (exception : Exception) (env : Environment) :
     (Result.error exception : Result α) env = (.error exception, env) := by
   change Term.Runner.run (.error exception) env = _
-  rw [Term.Runner.run]
-
-@[simp] theorem exhausted_apply (env : Environment) :
-    (Result.exhausted : Result α) env = (.exhausted, env) := by
-  change Term.Runner.run .exhausted env = _
   rw [Term.Runner.run]
 
 @[simp] theorem get_continuation_apply (continuation : Environment → Result α)

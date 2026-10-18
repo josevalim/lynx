@@ -31,7 +31,7 @@ defmodule DecimalProofsTest do
   @compare_fixpoint ~LEAN"""
   partial_fixpoint monotonicity by
     intro f g h
-    simp only [«decimal/1», Lynx.Result.exhausted_bind]
+    simp only [«decimal/1», Lynx.Except.cutoff_eq, Lynx.Except.error_bind]
     exact Lean.Order.PartialOrder.rel_refl
   """
 
@@ -83,7 +83,7 @@ defmodule DecimalProofsTest do
         by_cases negative : n < 0 <;>
           simp [Elixir.Decimal.«new/1», Erlang.erlang.«</2», Int.compare_eq_lt,
             Erlang.erlang.«abs/1», Lynx.Term.getMapKeys, negative] <;> omega
-      simp only [«integer_compare:ensures/2», created, Lynx.Result.ok_bind]
+      simp only [«integer_compare:ensures/2», created, Lynx.Except.ok_bind]
       rw [Elixir.Decimal.«compare/2».eq_def]
       rcases Int.lt_trichotomy a 0 with ha | ha | ha <;>
         rcases Int.lt_trichotomy b 0 with hb | hb | hb <;>

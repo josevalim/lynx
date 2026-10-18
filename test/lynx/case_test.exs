@@ -98,12 +98,7 @@ defmodule Lynx.CaseTest do
       def increment(_value), do: true
 
       laws "partial recursion" do
-        termination_suffix &__MODULE__.increment/1, ~LEAN"""
-        partial_fixpoint monotonicity by
-          intro f g h n
-          cases n <;> simp
-          all_goals first | exact h _ | exact Lean.Order.PartialOrder.rel_refl
-        """
+        termination_suffix &__MODULE__.increment/1, ~LEAN"partial_fixpoint"
 
         law stops(value),
           requires: is_atom(value),

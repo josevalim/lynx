@@ -58,23 +58,35 @@ inductive Exception where
   | error : Term → Exception
   | throw : Term → Exception
   | exit : Term → Exception
+  /-- The computation does not return: it reached a translation cutoff, diverged
+  in a partial fixed point, or exceeded the dynamic-call depth. This is not an
+  Erlang exception. Handlers never receive it, so no Erlang code observes it, and
+  it is the least element of the order used by partial fixed points. -/
+  | exhausted : Exception
 deriving Repr
+
+instance : Inhabited Exception := ⟨.exhausted⟩
 
 namespace Exception
 
+/-- Handlers never receive `exhausted`, so its class is never observed. -/
 @[expose] def classTerm : Exception → Term
   | .error _ => .atom "error"
   | .throw _ => .atom "throw"
   | .exit _ => .atom "exit"
+  | .exhausted => .atom "exhausted"
 
+/-- Handlers never receive `exhausted`, so its reason is never observed. -/
 @[expose] def reason : Exception → Term
   | .error value | .throw value | .exit value => value
+  | .exhausted => .atom "exhausted"
 
 /-- Raw Core exception tokens retain their class when re-raised. -/
 @[expose] def withReason : Exception → Term → Exception
   | .error _, value => .error value
   | .throw _, value => .throw value
   | .exit _, value => .exit value
+  | .exhausted, _ => .exhausted
 
 /-- Stack frames are not recorded by the runtime model. -/
 @[expose] def stacktrace (_ : Exception) : Term := .nil
@@ -141,11 +153,11 @@ end Environment
 low-level runners, so laws and callers of `Lynx.run` compare outcomes alone. -/
 inductive Outcome (α : Type) where
   | ok : α → Outcome α
+  /-- An uncaught exception. `Exception.exhausted` means some process did not
+  return, which ends the whole run. -/
   | error : Exception → Outcome α
   /-- No modeled process can proceed. This is not an Erlang exception. -/
   | deadlock : Outcome α
-  /-- The dynamic-call depth budget was exhausted. -/
-  | exhausted : Outcome α
 deriving Repr
 
 /-- Receive durations are validated before entering the process operation.
@@ -159,7 +171,6 @@ deriving Repr, Inhabited
 /-- A resumable process computation. Bind stores continuations so scheduling
 does not require translated functions to use continuation-passing style. -/
 inductive Result : (α : Type := Term) → Type 1 where
-  | exhausted {α : Type} : Result α
   | ok {α : Type} : α → Result α
   | error {α : Type} : Exception → Result α
   /-- Request a call through the program table. Both returns and exceptions resume
@@ -192,7 +203,6 @@ namespace Result
 
 @[expose] protected def bind (computation : Result α) (next : α → Result β) : Result β :=
   match computation with
-  | .exhausted => .exhausted
   | .ok value => next value
   | .error exception => .error exception
   | .apply function arguments continuation =>
@@ -227,10 +237,12 @@ instance : MonadStateOf Environment @Result where
     let (value, next) := update env
     .set next (.ok value)
 
+/-- Handle exceptions raised by the computation. `exhausted` is not an Erlang
+exception, so it propagates without reaching the handler. -/
 @[expose] protected def handle (computation : Result α) (handler : Exception → Result α) : Result α :=
   match computation with
-  | .exhausted => .exhausted
   | .ok value => .ok value
+  | .error .exhausted => .error .exhausted
   | .error exception => handler exception
   | .apply function arguments continuation =>
       .apply function arguments fun result => Result.handle (continuation result) handler
@@ -259,11 +271,12 @@ continuation propagate to an enclosing handler. -/
     Result.tryWith (.ok value) next handler = next value := rfl
 
 @[simp] theorem tryWith_error (exception : Exception) (next : α → Result β)
-    (handler : Exception → Result β) :
-    Result.tryWith (.error exception) next handler = handler exception := rfl
+    (handler : Exception → Result β) (raised : exception ≠ .exhausted) :
+    Result.tryWith (.error exception) next handler = handler exception := by
+  cases exception <;> first | rfl | contradiction
 
 @[simp] theorem tryWith_exhausted (next : α → Result β) (handler : Exception → Result β) :
-    Result.tryWith .exhausted next handler = .exhausted := rfl
+    Result.tryWith (.error .exhausted) next handler = .error .exhausted := rfl
 
 /-- Erlang `orelse`. The right operand is selected only after the left one
 returns `false`; other values raise `badarg`. Like `||`, compiled code inlines
@@ -305,7 +318,7 @@ instance : MonadExceptOf Exception @Result where
     (computation >>= Result.ok) = computation := by
   change Result.bind computation .ok = computation
   induction computation with
-  | exhausted | ok | error => rfl
+  | ok | error => rfl
   | apply function arguments continuation ih | spawn function continuation ih =>
       simp only [Result.bind]
       congr
@@ -334,7 +347,7 @@ private theorem bind_assoc_proof (computation : Result α)
     Result.bind (Result.bind computation next) final =
       Result.bind computation fun value => Result.bind (next value) final := by
   induction computation with
-  | exhausted | ok | error => rfl
+  | ok | error => rfl
   | apply function arguments continuation ih | spawn function continuation ih =>
       simp only [Result.bind]
       congr
@@ -392,8 +405,7 @@ instance : LawfulMonad @Result := LawfulMonad.mk' _
 
 end Result
 
--- Foundational definitions cannot import the purity generator, which depends
--- on this module; provide the same kernel-checked simp lemma directly.
+-- Receives validate their timeout before making a request.
 @[simp↓] theorem ReceiveTimeout.ofTerm_pure (timeout : Term) :
     Result.IsPure (ReceiveTimeout.ofTerm timeout) := by
   cases timeout <;> simp [ReceiveTimeout.ofTerm] <;>
@@ -421,7 +433,8 @@ theorem IsPure.shared (next : α → Result β) (body : (α → Result β) → R
 @[simp↓] theorem IsPure.handle (computation : Result α) (handler : Exception → Result α)
     (computationPure : IsPure computation) (handlerPure : ∀ exception, IsPure (handler exception)) :
     IsPure (Result.handle computation handler) := by
-  cases computation <;> simp_all [IsPure, Result.handle]
+  cases computation <;> try (rename_i exception; cases exception)
+  all_goals simp_all [IsPure, Result.handle]
 
 @[simp↓] theorem IsPure.bind (computation : Result α) (next : α → Result β)
     (computationPure : IsPure computation) (nextPure : ∀ value, IsPure (next value)) :
@@ -440,7 +453,8 @@ theorem IsPure.shared (next : α → Result β) (body : (α → Result β) → R
     (nextPure : ∀ value, IsPure (next value))
     (handlerPure : ∀ exception, IsPure (handler exception)) :
     IsPure (Result.tryWith computation next handler) := by
-  cases computation <;> simp_all [IsPure, Result.tryWith, Result.bind, Result.handle]
+  cases computation <;> try (rename_i exception; cases exception)
+  all_goals simp_all [IsPure, Result.tryWith, Result.bind, Result.handle]
 
 @[simp↓] theorem IsPure.orElse (left right : Result) (leftPure : IsPure left)
     (rightPure : IsPure right) : IsPure (Result.orElse left right) := by
@@ -453,79 +467,6 @@ theorem IsPure.shared (next : α → Result β) (body : (α → Result β) → R
   apply IsPure.bind_explicit _ _ leftPure
   intro value
   split <;> simp_all [IsPure]
-
-/-- A partial computation makes no runtime requests, but may not return: it is
-pure or exhausted. Definitions with termination suffixes or cutoffs are partial. -/
-@[expose] def IsPartial : Result α → Prop
-  | .ok _ | .error _ | .exhausted => True
-  | _ => False
-
-@[simp] theorem isPartial_ok (value : α) : IsPartial (.ok value) := trivial
-@[simp] theorem isPartial_error (exception : Exception) :
-    IsPartial (.error exception : Result α) := trivial
-@[simp] theorem isPartial_exhausted : IsPartial (.exhausted : Result α) := trivial
-@[simp] theorem not_isPartial_apply (function : Term) (arguments : Array Term)
-    (next : Except Exception Term → Result α) :
-    ¬ IsPartial (.apply function arguments next) := by simp [IsPartial]
-@[simp] theorem not_isPartial_get (next : Environment → Result α) :
-    ¬ IsPartial (.get next) := by simp [IsPartial]
-@[simp] theorem not_isPartial_set (env : Environment) (next : Result α) :
-    ¬ IsPartial (.set env next) := by simp [IsPartial]
-@[simp] theorem not_isPartial_spawn (child : Term) (next : Except Exception Term → Result α) :
-    ¬ IsPartial (.spawn child next) := by simp [IsPartial]
-@[simp] theorem not_isPartial_schedule (child : Result Term) (next : PID → Result α) :
-    ¬ IsPartial (Result.schedule child next) := by simp [IsPartial]
-@[simp] theorem not_isPartial_send (pid : PID) (message : Term) (next : Result α) :
-    ¬ IsPartial (.send pid message next) := by simp [IsPartial]
-@[simp] theorem not_isPartial_receive (timeout : ReceiveTimeout)
-    (select : Environment → Term → Option β) (next : Option β → Result α) :
-    ¬ IsPartial (.receive timeout select next) := by simp [IsPartial]
-
-theorem IsPure.isPartial {computation : Result α} (pure : IsPure computation) :
-    IsPartial computation := by
-  cases computation <;> simp_all [IsPure, IsPartial]
-
-/-- Prove a shared continuation once, then use its partiality throughout the body. -/
-theorem IsPartial.shared (next : α → Result β) (body : (α → Result β) → Result γ)
-    (nextPartial : ∀ value, IsPartial (next value))
-    (bodyPartial : ∀ next, (∀ value, IsPartial (next value)) → IsPartial (body next)) :
-    IsPartial (body next) := bodyPartial next nextPartial
-
-theorem IsPartial.handle (computation : Result α) (handler : Exception → Result α)
-    (computationPartial : IsPartial computation)
-    (handlerPartial : ∀ exception, IsPartial (handler exception)) :
-    IsPartial (Result.handle computation handler) := by
-  cases computation <;> simp_all [IsPartial, Result.handle]
-
-theorem IsPartial.bind (computation : Result α) (next : α → Result β)
-    (computationPartial : IsPartial computation) (nextPartial : ∀ value, IsPartial (next value)) :
-    IsPartial (computation >>= next) := by
-  change IsPartial (Result.bind computation next)
-  cases computation <;> simp_all [IsPartial, Result.bind]
-
-theorem IsPartial.bind_explicit (computation : Result α) (next : α → Result β)
-    (computationPartial : IsPartial computation) (nextPartial : ∀ value, IsPartial (next value)) :
-    IsPartial (Result.bind computation next) :=
-  IsPartial.bind computation next computationPartial nextPartial
-
-theorem IsPartial.tryWith (computation : Result α) (next : α → Result β)
-    (handler : Exception → Result β) (protectedPartial : IsPartial computation)
-    (nextPartial : ∀ value, IsPartial (next value))
-    (handlerPartial : ∀ exception, IsPartial (handler exception)) :
-    IsPartial (Result.tryWith computation next handler) := by
-  cases computation <;> simp_all [IsPartial, Result.tryWith, Result.bind, Result.handle]
-
-theorem IsPartial.orElse (left right : Result) (leftPartial : IsPartial left)
-    (rightPartial : IsPartial right) : IsPartial (Result.orElse left right) := by
-  apply IsPartial.bind_explicit _ _ leftPartial
-  intro value
-  split <;> simp_all [IsPartial]
-
-theorem IsPartial.andAlso (left right : Result) (leftPartial : IsPartial left)
-    (rightPartial : IsPartial right) : IsPartial (Result.andAlso left right) := by
-  apply IsPartial.bind_explicit _ _ leftPartial
-  intro value
-  split <;> simp_all [IsPartial]
 
 /-- A guard may read its process environment, but cannot modify it, schedule,
 or make unresolved calls. Every environment read must eventually terminate. -/
@@ -562,7 +503,9 @@ or make unresolved calls. Every environment read must eventually terminate. -/
   induction computation with
   | get continuation ih => exact fun env => ih env handler (readOnly env) handlerReadOnly
   | ok value => trivial
-  | error exception => exact handlerReadOnly exception
+  | error exception =>
+      cases exception
+      all_goals first | trivial | exact handlerReadOnly _
   | _ =>
       exact False.elim readOnly
 
@@ -603,18 +546,13 @@ or make unresolved calls. Every environment read must eventually terminate. -/
   | .ok value => .ok value
   | .error exception => .error exception
   | .get next => toExceptRead (next env) env (readOnly env)
-  | .exhausted | .apply .. | .set .. | .spawn .. | .schedule .. | .send .. | .receive .. =>
+  | .apply .. | .set .. | .spawn .. | .schedule .. | .send .. | .receive .. =>
       False.elim readOnly
-
-@[simp] theorem not_isPure_exhausted : ¬ IsPure (.exhausted : Result α) := by simp [IsPure]
 
 @[simp] theorem ok_bind (value : α) (next : α → Result β) :
     (Result.ok value >>= next) = next value := by rfl
 @[simp] theorem error_bind (exception : Exception) (next : α → Result β) :
     (Result.error exception >>= next) = .error exception := by rfl
-
-@[simp] theorem exhausted_bind (next : α → Result β) :
-    (Result.exhausted >>= next) = .exhausted := rfl
 
 @[simp] theorem apply_bind (function : Term) (arguments : Array Term)
     (continuation : Except Exception Term → Result α) (next : α → Result β) :
@@ -687,7 +625,7 @@ namespace Lynx.Result
   match computation with
   | .ok value => .ok value
   | .error exception => .error exception
-  | .exhausted | .apply .. | .get .. | .set .. | .spawn .. | .schedule ..
+  | .apply .. | .get .. | .set .. | .spawn .. | .schedule ..
     | .send .. | .receive .. => False.elim pure
 
 /-- Read-only evaluation agrees with pure extraction when there are no reads. -/

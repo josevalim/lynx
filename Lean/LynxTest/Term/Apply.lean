@@ -24,7 +24,7 @@ private def countdown : Term.FunTable := #[.effectful fun _ (args : Array Term) 
 /-- A recursive table requires no recursive Lean definition or cyclic import. -/
 theorem recursive_dispatch :
     (call 0 #[.integer 3]).runWith countdown 4 {} = (.ok (.integer 0), {}) ∧
-    (call 0 #[.integer 3]).runWith countdown 3 {} = (.exhausted, {}) := by
+    (call 0 #[.integer 3]).runWith countdown 3 {} = (.error .exhausted, {}) := by
   repeat' apply And.intro
   all_goals first | exact rfl | (cbv <;> rfl)
 
@@ -67,13 +67,13 @@ theorem effectful_call :
     (Term.apply (.function 1 0 #[]) #[]).runWith pureFunctions 1 {} =
       (.ok (.pid 1), {}) ∧
     (Term.apply (.function 1 0 #[]) #[]).runWith pureFunctions 0 {} =
-      (.exhausted, {}) := by
+      (.error .exhausted, {}) := by
   constructor <;> cbv
 
 /-- Sequential calls reuse the depth budget after returning. -/
 theorem sequential_dispatch :
     (do let _ ← call 0; call 0).runWith constant 1 {} = (.ok (.integer 7), {}) ∧
-    (call 0).runWith constant 0 {} = (.exhausted, {}) ∧
+    (call 0).runWith constant 0 {} = (.error .exhausted, {}) ∧
     (call 1).runWith constant 0 {} =
       (.error (.error (.tuple #[.atom "badfun", .function 1 0 #[]])), {}) := by
   repeat' apply And.intro
@@ -91,7 +91,7 @@ theorem catch_dispatched_exception :
 /-- Exhaustion cannot be caught as an Erlang exception. -/
 theorem exhaustion_is_not_an_exception :
     (Result.handle (call 0) (fun _ => .ok (.integer 42))).runWith failing 0 {} =
-      (.exhausted, {}) := by
+      (.error .exhausted, {}) := by
   repeat' apply And.intro
   all_goals first | exact rfl | (cbv <;> rfl)
 
@@ -136,7 +136,7 @@ theorem spawn_exception_boundaries :
 for each new process. -/
 theorem recursive_spawn_exhausts :
     match (spawn 0).runWith #[.effectful fun _ _ => spawn 0] 3 {} with
-    | (.exhausted, env) => env.pidCounter = 4
+    | (.error .exhausted, env) => env.pidCounter = 4
     | _ => False := by cbv
 
 end LynxTest.Term.Apply

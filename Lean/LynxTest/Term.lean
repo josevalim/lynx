@@ -12,8 +12,10 @@ theorem generic_result_bind :
     ((pure 7 : Result Nat) >>= fun n => (pure (.integer n) : Result)) =
       .ok (.integer 7) := rfl
 
-theorem generic_result_catch (exception : Exception) (handler : Exception → Result Nat) :
-    tryCatch (throw exception : Result Nat) handler = handler exception := rfl
+theorem generic_result_catch (exception : Exception) (handler : Exception → Result Nat)
+    (raised : exception ≠ .exhausted) :
+    tryCatch (throw exception : Result Nat) handler = handler exception := by
+  cases exception <;> first | rfl | contradiction
 
 -- Constant computations distinguish success and the three Erlang exception classes.
 theorem result_constructors :

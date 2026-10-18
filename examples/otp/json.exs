@@ -232,8 +232,8 @@ defmodule JsonProofsTest do
               (do
                 let token ← Result.ofExcept (Erlang.erlang.«binary_part/3» orig skip (.integer len))
                 let value ← Term.apply (.function 2 1 #[]) #[token]
-                «unexpected/8» orig skip acc stack options
-                  (.integer len) (.integer 0) (.tuple #[.atom "number", value])) := by
+                Result.ofExcept («unexpected/8» orig skip acc stack options
+                  (.integer len) (.integer 0) (.tuple #[.atom "number", value]))) := by
           intro orig skip acc stack len
           conv => lhs; unfold «number/7»
           simp only [matchInteger_byte_nil, extract_none, matchEnd_byte_nil]
@@ -246,8 +246,8 @@ defmodule JsonProofsTest do
               (do
                 let value ← Term.apply (.function 2 1 #[]) #[.bitstring ⟨#[48]⟩ 0 (valid_aligned
                     _)]
-                «unexpected/8» orig skip acc stack options
-                  (.integer len) (.integer 0) (.tuple #[.atom "number", value])) := by
+                Result.ofExcept («unexpected/8» orig skip acc stack options
+                  (.integer len) (.integer 0) (.tuple #[.atom "number", value]))) := by
           intro orig skip acc stack len
           conv => lhs; unfold «number_zero/7»
           simp only [matchInteger_byte_nil, extract_none, matchEnd_byte_nil]

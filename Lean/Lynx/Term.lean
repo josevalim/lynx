@@ -2,6 +2,7 @@ module
 
 public import Lynx.Term.DataTypes
 public import Lynx.Term.Except
+public import Lynx.Term.Result
 public import Lynx.Term.Compare
 public import Lynx.Term.Maps
 public import Lynx.Term.Runner
@@ -12,10 +13,11 @@ namespace Lynx
 
 /-- Run a complete process tree from a fresh runtime using the supplied
 scheduler choices.
-An `ok` or `error` outcome means every spawned process has finished.
-`deadlock` means the modeled process tree is stuck. `exhausted` means a dynamic
-call exceeded `callDepth`; it is not an Erlang exception. The immutable table
-is separate from process state. -/
+An `ok` or `error` outcome means every spawned process has finished, except
+that an `Exception.exhausted` error means some process did not return, such as
+a dynamic call exceeding `callDepth`; it is not an Erlang exception.
+`deadlock` means the modeled process tree is stuck. The immutable table is
+separate from process state. -/
 public def schedule (computation : Result α) (schedule : List ScheduleChoice := [])
     (table : Term.FunTable := #[]) (callDepth : Nat := 100) : Outcome α :=
   if table.isEmpty then (computation.run { schedule }).1
@@ -76,16 +78,6 @@ public theorem schedule_of_resolve {computation : Result α} {table : Term.FunTa
   rw [schedule_of_isPure _ pure]
   cases computation <;> simp_all [Result.IsPure]
 
-/-- A partial computation runs to `ok` exactly when it returns that value: it
-makes no runtime requests, and an exhausted computation does not return. -/
-@[simp] public theorem IsPartial.schedule_eq_ok_iff {computation : Result α}
-    (partiality : computation.IsPartial) {choices : List ScheduleChoice} {table : Term.FunTable}
-    {callDepth : Nat} {value : α} :
-    schedule computation choices table callDepth = .ok value ↔ computation = .ok value := by
-  unfold schedule
-  split <;> (try rw [Result.runWith_apply, Result.resolve_of_isPartial _ _ _ partiality]) <;>
-    cases computation <;> simp_all [Result.IsPartial]
-
 /-- Pure computations ignore the program table. -/
 public theorem run_of_isPure (computation : Result α) (pure : computation.IsPure)
     (table : Term.FunTable) (callDepth : Nat) :
@@ -108,12 +100,6 @@ public theorem run_of_resolve {computation : Result α} {table : Term.FunTable}
     (resolved : Result.resolve table callDepth computation = .ok value) :
     run computation table callDepth = .ok value :=
   schedule_of_resolve nonempty resolved []
-
-/-- A partial computation runs to `ok` exactly when it returns that value. -/
-@[simp] public theorem IsPartial.run_eq_ok_iff {computation : Result α}
-    (partiality : computation.IsPartial) {table : Term.FunTable} {callDepth : Nat} {value : α} :
-    run computation table callDepth = .ok value ↔ computation = .ok value :=
-  IsPartial.schedule_eq_ok_iff partiality
 
 /-- A pure computation runs to `ok` exactly when it returns that value. -/
 @[simp] public theorem IsPure.run_eq_ok_iff {computation : Result α} (pure : computation.IsPure)

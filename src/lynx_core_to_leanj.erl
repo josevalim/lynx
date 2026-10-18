@@ -3,11 +3,12 @@
 -export([module_name/1, to_definitions/1, translate/8, fun_table/2, join_purity/2]).
 
 %% Purity levels, ordered by what running a definition requires: `pure` needs
-%% nothing, `partial` may not return, `sequential` needs the function table and
-%% an environment, and `concurrent` also needs scheduler choices. `dynamic` marks
-%% calls to function values, whose purity depends on the complete program table;
-%% Lynx.Translation resolves it to `sequential` or `concurrent` before assembly.
--type purity() :: pure | partial | sequential | dynamic | concurrent.
+%% nothing, `sequential` needs the function table and an environment, and
+%% `concurrent` also needs scheduler choices. Pure definitions may still not
+%% return, such as cutoffs. `dynamic` marks calls to function values, whose
+%% purity depends on the complete program table; Lynx.Translation resolves it to
+%% `sequential` or `concurrent` before assembly.
+-type purity() :: pure | sequential | dynamic | concurrent.
 
 -include_lib("compiler/src/core_parse.hrl").
 
@@ -124,10 +125,9 @@ join_purity(Left, Right) ->
     end.
 
 purity_rank(pure) -> 0;
-purity_rank(partial) -> 1;
-purity_rank(sequential) -> 2;
-purity_rank(dynamic) -> 3;
-purity_rank(concurrent) -> 4.
+purity_rank(sequential) -> 1;
+purity_rank(dynamic) -> 2;
+purity_rank(concurrent) -> 3.
 
 %% Translate the requested functions and laws, plus their reachable local callees.
 %% Laws are returned separately from definitions, keyed by name.
@@ -306,7 +306,7 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
                 ~"name" => function_name(Name),
                 ~"params" => [variable(Var) || Var <- Vars],
                 ~"body" => node(~"cutoff", Anno, #{})
-            }), State1#state{purity = partial}};
+            }), State1};
         {function, Body} ->
             {Translated, Next0} = expression(Body, State1),
             {TranslatedBody, Next} = lists:foldr(fun(Size, {Acc, AccState}) ->

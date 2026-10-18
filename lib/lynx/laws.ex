@@ -110,18 +110,14 @@ defmodule Lynx.Laws do
   milliseconds. Cached and skipped modules have an empty list.
 
   Pass `termination_suffixes: %{{module, function, arity} => lean_source}` to attach
-  a `Lynx.Lean` termination suffix to a translated function. Regardless of the
-  suffix contents, the function and every function calling it are marked as
-  partial (see the purity model in `Lynx`): instead of returning `Except`, they
-  return `Lynx.Result` with partiality proofs (`#lynx_partial`), and laws
-  reaching them are still stated directly. Targets must be translated by the laws
-  being verified; annotations do not add translation roots.
+  a `Lynx.Lean` termination suffix to a translated function. The suffix does not
+  change the function's purity (see the purity model in `Lynx`). Targets must be
+  translated by the laws being verified; annotations do not add translation roots.
 
   Pass `cutoffs: [{module, function, arity}]` to leave selected functions
-  untranslated. Calls to these functions evaluate to `Lynx.Result.exhausted`;
-  successful-return proofs must show they are unreachable. No return values or
-  exceptions are assumed for a cutoff. Like termination suffixes, cutoffs mark the
-  function and every function calling it as partial.
+  untranslated. Calls to these functions raise `Lynx.Exception.exhausted`, which
+  no handler catches; successful-return proofs must show they are unreachable.
+  No return values or Erlang exceptions are assumed for a cutoff.
 
   Pass `preludes: [source, ...]` to load `Lynx.Lean` declaration blocks before
   translated definitions and proofs, as with `Lynx.Case.prelude/1`.

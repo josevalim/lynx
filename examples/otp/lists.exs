@@ -46,23 +46,7 @@ defmodule ListsProofsTest do
   end
 
   @merge_fixpoint ~LEAN"""
-  partial_fixpoint monotonicity by
-    intro f g h
-    repeat' first
-      | exact Lean.Order.PartialOrder.rel_refl
-      | exact h _ _
-      | exact h.1 _ _
-      | exact h.2 _ _
-      | apply Lynx.Result.bind_mono_left
-      | apply Lynx.Result.bind_mono_pure
-      | apply Lynx.Result.IsPure.guard
-      | apply Lynx.Result.IsPure.tryWith
-      | apply Lynx.Result.IsPure.handle
-      | apply Lynx.Result.IsPure.bind
-      | apply Lynx.Result.IsPure.bind_explicit
-      | (intro)
-      | split
-      | simp_all
+  partial_fixpoint
   """
 
   laws "sort preserves multiplicities and is idempotent" do
@@ -418,15 +402,16 @@ defmodule ListsProofsTest do
         simp only [combine, merged, List.length_reverse, List.length_merge, List.length_nil] at length
         omega
       let pack (runs : List (List Lynx.Term)) : Lynx.Term := encode (runs.map encode)
-      let schedule (descending : Bool) (runs acc : List (List Lynx.Term)) : Lynx.Result :=
+      let schedule (descending : Bool) (runs acc : List (List Lynx.Term)) :
+          Except Lynx.Exception Lynx.Term :=
         (if descending then Erlang.lists.«rmergel/2» else Erlang.lists.«mergel/2») (pack runs) (pack acc)
       let runsGood (descending : Bool) (runs : List (List Lynx.Term)) : Prop :=
         ∀ run ∈ runs, run ≠ [] ∧ run.Pairwise (fun a b => order descending a b)
-      let good (input : List Lynx.Term) (computation : Lynx.Result) : Prop :=
+      let good (input : List Lynx.Term) (computation : Except Lynx.Exception Lynx.Term) : Prop :=
         ∃ output : List Lynx.Term, computation = .ok (encode output) ∧
           output.Pairwise (fun a b => order false a b) ∧
           ∀ weight, mass weight output = mass weight input
-      have goodTransfer (original next : List Lynx.Term) (computation : Lynx.Result)
+      have goodTransfer (original next : List Lynx.Term) (computation : Except Lynx.Exception Lynx.Term)
           (checked : good next computation)
           (same : ∀ weight, mass weight next = mass weight original) : good original computation := by
         obtain ⟨output, returned, sorted, equal⟩ := checked
@@ -1136,21 +1121,7 @@ defmodule ListsProofsTest do
 
   laws "sequence length and elements" do
     termination_suffix &:lists.seq_loop/4, ~LEAN"""
-    partial_fixpoint monotonicity by
-      intro f g h
-      repeat' first
-        | exact Lean.Order.PartialOrder.rel_refl
-        | exact h _ _ _ _
-        | apply Lynx.Result.tryWith_mono_pure
-        | apply Lynx.Result.bind_mono_left
-        | apply Lynx.Result.bind_mono_pure
-        | apply Lynx.Result.IsPure.tryWith
-        | apply Lynx.Result.IsPure.handle
-        | apply Lynx.Result.IsPure.bind
-        | apply Lynx.Result.IsPure.bind_explicit
-        | (intro)
-        | split
-        | simp_all
+    partial_fixpoint
     """
 
     law sequence_formula(first, last, step, index),
@@ -1181,8 +1152,8 @@ defmodule ListsProofsTest do
             have nEq : n = (n-4)+1+1+1+1 := by omega
             have arith (k : Int) : a + k*d-d = a + (k-1)*d := by simp only [Int.sub_mul, Int.one_mul]; omega
             simp only [Erlang.erlang.«>=/2_integers», Erlang.erlang.«-/2_integers»,
-              show (4 : Int) ≤ n by omega, if_true, Lynx.Result.ofExcept_ok, Lynx.Result.tryWith_ok,
-              Lynx.Result.ok_bind]
+              show (4 : Int) ≤ n by omega, if_true, Lynx.Except.tryWith_ok,
+              Lynx.Except.ok_bind]
             simp only [arith]
             have expanded : series n a d = series (n-4) a d ++
                 [a + ((n : Int)-4)*d, a + ((n : Int)-3)*d,
@@ -1201,8 +1172,8 @@ defmodule ListsProofsTest do
               have arith (k : Int) : a + k*d-d = a + (k-1)*d := by simp only [Int.sub_mul, Int.one_mul]; omega
               simp only [Erlang.erlang.«>=/2_integers», Erlang.erlang.«-/2_integers»,
                 show ¬ (4 : Int) ≤ n by omega, show (2 : Int) ≤ n by omega,
-                if_true, if_false, Lynx.Result.ofExcept_ok, Lynx.Result.tryWith_ok,
-                Lynx.Result.ok_bind]
+                if_true, if_false, Lynx.Except.tryWith_ok,
+                Lynx.Except.ok_bind]
               simp only [arith]
               have expanded : series n a d = series (n-2) a d ++
                   [a + ((n : Int)-2)*d, a + ((n : Int)-1)*d] := by
@@ -1328,7 +1299,7 @@ defmodule ListsProofsTest do
       have counted : (if d = 0 then (1 : Int) else (b-a+d).tdiv d) = n := by
         simpa only [count] using size.symm
       simp only [«sequence_formula:ensures/4», «sequence_contract/4», returned,
-        Lynx.Result.ok_bind]
+        Lynx.Except.ok_bind]
       by_cases zero : d = 0
       · have one : n = 1 := by simp only [zero, if_true] at counted; omega
         subst n

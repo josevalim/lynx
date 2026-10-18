@@ -611,6 +611,14 @@ public theorem extract_mono [Lean.Order.PartialOrder β] (lookup : Option (Term 
   | none => exact missingBelow ()
   | some pair => cases pair; exact foundBelow _ _
 
+/-- `partial_fixpoint` proves monotonicity through extractions. -/
+@[partial_fixpoint_monotone] public theorem monotone_extract [Lean.Order.PartialOrder γ]
+    [Lean.Order.PartialOrder β] (lookup : Option (Term × Term))
+    (found : γ → Term → Term → β) (missing : γ → Unit → β)
+    (foundMono : Lean.Order.monotone found) (missingMono : Lean.Order.monotone missing) :
+    Lean.Order.monotone fun x => extract lookup (found x) (missing x) :=
+  fun x y below => extract_mono lookup (foundMono x y below) (missingMono x y below)
+
 end Extraction
 
 public theorem _root_.Lynx.Result.IsPure.extract (lookup : Option (Term × Term))
@@ -621,15 +629,6 @@ public theorem _root_.Lynx.Result.IsPure.extract (lookup : Option (Term × Term)
   cases lookup with
   | none => exact missingPure rfl ()
   | some pair => cases pair; exact foundPure _ _ rfl
-
-public theorem _root_.Lynx.Result.IsPartial.extract (lookup : Option (Term × Term))
-    (found : Term → Term → Result α) (missing : Unit → Result α)
-    (foundPartial : ∀ value rest, lookup = some (value, rest) → (found value rest).IsPartial)
-    (missingPartial : lookup = none → ∀ token, (missing token).IsPartial) :
-    (extract lookup found missing).IsPartial := by
-  cases lookup with
-  | none => exact missingPartial rfl ()
-  | some pair => cases pair; exact foundPartial _ _ rfl
 
 /-! ## Termination
 

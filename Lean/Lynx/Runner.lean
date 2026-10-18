@@ -37,17 +37,17 @@ sequentially. Dependent files import the prelude before their embedded proofs
 and termination suffixes are parsed; no declarations leak through request order.
 Theorem nodes contain name, named params, an optional requires helper, an ensures helper,
 and a proof object. Helpers are ordinary Result computations called with the theorem's
-parameters. Each helper carries its purity: `pure`, `partial`, `sequential`, or `concurrent`,
-which selects how it is stated to return true. Pure and partial helpers are stated directly
-as `= .ok true`, in `Except` and `Result` respectively. Other helpers are stated through
+parameters. Each helper carries its purity: `pure`, `sequential`, or `concurrent`,
+which selects how it is stated to return true. Pure helpers are stated directly
+as `= .ok true` in `Except`. Other helpers are stated through
 `Lynx.run` with depth 100, except concurrent ones, which are stated through `Lynx.schedule`:
 the requires helper under some schedule, and the ensures helper under every schedule.
 An absent requires helper means no assumption. An optional table names the program's
 function table; it defaults to empty. Proofs are elaborated against these statements as given.
 Definitions, mutual groups, and table entries carry the same purity. Pure definitions return
-`Except Lynx.Exception Lynx.Term`, and partial ones are wrapped in `#lynx_partial`,
-generating their lemmas. Calls carry their callee's purity, and other computations embed
-pure callees with `Result.ofExcept`.
+`Except Lynx.Exception Lynx.Term`, including those that may not return: translation cutoffs
+and partial fixed points raise `Lynx.Exception.exhausted`. Calls carry their callee's purity,
+and other computations embed pure callees with `Result.ofExcept`.
 A proof object contains tactic source, nonnegative indentation, and a span locating
 the first character of that source. The producer handles host delimiters and line offsets. Proof syntax keeps
 its own source ranges, mapped to the supplied host locations using a synthetic file map.
@@ -148,11 +148,11 @@ private def embedPure (computation : TSyntax `term) : DecodeM (TSyntax `term) :=
   let ofExcept := mkIdent ``Lynx.Result.ofExcept
   return Unhygienic.run `($ofExcept $computation)
 
-/-- Decode a purity level: `pure`, `partial`, `sequential`, or `concurrent`. -/
+/-- Decode a purity level: `pure`, `sequential`, or `concurrent`. -/
 private def purity (j : Json) (key : String) : DecodeM String := do
   let level ← str j key
-  unless ["pure", "partial", "sequential", "concurrent"].contains level do
-    throw s!"{key} must be pure, partial, sequential, or concurrent"
+  unless ["pure", "sequential", "concurrent"].contains level do
+    throw s!"{key} must be pure, sequential, or concurrent"
   return level
 
 /-- Decode in a context of the given purity, restoring the enclosing one. -/
@@ -649,8 +649,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
   | "cutoff" => do
     fields j ["kind", "span"]
     unless !pattern do throw "translation cutoff is only valid in computations"
-    let exhausted := mkIdent ``Lynx.Result.exhausted
-    pure ⟨exhausted.raw⟩
+    embedPure ⟨(mkIdent ``Lynx.Except.cutoff).raw⟩
   | "atom" => do
     fields j ["kind", "value", "span"]
     let literal : TSyntax `term := ⟨Syntax.mkStrLit (← str j "value")⟩
@@ -906,8 +905,8 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       else do
         -- Calls to function values are resolved later, but are never pure.
         let level ← str j "purity"
-        unless ["pure", "partial", "sequential", "dynamic", "concurrent"].contains level do
-          throw "purity must be pure, partial, sequential, dynamic, or concurrent"
+        unless ["pure", "sequential", "dynamic", "concurrent"].contains level do
+          throw "purity must be pure, sequential, dynamic, or concurrent"
         pure level
     if (← get).pureContext && level != "pure" then
       throw s!"pure computations cannot call {level} functions"
@@ -1381,8 +1380,8 @@ private def tableEntry (map : FileMap) (info : Span) (entry : Json) : DecodeM Ta
       | _, _ => $resultError ($exceptionError ($atom "badarg"))))
   return ⟨captureIds, argumentIds, body, withSpan entryInfo.info adapter, isPure⟩
 
-private partial def command (map : FileMap) (j : Json) (parent : Span := {})
-    (wrapPurity : Bool := true) : DecodeM (TSyntax `command) := do
+private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
+    DecodeM (TSyntax `command) := do
   let info ← span map j parent
   let kind ← str j "kind"
   let result ← match kind with
@@ -1405,7 +1404,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       unless (← str decl "kind") == "def" do throw "mutual requires def declarations"
       unless (← purity decl "purity") == (← purity j "purity") do
         throw "mutual definitions must agree with the group purity"
-      command map decl info false
+      command map decl info
     pure (Unhygienic.run `(mutual $decls:command* end))
   | "theorem" => do
     fields j ["kind", "name", "params", "requires", "ensures", "proof", "span",
@@ -1450,18 +1449,18 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     let schedules (computation : TSyntax `term) : TSyntax `term :=
       Unhygienic.run `($scheduled $computation $schedule $table 100 = $ok $trueTerm)
     -- A precondition is assumed directly only when it makes no runtime requests:
-    -- its generated purity or partiality lemma makes that equivalent to running it.
+    -- it then returns `Except`, so the statement is equivalent to running it.
     let binders := match requirement with
       | none => binders
       | some (requires, level) =>
         let statement := match level with
-          | "pure" | "partial" => direct requires level
+          | "pure" => direct requires level
           | "concurrent" => Unhygienic.run `(∃ $schedule:ident : List $scheduleType, $(schedules requires))
           | _ => runs requires
         binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $statement)))
     -- A direct expectation implies it holds when run, under every schedule.
     let (binders, goal) := match ensuresPurity with
-      | "pure" | "partial" => (binders, direct ensures ensuresPurity)
+      | "pure" => (binders, direct ensures ensuresPurity)
       | "concurrent" =>
         (binders.push (Unhygienic.run `(bracketedBinder| ($schedule : List $scheduleType))),
           schedules ensures)
@@ -1485,7 +1484,6 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       ⟨declaration.raw.setArg 1 (definition.setArg 3 value)⟩
     match field j "termination_suffix", field j "measure" with
     | .ok annotation, _ =>
-      if (← purity j "purity") == "pure" then throw "a function with a termination suffix cannot be pure"
       pure (attach (← leanSuffix map info name.getId annotation))
     | .error _, .ok coordinates =>
       -- Lexicographic coordinates are constants or a parameter's size plus an offset.
@@ -1506,12 +1504,6 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       pure (attach (Unhygienic.run `(Parser.Termination.suffix| termination_by $measure)))
     | .error _, .error _ => pure declaration
   | _ => throw s!"unsupported command kind '{kind}'"
-  let level ← if kind ∈ ["def", "mutual"] then purity j "purity" else pure "sequential"
-  -- Pure definitions return `Except`, so only partial ones need a proof. A
-  -- mutual group gets one joint proof, rather than wrapping its members.
-  let result := if !wrapPurity then result else match level with
-    | "partial" => Unhygienic.run `(#lynx_partial $result:command)
-    | _ => result
   return withSpan info.info result
 
 /-- Table metadata also gives kernel-checked application equations for both pure
@@ -1634,7 +1626,7 @@ private def messageLocation (map : FileMap) (spans : Array Span) (msg : Message)
         | .column pos => result := (span.fileName, .column pos)
   return result
 
-/-- Read declaration identifiers from generated syntax, including purity wrappers.
+/-- Read declaration identifiers from generated syntax.
 A command containing several declarations has no single declaration name. -/
 private partial def declarationNames (stx : Syntax) : Array Name :=
   if stx.isOfKind ``Lean.Parser.Command.declaration then
