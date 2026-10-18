@@ -441,6 +441,105 @@ public theorem binarySegment_aligned (bytes : ByteArray) :
   simp [binarySegment, bitSize]
   split <;> omega
 
+private theorem drop_bytes (bytes : List UInt8) (i : Nat) :
+    (bytes.flatMap fun b => (List.range 8).map fun j => b.toBitVec.getMsbD j).drop (i * 8) =
+      (bytes.drop i).flatMap fun b => (List.range 8).map fun j => b.toBitVec.getMsbD j := by
+  induction bytes generalizing i with
+  | nil => simp
+  | cons b bs ih =>
+    cases i with
+    | zero => simp
+    | succ i =>
+      rw [List.flatMap_cons, List.drop_append, List.drop_of_length_le (by simp; omega),
+        List.nil_append, show (i + 1) * 8 - ((List.range 8).map fun j => b.toBitVec.getMsbD j).length =
+          i * 8 by simp; omega, ih]
+      rfl
+
+private theorem byte_at (bytes : List UInt8) (i : Nat) :
+    decodeInteger (((bytes.flatMap fun b => (List.range 8).map fun j => b.toBitVec.getMsbD j).drop
+        (i * 8)).take 8) Bool.false = (bytes.getD i 0).toNat := by
+  rw [drop_bytes]
+  cases rest : bytes.drop i with
+  | nil =>
+    have : bytes.length ≤ i := List.drop_eq_nil_iff.mp rest
+    simp [List.getD_eq_getElem?_getD, List.getElem?_eq_none this, decodeInteger]
+  | cons b more =>
+    have at_i : bytes.getD i 0 = b := by
+      have := congrArg List.head? rest
+      simp [List.head?_drop] at this
+      simp [List.getD_eq_getElem?_getD, this]
+    rw [at_i, List.flatMap_cons, List.take_append_of_le_length (by simp), List.take_of_length_le
+      (by simp), decode_byte_bits]
+
+/-- A code point matched at the front of a byte-aligned binary is one of the well-formed UTF-8
+byte sequences of Table 3-7 of the Unicode Standard, followed by the remaining bytes. -/
+public theorem matchUtf8_bytes {bytes : List UInt8} {value rest : Term}
+    (matched : matchUtf8 (.bitstring ⟨bytes.toArray⟩ 0 (valid_aligned _)) = some (value, rest)) :
+    ∃ head tail, bytes = head ++ tail ∧ rest = .bitstring ⟨tail.toArray⟩ 0 (valid_aligned _) ∧
+      ((∃ b, head = [b] ∧ b.toNat < 0x80) ∨
+        (∃ b c, head = [b, c] ∧ 0xc2 ≤ b.toNat ∧ b.toNat ≤ 0xdf ∧ 0x80 ≤ c.toNat ∧ c.toNat ≤ 0xbf) ∨
+        (∃ b c d, head = [b, c, d] ∧
+          ((b.toNat = 0xe0 ∧ 0xa0 ≤ c.toNat ∧ c.toNat ≤ 0xbf) ∨
+            (0xe1 ≤ b.toNat ∧ b.toNat ≤ 0xec ∧ 0x80 ≤ c.toNat ∧ c.toNat ≤ 0xbf) ∨
+            (b.toNat = 0xed ∧ 0x80 ≤ c.toNat ∧ c.toNat ≤ 0x9f) ∨
+            (0xee ≤ b.toNat ∧ b.toNat ≤ 0xef ∧ 0x80 ≤ c.toNat ∧ c.toNat ≤ 0xbf)) ∧
+          0x80 ≤ d.toNat ∧ d.toNat ≤ 0xbf) ∨
+        (∃ b c d e, head = [b, c, d, e] ∧
+          ((b.toNat = 0xf0 ∧ 0x90 ≤ c.toNat ∧ c.toNat ≤ 0xbf) ∨
+            (0xf1 ≤ b.toNat ∧ b.toNat ≤ 0xf3 ∧ 0x80 ≤ c.toNat ∧ c.toNat ≤ 0xbf) ∨
+            (b.toNat = 0xf4 ∧ 0x80 ≤ c.toNat ∧ c.toNat ≤ 0x8f)) ∧
+          0x80 ≤ d.toNat ∧ d.toNat ≤ 0xbf ∧ 0x80 ≤ e.toNat ∧ e.toNat ≤ 0xbf)) := by
+  rcases bytes with _ | ⟨b, bs⟩
+  · simp [matchUtf8, toBits_bytes, decodeInteger] at matched
+  have remaining : ∀ k, k ≤ (b :: bs).length →
+      ofBits (((b :: bs).flatMap fun b => (List.range 8).map fun j => b.toBitVec.getMsbD j).drop
+        (k * 8)) = .bitstring ⟨((b :: bs).drop k).toArray⟩ 0 (valid_aligned _) := by
+    intro k bound
+    rw [drop_bytes, ← toBits_bytes, ofBits_toBits_aligned]
+  simp only [matchUtf8, toBits_bytes, byte_at, List.getD_cons_zero, List.getD_cons_succ] at matched
+  have high := b.toNat_lt
+  have binary (tail : List UInt8) :
+      ofBits (tail.flatMap fun b => (List.range 8).map fun j => b.toBitVec.getMsbD j) =
+        .bitstring ⟨tail.toArray⟩ 0 (valid_aligned _) := by
+    rw [← toBits_bytes, ofBits_toBits_aligned]
+  by_cases ascii : b.toNat < 0x80
+  · simp [ascii] at matched
+    obtain ⟨-, -, rfl⟩ := matched
+    exact ⟨[b], bs, rfl, binary bs, Or.inl ⟨b, rfl, ascii⟩⟩
+  have range2 : List.range 2 = [0, 1] := rfl
+  have range3 : List.range 3 = [0, 1, 2] := rfl
+  by_cases two : 0xc2 ≤ b.toNat ∧ b.toNat ≤ 0xdf
+  · simp only [ascii, two, and_self, if_true, if_false] at matched
+    rw [drop_bytes] at matched
+    rcases bs with _ | ⟨c, bs⟩
+    · simp at matched
+    simp at matched
+    obtain ⟨⟨-, ⟨cLow, cHigh⟩, -⟩, -, rfl⟩ := matched
+    exact ⟨[b, c], bs, rfl, binary bs, Or.inr (Or.inl ⟨b, c, rfl, two.1, two.2, cLow, cHigh⟩)⟩
+  by_cases three : 0xe0 ≤ b.toNat ∧ b.toNat ≤ 0xef
+  · simp only [ascii, two, three, and_self, if_true, if_false] at matched
+    rw [drop_bytes] at matched
+    rcases bs with _ | ⟨c, _ | ⟨d, bs⟩⟩
+    · simp at matched
+    · simp at matched
+    simp [range2] at matched
+    obtain ⟨⟨-, ⟨cCont, dCont⟩, low, -, scalar⟩, -, rfl⟩ := matched
+    refine ⟨[b, c, d], bs, rfl, binary bs, Or.inr (Or.inr (Or.inl ⟨b, c, d, rfl, ?_, dCont⟩))⟩
+    omega
+  by_cases four : 0xf0 ≤ b.toNat ∧ b.toNat ≤ 0xf4
+  · simp only [ascii, two, three, four, and_self, if_true, if_false] at matched
+    rw [drop_bytes] at matched
+    rcases bs with _ | ⟨c, _ | ⟨d, _ | ⟨e, bs⟩⟩⟩
+    · simp at matched
+    · simp at matched
+    · simp at matched
+    simp [range3] at matched
+    obtain ⟨⟨-, ⟨cCont, dCont, eCont⟩, low, high', -⟩, -, rfl⟩ := matched
+    refine ⟨[b, c, d, e], bs, rfl, binary bs,
+      Or.inr (Or.inr (Or.inr ⟨b, c, d, e, rfl, ?_, dCont.1, dCont.2, eCont⟩))⟩
+    omega
+  simp [ascii, two, three, four] at matched
+
 /-- An empty binary ends a pattern. -/
 public theorem matchEnd_byte_nil :
     matchEnd (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (valid_aligned _)) = Bool.true := rfl
