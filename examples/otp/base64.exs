@@ -11,55 +11,12 @@ defmodule Base64ProofsTest do
     :base64.decode(encoded) === bytes and byte_size(encoded) === div(byte_size(bytes) + 2, 3) * 4
   end
 
-  @prelude_file Path.expand("monotonicity_tactics.lean", __DIR__)
-  @monotonicity_tactics %Lynx.Lean{
-    source: File.read!(@prelude_file),
-    file: @prelude_file,
-    span: {1, 1},
-    indentation: 0
-  }
-
-  @fixpoint ~LEAN"""
-  partial_fixpoint monotonicity by
-    intro f g h
-    intros
-    -- Monotonicity holds for any lookup table; abstract the closed literal so
-    -- purity reasoning does not repeatedly traverse its hundreds of entries.
-    run_tac do
-      Lean.Elab.Tactic.liftMetaTactic fun goal => goal.withContext do
-        let target ← goal.getType
-        let args := target.getAppArgs
-        let left := args[args.size-2]!.headBeta
-        if let some table := left.find? (fun value =>
-            value.isAppOfArity ``Lynx.Term.tuple 1 && !value.hasFVar && !value.hasLooseBVars) then
-          let (_, next) ← goal.generalize #[{expr := table, xName? := some `table}]
-          return [next]
-        return [goal]
-    simp only [Lynx.Order.rel_pi, Lynx.Order.rel_pprod] at h
-    repeat' first
-      | lynx_mono_share
-      | lynx_pure_share
-      | lynx_pure_step
-      | lynx_mono_step
-      | apply_assumption (config := { exfalso := false })
-      | split
-      | simp_all
-  """
+  @lookup_tables Lynx.Lean.from_file!(Path.expand("lookup_tables.lean", __DIR__))
 
   laws "Base64 encoding round trip", options: [maxHeartbeats: 800_000] do
-    prelude @monotonicity_tactics
+    prelude @lookup_tables
     cutoff &:base64.encode_list/4
     cutoff &:base64.decode_list/4
-    termination_suffix &:base64.encode_binary/4, @fixpoint
-    termination_suffix &:base64.only_ws_binary/4, @fixpoint
-    termination_suffix &:base64.decode_binary/4, @fixpoint
-    termination_suffix &:base64.dec_bin/8, @fixpoint
-    termination_suffix &:base64.dec_bin/7, @fixpoint
-    termination_suffix &:base64.dec_bin/6, @fixpoint
-    termination_suffix &:base64.dec_bin/5, @fixpoint
-    termination_suffix &:base64.decode_binary/5, @fixpoint
-    termination_suffix &:base64.decode_binary/6, @fixpoint
-    termination_suffix &:base64.decode_binary/7, @fixpoint
 
     law encoding_roundtrip(bytes),
       requires: is_binary(bytes),
@@ -69,9 +26,10 @@ defmodule Base64ProofsTest do
         set_option maxRecDepth 8192 in
           let encodeTable : Lynx.Term := by
             run_tac do
-              let type := (← Lean.getConstInfo ``Erlang.base64.«encode_binary/4»).value!
-              let some table := type.find? (fun value =>
-                  value.isAppOfArity ``Lynx.Term.tuple 1 && !value.hasFVar && !value.hasLooseBVars) |
+              let some equations ← Lean.Meta.getEqnsFor? ``Erlang.base64.«encode_binary/4» |
+                throwError "encoding equations were not found"
+              let type := (← Lean.getConstInfo equations[0]!).type
+              let some table := type.find? LookupTables.isTable |
                 throwError "encoding table was not found"
               (← Lean.Elab.Tactic.getMainGoal).assign table
           let decodeTable : Lynx.Term := by
@@ -79,8 +37,7 @@ defmodule Base64ProofsTest do
               let some equations ← Lean.Meta.getEqnsFor? ``Erlang.base64.«decode_binary/4» |
                 throwError "decoding equations were not found"
               let type := (← Lean.getConstInfo equations[0]!).type
-              let some table := type.find? (fun value =>
-                  value.isAppOfArity ``Lynx.Term.tuple 1 && !value.hasFVar && !value.hasLooseBVars) |
+              let some table := type.find? LookupTables.isTable |
                 throwError "decoding table was not found"
               (← Lean.Elab.Tactic.getMainGoal).assign table
           let symbol (n : Nat) : Nat :=
@@ -134,7 +91,7 @@ defmodule Base64ProofsTest do
                 (ofBits (acc ++ (charBits a ++ (charBits b ++ (charBits c ++ (charBits d ++
                   (charBits e ++ (charBits f ++ (charBits g ++ charBits h))))))))) := by
             conv => lhs; unfold Erlang.base64.«encode_binary/4»
-            lynx_fold_tuple encodeTable
+            lynx_fold_table encodeTable
             simp (disch := omega) only [extract_some,
               field, matchTail_bits, Erlang.erlang.«+/2_integers»,
               Int.natCast_add, Int.cast_ofNat_Int, encodeLookup,
@@ -147,15 +104,9 @@ defmodule Base64ProofsTest do
           have short6 (bits : List Bool) (short : bits.length<6) :
               matchInteger (ofBits bits) (.integer 6) 1 false false = none := by
             simp [matchInteger, ofBits, pack_toBits, show ¬6≤bits.length by omega]
-          have notEmpty (bits : List Bool) (positive : 0<bits.length) :
-              ∀ valid, ofBits bits ≠ .bitstring ⟨#[]⟩ 0 valid := by
-            intro valid same
-            have size := congrArg (fun value : Lynx.Term => match value with
-              | .bitstring bytes last _ => bitSize bytes last
-              | _ => 0) same
-            simp only [ofBits, pack_bitSize] at size
-            have : bits.length=0 := size
-            omega
+          have notEnd (bits : List Bool) (positive : 0<bits.length) :
+              matchEnd (ofBits bits) = false := by
+            simp [matchEnd_bits, show bits.length≠0 by omega]
           have encode24 (a b c d : Nat) (ha : a<64) (hb : b<64) (hc : c<64) (hd : d<64)
               (tail acc : List Bool) (short : tail.length<24) (aligned : tail.length%8=0) :
               Erlang.base64.«encode_binary/4» (.integer 1) Lynx.Term.true
@@ -163,7 +114,7 @@ defmodule Base64ProofsTest do
                   (integerBits c 6 false ++ (integerBits d 6 false ++ tail))))) (ofBits acc) =
               Erlang.base64.«encode_binary/4» (.integer 1) Lynx.Term.true (ofBits tail)
                 (ofBits (acc ++ (charBits a ++ (charBits b ++ (charBits c ++ charBits d))))) := by
-            have noEmpty := notEmpty
+            have noEmpty := notEnd
               (integerBits a 6 false ++ (integerBits b 6 false ++
                 (integerBits c 6 false ++ (integerBits d 6 false ++ tail))))
               (by simp only [List.length_append, integerBits_length]; omega)
@@ -181,8 +132,8 @@ defmodule Base64ProofsTest do
             rcases lengths with empty | eight | sixteen
             all_goals
               conv => lhs; unfold Erlang.base64.«encode_binary/4»
-              lynx_fold_tuple encodeTable
-              simp (disch := omega) only [extract_some, extract_none,
+              lynx_fold_table encodeTable
+              simp (disch := omega) only [extract_some, extract_none, noEmpty,
                 if_pos, if_neg, field, tailMatch0, tailMatch,
                 List.length_drop, List.drop_drop, matchTail_bits,
                 Erlang.erlang.«+/2_integers», encodeLookup, okBind, Lynx.Result.bind,
@@ -208,7 +159,7 @@ defmodule Base64ProofsTest do
             have hc' := symbolBound c hc
             have hd' := symbolBound d hd
             conv => lhs; unfold Erlang.base64.«decode_binary/4»
-            lynx_fold_tuple decodeTable
+            lynx_fold_table decodeTable
             simp (disch := omega) only [extract_some, charBits, field8, symbolBound, matchTail_bits,
               Erlang.erlang.«+/2_integers», decodeLookup, okBind, Lynx.Result.bind,
               construct6, binarySegment_bits, append_bits]
@@ -226,12 +177,12 @@ defmodule Base64ProofsTest do
               Erlang.base64.«encode_binary/4» (.integer 1) Lynx.Term.true
                 (ofBits (integerBits a 6 false ++ integerBits b 2 false)) (ofBits acc) =
               .ok (ofBits (acc ++ (charBits a ++ (charBits (b*16) ++ (pad ++ pad))))) := by
-            have noEmpty := notEmpty (integerBits a 6 false ++ integerBits b 2 false)
+            have noEmpty := notEnd (integerBits a 6 false ++ integerBits b 2 false)
               (by simp only [List.length_append, integerBits_length]; omega)
             conv => lhs; unfold Erlang.base64.«encode_binary/4»
-            lynx_fold_tuple encodeTable
+            lynx_fold_table encodeTable
             simp (disch := (try simp only [integerBits_length]); omega) only
-              [extract_some, extract_none, short6, field, matchTail_bits, field2, matchEnd_bits,
+              [extract_some, extract_none, noEmpty, short6, field, matchTail_bits, field2, matchEnd_bits,
                List.length_nil, beq_self_eq_true, Lynx.Term.true, left4, Erlang.erlang.«+/2_integers», encodeLookup,
                okBind, Lynx.Result.bind, construct8, binarySegment_bits, append_bits]
             rfl
@@ -247,21 +198,18 @@ defmodule Base64ProofsTest do
               matchInteger (ofBits bits) (.integer 2) 1 false false =
                 some (.integer (decodeInteger (bits.take 2) false), ofBits (bits.drop 2)) :=
             matchInteger_take bits 2 enough
-          have notEnd (bits : List Bool) (positive : 0<bits.length) :
-              matchEnd (ofBits bits) = false := by
-            simp [matchEnd_bits, show bits.length≠0 by omega]
           have encode16 (a b c : Nat) (ha : a<64) (hb : b<64) (hc : c<16) (acc : List Bool) :
               Erlang.base64.«encode_binary/4» (.integer 1) Lynx.Term.true
                 (ofBits (integerBits a 6 false ++ (integerBits b 6 false ++ integerBits c 4 false)))
                 (ofBits acc) =
               .ok (ofBits (acc ++ (charBits a ++ (charBits b ++ (charBits (c*4) ++ pad))))) := by
-            have noEmpty := notEmpty
+            have noEmpty := notEnd
               (integerBits a 6 false ++ (integerBits b 6 false ++ integerBits c 4 false))
               (by simp only [List.length_append, integerBits_length]; omega)
             conv => lhs; unfold Erlang.base64.«encode_binary/4»
-            lynx_fold_tuple encodeTable
+            lynx_fold_table encodeTable
             simp (disch := (try simp only [List.length_append, List.length_drop, integerBits_length]); omega) only
-              [extract_some, extract_none,
+              [extract_some, extract_none, noEmpty,
                short6, field, matchTail_bits, take2, field4, notEnd, matchEnd_bits,
                List.length_nil, beq_self_eq_true, Lynx.Term.true, left2, Erlang.erlang.«+/2_integers», encodeLookup,
                okBind, Lynx.Result.bind, construct8, binarySegment_bits, append_bits]
@@ -270,13 +218,13 @@ defmodule Base64ProofsTest do
               Erlang.base64.«encode_binary/4» (.integer 1) Lynx.Term.true (ofBits []) (ofBits acc) =
                 .ok (ofBits acc) := by
             conv => lhs; unfold Erlang.base64.«encode_binary/4»
-            lynx_fold_tuple encodeTable
+            lynx_fold_table encodeTable
             rfl
           have decodeEmpty (acc : List Bool) :
               Erlang.base64.«decode_binary/4» (.integer 1) Lynx.Term.true (ofBits []) (ofBits acc) =
                 .ok (ofBits acc) := by
             conv => lhs; unfold Erlang.base64.«decode_binary/4»
-            lynx_fold_tuple decodeTable
+            lynx_fold_table decodeTable
             rfl
           have exact8 (n : Nat) (bound : n<256) :
               matchInteger (ofBits (integerBits n 8 false)) (.integer 8) 1 false false =
@@ -310,7 +258,7 @@ defmodule Base64ProofsTest do
             have ha' := symbolBound a ha
             have hb' := symbolBound (b*16) (by omega)
             conv => lhs; unfold Erlang.base64.«decode_binary/4»
-            lynx_fold_tuple decodeTable
+            lynx_fold_table decodeTable
             simp (disch := omega) only [extract_some,
               charBits, field8, exact8, padPrefix, padExact, matchTail_bits,
               Erlang.erlang.«+/2_integers», Int.reduceAdd, decodeLookup, paddingLookup, okBind, Lynx.Result.bind]
@@ -334,7 +282,7 @@ defmodule Base64ProofsTest do
             have hb' := symbolBound b hb
             have hc' := symbolBound (c*4) (by omega)
             conv => lhs; unfold Erlang.base64.«decode_binary/4»
-            lynx_fold_tuple decodeTable
+            lynx_fold_table decodeTable
             simp (disch := omega) only [extract_some,
               charBits, field8, exact8, padExact, matchTail_bits,
               Erlang.erlang.«+/2_integers», Int.reduceAdd, decodeLookup, paddingLookup, okBind, Lynx.Result.bind]

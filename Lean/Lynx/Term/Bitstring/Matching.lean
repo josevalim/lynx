@@ -319,6 +319,15 @@ public theorem matchInteger_byte (b : UInt8) (bs : List UInt8) (valid : Valid �
   norm_cast at this
   rw [this, toBits_cons_take, toBits_cons_drop, decode_byte_bits]
 
+/-- An empty binary ends a pattern. -/
+public theorem matchEnd_byte_nil :
+    matchEnd (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (valid_aligned _)) = Bool.true := rfl
+
+/-- A binary with a byte left does not end a pattern. -/
+public theorem matchEnd_byte (b : UInt8) (bs : List UInt8) (valid) :
+    matchEnd (.bitstring ⟨(b :: bs).toArray⟩ 0 valid) = Bool.false := by
+  simp [matchEnd, bitSize, ByteArray.size]
+
 /-- Matching a byte at the front of an empty binary fails. -/
 public theorem matchInteger_byte_nil :
     matchInteger (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (valid_aligned _)) (.integer 8) 1

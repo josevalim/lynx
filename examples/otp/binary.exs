@@ -12,47 +12,10 @@ defmodule BinaryProofsTest do
     :binary.decode_hex(encoded) === bytes and byte_size(encoded) === 2 * byte_size(bytes)
   end
 
-  @prelude_file Path.expand("monotonicity_tactics.lean", __DIR__)
-  @monotonicity_tactics %Lynx.Lean{
-    source: File.read!(@prelude_file),
-    file: @prelude_file,
-    span: {1, 1},
-    indentation: 0
-  }
-
-  @fixpoint ~LEAN"""
-  partial_fixpoint monotonicity by
-    intro f g h
-    intros
-    -- Monotonicity holds for any lookup table; abstract the closed literal so
-    -- purity reasoning does not repeatedly traverse its hundreds of entries.
-    run_tac do
-      Lean.Elab.Tactic.liftMetaTactic fun goal => goal.withContext do
-        let target ← goal.getType
-        let args := target.getAppArgs
-        let left := args[args.size-2]!.headBeta
-        if let some table := left.find? (fun value =>
-            value.isAppOfArity ``Lynx.Term.tuple 1 && !value.hasFVar && !value.hasLooseBVars) then
-          let (_, next) ← goal.generalize #[{expr := table, xName? := some `table}]
-          return [next]
-        return [goal]
-    simp only [Lynx.Order.rel_pi, Lynx.Order.rel_pprod] at h
-    repeat' first
-      | lynx_mono_share
-      | lynx_pure_share
-      | lynx_pure_step
-      | lynx_mono_step
-      | apply_assumption (config := { exfalso := false })
-      | split
-      | simp_all
-  """
+  @lookup_tables Lynx.Lean.from_file!(Path.expand("lookup_tables.lean", __DIR__))
 
   laws "hexadecimal encoding round trip", options: [maxHeartbeats: 1_000_000] do
-    prelude @monotonicity_tactics
-    termination_suffix &:binary.lynx_local_2/3, @fixpoint
-    termination_suffix &:binary.encode_hex2/3, @fixpoint
-    termination_suffix &:binary.lynx_local_6/2, @fixpoint
-    termination_suffix &:binary.decode_hex2/2, @fixpoint
+    prelude @lookup_tables
 
     law hex_roundtrip(bytes, mode),
       requires: is_binary(bytes) and (mode === :uppercase or mode === :lowercase),
@@ -62,16 +25,18 @@ defmodule BinaryProofsTest do
         set_option maxRecDepth 16384 in
           let encodeTable : Lynx.Term := by
             run_tac do
-              let body := (← Lean.getConstInfo ``Erlang.binary.«encode_hex2/3»).value!
-              let some table := body.find? (fun value =>
-                value.isAppOfArity ``Lynx.Term.tuple 1 && !value.hasFVar && !value.hasLooseBVars) |
+              let some equations ← Lean.Meta.getEqnsFor? ``Erlang.binary.«encode_hex2/3» |
+                throwError "encoding equations were not found"
+              let body := (← Lean.getConstInfo equations[0]!).type
+              let some table := body.find? LookupTables.isTable |
                 throwError "encoding table was not found"
               (← Lean.Elab.Tactic.getMainGoal).assign table
           let decodeTable : Lynx.Term := by
             run_tac do
-              let body := (← Lean.getConstInfo ``Erlang.binary.«decode_hex2/2»).value!
-              let some table := body.find? (fun value =>
-                value.isAppOfArity ``Lynx.Term.tuple 1 && !value.hasFVar && !value.hasLooseBVars) |
+              let some equations ← Lean.Meta.getEqnsFor? ``Erlang.binary.«decode_hex2/2» |
+                throwError "decoding equations were not found"
+              let body := (← Lean.getConstInfo equations[0]!).type
+              let some table := body.find? LookupTables.isTable |
                 throwError "decoding table was not found"
               (← Lean.Elab.Tactic.getMainGoal).assign table
           let offset (lower : Bool) : Int := if lower then 257 else 1
@@ -190,7 +155,7 @@ defmodule BinaryProofsTest do
               have charBound := digitBound lower n.val n.isLt
               rw [wireCons]
               conv => lhs; unfold Erlang.binary.«decode_hex2/2»
-              lynx_fold_tuple decodeTable
+              lynx_fold_table decodeTable
               simp (disch := (try simp only [wireLength]); omega) only
                 [field8, extract_some, tailMatch, decodeLookup, okBind, construct4, segment, Lynx.Result.bind, append_bits]
               rw [ih _ (by simp only [List.length_append, integerBits_length]; omega)]
@@ -212,7 +177,7 @@ defmodule BinaryProofsTest do
                 have byteBound : a.val*16+b.val<256 := by have := a.isLt; have := b.isLt; omega
                 rw [sourcePair]
                 conv => lhs; unfold Erlang.binary.«encode_hex2/3»
-                lynx_fold_tuple encodeTable
+                lynx_fold_table encodeTable
                 simp (disch := (try simp only [sourceLength]); omega) only
                   [field8, extract_some, tailMatch, Erlang.erlang.«+/2_integers», encodePair, okBind,
                    codePair, segment, Lynx.Result.bind, append_bits]
@@ -224,7 +189,7 @@ defmodule BinaryProofsTest do
               Erlang.binary.«lynx_local_6/2» (ofBits (wire lower rest)) (ofBits (acc++source (a::b::c::d::e::f::g::h::[]))) := by
             simp only [wireCons]
             conv => lhs; unfold Erlang.binary.«lynx_local_6/2»
-            lynx_fold_tuple decodeTable
+            lynx_fold_table decodeTable
             have ha := a.isLt
             have hb := b.isLt
             have hc := c.isLt
@@ -266,7 +231,7 @@ defmodule BinaryProofsTest do
               Erlang.binary.«lynx_local_2/3» (ofBits (source rest)) (ofBits (acc++wire lower (a::b::c::d::e::f::g::h::i::j::k::l::m::n::o::p::[]))) (.integer (offset lower)) := by
             simp only [sourcePair]
             conv => lhs; unfold Erlang.binary.«lynx_local_2/3»
-            lynx_fold_tuple encodeTable
+            lynx_fold_table encodeTable
             have ha := a.isLt
             have hb := b.isLt
             have hc := c.isLt

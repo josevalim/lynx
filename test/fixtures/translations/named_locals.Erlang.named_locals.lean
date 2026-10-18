@@ -469,26 +469,32 @@ set_option «match».ignoreUnusedAlts true
             | _ => lynxMatchNext ())
           (fun _ => lynxMatchNext ()))
       (fun (_ : Unit) =>
-        match _2 with
-        | Lynx.Term.bitstring ⟨⟨[]⟩⟩ 0 _ => pure Lynx.Term.nil
-        | _2 =>
-          (fun {lynxValue : Type}
-                (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
-                (lynxNext : Unit → Lynx.Result lynxValue) =>
-              lynxBody lynxNext)
-            (fun lynxMatchNext =>
-              match (Lynx.Term.Bitstring.matchTail _2 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
-                match (_2) with
-                | _1 =>
+        (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+              (lynxNext : Unit → Lynx.Result lynxValue) =>
+            lynxBody lynxNext)
+          (fun lynxMatchNext =>
+            match (Lynx.Term.Bitstring.matchEnd _2) with
+            | Bool.true✝ => pure Lynx.Term.nil
+            | _ => lynxMatchNext ())
+          (fun (_ : Unit) =>
+            (fun {lynxValue : Type}
+                  (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+                  (lynxNext : Unit → Lynx.Result lynxValue) =>
+                lynxBody lynxNext)
+              (fun lynxMatchNext =>
+                match (Lynx.Term.Bitstring.matchTail _2 (Lynx.Term.atom "all") 1) with
+                | Bool.true✝ =>
+                  match (_2) with
+                  | _1 =>
+                    Lynx.Result.error
+                      (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "badmatch", _1]))
+                | _ => lynxMatchNext ())
+              (fun (_ : Unit) =>
+                match _2 with
+                | _3 =>
                   Lynx.Result.error
-                    (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "badmatch", _1]))
-              | _ => lynxMatchNext ())
-            (fun (_ : Unit) =>
-              match _2 with
-              | _3 =>
-                Lynx.Result.error
-                  (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _3]))))
+                    (Lynx.Exception.error
+                      (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _3])))))
   termination_by sizeOf✝ _2
 
 #lynx_pure

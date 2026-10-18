@@ -116,6 +116,10 @@ private structure DecodeState where
   theorems : Array (Name × Span) := #[]
   patternExtractions : Array PatternExtraction := #[]
   nextBitstringPattern : Nat := 0
+  /-- Values of the module's shared literals, by name, to detect conflicts. -/
+  literals : Std.HashMap String String := {}
+  /-- Definitions of shared literals, emitted before the command using them. -/
+  pendingLiterals : Array (TSyntax `command) := #[]
 
 private abbrev DecodeM := ReaderT Lean.Environment (StateT DecodeState (Except String))
 
@@ -780,7 +784,21 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let ctor := mkIdent ``Lynx.Term.function
     pure (Unhygienic.run `($ctor $id $arity #[$captures,*]))
   | "tuple" => do
-    fields j ["kind", "elements", "span"]
+    fields j ["kind", "elements", "name", "span"]
+    -- Named tuples are shared literals, defined once before the command using them.
+    if let (.ok name, false) := (str j "name", pattern) then
+      let id := mkIdent (Name.mkSimple name)
+      let unnamed := Json.mkObj ((← j.getObj?).toArray.toList.filter (·.1 != "name"))
+      let key := (withoutSpans unnamed).compress
+      match (← get).literals.get? name with
+      | some existing => unless existing == key do throw s!"literal '{name}' has conflicting values"
+      | none =>
+        let decoded ← term map info false unnamed
+        let termType := mkIdent ``Lynx.Term
+        let definition := Unhygienic.run `(def $id : $termType := $decoded)
+        modify fun s => { s with literals := s.literals.insert name key,
+                                 pendingLiterals := s.pendingLiterals.push definition }
+      return id
     let elements ← (← arr j "elements").mapM (term map info pattern)
     let ctor := mkIdent ``Lynx.Term.tuple
     -- Use Array's ordinary constructor in patterns, avoiding the array-literal
@@ -1439,11 +1457,13 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
   let errors := (← get).diagnostics.size
   let declaration ← command map j
   if (← get).diagnostics.size != errors then return #[]
-  if (← str j "kind") != "fun_table" then return #[declaration]
+  let literals := (← get).pendingLiterals
+  modify fun s => { s with pendingLiterals := #[] }
+  if (← str j "kind") != "fun_table" then return literals.push declaration
   let info ← span map j
   let table ← identifier (← str j "name")
   let entries ← arr j "entries"
-  let mut result := #[declaration]
+  let mut result := literals.push declaration
   for index in [:entries.size] do
     let entry ← tableEntry map info entries[index]!
     let name := mkIdent (Name.mkSimple s!"{table.getId.getString!}_apply_{index}_bind")

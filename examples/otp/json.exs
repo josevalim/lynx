@@ -94,7 +94,7 @@ defmodule JsonProofsTest do
           have digit : (b.toNat : Int) = 49 ∨ (b.toNat : Int) = 50 ∨ (b.toNat : Int) = 51 ∨
               (b.toNat : Int) = 52 ∨ (b.toNat : Int) = 53 ∨ (b.toNat : Int) = 54 ∨
               (b.toNat : Int) = 55 ∨ (b.toNat : Int) = 56 ∨ (b.toNat : Int) = 57 := by omega
-          simp only [matchInteger_byte, extract_some]
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»,
             h32, h9, h13, h10, h48]
           rcases digit with h | h | h | h | h | h | h | h | h <;> simp [h]
@@ -108,7 +108,7 @@ defmodule JsonProofsTest do
                   dec := by
           intro orig skip acc stack dec bs
           unfold «value/6»
-          simp only [matchInteger_byte, extract_some]
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- A leading zero starts a number that only continues with a fraction or exponent.
@@ -121,7 +121,7 @@ defmodule JsonProofsTest do
                 (.integer 1) := by
           intro orig skip acc stack dec bs
           unfold «value/6»
-          simp only [matchInteger_byte, extract_some]
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have number_minus_digit : ∀ (orig skip acc stack dec : Term) (b : UInt8) (bs : List
@@ -138,7 +138,7 @@ defmodule JsonProofsTest do
               (b.toNat : Int) = 52 ∨ (b.toNat : Int) = 53 ∨ (b.toNat : Int) = 54 ∨
               (b.toNat : Int) = 55 ∨ (b.toNat : Int) = 56 ∨ (b.toNat : Int) = 57 := by omega
           unfold «number_minus/6»
-          simp only [matchInteger_byte, extract_some]
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, h48]
           rcases digit with h | h | h | h | h | h | h | h | h <;> simp [h]
 
@@ -152,7 +152,7 @@ defmodule JsonProofsTest do
                 (.integer (len + 1)) := by
           intro orig skip acc stack dec len b bs low high
           conv => lhs; unfold «number/7»
-          simp only [matchInteger_byte, extract_some]
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
           have ge : (compare (b.toNat : Int) 48).isGE = true := by
             simp [Ordering.isGE_iff_ne_lt, Int.compare_eq_lt]; omega
           have le : (compare (b.toNat : Int) 57).isLE = true := by
@@ -189,7 +189,7 @@ defmodule JsonProofsTest do
                   (.integer len) (.integer 0) (.tuple #[.atom "number", value])) := by
           intro orig skip acc stack len
           conv => lhs; unfold «number/7»
-          simp only [matchInteger_byte_nil, extract_none]
+          simp only [matchInteger_byte_nil, extract_none, matchEnd_byte_nil]
           simp
 
         have number_zero_end : ∀ (orig skip acc stack : Term) (len : Int),
@@ -203,7 +203,7 @@ defmodule JsonProofsTest do
                   (.integer len) (.integer 0) (.tuple #[.atom "number", value])) := by
           intro orig skip acc stack len
           conv => lhs; unfold «number_zero/7»
-          simp only [matchInteger_byte_nil, extract_none]
+          simp only [matchInteger_byte_nil, extract_none, matchEnd_byte_nil]
           simp
 
         -- A number spanning the whole input is the complete result.
@@ -330,7 +330,7 @@ defmodule JsonProofsTest do
                   _)]) := by
           intro orig skip acc value
           unfold «terminate/5»
-          simp [matchInteger_byte_nil]
+          simp [matchInteger_byte_nil, matchEnd_byte_nil]
 
         have array_push_comma : ∀ (bs : List UInt8) (orig skip acc stack value : Term),
             «array_push/7» (.bitstring ⟨((44 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig
@@ -341,7 +341,7 @@ defmodule JsonProofsTest do
                     acc) stack options) := by
           intro bs orig skip acc stack value
           conv => lhs; unfold «array_push/7»
-          simp only [matchInteger_byte, extract_some]
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have array_push_close : ∀ (bs : List UInt8) (orig skip acc old stack value : Term),
@@ -355,7 +355,7 @@ defmodule JsonProofsTest do
                     options list) := by
           intro bs orig skip acc old stack value
           conv => lhs; unfold «array_push/7»
-          simp only [matchInteger_byte, extract_some]
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have value_open : ∀ (bs : List UInt8) (orig skip acc stack : Term),
@@ -365,7 +365,7 @@ defmodule JsonProofsTest do
                   options (.integer 1) := by
           intro bs orig skip acc stack
           unfold «value/6»
-          simp only [matchInteger_byte, extract_some]
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- An array whose first element starts with a minus sign or a digit.
@@ -384,7 +384,7 @@ defmodule JsonProofsTest do
           have h10 : (b.toNat : Int) ≠ 10 := by omega
           have h93 : (b.toNat : Int) ≠ 93 := by omega
           conv => lhs; unfold «array_start/7»
-          simp only [matchInteger_byte, extract_some]
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2», h32, h9,
             h13, h10, h93]
 
@@ -404,7 +404,7 @@ defmodule JsonProofsTest do
           have h69 : (b.toNat : Int) ≠ 69 := by omega
           have h101 : (b.toNat : Int) ≠ 101 := by omega
           conv => lhs; unfold «number/7»
-          simp only [matchInteger_byte, extract_some]
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
           rcases separator with h | h
           · have ge : ¬ (compare (b.toNat : Int) 48).isGE = true := by
               simp [Ordering.isGE_iff_ne_lt, Int.compare_eq_lt]; omega
@@ -434,7 +434,7 @@ defmodule JsonProofsTest do
           have h69 : (b.toNat : Int) ≠ 69 := by omega
           have h101 : (b.toNat : Int) ≠ 101 := by omega
           conv => lhs; unfold «number_zero/7»
-          simp only [matchInteger_byte, extract_some]
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2», h46, h69,
             h101]
 
@@ -672,7 +672,7 @@ defmodule JsonProofsTest do
                     options .nil) := by
           intro bs orig skip acc stack len
           conv => lhs; unfold «array_start/7»
-          simp only [matchInteger_byte, extract_some]
+          simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have decode_list : ∀ (l : List Int) (depth : Nat),

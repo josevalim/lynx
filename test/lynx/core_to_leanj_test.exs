@@ -421,6 +421,69 @@ defmodule Lynx.CoreToLeanjTest do
     end
   end
 
+  test "matches literal binaries as segments beside clauses that match segments" do
+    byte =
+      :cerl.c_bitstr(
+        :cerl.c_var(:B),
+        :cerl.c_int(8),
+        :cerl.c_int(1),
+        :cerl.c_atom(:integer),
+        :cerl.abstract([:unsigned, :big])
+      )
+
+    body =
+      :cerl.c_case(:cerl.c_values([:cerl.c_var(0), :cerl.c_binary([])]), [
+        :cerl.c_clause([:cerl.c_binary([byte]), :cerl.c_binary([])], :cerl.c_var(:B)),
+        :cerl.c_clause([:cerl.c_binary([]), :cerl.c_binary([])], :cerl.c_atom(:empty))
+      ])
+
+    assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
+
+    assert %{
+             "body" => %{
+               "cases" => [
+                 %{
+                   "patterns" => [
+                     %{"kind" => "bitstring_pattern", "segments" => [_]},
+                     %{"kind" => "bitstring", "bytes" => []}
+                   ]
+                 },
+                 %{
+                   "patterns" => [
+                     %{"kind" => "bitstring_pattern", "segments" => []},
+                     %{"kind" => "bitstring", "bytes" => []}
+                   ]
+                 }
+               ]
+             }
+           } = functions[{:entry, 1}].translation
+  end
+
+  test "names large literal tuples by their value to share them" do
+    small = :cerl.abstract(List.to_tuple(Enum.to_list(1..31)))
+    large = :cerl.abstract(List.to_tuple(Enum.to_list(1..32)))
+    body = :cerl.c_tuple([small, large, large])
+
+    assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
+
+    assert %{
+             "body" => %{
+               "values" => [
+                 %{
+                   "elements" => [
+                     %{"kind" => "tuple", "elements" => small_elements} = small_tuple,
+                     %{"kind" => "tuple", "name" => "lynx_literal_" <> _ = name},
+                     %{"kind" => "tuple", "name" => name}
+                   ]
+                 }
+               ]
+             }
+           } = functions[{:entry, 1}].translation
+
+    assert length(small_elements) == 31
+    refute Map.has_key?(small_tuple, "name")
+  end
+
   test "allocates distinct generated message binders for timeout-only receives" do
     receive_after = fn action ->
       loop = :cerl.c_fname(:receive_loop, 0)

@@ -480,6 +480,8 @@ private def proveGroup (predicate : Predicate) (declaration : TSyntax `command)
   let extract := rule predicate "extract"
   let lemmaStep ← if predicate.name == ``Result.IsPartial then `(tactic| lynx_partial_lemma)
     else `(tactic| fail)
+  let shareStep ← if predicate.name == ``Result.IsPartial then `(tactic| lynx_partial_share)
+    else `(tactic| lynx_pure_share)
   let proof ← Command.liftTermElabM do
     let inductionName := functions[0]! ++
       if functions.size == 1 then `induct else `mutual_induct
@@ -512,6 +514,7 @@ private def proveGroup (predicate : Predicate) (declaration : TSyntax `command)
         -- (for example under a shared guard continuation).
         first $[| $unfoldings:tactic]*
         repeat' first
+          | $shareStep:tactic
           | $lemmaStep:tactic
           | apply $guard:ident
           | apply $tryWith:ident
@@ -520,6 +523,13 @@ private def proveGroup (predicate : Predicate) (declaration : TSyntax `command)
           | apply $bindExplicit:ident
           | apply $extract:ident
           | (intro)
+          -- Shared continuations and recursive calls follow from hypotheses.
+          -- Matching them reducibly avoids unfolding the extractions they mention.
+          | (solve | with_reducible (apply_assumption -exfalso -symm <;> assumption))
+          | split
+          -- Goal-only simplification closes calls with purity lemmas without
+          -- also rewriting the induction hypotheses, as `grind` and `simp_all` do.
+          | (solve | simp)
           | (solve | grind)
           | split at *
           | simp_all)

@@ -12,6 +12,33 @@ section
 set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
+  def «empty_or_byte/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        Lynx.Term.Bitstring.extract
+          (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
+          (fun vX lynxBits0 =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits0 (Lynx.Term.atom "all") 8) with
+            | Bool.true✝ =>
+              match (lynxBits0) with
+              | vRest => pure (Lynx.Term.tuple #[vX, vRest])
+            | _ => lynxMatchNext ())
+          (fun _ => lynxMatchNext ()))
+      (fun (_ : Unit) =>
+        (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+              (lynxNext : Unit → Lynx.Result lynxValue) =>
+            lynxBody lynxNext)
+          (fun lynxMatchNext =>
+            match (Lynx.Term.Bitstring.matchEnd _0) with
+            | Bool.true✝ => pure (Lynx.Term.atom "empty")
+            | _ => lynxMatchNext ())
+          (fun (_ : Unit) =>
+            match _0 with
+            | _2 => pure (Lynx.Term.atom "other")))
+
+#lynx_pure
   def «empty/1» (_0 : Lynx.Term) : Lynx.Result :=
     match _0 with
     | Lynx.Term.bitstring ⟨⟨[]⟩⟩ 0 _ => pure (Lynx.Term.atom "empty")
@@ -55,16 +82,16 @@ set_option «match».ignoreUnusedAlts true
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract
           (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
-          (fun vA lynxBits0 =>
+          (fun vA lynxBits1 =>
             Lynx.Term.Bitstring.extract
-              (Lynx.Term.Bitstring.matchInteger lynxBits0 (Lynx.Term.integer 12) 1 Bool.true
+              (Lynx.Term.Bitstring.matchInteger lynxBits1 (Lynx.Term.integer 12) 1 Bool.true
                 Bool.false)
-              (fun vB lynxBits1 =>
+              (fun vB lynxBits2 =>
                 Lynx.Term.Bitstring.extract
-                  (Lynx.Term.Bitstring.matchInteger lynxBits1 (Lynx.Term.integer 12) 1 Bool.true
+                  (Lynx.Term.Bitstring.matchInteger lynxBits2 (Lynx.Term.integer 12) 1 Bool.true
                     Bool.true)
-                  (fun vC lynxBits2 =>
-                    match (Lynx.Term.Bitstring.matchEnd lynxBits2) with
+                  (fun vC lynxBits3 =>
+                    match (Lynx.Term.Bitstring.matchEnd lynxBits3) with
                     | Bool.true✝ => pure (Lynx.Term.tuple #[vA, vB, vC])
                     | _ => lynxMatchNext ())
                   (fun _ => lynxMatchNext ()))
@@ -86,10 +113,10 @@ set_option «match».ignoreUnusedAlts true
           (fun lynxMatchNext =>
             Lynx.Term.Bitstring.extract
               (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
-              (fun vSize lynxBits3 =>
-                match (Lynx.Term.Bitstring.matchTail lynxBits3 (Lynx.Term.atom "all") 1) with
+              (fun vSize lynxBits4 =>
+                match (Lynx.Term.Bitstring.matchTail lynxBits4 (Lynx.Term.atom "all") 1) with
                 | Bool.true✝ =>
-                  match (lynxBits3) with
+                  match (lynxBits4) with
                   | _3 =>
                     (fun {lynxValue : Type}
                           (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
@@ -98,12 +125,12 @@ set_option «match».ignoreUnusedAlts true
                       (fun lynxMatchNext =>
                         Lynx.Term.Bitstring.extract
                           (Lynx.Term.Bitstring.matchInteger _3 vSize 1 Bool.true Bool.true)
-                          (fun vX lynxBits4 =>
+                          (fun vX lynxBits5 =>
                             match
-                              (Lynx.Term.Bitstring.matchTail lynxBits4 (Lynx.Term.atom "all")
+                              (Lynx.Term.Bitstring.matchTail lynxBits5 (Lynx.Term.atom "all")
                                 1) with
                             | Bool.true✝ =>
-                              match (lynxBits4) with
+                              match (lynxBits5) with
                               | vTail => pure (Lynx.Term.tuple #[vSize, vX, vTail])
                             | _ => lynxMatchNext ())
                           (fun _ => lynxMatchNext ()))
@@ -124,10 +151,10 @@ set_option «match».ignoreUnusedAlts true
         lynxBody lynxNext)
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchInteger _1 _0 3 Bool.false Bool.false)
-          (fun vX lynxBits5 =>
-            match (Lynx.Term.Bitstring.matchTail lynxBits5 (Lynx.Term.atom "all") 1) with
+          (fun vX lynxBits6 =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits6 (Lynx.Term.atom "all") 1) with
             | Bool.true✝ =>
-              match (lynxBits5) with
+              match (lynxBits6) with
               | vTail => pure (Lynx.Term.tuple #[vX, vTail])
             | _ => lynxMatchNext ())
           (fun _ => lynxMatchNext ()))
@@ -142,10 +169,10 @@ set_option «match».ignoreUnusedAlts true
         lynxBody lynxNext)
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchFloat _0 64 Bool.false)
-          (fun vX lynxBits6 =>
-            Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchFloat lynxBits6 64 Bool.true)
-              (fun vY lynxBits7 =>
-                match (Lynx.Term.Bitstring.matchEnd lynxBits7) with
+          (fun vX lynxBits7 =>
+            Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchFloat lynxBits7 64 Bool.true)
+              (fun vY lynxBits8 =>
+                match (Lynx.Term.Bitstring.matchEnd lynxBits8) with
                 | Bool.true✝ => pure (Lynx.Term.tuple #[vX, vY])
                 | _ => lynxMatchNext ())
               (fun _ => lynxMatchNext ()))
@@ -162,10 +189,10 @@ set_option «match».ignoreUnusedAlts true
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract
           (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 3) 1 Bool.false Bool.false)
-          (fun vTag lynxBits8 =>
-            match (Lynx.Term.Bitstring.matchTail lynxBits8 (Lynx.Term.atom "all") 8) with
+          (fun vTag lynxBits9 =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits9 (Lynx.Term.atom "all") 8) with
             | Bool.true✝ =>
-              match (lynxBits8) with
+              match (lynxBits9) with
               | vTail => pure (Lynx.Term.tuple #[vTag, vTail])
             | _ => lynxMatchNext ())
           (fun _ => lynxMatchNext ()))
@@ -181,10 +208,10 @@ set_option «match».ignoreUnusedAlts true
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract
           (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 3) 1 Bool.false Bool.false)
-          (fun vTag lynxBits9 =>
-            match (Lynx.Term.Bitstring.matchTail lynxBits9 (Lynx.Term.atom "all") 1) with
+          (fun vTag lynxBits10 =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits10 (Lynx.Term.atom "all") 1) with
             | Bool.true✝ =>
-              match (lynxBits9) with
+              match (lynxBits10) with
               | vTail => pure (Lynx.Term.tuple #[vTag, vTail])
             | _ => lynxMatchNext ())
           (fun _ => lynxMatchNext ()))
@@ -200,12 +227,12 @@ set_option «match».ignoreUnusedAlts true
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract
           (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 3) 1 Bool.false Bool.false)
-          (fun lynxExtracted lynxBits10 =>
+          (fun lynxExtracted lynxBits11 =>
             match lynxExtracted with
             | Lynx.Term.integer 1 =>
-              match (Lynx.Term.Bitstring.matchTail lynxBits10 (Lynx.Term.atom "all") 8) with
+              match (Lynx.Term.Bitstring.matchTail lynxBits11 (Lynx.Term.atom "all") 8) with
               | Bool.true✝ =>
-                match (lynxBits10) with
+                match (lynxBits11) with
                 | vTail => pure vTail
               | _ => lynxMatchNext ()
             | _ => lynxMatchNext ())
@@ -222,12 +249,12 @@ set_option «match».ignoreUnusedAlts true
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract
           (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 3) 1 Bool.false Bool.false)
-          (fun lynxExtracted lynxBits11 =>
+          (fun lynxExtracted lynxBits12 =>
             match lynxExtracted with
             | Lynx.Term.integer 1 =>
-              match (Lynx.Term.Bitstring.matchTail lynxBits11 (Lynx.Term.atom "all") 1) with
+              match (Lynx.Term.Bitstring.matchTail lynxBits12 (Lynx.Term.atom "all") 1) with
               | Bool.true✝ =>
-                match (lynxBits11) with
+                match (lynxBits12) with
                 | vTail => pure vTail
               | _ => lynxMatchNext ()
             | _ => lynxMatchNext ())
@@ -244,10 +271,10 @@ set_option «match».ignoreUnusedAlts true
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract
           (Lynx.Term.Bitstring.matchInteger _1 (Lynx.Term.integer 3) 1 Bool.false Bool.false)
-          (fun vTag lynxBits12 =>
-            match (Lynx.Term.Bitstring.matchTail lynxBits12 _0 8) with
+          (fun vTag lynxBits13 =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits13 _0 8) with
             | Bool.true✝ =>
-              match (lynxBits12) with
+              match (lynxBits13) with
               | vTail => pure (Lynx.Term.tuple #[vTag, vTail])
             | _ => lynxMatchNext ())
           (fun _ => lynxMatchNext ()))
@@ -263,10 +290,10 @@ set_option «match».ignoreUnusedAlts true
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract
           (Lynx.Term.Bitstring.matchInteger _1 (Lynx.Term.integer 3) 1 Bool.false Bool.false)
-          (fun vTag lynxBits13 =>
-            match (Lynx.Term.Bitstring.matchTail lynxBits13 _0 1) with
+          (fun vTag lynxBits14 =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits14 _0 1) with
             | Bool.true✝ =>
-              match (lynxBits13) with
+              match (lynxBits14) with
               | vTail => pure (Lynx.Term.tuple #[vTag, vTail])
             | _ => lynxMatchNext ())
           (fun _ => lynxMatchNext ()))
@@ -281,14 +308,14 @@ set_option «match».ignoreUnusedAlts true
         lynxBody lynxNext)
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchBinary _1 _0 8)
-          (fun vPrefix lynxBits14 =>
+          (fun vPrefix lynxBits15 =>
             Lynx.Term.Bitstring.extract
-              (Lynx.Term.Bitstring.matchInteger lynxBits14 (Lynx.Term.integer 3) 1 Bool.false
+              (Lynx.Term.Bitstring.matchInteger lynxBits15 (Lynx.Term.integer 3) 1 Bool.false
                 Bool.false)
-              (fun vTag lynxBits15 =>
-                match (Lynx.Term.Bitstring.matchTail lynxBits15 (Lynx.Term.atom "all") 1) with
+              (fun vTag lynxBits16 =>
+                match (Lynx.Term.Bitstring.matchTail lynxBits16 (Lynx.Term.atom "all") 1) with
                 | Bool.true✝ =>
-                  match (lynxBits15) with
+                  match (lynxBits16) with
                   | vTail => pure (Lynx.Term.tuple #[vPrefix, vTag, vTail])
                 | _ => lynxMatchNext ())
               (fun _ => lynxMatchNext ()))
@@ -304,16 +331,16 @@ set_option «match».ignoreUnusedAlts true
         lynxBody lynxNext)
       (fun lynxMatchNext =>
         match _0 with
-        | Lynx.Term.tuple ⟨[Lynx.Term.atom "tag", Lynx.Term.cons lynxMap363 Lynx.Term.nil]⟩ =>
-          match (Lynx.Term.getMapKeys [Lynx.Term.atom "bits"] lynxMap363) with
-          | [lynxBits16] =>
+        | Lynx.Term.tuple ⟨[Lynx.Term.atom "tag", Lynx.Term.cons lynxMap392 Lynx.Term.nil]⟩ =>
+          match (Lynx.Term.getMapKeys [Lynx.Term.atom "bits"] lynxMap392) with
+          | [lynxBits17] =>
             Lynx.Term.Bitstring.extract
-              (Lynx.Term.Bitstring.matchInteger lynxBits16 (Lynx.Term.integer 8) 1 Bool.false
+              (Lynx.Term.Bitstring.matchInteger lynxBits17 (Lynx.Term.integer 8) 1 Bool.false
                 Bool.false)
-              (fun vX lynxBits17 =>
-                match (Lynx.Term.Bitstring.matchTail lynxBits17 (Lynx.Term.atom "all") 1) with
+              (fun vX lynxBits18 =>
+                match (Lynx.Term.Bitstring.matchTail lynxBits18 (Lynx.Term.atom "all") 1) with
                 | Bool.true✝ =>
-                  match (lynxBits17) with
+                  match (lynxBits18) with
                   | vRest => pure (Lynx.Term.tuple #[vX, vRest])
                 | _ => lynxMatchNext ())
               (fun _ => lynxMatchNext ())
@@ -331,10 +358,10 @@ set_option «match».ignoreUnusedAlts true
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract
           (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
-          (fun vX lynxBits18 =>
-            match (Lynx.Term.Bitstring.matchTail lynxBits18 (Lynx.Term.atom "all") 8) with
+          (fun vX lynxBits19 =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits19 (Lynx.Term.atom "all") 8) with
             | Bool.true✝ =>
-              match (lynxBits18) with
+              match (lynxBits19) with
               | vRest =>
                 Lynx.Result.guard (Erlang.erlang.«>/2» vX (Lynx.Term.integer 10))
                   (fun _ => pure (Lynx.Term.tuple #[Lynx.Term.atom "large", vX, vRest]))
@@ -348,10 +375,10 @@ set_option «match».ignoreUnusedAlts true
           (fun lynxMatchNext =>
             Lynx.Term.Bitstring.extract
               (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
-              (fun vX lynxBits19 =>
-                match (Lynx.Term.Bitstring.matchTail lynxBits19 (Lynx.Term.atom "all") 1) with
+              (fun vX lynxBits20 =>
+                match (Lynx.Term.Bitstring.matchTail lynxBits20 (Lynx.Term.atom "all") 1) with
                 | Bool.true✝ =>
-                  match (lynxBits19) with
+                  match (lynxBits20) with
                   | vRest => pure (Lynx.Term.tuple #[Lynx.Term.atom "small", vX, vRest])
                 | _ => lynxMatchNext ())
               (fun _ => lynxMatchNext ()))
@@ -366,14 +393,14 @@ set_option «match».ignoreUnusedAlts true
         lynxBody lynxNext)
       (fun lynxMatchNext =>
         match _0 with
-        | vWhole@lynxBits20 =>
+        | vWhole@lynxBits21 =>
           Lynx.Term.Bitstring.extract
-            (Lynx.Term.Bitstring.matchInteger lynxBits20 (Lynx.Term.integer 8) 1 Bool.false
+            (Lynx.Term.Bitstring.matchInteger lynxBits21 (Lynx.Term.integer 8) 1 Bool.false
               Bool.false)
-            (fun vX lynxBits21 =>
-              match (Lynx.Term.Bitstring.matchTail lynxBits21 (Lynx.Term.atom "all") 1) with
+            (fun vX lynxBits22 =>
+              match (Lynx.Term.Bitstring.matchTail lynxBits22 (Lynx.Term.atom "all") 1) with
               | Bool.true✝ =>
-                match (lynxBits21) with
+                match (lynxBits22) with
                 | vRest => pure (Lynx.Term.tuple #[vX, vRest, vWhole])
               | _ => lynxMatchNext ())
             (fun _ => lynxMatchNext ()))
@@ -389,10 +416,10 @@ set_option «match».ignoreUnusedAlts true
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract
           (Lynx.Term.Bitstring.matchInteger _1 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
-          (fun _5 lynxBits22 =>
-            match (Lynx.Term.Bitstring.matchTail lynxBits22 (Lynx.Term.atom "all") 1) with
+          (fun _5 lynxBits23 =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits23 (Lynx.Term.atom "all") 1) with
             | Bool.true✝ =>
-              match (lynxBits22) with
+              match (lynxBits23) with
               | vRest =>
                 Lynx.Result.guard (Erlang.erlang.«=:=/2» _5 _0)
                   (fun _ => pure (Lynx.Term.tuple #[_0, vRest])) lynxMatchNext
@@ -404,24 +431,6 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «utf8/1» (_0 : Lynx.Term) : Lynx.Result :=
-    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
-          (lynxNext : Unit → Lynx.Result lynxValue) =>
-        lynxBody lynxNext)
-      (fun lynxMatchNext =>
-        Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf8 _0)
-          (fun vX lynxBits23 =>
-            match (Lynx.Term.Bitstring.matchTail lynxBits23 (Lynx.Term.atom "all") 1) with
-            | Bool.true✝ =>
-              match (lynxBits23) with
-              | vRest => pure (Lynx.Term.tuple #[vX, vRest])
-            | _ => lynxMatchNext ())
-          (fun _ => lynxMatchNext ()))
-      (fun (_ : Unit) =>
-        match _0 with
-        | _2 => pure (Lynx.Term.atom "other"))
-
-#lynx_pure
-  def «utf8_little/1» (_0 : Lynx.Term) : Lynx.Result :=
     (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
           (lynxNext : Unit → Lynx.Result lynxValue) =>
         lynxBody lynxNext)
@@ -439,12 +448,12 @@ set_option «match».ignoreUnusedAlts true
         | _2 => pure (Lynx.Term.atom "other"))
 
 #lynx_pure
-  def «utf16/1» (_0 : Lynx.Term) : Lynx.Result :=
+  def «utf8_little/1» (_0 : Lynx.Term) : Lynx.Result :=
     (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
           (lynxNext : Unit → Lynx.Result lynxValue) =>
         lynxBody lynxNext)
       (fun lynxMatchNext =>
-        Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 _0 Bool.false)
+        Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf8 _0)
           (fun vX lynxBits25 =>
             match (Lynx.Term.Bitstring.matchTail lynxBits25 (Lynx.Term.atom "all") 1) with
             | Bool.true✝ =>
@@ -457,7 +466,7 @@ set_option «match».ignoreUnusedAlts true
         | _2 => pure (Lynx.Term.atom "other"))
 
 #lynx_pure
-  def «utf16_big/1» (_0 : Lynx.Term) : Lynx.Result :=
+  def «utf16/1» (_0 : Lynx.Term) : Lynx.Result :=
     (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
           (lynxNext : Unit → Lynx.Result lynxValue) =>
         lynxBody lynxNext)
@@ -475,12 +484,12 @@ set_option «match».ignoreUnusedAlts true
         | _2 => pure (Lynx.Term.atom "other"))
 
 #lynx_pure
-  def «utf16_little/1» (_0 : Lynx.Term) : Lynx.Result :=
+  def «utf16_big/1» (_0 : Lynx.Term) : Lynx.Result :=
     (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
           (lynxNext : Unit → Lynx.Result lynxValue) =>
         lynxBody lynxNext)
       (fun lynxMatchNext =>
-        Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 _0 Bool.true)
+        Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 _0 Bool.false)
           (fun vX lynxBits27 =>
             match (Lynx.Term.Bitstring.matchTail lynxBits27 (Lynx.Term.atom "all") 1) with
             | Bool.true✝ =>
@@ -493,12 +502,12 @@ set_option «match».ignoreUnusedAlts true
         | _2 => pure (Lynx.Term.atom "other"))
 
 #lynx_pure
-  def «utf32/1» (_0 : Lynx.Term) : Lynx.Result :=
+  def «utf16_little/1» (_0 : Lynx.Term) : Lynx.Result :=
     (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
           (lynxNext : Unit → Lynx.Result lynxValue) =>
         lynxBody lynxNext)
       (fun lynxMatchNext =>
-        Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf32 _0 Bool.false)
+        Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 _0 Bool.true)
           (fun vX lynxBits28 =>
             match (Lynx.Term.Bitstring.matchTail lynxBits28 (Lynx.Term.atom "all") 1) with
             | Bool.true✝ =>
@@ -511,7 +520,7 @@ set_option «match».ignoreUnusedAlts true
         | _2 => pure (Lynx.Term.atom "other"))
 
 #lynx_pure
-  def «utf32_big/1» (_0 : Lynx.Term) : Lynx.Result :=
+  def «utf32/1» (_0 : Lynx.Term) : Lynx.Result :=
     (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
           (lynxNext : Unit → Lynx.Result lynxValue) =>
         lynxBody lynxNext)
@@ -529,16 +538,34 @@ set_option «match».ignoreUnusedAlts true
         | _2 => pure (Lynx.Term.atom "other"))
 
 #lynx_pure
+  def «utf32_big/1» (_0 : Lynx.Term) : Lynx.Result :=
+    (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
+          (lynxNext : Unit → Lynx.Result lynxValue) =>
+        lynxBody lynxNext)
+      (fun lynxMatchNext =>
+        Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf32 _0 Bool.false)
+          (fun vX lynxBits30 =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits30 (Lynx.Term.atom "all") 1) with
+            | Bool.true✝ =>
+              match (lynxBits30) with
+              | vRest => pure (Lynx.Term.tuple #[vX, vRest])
+            | _ => lynxMatchNext ())
+          (fun _ => lynxMatchNext ()))
+      (fun (_ : Unit) =>
+        match _0 with
+        | _2 => pure (Lynx.Term.atom "other"))
+
+#lynx_pure
   def «utf32_little/1» (_0 : Lynx.Term) : Lynx.Result :=
     (fun {lynxValue : Type} (lynxBody : (Unit → Lynx.Result lynxValue) → Lynx.Result lynxValue)
           (lynxNext : Unit → Lynx.Result lynxValue) =>
         lynxBody lynxNext)
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf32 _0 Bool.true)
-          (fun vX lynxBits30 =>
-            match (Lynx.Term.Bitstring.matchTail lynxBits30 (Lynx.Term.atom "all") 1) with
+          (fun vX lynxBits31 =>
+            match (Lynx.Term.Bitstring.matchTail lynxBits31 (Lynx.Term.atom "all") 1) with
             | Bool.true✝ =>
-              match (lynxBits30) with
+              match (lynxBits31) with
               | vRest => pure (Lynx.Term.tuple #[vX, vRest])
             | _ => lynxMatchNext ())
           (fun _ => lynxMatchNext ()))
@@ -554,18 +581,18 @@ set_option «match».ignoreUnusedAlts true
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract
           (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 3) 1 Bool.false Bool.false)
-          (fun vTag lynxBits31 =>
-            Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf8 lynxBits31)
-              (fun vX lynxBits32 =>
-                Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 lynxBits32 Bool.true)
-                  (fun vY lynxBits33 =>
+          (fun vTag lynxBits32 =>
+            Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf8 lynxBits32)
+              (fun vX lynxBits33 =>
+                Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 lynxBits33 Bool.true)
+                  (fun vY lynxBits34 =>
                     Lynx.Term.Bitstring.extract
-                      (Lynx.Term.Bitstring.matchUtf32 lynxBits33 Bool.false)
-                      (fun vZ lynxBits34 =>
+                      (Lynx.Term.Bitstring.matchUtf32 lynxBits34 Bool.false)
+                      (fun vZ lynxBits35 =>
                         match
-                          (Lynx.Term.Bitstring.matchTail lynxBits34 (Lynx.Term.atom "all") 1) with
+                          (Lynx.Term.Bitstring.matchTail lynxBits35 (Lynx.Term.atom "all") 1) with
                         | Bool.true✝ =>
-                          match (lynxBits34) with
+                          match (lynxBits35) with
                           | vRest => pure (Lynx.Term.tuple #[vTag, vX, vY, vZ, vRest])
                         | _ => lynxMatchNext ())
                       (fun _ => lynxMatchNext ()))
@@ -583,19 +610,19 @@ set_option «match».ignoreUnusedAlts true
         lynxBody lynxNext)
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf8 _0)
-          (fun lynxExtracted lynxBits35 =>
+          (fun lynxExtracted lynxBits36 =>
             match lynxExtracted with
             | Lynx.Term.integer 8364 =>
-              Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 lynxBits35 Bool.true)
-                (fun lynxExtracted lynxBits36 =>
+              Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 lynxBits36 Bool.true)
+                (fun lynxExtracted lynxBits37 =>
                   match lynxExtracted with
                   | Lynx.Term.integer 128512 =>
                     Lynx.Term.Bitstring.extract
-                      (Lynx.Term.Bitstring.matchUtf32 lynxBits36 Bool.false)
-                      (fun lynxExtracted lynxBits37 =>
+                      (Lynx.Term.Bitstring.matchUtf32 lynxBits37 Bool.false)
+                      (fun lynxExtracted lynxBits38 =>
                         match lynxExtracted with
                         | Lynx.Term.integer 1114111 =>
-                          match (Lynx.Term.Bitstring.matchEnd lynxBits37) with
+                          match (Lynx.Term.Bitstring.matchEnd lynxBits38) with
                           | Bool.true✝ => pure (Lynx.Term.atom "matched")
                           | _ => lynxMatchNext ()
                         | _ => lynxMatchNext ())
@@ -615,12 +642,12 @@ set_option «match».ignoreUnusedAlts true
         lynxBody lynxNext)
       (fun lynxMatchNext =>
         Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf8 _1)
-          (fun _5 lynxBits38 =>
-            Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 lynxBits38 Bool.false)
-              (fun _6 lynxBits39 =>
-                Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf32 lynxBits39 Bool.true)
-                  (fun _7 lynxBits40 =>
-                    match (Lynx.Term.Bitstring.matchEnd lynxBits40) with
+          (fun _5 lynxBits39 =>
+            Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 lynxBits39 Bool.false)
+              (fun _6 lynxBits40 =>
+                Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf32 lynxBits40 Bool.true)
+                  (fun _7 lynxBits41 =>
+                    match (Lynx.Term.Bitstring.matchEnd lynxBits41) with
                     | Bool.true✝ =>
                       Lynx.Result.guard
                         (do

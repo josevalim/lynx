@@ -566,7 +566,8 @@ badarg_raise(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = 
 badarg_raise(_, _) ->
     false.
 
-expression_case(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
+expression_case(#c_case{anno = Anno, arg = Arg, clauses = Clauses0}, State0) ->
+    Clauses = segment_patterns(Clauses0),
     {Translated, Next} = expression(Arg, State0),
     {Args, Bind, State1} = case Translated of
         #{~"kind" := ~"return", ~"values" := Values} ->
@@ -599,6 +600,29 @@ expression_case(#c_case{anno = Anno, arg = Arg, clauses = Clauses}, State0) ->
             {node(~"bind", Anno, #{~"vars" => Binders,
                 ~"computation" => Computation, ~"body" => Match}), State2}
     end.
+
+%% Literal bitstring patterns become Lean constructor patterns, unless another
+%% clause matches segments at the same position. Lean then extracts from that
+%% position in every clause, rather than also matching it against a
+%% constructor: functional induction cannot be derived for recursion over the
+%% remaining bits when a constructor match on the input precedes extractions.
+segment_patterns([#c_clause{pats = Patterns} | _] = Clauses) ->
+    Positions = [Position || Position <- lists:seq(1, length(Patterns)),
+        lists:any(fun(#c_clause{pats = Pats}) ->
+            case lists:nth(Position, Pats) of
+                #c_binary{segments = Segments} -> binary_pattern_literal(Segments, <<>>) =:= error;
+                _ -> false
+            end
+        end, Clauses)],
+    [Clause#c_clause{pats = [segment_pattern(Pattern, lists:member(Position, Positions)) ||
+        {Position, Pattern} <- lists:enumerate(Pats)]} || #c_clause{pats = Pats} = Clause <- Clauses];
+segment_patterns([]) ->
+    [].
+
+segment_pattern(#c_binary{anno = Anno} = Pattern, true) ->
+    Pattern#c_binary{anno = [lynx_segments | Anno]};
+segment_pattern(Pattern, _) ->
+    Pattern.
 
 expression_local_function(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
              #c_fun{vars = Vars} = Fun}], body = Body}, State0) ->
@@ -879,7 +903,7 @@ value(#c_alias{anno = Anno, var = Var, pat = Pattern}, State0) ->
 value(#c_var{} = Var, State) ->
     {variable(Var), State};
 value(#c_binary{anno = Anno, segments = Segments}, State0) ->
-    case binary_pattern_literal(Segments, <<>>) of
+    case not lists:member(lynx_segments, Anno) andalso binary_pattern_literal(Segments, <<>>) of
         {ok, Bits} -> value(#c_literal{anno = Anno, val = Bits}, State0);
         _ ->
             {Translated, State1} = binary_pattern_segments(Segments, State0),
@@ -916,6 +940,14 @@ value(#c_cons{anno = Anno, hd = Head, tl = Tail}, State0) ->
     {TranslatedHead, State1} = value(Head, State0),
     {TranslatedTail, State2} = value(Tail, State1),
     {node(~"cons", Anno, #{~"head" => TranslatedHead, ~"tail" => TranslatedTail}), State2};
+%% Large literal tuples, such as lookup tables, are shared module definitions.
+%% Inline, they are traversed by every termination, induction, and purity proof
+%% of the functions using them, and repeated in each clause that does.
+value(#c_literal{anno = Anno, val = Tuple}, State0) when is_tuple(Tuple), tuple_size(Tuple) >= 32 ->
+    {Value, State1} = value(#c_tuple{anno = Anno,
+        es = [#c_literal{anno = Anno, val = V} || V <- tuple_to_list(Tuple)]}, State0),
+    Hash = binary:encode_hex(binary:part(erlang:md5(term_to_binary(Tuple)), 0, 6), lowercase),
+    {Value#{~"name" => <<"lynx_literal_", Hash/binary>>}, State1};
 value(#c_literal{anno = Anno, val = Tuple}, State) when is_tuple(Tuple) ->
     value(#c_tuple{anno = Anno, es = [#c_literal{anno = Anno, val = V} || V <- tuple_to_list(Tuple)]}, State);
 value(#c_tuple{anno = Anno, es = Elements}, State0) ->

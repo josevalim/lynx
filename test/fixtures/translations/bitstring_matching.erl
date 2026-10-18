@@ -1,10 +1,15 @@
 -module(bitstring_matching).
--export([empty/1, literal/1, partial_literal/1, binary_literal/1, string_literal/1, signed_literal/1, integers/1, integer_sized/1, integer_external_size/2,
+-export([empty/1, empty_or_byte/1, literal/1, partial_literal/1, binary_literal/1, string_literal/1, signed_literal/1, integers/1, integer_sized/1, integer_external_size/2,
          utf8/1, utf8_little/1, utf16/1, utf16_big/1, utf16_little/1,
          utf32/1, utf32_big/1, utf32_little/1, utf_mixed/1, utf_literal/1, utf_pinned/2,
          float64/1, binary_tail/1, bitstring_tail/1, binary_literal_tail/1,
          bitstring_literal_tail/1, binary_fixed/2,
          bitstring_fixed/2, binary_prefix/2, nested/1, guarded/1, alias/1, pinned/2]).
+
+%% A literal binary beside segment clauses is matched as segments too.
+empty_or_byte(<<X, Rest/binary>>) -> {X, Rest};
+empty_or_byte(<<>>) -> empty;
+empty_or_byte(_) -> other.
 
 empty(<<>>) -> empty;
 empty(_) -> other.

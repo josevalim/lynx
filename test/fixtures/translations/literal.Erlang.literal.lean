@@ -1,6 +1,7 @@
 module
 
 public import Lynx
+public import Lynx.Modules.Erlang.erlang
 
 @[expose] public section
 
@@ -91,6 +92,28 @@ set_option «match».ignoreUnusedAlts true
       (Lynx.Term.cons (Lynx.Term.bitstring ⟨#[0, 255]⟩ 0 (by decide))
         (Lynx.Term.cons (Lynx.Term.bitstring ⟨#[160]⟩ 3 (by decide))
           (Lynx.Term.cons (Lynx.Term.bitstring ⟨#[128, 255, 128]⟩ 1 (by decide)) Lynx.Term.nil)))
+
+def lynx_literal_b8a3e82516a4 : Lynx.Term :=
+  Lynx.Term.tuple
+    #[Lynx.Term.integer 0, Lynx.Term.integer 1, Lynx.Term.integer 2, Lynx.Term.integer 3,
+      Lynx.Term.integer 4, Lynx.Term.integer 5, Lynx.Term.integer 6, Lynx.Term.integer 7,
+      Lynx.Term.integer 8, Lynx.Term.integer 9, Lynx.Term.integer 10, Lynx.Term.integer 11,
+      Lynx.Term.integer 12, Lynx.Term.integer 13, Lynx.Term.integer 14, Lynx.Term.integer 15,
+      Lynx.Term.integer 16, Lynx.Term.integer 17, Lynx.Term.integer 18, Lynx.Term.integer 19,
+      Lynx.Term.integer 20, Lynx.Term.integer 21, Lynx.Term.integer 22, Lynx.Term.integer 23,
+      Lynx.Term.integer 24, Lynx.Term.integer 25, Lynx.Term.integer 26, Lynx.Term.integer 27,
+      Lynx.Term.integer 28, Lynx.Term.integer 29, Lynx.Term.integer 30, Lynx.Term.integer 31]
+
+#lynx_pure
+  def «table/0» : Lynx.Result :=
+    pure lynx_literal_b8a3e82516a4
+
+#lynx_pure
+  def «table_lookup/1» (_0 : Lynx.Term) : Lynx.Result := do
+    let _3 ← Erlang.erlang.«element/2» _0 lynx_literal_b8a3e82516a4
+    let _1 ← Erlang.erlang.«+/2» _0 (Lynx.Term.integer 1)
+    let _2 ← Erlang.erlang.«element/2» _1 lynx_literal_b8a3e82516a4
+    pure (Lynx.Term.tuple #[_3, _2])
 
 end
 
