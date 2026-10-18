@@ -15,6 +15,18 @@ defmodule Lynx.Lean do
   @enforce_keys [:source, :file, :span, :indentation]
   defstruct [:source, :file, :span, :indentation]
 
+  @doc """
+  Reads Lean source from a file, such as shared tactics loaded with `prelude`.
+
+  Diagnostics point to the file itself. Relative paths are expanded against
+  the current working directory.
+  """
+  @spec from_file!(Path.t()) :: t()
+  def from_file!(path) do
+    file = Path.expand(path)
+    %__MODULE__{source: File.read!(file), file: file, span: {1, 1}, indentation: 0}
+  end
+
   @doc "Builds Lean source from a literal inline string or heredoc, without modifiers."
   defmacro sigil_LEAN({:<<>>, meta, [source]}, []) when is_binary(source) do
     env = __CALLER__
