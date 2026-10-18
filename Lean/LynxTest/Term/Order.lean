@@ -12,7 +12,7 @@ private def count (n : Nat) : Result :=
   if n = 0 then .ok (.integer 0)
   else do
     let value ← count (n - 1)
-    Erlang.erlang.«+/2» value (.integer 1)
+    Result.ofExcept (Erlang.erlang.«+/2» value (.integer 1))
 partial_fixpoint monotonicity by
   intro f g below n
   dsimp only

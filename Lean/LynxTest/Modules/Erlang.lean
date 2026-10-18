@@ -362,7 +362,7 @@ theorem dynamic_apply_array :
 private def closureFunctions : Term.FunTable := #[
   .effectful fun captures args =>
     match captures.toList, args.toList with
-    | [captured], [argument] => «+/2» captured argument
+    | [captured], [argument] => Result.ofExcept («+/2» captured argument)
     | _, _ => .error (.error (.atom "badarg"))
 ]
 

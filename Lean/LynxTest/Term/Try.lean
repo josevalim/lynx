@@ -65,7 +65,7 @@ theorem stacktrace_is_empty (exception : Exception) : exception.stacktrace = .ni
 theorem protected_effects_survive_failure :
     Result.run (Result.tryWith (do
       let _ ← «put/2» (.atom "key") (.atom "protected")
-      «throw/1» (.atom "failure"))
+      Result.ofExcept («throw/1» (.atom "failure")))
       Result.ok (fun exception => do
         let value ← «get/1» (.atom "key")
         pure (.tuple #[exception.classTerm, exception.reason, value]))) {} =
@@ -89,14 +89,14 @@ theorem cleanup_runs_on_success_and_failure :
 
 theorem cleanup_failure_overrides_previous_outcome :
     Result.tryWith (.ok (Term.integer 7))
-      (fun _ => «exit/1» (.atom "cleanup")) (fun _ => «exit/1» (.atom "cleanup")) =
+      (fun _ => Result.ofExcept («exit/1» (.atom "cleanup"))) (fun _ => Result.ofExcept («exit/1» (.atom "cleanup"))) =
       .error (.exit (.atom "cleanup")) ∧
     Result.tryWith (.error (.throw (.atom "failure")) : Result)
-      (fun _ => «exit/1» (.atom "cleanup")) (fun _ => «exit/1» (.atom "cleanup")) =
+      (fun _ => Result.ofExcept («exit/1» (.atom "cleanup"))) (fun _ => Result.ofExcept («exit/1» (.atom "cleanup"))) =
       .error (.exit (.atom "cleanup")) := by constructor <;> rfl
 
 private def failingTable : Term.FunTable := #[
-  .effectful fun _ _ => «throw/1» (.atom "dispatched")]
+  .effectful fun _ _ => Result.ofExcept («throw/1» (.atom "dispatched"))]
 
 theorem dispatched_exception_is_caught :
     Lynx.schedule (Result.tryWith (Term.apply (.function 0 0 #[]) #[])

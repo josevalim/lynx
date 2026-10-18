@@ -45,10 +45,10 @@ theorem isMember_exact :
 
 /-- A membership test agrees with the chain of comparisons it replaces. -/
 theorem isMember_agrees_with_chain (value : Term) :
-    Result.ok (Term.isMember value [.integer 1, .integer 2]) =
-      Result.orElse (Erlang.erlang.«=:=/2» value (.integer 1))
+    Except.ok (Term.isMember value [.integer 1, .integer 2]) =
+      Except.orElse (Erlang.erlang.«=:=/2» value (.integer 1))
         (Erlang.erlang.«=:=/2» value (.integer 2)) := by
-  simp only [Term.isMember_cons, Term.isMember_nil, Result.orElse_eq, Erlang.erlang.«=:=/2»]
+  simp only [Term.isMember_cons, Term.isMember_nil, Except.orElse_eq, Erlang.erlang.«=:=/2»]
   split <;> split <;> simp_all
 
 end LynxTest.Term.ShortCircuit

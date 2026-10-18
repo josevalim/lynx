@@ -33,7 +33,7 @@ theorem iodata_total_and_exact (input : Term) (bytes : ByteArray) (valid : Flatt
 
 private meta def binary (text : String) : Term := .bitstring text.toUTF8 0 (Term.Bitstring.valid_aligned _)
 
-private meta def rendered : Result → String
+private meta def rendered : Except Exception Term → String
   | .ok (.integer value) => toString value
   | .ok (.float value) =>
     match Erlang.erlang.«float_to_binary/2» (.float value) (.cons (.atom "short") .nil) with

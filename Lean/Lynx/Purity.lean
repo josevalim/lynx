@@ -137,9 +137,10 @@ public theorem Lynx.Result.IsPartial.guard_cases (computation : Lynx.Result)
 
 public meta section
 
-/-! Generate kernel-checked purity lemmas for translated functions.
-Each definition gets an ordinary `<name>_pure` theorem, registered with `simp`.
-Recursive definitions use their compiler-generated induction principle. -/
+/-! Generate kernel-checked partiality lemmas for translated functions that may
+not return. Pure functions return `Except`, so they need no lemmas. Each partial
+definition gets an ordinary `<name>_partial` theorem. Recursive definitions use
+their compiler-generated induction principle. -/
 namespace Lynx.Purity
 open Lean Meta Elab Tactic
 
@@ -152,22 +153,6 @@ private structure Predicate where
   terminals : List Name
   shared : Name
   rules : List (Name × Name)
-  /-- Lemmas of a stronger predicate that imply this one, and the implication. -/
-  stronger : Option (String × Name) := none
-
-private def purePredicate : Predicate where
-  name := ``Result.IsPure
-  command := "#lynx_pure"
-  property := "purity"
-  suffix := "_pure"
-  terminals := [``Result.ok, ``Result.error]
-  shared := ``Result.IsPure.shared
-  rules := [(``Bind.bind, ``Result.IsPure.bind), (``Result.bind, ``Result.IsPure.bind_explicit),
-    (``Result.guard, ``Result.IsPure.guard), (``Result.tryWith, ``Result.IsPure.tryWith),
-    (``Result.handle, ``Result.IsPure.handle), (``Result.orElse, ``Result.IsPure.orElse),
-    (``Result.andAlso, ``Result.IsPure.andAlso),
-    -- Bitstring extraction is defined later, with its rule.
-    (`Lynx.Term.Bitstring.extract, `Lynx.Result.IsPure.extract)]
 
 private def partialPredicate : Predicate where
   name := ``Result.IsPartial
@@ -180,8 +165,9 @@ private def partialPredicate : Predicate where
     (``Result.bind, ``Result.IsPartial.bind_explicit), (``Result.guard, ``Result.IsPartial.guard),
     (``Result.tryWith, ``Result.IsPartial.tryWith), (``Result.handle, ``Result.IsPartial.handle),
     (``Result.orElse, ``Result.IsPartial.orElse), (``Result.andAlso, ``Result.IsPartial.andAlso),
+    (``Result.ofExcept, ``Result.isPartial_ofExcept),
+    -- Bitstring extraction is defined later, with its rule.
     (`Lynx.Term.Bitstring.extract, `Lynx.Result.IsPartial.extract)]
-  stronger := some ("_pure", ``Result.IsPure.isPartial)
 
 -- Core's guard fallthroughs are applied lambdas. Abstract their continuation
 -- before beta reduction duplicates it into every match alternative.
@@ -221,9 +207,6 @@ private def functionLemma (predicate : Predicate) (head computation : Expr) :
   let applied (suffix : String) :=
     mkAppN (mkConst (lemmaName name suffix) head.constLevels!) computation.getAppArgs
   if ← realizeLemma (lemmaName name predicate.suffix) then return some (applied predicate.suffix)
-  if let some (suffix, implication) := predicate.stronger then
-    if ← realizeLemma (lemmaName name suffix) then
-      return some (← mkAppM implication #[applied suffix])
   return none
 
 -- Inspect the syntax before applying purity lemmas. Blind `apply`/`intro` can
@@ -279,8 +262,6 @@ private def lemmaStep (predicate : Predicate) : TacticM Unit :=
       return []
     throwError "no generated lemma"
 
-elab "lynx_pure_share" : tactic => shareStep purePredicate
-elab "lynx_pure_step" : tactic => structuralStep purePredicate
 elab "lynx_partial_share" : tactic => shareStep partialPredicate
 elab "lynx_partial_step" : tactic => structuralStep partialPredicate
 elab "lynx_partial_lemma" : tactic => lemmaStep partialPredicate
@@ -307,7 +288,7 @@ private def isResultType (type : Expr) : MetaM Bool := do
 private def pureDefinitionId (declaration : TSyntax `command) : Command.CommandElabM Syntax := do
   let inner := declaration.raw.getArg 1
   unless inner.getKind == ``Lean.Parser.Command.definition do
-    throwErrorAt declaration "#lynx_pure requires `def` declarations"
+    throwErrorAt declaration "#lynx_partial requires `def` declarations"
   let declId := inner.getArg 1
   let id := if declId.isIdent then declId else declId.getArg 0
   unless id.isIdent do
@@ -319,7 +300,7 @@ private def predicateType (predicate : Predicate) (function : Name) : MetaM Expr
   let functionExpr := mkConst function (info.levelParams.map Level.param)
   forallTelescopeReducing info.type fun arguments resultType => do
     unless ← isResultType resultType do
-      throwError "#lynx_pure requires a definition returning `Result`"
+      throwError "#lynx_partial requires a definition returning `Result`"
     let proposition ← mkAppM predicate.name
       #[mkAppN functionExpr arguments]
     mkForallFVars arguments proposition
@@ -354,19 +335,12 @@ private def rule (predicate : Predicate) (name : String) : Name :=
   predicate.name ++ Name.mkSimple name
 
 /-- Structural proof steps for a definition body, given its predicate. -/
-private def bodySteps (predicate : Predicate) : TermElabM (TSyntax `tactic) :=
-  if predicate.name == ``Result.IsPartial then
-    `(tactic| (lynx_generalize_tables; repeat' first
-      | lynx_partial_share
-      | lynx_partial_step
-      | split
-      | simp_all))
-  else
-    `(tactic| repeat' first
-      | lynx_pure_share
-      | lynx_pure_step
-      | split
-      | simp_all)
+private def bodySteps : TermElabM (TSyntax `tactic) :=
+  `(tactic| (lynx_generalize_tables; repeat' first
+    | lynx_partial_share
+    | lynx_partial_step
+    | split
+    | simp_all))
 
 /-- Admissibility of `fun f => ∀ x₁ … xₙ, (f x₁ … xₙ).IsPartial`, built one
 argument at a time so that unification never abstracts an application. -/
@@ -476,12 +450,9 @@ private def singleProof (predicate : Predicate) (function : Name) (method : Meth
   let parameters := (List.range arity).toArray.map fun i => mkIdent (Name.mkSimple s!"_pure_arg_{i}")
   let introduce ← if parameters.isEmpty then `(tactic| skip)
     else `(tactic| intro $parameters:ident*)
-  let steps ← bodySteps predicate
+  let steps ← bodySteps
   let proofSyntax ← match method with
-    | .fixpoint =>
-      unless predicate.name == ``Result.IsPartial do
-        throwError "a partial fixed point cannot be proved pure"
-      fixpointProof function arity
+    | .fixpoint => fixpointProof function arity
     | _ =>
       `(by
         $introduce:tactic
@@ -553,10 +524,8 @@ private def jointProof (predicate : Predicate) (group : Group) (guard : Name) :
   let bind := mkIdent (rule predicate "bind_return")
   let bindExplicit := mkIdent (rule predicate "bind_return_explicit")
   let extract := mkIdent (rule predicate "extract")
-  let lemmaStep ← if predicate.name == ``Result.IsPartial then `(tactic| lynx_partial_lemma)
-    else `(tactic| fail)
-  let shareStep ← if predicate.name == ``Result.IsPartial then `(tactic| lynx_partial_share)
-    else `(tactic| lynx_pure_share)
+  let lemmaStep ← `(tactic| lynx_partial_lemma)
+  let shareStep ← `(tactic| lynx_partial_share)
   let inductionName := functions[0]! ++
     if functions.size == 1 then `induct else `mutual_induct
   let induction := mkIdent inductionName
@@ -629,21 +598,13 @@ private def memberProof (predicate : Predicate) (group : Group) (i : Nat) (joint
 /-! ### Lemmas generated on demand
 
 When importers can unfold a definition, the commands only record how to prove
-each lemma, unless `lynx.lazyPurity` is disabled. Its reserved name is realized when first used: by a reference, by the purity steps
-of a caller, or by the simprocs below. Recursive groups realize one joint proof
+each lemma. Its reserved name is realized when first used: by a reference, by
+the partiality steps of a caller, or by the simproc below. Recursive groups realize one joint proof
 for their members. Realizations run in the environment of the definition, using
 its recorded heartbeat limit, so they do not depend on where they are requested. -/
 
-register_option lynx.lazyPurity : Bool := {
-  defValue := true
-  descr := "generate `#lynx_pure` and `#lynx_partial` lemmas when first used. \
-    Eager lemmas are also simp rules for preprocessing well-founded recursion, \
-    which the runtime library needs for the operations other definitions call."
-}
-
 private structure Entry where
   function : Name
-  isPartial : Bool
   method : Method
   maxHeartbeats : Nat
   deriving Inhabited
@@ -657,20 +618,12 @@ private initialize entriesExt : SimplePersistentEnvExtension Entry (NameMap Entr
     asyncMode := .local
   }
 
-private def predicateOf (isPartial : Bool) : Predicate :=
-  if isPartial then partialPredicate else purePredicate
-
 /-- The recorded definition whose lemma has the given name. -/
 private def lemmaEntry? (env : Lean.Environment) (name : Name) : Option Entry := do
   let .str namespace_ string := name | none
-  let entries := entriesExt.getState env
-  let find (isPartial : Bool) : Option Entry := do
-    let suffix := (predicateOf isPartial).suffix
-    guard (string.endsWith suffix)
-    let entry ← entries.find? (.str namespace_ (string.dropEnd suffix.length).toString)
-    guard (entry.isPartial == isPartial)
-    pure entry
-  find false <|> find true
+  let suffix := partialPredicate.suffix
+  guard (string.endsWith suffix)
+  (entriesExt.getState env).find? (.str namespace_ (string.dropEnd suffix.length).toString)
 
 private def withRecordedOptions (entry : Entry) (x : MetaM α) : MetaM α :=
   withTheReader Core.Context (fun ctx =>
@@ -691,7 +644,7 @@ private def withoutEntries (functions : Array Name) (x : MetaM α) : MetaM α :=
   x
 
 private def realizeEntry (entry : Entry) : MetaM Unit := do
-  let predicate := predicateOf entry.isPartial
+  let predicate := partialPredicate
   let name := lemmaName entry.function predicate.suffix
   match entry.method with
   | .group declared guard =>
@@ -746,7 +699,6 @@ private def purityProc (predicate : Predicate) : Simp.Simproc := fun e => do
   let some proof ← functionLemma predicate head computation | return .continue
   return .done { expr := mkConst ``True, proof? := some (← mkEqTrue proof) }
 
-simproc ↓ lynxIsPure (Result.IsPure _) := purityProc purePredicate
 simproc ↓ lynxIsPartial (Result.IsPartial _) := purityProc partialPredicate
 
 /-- Record or prove the lemmas of elaborated definitions. A recursive group gets
@@ -762,12 +714,10 @@ private def generate (predicate : Predicate) (declaration : TSyntax `command)
     match exports.find? function with
     | some (.defnInfo _) => true
     | _ => false
-  if exported && lynx.lazyPurity.get (← getOptions) then
+  if exported then
     let maxHeartbeats := maxHeartbeats.get (← getOptions)
     for (function, method) in methods do
-      modifyEnv (entriesExt.addEntry · {
-        function, method, maxHeartbeats
-        isPartial := predicate.name == ``Result.IsPartial })
+      modifyEnv (entriesExt.addEntry · { function, method, maxHeartbeats })
       Command.liftCoreM <| installReservedNames (lemmaName function predicate.suffix)
     return
   let mut joints : Std.HashMap Name Expr := {}
@@ -801,7 +751,7 @@ private def elaborateWith (predicate : Predicate) (doc? : Option (TSyntax ``Pars
     let ids ← declarations.mapM pureDefinitionId
     Command.elabCommand declaration
     let functions ← ids.mapM resolveGlobalConstNoOverload
-    if predicate.name == ``Result.IsPartial && (← Command.liftCoreM <| isFixpoint functions[0]!) then
+    if ← Command.liftCoreM <| isFixpoint functions[0]! then
       generate predicate declaration (functions.map (·, .fixpoint))
       return
     -- Check the group now, rather than when its lemmas are first used.
@@ -823,20 +773,15 @@ private def elaborateWith (predicate : Predicate) (doc? : Option (TSyntax ``Pars
   let function ← resolveGlobalConstNoOverload id
   let fixpoint ← Command.liftCoreM <| isFixpoint function
   let method ← if fixpoint then
-      unless predicate.name == ``Result.IsPartial do
-        throwError "a partial fixed point cannot be proved pure"
       pure .fixpoint
     else if ← Command.liftCoreM (isRecursiveDefinition function) then
       pure (.group #[function] (rule predicate "guard_cases"))
     else pure .body
   generate predicate declaration #[(function, method)]
 
-elab doc?:(docComment)? "#lynx_pure " declaration:command : command =>
-  elaborateWith purePredicate doc? declaration
-
-/-- Like `#lynx_pure`, for definitions that may not return: their termination
-suffixes or cutoffs make them exhausted on some inputs. Each generated
-`<name>_partial` theorem states that the definition makes no runtime requests. -/
+/-- Elaborate definitions that may not return, because their termination suffixes
+or cutoffs make them exhausted on some inputs, but make no other runtime requests.
+Each generated `<name>_partial` theorem states that property. -/
 elab doc?:(docComment)? "#lynx_partial " declaration:command : command =>
   -- Partial fixed points unfold whole bodies at once, and translated bodies can
   -- have hundreds of binds and matches. The limit bounds elaboration only.

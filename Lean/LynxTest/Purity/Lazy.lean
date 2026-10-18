@@ -13,21 +13,21 @@ requests the remaining ones from another module. -/
 namespace LynxTest.Purity.Lazy
 open Lynx
 
-#lynx_pure def lazyClassify (input : Term) : Result :=
+#lynx_partial def lazyClassify (input : Term) : Result :=
   match input with
   | .integer _ => .ok (.atom "integer")
   | _ => .error (.error (.atom "badarg"))
 
-#lynx_pure def lazyClassifyTwice (input : Term) : Result := do
+#lynx_partial def lazyClassifyTwice (input : Term) : Result := do
   let _ ← lazyClassify input
   lazyClassify input
 
 #lynx_partial def «lazyFind/2» (_0 : Term) (_1 : Term) : Result := do
-  let _2 ← Erlang.erlang.«</2» _0 _1
+  let _2 ← Result.ofExcept (Erlang.erlang.«</2» _0 _1)
   match _2 with
   | .atom "true" => pure _1
   | _ => do
-    let _3 ← Erlang.erlang.«+/2» _1 (.integer 4)
+    let _3 ← Result.ofExcept (Erlang.erlang.«+/2» _1 (.integer 4))
     «lazyFind/2» _0 _3
 partial_fixpoint monotonicity by
   intro f g h
@@ -47,7 +47,7 @@ partial_fixpoint monotonicity by
     «lazyEach/1» tail
   | _ => pure .nil
 
-#lynx_pure mutual
+#lynx_partial mutual
   def lazyRotateFirst (left right : Term) : Result :=
     match left with
     | .cons _ tail => lazyRotateThird tail right
@@ -63,17 +63,17 @@ partial_fixpoint monotonicity by
 end
 
 -- Structural recursion over tuple fields, like gb_trees node counts.
-#lynx_pure def lazyNodes (_0 : Term) : Result :=
+#lynx_partial def lazyNodes (_0 : Term) : Result :=
   match _0 with
   | .atom "nil" => pure (.integer 0)
   | .tuple ⟨[_, left, right]⟩ => do
     let a ← lazyNodes left
     let b ← lazyNodes right
-    Erlang.erlang.«+/2» a b
+    Result.ofExcept (Erlang.erlang.«+/2» a b)
   | _ => .error (.error (.atom "function_clause"))
 
 -- Well-founded recursion, where a call passes its parameter unchanged.
-#lynx_pure mutual
+#lynx_partial mutual
   def lazyCheck : Term → Term → Result
     | .cons x xs, depth => lazyItems (.cons x xs) depth
     | _, _ => .ok (.atom "true")
@@ -88,33 +88,34 @@ end
 
 -- Nothing is proved until a lemma is requested.
 run_meta do
-  for name in [`lazyClassify_pure, `lazyClassifyTwice_pure, `lazyRotateFirst_pure] do
+  for name in [`lazyClassify_partial, `lazyClassifyTwice_partial, `lazyRotateFirst_partial] do
     if (← Lean.getEnv).contains (`LynxTest.Purity.Lazy ++ name) then
       throwError "{name} was proved eagerly"
 
 -- Callers realize the lemmas of their callees.
-example (input : Term) : Result.IsPure (lazyClassifyTwice input) := by simp
-example (input : Term) : Result.IsPure (lazyClassify input) := lazyClassify_pure input
+example (input : Term) : Result.IsPartial (lazyClassifyTwice input) := by simp
+example (input : Term) : Result.IsPartial (lazyClassify input) := lazyClassify_partial input
 example (a b : Term) : Result.IsPartial («lazyFind/2» a b) := «lazyFind/2_partial» a b
-example (left right : Term) : Result.IsPure (lazyRotateSecond left right) := by simp
+example (left right : Term) : Result.IsPartial (lazyRotateSecond left right) := by simp
 
-example (t : Term) : Result.IsPure (lazyNodes t) := lazyNodes_pure t
+example (t : Term) : Result.IsPartial (lazyNodes t) := lazyNodes_partial t
 
--- `simp_all` may visit purity predicates that are not fully applied.
+-- `simp_all` may visit partiality predicates that are not fully applied.
 example (root output : Term) (returned : lazyNodes root = .ok output) : True := by
-  have pureCases (computation : Result) (pure : computation.IsPure) :
-      (∃ value, computation = .ok value) ∨ (∃ exception, computation = .error exception) := by
-    cases computation <;> simp_all [Result.IsPure]
+  have partialCases (computation : Result) (partiality : computation.IsPartial) :
+      computation = .exhausted ∨ (∃ value, computation = .ok value) ∨
+        (∃ exception, computation = .error exception) := by
+    cases computation <;> simp_all [Result.IsPartial]
   induction root using lazyNodes.induct generalizing output with
   | case1 => trivial
   | case2 => trivial
   | case3 => simp_all [lazyNodes]
 
 -- An impure definition fails when its lemma is requested.
-#lynx_pure def lazyReads : Result := .get fun _ => .ok .nil
+#lynx_partial def lazyReads : Result := .get fun _ => .ok .nil
 
 #guard_msgs (drop error) in
-example : Result.IsPure lazyReads := lazyReads_pure
+example : Result.IsPartial lazyReads := lazyReads_partial
 
 end LynxTest.Purity.Lazy
 

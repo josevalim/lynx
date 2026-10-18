@@ -39,13 +39,15 @@ Theorem nodes contain name, named params, an optional requires helper, an ensure
 and a proof object. Helpers are ordinary Result computations called with the theorem's
 parameters. Each helper carries its purity: `pure`, `partial`, `sequential`, or `concurrent`,
 which selects how it is stated to return true. Pure and partial helpers are stated directly
-as `= .ok true`. Other helpers are stated through
+as `= .ok true`, in `Except` and `Result` respectively. Other helpers are stated through
 `Lynx.run` with depth 100, except concurrent ones, which are stated through `Lynx.schedule`:
 the requires helper under some schedule, and the ensures helper under every schedule.
 An absent requires helper means no assumption. An optional table names the program's
 function table; it defaults to empty. Proofs are elaborated against these statements as given.
-Definitions, mutual groups, and table entries carry the same purity. Pure definitions are
-wrapped in `#lynx_pure`, and partial ones in `#lynx_partial`, generating their lemmas.
+Definitions, mutual groups, and table entries carry the same purity. Pure definitions return
+`Except Lynx.Exception Lynx.Term`, and partial ones are wrapped in `#lynx_partial`,
+generating their lemmas. Calls carry their callee's purity, and other computations embed
+pure callees with `Result.ofExcept`.
 A proof object contains tactic source, nonnegative indentation, and a span locating
 the first character of that source. The producer handles host delimiters and line offsets. Proof syntax keeps
 its own source ranges, mapped to the supplied host locations using a synthetic file map.
@@ -120,8 +122,46 @@ private structure DecodeState where
   literals : Std.HashSet String := {}
   /-- Definitions of pooled literals, emitted before the command using them. -/
   pendingLiterals : Array (TSyntax `command) := #[]
+  /-- Whether the computation being decoded is pure, so that it returns `Except`. -/
+  pureContext : Bool := false
+  /-- The purity of each definition in this file, by `name/arity`. -/
+  purities : Std.HashMap String String := {}
 
 private abbrev DecodeM := ReaderT Lean.Environment (StateT DecodeState (Except String))
+
+/-- Pure computations return `Except`, and the others `Result`. -/
+private def contextual (pureName resultName : Name) : DecodeM Ident := do
+  return mkIdent (if (← get).pureContext then pureName else resultName)
+
+/-- The result type of the computation being decoded, for values of a type. -/
+private def resultTypeOf (value : TSyntax `term) : DecodeM (TSyntax `term) := do
+  if (← get).pureContext then
+    let except := mkIdent ``Except
+    let exception := mkIdent ``Lynx.Exception
+    return Unhygienic.run `($except $exception $value)
+  let result := mkIdent ``Lynx.Result
+  return Unhygienic.run `($result $value)
+
+/-- Embed a pure computation in the computation being decoded. -/
+private def embedPure (computation : TSyntax `term) : DecodeM (TSyntax `term) := do
+  if (← get).pureContext then return computation
+  let ofExcept := mkIdent ``Lynx.Result.ofExcept
+  return Unhygienic.run `($ofExcept $computation)
+
+/-- Decode a purity level: `pure`, `partial`, `sequential`, or `concurrent`. -/
+private def purity (j : Json) (key : String) : DecodeM String := do
+  let level ← str j key
+  unless ["pure", "partial", "sequential", "concurrent"].contains level do
+    throw s!"{key} must be pure, partial, sequential, or concurrent"
+  return level
+
+/-- Decode in a context of the given purity, restoring the enclosing one. -/
+private def withPurity (pure : Bool) (action : DecodeM α) : DecodeM α := do
+  let previous := (← get).pureContext
+  modify fun s => { s with pureContext := pure }
+  let result ← action
+  modify fun s => { s with pureContext := previous }
+  return result
 
 private def span (map : FileMap) (j : Json) (parent : Span := {}) : DecodeM Span := do
   let xs ← arr j "span"
@@ -202,16 +242,16 @@ private def product (values : Array (TSyntax `term)) : DecodeM (TSyntax `term) :
 elaborating matches that capture them. Keep the result polymorphic for Core's
 zero and multiple return values, and use applied lambdas for recursive proofs. -/
 private def withContinuation (name : TSyntax `ident) (body next : TSyntax `term) :
-    TSyntax `term := Id.run do
+    DecodeM (TSyntax `term) := do
   let valueType := mkIdent `lynxValue
   let bodyName := mkIdent `lynxBody
   let nextName := mkIdent `lynxNext
   let unitType := mkIdent ``Unit
-  let resultType := mkIdent ``Lynx.Result
+  let resultType ← resultTypeOf valueType
   return Unhygienic.run `(
     (fun {$valueType : Type}
-        ($bodyName : ($unitType → $resultType $valueType) → $resultType $valueType)
-        ($nextName : $unitType → $resultType $valueType) => $bodyName $nextName)
+        ($bodyName : ($unitType → $resultType) → $resultType)
+        ($nextName : $unitType → $resultType) => $bodyName $nextName)
       (fun $name => $body) (fun (_ : $unitType) => $next))
 
 private partial def catchAllPattern (j : Json) : Except String Bool := do
@@ -771,15 +811,16 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
           pure (Unhygienic.run `($build $value $size $unit $little))
       pure (withSpan si.info body)
     let empty := Unhygienic.run `(Lynx.Term.bitstring ⟨#[]⟩ 0 (by decide))
-    let ok := mkIdent ``Lynx.Result.ok
+    let ok := mkIdent ``Except.ok
     let append := mkIdent ``Lynx.Term.Bitstring.append
-    let bind := mkIdent ``Lynx.Result.bind
+    let bind := mkIdent ``Except.bind
     let mut body := segments.back?.getD (Unhygienic.run `($ok $empty))
     -- All segment operands are Core values: preserve segment validation order.
+    -- Construction is pure, so other computations embed it.
     for segment in segments.toList.dropLast.reverse do
       body := Unhygienic.run `($bind $segment (fun lynxBinarySegment =>
         $bind $body (fun lynxBinaryTail => $append lynxBinarySegment lynxBinaryTail)))
-    pure body
+    embedPure body
   | "nil" => do
     fields j ["kind", "span"]
     pure ⟨(mkIdent ``Lynx.Term.nil).raw⟩
@@ -850,14 +891,28 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     pure (Unhygienic.run `($ctor [$entries,*]))
   | "local_call" | "remote_call" => do
     fields j (if kind == "local_call" then ["kind", "name", "args", "span"]
-      else ["kind", "module", "name", "args", "span"])
+      else ["kind", "module", "name", "args", "purity", "span"])
     let args ← (← arr j "args").mapM (term map info false)
     let name := functionName (← str j "name") args.size
     let fn ← if kind == "local_call" then pure name else do
       let namespaceId ← identifier (← str j "module")
       pure (mkIdent (namespaceId.getId ++ name.getId))
-    if args.isEmpty then pure ⟨fn.raw⟩
-    else pure (Unhygienic.run `($fn $args*))
+    -- Pure callees return `Except`, which other computations embed.
+    let level ← if kind == "local_call" then
+        let key := s!"{← str j "name"}/{args.size}"
+        match (← get).purities[key]? with
+        | some level => pure level
+        | none => throw s!"unknown local function {key}"
+      else do
+        -- Calls to function values are resolved later, but are never pure.
+        let level ← str j "purity"
+        unless ["pure", "partial", "sequential", "dynamic", "concurrent"].contains level do
+          throw "purity must be pure, partial, sequential, dynamic, or concurrent"
+        pure level
+    if (← get).pureContext && level != "pure" then
+      throw s!"pure computations cannot call {level} functions"
+    let call := if args.isEmpty then ⟨fn.raw⟩ else Unhygienic.run `($fn $args*)
+    if level == "pure" then embedPure call else pure call
   | "fun_call" => do
     fields j ["kind", "function", "args", "span"]
     let fn ← term map info false (← field j "function")
@@ -870,7 +925,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let continuation ← term map info false (← field j "continuation")
     let body ← term map info false (← field j "body")
     -- Use the same applied-lambda form as match fallthrough continuations.
-    pure (withContinuation label body continuation)
+    withContinuation label body continuation
   | "jump" => do
     fields j ["kind", "label", "span"]
     let label := mkIdent (Name.mkSimple s!"lynxLabel_{← str j "label"}")
@@ -909,20 +964,21 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       | "exit" => pure (mkIdent ``Lynx.Exception.exit)
       | other => throw s!"unsupported exception class '{other}'"
     let reason ← term map info false (← field j "reason")
-    let error := mkIdent ``Lynx.Result.error
+    let error ← contextual ``Except.error ``Lynx.Result.error
     pure (Unhygienic.run `($error ($ctor $reason)))
   | "in" => do
     fields j ["kind", "value", "elements", "span"]
     let value ← term map info false (← field j "value")
     let elements ← (← arr j "elements").mapM (term map info false)
     let member := mkIdent ``Lynx.Term.isMember
-    let ok := mkIdent ``Lynx.Result.ok
+    let ok ← contextual ``Except.ok ``Lynx.Result.ok
     pure (Unhygienic.run `($ok ($member $value [$elements,*])))
   | "orelse" | "andalso" => do
     fields j ["kind", "left", "right", "span"]
     let left ← term map info false (← field j "left")
     let right ← term map info false (← field j "right")
-    let combinator := mkIdent (if kind == "orelse" then ``Lynx.Result.orElse else ``Lynx.Result.andAlso)
+    let combinator ← if kind == "orelse" then contextual ``Lynx.Except.orElse ``Lynx.Result.orElse
+      else contextual ``Lynx.Except.andAlso ``Lynx.Result.andAlso
     pure (Unhygienic.run `($combinator $left $right))
   | "nonzero_width" => do
     fields j ["kind", "size", "body", "span"]
@@ -931,8 +987,9 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let zero := mkIdent ``Lynx.Term.Bitstring.zeroWidth
     -- The named check lets termination proofs use the nonzero width.
     let nonzero := mkIdent `lynxNonzero
+    let error ← contextual ``Except.error ``Lynx.Result.error
     pure (Unhygienic.run `(if $nonzero:ident : $zero $size = Bool.true then
-      Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "badarg")) else $body))
+      $error (Lynx.Exception.error (Lynx.Term.atom "badarg")) else $body))
   | "try" => do
     fields j ["kind", "computation", "vars", "body", "exception_vars", "handler", "span"]
     let vars ← (← arr j "vars").mapM (param map info)
@@ -948,7 +1005,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let reasonVar := evars[1]!
     let exceptionClass := mkIdent ``Lynx.Exception.classTerm
     let reason := mkIdent ``Lynx.Exception.reason
-    let tryWith := mkIdent ``Lynx.Result.tryWith
+    let tryWith ← contextual ``Lynx.Except.tryWith ``Lynx.Result.tryWith
     pure (Unhygienic.run `($tryWith $computation (fun $binder:term => $body)
       (fun $exception:ident =>
         let $classVar := $exceptionClass $exception:ident
@@ -958,14 +1015,14 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     fields j ["kind", "exception", "span"]
     let exception ← term map info false (← field j "exception")
     let stacktrace := mkIdent ``Lynx.Exception.stacktrace
-    let ok := mkIdent ``Lynx.Result.ok
+    let ok ← contextual ``Except.ok ``Lynx.Result.ok
     pure (Unhygienic.run `($ok ($stacktrace $exception)))
   | "reraise" => do
     fields j ["kind", "exception", "reason", "span"]
     let exception ← term map info false (← field j "exception")
     let reason ← term map info false (← field j "reason")
     let withReason := mkIdent ``Lynx.Exception.withReason
-    let error := mkIdent ``Lynx.Result.error
+    let error ← contextual ``Except.error ``Lynx.Result.error
     pure (Unhygienic.run `($error ($withReason $exception $reason)))
   | "raise_dynamic" => do
     fields j ["kind", "class", "reason", "exception", "span"]
@@ -980,10 +1037,10 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
         | "exit" => some (mkIdent ``Lynx.Exception.exit)
         | _ => none
       if let some ctor := ctor? then
-        let error := mkIdent ``Lynx.Result.error
+        let error ← contextual ``Except.error ``Lynx.Result.error
         return withSpan info.info (Unhygienic.run `($error ($ctor $reason)))
-    let error := mkIdent ``Lynx.Result.error
-    let ok := mkIdent ``Lynx.Result.ok
+    let error ← contextual ``Except.error ``Lynx.Result.error
+    let ok ← contextual ``Except.ok ``Lynx.Result.ok
     let atom := mkIdent ``Lynx.Term.atom
     let errorClass := mkIdent ``Lynx.Exception.error
     let throwClass := mkIdent ``Lynx.Exception.throw
@@ -1139,7 +1196,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       let tuple := mkIdent ``Lynx.Term.tuple
       let value ← if unmatched.size == 1 then pure unmatched[0]!
         else pure (Unhygienic.run `($tuple #[$unmatched,*]))
-      let error := mkIdent ``Lynx.Result.error
+      let error ← contextual ``Except.error ``Lynx.Result.error
       let exception := mkIdent ``Lynx.Exception.error
       let atom := mkIdent ``Lynx.Term.atom
       let body := Unhygienic.run `($error ($exception ($tuple #[$atom "case_clause", $value])))
@@ -1153,8 +1210,9 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       else Unhygienic.run `(_)
     if nests.contains true then
       let fallback := mkIdent `lynxMatchNext
-      let guardCall := mkIdent ``Lynx.Result.guard
-      let mut result := Unhygienic.run `(Lynx.Result.error
+      let guardCall ← contextual ``Lynx.Except.guard ``Lynx.Result.guard
+      let error ← contextual ``Except.error ``Lynx.Result.error
+      let mut result := Unhygienic.run `($error
         (Lynx.Exception.error (Lynx.Term.atom "function_clause")))
       let mut stop := cases.size
       while stop > 0 do
@@ -1186,7 +1244,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
                 | $[$kept:term],* => $branch | $[$keptWildcards:term],* => $fallback ())
             -- An applied lambda shares the continuation without leaving a recursive
             -- let-bound thunk in Lean's generated induction principle.
-            result := withContinuation fallback matched result
+            result ← withContinuation fallback matched result
           | _ => throw "invalid match alternative"
           stop := i
         else
@@ -1296,13 +1354,6 @@ private structure TableEntry where
   adapter : TSyntax `term
   isPure : Bool
 
-/-- Decode a purity level: `pure`, `partial`, `sequential`, or `concurrent`. -/
-private def purity (j : Json) (key : String) : DecodeM String := do
-  let level ← str j key
-  unless ["pure", "partial", "sequential", "concurrent"].contains level do
-    throw s!"{key} must be pure, partial, sequential, or concurrent"
-  return level
-
 private def tableEntry (map : FileMap) (info : Span) (entry : Json) : DecodeM TableEntry := do
   fields entry ["body", "captures", "args", "purity", "span"]
   let entryInfo ← span map entry info
@@ -1310,9 +1361,8 @@ private def tableEntry (map : FileMap) (info : Span) (entry : Json) : DecodeM Ta
   let argumentIds ← (← arr entry "args").mapM (param map entryInfo)
   let captures := captureIds.map fun id => (⟨id.raw⟩ : TSyntax `term)
   let arguments := argumentIds.map fun id => (⟨id.raw⟩ : TSyntax `term)
-  let body ← term map entryInfo false (← field entry "body")
   let isPure := (← purity entry "purity") == "pure"
-  let toExcept := mkIdent ``Lynx.Result.toExcept
+  let body ← withPurity isPure <| term map entryInfo false (← field entry "body")
   let exceptError := mkIdent ``Except.error
   let resultError := mkIdent ``Lynx.Result.error
   let exceptionError := mkIdent ``Lynx.Exception.error
@@ -1322,7 +1372,7 @@ private def tableEntry (map : FileMap) (info : Span) (entry : Json) : DecodeM Ta
   let adapter ← if isPure then
     pure (Unhygienic.run `(fun $capturesId:ident $argsId:ident =>
       match $capturesId:ident, $argsId:ident with
-      | #[$captures,*], #[$arguments,*] => $toExcept $body (by simp)
+      | #[$captures,*], #[$arguments,*] => $body
       | _, _ => $exceptError ($exceptionError ($atom "badarg"))))
   else
     pure (Unhygienic.run `(fun $capturesId:ident $argsId:ident =>
@@ -1391,8 +1441,10 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     -- Each helper is stated as strongly as its purity allows: directly when it
     -- makes no runtime requests, through `Lynx.run` when it needs the table or
     -- an environment, and through `Lynx.schedule` when it needs scheduler choices.
-    let direct (computation : TSyntax `term) : TSyntax `term :=
-      Unhygienic.run `($computation = $resultOk $trueTerm)
+    let exceptOk := mkIdent ``Except.ok
+    let direct (computation : TSyntax `term) (level : String) : TSyntax `term :=
+      if level == "pure" then Unhygienic.run `($computation = $exceptOk $trueTerm)
+      else Unhygienic.run `($computation = $resultOk $trueTerm)
     let runs (computation : TSyntax `term) : TSyntax `term :=
       Unhygienic.run `($run $computation $table 100 = $ok $trueTerm)
     let schedules (computation : TSyntax `term) : TSyntax `term :=
@@ -1403,13 +1455,13 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
       | none => binders
       | some (requires, level) =>
         let statement := match level with
-          | "pure" | "partial" => direct requires
+          | "pure" | "partial" => direct requires level
           | "concurrent" => Unhygienic.run `(∃ $schedule:ident : List $scheduleType, $(schedules requires))
           | _ => runs requires
         binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $statement)))
     -- A direct expectation implies it holds when run, under every schedule.
     let (binders, goal) := match ensuresPurity with
-      | "pure" | "partial" => (binders, direct ensures)
+      | "pure" | "partial" => (binders, direct ensures ensuresPurity)
       | "concurrent" =>
         (binders.push (Unhygienic.run `(bracketedBinder| ($schedule : List $scheduleType))),
           schedules ensures)
@@ -1420,9 +1472,11 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     let params ← (← arr j "params").mapM (param map info)
     let name := functionName (← str j "name") params.size
     let termType := mkIdent ``Lynx.Term
-    let resultType := mkIdent ``Lynx.Result
+    let isPure := (← purity j "purity") == "pure"
+    let resultType ← if isPure then withPurity true (resultTypeOf termType)
+      else pure ⟨(mkIdent ``Lynx.Result).raw⟩
     let binders := params.map fun p => Unhygienic.run `(bracketedBinder| ($p : $termType))
-    let body ← term map info false (← field j "body")
+    let body ← withPurity isPure <| term map info false (← field j "body")
     let declaration := Unhygienic.run `(def $name $binders:bracketedBinder* : $resultType := $body)
     -- A simple definition has a declValSimple containing :=, body, suffix, and where.
     let attach (suffix : Syntax) : TSyntax `command :=
@@ -1453,9 +1507,9 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {})
     | .error _, .error _ => pure declaration
   | _ => throw s!"unsupported command kind '{kind}'"
   let level ← if kind ∈ ["def", "mutual"] then purity j "purity" else pure "sequential"
-  -- A mutual group gets one joint purity proof, rather than wrapping its members.
+  -- Pure definitions return `Except`, so only partial ones need a proof. A
+  -- mutual group gets one joint proof, rather than wrapping its members.
   let result := if !wrapPurity then result else match level with
-    | "pure" => Unhygienic.run `(#lynx_pure $result:command)
     | "partial" => Unhygienic.run `(#lynx_partial $result:command)
     | _ => result
   return withSpan info.info result
@@ -1503,19 +1557,15 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
     let value := mkIdent `value
     let natType := mkIdent ``Nat
     let ok := mkIdent ``Lynx.Result.ok
+    let ofExcept := mkIdent ``Lynx.Result.ofExcept
     let lemma ← if entry.isPure then
       let reduce := mkIdent ``Lynx.Result.resolve_apply_pure
-      let ofExcept := mkIdent ``Lynx.Result.ofExcept
-      let toExcept := mkIdent ``Lynx.Result.toExcept
-      let cancel := mkIdent ``Lynx.Result.ofExcept_toExcept
       pure (Unhygienic.run `(@[simp↓] theorem $name {$alpha:ident : Type} ($depth:ident : $natType)
         $binders:bracketedBinder* ($next:ident : $termType → $resultType $alpha:ident) :
         $resolve $table $depth:ident ($apply ($function $id $arity #[$captures,*]) #[$arguments,*] >>= $next:ident) =
-          $resolve $table $depth:ident ($body >>= $next:ident) := by
-        rw [$reduce $table $depth:ident $id $arity #[$captures,*] #[$arguments,*] $adapter $next:ident
-          (by rfl) (by rfl)]
-        change $resolve $table $depth:ident ($ofExcept ($toExcept $body (by simp)) >>= $next:ident) = _
-        rw [$cancel $body]))
+          $resolve $table $depth:ident ($ofExcept $body >>= $next:ident) :=
+        $reduce $table $depth:ident $id $arity #[$captures,*] #[$arguments,*] $adapter $next:ident
+          (by rfl) (by rfl)))
     else
       let reduce := mkIdent ``Lynx.Result.resolve_apply_effectful
       let resolveBind := mkIdent ``Lynx.Result.resolve_bind
@@ -1535,7 +1585,7 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
       pure (Unhygienic.run `(@[simp↓] theorem $explicitName {$alpha:ident : Type} ($depth:ident : $natType)
         $binders:bracketedBinder* ($next:ident : $termType → $resultType $alpha:ident) :
         $resolve $table $depth:ident ($bind ($apply ($function $id $arity #[$captures,*]) #[$arguments,*]) $next:ident) =
-          $resolve $table $depth:ident ($bind $body $next:ident) := by
+          $resolve $table $depth:ident ($bind ($ofExcept $body) $next:ident) := by
         exact $name $depth:ident $parameters* $next:ident))
     else
       pure (Unhygienic.run `(@[simp↓] theorem $explicitName {$alpha:ident : Type} ($depth:ident : $natType)
@@ -1547,8 +1597,9 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
     let reduction ← if entry.isPure then
       pure (Unhygienic.run `(@[simp] theorem $callName ($depth:ident : $natType)
         $binders:bracketedBinder* :
-        $resolve $table $depth:ident ($apply ($function $id $arity #[$captures,*]) #[$arguments,*]) = $body := by
-        simpa only [($bindOk), ($resolvePure $table $depth:ident $body (by simp))] using $name $depth:ident $parameters* (fun $value:ident => $ok $value:ident)))
+        $resolve $table $depth:ident ($apply ($function $id $arity #[$captures,*]) #[$arguments,*]) =
+          $ofExcept $body := by
+        simpa only [($bindOk), ($resolvePure $table $depth:ident ($ofExcept $body) (by simp))] using $name $depth:ident $parameters* (fun $value:ident => $ok $value:ident)))
     else
       pure (Unhygienic.run `(@[simp] theorem $callName ($depth:ident : $natType)
         $binders:bracketedBinder* :
@@ -1803,7 +1854,17 @@ private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environme
       let imports ← inputImports files entry env
       let contents ← arr entry "contents"
       let reexportImports := !contents.isEmpty || !preludes.isEmpty
-      let (commands, state) ← contents.mapM (commands map) |>.run env |>.run {}
+      -- Calls embed pure callees in other computations, so collect every purity first.
+      let mut purities : Std.HashMap String String := {}
+      for content in contents do
+        let definitions ← match (← str content "kind") with
+          | "def" => pure #[content]
+          | "mutual" => arr content "defs"
+          | _ => pure #[]
+        for definition in definitions do
+          let key := s!"{← str definition "name"}/{(← arr definition "params").size}"
+          purities := purities.insert key (← str definition "purity")
+      let (commands, state) ← contents.mapM (commands map) |>.run env |>.run { purities }
       -- Generated Core may contain unused match alternatives. Scope the
       -- option to generated declarations, restoring diagnostics for laws.
       let ignoreUnused := mkIdent `match.ignoreUnusedAlts

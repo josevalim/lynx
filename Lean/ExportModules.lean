@@ -4,10 +4,15 @@ import Lean
 
 /-! Emit the public Erlang runtime functions.
 Run from Lean/: lake env lean --run ExportModules.lean > modules.json
-Purity means that `#lynx_pure` has generated a proof for the function.
+Pure functions return `Except Exception Term`; the others return `Result`.
 -/
 
 open Lean
+
+/-- Whether a function type ends in `Except`, after all its parameters. -/
+private def returnsExcept : Expr → Bool
+  | .forallE _ _ body _ => returnsExcept body
+  | type => type.isAppOf ``Except
 
 private def manifest (env : Environment) : Json := Id.run do
   let exports := env.setExporting true
@@ -19,10 +24,7 @@ private def manifest (env : Environment) : Json := Id.run do
     let function := name.getString!
     -- Only Erlang functions carry an arity; supporting declarations do not.
     unless (function.splitOn "/").getLast!.toNat?.isSome do continue
-    let proof := Name.str name.getPrefix (function ++ "_pure")
-    let pure := match env.find? proof with
-      | some (.thmInfo _) => true
-      | _ => false
+    let pure := returnsExcept info.type
     let entry := (function, Json.mkObj [("pure", toJson pure)])
     let moduleName := name.getPrefix.getString!
     modules := modules.insert moduleName (entry :: modules.getD moduleName [])

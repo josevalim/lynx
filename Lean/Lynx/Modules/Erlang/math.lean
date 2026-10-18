@@ -3,15 +3,11 @@ module
 public import Lynx.Purity
 
 namespace Erlang.math
-
--- Other modules use these lemmas constantly, including while checking
--- well-founded recursion, so they are proved once, here.
-set_option lynx.lazyPurity false
 open Lynx
 
 -- Both operations return a float. Keep the input sign when the result is zero,
 -- including ceil of a negative fraction and either operation on negative zero.
-#lynx_pure private def roundFloat (up : Bool) (value : Term.FiniteFloat) : Result :=
+private def roundFloat (up : Bool) (value : Term.FiniteFloat) : Except Exception Term :=
   -- At this exponent every binary64 value is already an integer. Returning
   -- its encoding avoids converting a potentially 1024-bit integer back again.
   if 1075 ≤ value.exponent.val then .ok (.float value)
@@ -23,7 +19,7 @@ open Lynx
       | some rounded => .ok (.float rounded)
       | none => .error (.error (.atom "badarith"))
 
-#lynx_pure private def roundNumber (up : Bool) : Term → Result
+private def roundNumber (up : Bool) : Term → Except Exception Term
   | .float value => roundFloat up value
   | .integer value =>
     match Term.FiniteFloat.ofInt value with
@@ -33,11 +29,11 @@ open Lynx
 
 /-- Round down to an integral float, preserving signed zero. Integer arguments
 are converted to binary64 first, as in the Erlang math BIF. -/
-#lynx_pure public def «floor/1» (value : Term) : Result :=
+public def «floor/1» (value : Term) : Except Exception Term :=
   roundNumber false value
 
 /-- Round up to an integral float, preserving signed zero. -/
-#lynx_pure public def «ceil/1» (value : Term) : Result :=
+public def «ceil/1» (value : Term) : Except Exception Term :=
   roundNumber true value
 
 /-- Expose rounding of float arguments without exposing conversion helpers. -/

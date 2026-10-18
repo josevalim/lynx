@@ -112,8 +112,8 @@ defmodule Lynx.Laws do
   Pass `termination_suffixes: %{{module, function, arity} => lean_source}` to attach
   a `Lynx.Lean` termination suffix to a translated function. Regardless of the
   suffix contents, the function and every function calling it are marked as
-  partial (see the purity model in `Lynx`): instead of purity proofs
-  (`#lynx_pure`), they receive partiality proofs (`#lynx_partial`), and laws
+  partial (see the purity model in `Lynx`): instead of returning `Except`, they
+  return `Lynx.Result` with partiality proofs (`#lynx_partial`), and laws
   reaching them are still stated directly. Targets must be translated by the laws
   being verified; annotations do not add translation roots.
 

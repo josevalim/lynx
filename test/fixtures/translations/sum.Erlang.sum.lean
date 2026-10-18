@@ -12,23 +12,19 @@ section
 
 set_option «match».ignoreUnusedAlts true
 
-#lynx_pure
-  def «sum/1» (_0 : Lynx.Term) : Lynx.Result :=
-    Erlang.lists.«sum/1» _0
+def «sum/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
+  Erlang.lists.«sum/1» _0
 
-#lynx_pure
-  def «sum_singleton_requires/1» (_0 : Lynx.Term) : Lynx.Result :=
-    Erlang.erlang.«is_integer/1» _0
+def «sum_singleton_requires/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
+  Erlang.erlang.«is_integer/1» _0
 
-#lynx_pure
-  def «sum_empty_ensures/0» : Lynx.Result := do
-    let _0 ← «sum/1» Lynx.Term.nil
-    Erlang.erlang.«==/2» _0 (Lynx.Term.integer 0)
+def «sum_empty_ensures/0» : Except Lynx.Exception Lynx.Term := do
+  let _0 ← «sum/1» Lynx.Term.nil
+  Erlang.erlang.«==/2» _0 (Lynx.Term.integer 0)
 
-#lynx_pure
-  def «sum_singleton_ensures/1» (_0 : Lynx.Term) : Lynx.Result := do
-    let _1 ← «sum/1» (Lynx.Term.list [_0])
-    Erlang.erlang.«==/2» _1 _0
+def «sum_singleton_ensures/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term := do
+  let _1 ← «sum/1» (Lynx.Term.list [_0])
+  Erlang.erlang.«==/2» _1 _0
 
 end
 

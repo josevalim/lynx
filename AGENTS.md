@@ -51,14 +51,13 @@ If a proof needs to unfold a public operation, deliberately expose its body with
 and for proof audits that inspect private declarations in test modules.
 
 Functions that neither inspect nor change the environment and perform no process
-effects should be tagged with `#lynx_pure`. They may still raise exceptions.
-Those that may additionally not return, such as partial fixed points, should be
-tagged with `#lynx_partial`. `Lynx/Purity.lean` generates ordinary kernel-checked
-`<name>_pure` and `<name>_partial` lemmas without a contract verification tactic.
+effects return `Except Exception Term`. They may still raise exceptions. Other
+computations embed their calls with `Result.ofExcept`. Functions that may
+additionally not return, such as partial fixed points, return `Result` and
+should be tagged with `#lynx_partial`. `Lynx/Purity.lean` generates ordinary
+kernel-checked `<name>_partial` lemmas without a contract verification tactic.
 Lemmas about exported definitions are proved on first use: by name, by `simp`,
-or by the purity proofs of callers. The runtime library disables
-`lynx.lazyPurity`, so its lemmas are simp rules from the start, which
-well-founded preprocessing needs.
+or by the partiality proofs of callers.
 
 Proofs must not introduce untrusted axioms or `sorry`
 

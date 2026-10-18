@@ -85,7 +85,7 @@ theorem concatenation_associative (left middle right : List Bool) :
       (fun joined => Term.Bitstring.append joined (Term.Bitstring.ofBits right))) =
     ((Term.Bitstring.append (Term.Bitstring.ofBits middle) (Term.Bitstring.ofBits right)).bind
       (fun joined => Term.Bitstring.append (Term.Bitstring.ofBits left) joined)) := by
-  simp [concatenation_preserves_bits, Result.bind, List.append_assoc]
+  simp [concatenation_preserves_bits, Except.bind, List.append_assoc]
 
 -- Checked against OTP 29's integer construction semantics, including partial bytes.
 theorem big_and_little_partial_bytes :

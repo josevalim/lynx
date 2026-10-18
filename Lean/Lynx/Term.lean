@@ -1,6 +1,7 @@
 module
 
 public import Lynx.Term.DataTypes
+public import Lynx.Term.Except
 public import Lynx.Term.Compare
 public import Lynx.Term.Maps
 public import Lynx.Term.Runner

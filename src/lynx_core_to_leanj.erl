@@ -112,7 +112,7 @@ fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Nam
                 || I <- lists:seq(1, length(Params) - Arity)],
     Args = [var_node(<<"arg", (integer_to_binary(I))/binary>>, [])
             || I <- lists:seq(1, Arity)],
-    Body = remote_call_node(module_name(Module), Name, Captures ++ Args, []),
+    Body = remote_call_node(module_name(Module), Name, Captures ++ Args, Purity, []),
     #{~"body" => Body, ~"captures" => Captures, ~"args" => Args,
       ~"purity" => atom_to_binary(Purity), ~"span" => []}.
 
@@ -461,7 +461,9 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
         {Purity, NewFuns, NewContext} ->
             {TranslatedArgs, State1} = lists:mapfoldl(fun value/2,
                 State0#state{funs = NewFuns, remote = {NewContext, Callback}}, Args),
-            {remote_call_node(module_name(Module), atom_to_binary(Name, utf8), TranslatedArgs, Anno), State1#state{purity = join_purity(State1#state.purity, Purity)}}
+            Call = remote_call_node(module_name(Module), atom_to_binary(Name, utf8),
+                TranslatedArgs, Purity, Anno),
+            {Call, State1#state{purity = join_purity(State1#state.purity, Purity)}}
     end;
 expression(#c_call{} = Core, _State) ->
     core_error(Core, <<"dynamic calls, such as mod.fun(x) or M:F(X), are not supported">>);
@@ -1203,7 +1205,7 @@ map_updates([#c_map_pair{anno = Anno, op = #c_literal{val = Op},
         State0#state{funs = NewFuns, remote = {NewContext, Callback}}),
     {TranslatedValue, State2} = value(Value, State1),
     Call = remote_call_node(module_name(maps), atom_to_binary(Name, utf8),
-        [TranslatedKey, TranslatedValue, Base], Anno),
+        [TranslatedKey, TranslatedValue, Base], Purity, Anno),
     State3 = State2#state{purity = join_purity(State2#state.purity, Purity)},
     case Rest of
         [] -> {Call, State3};
@@ -1260,8 +1262,10 @@ error_node(Reason, Anno) ->
 local_call_node(Name, Args, Anno) ->
     node(~"local_call", Anno, #{~"name" => Name, ~"args" => Args}).
 
-remote_call_node(Module, Name, Args, Anno) ->
-    node(~"remote_call", Anno, #{~"module" => Module, ~"name" => Name, ~"args" => Args}).
+%% Calls carry the callee's purity: other computations embed pure callees.
+remote_call_node(Module, Name, Args, Purity, Anno) ->
+    node(~"remote_call", Anno, #{~"module" => Module, ~"name" => Name, ~"args" => Args,
+                                 ~"purity" => atom_to_binary(Purity)}).
 
 node(Kind, Anno, Fields) ->
     Fields#{~"kind" => Kind, ~"span" => span(Anno)}.
