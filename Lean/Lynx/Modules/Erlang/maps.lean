@@ -6,6 +6,10 @@ public import Lynx.Purity
 public section
 
 namespace Erlang.maps
+
+-- Other modules use these lemmas constantly, including while checking
+-- well-founded recursion, so they are proved once, here.
+set_option lynx.lazyPurity false
 open Lynx
 
 #lynx_pure @[expose] def «new/0» : Result := .ok (Term.map [])

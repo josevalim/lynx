@@ -5,6 +5,10 @@ public import Lynx.Purity
 public section
 
 namespace Erlang.erlang
+
+-- Other modules use these lemmas constantly, including while checking
+-- well-founded recursion, so they are proved once, here.
+set_option lynx.lazyPurity false
 open Lynx
 
 /-- The argument list only supplies stack trace metadata, which Result does not model. -/

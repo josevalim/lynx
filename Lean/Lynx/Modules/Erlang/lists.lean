@@ -6,6 +6,10 @@ public import Lynx.Purity
 public section
 
 namespace Erlang.lists
+
+-- Other modules use these lemmas constantly, including while checking
+-- well-founded recursion, so they are proved once, here.
+set_option lynx.lazyPurity false
 open Lynx
 
 /-- Reverse a proper list onto an arbitrary tail, or raise `badarg`. -/

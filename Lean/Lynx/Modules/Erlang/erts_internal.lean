@@ -8,6 +8,10 @@ public section
 /-! Internal BIFs emitted by the Erlang compiler. -/
 
 namespace Erlang.erts_internal
+
+-- Other modules use these lemmas constantly, including while checking
+-- well-founded recursion, so they are proved once, here.
+set_option lynx.lazyPurity false
 open Lynx
 
 /-- Starts a map generator in a comprehension. The iterator is returned fully

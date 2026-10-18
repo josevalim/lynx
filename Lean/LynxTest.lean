@@ -16,3 +16,5 @@ import LynxTest.Modules.Math
 import LynxTest.Modules.Conversions
 import LynxTest.Modules.Process
 import LynxTest.Purity
+import LynxTest.Purity.Lazy
+import LynxTest.Purity.LazyImport

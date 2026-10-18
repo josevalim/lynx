@@ -200,15 +200,29 @@ private def shareStep (predicate : Predicate) : TacticM Unit :=
     let proof ← mkAppM predicate.shared #[next, body]
     goal.apply proof
 
-/-- The generated lemma for a function application, if any. -/
+private def lemmaName (function : Name) (suffix : String) : Name :=
+  function.getPrefix ++ Name.mkSimple (function.getString! ++ suffix)
+
+/-- Realizes a lemma generated on demand, given its name. Set once the
+definitions are recorded, below. -/
+private initialize realizeHook : IO.Ref (Name → MetaM Bool) ← IO.mkRef fun _ => pure false
+
+/-- Whether a lemma exists, realizing it if it is generated on demand. -/
+private def realizeLemma (name : Name) : MetaM Bool := do
+  if (← getEnv).contains name then return true
+  discard <| (← realizeHook.get) name
+  return (← getEnv).contains name
+
+/-- The generated lemma for a full function application, if any. -/
 private def functionLemma (predicate : Predicate) (head computation : Expr) :
     MetaM (Option Expr) := do
   let name := head.constName!
-  let lemma (suffix : String) := name.getPrefix ++ Name.mkSimple (name.getString! ++ suffix)
-  let applied (suffix : String) := mkAppN (mkConst (lemma suffix) head.constLevels!) computation.getAppArgs
-  if (← getEnv).contains (lemma predicate.suffix) then return some (applied predicate.suffix)
+  unless computation.getAppNumArgs == (← getConstInfo name).type.getForallArity do return none
+  let applied (suffix : String) :=
+    mkAppN (mkConst (lemmaName name suffix) head.constLevels!) computation.getAppArgs
+  if ← realizeLemma (lemmaName name predicate.suffix) then return some (applied predicate.suffix)
   if let some (suffix, implication) := predicate.stronger then
-    if (← getEnv).contains (lemma suffix) then
+    if ← realizeLemma (lemmaName name suffix) then
       return some (← mkAppM implication #[applied suffix])
   return none
 
@@ -300,37 +314,47 @@ private def pureDefinitionId (declaration : TSyntax `command) : Command.CommandE
     throwErrorAt declId "could not determine the definition name"
   return id
 
-private def predicateType (predicate : Predicate) (function : Name) :
-    Command.CommandElabM Expr := do
+private def predicateType (predicate : Predicate) (function : Name) : MetaM Expr := do
   let info ← getConstInfo function
   let functionExpr := mkConst function (info.levelParams.map Level.param)
-  Command.liftTermElabM do
-    forallTelescopeReducing info.type fun arguments resultType => do
-      unless ← isResultType resultType do
-        throwError "#lynx_pure requires a definition returning `Result`"
-      let proposition ← mkAppM predicate.name
-        #[mkAppN functionExpr arguments]
-      mkForallFVars arguments proposition
+  forallTelescopeReducing info.type fun arguments resultType => do
+    unless ← isResultType resultType do
+      throwError "#lynx_pure requires a definition returning `Result`"
+    let proposition ← mkAppM predicate.name
+      #[mkAppN functionExpr arguments]
+    mkForallFVars arguments proposition
 
-private def registerProof (predicate : Predicate) (function : Name) (type proof : Expr) :
-    Command.CommandElabM Unit := do
+private def checkProof (predicate : Predicate) (proof : Expr) : MetaM Unit := do
   if proof.hasSorry then
     throwError "{predicate.command} could not prove {predicate.property}; refusing an incomplete proof"
+
+private def addTheorem (name function : Name) (type proof : Expr) : CoreM Unit := do
   let info ← getConstInfo function
-  let theoremName := function.getPrefix ++ Name.mkSimple (function.getString! ++ predicate.suffix)
-  Command.liftCoreM <| addAndCompile <| Declaration.thmDecl {
-    name := theoremName
+  addDecl <| Declaration.thmDecl {
+    name := name
     levelParams := info.levelParams
     type := type
     value := proof
   }
+
+/-- Eagerly generated lemmas are simp rules, which also discharge purity
+conditions while preprocessing later well-founded definitions. -/
+private def registerProof (predicate : Predicate) (function : Name) (type proof : Expr) :
+    Command.CommandElabM Unit := do
+  let theoremName := lemmaName function predicate.suffix
+  Command.liftCoreM <| addTheorem theoremName function type proof
   Command.elabCommand (← `(attribute [simp↓, wf_preprocess] $(mkIdent theoremName)))
 
-private def rule (predicate : Predicate) (name : String) : Ident :=
-  mkIdent (predicate.name ++ Name.mkSimple name)
+private def elabProof (proof : TSyntax `term) (type : Expr) : TermElabM Expr := do
+  let proof ← Term.elabTermEnsuringType proof type
+  Term.synthesizeSyntheticMVarsNoPostponing
+  instantiateMVars proof
+
+private def rule (predicate : Predicate) (name : String) : Name :=
+  predicate.name ++ Name.mkSimple name
 
 /-- Structural proof steps for a definition body, given its predicate. -/
-private def bodySteps (predicate : Predicate) : Command.CommandElabM (TSyntax `tactic) :=
+private def bodySteps (predicate : Predicate) : TermElabM (TSyntax `tactic) :=
   if predicate.name == ``Result.IsPartial then
     `(tactic| (lynx_generalize_tables; repeat' first
       | lynx_partial_share
@@ -346,7 +370,7 @@ private def bodySteps (predicate : Predicate) : Command.CommandElabM (TSyntax `t
 
 /-- Admissibility of `fun f => ∀ x₁ … xₙ, (f x₁ … xₙ).IsPartial`, built one
 argument at a time so that unification never abstracts an application. -/
-private partial def partialAdmissibility : Nat → Command.CommandElabM (TSyntax `term)
+private partial def partialAdmissibility : Nat → TermElabM (TSyntax `term)
   | 0 => `(Lynx.Result.admissible_isPartial)
   | arity + 1 => do
     let inner ← partialAdmissibility arity
@@ -359,24 +383,26 @@ private partial def partialAdmissibility : Nat → Command.CommandElabM (TSyntax
 
 /-- Whether a definition is a partial fixed point. Its induction principle is a
 reserved name, realized on demand. -/
-private def isFixpoint (function : Name) : Command.CommandElabM Bool :=
-  Command.liftCoreM do
-    try
-      discard <| realizeGlobalConstNoOverload (mkIdent (function ++ `fixpoint_induct))
-      pure true
-    catch _ => pure false
+private def isFixpoint (function : Name) : CoreM Bool := do
+  try
+    discard <| realizeGlobalConstNoOverload (mkIdent (function ++ `fixpoint_induct))
+    pure true
+  catch _ => pure false
+
+private def arityOf (function : Name) : MetaM Nat := do
+  forallTelescopeReducing (← getConstInfo function).type fun args _ => pure args.size
 
 /-- Prove partiality of a partial fixed point, which may belong to a mutual
 group, through its induction principle. The bottom is exhausted, so partiality
 is admissible, and each unfolding preserves it given the recursive calls.
 Parameters passed unchanged to every recursive call are fixed: the principle
 takes them before its motives, which range over the remaining parameters. -/
-private def fixpointProof (function : Name) (arity : Nat) : Command.CommandElabM (TSyntax `term) := do
+private def fixpointProof (function : Name) (arity : Nat) : TermElabM (TSyntax `term) := do
   unless ← isFixpoint function do throwError "{function} is not a partial fixed point"
   let fixpoint := function ++ `fixpoint_induct
   -- Read the fixed binders, every motive's arity, and the parameter positions of
   -- the fixed and varying arguments in the conclusion `motive (fun ys => f args)`.
-  let (fixedPositions, varyingPositions, motives) ← Command.liftTermElabM do
+  let (fixedPositions, varyingPositions, motives) ←
     forallTelescope (← inferType (← mkConstWithLevelParams fixpoint)) fun binders conclusion => do
       let mut fixedBinders : Array Expr := #[]
       let mut motives : Array (Name × Nat) := #[]
@@ -428,130 +454,344 @@ private def fixpointProof (function : Name) (arity : Nat) : Command.CommandElabM
         | split
         | simp_all)
 
-/-- Prove the predicate for a recursive group through its induction principle,
-generating one theorem per function. -/
-private def proveGroup (predicate : Predicate) (declaration : TSyntax `command)
-    (functions : Array Name) (guard : Ident) : Command.CommandElabM Unit := do
-  -- The equation compiler can reorder a mutual group. Its induction theorem
-  -- uses that order for motives and conjunction projections.
+/-- How a definition's lemma is proved. -/
+private inductive Method where
+  /-- A non-recursive body, proved structurally. -/
+  | body
+  /-- A partial fixed point, proved through its fixed-point induction. -/
+  | fixpoint
+  /-- A recursive group, proved jointly through its induction principle. The
+  functions are in declaration order, and the guard rule handles their clauses. -/
+  | group (functions : Array Name) (guard : Name)
+  deriving Inhabited
+
+/-- Prove the predicate for a definition that is not part of a recursive group. -/
+private def singleProof (predicate : Predicate) (function : Name) (method : Method) :
+    TermElabM Expr := do
+  let type ← predicateType predicate function
+  let arity ← arityOf function
+  let functionId := mkIdent function
+  -- Introduce exactly the function parameters: an unbounded `intros` also
+  -- reduces the predicate's computation while looking for another binder.
+  let parameters := (List.range arity).toArray.map fun i => mkIdent (Name.mkSimple s!"_pure_arg_{i}")
+  let introduce ← if parameters.isEmpty then `(tactic| skip)
+    else `(tactic| intro $parameters:ident*)
+  let steps ← bodySteps predicate
+  let proofSyntax ← match method with
+    | .fixpoint =>
+      unless predicate.name == ``Result.IsPartial do
+        throwError "a partial fixed point cannot be proved pure"
+      fixpointProof function arity
+    | _ =>
+      `(by
+        $introduce:tactic
+        delta $functionId:ident
+        -- Peel binds before simplifying their continuations. Simplifying a large
+        -- straight-line computation first can duplicate all later branches at
+        -- each intermediate match (notably binary64 conversion code).
+        $steps:tactic)
+  let proof ← elabProof proofSyntax type
+  checkProof predicate proof
+  return proof
+
+/-- A recursive group in the equation compiler's order, which its induction
+theorem uses for motives and conjunction projections, with the position of each
+function's fixed parameters. -/
+private structure Group where
+  functions : Array Name
+  perms : Array (Array (Option Nat))
+  numFixed : Nat
+
+private def groupLayout (declared : Array Name) : MetaM Group := do
   let env ← getEnv
-  let declaredFunctions := functions
   let (functions, perms) : Array Name × Option FixedParamPerms :=
-    if let some info := Structural.eqnInfoExt.find? env functions[0]! then
+    if let some info := Structural.eqnInfoExt.find? env declared[0]! then
       (info.declNames, some info.fixedParamPerms)
-    else if let some info := WF.eqnInfoExt.find? env functions[0]! then
+    else if let some info := WF.eqnInfoExt.find? env declared[0]! then
       (info.declNames, some info.fixedParamPerms)
-    else (functions, none)
-  unless functions.size == declaredFunctions.size && functions.all declaredFunctions.contains do
-    throwErrorAt declaration "mutual block must be a single recursive group"
-  let types : Array Expr ← functions.mapM (predicateType predicate)
+    else (declared, none)
+  unless functions.size == declared.size && functions.all declared.contains do
+    throwError "mutual block must be a single recursive group"
   -- Parameters passed unchanged by every recursive call are fixed: the
   -- induction principle takes them first, and its motives range over the rest.
-  let perms ← Command.liftTermElabM do
-    functions.mapIdxM fun i function => do
-      let arity ← forallTelescopeReducing (← getConstInfo function).type fun args _ =>
-        pure args.size
-      let perm := (perms.bind (·.perms[i]?)).getD (Array.replicate arity none)
-      unless perm.size == arity do throwError "unexpected fixed parameters for {function}"
-      pure perm
-  let numFixed := (perms[0]!.filter Option.isSome).size
-  let jointType ← Command.liftTermElabM do
-    let termType := mkConst ``Lynx.Term
-    withLocalDeclsDND ((List.range numFixed).toArray.map fun k =>
-        (Name.mkSimple s!"fixed{k}", termType)) fun fixed => do
-      let parts ← functions.mapIdxM fun i function => do
-        let info ← getConstInfo function
-        forallTelescopeReducing info.type fun arguments _ => do
-          let args := arguments.mapIdx fun j argument =>
-            match perms[i]![j]! with
-            | some k => fixed[k]!
-            | none => argument
-          let varying := (arguments.zip perms[i]!).filterMap fun (argument, perm) =>
-            if perm.isNone then some argument else none
-          let proposition ← mkAppM predicate.name
-            #[mkAppN (mkConst function (info.levelParams.map Level.param)) args]
-          mkForallFVars varying proposition
-      mkForallFVars fixed (parts.toList.dropLast.foldr (mkApp2 (mkConst ``And)) parts.back!)
-  let tryWith := rule predicate "tryWith"
-  let handle := rule predicate "handle"
+  let perms ← functions.mapIdxM fun i function => do
+    let arity ← arityOf function
+    let perm := (perms.bind (·.perms[i]?)).getD (Array.replicate arity none)
+    unless perm.size == arity do throwError "unexpected fixed parameters for {function}"
+    pure perm
+  return { functions, perms, numFixed := (perms[0]!.filter Option.isSome).size }
+
+/-- The conjunction of the predicate for every function in a group, over shared
+fixed parameters. -/
+private def jointType (predicate : Predicate) (group : Group) : MetaM Expr := do
+  let termType := mkConst ``Lynx.Term
+  withLocalDeclsDND ((List.range group.numFixed).toArray.map fun k =>
+      (Name.mkSimple s!"fixed{k}", termType)) fun fixed => do
+    let parts ← group.functions.mapIdxM fun i function => do
+      let info ← getConstInfo function
+      forallTelescopeReducing info.type fun arguments _ => do
+        let args := arguments.mapIdx fun j argument =>
+          match group.perms[i]![j]! with
+          | some k => fixed[k]!
+          | none => argument
+        let varying := (arguments.zip group.perms[i]!).filterMap fun (argument, perm) =>
+          if perm.isNone then some argument else none
+        let proposition ← mkAppM predicate.name
+          #[mkAppN (mkConst function (info.levelParams.map Level.param)) args]
+        mkForallFVars varying proposition
+    mkForallFVars fixed (parts.toList.dropLast.foldr (mkApp2 (mkConst ``And)) parts.back!)
+
+/-- Prove the predicate for a recursive group through its induction principle. -/
+private def jointProof (predicate : Predicate) (group : Group) (guard : Name) :
+    TermElabM Expr := do
+  let functions := group.functions
+  let type ← jointType predicate group
+  let guard := mkIdent guard
+  let tryWith := mkIdent (rule predicate "tryWith")
+  let handle := mkIdent (rule predicate "handle")
   -- Keep successful-return equations, so impossible returns close branches.
-  let bind := rule predicate "bind_return"
-  let bindExplicit := rule predicate "bind_return_explicit"
-  let extract := rule predicate "extract"
+  let bind := mkIdent (rule predicate "bind_return")
+  let bindExplicit := mkIdent (rule predicate "bind_return_explicit")
+  let extract := mkIdent (rule predicate "extract")
   let lemmaStep ← if predicate.name == ``Result.IsPartial then `(tactic| lynx_partial_lemma)
     else `(tactic| fail)
   let shareStep ← if predicate.name == ``Result.IsPartial then `(tactic| lynx_partial_share)
     else `(tactic| lynx_pure_share)
-  let proof ← Command.liftTermElabM do
-    let inductionName := functions[0]! ++
-      if functions.size == 1 then `induct else `mutual_induct
-    let induction := mkIdent inductionName
-    let definitions := functions.map mkIdent
-    let unfoldings ← definitions.mapM fun definition => `(tactic| unfold $definition:ident)
-    let fixed := (List.range numFixed).toArray.map fun k => mkIdent (Name.mkSimple s!"fixed{k}")
-    let introduce ← if fixed.isEmpty then `(tactic| skip) else `(tactic| intro $fixed:ident*)
-    -- The principle takes the fixed parameters its cases use before its
-    -- motives, named after the first function's parameters.
-    discard <| realizeGlobalConstNoOverload induction
-    let leading ← forallTelescope (← inferType (← mkConstWithLevelParams inductionName))
-      fun binders _ => do
-        let names ← binders.mapM fun binder => return (← binder.fvarId!.getDecl).userName
-        return names.toList.takeWhile (!·.toString.startsWith "motive")
-    let parameterNames ← forallTelescopeReducing (← getConstInfo functions[0]!).type
-      fun arguments _ => arguments.mapM fun argument => return (← argument.fvarId!.getDecl).userName
-    let fixedArgs ← leading.toArray.mapM fun name => do
-      let some position := parameterNames.findIdx? (· == name) |
-        throwError "unexpected fixed parameter {name} in {inductionName}"
-      let some (some k) := perms[0]![position]? |
-        throwError "unexpected fixed parameter {name} in {inductionName}"
-      pure fixed[k]!
-    let proofSyntax ← `(by
-      $introduce:tactic
-      apply $induction:ident $fixedArgs:ident*
-      all_goals
-        intros
-        -- Unfold only the goal: recursive hypotheses may themselves be matches
-        -- (for example under a shared guard continuation).
-        first $[| $unfoldings:tactic]*
-        repeat' first
-          | $shareStep:tactic
-          | $lemmaStep:tactic
-          | apply $guard:ident
-          | apply $tryWith:ident
-          | apply $handle:ident
-          | apply $bind:ident
-          | apply $bindExplicit:ident
-          | apply $extract:ident
-          | (intro)
-          -- Shared continuations and recursive calls follow from hypotheses.
-          -- Matching them reducibly avoids unfolding the extractions they mention.
-          | (solve | with_reducible (apply_assumption -exfalso -symm <;> assumption))
-          | split
-          -- Goal-only simplification closes calls with purity lemmas without
-          -- also rewriting the induction hypotheses, as `grind` and `simp_all` do.
-          | (solve | simp)
-          | (solve | grind)
-          | split at *
-          | simp_all)
-    let proof ← Term.elabTermEnsuringType proofSyntax jointType
-    Term.synthesizeSyntheticMVarsNoPostponing
-    instantiateMVars proof
-  for i in [:functions.size] do
-    let part ← Command.liftTermElabM do
-      forallTelescopeReducing types[i]! fun arguments _ => do
-        let fixed := (List.range numFixed).toArray.map fun k =>
-          arguments[(perms[i]!.findIdx? (· == some k)).get!]!
-        let mut part := mkAppN proof fixed
-        for _ in [:i] do part ← mkAppM ``And.right #[part]
-        if i + 1 < functions.size then part ← mkAppM ``And.left #[part]
-        let varying := (arguments.zip perms[i]!).filterMap fun (argument, perm) =>
-          if perm.isNone then some argument else none
-        mkLambdaFVars arguments (mkAppN part varying)
-    registerProof predicate functions[i]! types[i]! part
+  let inductionName := functions[0]! ++
+    if functions.size == 1 then `induct else `mutual_induct
+  let induction := mkIdent inductionName
+  -- Rewrite with the equations: in other modules, `unfold` can expose the
+  -- internal definition of a well-founded mutual group instead.
+  let unfoldings ← functions.mapM fun function =>
+    `(tactic| rw [$(mkIdent (function ++ `eq_def)):ident])
+  let fixed := (List.range group.numFixed).toArray.map fun k => mkIdent (Name.mkSimple s!"fixed{k}")
+  let introduce ← if fixed.isEmpty then `(tactic| skip) else `(tactic| intro $fixed:ident*)
+  -- The principle takes the fixed parameters its cases use before its
+  -- motives, named after the first function's parameters.
+  discard <| realizeGlobalConstNoOverload induction
+  let leading ← forallTelescope (← inferType (← mkConstWithLevelParams inductionName))
+    fun binders _ => do
+      let names ← binders.mapM fun binder => return (← binder.fvarId!.getDecl).userName
+      return names.toList.takeWhile (!·.toString.startsWith "motive")
+  let parameterNames ← forallTelescopeReducing (← getConstInfo functions[0]!).type
+    fun arguments _ => arguments.mapM fun argument => return (← argument.fvarId!.getDecl).userName
+  let fixedArgs ← leading.toArray.mapM fun name => do
+    let some position := parameterNames.findIdx? (· == name) |
+      throwError "unexpected fixed parameter {name} in {inductionName}"
+    let some (some k) := group.perms[0]![position]? |
+      throwError "unexpected fixed parameter {name} in {inductionName}"
+    pure fixed[k]!
+  let proofSyntax ← `(by
+    $introduce:tactic
+    apply $induction:ident $fixedArgs:ident*
+    all_goals
+      intros
+      -- Unfold only the goal: recursive hypotheses may themselves be matches
+      -- (for example under a shared guard continuation).
+      first $[| $unfoldings:tactic]*
+      repeat' first
+        | $shareStep:tactic
+        | $lemmaStep:tactic
+        | apply $guard:ident
+        | apply $tryWith:ident
+        | apply $handle:ident
+        | apply $bind:ident
+        | apply $bindExplicit:ident
+        | apply $extract:ident
+        | (intro)
+        -- Shared continuations and recursive calls follow from hypotheses.
+        -- Matching them reducibly avoids unfolding the extractions they mention.
+        | (solve | with_reducible (apply_assumption -exfalso -symm <;> assumption))
+        | split
+        -- Goal-only simplification closes calls with purity lemmas without
+        -- also rewriting the induction hypotheses, as `grind` and `simp_all` do.
+        | (solve | simp)
+        | (solve | grind)
+        | split at *
+        | simp_all)
+  let proof ← elabProof proofSyntax type
+  checkProof predicate proof
+  return proof
+
+/-- One function's lemma, projected from the joint proof of its group. -/
+private def memberProof (predicate : Predicate) (group : Group) (i : Nat) (joint : Expr) :
+    MetaM Expr := do
+  forallTelescopeReducing (← predicateType predicate group.functions[i]!) fun arguments _ => do
+    let fixed := (List.range group.numFixed).toArray.map fun k =>
+      arguments[(group.perms[i]!.findIdx? (· == some k)).get!]!
+    let mut part := mkAppN joint fixed
+    for _ in [:i] do part ← mkAppM ``And.right #[part]
+    if i + 1 < group.functions.size then part ← mkAppM ``And.left #[part]
+    let varying := (arguments.zip group.perms[i]!).filterMap fun (argument, perm) =>
+      if perm.isNone then some argument else none
+    mkLambdaFVars arguments (mkAppN part varying)
+
+/-! ### Lemmas generated on demand
+
+When importers can unfold a definition, the commands only record how to prove
+each lemma, unless `lynx.lazyPurity` is disabled. Its reserved name is realized when first used: by a reference, by the purity steps
+of a caller, or by the simprocs below. Recursive groups realize one joint proof
+for their members. Realizations run in the environment of the definition, using
+its recorded heartbeat limit, so they do not depend on where they are requested. -/
+
+register_option lynx.lazyPurity : Bool := {
+  defValue := true
+  descr := "generate `#lynx_pure` and `#lynx_partial` lemmas when first used. \
+    Eager lemmas are also simp rules for preprocessing well-founded recursion, \
+    which the runtime library needs for the operations other definitions call."
+}
+
+private structure Entry where
+  function : Name
+  isPartial : Bool
+  method : Method
+  maxHeartbeats : Nat
+  deriving Inhabited
+
+private initialize entriesExt : SimplePersistentEnvExtension Entry (NameMap Entry) ←
+  registerSimplePersistentEnvExtension {
+    addEntryFn := fun entries entry => entries.insert entry.function entry
+    addImportedFn := fun modules => modules.foldl (init := {}) fun entries module =>
+      module.foldl (init := entries) fun entries entry => entries.insert entry.function entry
+    -- Realizations hide the entries of the group they prove.
+    asyncMode := .local
+  }
+
+private def predicateOf (isPartial : Bool) : Predicate :=
+  if isPartial then partialPredicate else purePredicate
+
+/-- The recorded definition whose lemma has the given name. -/
+private def lemmaEntry? (env : Lean.Environment) (name : Name) : Option Entry := do
+  let .str namespace_ string := name | none
+  let entries := entriesExt.getState env
+  let find (isPartial : Bool) : Option Entry := do
+    let suffix := (predicateOf isPartial).suffix
+    guard (string.endsWith suffix)
+    let entry ← entries.find? (.str namespace_ (string.dropEnd suffix.length).toString)
+    guard (entry.isPartial == isPartial)
+    pure entry
+  find false <|> find true
+
+private def withRecordedOptions (entry : Entry) (x : MetaM α) : MetaM α :=
+  withTheReader Core.Context (fun ctx =>
+    let options := ctx.options
+      |> (maxHeartbeats.set · entry.maxHeartbeats)
+      |> (maxRecDepth.set · 100000)
+      |> (Meta.synthInstance.maxSize.set · 4096)
+      |> (Meta.synthInstance.maxHeartbeats.set · 400000)
+    { ctx with
+      options := options
+      maxRecDepth := 100000
+      maxHeartbeats := entry.maxHeartbeats * 1000 }) x
+
+/-- Prove a group without its own recorded lemmas: importers record them, and
+realizing them from the group's recursive calls would wait on this proof. -/
+private def withoutEntries (functions : Array Name) (x : MetaM α) : MetaM α := do
+  modifyEnv fun env => entriesExt.modifyState env fun entries => functions.foldl .erase entries
+  x
+
+private def realizeEntry (entry : Entry) : MetaM Unit := do
+  let predicate := predicateOf entry.isPartial
+  let name := lemmaName entry.function predicate.suffix
+  match entry.method with
+  | .group declared guard =>
+    -- Realizations are enabled for the first function last, so its environment
+    -- has the whole group, and each realization may request the joint proof.
+    let leader := (← groupLayout declared).functions[0]!
+    let joint := lemmaName leader (predicate.suffix ++ "_group")
+    realizeConst leader name <| withRecordedOptions entry do
+      realizeConst leader joint <| withRecordedOptions entry <| withoutEntries declared do
+        let group ← groupLayout declared
+        let proof ← (jointProof predicate group guard).run'
+        addTheorem joint leader (← jointType predicate group) proof
+      let group ← groupLayout declared
+      let some i := group.functions.idxOf? entry.function |
+        throwError "{entry.function} is not part of its recursive group"
+      let info ← getConstInfo leader
+      let proof ← memberProof predicate group i (mkConst joint (info.levelParams.map Level.param))
+      addTheorem name entry.function (← predicateType predicate entry.function) proof
+  | method =>
+    realizeConst entry.function name <| withRecordedOptions entry <|
+        withoutEntries #[entry.function] do
+      let proof ← (singleProof predicate entry.function method).run'
+      addTheorem name entry.function (← predicateType predicate entry.function) proof
+
+private def reservedLemma (env : Lean.Environment) (name : Name) : Bool :=
+  (lemmaEntry? env name).isSome
+
+initialize
+  registerReservedNamePredicate reservedLemma
+  registerReservedNameAction fun name => do
+    let some entry := lemmaEntry? (← getEnv) name | return false
+    MetaM.run' (realizeEntry entry)
+    return true
+  realizeHook.set fun name => do
+    let some entry := lemmaEntry? (← getEnv) name | return false
+    realizeEntry entry
+    return true
+
+/-- Environments created while importing the module that registers the reserved
+name predicate miss it, so recording definitions installs it when missing. -/
+private def installReservedNames (example_ : Name) : CoreM Unit := do
+  unless isReservedName (← getEnv) example_ do
+    modifyEnv (reservedNamePredicatesExt.modifyState · (·.push reservedLemma))
+
+/-- Close purity goals for translated calls with their lemmas, realizing them
+on demand. Eagerly generated lemmas are also simp rules. -/
+private def purityProc (predicate : Predicate) : Simp.Simproc := fun e => do
+  unless e.isAppOfArity predicate.name 2 do return .continue
+  let computation := (← instantiateMVars e.appArg!).consumeMData
+  let head := computation.getAppFn.consumeMData
+  unless head.isConst do return .continue
+  let some proof ← functionLemma predicate head computation | return .continue
+  return .done { expr := mkConst ``True, proof? := some (← mkEqTrue proof) }
+
+simproc ↓ lynxIsPure (Result.IsPure _) := purityProc purePredicate
+simproc ↓ lynxIsPartial (Result.IsPartial _) := purityProc partialPredicate
+
+/-- Record or prove the lemmas of elaborated definitions. A recursive group gets
+one joint proof, from which each function's lemma is projected. -/
+private def generate (predicate : Predicate) (declaration : TSyntax `command)
+    (methods : Array (Name × Method)) : Command.CommandElabM Unit := do
+  for (function, _) in methods do
+    discard <| Command.liftTermElabM <| predicateType predicate function
+  -- Realizations in other modules unfold the definitions, which needs their
+  -- bodies to be exported. Lemmas about hidden bodies are proved here instead.
+  let exports := (← getEnv).setExporting true
+  let exported := methods.all fun (function, _) =>
+    match exports.find? function with
+    | some (.defnInfo _) => true
+    | _ => false
+  if exported && lynx.lazyPurity.get (← getOptions) then
+    let maxHeartbeats := maxHeartbeats.get (← getOptions)
+    for (function, method) in methods do
+      modifyEnv (entriesExt.addEntry · {
+        function, method, maxHeartbeats
+        isPartial := predicate.name == ``Result.IsPartial })
+      Command.liftCoreM <| installReservedNames (lemmaName function predicate.suffix)
+    return
+  let mut joints : Std.HashMap Name Expr := {}
+  for (function, method) in methods do
+    let type ← Command.liftTermElabM <| predicateType predicate function
+    match method with
+    | .group declared guard =>
+      let group ← Command.liftTermElabM <| withRef declaration <| groupLayout declared
+      let joint ← match joints[declared[0]!]? with
+        | some joint => pure joint
+        | none => Command.liftTermElabM <| jointProof predicate group guard
+      joints := joints.insert declared[0]! joint
+      let some i := group.functions.idxOf? function |
+        throwError "{function} is not part of its recursive group"
+      registerProof predicate function type
+        (← Command.liftTermElabM <| memberProof predicate group i joint)
+    | method =>
+      registerProof predicate function type
+        (← Command.liftTermElabM <| singleProof predicate function method)
 
 /-- Elaborate translated definitions and prove the predicate for each fully
 applied computation. Mutually recursive definitions are proved together using
-their generated mutual induction principle. Each generated theorem is a simp rule. -/
+their generated mutual induction principle. Lemmas about exported bodies are
+generated on demand; the others are proved immediately and are simp rules. -/
 private def elaborateWith (predicate : Predicate) (doc? : Option (TSyntax ``Parser.Command.docComment))
     (declaration : TSyntax `command) : Command.CommandElabM Unit := do
   if let `(mutual $declarations:command* end) := declaration then
@@ -561,19 +801,13 @@ private def elaborateWith (predicate : Predicate) (doc? : Option (TSyntax ``Pars
     let ids ← declarations.mapM pureDefinitionId
     Command.elabCommand declaration
     let functions ← ids.mapM resolveGlobalConstNoOverload
-    if predicate.name == ``Result.IsPartial && (← isFixpoint functions[0]!) then
-      for function in functions do
-        let type ← predicateType predicate function
-        let arity ← Command.liftTermElabM do
-          forallTelescopeReducing (← getConstInfo function).type fun args _ => pure args.size
-        let proofSyntax ← fixpointProof function arity
-        let proof ← Command.liftTermElabM do
-          let proof ← Term.elabTermEnsuringType proofSyntax type
-          Term.synthesizeSyntheticMVarsNoPostponing
-          instantiateMVars proof
-        registerProof predicate function type proof
+    if predicate.name == ``Result.IsPartial && (← Command.liftCoreM <| isFixpoint functions[0]!) then
+      generate predicate declaration (functions.map (·, .fixpoint))
       return
-    proveGroup predicate declaration functions (rule predicate "guard")
+    -- Check the group now, rather than when its lemmas are first used.
+    discard <| Command.liftTermElabM <| withRef declaration <| groupLayout functions
+    let guard := rule predicate "guard"
+    generate predicate declaration (functions.map (·, .group functions guard))
     return
   if let some doc := doc? then
     unless declaration.raw.getArg 0 |>.getArg 0 |>.isNone do
@@ -587,36 +821,15 @@ private def elaborateWith (predicate : Predicate) (doc? : Option (TSyntax ``Pars
   let id ← pureDefinitionId declaration
   Command.elabCommand declaration
   let function ← resolveGlobalConstNoOverload id
-  let type ← predicateType predicate function
-  let arity ← Command.liftTermElabM do
-    forallTelescopeReducing (← getConstInfo function).type fun args _ => pure args.size
-  let functionId := mkIdent function
-  -- Introduce exactly the function parameters: an unbounded `intros` also
-  -- reduces the predicate's computation while looking for another binder.
-  let parameters := (List.range arity).toArray.map fun i => mkIdent (Name.mkSimple s!"_pure_arg_{i}")
-  let introduce ← if parameters.isEmpty then `(tactic| skip)
-    else `(tactic| intro $parameters:ident*)
-  if !(← isFixpoint function) && (← Command.liftCoreM (isRecursiveDefinition function)) then
-    proveGroup predicate declaration #[function] (rule predicate "guard_cases")
-    return
-  let steps ← bodySteps predicate
-  let proofSyntax ← if ← isFixpoint function then
+  let fixpoint ← Command.liftCoreM <| isFixpoint function
+  let method ← if fixpoint then
       unless predicate.name == ``Result.IsPartial do
         throwError "a partial fixed point cannot be proved pure"
-      fixpointProof function arity
-    else
-      `(by
-        $introduce:tactic
-        delta $functionId:ident
-        -- Peel binds before simplifying their continuations. Simplifying a large
-        -- straight-line computation first can duplicate all later branches at
-        -- each intermediate match (notably binary64 conversion code).
-        $steps:tactic)
-  let proof ← Command.liftTermElabM do
-    let proof ← Term.elabTermEnsuringType proofSyntax type
-    Term.synthesizeSyntheticMVarsNoPostponing
-    instantiateMVars proof
-  registerProof predicate function type proof
+      pure .fixpoint
+    else if ← Command.liftCoreM (isRecursiveDefinition function) then
+      pure (.group #[function] (rule predicate "guard_cases"))
+    else pure .body
+  generate predicate declaration #[(function, method)]
 
 elab doc?:(docComment)? "#lynx_pure " declaration:command : command =>
   elaborateWith purePredicate doc? declaration

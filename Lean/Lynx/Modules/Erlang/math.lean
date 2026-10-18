@@ -3,6 +3,10 @@ module
 public import Lynx.Purity
 
 namespace Erlang.math
+
+-- Other modules use these lemmas constantly, including while checking
+-- well-founded recursion, so they are proved once, here.
+set_option lynx.lazyPurity false
 open Lynx
 
 -- Both operations return a float. Keep the input sign when the result is zero,

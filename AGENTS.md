@@ -54,8 +54,11 @@ Functions that neither inspect nor change the environment and perform no process
 effects should be tagged with `#lynx_pure`. They may still raise exceptions.
 Those that may additionally not return, such as partial fixed points, should be
 tagged with `#lynx_partial`. `Lynx/Purity.lean` generates ordinary kernel-checked
-`<name>_pure` and `<name>_partial` lemmas, registered for simplification,
-without a contract verification tactic.
+`<name>_pure` and `<name>_partial` lemmas without a contract verification tactic.
+Lemmas about exported definitions are proved on first use: by name, by `simp`,
+or by the purity proofs of callers. The runtime library disables
+`lynx.lazyPurity`, so its lemmas are simp rules from the start, which
+well-founded preprocessing needs.
 
 Proofs must not introduce untrusted axioms or `sorry`
 

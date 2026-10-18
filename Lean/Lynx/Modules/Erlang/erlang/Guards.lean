@@ -10,6 +10,10 @@ public section
 
 namespace Erlang.erlang
 
+-- Other modules use these lemmas constantly, including while checking
+-- well-founded recursion, so they are proved once, here.
+set_option lynx.lazyPurity false
+
 open Lynx
 
 #lynx_pure @[expose] def «and/2» : Term → Term → Result
