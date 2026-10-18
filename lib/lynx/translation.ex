@@ -108,7 +108,7 @@ defmodule Lynx.Translation do
       end)
 
     context = {%{translation | stack: [name | stack]}, &remote_call/6}
-    %{translations: translations} = module
+    %{translations: translations, literals: literals} = module
     %{funs: funs} = translation
 
     suffixed =
@@ -120,14 +120,16 @@ defmodule Lynx.Translation do
            definitions,
            names,
            translations,
+           literals,
            funs,
            suffixed,
            context
          ) do
-      {:ok, functions, laws, funs, translation} ->
+      {:ok, functions, literals, laws, funs, translation} ->
         updated = %{
           module
           | translations: propagate_purity(functions, name, translation.termination_suffixes),
+            literals: literals,
             laws: Map.merge(module.laws, laws)
         }
 
@@ -296,7 +298,7 @@ defmodule Lynx.Translation do
         raise CompileError, source_location(span_anno, file) ++ [description: reason]
 
       definitions ->
-        %{definitions: definitions, translations: %{}, laws: %{}, file: file}
+        %{definitions: definitions, translations: %{}, literals: %{}, laws: %{}, file: file}
     end
   end
 

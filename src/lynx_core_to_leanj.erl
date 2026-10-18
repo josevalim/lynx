@@ -1,6 +1,6 @@
 -module(lynx_core_to_leanj).
 
--export([module_name/1, to_definitions/1, translate/7, fun_table/2, join_purity/2]).
+-export([module_name/1, to_definitions/1, translate/8, fun_table/2, join_purity/2]).
 
 %% Purity levels, ordered by what running a definition requires: `pure` needs
 %% nothing, `partial` may not return, `sequential` needs the function table and
@@ -18,7 +18,8 @@
 %% of recursive definitions can be given termination measures.
 -record(state, {module, name, defs, translated, laws = #{}, funs = #{},
                 local_calls = #{}, purity = pure, remote, next_var = 0, labels = #{},
-                local_funs = #{}, size_facts = #{}, size_calls = [], suffixed = []}).
+                local_funs = #{}, size_facts = #{}, size_calls = [], suffixed = [],
+                literals = #{}}).
 
 -spec module_name(module()) -> binary().
 module_name(Module) ->
@@ -130,21 +131,23 @@ purity_rank(concurrent) -> 4.
 
 %% Translate the requested functions and laws, plus their reachable local callees.
 %% Laws are returned separately from definitions, keyed by name.
-%% The supplied maps contain this module's definitions and the program-wide function registry.
+%% The supplied maps contain this module's definitions, its literal pool, and the
+%% program-wide function registry.
 %% Suffixed functions have user termination suffixes, which refer to Core's parameter names.
 %% The callback returns remote callee purity. Local purity is propagated by Lynx.Translation.
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
--spec translate(module(), #{{atom(), arity()} => {function | cutoff, cerl:c_fun()} | {law, map()}}, [{atom(), arity()}], map(), map(),
-                [{atom(), arity()}],
+-spec translate(module(), #{{atom(), arity()} => {function | cutoff, cerl:c_fun()} | {law, map()}}, [{atom(), arity()}], map(),
+                #{term() => binary()}, map(), [{atom(), arity()}],
                 {term(), fun((term(), module(), atom(), arity(), list(), map()) ->
                     {purity(), map(), term()} | local)}) ->
-    {ok, map(), map(), map(), term()} | {error, list(), binary()}.
-translate(Module, Definitions, Names, Translated, Funs, Suffixed, Remote) ->
+    {ok, map(), map(), map(), map(), term()} | {error, list(), binary()}.
+translate(Module, Definitions, Names, Translated, Literals, Funs, Suffixed, Remote) ->
     try
         State = #state{
           module = Module,
           defs = Definitions,
           translated = Translated,
+          literals = Literals,
           funs = Funs,
           suffixed = Suffixed,
           remote = Remote
@@ -152,12 +155,13 @@ translate(Module, Definitions, Names, Translated, Funs, Suffixed, Remote) ->
 
         #state{
           translated = NewTranslated,
+          literals = NewLiterals,
           laws = Laws,
           funs = NewFuns,
           remote = {NewContext, _Callback}
         } = lists:foldl(fun translate_def/2, State, Names),
 
-        {ok, NewTranslated, Laws, NewFuns, NewContext}
+        {ok, NewTranslated, NewLiterals, Laws, NewFuns, NewContext}
     catch
         throw:{error, Core, Reason} -> {error, cerl:get_ann(Core), Reason}
     end.
@@ -319,7 +323,8 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
               size_calls => lists:reverse(State2#state.size_calls),
               purity => State2#state.purity},
     State0#state{translated = (State2#state.translated)#{Name => Entry},
-                 funs = State2#state.funs, remote = State2#state.remote}.
+                 literals = State2#state.literals, funs = State2#state.funs,
+                 remote = State2#state.remote}.
 
 %% OTP lowers receive to a local scan/wait loop. Recover the operation before
 %% translating ordinary expressions; loop identity is checked structurally,
@@ -909,55 +914,42 @@ value(#c_binary{anno = Anno, segments = Segments}, State0) ->
             {Translated, State1} = binary_pattern_segments(Segments, State0),
             {node(~"bitstring_pattern", Anno, #{~"segments" => Translated}), State1}
     end;
-value(#c_literal{anno = Anno, val = Fun} = Core, State0) when is_function(Fun) ->
-    case erlang:fun_info(Fun, type) of
-        {type, external} ->
-            {module, Module} = erlang:fun_info(Fun, module),
-            {name, Name} = erlang:fun_info(Fun, name),
-            {arity, Arity} = erlang:fun_info(Fun, arity),
-            external_function_value(Module, Name, Arity, Anno, State0);
-        _ -> unsupported(Core)
+%% Large compound literals, such as lookup tables, are pooled into module
+%% definitions. Inline, they are traversed by every termination, induction, and
+%% purity proof of the functions using them, even when they appear once. Their
+%% elements stay inline in the definition. Names derive from the value, so
+%% proofs referring to them do not depend on other literals or on translation
+%% order; the module's pool shares equal values and rejects name collisions.
+value(#c_literal{anno = Anno, val = Value} = Literal, State0)
+        when is_tuple(Value); is_map(Value); is_bitstring(Value); is_list(Value), Value =/= [] ->
+    case not lists:member(lynx_inline, Anno) andalso literal_size(Value) >= 32 of
+        true ->
+            Literals = State0#state.literals,
+            {Name, State1} = case Literals of
+                #{Value := Existing} -> {Existing, State0};
+                #{} ->
+                    Hash = erlang:md5(term_to_binary(Value, [deterministic])),
+                    Encoded = 'Elixir.Base':encode32(Hash, [{'case', lower}, {padding, false}]),
+                    New = <<"lynx_literal_", (binary:part(Encoded, 0, 8))/binary>>,
+                    lists:member(New, maps:values(Literals)) andalso
+                        core_error(Literal, <<"literal name collision: ", New/binary>>),
+                    {New, State0#state{literals = Literals#{Value => New}}}
+            end,
+            {Translated, State2} = value(Literal#c_literal{anno = [lynx_inline | Anno]}, State1),
+            {Translated#{~"pooled" => Name}, State2};
+        false ->
+            literal_value(Literal, State0)
     end;
-value(#c_literal{anno = Anno, val = []}, State) ->
-    {node(~"nil", Anno, #{}), State};
-value(#c_literal{anno = Anno, val = [Head | Tail]}, State0) ->
-    {TranslatedHead, State1} = value(#c_literal{anno = Anno, val = Head}, State0),
-    {TranslatedTail, State2} = value(#c_literal{anno = Anno, val = Tail}, State1),
-    {node(~"cons", Anno, #{~"head" => TranslatedHead, ~"tail" => TranslatedTail}), State2};
-value(#c_literal{anno = Anno, val = N}, State) when is_integer(N) ->
-    {node(~"integer", Anno, #{~"value" => N}), State};
-value(#c_literal{anno = Anno, val = N}, State) when is_float(N) ->
-    <<Sign:1, Exponent:11, Fraction:52>> = <<N:64/float>>,
-    {node(~"float", Anno, #{~"negative" => Sign =:= 1,
-        ~"exponent" => Exponent, ~"fraction" => Fraction}), State};
-value(#c_literal{anno = Anno, val = Bits}, State) when is_bitstring(Bits) ->
-    Padding = (8 - bit_size(Bits) rem 8) rem 8,
-    Bytes = binary_to_list(<<Bits/bitstring, 0:Padding>>),
-    {node(~"bitstring", Anno, #{~"bytes" => Bytes, ~"last_bits" => bit_size(Bits) rem 8}), State};
-value(#c_literal{anno = Anno, val = Atom}, State) when is_atom(Atom) ->
-    {node(~"atom", Anno, #{~"value" => atom_to_binary(Atom, utf8)}), State};
+value(#c_literal{} = Literal, State) ->
+    literal_value(Literal, State);
+
 value(#c_cons{anno = Anno, hd = Head, tl = Tail}, State0) ->
     {TranslatedHead, State1} = value(Head, State0),
     {TranslatedTail, State2} = value(Tail, State1),
     {node(~"cons", Anno, #{~"head" => TranslatedHead, ~"tail" => TranslatedTail}), State2};
-%% Large literal tuples, such as lookup tables, are shared module definitions.
-%% Inline, they are traversed by every termination, induction, and purity proof
-%% of the functions using them, and repeated in each clause that does.
-value(#c_literal{anno = Anno, val = Tuple}, State0) when is_tuple(Tuple), tuple_size(Tuple) >= 32 ->
-    {Value, State1} = value(#c_tuple{anno = Anno,
-        es = [#c_literal{anno = Anno, val = V} || V <- tuple_to_list(Tuple)]}, State0),
-    Hash = binary:encode_hex(binary:part(erlang:md5(term_to_binary(Tuple)), 0, 6), lowercase),
-    {Value#{~"name" => <<"lynx_literal_", Hash/binary>>}, State1};
-value(#c_literal{anno = Anno, val = Tuple}, State) when is_tuple(Tuple) ->
-    value(#c_tuple{anno = Anno, es = [#c_literal{anno = Anno, val = V} || V <- tuple_to_list(Tuple)]}, State);
 value(#c_tuple{anno = Anno, es = Elements}, State0) ->
     {Translated, State1} = lists:mapfoldl(fun value/2, State0, Elements),
     {node(~"tuple", Anno, #{~"elements" => Translated}), State1};
-value(#c_literal{anno = Anno, val = Map}, State0) when is_map(Map) ->
-    Pairs = [#c_map_pair{anno = Anno, op = #c_literal{val = assoc},
-                       key = #c_literal{anno = Anno, val = K},
-                       val = #c_literal{anno = Anno, val = V}} || {K, V} <- maps:to_list(Map)],
-    value(#c_map{anno = Anno, arg = #c_literal{val = #{}}, es = Pairs}, State0);
 value(#c_map{anno = Anno, es = Pairs, is_pat = true}, State0) ->
     {Entries, State1} = lists:mapfoldl(fun map_pattern_entry/2, State0, Pairs),
     {node(~"map", Anno, #{~"entries" => Entries}), State1};
@@ -967,6 +959,53 @@ value(#c_map{anno = Anno, arg = #c_literal{val = Base}, es = Pairs,
     {node(~"map", Anno, #{~"entries" => Entries}), State1};
 value(Core, _State) ->
     unsupported(Core).
+
+literal_value(#c_literal{anno = Anno, val = Fun} = Core, State0) when is_function(Fun) ->
+    case erlang:fun_info(Fun, type) of
+        {type, external} ->
+            {module, Module} = erlang:fun_info(Fun, module),
+            {name, Name} = erlang:fun_info(Fun, name),
+            {arity, Arity} = erlang:fun_info(Fun, arity),
+            external_function_value(Module, Name, Arity, Anno, State0);
+        _ -> unsupported(Core)
+    end;
+literal_value(#c_literal{anno = Anno, val = []}, State) ->
+    {node(~"nil", Anno, #{}), State};
+literal_value(#c_literal{anno = Anno, val = [Head | Tail]}, State0) ->
+    {TranslatedHead, State1} = value(#c_literal{anno = Anno, val = Head}, State0),
+    {TranslatedTail, State2} = value(#c_literal{anno = Anno, val = Tail}, State1),
+    {node(~"cons", Anno, #{~"head" => TranslatedHead, ~"tail" => TranslatedTail}), State2};
+literal_value(#c_literal{anno = Anno, val = N}, State) when is_integer(N) ->
+    {node(~"integer", Anno, #{~"value" => N}), State};
+literal_value(#c_literal{anno = Anno, val = N}, State) when is_float(N) ->
+    <<Sign:1, Exponent:11, Fraction:52>> = <<N:64/float>>,
+    {node(~"float", Anno, #{~"negative" => Sign =:= 1,
+        ~"exponent" => Exponent, ~"fraction" => Fraction}), State};
+literal_value(#c_literal{anno = Anno, val = Bits}, State) when is_bitstring(Bits) ->
+    Padding = (8 - bit_size(Bits) rem 8) rem 8,
+    Bytes = binary_to_list(<<Bits/bitstring, 0:Padding>>),
+    {node(~"bitstring", Anno, #{~"bytes" => Bytes, ~"last_bits" => bit_size(Bits) rem 8}), State};
+literal_value(#c_literal{anno = Anno, val = Atom}, State) when is_atom(Atom) ->
+    {node(~"atom", Anno, #{~"value" => atom_to_binary(Atom, utf8)}), State};
+literal_value(#c_literal{anno = Anno, val = Tuple}, State) when is_tuple(Tuple) ->
+    value(#c_tuple{anno = Anno, es = [#c_literal{anno = Anno, val = V} || V <- tuple_to_list(Tuple)]}, State);
+literal_value(#c_literal{anno = Anno, val = Map}, State0) when is_map(Map) ->
+    Pairs = [#c_map_pair{anno = Anno, op = #c_literal{val = assoc},
+                       key = #c_literal{anno = Anno, val = K},
+                       val = #c_literal{anno = Anno, val = V}} || {K, V} <- maps:to_list(Map)],
+    value(#c_map{anno = Anno, arg = #c_literal{val = #{}}, es = Pairs}, State0).
+
+%% The number of terms a literal renders to in Lean, counting each byte.
+literal_size(Value) when is_tuple(Value) ->
+    lists:foldl(fun(Element, Size) -> Size + literal_size(Element) end, 1, tuple_to_list(Value));
+literal_size([Head | Tail]) ->
+    1 + literal_size(Head) + literal_size(Tail);
+literal_size(Value) when is_map(Value) ->
+    maps:fold(fun(Key, Element, Size) -> Size + literal_size(Key) + literal_size(Element) end, 1, Value);
+literal_size(Value) when is_bitstring(Value) ->
+    1 + byte_size(Value);
+literal_size(_) ->
+    1.
 
 %% Fold constant bitstring patterns into ordinary literals. Bound each segment
 %% expansion; larger segments retain matching without changing their semantics.

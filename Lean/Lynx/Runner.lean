@@ -116,9 +116,9 @@ private structure DecodeState where
   theorems : Array (Name × Span) := #[]
   patternExtractions : Array PatternExtraction := #[]
   nextBitstringPattern : Nat := 0
-  /-- Values of the module's shared literals, by name, to detect conflicts. -/
-  literals : Std.HashMap String String := {}
-  /-- Definitions of shared literals, emitted before the command using them. -/
+  /-- Names of the pooled literals already defined in this module. -/
+  literals : Std.HashSet String := {}
+  /-- Definitions of pooled literals, emitted before the command using them. -/
   pendingLiterals : Array (TSyntax `command) := #[]
 
 private abbrev DecodeM := ReaderT Lean.Environment (StateT DecodeState (Except String))
@@ -545,6 +545,19 @@ private def refineGuardClause (c : Json) (expressions : Array Json) (receiveClau
 
 private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     (j : Json) : DecodeM (TSyntax `term) := do
+  -- Named literals are pooled: defined once per module, before the command
+  -- using them, and referred to by name. Patterns need their constructors.
+  if let .ok name := str j "pooled" then
+    let unnamed := Json.mkObj ((← j.getObj?).toArray.toList.filter (·.1 != "pooled"))
+    if pattern then return ← term map parent pattern unnamed
+    let id := mkIdent (Name.mkSimple name)
+    unless (← get).literals.contains name do
+      let decoded ← term map parent false unnamed
+      let termType := mkIdent ``Lynx.Term
+      let definition := Unhygienic.run `(def $id : $termType := $decoded)
+      modify fun s => { s with literals := s.literals.insert name,
+                               pendingLiterals := s.pendingLiterals.push definition }
+    return id
   let info ← span map j parent
   let kind ← str j "kind"
   if pattern && kind ∈ ["local_call", "remote_call", "fun_call", "bind", "return", "raise", "raise_dynamic", "reraise", "nonzero_width", "orelse", "andalso", "in", "match", "receive", "try", "stacktrace", "label", "jump"] then
@@ -784,21 +797,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let ctor := mkIdent ``Lynx.Term.function
     pure (Unhygienic.run `($ctor $id $arity #[$captures,*]))
   | "tuple" => do
-    fields j ["kind", "elements", "name", "span"]
-    -- Named tuples are shared literals, defined once before the command using them.
-    if let (.ok name, false) := (str j "name", pattern) then
-      let id := mkIdent (Name.mkSimple name)
-      let unnamed := Json.mkObj ((← j.getObj?).toArray.toList.filter (·.1 != "name"))
-      let key := (withoutSpans unnamed).compress
-      match (← get).literals.get? name with
-      | some existing => unless existing == key do throw s!"literal '{name}' has conflicting values"
-      | none =>
-        let decoded ← term map info false unnamed
-        let termType := mkIdent ``Lynx.Term
-        let definition := Unhygienic.run `(def $id : $termType := $decoded)
-        modify fun s => { s with literals := s.literals.insert name key,
-                                 pendingLiterals := s.pendingLiterals.push definition }
-      return id
+    fields j ["kind", "elements", "span"]
     let elements ← (← arr j "elements").mapM (term map info pattern)
     let ctor := mkIdent ``Lynx.Term.tuple
     -- Use Array's ordinary constructor in patterns, avoiding the array-literal
