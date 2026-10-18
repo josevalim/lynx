@@ -61,7 +61,7 @@ defmodule StringProofsTest do
           rw [←original]
           simp [«next_codepoint_recovers_prefix:ensures/2», «prepend/2», constructed,
             copied, append_bits, Elixir.String.«next_codepoint/1», matched, tailMatch,
-            Erlang.erlang.«=:=/2», Lynx.Result.bind]
+            Erlang.erlang.«=:=/2», Except.bind]
       """
   end
 end

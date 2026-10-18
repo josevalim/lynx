@@ -51,8 +51,8 @@ public theorem ofBits_toBits_aligned (bytes : ByteArray) : ofBits (toBits bytes 
 
 /-- Build an integer segment. Segment sizes count `unit` bits and must be
 nonnegative integers; the Core unit is a compile-time value in `1..256`. -/
-#lynx_pure @[expose] public def integerSegment (value size : Term) (unit : Nat)
-    (little : Bool) : Result :=
+@[expose] public def integerSegment (value size : Term) (unit : Nat)
+    (little : Bool) : Except Exception Term :=
   match value, size with
   | .integer value, .integer size =>
     if 0 ≤ size ∧ 1 ≤ unit ∧ unit ≤ 256 then
@@ -63,7 +63,7 @@ nonnegative integers; the Core unit is a compile-time value in `1..256`. -/
 /-- Encode binary64 fields without rounding. Integer operands are first rounded
 into binary64, failing with badarg if conversion overflows. Binary16 and
 binary32 are not modeled yet and currently return badarg. -/
-#lynx_pure @[expose] public def floatSegment (value : Term) (width : Nat) (little : Bool) : Result :=
+@[expose] public def floatSegment (value : Term) (width : Nat) (little : Bool) : Except Exception Term :=
   if width != 64 then .error (.error (.atom "badarg"))
   else
     let converted := match value with
@@ -78,7 +78,7 @@ binary32 are not modeled yet and currently return badarg. -/
     | none => .error (.error (.atom "badarg"))
 
 /-- Encode one Unicode scalar as UTF-8. Endianness does not affect UTF-8. -/
-#lynx_pure @[expose] public def utf8Segment (value : Term) : Result :=
+@[expose] public def utf8Segment (value : Term) : Except Exception Term :=
   match value with
   | .integer value =>
     if 0 ≤ value ∧ value ≤ 0x10ffff ∧ (value < 0xd800 ∨ 0xdfff < value) then
@@ -95,7 +95,7 @@ binary32 are not modeled yet and currently return badarg. -/
 
 /-- Encode one Unicode scalar as UTF-16, ordering bytes within each code unit.
 Supplementary scalars emit the high surrogate before the low surrogate. -/
-#lynx_pure @[expose] public def utf16Segment (value : Term) (little : Bool) : Result :=
+@[expose] public def utf16Segment (value : Term) (little : Bool) : Except Exception Term :=
   match value with
   | .integer value =>
     if 0 ≤ value ∧ value ≤ 0x10ffff ∧ (value < 0xd800 ∨ 0xdfff < value) then
@@ -108,7 +108,7 @@ Supplementary scalars emit the high surrogate before the low surrogate. -/
   | _ => .error (.error (.atom "badarg"))
 
 /-- Encode one Unicode scalar as UTF-32 without integer-segment truncation. -/
-#lynx_pure @[expose] public def utf32Segment (value : Term) (little : Bool) : Result :=
+@[expose] public def utf32Segment (value : Term) (little : Bool) : Except Exception Term :=
   match value with
   | .integer value =>
     if 0 ≤ value ∧ value ≤ 0x10ffff ∧ (value < 0xd800 ∨ 0xdfff < value) then
@@ -118,7 +118,7 @@ Supplementary scalars emit the high surrogate before the low surrogate. -/
 
 /-- Copy a whole bitstring or a sized prefix. Whole segments must have a bit
 length divisible by their unit; sized segments may consume an unaligned input. -/
-#lynx_pure @[expose] public def binarySegment (value size : Term) (unit : Nat) : Result :=
+@[expose] public def binarySegment (value size : Term) (unit : Nat) : Except Exception Term :=
   match value with
   | .bitstring bytes last _ =>
     if 1 ≤ unit ∧ unit ≤ 256 then
@@ -135,7 +135,7 @@ length divisible by their unit; sized segments may consume an unaligned input. -
   | _ => .error (.error (.atom "badarg"))
 
 /-- Concatenate meaningful bits, including segments that cross byte boundaries. -/
-#lynx_pure @[expose] public def append (left right : Term) : Result :=
+@[expose] public def append (left right : Term) : Except Exception Term :=
   match left, right with
   | .bitstring a ab _, .bitstring b bb _ =>
       .ok (ofBits (toBits a ab ++ toBits b bb))

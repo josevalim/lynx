@@ -195,17 +195,17 @@ defmodule CalendarProofsTest do
       have decodedRaw (n : Int) : Erlang.calendar.«gregorian_days_to_date/1» (.integer n) =
           .ok (.tuple #[.integer (rawY n+rawEra n*400+if rawMonth n≤2 then 1 else 0),
             .integer (rawMonth n), .integer (rawR n-(153*rawMP n+2).tdiv 5+1)]) := by
-        have pureOk {α : Type} (a : α) : (pure a : Lynx.Result α) = .ok a := rfl
-        have okBind {α β : Type} (a : α) (k : α → Lynx.Result β) : (Lynx.Result.ok a >>= k) = k a := rfl
+        have pureOk {α : Type} (a : α) : (pure a : Except Lynx.Exception α) = .ok a := rfl
+        have okBind {α β : Type} (a : α) (k : α → Except Lynx.Exception β) : (Except.ok a >>= k) = k a := rfl
         have divide (a b : Int) (nonzero : b ≠ 0) :
             Erlang.erlang.«div/2» (.integer a) (.integer b) = .ok (.integer (a.tdiv b)) := by
           simp [Erlang.erlang.«div/2», nonzero]
-        have branch (p : Prop) [Decidable p] (yes no : Unit → Lynx.Result) :
-            Lynx.Result.guard (.ok (if p then Lynx.Term.true else Lynx.Term.false)) yes no =
+        have branch (p : Prop) [Decidable p] (yes no : Unit → Except Lynx.Exception Lynx.Term) :
+            Lynx.Except.guard (.ok (if p then Lynx.Term.true else Lynx.Term.false)) yes no =
               if p then yes () else no () := by
           by_cases h : p <;> simp [h]
         have iteResult (p : Prop) [Decidable p] (a b : Lynx.Term) :
-            (if p then Lynx.Result.ok a else Lynx.Result.ok b) = Lynx.Result.ok (if p then a else b) := by split <;> rfl
+            (if p then (Except.ok a : Except Lynx.Exception Lynx.Term) else .ok b) = .ok (if p then a else b) := by split <;> rfl
         have iteInteger (p : Prop) [Decidable p] (a b : Int) :
             (if p then Lynx.Term.integer a else Lynx.Term.integer b) = Lynx.Term.integer (if p then a else b) := by split <;> rfl
         simp (disch := decide) only [Erlang.calendar.«gregorian_days_to_date/1»,
@@ -213,7 +213,7 @@ defmodule CalendarProofsTest do
           Erlang.erlang.«*/2_integers», divide, Erlang.erlang.«>=/2_integers»,
           Erlang.erlang.«</2_integers», Erlang.erlang.«=</2_integers», branch,
           iteResult, iteInteger, pureOk, okBind]
-        change (Lynx.Result.ok (Lynx.Term.tuple #[.integer (if rawMonth n≤2 then rawY n+rawEra n*400+1 else rawY n+rawEra n*400),
+        change (Except.ok (Lynx.Term.tuple #[.integer (if rawMonth n≤2 then rawY n+rawEra n*400+1 else rawY n+rawEra n*400),
           .integer (rawMonth n), .integer (rawR n-(153*rawMP n+2).tdiv 5+1)])) = _
         by_cases h : rawMonth n≤2 <;> simp [h]
 
@@ -227,21 +227,21 @@ defmodule CalendarProofsTest do
       have encodedRaw (year month day : Int) (positive : 0 < day) :
           Erlang.calendar.«date_to_gregorian_days/1»
             (.tuple #[.integer year, .integer month, .integer day]) = .ok (.integer (dateNumber year month day)) := by
-        have pureOk {α : Type} (a : α) : (pure a : Lynx.Result α) = .ok a := rfl
-        have okBind {α β : Type} (a : α) (k : α → Lynx.Result β) : (Lynx.Result.ok a >>= k) = k a := rfl
+        have pureOk {α : Type} (a : α) : (pure a : Except Lynx.Exception α) = .ok a := rfl
+        have okBind {α β : Type} (a : α) (k : α → Except Lynx.Exception β) : (Except.ok a >>= k) = k a := rfl
         have divide (a b : Int) (nonzero : b ≠ 0) :
             Erlang.erlang.«div/2» (.integer a) (.integer b) = .ok (.integer (a.tdiv b)) := by
           simp [Erlang.erlang.«div/2», nonzero]
-        have branch (p : Prop) [Decidable p] (yes no : Unit → Lynx.Result) :
-            Lynx.Result.guard (.ok (if p then Lynx.Term.true else Lynx.Term.false)) yes no =
+        have branch (p : Prop) [Decidable p] (yes no : Unit → Except Lynx.Exception Lynx.Term) :
+            Lynx.Except.guard (.ok (if p then Lynx.Term.true else Lynx.Term.false)) yes no =
               if p then yes () else no () := by
           by_cases h : p <;> simp [h]
         have iteResult (p : Prop) [Decidable p] (a b : Lynx.Term) :
-            (if p then Lynx.Result.ok a else Lynx.Result.ok b) = Lynx.Result.ok (if p then a else b) := by split <;> rfl
+            (if p then (Except.ok a : Except Lynx.Exception Lynx.Term) else .ok b) = .ok (if p then a else b) := by split <;> rfl
         have iteInteger (p : Prop) [Decidable p] (a b : Int) :
             (if p then Lynx.Term.integer a else Lynx.Term.integer b) = Lynx.Term.integer (if p then a else b) := by split <;> rfl
-        have branchTrue (yes no : Unit → Lynx.Result) :
-            Lynx.Result.guard (.ok Lynx.Term.true) yes no = yes () := rfl
+        have branchTrue (yes no : Unit → Except Lynx.Exception Lynx.Term) :
+            Lynx.Except.guard (.ok Lynx.Term.true) yes no = yes () := rfl
         have greater (a b : Int) : Erlang.erlang.«>/2» (.integer a) (.integer b) =
             .ok (if b<a then Lynx.Term.true else Lynx.Term.false) := by
           simp [Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt, Int.compare_eq_gt]
@@ -250,9 +250,9 @@ defmodule CalendarProofsTest do
           Erlang.erlang.«+/2_integers», Erlang.erlang.«-/2_integers»,
           Erlang.erlang.«*/2_integers», divide, Erlang.erlang.«>=/2_integers», greater,
           Erlang.erlang.«=</2_integers», branch, iteResult, iteInteger, pureOk, okBind,
-          positive, if_true, Erlang.erlang.«and/2», branchTrue, Lynx.Result.tryWith_ok]
+          positive, if_true, Erlang.erlang.«and/2», branchTrue, Lynx.Except.tryWith_ok]
         simp only [Lynx.Term.true, branchTrue]
-        apply congrArg (fun value : Int => Lynx.Result.ok (Lynx.Term.integer value))
+        apply congrArg (fun value : Int => Except.ok (Lynx.Term.integer value))
         dsimp [dateNumber]
         omega
 

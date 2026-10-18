@@ -35,8 +35,8 @@ def «selective/1» (_0 : Lynx.Term) : Lynx.Result :=
         match _3 with
         | Lynx.Term.tuple ⟨[_2, vX]⟩ =>
           match
-            (Lynx.Result.toExceptRead (Erlang.erlang.«=:=/2» _2 _0) _lynxReceiveEnv
-              (by simp (config := { maxDischargeDepth := 64 }))) with
+            (Lynx.Result.toExceptRead (Lynx.Result.ofExcept (Erlang.erlang.«=:=/2» _2 _0))
+              _lynxReceiveEnv (by simp (config := { maxDischargeDepth := 64 }))) with
           | Except.ok (Lynx.Term.atom "true") => Option.some (Sum.inl vX)
           | _ => lynxReceiveNext ()
         | _ => lynxReceiveNext () :
@@ -63,8 +63,8 @@ def «guarded/1» (_0 : Lynx.Term) : Lynx.Result :=
                 match _12 with
                 | Lynx.Term.tuple ⟨[_11, vX]⟩ =>
                   match
-                    (Lynx.Result.toExceptRead (Erlang.erlang.«=:=/2» _11 _0) _lynxReceiveEnv
-                      (by simp (config := { maxDischargeDepth := 64 }))) with
+                    (Lynx.Result.toExceptRead (Lynx.Result.ofExcept (Erlang.erlang.«=:=/2» _11 _0))
+                      _lynxReceiveEnv (by simp (config := { maxDischargeDepth := 64 }))) with
                   | Except.ok (Lynx.Term.atom "true") =>
                     Option.some (Sum.inr (Sum.inr (Sum.inl vX)))
                   | _ => lynxReceiveNext ()
@@ -75,12 +75,12 @@ def «guarded/1» (_0 : Lynx.Term) : Lynx.Result :=
               match
                 (Lynx.Result.toExceptRead
                   (do
-                    let _9 ← Erlang.erlang.«=:=/2» _8 _0
+                    let _9 ← Lynx.Result.ofExcept (Erlang.erlang.«=:=/2» _8 _0)
                     let _10 ←
                       do
-                        let _3 ← Erlang.erlang.«>/2» vX (Lynx.Term.integer 0)
-                        Erlang.erlang.«and/2» (Lynx.Term.atom "true") _3
-                    Erlang.erlang.«and/2» _9 _10)
+                        let _3 ← Lynx.Result.ofExcept (Erlang.erlang.«>/2» vX (Lynx.Term.integer 0))
+                        Lynx.Result.ofExcept (Erlang.erlang.«and/2» (Lynx.Term.atom "true") _3)
+                    Lynx.Result.ofExcept (Erlang.erlang.«and/2» _9 _10))
                   _lynxReceiveEnv (by simp (config := { maxDischargeDepth := 64 }))) with
               | Except.ok (Lynx.Term.atom "true") => Option.some (Sum.inr (Sum.inl vX))
               | _ => lynxReceiveNext ()
@@ -91,18 +91,18 @@ def «guarded/1» (_0 : Lynx.Term) : Lynx.Result :=
           match
             (Lynx.Result.toExceptRead
               (do
-                let _6 ← Erlang.erlang.«=:=/2» _5 _0
+                let _6 ← Lynx.Result.ofExcept (Erlang.erlang.«=:=/2» _5 _0)
                 let _7 ←
                   Lynx.Result.tryWith
                       (do
-                        let _1 ← Erlang.erlang.«byte_size/1» vX
-                        Erlang.erlang.«==/2» _1 (Lynx.Term.integer 1))
+                        let _1 ← Lynx.Result.ofExcept (Erlang.erlang.«byte_size/1» vX)
+                        Lynx.Result.ofExcept (Erlang.erlang.«==/2» _1 (Lynx.Term.integer 1)))
                       (fun vTry => pure vTry)
                       (fun lynxException =>
                         let vT := Lynx.Exception.classTerm lynxException
                         let vR := Lynx.Exception.reason lynxException
                         pure (Lynx.Term.atom "false"))
-                Erlang.erlang.«and/2» _6 _7)
+                Lynx.Result.ofExcept (Erlang.erlang.«and/2» _6 _7))
               _lynxReceiveEnv (by simp (config := { maxDischargeDepth := 64 }))) with
           | Except.ok (Lynx.Term.atom "true") => Option.some (Sum.inl vX)
           | _ => lynxReceiveNext ()
@@ -128,7 +128,7 @@ def «self_guard/0» : Lynx.Result :=
               (Lynx.Result.tryWith
                 (do
                   let _0 ← Erlang.erlang.«self/0»
-                  Erlang.erlang.«=:=/2» vPid _0)
+                  Lynx.Result.ofExcept (Erlang.erlang.«=:=/2» vPid _0))
                 (fun vTry => pure vTry)
                 (fun lynxException =>
                   let vT := Lynx.Exception.classTerm lynxException
@@ -181,7 +181,7 @@ def «sleep/1» (_0 : Lynx.Term) : Lynx.Result :=
       | Option.none => pure (Lynx.Term.atom "done"))
 
 def «computed/1» (_0 : Lynx.Term) : Lynx.Result := do
-  let _2 ← Erlang.erlang.«+/2» _0 (Lynx.Term.integer 1)
+  let _2 ← Lynx.Result.ofExcept (Erlang.erlang.«+/2» _0 (Lynx.Term.integer 1))
   Lynx.Result.receiveWith _2
       (fun (_lynxReceiveEnv : Lynx.Environment) (_3 : Lynx.Term) =>
         (match _3 with
@@ -216,8 +216,8 @@ def «nested/0» : Lynx.Result :=
                 match _1 with
                 | _0 =>
                   match
-                    (Lynx.Result.toExceptRead (Erlang.erlang.«=:=/2» _1 vX) _lynxReceiveEnv
-                      (by simp (config := { maxDischargeDepth := 64 }))) with
+                    (Lynx.Result.toExceptRead (Lynx.Result.ofExcept (Erlang.erlang.«=:=/2» _1 vX))
+                      _lynxReceiveEnv (by simp (config := { maxDischargeDepth := 64 }))) with
                   | Except.ok (Lynx.Term.atom "true") => Option.some ()
                   | _ => lynxReceiveNext () :
                 Option Unit))
@@ -257,8 +257,8 @@ def «repeated/0» : Lynx.Result :=
         match _1 with
         | Lynx.Term.tuple ⟨[vX, _0]⟩ =>
           match
-            (Lynx.Result.toExceptRead (Erlang.erlang.«=:=/2» _0 vX) _lynxReceiveEnv
-              (by simp (config := { maxDischargeDepth := 64 }))) with
+            (Lynx.Result.toExceptRead (Lynx.Result.ofExcept (Erlang.erlang.«=:=/2» _0 vX))
+              _lynxReceiveEnv (by simp (config := { maxDischargeDepth := 64 }))) with
           | Except.ok (Lynx.Term.atom "true") => Option.some vX
           | _ => lynxReceiveNext ()
         | _ => lynxReceiveNext () :
@@ -310,10 +310,10 @@ def «alternatives/0» : Lynx.Result :=
               (do
                 let _1 ←
                   do
-                    let _0 ← Erlang.erlang.«is_integer/1» _3
-                    Erlang.erlang.«not/1» _0
-                let _2 ← Erlang.erlang.«>/2» _3 (Lynx.Term.integer 0)
-                Erlang.erlang.«or/2» _1 _2)
+                    let _0 ← Lynx.Result.ofExcept (Erlang.erlang.«is_integer/1» _3)
+                    Lynx.Result.ofExcept (Erlang.erlang.«not/1» _0)
+                let _2 ← Lynx.Result.ofExcept (Erlang.erlang.«>/2» _3 (Lynx.Term.integer 0))
+                Lynx.Result.ofExcept (Erlang.erlang.«or/2» _1 _2))
               _lynxReceiveEnv (by simp (config := { maxDischargeDepth := 64 }))) with
           | Except.ok (Lynx.Term.atom "true") => Option.some vX
           | _ => lynxReceiveNext () :

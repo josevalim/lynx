@@ -6,15 +6,11 @@ public import Lynx.Purity
 public section
 
 namespace Erlang.maps
-
--- Other modules use these lemmas constantly, including while checking
--- well-founded recursion, so they are proved once, here.
-set_option lynx.lazyPurity false
 open Lynx
 
-#lynx_pure @[expose] def «new/0» : Result := .ok (Term.map [])
+@[expose] def «new/0» : Except Exception Term := .ok (Term.map [])
 
-#lynx_pure @[expose] def «get/2» (key input : Term) : Result :=
+@[expose] def «get/2» (key input : Term) : Except Exception Term :=
   match input with
   | .map entries =>
     match (entries.find? fun entry => decide (Term.exactCompare key entry.1 = .eq)).map Prod.snd with
@@ -22,12 +18,12 @@ open Lynx
     | none => .error (.error (.tuple #[.atom "badkey", key]))
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
-#lynx_pure @[expose] def «put/3» (key value input : Term) : Result :=
+@[expose] def «put/3» (key value input : Term) : Except Exception Term :=
   match input with
   | .map entries => .ok (.map ((key, value) :: entries))
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
-#lynx_pure @[expose] def «update/3» (key value input : Term) : Result :=
+@[expose] def «update/3» (key value input : Term) : Except Exception Term :=
   match input with
   | .map entries =>
     if (entries.find? fun entry => decide (Term.exactCompare key entry.1 = .eq)).isSome then
@@ -37,12 +33,12 @@ open Lynx
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
 /-- Later pairs take precedence, so they shadow earlier ones. -/
-#lynx_pure @[expose] def «from_list/1» (list : Term) : Result :=
+@[expose] def «from_list/1» (list : Term) : Except Exception Term :=
   match Term.pairList? list with
   | some entries => .ok (.map entries.reverse)
   | none => .error (.error (.atom "badarg"))
 
-#lynx_pure @[expose] def «merge/2» (left right : Term) : Result :=
+@[expose] def «merge/2» (left right : Term) : Except Exception Term :=
   match left, right with
   | .map a, .map b => .ok (.map (b ++ a))
   | .map _, _ => .error (.error (.tuple #[.atom "badmap", right]))
@@ -55,7 +51,7 @@ theorem get_merge (key : Term) (left right : List (Term × Term)) :
       match «get/2» key (.map right) with
       | .error _ => «get/2» key (.map left)
       | result => result := by
-  simp only [«merge/2», Result.ok_bind, «get/2», List.find?_append, Option.map_or]
+  simp only [«merge/2», Except.ok_bind, «get/2», List.find?_append, Option.map_or]
   cases (right.find? fun e => decide (Term.exactCompare key e.1 = .eq)).map Prod.snd <;> rfl
 
 /-- Maps with identical lookup results are semantically equal. -/

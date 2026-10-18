@@ -122,7 +122,7 @@ defmodule QueueProofsTest do
               show (↑(n+1) : Int) - 1 = n by omega] using step
       -- These are the two normalizations inlined by OTP at the split boundary.
 
-      let front : Lynx.Term → Lynx.Result := fun input => match input with
+      let front : Lynx.Term → Except Lynx.Exception Lynx.Term := fun input => match input with
         | .nil => .ok (pack [] [])
         | .cons x .nil => .ok (pack [x] [])
         | .cons x (.cons y .nil) => .ok (pack [y] [x])
@@ -135,7 +135,7 @@ defmodule QueueProofsTest do
             let rear ← Erlang.lists.«reverse/2» rr .nil
             .ok (.tuple #[rear, ff])
           | other => .error (.error (.tuple #[.atom "badmatch", other]))
-      let rear : Lynx.Term → Lynx.Result := fun input => match input with
+      let rear : Lynx.Term → Except Lynx.Exception Lynx.Term := fun input => match input with
         | .nil => .ok (pack [] [])
         | .cons x .nil => .ok (pack [] [x])
         | .cons y (.cons x .nil) => .ok (pack [y] [x])
@@ -162,7 +162,7 @@ defmodule QueueProofsTest do
           have divided : Erlang.erlang.«div/2» (.integer xs.length) (.integer 2) =
               .ok (.integer half) := rfl
           refine ⟨(xs.drop half).reverse, xs.take half, ?_, ?_, ?_⟩
-          · change (show Lynx.Result from do
+          · change (show Except Lynx.Exception Lynx.Term from do
               let count ← Erlang.erlang.«length/1» (encode xs)
               let half ← Erlang.erlang.«div/2» count (.integer 2)
               let pair ← Erlang.lists.«split/2» half (encode xs)
@@ -173,7 +173,7 @@ defmodule QueueProofsTest do
               | other => .error (.error (.tuple #[.atom "badmatch", other]))) = _
             simp only [lengthModel, divided,
               listSplitPublic half xs (Nat.div_le_self xs.length 2),
-              reverseNil, Lynx.Result.ok_bind] <;> rfl
+              reverseNil, Lynx.Except.ok_bind] <;> rfl
           · change _ = xs.length
             simp only [List.length_reverse, List.length_drop, List.length_take]
             omega
@@ -192,7 +192,7 @@ defmodule QueueProofsTest do
           have divided : Erlang.erlang.«div/2» (.integer xs.length) (.integer 2) =
               .ok (.integer half) := rfl
           refine ⟨xs.take half, (xs.drop half).reverse, ?_, ?_, ?_⟩
-          · change (show Lynx.Result from do
+          · change (show Except Lynx.Exception Lynx.Term from do
               let count ← Erlang.erlang.«length/1» (encode xs)
               let half ← Erlang.erlang.«div/2» count (.integer 2)
               let pair ← Erlang.lists.«split/2» half (encode xs)
@@ -203,7 +203,7 @@ defmodule QueueProofsTest do
               | other => .error (.error (.tuple #[.atom "badmatch", other]))) = _
             simp only [lengthModel, divided,
               listSplitPublic half xs (Nat.div_le_self xs.length 2),
-              reverseNil, Lynx.Result.ok_bind] <;> rfl
+              reverseNil, Lynx.Except.ok_bind] <;> rfl
           · change _ = xs.length
             simp only [List.length_reverse, List.length_drop, List.length_take]
             omega
@@ -224,8 +224,8 @@ defmodule QueueProofsTest do
         | zero =>
           refine ⟨[], [], r, f, ?_, rfl, by simp⟩
           dsimp only [Erlang.queue.«split/2», pack]
-          simp only [Int.cast_ofNat_Int, shape, Lynx.Result.ok_bind, Erlang.erlang.«and/2»,
-            Lynx.Term.true, Lynx.Result.guard_eq, Lynx.Result.tryWith_ok, pack, encNil] <;> rfl
+          simp only [Int.cast_ofNat_Int, shape, Lynx.Except.ok_bind, Erlang.erlang.«and/2»,
+            Lynx.Term.true, Lynx.Except.guard_eq, Lynx.Except.tryWith_ok, pack, encNil] <;> rfl
         | succ n =>
           have positive : (1 : Int) ≤ ↑(n+1) := by omega
           have nonzero : (↑(n+1) : Int) ≠ 0 := by omega
@@ -242,8 +242,8 @@ defmodule QueueProofsTest do
                 dsimp only [Erlang.queue.«split/2», pack]
                 simpa only [Lynx.Term.atom.injEq, String.reduceEq, imp_self, Int.cast_ofNat_Int, Int.reduceLT,
                   Int.reduceLE, Int.reduceEq, List.length_cons, lengthCons, List.append_nil, Lynx.Term.true,
-                  Lynx.Term.false, shapeCons, shapeNil, if_true, if_false, Lynx.Result.ok_bind,
-                  Lynx.Result.guard_eq, Lynx.Result.tryWith_ok, Lynx.Result.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
+                  Lynx.Term.false, shapeCons, shapeNil, if_true, if_false, Lynx.Except.ok_bind,
+                  Lynx.Except.guard_eq, Lynx.Except.tryWith_ok, Lynx.Except.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
                   Erlang.erlang.«</2_integers», greaterModel, Erlang.erlang.«-/2_integers», if_pos, if_neg, encNil,
                   pack, shape, lengthModel, encCons,
                   Erlang.erlang.«and/2»,
@@ -265,8 +265,8 @@ defmodule QueueProofsTest do
                 dsimp only [Erlang.queue.«split/2», pack]
                 simp only [Lynx.Term.atom.injEq, String.reduceEq, imp_self, Int.cast_ofNat_Int, Int.reduceLT,
                   Int.reduceLE, Int.reduceEq, List.length_cons, lengthCons, List.append_nil, Lynx.Term.true,
-                  Lynx.Term.false, shapeCons, shapeNil, if_true, if_false, Lynx.Result.ok_bind,
-                  Lynx.Result.guard_eq, Lynx.Result.tryWith_ok, Lynx.Result.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
+                  Lynx.Term.false, shapeCons, shapeNil, if_true, if_false, Lynx.Except.ok_bind,
+                  Lynx.Except.guard_eq, Lynx.Except.tryWith_ok, Lynx.Except.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
                   Erlang.erlang.«</2_integers», greaterModel, Erlang.erlang.«-/2_integers», if_pos, if_neg, encNil,
                   shape, lengthModel,
                   Erlang.erlang.«and/2»,
@@ -286,8 +286,8 @@ defmodule QueueProofsTest do
                     dsimp only [Erlang.queue.«split/2», pack]
                     simpa only [Lynx.Term.atom.injEq, String.reduceEq, imp_self, Int.cast_ofNat_Int, Int.reduceLT,
                       Int.reduceLE, Int.reduceEq, List.length_cons, lengthCons, List.append_nil, Lynx.Term.true,
-                      Lynx.Term.false, shapeCons, shapeNil, if_true, if_false, Lynx.Result.ok_bind,
-                      Lynx.Result.guard_eq, Lynx.Result.tryWith_ok, Lynx.Result.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
+                      Lynx.Term.false, shapeCons, shapeNil, if_true, if_false, Lynx.Except.ok_bind,
+                      Lynx.Except.guard_eq, Lynx.Except.tryWith_ok, Lynx.Except.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
                       Erlang.erlang.«</2_integers», greaterModel, Erlang.erlang.«-/2_integers», if_pos, if_neg,
                       encNil, pack, shape, lengthModel, encCons,
                       Erlang.erlang.«and/2»,
@@ -318,8 +318,8 @@ defmodule QueueProofsTest do
                 dsimp only [Erlang.queue.«split/2», pack]
                 simp only [Lynx.Term.atom.injEq, String.reduceEq, imp_self, Int.cast_ofNat_Int, Int.reduceLT,
                   Int.reduceLE, Int.reduceEq, List.length_cons, lengthCons, List.append_nil, Lynx.Term.true,
-                  Lynx.Term.false, shapeCons, shapeNil, if_true, if_false, Lynx.Result.ok_bind,
-                  Lynx.Result.guard_eq, Lynx.Result.tryWith_ok, Lynx.Result.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
+                  Lynx.Term.false, shapeCons, shapeNil, if_true, if_false, Lynx.Except.ok_bind,
+                  Lynx.Except.guard_eq, Lynx.Except.tryWith_ok, Lynx.Except.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
                   Erlang.erlang.«</2_integers», greaterModel, Erlang.erlang.«-/2_integers», if_pos, if_neg, encNil,
                   shape, lengthModel,
                   Erlang.erlang.«and/2»,
@@ -367,7 +367,7 @@ defmodule QueueProofsTest do
             change (do let total ← Erlang.queue.«len/1» (pack r f)
                        Erlang.erlang.«=</2» (.integer k) total) = .ok Lynx.Term.true at requires
             rw [lenModel] at requires
-            simp only [Lynx.Result.ok_bind, Erlang.erlang.«=</2_integers»] at requires
+            simp only [Lynx.Except.ok_bind, Erlang.erlang.«=</2_integers»] at requires
             have maxIndex : k ≤ (↑r.length : Int) + ↑f.length := by
               by_cases h : k ≤ (↑r.length : Int) + ↑f.length <;> simp_all
             have bound : k.toNat ≤ r.length + f.length := by omega

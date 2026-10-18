@@ -509,7 +509,7 @@ defmodule Lynx.Translation do
   end
 
   # A definition is as impure as its callees. Termination suffixes make it
-  # partial, since `#lynx_pure` cannot prove that such a definition returns.
+  # partial, since a pure definition must return.
   defp propagate_purity(functions, module, suffixes) do
     {functions, changed?} =
       Enum.reduce(functions, {functions, false}, fn {{function, arity} = name, definition},

@@ -230,7 +230,7 @@ defmodule JsonProofsTest do
               stack options
               (.integer len) =
               (do
-                let token ← Erlang.erlang.«binary_part/3» orig skip (.integer len)
+                let token ← Result.ofExcept (Erlang.erlang.«binary_part/3» orig skip (.integer len))
                 let value ← Term.apply (.function 2 1 #[]) #[token]
                 «unexpected/8» orig skip acc stack options
                   (.integer len) (.integer 0) (.tuple #[.atom "number", value])) := by
@@ -279,7 +279,7 @@ defmodule JsonProofsTest do
           intro n depth text encoded
           have parsed := Erlang.erlang.binary_to_integer_integer_to_binary n
           rw [encoded] at parsed
-          simp only [Result.ok_bind] at parsed
+          simp only [Except.ok_bind] at parsed
           obtain ⟨first, rest, decimal, digits, zero⟩ := Erlang.erlang.integer_to_binary_decimal n
           rw [encoded] at decimal
           cases decimal
@@ -346,11 +346,8 @@ defmodule JsonProofsTest do
           unfold «do_encode/2»
           simp only []
           obtain ⟨first, rest, text, -, -⟩ := Erlang.erlang.integer_to_binary_decimal n
-          rw [text, Result.resolve_of_isPure _ _ _ (by simp)]
-          simp only [Result.ok_bind, Result.resolve_bind, Erlang.erlang.iolist_to_binary_binary]
-          rw [Result.resolve_of_isPure _ _ _ (by simp), Result.ok_bind,
-            decode_integer n 100 _ text, Result.ok_bind, Result.resolve_of_isPure _ _ _ (by simp)]
-          simp [Erlang.erlang.«=:=/2»]
+          simp [text, Result.resolve_bind, Erlang.erlang.iolist_to_binary_binary,
+            decode_integer n 100 _ text, Erlang.erlang.«=:=/2»]
 
         have continue_array : ∀ (bs : List UInt8) (orig skip acc rest value : Term),
             «continue/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc (.cons
@@ -364,7 +361,8 @@ defmodule JsonProofsTest do
         have continue_top : ∀ (bs : List UInt8) (orig skip acc value : Term),
             «continue/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc .nil options
                 value =
-              «terminate/5» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc value :=
+              Result.ofExcept («terminate/5» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc
+                value) :=
                   by
           intro bs orig skip acc value
           conv => lhs; unfold «continue/7»
@@ -383,7 +381,7 @@ defmodule JsonProofsTest do
             «array_push/7» (.bitstring ⟨((44 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig
                 skip acc stack options value =
               (do
-                let next ← Erlang.erlang.«+/2» skip (.integer 1)
+                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 1))
                 «value/6» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig next (.cons value
                     acc) stack options) := by
           intro bs orig skip acc stack value
@@ -396,8 +394,8 @@ defmodule JsonProofsTest do
                 skip acc
                 (.cons (.atom "array") (.cons old stack)) options value =
               (do
-                let list ← Erlang.lists.«reverse/1» (.cons value acc)
-                let next ← Erlang.erlang.«+/2» skip (.integer 1)
+                let list ← Result.ofExcept (Erlang.lists.«reverse/1» (.cons value acc))
+                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 1))
                 «continue/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig next old stack
                     options list) := by
           intro bs orig skip acc old stack value
@@ -422,7 +420,7 @@ defmodule JsonProofsTest do
             «array_start/7» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc
                 stack options (.integer len) =
               (do
-                let next ← Erlang.erlang.«+/2» skip (.integer len)
+                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer len))
                 «value/6» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig next .nil
                   (.cons (.atom "array") (.cons acc stack)) options) := by
           intro b bs orig skip acc stack len start
@@ -441,8 +439,8 @@ defmodule JsonProofsTest do
                 skip acc stack options
                 (.integer len) =
               (do
-                let next ← Erlang.erlang.«+/2» skip (.integer len)
-                let after ← Erlang.erlang.«+/2» next (.integer 1)
+                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer len))
+                let after ← Result.ofExcept (Erlang.erlang.«+/2» next (.integer 1))
                 «continue/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig after acc stack
                     options .nil) := by
           intro bs orig skip acc stack len
@@ -456,9 +454,9 @@ defmodule JsonProofsTest do
             «number/7» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc stack
                 options (.integer len) =
               (do
-                let token ← Erlang.erlang.«binary_part/3» orig skip (.integer len)
+                let token ← Result.ofExcept (Erlang.erlang.«binary_part/3» orig skip (.integer len))
                 let value ← Term.apply (.function 2 1 #[]) #[token]
-                let next ← Erlang.erlang.«+/2» skip (.integer len)
+                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer len))
                 «continue/7» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig next acc
                     stack options value) := by
           intro b bs orig skip acc stack len separator
@@ -488,7 +486,7 @@ defmodule JsonProofsTest do
               (do
                 let value ← Term.apply (.function 2 1 #[]) #[.bitstring ⟨#[48]⟩ 0 (valid_aligned
                     _)]
-                let next ← Erlang.erlang.«+/2» skip (.integer len)
+                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer len))
                 «continue/7» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig next acc
                     stack options value) := by
           intro b bs orig skip acc stack len separator
@@ -546,7 +544,7 @@ defmodule JsonProofsTest do
           intro x pre post b separator acc stack depth first rest encoded digits zero
           have parsed := Erlang.erlang.binary_to_integer_integer_to_binary x
           rw [encoded] at parsed
-          simp only [Result.ok_bind] at parsed
+          simp only [Except.ok_bind] at parsed
           have firstLow := (digits first (by simp)).1
           have firstHigh := (digits first (by simp)).2
           have restDigits : ∀ d ∈ rest, 48 ≤ d.toNat ∧ d.toNat ≤ 57 := fun d mem => digits d (by
@@ -596,7 +594,7 @@ defmodule JsonProofsTest do
           intro x
           obtain ⟨first, rest, encoded, digits, zero⟩ := Erlang.erlang.integer_to_binary_decimal x
           refine ⟨first, rest, ?_, encoded, digits, zero⟩
-          simp only [Erlang.erlang.«integer_to_binary/1», Result.ok.injEq,
+          simp only [Erlang.erlang.«integer_to_binary/1», Except.ok.injEq,
             Term.bitstring.injEq] at encoded
           rw [textOf, encoded.1]
 
@@ -625,7 +623,7 @@ defmodule JsonProofsTest do
           obtain ⟨first, rest, text, encoded, -, -⟩ := textOf_decimal x
           unfold «do_encode/2»
           simp only []
-          rw [encoded, Result.resolve_of_isPure _ _ _ (by simp), text]
+          rw [encoded, Result.resolve_of_isPure _ _ _ (by simp), text, Result.ofExcept_ok]
 
         -- Keywords dispatch on their first letter and match their other letters at once.
         have value_true : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
@@ -659,7 +657,7 @@ defmodule JsonProofsTest do
             «true/6» (.bitstring ⟨([114, 117, 101] ++ post).toArray⟩ 0 (valid_aligned _)) orig
                 skip acc stack dec =
               (do
-                let next ← Erlang.erlang.«+/2» skip (.integer 4)
+                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 4))
                 «continue/7» (.bitstring ⟨post.toArray⟩ 0 (valid_aligned _)) orig next acc stack
                   dec (.atom "true")) := by
           intro orig skip acc stack dec post
@@ -671,7 +669,7 @@ defmodule JsonProofsTest do
             «false/6» (.bitstring ⟨([97, 108, 115, 101] ++ post).toArray⟩ 0 (valid_aligned _))
                 orig skip acc stack dec =
               (do
-                let next ← Erlang.erlang.«+/2» skip (.integer 5)
+                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 5))
                 «continue/7» (.bitstring ⟨post.toArray⟩ 0 (valid_aligned _)) orig next acc stack
                   dec (.atom "false")) := by
           intro orig skip acc stack dec post
@@ -683,7 +681,7 @@ defmodule JsonProofsTest do
             «null/6» (.bitstring ⟨([117, 108, 108] ++ post).toArray⟩ 0 (valid_aligned _)) orig
                 skip acc stack options =
               (do
-                let next ← Erlang.erlang.«+/2» skip (.integer 4)
+                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 4))
                 «continue/7» (.bitstring ⟨post.toArray⟩ 0 (valid_aligned _)) orig next acc stack
                   options (.atom "null")) := by
           intro orig skip acc stack post
@@ -813,8 +811,10 @@ defmodule JsonProofsTest do
             rw [show Json.tailText (y :: ys) = 44 :: (y.text ++ Json.tailText ys) from rfl]
             simp only [List.cons_append, List.append_assoc]
             rw [array_push_comma]
-            simp only [Result.resolve_bind, Erlang.erlang.«+/2_integers», Result.ok_bind,
-              Result.resolve_of_isPure _ _ (Result.ok _) (by simp)]
+            simp only [Result.resolve_bind, Erlang.erlang.«+/2_integers»,
+              Result.ofExcept_ok, Result.ok_bind,
+              Result.resolve_of_isPure _ _ (Result.ok _) (by simp),
+              Result.resolve_of_isPure _ _ (Result.ofExcept _) (by simp)]
             rw [first, continue_array]
             rw [next]
             have length : (pre.length : Int) + 1 + y.text.length + (Json.tailText ys).length =
@@ -881,8 +881,10 @@ defmodule JsonProofsTest do
               rw [show Json.text (.arr (x :: xs)) = 91 :: (x.text ++ Json.tailText xs) from rfl]
               simp only [List.cons_append, List.append_assoc]
               rw [value_open, opened]
-              simp only [Result.resolve_bind, Erlang.erlang.«+/2_integers», Result.ok_bind,
-                Result.resolve_of_isPure _ _ (Result.ok _) (by simp)]
+              simp only [Result.resolve_bind, Erlang.erlang.«+/2_integers»,
+                Result.ofExcept_ok, Result.ok_bind,
+                Result.resolve_of_isPure _ _ (Result.ok _) (by simp),
+                Result.resolve_of_isPure _ _ (Result.ofExcept _) (by simp)]
               rw [first, continue_array]
               rw [next]
               have length : (pre.length : Int) + 1 + x.text.length + (Json.tailText xs).length =
@@ -1019,11 +1021,13 @@ defmodule JsonProofsTest do
           simp only [«roundtrip/1», «encode/1», «encode/2», Erlang.erlang.«is_function/2»]
           simp
           rw [encode_value v 99 bound, Result.ok_bind]
-          simp only [Result.resolve_bind]
-          rw [flatten, Result.resolve_of_isPure _ _ _ (by simp), Result.ok_bind,
-            decode_value v _ number,
-            Result.ok_bind, Result.resolve_of_isPure _ _ _ (by simp)]
-          simp [Erlang.erlang.«=:=/2»]
+          simp only [Result.resolve_bind,
+            Result.resolve_of_isPure _ _ (Result.ok _) (by simp),
+            Result.resolve_of_isPure _ _ (Result.ofExcept _) (by simp),
+            Result.ofExcept_ok, Result.ok_bind]
+          rw [flatten, Result.ofExcept_ok, Result.ok_bind,
+            decode_value v _ number, Result.ok_bind]
+          simp [Erlang.erlang.«=:=/2», Result.ofExcept_ok]
 
         -- The requirement describes values nested at most as deep as its budget.
         have extract : ∀ (s : Nat) (t : Term), sizeOf t < s →
@@ -1045,7 +1049,7 @@ defmodule JsonProofsTest do
               | cons x xs =>
                 simp only [Term.cons.sizeOf_spec] at size
                 cases first : «supported?/2» x (.integer n) <;>
-                  simp [first, Bind.bind, Result.bind] at returned
+                  simp [first, Bind.bind, Except.bind] at returned
                 split at returned
                 · simp at returned
                 · obtain ⟨v, rfl, vDepth⟩ := (ih x (by omega)).1 n first

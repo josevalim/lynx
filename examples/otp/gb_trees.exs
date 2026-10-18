@@ -34,17 +34,17 @@ defmodule GbTreesProofsTest do
     termination_by match _1 with | .integer n => n.toNat | _ => 0
     decreasing_by
       all_goals
-        rename_i passed
+        have passed : Lynx.Result.guardPassed
+            (.ofExcept (Erlang.erlang.«>/2» vS (.integer 1))) = true := by assumption
         have divisionShape (input output : Lynx.Term)
             (returned : Erlang.erlang.«div/2» input (.integer 2) = .ok output) :
             ∃ value : Int, input = .integer value ∧ output = .integer (value.tdiv 2) := by
           cases input <;> simp [Erlang.erlang.«div/2»] at returned
           rename_i value
           exact ⟨value, rfl, returned.symm⟩
-        obtain ⟨sm, smaller, half⟩ := divisionShape vSm.val vS2.val vS2.property
+        obtain ⟨sm, smaller, half⟩ := divisionShape vSm vS2 (by assumption)
         have source : vS = .integer (sm+1) :=
-          (Erlang.erlang.«-/2_integer_result» vS 1 sm).mp (by
-            simpa only [smaller] using vSm.property)
+          (Erlang.erlang.«-/2_integer_result» vS 1 sm).mp (by rw [← smaller]; assumption)
         have positive : 0 < sm := by
           simp [source, Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
             Int.compare_eq_gt] at passed
@@ -52,10 +52,10 @@ defmodule GbTreesProofsTest do
           · omega
           · simp [h, Lynx.Result.guardPassed] at passed
         first
-        | have next : vS1.val = .integer (sm - sm.tdiv 2) := by
-            have returned := vS1.property
-            simpa only [smaller, half, Erlang.erlang.«-/2_integers»,
-              Lynx.Result.ok.injEq] using returned.symm
+        | have next : vS1 = .integer (sm - sm.tdiv 2) := by
+            have returned : Erlang.erlang.«-/2» vSm vS2 = .ok vS1 := by assumption
+            simpa only [smaller, half, Erlang.erlang.«-/2_integers», Except.ok.injEq]
+              using returned.symm
           simp only [source, next]
           simp [Int.tdiv_eq_ediv_of_nonneg (Int.le_of_lt positive)]
           omega
@@ -135,18 +135,18 @@ defmodule GbTreesProofsTest do
             rw [past]
             simp [Erlang.gb_trees.«lookup_1/2», Erlang.erlang.«</2», Erlang.erlang.«>/2»,
               comparison, search, rightLookup query sorted.2.1.2]
-      have pureCases (computation : Lynx.Result) (pure : computation.IsPure) :
+      have pureCases (computation : Except Lynx.Exception Lynx.Term) :
           (∃ value, computation = .ok value) ∨ (∃ exception, computation = .error exception) := by
-        cases computation <;> simp_all [Lynx.Result.IsPure]
+        cases computation <;> simp
       have flatten (root output : Lynx.Term) (returned : «nodes/1» root = .ok output) :
           ∃ xs : List (Lynx.Term × Lynx.Term), spec root xs := by
         induction root using «nodes/1».induct generalizing output with
         | case1 => exact ⟨[], emptySpec⟩
         | case2 key value left right ihl ihr =>
-          rcases pureCases («nodes/1» left) («nodes/1_pure» left) with leftOk | leftError
+          rcases pureCases («nodes/1» left) with leftOk | leftError
           · obtain ⟨leftValue, leftOk⟩ := leftOk
             obtain ⟨xs, leftSpec⟩ := ihl leftValue leftOk
-            rcases pureCases («nodes/1» right) («nodes/1_pure» right) with rightOk | rightError
+            rcases pureCases («nodes/1» right) with rightOk | rightError
             · obtain ⟨rightValue, rightOk⟩ := rightOk
               obtain ⟨ys, rightSpec⟩ := ihr rightValue rightOk
               exact ⟨xs ++ (key, value) :: ys, nodeSpec key value left right xs ys leftSpec rightSpec⟩
@@ -211,8 +211,8 @@ defmodule GbTreesProofsTest do
                       encode (xs.take ln ++ (((key, value) :: restXs) ++ tail)) := by
                     rw [← List.append_assoc, ← joined]
                   simp only [greater, positive, if_true, Lynx.Result.guard_eq, Lynx.Result.tryWith_ok,
-                    Lynx.Term.true, Erlang.erlang.«-/2_integers», Lynx.Result.ok_bind, divided, subtracted,
-                    input, leftReturned]
+                    Lynx.Term.true, Erlang.erlang.«-/2_integers», Lynx.Result.ofExcept_ok,
+                    Lynx.Result.ok_bind, divided, subtracted, input, leftReturned]
                   simp only [encode, List.foldr_cons, pair, List.cons_append] at rightReturned ⊢
                   simp only [rightReturned, Lynx.Result.ok_bind]
                   rfl
@@ -257,8 +257,8 @@ defmodule GbTreesProofsTest do
         rename_i count
         have nonnegative : 0 ≤ count := by
           by_cases h : 0 ≤ count <;> simp [h] at requires <;> omega
-        simp only [nonnegative, if_true, Lynx.Result.ok_bind] at requires
-        rcases pureCases («nodes/1» root) («nodes/1_pure» root) with returned | failed
+        simp only [nonnegative, if_true, Lynx.Except.ok_bind] at requires
+        rcases pureCases («nodes/1» root) with returned | failed
         · obtain ⟨output, returned⟩ := returned
           obtain ⟨xs, original⟩ := flatten root output returned
           have countEq : count = xs.length := by

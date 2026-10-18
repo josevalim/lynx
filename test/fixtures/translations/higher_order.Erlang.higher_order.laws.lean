@@ -9,7 +9,7 @@ public import Erlang.program
 namespace Erlang.higher_order.laws
 
 theorem «map_returns_list/2» (list : Lynx.Term) (callback : Lynx.Term)
-    (requires : «map_returns_list_requires/2» list callback = Lynx.Result.ok Lynx.Term.true) :
+    (requires : «map_returns_list_requires/2» list callback = Except.ok Lynx.Term.true) :
     Lynx.run («map_returns_list_ensures/2» list callback) Erlang.program.fun_table 100 =
       Lynx.Outcome.ok Lynx.Term.true :=
   by

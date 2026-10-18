@@ -60,35 +60,13 @@ theorem bitstring_byte_size_is_integer (input : Term)
   cases input <;> simp_all [Erlang.erlang.«is_bitstring/1»,
     Erlang.erlang.«byte_size/1», Erlang.erlang.«is_integer/1», Term.true, Term.false]
 
-#lynx_pure def classify (input : Term) : Result :=
-  pure (match input with | .integer _ => Term.true | _ => Term.false)
-
-/-- Purity composes through calls already checked by `#lynx_pure`. -/
-#lynx_pure def classifyTwice (input : Term) : Result := do
-  let first ← classify input
-  classify first
-
-/-- Unary structural recursion can be checked automatically. -/
-#lynx_pure def proper : Term → Result
-  | .nil => .ok Term.true
-  | .cons _ tail => proper tail
-  | _ => .ok Term.false
-
-/-- Nested matching on list elements remains structurally recursive on the tail. -/
-#lynx_pure def properIntegers : Term → Result
-  | .nil => .ok Term.true
-  | .cons (.integer _) tail => properIntegers tail
-  | .cons _ _ => .ok Term.false
-  | _ => .ok Term.false
-
--- A guard continuation contains one flat recursive suffix. Its induction
--- hypothesis is a match, so purity must preserve it until the scrutinee splits.
--- Use the typed wrapper emitted by the decoder, keeping the shared lambda
--- behind applications that must reduce before the tactic can recognize it.
-#lynx_pure def guardedSuffix (input : Term) : Result :=
-  (fun {α : Type} (body : (Unit → Result α) → Result α)
-      (next : Unit → Result α) => body next)
-  (fun next => Result.tryWith (Erlang.erlang.«is_integer/1» input)
+-- Pure functions return `Except`, so they need no purity proof. A guard
+-- continuation contains one flat recursive suffix, whose functional induction
+-- sees the guard's cases.
+private def guardedSuffix (input : Term) : Except Exception Term :=
+  (fun {α : Type} (body : (Unit → Except Exception α) → Except Exception α)
+      (next : Unit → Except Exception α) => body next)
+  (fun next => Except.tryWith (Erlang.erlang.«is_integer/1» input)
     (fun value => match value with
       | .atom "true" => .ok (.integer 0)
       | _ => next ())
@@ -106,24 +84,53 @@ theorem guardedSuffix_zero (input : Term) :
     split at ih <;> simp_all [Erlang.erlang.«is_integer/1»]
     split <;> rfl
 
--- Explicit binds in translated mutual calls retain the group's induction hypotheses.
-#lynx_pure mutual
+-- Guard preprocessing retains the accepted comparison, and every pure bind
+-- retains its equation for well-founded recursion on computed results.
+private def halve (input : Term) : Except Exception Term :=
+  Except.guard (Erlang.erlang.«>/2» input (.integer 1))
+    (fun _ => do
+      let smaller ← Erlang.erlang.«-/2» input (.integer 1)
+      let half ← Erlang.erlang.«div/2» smaller (.integer 2)
+      halve half)
+    (fun _ => .ok input)
+termination_by match input with | .integer n => n.toNat | _ => 0
+decreasing_by
+  rename_i passed smallerEq halfEq
+  cases smaller <;> simp [Erlang.erlang.«div/2»] at halfEq
+  rename_i sm
+  subst half
+  have shape := (Erlang.erlang.«-/2_integer_result» input 1 sm).mp smallerEq
+  subst input
+  simp [Except.guardPassed, Erlang.erlang.«>/2»,
+    Ordering.isGT_iff_eq_gt, Int.compare_eq_gt] at passed
+  have positive : 0 < sm := by
+    by_cases h : 1 < sm+1
+    · omega
+    · simp [h] at passed
+  simp [Int.tdiv_eq_ediv_of_nonneg (Int.le_of_lt positive)]
+  omega
+
+-- Explicit binds in translated mutual calls retain the group's induction
+-- hypotheses, and embedded pure calls are partial.
+#lynx_partial mutual
   def sumLeft : Term → Result
     | .nil => .ok (.integer 0)
-    | .cons x xs => Result.bind (sumRight xs) fun total => Erlang.erlang.«+/2» x total
+    | .cons x xs => Result.bind (sumRight xs) fun total =>
+      Result.ofExcept (Erlang.erlang.«+/2» x total)
     | _ => .error (.error (.atom "function_clause"))
   def sumRight : Term → Result
     | .nil => .ok (.integer 0)
-    | .cons x xs => Result.bind (sumLeft xs) fun total => Erlang.erlang.«+/2» x total
+    | .cons x xs => Result.bind (sumLeft xs) fun total =>
+      Result.ofExcept (Erlang.erlang.«+/2» x total)
     | _ => .error (.error (.atom "function_clause"))
 end
 
-example (input : Term) : Result.IsPure (sumLeft input) := by simp
-example (input : Term) : Result.IsPure (sumRight input) := by simp
+example (input : Term) : Result.IsPartial (sumLeft input) := sumLeft_partial input
+example (input : Term) : Result.IsPartial (sumRight input) := sumRight_partial input
 
 -- Same-arity members can be reordered by Lean's equation compiler. Their
--- purity motives and conjunction projections must follow the compiler's order.
-#lynx_pure mutual
+-- motives and conjunction projections must follow the compiler's order.
+#lynx_partial mutual
   def rotateFirst (left right : Term) : Result :=
     match left with
     | .cons _ tail => rotateThird tail right
@@ -138,78 +145,31 @@ example (input : Term) : Result.IsPure (sumRight input) := by simp
     | _ => .ok right
 end
 
--- Guard preprocessing retains the accepted comparison, and arithmetic binds
--- retain return equations for well-founded recursion on their computed results.
-#lynx_pure def halve (input : Term) : Result :=
-  Result.guard (Erlang.erlang.«>/2» input (.integer 1))
-    (fun _ => do
-      let smaller ← Erlang.erlang.«-/2» input (.integer 1)
-      let half ← Erlang.erlang.«div/2» smaller (.integer 2)
-      halve half)
-    (fun _ => .ok input)
-termination_by match input with | .integer n => n.toNat | _ => 0
-decreasing_by
-  rename_i passed
-  rcases smaller with ⟨smaller, smallerEq⟩
-  rcases half with ⟨half, halfEq⟩
-  cases smaller <;> simp [Erlang.erlang.«div/2»] at halfEq
-  rename_i sm _
-  subst half
-  have shape := (Erlang.erlang.«-/2_integer_result» input 1 sm).mp smallerEq
-  subst input
-  simp [Result.guardPassed, Erlang.erlang.«>/2»,
-    Ordering.isGT_iff_eq_gt, Int.compare_eq_gt] at passed
-  have positive : 0 < sm := by
-    by_cases h : 1 < sm+1
-    · omega
-    · simp [h] at passed
-  simp [Int.tdiv_eq_ediv_of_nonneg (Int.le_of_lt positive)]
-  omega
-
 theorem guard_retains_environment (value : Term) (env : Environment) :
     (Result.guard (.get fun _ => .ok Term.true)
       (fun _ => .ok value) (fun _ => .error (.error (.atom "unexpected")))).run env =
         (.ok value, env) := by
   simp [Result.tryWith, Result.bind, Result.handle]
 
-theorem execution_reuses_purity (input : Term) (env final : Environment) :
-    classifyTwice input env = (.ok Term.false, final) ↔
-      classifyTwice input = .ok Term.false ∧ env = final := by
-  simp
+/-- Partiality composes through embedded pure calls. -/
+#lynx_partial def classifyTwice (input : Term) : Result := do
+  let first ← Result.ofExcept (Erlang.erlang.«is_integer/1» input)
+  Result.ofExcept (Erlang.erlang.«is_atom/1» first)
 
 run_cmd do
   let some doc ← Lean.findSimpleDocString? (← Lean.getEnv) ``LynxTest.Purity.classifyTwice
     | throwError "classifyTwice documentation was not registered"
-  unless doc.startsWith "Purity composes through calls already checked by `#lynx_pure`." do
+  unless doc.startsWith "Partiality composes through embedded pure calls." do
     throwError "unexpected classifyTwice documentation: {doc}"
-
--- Failed purity checks must never register an incomplete purity theorem.
-/--
-error: unsolved goals
-⊢ False
----
-error: #lynx_pure could not prove purity; refusing an incomplete proof
--/
-#guard_msgs in
-#lynx_pure def readsEnvironment : Result := .get fun _ => .ok .nil
-
-/--
-error: unsolved goals
-⊢ False
----
-error: #lynx_pure could not prove purity; refusing an incomplete proof
--/
-#guard_msgs in
-#lynx_pure def writesEnvironment : Result := .set {} (.ok .nil)
 
 -- A partial fixed point shaped like OTP's array:find_bits/2: its first
 -- parameter is fixed, and the induction ranges over the second.
 #lynx_partial def «find/2» (_0 : Term) (_1 : Term) : Result := do
-  let _2 ← Erlang.erlang.«</2» _0 _1
+  let _2 ← Result.ofExcept (Erlang.erlang.«</2» _0 _1)
   match _2 with
   | .atom "true" => pure _1
   | _ => do
-    let _3 ← Erlang.erlang.«+/2» _1 (.integer 4)
+    let _3 ← Result.ofExcept (Erlang.erlang.«+/2» _1 (.integer 4))
     «find/2» _0 _3
 partial_fixpoint monotonicity by
   intro f g h

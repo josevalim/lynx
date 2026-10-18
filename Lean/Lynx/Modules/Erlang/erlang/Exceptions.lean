@@ -5,20 +5,16 @@ public import Lynx.Purity
 public section
 
 namespace Erlang.erlang
-
--- Other modules use these lemmas constantly, including while checking
--- well-founded recursion, so they are proved once, here.
-set_option lynx.lazyPurity false
 open Lynx
 
 /-- The argument list only supplies stack trace metadata, which Result does not model. -/
-#lynx_pure @[expose] def «error/2» (reason _arguments : Term) : Result := .error (.error reason)
+@[expose] def «error/2» (reason _arguments : Term) : Except Exception Term := .error (.error reason)
 
 /-- Error options describe stack trace formatting, which Result does not model. -/
-#lynx_pure @[expose] def «error/3» (reason _arguments _options : Term) : Result := .error (.error reason)
+@[expose] def «error/3» (reason _arguments _options : Term) : Except Exception Term := .error (.error reason)
 
-#lynx_pure @[expose] def «throw/1» (reason : Term) : Result := .error (.throw reason)
+@[expose] def «throw/1» (reason : Term) : Except Exception Term := .error (.throw reason)
 
-#lynx_pure @[expose] def «exit/1» (reason : Term) : Result := .error (.exit reason)
+@[expose] def «exit/1» (reason : Term) : Except Exception Term := .error (.exit reason)
 
 end Erlang.erlang

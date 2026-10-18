@@ -164,17 +164,19 @@ defmodule ListsProofsTest do
               · have returned := (ih _ smaller xs ys rfl).2 y head (previous :: acc)
                 simpa [choice, List.cons_merge_cons, List.reverse_cons, List.append_assoc] using returned
       let f1 (descending : Bool) (xs acc : List Lynx.Term) (h2 : Lynx.Term) (ys : List Lynx.Term)
-          (h3 : Lynx.Term) (zs : List Lynx.Term) : Lynx.Result :=
+          (h3 : Lynx.Term) (zs : List Lynx.Term) : Except Lynx.Exception Lynx.Term :=
         (if descending then Erlang.lists.«rmerge3_1/6» else Erlang.lists.«merge3_1/6»)
           (encode xs) (encode acc) h2 (encode ys) h3 (encode zs)
       let f2 (descending : Bool) (xs : List Lynx.Term) (h1 : Lynx.Term) (acc ys : List Lynx.Term)
-          (h3 : Lynx.Term) (zs : List Lynx.Term) : Lynx.Result :=
+          (h3 : Lynx.Term) (zs : List Lynx.Term) : Except Lynx.Exception Lynx.Term :=
         (if descending then Erlang.lists.«rmerge3_2/6» else Erlang.lists.«merge3_2/6»)
           (encode xs) h1 (encode acc) (encode ys) h3 (encode zs)
-      let f12 (descending : Bool) (xs : List Lynx.Term) (h1 h2 : Lynx.Term) (ys acc zs : List Lynx.Term) : Lynx.Result :=
+      let f12 (descending : Bool) (xs : List Lynx.Term) (h1 h2 : Lynx.Term) (ys acc zs : List Lynx.Term) :
+          Except Lynx.Exception Lynx.Term :=
         (if descending then Erlang.lists.«rmerge3_21_3/6» else Erlang.lists.«merge3_12_3/6»)
           (encode xs) h1 h2 (encode ys) (encode acc) (encode zs)
-      let f21 (descending : Bool) (xs : List Lynx.Term) (h1 h2 : Lynx.Term) (ys acc zs : List Lynx.Term) : Lynx.Result :=
+      let f21 (descending : Bool) (xs : List Lynx.Term) (h1 h2 : Lynx.Term) (ys acc zs : List Lynx.Term) :
+          Except Lynx.Exception Lynx.Term :=
         (if descending then Erlang.lists.«rmerge3_12_3/6» else Erlang.lists.«merge3_21_3/6»)
           (encode xs) h1 h2 (encode ys) (encode acc) (encode zs)
       have f1Nil (descending : Bool) (acc ys zs : List Lynx.Term) (h2 h3 : Lynx.Term) :
@@ -1179,7 +1181,7 @@ defmodule ListsProofsTest do
             have nEq : n = (n-4)+1+1+1+1 := by omega
             have arith (k : Int) : a + k*d-d = a + (k-1)*d := by simp only [Int.sub_mul, Int.one_mul]; omega
             simp only [Erlang.erlang.«>=/2_integers», Erlang.erlang.«-/2_integers»,
-              show (4 : Int) ≤ n by omega, if_true, Lynx.Result.tryWith_ok,
+              show (4 : Int) ≤ n by omega, if_true, Lynx.Result.ofExcept_ok, Lynx.Result.tryWith_ok,
               Lynx.Result.ok_bind]
             simp only [arith]
             have expanded : series n a d = series (n-4) a d ++
@@ -1199,7 +1201,8 @@ defmodule ListsProofsTest do
               have arith (k : Int) : a + k*d-d = a + (k-1)*d := by simp only [Int.sub_mul, Int.one_mul]; omega
               simp only [Erlang.erlang.«>=/2_integers», Erlang.erlang.«-/2_integers»,
                 show ¬ (4 : Int) ≤ n by omega, show (2 : Int) ≤ n by omega,
-                if_true, if_false, Lynx.Result.tryWith_ok, Lynx.Result.ok_bind]
+                if_true, if_false, Lynx.Result.ofExcept_ok, Lynx.Result.tryWith_ok,
+                Lynx.Result.ok_bind]
               simp only [arith]
               have expanded : series n a d = series (n-2) a d ++
                   [a + ((n : Int)-2)*d, a + ((n : Int)-1)*d] := by

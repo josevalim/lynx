@@ -102,8 +102,9 @@ defmodule Lynx.Case do
   The source is a `Lynx.Lean` value. It is parsed as part of the function's
   declaration, after its body. Regardless of the suffix contents, the function
   and every function calling it are marked as partial (see the purity model in
-  `Lynx`): instead of purity proofs (`#lynx_pure`), they receive partiality proofs
-  (`#lynx_partial`), and laws reaching them are still stated directly.
+  `Lynx`): instead of returning `Except`, they return `Lynx.Result` with
+  partiality proofs (`#lynx_partial`), and laws reaching them are still stated
+  directly.
   Raises if the target function is not translated by the group's laws.
   """
   defmacro termination_suffix(target, source) do

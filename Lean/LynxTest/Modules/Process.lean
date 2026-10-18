@@ -19,7 +19,7 @@ theorem error_reason (reason arguments : Term) :
     «error/2» reason arguments = .error (.error reason) := by rfl
 
 theorem error_caught (reason arguments : Term) :
-    Result.handle («error/2» reason arguments) (fun
+    Result.handle (Result.ofExcept («error/2» reason arguments)) (fun
       | .error value => .ok value
       | exception => .error exception) =
       .ok reason := by
@@ -56,7 +56,7 @@ theorem successive_references_are_distinct (env : Environment) :
     (do
       let first ← «make_ref/0»
       let second ← «make_ref/0»
-      «=:=/2» first second) env =
+      Result.ofExcept («=:=/2» first second)) env =
     (.ok Term.false, { env with refCounter := env.refCounter + 2 }) := by
   simp [«=:=/2», Nat.add_assoc]
 
@@ -204,7 +204,7 @@ private def receiveSelf : Result :=
   Result.receiveWith (.atom "infinity") (fun env message =>
     match Result.toExceptRead (do
       let receiver ← «self/0»
-      «=:=/2» message receiver) env (by simp) with
+      Result.ofExcept («=:=/2» message receiver)) env (by simp) with
     | .ok (.atom "true") => some message
     | _ => none) (fun reply => .ok (reply.getD .nil))
 
@@ -218,7 +218,7 @@ theorem guard_reads_waiting_child_identity :
 
 private def receiveFalse : Result :=
   Result.receiveWith (.integer 0) (fun env message =>
-    match Result.toExceptRead (Result.tryWith («not/1» message)
+    match Result.toExceptRead (Result.tryWith (Result.ofExcept («not/1» message))
       Result.ok (fun _ => .ok Term.false)) env
       (by simp (config := { maxDischargeDepth := 64 })) with
     | .ok (.atom "true") => some message

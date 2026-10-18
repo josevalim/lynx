@@ -184,7 +184,15 @@ defmodule Lynx.RunnerTest do
         &Enum.filter(&1, fn defn -> defn["name"] == "remember" end)
       )
 
-    wrong_table = Map.put(table, "entries", [Map.put(entry, "purity", "pure")])
+    # Purity metadata only decides how calls are embedded. Claiming that an
+    # effectful callee is pure makes its `Result` a type error where pure
+    # computations return `Except`.
+    wrong_entry =
+      entry
+      |> Map.put("purity", "pure")
+      |> put_in(["body", "purity"], "pure")
+
+    wrong_table = Map.put(table, "entries", [wrong_entry])
     wrong_file = Map.update!(source_file, "contents", &(&1 ++ [wrong_table]))
 
     assert [
@@ -192,11 +200,8 @@ defmodule Lynx.RunnerTest do
            ] = Lynx.Commands.verify!(@lean_dir, [wrong_file])
 
     assert Enum.any?(diagnostics, fn diagnostic ->
-             diagnostic.severity == :error and
-               diagnostic.module == source_file["module"] and
-               diagnostic.declaration == "fun_table_apply_0_bind" and
-               (diagnostic.message =~ "IsPure" or
-                  diagnostic.message =~ "simp` made no progress")
+             diagnostic.severity == :error and diagnostic.module == source_file["module"] and
+               diagnostic.message =~ "Except Lynx.Exception Lynx.Term"
            end)
   end
 
@@ -256,12 +261,12 @@ defmodule Lynx.RunnerTest do
     end
   end
 
-  defp definition(name, body) do
+  defp definition(name, body, purity \\ "pure") do
     %{
       "kind" => "def",
       "name" => name,
       "params" => [],
-      "purity" => "sequential",
+      "purity" => purity,
       "span" => [4, 1],
       "body" => body
     }
@@ -275,12 +280,13 @@ defmodule Lynx.RunnerTest do
     }
   end
 
-  defp call(module, name) do
+  defp call(module, name, purity \\ "pure") do
     %{
       "kind" => "remote_call",
       "module" => module,
       "name" => name,
       "args" => [],
+      "purity" => purity,
       "span" => [4, 15]
     }
   end
@@ -430,7 +436,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
     effect = %{
       "kind" => "bind",
       "vars" => [%{"kind" => "wildcard", "span" => []}],
-      "computation" => call("Erlang.erlang", "self"),
+      "computation" => call("Erlang.erlang", "self", "sequential"),
       "body" => infinite,
       "span" => []
     }
@@ -454,7 +460,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
           @literal_erl,
           "Elixir.#{name}",
           [
-            definition("ensures", body),
+            definition("ensures", body, "concurrent"),
             theorem(
               "law",
               if(name == "Success", do: "fail \"deliberate failure\"", else: proof),
@@ -496,8 +502,8 @@ defmodule Lynx.RunnerDiagnosticsTest do
           })
 
         file(@literal_erl, "Elixir.#{name}", [
-          definition("requires", requirement),
-          definition("ensures", false_body),
+          definition("requires", requirement, "sequential"),
+          definition("ensures", false_body, "sequential"),
           law
         ])
       end
@@ -563,29 +569,34 @@ defmodule Lynx.RunnerDiagnosticsTest do
         path,
         "Erlang.invalid_match",
         [
-          definition("broken", %{
-            "kind" => "match",
-            "span" => [3, 1],
-            "expressions" => [
-              %{
-                "kind" => "remote_call",
-                "module" => "Erlang.erlang",
-                "name" => "+",
-                "args" => [
-                  %{"kind" => "integer", "value" => 1, "span" => [3, 10]},
-                  %{"kind" => "integer", "value" => 2, "span" => [3, 14]}
-                ],
-                "span" => [3, 8]
-              }
-            ],
-            "cases" => [
-              %{
-                "patterns" => [%{"kind" => "integer", "value" => 3, "span" => [4, 5]}],
-                "body" => success(),
-                "span" => [4, 1]
-              }
-            ]
-          })
+          definition(
+            "broken",
+            %{
+              "kind" => "match",
+              "span" => [3, 1],
+              "expressions" => [
+                %{
+                  "kind" => "remote_call",
+                  "module" => "Erlang.erlang",
+                  "name" => "+",
+                  "args" => [
+                    %{"kind" => "integer", "value" => 1, "span" => [3, 10]},
+                    %{"kind" => "integer", "value" => 2, "span" => [3, 14]}
+                  ],
+                  "purity" => "pure",
+                  "span" => [3, 8]
+                }
+              ],
+              "cases" => [
+                %{
+                  "patterns" => [%{"kind" => "integer", "value" => 3, "span" => [4, 5]}],
+                  "body" => success(),
+                  "span" => [4, 1]
+                }
+              ]
+            },
+            "sequential"
+          )
         ],
         ["Erlang.erlang"]
       )
@@ -638,7 +649,9 @@ defmodule Lynx.RunnerDiagnosticsTest do
         }
       end
 
-    files = [file(path, "Elixir.Precision", [definition("ensures", success()) | laws])]
+    files = [
+      file(path, "Elixir.Precision", [definition("ensures", success(), "sequential") | laws])
+    ]
 
     assert [%{status: :error, diagnostics: diagnostics}] =
              Lynx.Commands.verify!(@lean_dir, files)
@@ -680,13 +693,18 @@ defmodule Lynx.RunnerDiagnosticsTest do
     argument = %{"kind" => "var", "name" => 0, "span" => []}
 
     elaboration =
-      definition("broken", %{
-        "kind" => "remote_call",
-        "module" => "Erlang.suffix_elaboration",
-        "name" => "broken",
-        "args" => [argument],
-        "span" => []
-      })
+      definition(
+        "broken",
+        %{
+          "kind" => "remote_call",
+          "module" => "Erlang.suffix_elaboration",
+          "name" => "broken",
+          "args" => [argument],
+          "purity" => "sequential",
+          "span" => []
+        },
+        "sequential"
+      )
       |> Map.put("params", [argument])
       |> Map.put("termination_suffix", %{
         "source" => "partial_fixpoint monotonicity by\n  exact (let hé := True; missing)\n",
@@ -696,7 +714,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
       })
 
     parsing =
-      definition("broken", success())
+      definition("broken", success(), "sequential")
       |> Map.put("termination_suffix", %{
         "source" => "termination_by )",
         "file" => "suffixes.exs",
@@ -825,12 +843,12 @@ defmodule Lynx.RunnerDiagnosticsTest do
            }
   end
 
-  defp definition(name, body) do
+  defp definition(name, body, purity \\ "pure") do
     %{
       "kind" => "def",
       "name" => name,
       "params" => [],
-      "purity" => "sequential",
+      "purity" => purity,
       "span" => [4, 1],
       "body" => body
     }
@@ -844,12 +862,13 @@ defmodule Lynx.RunnerDiagnosticsTest do
     }
   end
 
-  defp call(module, name) do
+  defp call(module, name, purity) do
     %{
       "kind" => "remote_call",
       "module" => module,
       "name" => name,
       "args" => [],
+      "purity" => purity,
       "span" => [4, 15]
     }
   end

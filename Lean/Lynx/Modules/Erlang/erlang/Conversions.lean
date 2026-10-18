@@ -3,10 +3,6 @@ module
 public import Lynx.Purity
 
 namespace Erlang.erlang
-
--- Other modules use these lemmas constantly, including while checking
--- well-founded recursion, so they are proved once, here.
-set_option lynx.lazyPurity false
 open Lynx
 
 -- Only list elements may be bytes. A tail is itself iodata, so an integer
@@ -25,18 +21,18 @@ private def iodataBytes : Term → Option ByteArray
 
 /-- Flatten nested byte lists and byte-aligned binaries. Binary tails are valid;
 integer tails and unaligned bitstrings raise badarg. -/
-#lynx_pure public def «iolist_to_binary/1» (value : Term) : Result :=
+public def «iolist_to_binary/1» (value : Term) : Except Exception Term :=
   match iodataBytes value with
   | some bytes => .ok (.bitstring bytes 0 (Term.Bitstring.valid_aligned bytes))
   | none => .error (.error (.atom "badarg"))
 
 /-- Decimal formatting of an arbitrary Erlang integer. -/
-#lynx_pure @[expose] public def «integer_to_binary/1» : Term → Result
+@[expose] public def «integer_to_binary/1» : Term → Except Exception Term
   | .integer value => .ok (.bitstring (toString value).toUTF8 0 (Term.Bitstring.valid_aligned _))
   | _ => .error (.error (.atom "badarg"))
 
 /-- The name of an atom as UTF-8, or as Latin-1 when every character fits a byte. -/
-#lynx_pure @[expose] public def «atom_to_binary/2» : Term → Term → Result
+@[expose] public def «atom_to_binary/2» : Term → Term → Except Exception Term
   | .atom name, .atom "utf8" | .atom name, .atom "unicode" =>
     .ok (.bitstring name.toUTF8 0 (Term.Bitstring.valid_aligned _))
   | .atom name, .atom "latin1" =>
@@ -46,7 +42,7 @@ integer tails and unaligned bitstrings raise badarg. -/
     else .error (.error (.atom "badarg"))
   | _, _ => .error (.error (.atom "badarg"))
 
-#lynx_pure @[expose] public def «atom_to_binary/1» (atom : Term) : Result :=
+@[expose] public def «atom_to_binary/1» (atom : Term) : Except Exception Term :=
   «atom_to_binary/2» atom (.atom "utf8")
 
 private def binaryOfString (text : String) : Term :=
@@ -66,7 +62,7 @@ private def splitSign : List UInt8 → Bool × List UInt8
   | bytes => (false, bytes)
 
 /-- An optionally signed decimal integer, without whitespace or underscores. -/
-#lynx_pure public def «binary_to_integer/1» : Term → Result
+public def «binary_to_integer/1» : Term → Except Exception Term
   | .bitstring bytes 0 _ =>
     let (negative, digits) := splitSign bytes.toList
     match digitsValue digits with
@@ -167,7 +163,7 @@ private theorem repr_bytes (m : Nat) : (Nat.repr m).toByteArray = (decimalBytes 
 /-- `binary_to_integer/1` reads back the decimal text of `integer_to_binary/1`. -/
 public theorem binary_to_integer_integer_to_binary (n : Int) :
     («integer_to_binary/1» (.integer n) >>= «binary_to_integer/1») = .ok (.integer n) := by
-  simp only [«integer_to_binary/1», Result.ok_bind, «binary_to_integer/1», String.toUTF8_eq_toByteArray,
+  simp only [«integer_to_binary/1», Except.ok_bind, «binary_to_integer/1», String.toUTF8_eq_toByteArray,
     Int.toString_eq_repr, Int.repr_eq_if]
   by_cases nonneg : 0 ≤ n
   · have bytes : n.toNat.repr.toByteArray.toList = decimalBytes n.toNat := by
@@ -232,17 +228,17 @@ public theorem integer_to_binary_decimal (n : Int) :
   · simp only [nonneg, if_true, show ¬n < 0 by omega, if_false, List.nil_append]
     by_cases zero : n.toNat = 0
     · have text := bytes_of_toList n.toNat.repr.toByteArray [48] (by rw [repr, zero, decimalBytes_zero])
-      exact ⟨48, [], congrArg Result.ok (congr _ _ text _ _), by simp, fun _ => ⟨by omega, rfl⟩⟩
+      exact ⟨48, [], congrArg Except.ok (congr _ _ text _ _), by simp, fun _ => ⟨by omega, rfl⟩⟩
     · obtain ⟨first, rest, text, digits, low⟩ :=
         positive n.toNat [] n.toNat.repr.toByteArray (by omega) (by rw [repr]; rfl)
-      exact ⟨first, rest, congrArg Result.ok (congr _ _ text _ _), digits, fun h => by omega⟩
+      exact ⟨first, rest, congrArg Except.ok (congr _ _ text _ _), digits, fun h => by omega⟩
   · simp only [nonneg, if_false, show n < 0 by omega, if_true]
     have sign : ("-" : String).toByteArray.data.toList = [45] := by decide
     obtain ⟨first, rest, text, digits, low⟩ :=
       positive (-n).toNat [45] ("-" ++ (-n).toNat.repr).toByteArray (by omega) (by
         rw [String.toByteArray_append, toList_eq_data, ByteArray.data_append, Array.toList_append,
           sign, ← toList_eq_data, repr])
-    exact ⟨first, rest, congrArg Result.ok (congr _ _ text _ _), digits, fun h => by omega⟩
+    exact ⟨first, rest, congrArg Except.ok (congr _ _ text _ _), digits, fun h => by omega⟩
 
 /-- Erlang float syntax: a signed mantissa with digits on both sides of the
 point and an optional signed exponent. Returns the sign, the digits as an
@@ -268,7 +264,7 @@ private def parseFloat (bytes : List UInt8) : Option (Bool × Nat × Int) := do
 
 /-- Parse an Erlang float, rounding to the nearest binary64 value. Results that
 overflow binary64 raise `badarg`. -/
-#lynx_pure public def «binary_to_float/1» : Term → Result
+public def «binary_to_float/1» : Term → Except Exception Term
   | .bitstring bytes 0 _ =>
     match parseFloat bytes.toList with
     | some (negative, mantissa, exponent) =>
@@ -349,7 +345,7 @@ private def shortFloat (value : Term.FiniteFloat) : String :=
     sign ++ if exact && fixed.length ≤ scientific.length then fixed else scientific
 
 /-- Only the `[short]` option is modeled; other options raise `badarg`. -/
-#lynx_pure public def «float_to_binary/2» : Term → Term → Result
+public def «float_to_binary/2» : Term → Term → Except Exception Term
   | .float value, .cons (.atom "short") .nil => .ok (binaryOfString (shortFloat value))
   | _, _ => .error (.error (.atom "badarg"))
 

@@ -200,7 +200,7 @@ defmodule ArrayProofsTest do
               by_cases hit : ci ≤ i + z ∧ i + z < ci + 16 <;>
                 simp [hit, boolAnd, andTT, andTF, andFT, masked] at returned
               · obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp returned
-                obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ cacheWrite
+                obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ ((Lynx.Result.ofExcept_eq_ok _ _).mp cacheWrite)
                 refine ⟨i, n, z, ci, bits, fixed, default, tree, entries, by omega, rfl,
                   by simp [Erlang.array.«size/1»], nonnegative, hit.1, hit.2, ?_⟩
                 intro replacement
@@ -209,7 +209,7 @@ defmodule ArrayProofsTest do
               · obtain ⟨newTree, treeReturned, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp returned
                 obtain ⟨newCache, cacheReturned, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
                 obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
-                obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ cacheWrite
+                obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ ((Lynx.Result.ofExcept_eq_ok _ _).mp cacheWrite)
                 have position : 1 + (i + z) - (i + z - r) = 1 + (r : Int) := by omega
                 refine ⟨i, n, z, i + z - r, bits, fixed, default, newTree, entries, by omega, rfl,
                   by simp [Erlang.array.«size/1»], nonnegative, by omega, by omega, ?_⟩
@@ -229,7 +229,7 @@ defmodule ArrayProofsTest do
               · by_cases same : i + z - (r : Int) = ci <;>
                   simp [same, Erlang.erlang.«=/=/2»] at returned
                 · obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp returned
-                  obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ cacheWrite
+                  obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ ((Lynx.Result.ofExcept_eq_ok _ _).mp cacheWrite)
                   have position : 1 + (i + z) - ci = 1 + (r : Int) := by omega
                   refine ⟨i, n, z, ci, bits, fixed, default, tree, entries, by omega, rfl,
                     by simp [Erlang.array.«size/1»], nonnegative, by omega, by omega, ?_⟩
@@ -240,7 +240,7 @@ defmodule ArrayProofsTest do
                 · obtain ⟨newTree, treeReturned, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp returned
                   obtain ⟨newCache, cacheReturned, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
                   obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
-                  obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ cacheWrite
+                  obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ ((Lynx.Result.ofExcept_eq_ok _ _).mp cacheWrite)
                   have position : 1 + (i + z) - (i + z - r) = 1 + (r : Int) := by omega
                   refine ⟨i, n, z, i + z - r, bits, fixed, default, newTree, entries, by omega, rfl,
                     by simp [Erlang.array.«size/1»], nonnegative, by omega, by omega, ?_⟩
@@ -255,7 +255,7 @@ defmodule ArrayProofsTest do
                 obtain ⟨newTree, treeReturned, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
                 obtain ⟨newCache, cacheReturned, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
                 obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Result.bind_eq_ok _ _ _).mp rest
-                obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ cacheWrite
+                obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ ((Lynx.Result.ofExcept_eq_ok _ _).mp cacheWrite)
                 have position : 1 + (i + z) - (i + z - r) = 1 + (r : Int) := by omega
                 refine ⟨i, n, z, i + z - r, grownBits, fixed, default, newTree, entries, by omega, rfl,
                   by simp [Erlang.array.«size/1»], nonnegative, by omega, by omega, ?_⟩
