@@ -1062,6 +1062,12 @@ defmodule JsonProofsTest do
               rw [fallback]
               exact main
 
+        -- Each section clears the facts that later sections do not use, since tactics slow
+        -- down with the size of the local context.
+        clear escape_utf8 escape_utf8_more escape_utf8_accept escape_utf8_start element_table
+          flat_quote high_verbatim escape_ascii_short escape_ascii_word escape_end escape_byte
+          escape_plain_byte bind_of_ok
+
         -- A quote starts a string.
         have value_quote : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
             «value/6» (bin (34 :: bs)) orig skip acc stack dec =
@@ -1513,6 +1519,10 @@ defmodule JsonProofsTest do
             simp
             omega
 
+        clear string10_more string10_accept string9_utf8_start string_utf8_more string_utf8_accept
+          string_utf8_start escapeBytes_head unescapeu_control hex_lookup unescape_unicode
+          unescape_char next_lookup type_lookup start_lookup bxor_ixor band_iband short56 tail1
+
         -- After an escape, the decoder has decoded `done`, holds a run of copied bytes since
         -- then, and has the text of `rest` left up to the closing quote.
         have decode9 : ∀ (n : Nat) (rest done run pre post : List UInt8) (acc stack start : Term)
@@ -1826,6 +1836,11 @@ defmodule JsonProofsTest do
               · exact Utf8.two (by unfold lead2 cont; omega) valid
               · exact Utf8.three (by unfold lead3 cont; omega) valid
               · exact Utf8.four (by unfold lead4 cont; omega) valid
+
+        clear decode9 string9_utf8 string_utf8 plain_text unescape_escape string_ascii9_short
+          string_ascii9_word string9_close string9_escape string9_plain_byte string_escape
+          string_ascii_short string_ascii_word string_close string_plain_byte utf8_drop utf8_cases
+          ascii_plain plain_verbatim escapeText_escape escapeText_verbatim escapeText_append tail8
 
         -- A leading digit other than zero starts a number of length one.
         have value_digit : ∀ (orig skip acc stack dec : Term) (b : UInt8) (bs : List UInt8),
@@ -2413,6 +2428,10 @@ defmodule JsonProofsTest do
             · exact Nat.le_max_left _ _
             · exact Nat.le_trans (ih mem) (Nat.le_max_right _ _)
 
+        clear reverse2 decode_element number_zero_stop number_stop decode_integer unexpected_whole
+          number_zero_end number_end number_digits number_digit number_minus_digit value_zero
+          value_minus value_digit binary_part_middle
+
         -- Values start with a minus sign, a digit, an opening bracket, a letter, or a quote.
         have first_byte : ∀ v : Json, ∃ b bs, v.text = b :: bs ∧
             (b.toNat = 45 ∨ (48 ≤ b.toNat ∧ b.toNat ≤ 57) ∨ b.toNat = 91 ∨ b.toNat = 116 ∨
@@ -2606,6 +2625,11 @@ defmodule JsonProofsTest do
           rw [whole, continue_top, terminate_end]
           simp
 
+        clear decodes loop tail_start first_byte terms_list reverse1 null_rest false_rest true_rest
+          value_null value_false value_true element textOf_decimal array_start_close
+          array_start_value value_open array_push_close array_push_comma terminate_end continue_top
+          continue_array decode7 value_quote
+
         -- Encoding a value makes one dynamic call per nesting level.
         have flat_byte : ∀ (k : UInt8) (r : Term) (y : List UInt8),
             Erlang.erlang.«iolist_to_binary/1» r = .ok (bin y) →
@@ -2714,6 +2738,9 @@ defmodule JsonProofsTest do
           rw [flat, Result.ofExcept_ok, Result.ok_bind,
             decode_value v _ number, Result.ok_bind]
           simp [Erlang.erlang.«=:=/2», Result.ofExcept_ok]
+
+        clear encode_value list_loop_values flat_byte decode_value depth_le encode_integer
+          encode_string flat_close flat_join flat_bin
 
         -- The requirement describes values nested at most as deep as its budget.
         have extract : ∀ (s : Nat) (t : Term), sizeOf t < s →
