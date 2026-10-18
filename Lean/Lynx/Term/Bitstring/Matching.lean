@@ -319,6 +319,14 @@ public theorem matchInteger_byte (b : UInt8) (bs : List UInt8) (valid : Valid �
   norm_cast at this
   rw [this, toBits_cons_take, toBits_cons_drop, decode_byte_bits]
 
+/-- Matching a byte at the front of an empty binary fails. -/
+public theorem matchInteger_byte_nil :
+    matchInteger (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (valid_aligned _)) (.integer 8) 1
+      Bool.false Bool.false = none := by
+  have : (toBits ⟨([] : List UInt8).toArray⟩ 0).length = 0 := by
+    rw [toBits_length_aligned]; rfl
+  simp [matchInteger, this]
+
 /-! ## Consumed bits
 
 Every successful extraction removes its width from the measure of the input.

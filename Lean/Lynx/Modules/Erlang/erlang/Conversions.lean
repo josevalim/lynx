@@ -177,6 +177,69 @@ public theorem binary_to_integer_integer_to_binary (n : Int) :
     simp only [nonneg, if_false, bytes, splitSign, digitsValue_decimalBytes]
     simp; omega
 
+private theorem decimalBytes_head (m : Nat) (positive : 0 < m) :
+    ∃ first rest, decimalBytes m = first :: rest ∧ 49 ≤ first.toNat ∧ first.toNat ≤ 57 := by
+  induction m using Nat.strongRecOn with
+  | ind m ih =>
+    rw [decimalBytes]
+    split
+    · exact ⟨_, _, rfl, by simp [UInt8.toNat_ofNat]; omega, by simp [UInt8.toNat_ofNat]; omega⟩
+    · obtain ⟨first, rest, eq, low, high⟩ := ih (m / 10) (by omega) (by omega)
+      exact ⟨first, rest ++ [UInt8.ofNat (48 + m % 10)], by simp [eq], low, high⟩
+
+private theorem decimalBytes_zero : decimalBytes 0 = [48] := by
+  rw [decimalBytes]; simp
+
+private theorem bytes_of_toList (bytes : ByteArray) (list : List UInt8) (h : bytes.toList = list) :
+    bytes = ⟨list.toArray⟩ := by
+  rw [toList_eq_data] at h
+  cases bytes with
+  | mk data => simp only at h; rw [← h]
+
+/-- The text of `integer_to_binary/1` is an optional minus sign followed by decimal
+digits, which start with zero only for zero. -/
+public theorem integer_to_binary_decimal (n : Int) :
+    ∃ (first : UInt8) (rest : List UInt8),
+      «integer_to_binary/1» (.integer n) =
+        .ok (.bitstring ⟨((if n < 0 then [45] else []) ++ first :: rest).toArray⟩ 0
+          (Term.Bitstring.valid_aligned _)) ∧
+      (∀ d ∈ first :: rest, 48 ≤ d.toNat ∧ d.toNat ≤ 57) ∧
+      (first.toNat = 48 → n = 0 ∧ rest = []) := by
+  have bounds (byte : UInt8) (digit : isDigit byte = true) : 48 ≤ byte.toNat ∧ byte.toNat ≤ 57 := by
+    simp only [isDigit, Bool.and_eq_true, decide_eq_true_eq] at digit
+    exact ⟨UInt8.le_iff_toNat_le.mp digit.1, UInt8.le_iff_toNat_le.mp digit.2⟩
+  have repr (m : Nat) : m.repr.toByteArray.toList = decimalBytes m := by
+    rw [repr_bytes, toList_eq_data, List.toList_data_toByteArray]
+  -- A positive magnitude has a leading digit other than zero.
+  have positive (m : Nat) (sign : List UInt8) (text : ByteArray) (zero : 0 < m)
+      (eq : text.toList = sign ++ decimalBytes m) :
+      ∃ (first : UInt8) (rest : List UInt8), text = ⟨(sign ++ first :: rest).toArray⟩ ∧
+        (∀ d ∈ first :: rest, 48 ≤ d.toNat ∧ d.toNat ≤ 57) ∧ 49 ≤ first.toNat := by
+    obtain ⟨first, rest, digits, low, _⟩ := decimalBytes_head m zero
+    refine ⟨first, rest, bytes_of_toList _ _ (by rw [eq, digits]), ?_, low⟩
+    intro d mem
+    exact bounds d (decimalBytes_digits m d (by rw [digits]; exact mem))
+  have congr (a b : ByteArray) (same : a = b) (va : Term.Bitstring.Valid a 0)
+      (vb : Term.Bitstring.Valid b 0) : Term.bitstring a 0 va = Term.bitstring b 0 vb := by
+    subst same; rfl
+  simp only [«integer_to_binary/1», String.toUTF8_eq_toByteArray, Int.toString_eq_repr,
+    Int.repr_eq_if]
+  by_cases nonneg : 0 ≤ n
+  · simp only [nonneg, if_true, show ¬n < 0 by omega, if_false, List.nil_append]
+    by_cases zero : n.toNat = 0
+    · have text := bytes_of_toList n.toNat.repr.toByteArray [48] (by rw [repr, zero, decimalBytes_zero])
+      exact ⟨48, [], congrArg Result.ok (congr _ _ text _ _), by simp, fun _ => ⟨by omega, rfl⟩⟩
+    · obtain ⟨first, rest, text, digits, low⟩ :=
+        positive n.toNat [] n.toNat.repr.toByteArray (by omega) (by rw [repr]; rfl)
+      exact ⟨first, rest, congrArg Result.ok (congr _ _ text _ _), digits, fun h => by omega⟩
+  · simp only [nonneg, if_false, show n < 0 by omega, if_true]
+    have sign : ("-" : String).toByteArray.data.toList = [45] := by decide
+    obtain ⟨first, rest, text, digits, low⟩ :=
+      positive (-n).toNat [45] ("-" ++ (-n).toNat.repr).toByteArray (by omega) (by
+        rw [String.toByteArray_append, toList_eq_data, ByteArray.data_append, Array.toList_append,
+          sign, ← toList_eq_data, repr])
+    exact ⟨first, rest, congrArg Result.ok (congr _ _ text _ _), digits, fun h => by omega⟩
+
 /-- Erlang float syntax: a signed mantissa with digits on both sides of the
 point and an optional signed exponent. Returns the sign, the digits as an
 integer, and the decimal exponent applied to them. -/

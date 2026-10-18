@@ -120,6 +120,12 @@ theorem integer_binary_round_trip (n : Int) :
       .ok (.integer n) :=
   Erlang.erlang.binary_to_integer_integer_to_binary n
 
+/-- The part spanning a whole binary is the binary itself. -/
+theorem binary_part_of_whole :
+    Erlang.erlang.«binary_part/3» (.bitstring ⟨#[1, 2]⟩ 0) (.integer 0) (.integer 2) =
+      .ok (.bitstring ⟨#[1, 2]⟩ 0) :=
+  Erlang.erlang.binary_part_whole ⟨#[1, 2]⟩
+
 end LynxTest.Modules.Conversions
 
 run_cmd do

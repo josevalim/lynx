@@ -363,6 +363,13 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
     else throw (.error (.atom "badarg"))
   | _, _, _ => throw (.error (.atom "badarg"))
 
+/-- The part spanning a whole binary is the binary itself. -/
+theorem binary_part_whole (bytes : ByteArray) :
+    «binary_part/3» (.bitstring bytes 0 (Term.Bitstring.valid_aligned _)) (.integer 0) (.integer bytes.size) =
+      .ok (.bitstring bytes 0 (Term.Bitstring.valid_aligned _)) := by
+  have nonneg : ¬ ((bytes.size : Int) < 0) := by omega
+  simp [«binary_part/3», nonneg, ByteArray.extract_zero_size]
+
 #lynx_pure @[expose] def «binary_part/2» (input range : Term) : Result :=
   match range with
   | .tuple entries =>

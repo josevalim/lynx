@@ -443,6 +443,11 @@ theorem extract_rewrites (found : Lynx.Term → Lynx.Term → Lynx.Result) (miss
       found (.integer 110) (.bitstring ⟨#[117]⟩ 0) := by
   simp [Lynx.Term.Bitstring.matchInteger_byte 110 [117]]
 
+/-- An empty binary has no leading byte. -/
+theorem match_byte_empty :
+    Lynx.Term.Bitstring.matchInteger (.bitstring ⟨#[]⟩ 0) (.integer 8) 1 false false = none :=
+  Lynx.Term.Bitstring.matchInteger_byte_nil
+
 end LynxTest.Term.Bitstring.Matching
 
 run_cmd do
