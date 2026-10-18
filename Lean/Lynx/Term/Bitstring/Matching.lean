@@ -319,6 +319,73 @@ public theorem matchInteger_byte (b : UInt8) (bs : List UInt8) (valid : Valid �
   norm_cast at this
   rw [this, toBits_cons_take, toBits_cons_drop, decode_byte_bits]
 
+private theorem toBits_cons (b : UInt8) (bs : List UInt8) :
+    toBits ⟨(b :: bs).toArray⟩ 0 =
+      ((List.range 8).map fun i => b.toBitVec.getMsbD i) ++ toBits ⟨bs.toArray⟩ 0 := by
+  conv => lhs; rw [← List.take_append_drop 8 (toBits _ 0)]
+  rw [toBits_cons_take, toBits_cons_drop]
+
+private theorem toBits_append (head rest : List UInt8) :
+    toBits ⟨(head ++ rest).toArray⟩ 0 =
+      head.flatMap (fun b => (List.range 8).map fun i => b.toBitVec.getMsbD i) ++
+        toBits ⟨rest.toArray⟩ 0 := by
+  induction head with
+  | nil => simp
+  | cons b bs ih => rw [List.cons_append, toBits_cons, ih]; simp
+
+private theorem foldl_bits (bits : List Bool) (acc : Nat) :
+    bits.foldl (fun value bit => value * 2 + if bit then 1 else 0) acc =
+      acc * 2 ^ bits.length + bits.foldl (fun value bit => value * 2 + if bit then 1 else 0) 0 := by
+  induction bits generalizing acc with
+  | nil => simp
+  | cons b bs ih =>
+    simp only [List.foldl_cons, List.length_cons]
+    rw [ih, ih (0 * 2 + _)]
+    cases b <;> simp [Nat.pow_succ, Nat.add_mul, Nat.mul_assoc, Nat.mul_comm, Nat.add_assoc]
+
+private theorem decode_bytes (head : List UInt8) (acc : Nat) :
+    (head.flatMap fun b => (List.range 8).map fun i => b.toBitVec.getMsbD i).foldl
+        (fun value bit => value * 2 + if bit then 1 else 0) acc =
+      head.foldl (fun value b => value * 256 + b.toNat) acc := by
+  induction head generalizing acc with
+  | nil => rfl
+  | cons b bs ih =>
+    have byte := decode_byte_bits b
+    simp only [decodeInteger, Bool.false_eq_true, ↓reduceIte] at byte
+    rw [List.flatMap_cons, List.foldl_append,
+      foldl_bits ((List.range 8).map fun i => b.toBitVec.getMsbD i) acc, byte, ih]
+    simp
+
+/-- Matching whole bytes at the front of a binary reads them as a big-endian integer. -/
+public theorem matchInteger_bytes (head rest : List UInt8) (valid : Valid ⟨(head ++ rest).toArray⟩ 0)
+    (width : Int) (exact : head.length * 8 = width) :
+    matchInteger (.bitstring ⟨(head ++ rest).toArray⟩ 0 valid) (.integer width) 1
+        Bool.false Bool.false =
+      some (.integer ((head.foldl (fun value b => value * 256 + b.toNat) 0 : Nat) : Int),
+        .bitstring ⟨rest.toArray⟩ 0 (valid_aligned _)) := by
+  have whole : Term.bitstring ⟨(head ++ rest).toArray⟩ 0 valid =
+      ofBits (toBits ⟨(head ++ rest).toArray⟩ 0) := (ofBits_toBits_aligned _).symm
+  have tail : Term.bitstring ⟨rest.toArray⟩ 0 (valid_aligned _) = ofBits (toBits ⟨rest.toArray⟩ 0) :=
+    (ofBits_toBits_aligned _).symm
+  rw [whole, tail, toBits_append]
+  have prefix_ := matchInteger_prefix
+    (head.flatMap fun b => (List.range 8).map fun i => b.toBitVec.getMsbD i) (toBits ⟨rest.toArray⟩ 0)
+  have length : ((head.flatMap fun b => (List.range 8).map fun i => b.toBitVec.getMsbD i).length : Int) =
+      width := by
+    have bits : ∀ bytes : List UInt8,
+        (bytes.flatMap fun b => (List.range 8).map fun i => b.toBitVec.getMsbD i).length =
+          bytes.length * 8 := by
+      intro bytes
+      induction bytes with
+      | nil => rfl
+      | cons b bs ih => simp [List.flatMap_cons, ih]; omega
+    rw [← exact, bits]
+    omega
+  rw [length] at prefix_
+  rw [prefix_, decodeInteger]
+  simp only [Bool.false_eq_true, ↓reduceIte]
+  rw [decode_bytes]
+
 /-- An empty binary ends a pattern. -/
 public theorem matchEnd_byte_nil :
     matchEnd (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (valid_aligned _)) = Bool.true := rfl

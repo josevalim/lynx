@@ -435,6 +435,13 @@ theorem match_leading_byte :
       some (.integer 110, .bitstring ⟨#[117]⟩ 0) :=
   Lynx.Term.Bitstring.matchInteger_byte 110 [117] _
 
+/-- Whole leading bytes are read as one big-endian integer. -/
+theorem match_leading_bytes :
+    Lynx.Term.Bitstring.matchInteger (.bitstring ⟨#[1, 2, 3]⟩ 0) (.integer 16) 1 false false =
+      some (.integer 258, .bitstring ⟨#[3]⟩ 0) := by
+  simpa using Lynx.Term.Bitstring.matchInteger_bytes [1, 2] [3]
+    (Lynx.Term.Bitstring.valid_aligned _) 16 rfl
+
 /-- Simp rewrites an extraction inside `extract`, then selects its branch. -/
 theorem extract_rewrites (found : Lynx.Term → Lynx.Term → Lynx.Result) (missing : Unit → Lynx.Result) :
     Lynx.Term.Bitstring.extract
