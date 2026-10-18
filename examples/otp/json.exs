@@ -12,8 +12,8 @@ defmodule JsonProofsTest do
 
   def roundtrip(data), do: :json.decode(:erlang.iolist_to_binary(:json.encode(data))) === data
 
-  # The data covered so far: integers, booleans, null, strings of printable
-  # ASCII that need no escaping, and lists of them, nested at most 64 deep.
+  # The data covered so far: integers, booleans, null, ASCII strings, and
+  # lists of them, nested at most 64 deep.
   # The encoder makes one dynamic call per nesting level, and laws run with a
   # call depth of 100.
   def supported?(data), do: supported?(data, 64)
@@ -21,7 +21,7 @@ defmodule JsonProofsTest do
   def supported?(data, _depth) when is_integer(data) or data in [true, false, :null],
     do: true
 
-  def supported?(data, _depth) when is_binary(data), do: plain?(data)
+  def supported?(data, _depth) when is_binary(data), do: ascii?(data)
   def supported?(data, depth) when is_list(data) and depth > 0, do: values?(data, depth - 1)
   def supported?(_data, _depth), do: false
 
@@ -29,12 +29,9 @@ defmodule JsonProofsTest do
   def values?([x | xs], depth), do: supported?(x, depth) and values?(xs, depth)
   def values?(_data, _depth), do: false
 
-  def plain?(<<byte, rest::binary>>)
-      when byte >= 32 and byte < 128 and byte != ?" and byte != ?\\,
-      do: plain?(rest)
-
-  def plain?(<<>>), do: true
-  def plain?(_data), do: false
+  def ascii?(<<byte, rest::binary>>) when byte < 128, do: ascii?(rest)
+  def ascii?(<<>>), do: true
+  def ascii?(_data), do: false
 
   # The decoder is a state machine of 32 mutually recursive functions over the
   # input, whose definition needs more than Lean's default heartbeats.
@@ -58,12 +55,44 @@ defmodule JsonProofsTest do
     @[expose] def plain (b : UInt8) : Bool :=
       32 ≤ b.toNat && b.toNat < 128 && b.toNat != 34 && b.toNat != 92
 
-    /-- JSON values made of integers, booleans, null, strings, and lists. -/
+    /-- An uppercase hexadecimal digit. -/
+    @[expose] def hexDigit (d : Nat) : UInt8 := if d < 10 then (48 + d).toUInt8 else (55 + d).toUInt8
+
+    /-- The escape sequence the encoder writes for a byte that needs escaping. -/
+    @[expose] def escapeBytes (b : UInt8) : List UInt8 :=
+      match b.toNat with
+      | 8 => [92, 98]
+      | 9 => [92, 116]
+      | 10 => [92, 110]
+      | 12 => [92, 102]
+      | 13 => [92, 114]
+      | 34 => [92, 34]
+      | 92 => [92, 92]
+      | n => [92, 117, 48, 48, hexDigit (n / 16), hexDigit (n % 16)]
+
+    /-- The text the encoder writes for the bytes of a string. -/
+    @[expose] def escapeText (s : List UInt8) : List UInt8 :=
+      s.flatMap fun b => if plain b then [b] else escapeBytes b
+
+    /-- The byte that a letter after a backslash stands for. -/
+    @[expose] def unescapeChar (c : UInt8) : Option UInt8 :=
+      match c.toNat with
+      | 98 => some 8
+      | 116 => some 9
+      | 110 => some 10
+      | 102 => some 12
+      | 114 => some 13
+      | 34 => some 34
+      | 92 => some 92
+      | 47 => some 47
+      | _ => none
+
+    /-- JSON values made of integers, booleans, null, ASCII strings, and lists. -/
     inductive Json where
       | int : Int → Json
       | bool : Bool → Json
       | null : Json
-      | str (s : List UInt8) (ok : ∀ b ∈ s, plain b)
+      | str (s : List UInt8) (ascii : ∀ b ∈ s, b.toNat < 128)
       | arr : List Json → Json
 
     /-- The decimal text `integer_to_binary/1` writes for an integer. -/
@@ -93,7 +122,7 @@ defmodule JsonProofsTest do
       | .bool true => [116, 114, 117, 101]
       | .bool false => [102, 97, 108, 115, 101]
       | .null => [110, 117, 108, 108]
-      | .str s _ => 34 :: (s ++ [34])
+      | .str s _ => 34 :: (escapeText s ++ [34])
       | .arr [] => [91, 93]
       | .arr (x :: xs) => 91 :: (x.text ++ Json.tailText xs)
     /-- The text after a list's first element: a comma before each element, then `]`. -/
@@ -111,22 +140,6 @@ defmodule JsonProofsTest do
     @[expose] def Json.depths : List Json → Nat
       | [] => 0
       | x :: xs => max x.depth (Json.depths xs)
-    end
-
-    mutual
-    /-- The iodata `do_encode/2` builds for a value. -/
-    @[expose] def Json.iodata : Json → Term
-      | .int n => .bitstring ⟨(textOf n).toArray⟩ 0 (Term.Bitstring.valid_aligned _)
-      | .bool true => .bitstring ⟨#[116, 114, 117, 101]⟩ 0 (Term.Bitstring.valid_aligned _)
-      | .bool false => .bitstring ⟨#[102, 97, 108, 115, 101]⟩ 0 (Term.Bitstring.valid_aligned _)
-      | .null => .bitstring ⟨#[110, 117, 108, 108]⟩ 0 (Term.Bitstring.valid_aligned _)
-      | .str s _ => Term.list [.integer 34, bin s, .integer 34]
-      | .arr [] => .bitstring ⟨#[91, 93]⟩ 0 (Term.Bitstring.valid_aligned _)
-      | .arr (x :: xs) => .cons (.integer 91) (.cons x.iodata (Json.loopIodata xs))
-    /-- The iodata `list_loop/2` builds for the elements after the first. -/
-    @[expose] def Json.loopIodata : List Json → Term
-      | [] => .cons (.integer 93) .nil
-      | y :: ys => .cons (.integer 44) (.cons y.iodata (Json.loopIodata ys))
     end
 
     end JsonProof
@@ -328,6 +341,20 @@ defmodule JsonProofsTest do
         omega
       simp only [iff]
 
+    /-- `json`'s guard for bytes that strings escape. -/
+    theorem isMember_escape (b : UInt8) :
+        Term.isMember (.integer b.toNat)
+          [.integer 0, .integer 1, .integer 2, .integer 3, .integer 4, .integer 5,
+          .integer 6, .integer 7, .integer 8, .integer 9, .integer 10, .integer 11,
+          .integer 12, .integer 13, .integer 14, .integer 15, .integer 16, .integer 17,
+          .integer 18, .integer 19, .integer 20, .integer 21, .integer 22, .integer 23,
+          .integer 24, .integer 25, .integer 26, .integer 27, .integer 28, .integer 29,
+          .integer 30, .integer 31, .integer 34, .integer 92] =
+          if b.toNat < 32 ∨ b.toNat = 34 ∨ b.toNat = 92 then .atom "true" else .atom "false" := by
+      change Term.isMember _ ((List.range 32 ++ [34, 92]).map fun k : Nat => .integer k) = _
+      rw [isMember_naturals]
+      simp only [List.mem_append, List.mem_range, List.mem_cons, List.not_mem_nil, or_false]
+
     /-- The SWAR test on a seven-byte word, with the constants of `json`. -/
     theorem swar_plain (w : List UInt8) (seven : w.length = 7)
         (h1 : iband (bytesValue w) 36170086419038336 = 0)
@@ -358,13 +385,15 @@ defmodule JsonProofsTest do
 
     # The encoder writes integers with integer_to_binary/1, booleans and null
     # as literals, strings between quotes, and lists as their elements between
-    # brackets, separated by commas. The decoder dispatches on each byte, reads
-    # integers back with binary_to_integer/1, the integer decoder in its default
-    # options, matches the remaining letters of a literal at once, takes a
-    # string's bytes up to its closing quote, and pushes values onto an array
-    # frame, opening a new frame for each nested list. Both sides scan strings
-    # seven bytes at a time while a SWAR test finds no byte to escape, and one
-    # byte at a time otherwise.
+    # brackets, separated by commas. Strings copy runs of bytes that need no
+    # escaping and escape quotes, backslashes, and control characters. The
+    # decoder dispatches on each byte, reads integers back with
+    # binary_to_integer/1, the integer decoder in its default options, matches
+    # the remaining letters of a literal at once, takes the runs of a string
+    # with binary_part/3 and appends each unescaped byte, and pushes values
+    # onto an array frame, opening a new frame for each nested list. Both sides
+    # scan strings seven bytes at a time while a SWAR test finds no byte to
+    # escape, and one byte at a time otherwise.
     law json_roundtrip(data),
       requires: supported?(data),
       expects: roundtrip(data),
@@ -396,6 +425,13 @@ defmodule JsonProofsTest do
           intro x y
           cases x <;> cases y <;> rfl
 
+        -- A computation that returns a known value passes it on.
+        have bind_of_ok : ∀ {α : Type} {M : Except Exception α} (x : α)
+            {K : α → Except Exception Term}, M = .ok x → (M >>= K) = K x := by
+          intro α M x K returned
+          subst returned
+          rfl
+
         -- The encoder copies bytes that need no escaping.
         have escape_plain_byte : ∀ (b : UInt8) (bs : List UInt8) (acc orig skip : Term)
             (len : Int), plain b →
@@ -407,27 +443,45 @@ defmodule JsonProofsTest do
           simp only [extract_some, tail8, isMember_plain, ok]
           simp
 
-        have escape_plain : ∀ (p r : List UInt8) (acc orig skip : Term) (len : Int),
-            (∀ b ∈ p, plain b) →
-            «escape_binary/5» (bin (p ++ r)) acc orig skip (.integer len) =
-              «escape_binary/5» (bin r) acc orig skip (.integer (len + p.length)) := by
-          intro p r acc orig skip len all
-          induction p generalizing len with
-          | nil => simp
-          | cons b p ih =>
-            rw [List.cons_append, escape_plain_byte _ _ _ _ _ _ (all b (by simp)),
-              ih _ (fun x mem => all x (by simp [mem]))]
-            congr 2
-            simp
-            omega
+        -- A byte that needs escaping ends the current run and writes its escape sequence.
+        have escape_byte : ∀ (b : UInt8) (bs : List UInt8) (acc orig : Term) (skip len : Int),
+            (b.toNat < 32 ∨ b.toNat = 34 ∨ b.toNat = 92) →
+            «escape_binary/5» (bin (b :: bs)) acc orig (.integer skip) (.integer len) =
+              (do
+                let next ← if len = 0 then .ok (.cons acc (bin (escapeBytes b))) else do
+                  let part ← Erlang.erlang.«binary_part/3» orig (.integer skip) (.integer len)
+                  .ok (.cons acc (.cons part (bin (escapeBytes b))))
+                «escape_binary_ascii/5» (bin bs) next orig (.integer (skip + len + 1))
+                  (.integer 0)) := by
+          intro b bs acc orig skip len escape
+          have notPlain : plain b = false := by simp [plain]; omega
+          conv => lhs; unfold «escape_binary/5»
+          rw [matchInteger_byte]
+          simp only [extract_some, tail8, isMember_plain, notPlain, isMember_escape, escape]
+          simp
+          rw [bind_of_ok (bin (escapeBytes b))]
+          · by_cases zero : len = 0 <;> simp [zero]
+          split
+          all_goals first
+            | (rename_i same
+               have value := Int.ofNat.inj (Term.integer.inj same)
+               simp [escapeBytes, value, hexDigit])
+            | (exfalso
+               simp only [Term.integer.injEq, imp_false] at *
+               omega)
 
-        -- A string without escapes is the original binary between quotes.
-        have escape_end : ∀ (acc orig len : Term),
-            «escape_binary/5» (bin []) acc orig (.integer 0) len =
-              .ok (Term.list [.integer 34, orig, .integer 34]) := by
-          intro acc orig len
+        -- At the end, a string without escapes is the original binary between quotes.
+        -- Otherwise the escaped text so far is followed by the current run.
+        have escape_end : ∀ (acc orig : Term) (skip len : Int),
+            «escape_binary/5» (bin []) acc orig (.integer skip) (.integer len) =
+              if skip = 0 then .ok (Term.list [.integer 34, orig, .integer 34])
+              else if len = 0 then .ok (Term.list [acc, .integer 34])
+              else (do
+                let part ← Erlang.erlang.«binary_part/3» orig (.integer skip) (.integer len)
+                .ok (Term.list [acc, part, .integer 34])) := by
+          intro acc orig skip len
           unfold «escape_binary/5»
-          simp [matchInteger_byte_nil]
+          by_cases s0 : skip = 0 <;> by_cases l0 : len = 0 <;> simp [matchInteger_byte_nil, s0, l0]
 
         -- The SWAR fast path skips a word of seven bytes only when they need no escaping.
         have escape_ascii_word : ∀ (w rest : List UInt8) (acc orig skip : Term) (len : Int),
@@ -465,53 +519,177 @@ defmodule JsonProofsTest do
           rw [«escape_binary_ascii/5».eq_def, short56 _ short]
           rfl
 
-        -- Bytes that need no escaping, up to one that does, extend the current run.
-        have escape_ascii : ∀ (n : Nat) (p r : List UInt8) (acc orig skip : Term) (len : Int),
-            p.length ≤ n → (∀ b ∈ p, plain b) →
-            (∀ c rs, r = c :: rs → plain c = false) →
-            «escape_binary_ascii/5» (bin (p ++ r)) acc orig skip (.integer len) =
-              «escape_binary/5» (bin r) acc orig skip (.integer (len + p.length)) := by
+        have binary_part_middle : ∀ (pre mid post : List UInt8),
+            Erlang.erlang.«binary_part/3» (.bitstring ⟨(pre ++ mid ++ post).toArray⟩ 0
+                (valid_aligned _))
+                (.integer pre.length) (.integer mid.length) =
+              .ok (.bitstring ⟨mid.toArray⟩ 0 (valid_aligned _)) := by
+          intro pre mid post
+          have size : (ByteArray.mk (pre ++ mid ++ post).toArray).size = pre.length + mid.length
+              + post.length := by
+            simp [ByteArray.size]; omega
+          have nonneg : ¬ ((mid.length : Int) < 0) := by omega
+          simp only [Erlang.erlang.«binary_part/3», nonneg, if_false, size]
+          have bounds : (0 : Int) ≤ pre.length ∧ (pre.length : Int) ≤ pre.length + mid.length ∧
+              (pre.length + mid.length : Int) ≤ ((pre.length + mid.length + post.length : Nat) :
+                  Int) := by omega
+          simp only [bounds, and_self, if_true]
+          congr 2
+          apply ByteArray.ext
+          rw [ByteArray.data_extract]
+          have : ((pre.length : Int) + mid.length).toNat - pre.length = mid.length := by omega
+          simp [this]
+
+        have escapeText_append : ∀ a b : List UInt8,
+            escapeText (a ++ b) = escapeText a ++ escapeText b := by
+          intro a b
+          simp [escapeText]
+
+        have escapeText_plain : ∀ p : List UInt8, (∀ b ∈ p, plain b) → escapeText p = p := by
+          intro p all
+          induction p with
+          | nil => rfl
+          | cons b p ih =>
+            simp only [escapeText, List.flatMap_cons, all b (by simp), if_true]
+            exact congrArg (b :: ·) (ih (fun x mem => all x (by simp [mem])))
+
+        have escapeText_escape : ∀ b : UInt8, plain b = false → escapeText [b] = escapeBytes b := by
+          intro b escaped
+          simp [escapeText, escaped]
+
+        -- Flattening the encoder's iodata.
+        have flat_bin : ∀ x : List UInt8, Erlang.erlang.«iolist_to_binary/1» (bin x) = .ok (bin x) :=
+          fun x => Erlang.erlang.iolist_to_binary_binary _
+
+        have flat_join : ∀ (l r : Term) (x y : List UInt8),
+            Erlang.erlang.«iolist_to_binary/1» l = .ok (bin x) →
+            Erlang.erlang.«iolist_to_binary/1» r = .ok (bin y) →
+            Erlang.erlang.«iolist_to_binary/1» (.cons l r) = .ok (bin (x ++ y)) := by
+          intro l r x y left right
+          rw [Erlang.erlang.iolist_to_binary_join _ _ _ _ left right]
+          congr 2
+
+        have flat_quote : ∀ (r : Term) (y : List UInt8),
+            Erlang.erlang.«iolist_to_binary/1» r = .ok (bin y) →
+            Erlang.erlang.«iolist_to_binary/1» (.cons (.integer 34) r) = .ok (bin (34 :: y)) := by
+          intro r y rest
+          rw [Erlang.erlang.iolist_to_binary_byte_cons 34 _ _ (by decide) (by decide) rest]
+          congr 2
+
+        have flat_close : Erlang.erlang.«iolist_to_binary/1» (.cons (.integer 34) .nil) =
+            .ok (bin [34]) := flat_quote _ [] Erlang.erlang.iolist_to_binary_nil
+
+        -- The encoder has written `done`, holds a run of bytes that need no escaping
+        -- since then, and has `rest` left. Its iodata flattens to the string's text.
+        have encode_string : ∀ (n : Nat) (rest done run : List UInt8) (acc : Term),
+            rest.length ≤ n → (∀ b ∈ rest, b.toNat < 128) → (∀ b ∈ run, plain b) →
+            Erlang.erlang.«iolist_to_binary/1» acc = .ok (bin (34 :: escapeText done)) →
+            (∃ io, «escape_binary/5» (bin rest) acc (bin (done ++ (run ++ rest)))
+                (.integer done.length) (.integer run.length) = .ok io ∧
+              Erlang.erlang.«iolist_to_binary/1» io =
+                .ok (bin (34 :: (escapeText (done ++ (run ++ rest)) ++ [34])))) ∧
+            (∃ io, «escape_binary_ascii/5» (bin rest) acc (bin (done ++ (run ++ rest)))
+                (.integer done.length) (.integer run.length) = .ok io ∧
+              Erlang.erlang.«iolist_to_binary/1» io =
+                .ok (bin (34 :: (escapeText (done ++ (run ++ rest)) ++ [34])))) := by
           intro n
           induction n using Nat.strongRecOn with
           | ind n ih =>
-            intro p r acc orig skip len size all stop
-            by_cases short : (p ++ r).length < 7
+            intro rest done run acc size ascii runPlain flat
+            have main : ∃ io, «escape_binary/5» (bin rest) acc (bin (done ++ (run ++ rest)))
+                (.integer done.length) (.integer run.length) = .ok io ∧
+              Erlang.erlang.«iolist_to_binary/1» io =
+                .ok (bin (34 :: (escapeText (done ++ (run ++ rest)) ++ [34]))) := by
+              cases rest with
+              | nil =>
+                rw [escape_end]
+                simp only [List.append_nil] at flat ⊢
+                by_cases d0 : done = []
+                · subst d0
+                  refine ⟨Term.list [.integer 34, bin run, .integer 34], by simp, ?_⟩
+                  have joined := flat_quote _ _ (flat_join _ _ _ _ (flat_bin run) flat_close)
+                  simpa [Term.list_cons, Term.list_nil, escapeText_plain run runPlain] using joined
+                by_cases r0 : run = []
+                · subst r0
+                  refine ⟨Term.list [acc, .integer 34], by simp [d0], ?_⟩
+                  have joined := flat_join _ _ _ _ flat flat_close
+                  simpa [Term.list_cons, Term.list_nil] using joined
+                · have part := binary_part_middle done run []
+                  simp only [List.append_nil, List.append_assoc] at part
+                  refine ⟨Term.list [acc, bin run, .integer 34], by simp [d0, r0, part], ?_⟩
+                  have joined := flat_join _ _ _ _ flat
+                    (flat_join _ _ _ _ (flat_bin run) flat_close)
+                  simpa [Term.list_cons, Term.list_nil, escapeText_append,
+                    escapeText_plain run runPlain] using joined
+              | cons b rest =>
+                have restAscii : ∀ x ∈ rest, x.toNat < 128 := fun x mem => ascii x (by simp [mem])
+                have smaller : rest.length < n := by simp at size; omega
+                by_cases bPlain : plain b
+                · rw [escape_plain_byte _ _ _ _ _ _ bPlain]
+                  have next := (ih rest.length smaller rest done (run ++ [b]) acc (Nat.le_refl _)
+                    restAscii (fun x mem => by
+                      rcases List.mem_append.mp mem with mem | mem
+                      · exact runPlain x mem
+                      · simp at mem; subst mem; exact bPlain) flat).1
+                  simp only [List.append_assoc, List.singleton_append, List.length_append,
+                    List.length_singleton] at next
+                  push_cast at next
+                  exact next
+                · have escaped : b.toNat < 32 ∨ b.toNat = 34 ∨ b.toNat = 92 := by
+                    have := ascii b (by simp)
+                    simp [plain] at bPlain
+                    omega
+                  have bEscape : plain b = false := by simpa using bPlain
+                  rw [escape_byte _ _ _ _ _ _ escaped]
+                  by_cases r0 : run = []
+                  · subst r0
+                    have next := (ih rest.length smaller rest (done ++ [b]) []
+                      (.cons acc (bin (escapeBytes b))) (Nat.le_refl _) restAscii (by simp)
+                      (by
+                        rw [escapeText_append, escapeText_escape b bEscape]
+                        exact flat_join _ _ _ _ flat (flat_bin (escapeBytes b)))).2
+                    simp only [List.append_assoc, List.singleton_append, List.nil_append,
+                      List.length_append, List.length_singleton, List.length_nil] at next ⊢
+                    push_cast at next
+                    simpa using next
+                  · have len : (run.length : Int) ≠ 0 := by simp [r0]
+                    have part := binary_part_middle done run (b :: rest)
+                    simp only [List.append_assoc] at part
+                    have next := (ih rest.length smaller rest (done ++ run ++ [b]) []
+                      (.cons acc (.cons (bin run) (bin (escapeBytes b)))) (Nat.le_refl _) restAscii
+                      (by simp)
+                      (by
+                        rw [escapeText_append, escapeText_append, escapeText_escape b bEscape,
+                          escapeText_plain run runPlain]
+                        simpa using flat_join _ _ _ _ flat
+                          (flat_join _ _ _ _ (flat_bin run) (flat_bin (escapeBytes b))))).2
+                    simp only [List.append_assoc, List.singleton_append, List.nil_append,
+                      List.length_append, List.length_singleton, List.length_nil] at next
+                    push_cast at next
+                    simp only [len, if_false, part, Lynx.Except.ok_bind]
+                    simpa [Int.add_assoc] using next
+            refine ⟨main, ?_⟩
+            by_cases short : rest.length < 7
             · rw [escape_ascii_short _ _ _ _ _ short]
-              exact escape_plain p r acc orig skip len all
-            have whole := List.take_append_drop 7 (p ++ r)
-            rw [← whole]
-            rcases escape_ascii_word (List.take 7 (p ++ r)) (List.drop 7 (p ++ r)) acc orig skip len
-                (by rw [List.length_take]; omega) with ⟨step, word⟩ | fallback
-            · by_cases long : 7 ≤ p.length
-              · rw [step, List.drop_append_of_le_length long,
-                  ih (p.length - 7) (by omega) (List.drop 7 p) r acc orig skip (len + 7)
-                    (by simp) (fun b mem => all b (List.mem_of_mem_drop mem)) stop]
-                congr 2
-                simp
-                omega
-              · obtain ⟨c, rs, rfl⟩ : ∃ c rs, r = c :: rs := by
-                  cases r with
-                  | nil => simp at short; omega
-                  | cons c rs => exact ⟨c, rs, rfl⟩
-                have mem : c ∈ List.take 7 (p ++ c :: rs) := by
-                  rw [List.take_append, List.take_of_length_le (by omega),
-                    show 7 - p.length = (6 - p.length) + 1 by omega]
-                  simp
-                simp [word c mem] at stop
-            · rw [fallback, whole]
-              exact escape_plain p r acc orig skip len all
-
-        -- Strings that need no escaping are encoded between quotes.
-        have encode_plain : ∀ (s : List UInt8) (depth : Nat), (∀ b ∈ s, plain b) →
-            Result.resolve Erlang.program.fun_table depth
-                («do_encode/2» (bin s) (.function 0 2 #[])) =
-              .ok (Term.list [.integer 34, bin s, .integer 34]) := by
-          intro s depth all
-          unfold «do_encode/2»
-          have run := escape_ascii s.length s [] (Term.list [.integer 34]) (bin s) (.integer 0) 0
-            (Nat.le_refl _) all (by simp)
-          simp only [List.append_nil] at run
-          simp [run, escape_end]
+              exact main
+            have seven : (rest.take 7).length = 7 := by rw [List.length_take]; omega
+            rcases escape_ascii_word (rest.take 7) (rest.drop 7) acc (bin (done ++ (run ++ rest)))
+                (.integer done.length) run.length seven with ⟨step, word⟩ | fallback
+            · rw [List.take_append_drop] at step
+              rw [step]
+              have next := (ih (rest.length - 7) (by omega) (rest.drop 7) done (run ++ rest.take 7)
+                acc (by simp) (fun x mem => ascii x (List.mem_of_mem_drop mem))
+                (fun x mem => by
+                  rcases List.mem_append.mp mem with mem | mem
+                  · exact runPlain x mem
+                  · exact word x mem) flat).2
+              rw [List.length_append, seven] at next
+              simp only [List.append_assoc, List.take_append_drop] at next
+              push_cast at next
+              exact next
+            · rw [List.take_append_drop] at fallback
+              rw [fallback]
+              exact main
 
         -- A quote starts a string.
         have value_quote : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
@@ -634,24 +812,328 @@ defmodule JsonProofsTest do
             · rw [fallback, whole]
               exact string_plain p r orig skip acc stack dec len all
 
-        -- The requirement accepts binaries whose bytes need no escaping.
-        have plain_bytes : ∀ s : List UInt8,
-            «plain?/1» (bin s) = .ok Term.true → ∀ b ∈ s, plain b := by
+        -- A backslash ends the run, which starts the decoded bytes.
+        have string_escape : ∀ (rest p : List UInt8) (orig acc stack dec : Term) (skip len : Int),
+            Erlang.erlang.«binary_part/3» orig (.integer skip) (.integer len) = .ok (bin p) →
+            «string/7» (bin (92 :: rest)) orig (.integer skip) acc stack dec (.integer len) =
+              «unescape/9» (bin rest) orig (.integer skip) acc stack dec (.integer (skip - 1))
+                (.integer len) (bin p) := by
+          intro rest p orig acc stack dec skip len part
+          conv => lhs; unfold «string/7»
+          rw [matchInteger_byte]
+          simp only [extract_some, isMember_plain, show plain 92 = false from rfl]
+          simp [matchTail, Nat.mod_one, part, binarySegment_aligned, append_bytes, Except.bind]
+
+        have string9_plain_byte : ∀ (b : UInt8) (bs : List UInt8)
+            (orig skip acc stack dec start sacc : Term) (len : Int), plain b →
+            «string/9» (bin (b :: bs)) orig skip acc stack dec start (.integer len) sacc =
+              «string/9» (bin bs) orig skip acc stack dec start (.integer (len + 1)) sacc := by
+          intro b bs orig skip acc stack dec start sacc len ok
+          conv => lhs; unfold «string/9»
+          rw [matchInteger_byte]
+          simp only [extract_some, isMember_plain, ok]
+          simp [matchTail, Nat.mod_one]
+
+        have string9_plain : ∀ (p r : List UInt8) (orig skip acc stack dec start sacc : Term)
+            (len : Int), (∀ b ∈ p, plain b) →
+            «string/9» (bin (p ++ r)) orig skip acc stack dec start (.integer len) sacc =
+              «string/9» (bin r) orig skip acc stack dec start (.integer (len + p.length)) sacc := by
+          intro p r orig skip acc stack dec start sacc len all
+          induction p generalizing len with
+          | nil => simp
+          | cons b p ih =>
+            rw [List.cons_append, string9_plain_byte _ _ _ _ _ _ _ _ _ _ (all b (by simp)),
+              ih _ (fun x mem => all x (by simp [mem]))]
+            congr 2
+            simp
+            omega
+
+        have string9_escape : ∀ (rest p sacc : List UInt8) (orig acc stack dec start : Term)
+            (skip len : Int),
+            Erlang.erlang.«binary_part/3» orig (.integer skip) (.integer len) = .ok (bin p) →
+            «string/9» (bin (92 :: rest)) orig (.integer skip) acc stack dec start (.integer len)
+                (bin sacc) =
+              «unescape/9» (bin rest) orig (.integer skip) acc stack dec start (.integer len)
+                (bin (sacc ++ p)) := by
+          intro rest p sacc orig acc stack dec start skip len part
+          conv => lhs; unfold «string/9»
+          rw [matchInteger_byte]
+          simp only [extract_some, isMember_plain, show plain 92 = false from rfl]
+          simp [matchTail, Nat.mod_one, part, binarySegment_aligned, append_bytes, Except.bind]
+
+        have string9_close : ∀ (rest p sacc : List UInt8) (orig acc stack start : Term)
+            (skip len : Int),
+            Erlang.erlang.«binary_part/3» orig (.integer skip) (.integer len) = .ok (bin p) →
+            «string/9» (bin (34 :: rest)) orig (.integer skip) acc stack options start (.integer len)
+                (bin sacc) =
+              «continue/7» (bin rest) orig (.integer (skip + len + 1)) acc stack options
+                (bin (sacc ++ p)) := by
+          intro rest p sacc orig acc stack start skip len part
+          conv => lhs; unfold «string/9»
+          rw [matchInteger_byte]
+          simp only [extract_some, isMember_plain, show plain 34 = false from rfl]
+          simp [matchTail, Nat.mod_one, part, binarySegment_aligned, append_bytes, Except.bind]
+
+        have string_ascii9_word : ∀ (w rest : List UInt8) (orig skip acc stack dec start sacc : Term)
+            (len : Int), w.length = 7 →
+            («string_ascii/9» (bin (w ++ rest)) orig skip acc stack dec start (.integer len) sacc =
+                «string_ascii/9» (bin rest) orig skip acc stack dec start (.integer (len + 7)) sacc ∧
+              ∀ b ∈ w, plain b) ∨
+            «string_ascii/9» (bin (w ++ rest)) orig skip acc stack dec start (.integer len) sacc =
+              «string/9» (bin (w ++ rest)) orig skip acc stack dec start (.integer len) sacc := by
+          intro w rest orig skip acc stack dec start sacc len seven
+          rw [«string_ascii/9».eq_def (bin (w ++ rest)),
+            matchInteger_bytes _ _ _ 56 (by omega)]
+          simp only [extract_some, tail8, band_iband, bxor_ixor, Erlang.erlang.«+/2_integers»,
+            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.exactCompare_integers,
+            Int.compare_eq_eq, Result.ofExcept_ok, Result.ok_bind, Result.andAlso_eq]
+          rw [show List.foldl (fun value b => value * 256 + b.toNat) 0 w = bytesValue w from rfl]
+          by_cases c1 : iband (bytesValue w) 36170086419038336 = 0
+          · by_cases c2 : iband (bytesValue w + 27127564814278752) 36170086419038336 =
+                36170086419038336
+            · by_cases c3 : iband (ixor (bytesValue w) 9607679205057058 - 282578800148737)
+                  36170086419038336 = 0
+              · by_cases c4 : iband (ixor (bytesValue w) 25997249613683804 - 282578800148737)
+                    36170086419038336 = 0
+                · exact Or.inl ⟨by simp [c1, c2, c3, c4], swar_plain w seven c1 c2 c3 c4⟩
+                · exact Or.inr (by simp [c1, c2, c3, c4])
+              · exact Or.inr (by simp [c1, c2, c3])
+            · exact Or.inr (by simp [c1, c2])
+          · exact Or.inr (by simp [c1])
+
+        have string_ascii9_short : ∀ (l : List UInt8) (orig skip acc stack dec start sacc : Term)
+            (len : Int), l.length < 7 →
+            «string_ascii/9» (bin l) orig skip acc stack dec start (.integer len) sacc =
+              «string/9» (bin l) orig skip acc stack dec start (.integer len) sacc := by
+          intro l orig skip acc stack dec start sacc len short
+          rw [«string_ascii/9».eq_def, short56 _ short]
+          rfl
+
+        have string_ascii9 : ∀ (n : Nat) (p r : List UInt8)
+            (orig skip acc stack dec start sacc : Term) (len : Int), p.length ≤ n →
+            (∀ b ∈ p, plain b) → (∀ c rs, r = c :: rs → plain c = false) →
+            «string_ascii/9» (bin (p ++ r)) orig skip acc stack dec start (.integer len) sacc =
+              «string/9» (bin r) orig skip acc stack dec start (.integer (len + p.length)) sacc := by
+          intro n
+          induction n using Nat.strongRecOn with
+          | ind n ih =>
+            intro p r orig skip acc stack dec start sacc len size all stop
+            by_cases short : (p ++ r).length < 7
+            · rw [string_ascii9_short _ _ _ _ _ _ _ _ _ short]
+              exact string9_plain p r orig skip acc stack dec start sacc len all
+            have whole := List.take_append_drop 7 (p ++ r)
+            rw [← whole]
+            rcases string_ascii9_word (List.take 7 (p ++ r)) (List.drop 7 (p ++ r)) orig skip acc
+                stack dec start sacc len (by rw [List.length_take]; omega)
+              with ⟨step, word⟩ | fallback
+            · by_cases long : 7 ≤ p.length
+              · rw [step, List.drop_append_of_le_length long,
+                  ih (p.length - 7) (by omega) (List.drop 7 p) r orig skip acc stack dec start sacc
+                    (len + 7) (by simp) (fun b mem => all b (List.mem_of_mem_drop mem)) stop]
+                congr 2
+                simp
+                omega
+              · obtain ⟨c, rs, rfl⟩ : ∃ c rs, r = c :: rs := by
+                  cases r with
+                  | nil => simp at short; omega
+                  | cons c rs => exact ⟨c, rs, rfl⟩
+                have mem : c ∈ List.take 7 (p ++ c :: rs) := by
+                  rw [List.take_append, List.take_of_length_le (by omega),
+                    show 7 - p.length = (6 - p.length) + 1 by omega]
+                  simp
+                simp [word c mem] at stop
+            · rw [fallback, whole]
+              exact string9_plain p r orig skip acc stack dec start sacc len all
+
+        -- A letter after a backslash stands for one byte.
+        have unescape_char : ∀ (c v : UInt8) (rest sacc : List UInt8)
+            (orig acc stack dec start : Term) (skip len : Int), unescapeChar c = some v →
+            «unescape/9» (bin (c :: rest)) orig (.integer skip) acc stack dec start (.integer len)
+                (bin sacc) =
+              «string_ascii/9» (bin rest) orig (.integer (skip + len + 2)) acc stack dec start
+                (.integer 0) (bin (sacc ++ [v])) := by
+          intro c v rest sacc orig acc stack dec start skip len char
+          conv => lhs; unfold «unescape/9»
+          rw [matchInteger_byte]
+          simp [matchTail, Nat.mod_one]
+          split
+          all_goals first
+            | (rename_i same
+               have value := Int.ofNat.inj (Term.integer.inj same)
+               simp [unescapeChar, value] at char
+               have segment := integerSegment_byte v
+               subst char
+               simp at segment
+               simp [binarySegment_aligned, segment, append_bytes, Except.bind])
+            | (exfalso
+               simp only [Term.integer.injEq, imp_false] at *
+               unfold unescapeChar at char
+               split at char <;> first | omega | simp at char)
+
+        have unescape_unicode : ∀ (rest : List UInt8) (orig skip acc stack dec start len sacc : Term),
+            «unescape/9» (bin (117 :: rest)) orig skip acc stack dec start len sacc =
+              «unescapeu/9» (bin rest) orig skip acc stack dec start len sacc := by
+          intro rest orig skip acc stack dec start len sacc
+          conv => lhs; unfold «unescape/9»
+          rw [matchInteger_byte]
+          simp [matchTail, Nat.mod_one]
+
+        -- The decoder reads hexadecimal digits from a table.
+        have hex_lookup : ∀ d, d < 16 →
+            Erlang.erlang.«element/2» (.integer (((hexDigit d).toNat : Int) - 48 + 1))
+              lynx_literal_p3xycmru = .ok (.integer d) := by
+          intro d bound
+          match d, bound with
+          | 0, _ => rfl
+          | 1, _ => rfl
+          | 2, _ => rfl
+          | 3, _ => rfl
+          | 4, _ => rfl
+          | 5, _ => rfl
+          | 6, _ => rfl
+          | 7, _ => rfl
+          | 8, _ => rfl
+          | 9, _ => rfl
+          | 10, _ => rfl
+          | 11, _ => rfl
+          | 12, _ => rfl
+          | 13, _ => rfl
+          | 14, _ => rfl
+          | 15, _ => rfl
+          | _ + 16, bound => exact absurd bound (by omega)
+
+        -- A control character is escaped as four hexadecimal digits.
+        have unescapeu_control : ∀ (e : UInt8) (rest sacc : List UInt8)
+            (orig acc stack dec start : Term) (skip len : Int), e.toNat < 32 →
+            «unescapeu/9» (bin (48 :: 48 :: hexDigit (e.toNat / 16) :: hexDigit (e.toNat % 16) ::
+                rest)) orig (.integer skip) acc stack dec start (.integer len) (bin sacc) =
+              «string_ascii/9» (bin rest) orig (.integer (skip + len + 6)) acc stack dec start
+                (.integer 0) (bin (sacc ++ [e])) := by
+          intro e rest sacc orig acc stack dec start skip len control
+          have high := hex_lookup (e.toNat / 16) (by omega)
+          have low := hex_lookup (e.toNat % 16) (by omega)
+          have zero : Erlang.erlang.«element/2» (.integer 1) lynx_literal_p3xycmru =
+              .ok (.integer 0) := rfl
+          conv => lhs; unfold «unescapeu/9»
+          simp only [matchInteger_byte, extract_some]
+          simp [matchTail, Nat.mod_one, high, low, zero]
+          have code : (e.toNat : Int) % 16 + 16 * ((e.toNat : Int) / 16) = e.toNat := by omega
+          have surrogate : ¬ (55296 ≤ (e.toNat : Int)) := by omega
+          have below : (e.toNat : Int) ≤ 56319 := by omega
+          simp [code, surrogate, below, Erlang.erlang.«and/2», utf8Segment_ascii e (by omega),
+            binarySegment_aligned, append_bytes, Except.bind]
+
+        -- A backslash and the bytes after it stand for one byte that needs escaping.
+        have unescape_escape : ∀ e : UInt8, e.toNat < 128 → plain e = false →
+            ∃ t, escapeBytes e = 92 :: t ∧ ∀ (rest sacc : List UInt8)
+              (orig acc stack dec start : Term) (skip len : Int),
+              «unescape/9» (bin (t ++ rest)) orig (.integer skip) acc stack dec start (.integer len)
+                  (bin sacc) =
+                «string_ascii/9» (bin rest) orig (.integer (skip + len + (escapeBytes e).length))
+                  acc stack dec start (.integer 0) (bin (sacc ++ [e])) := by
+          intro e ascii escaped
+          have control : e.toNat < 32 ∨ e.toNat = 34 ∨ e.toNat = 92 := by
+            simp [plain] at escaped
+            omega
+          unfold escapeBytes
+          split
+          all_goals first
+            | (rename_i same
+               refine ⟨_, rfl, fun rest sacc orig acc stack dec start skip len => ?_⟩
+               rw [List.cons_append, List.nil_append, unescape_char _ e _ _ _ _ _ _ _ _ _ (by
+                 simp [unescapeChar]
+                 apply UInt8.toNat_inj.mp
+                 simp [same])]
+               rfl)
+            | (refine ⟨_, rfl, fun rest sacc orig acc stack dec start skip len => ?_⟩
+               rw [List.cons_append, unescape_unicode]
+               simpa using unescapeu_control e rest sacc orig acc stack dec start skip len (by
+                 simp only [imp_false] at *
+                 omega))
+
+        -- A string's bytes are a run of bytes that need no escaping, then either nothing
+        -- or a byte that does.
+        have split_plain : ∀ s : List UInt8, ∃ p r, s = p ++ r ∧ (∀ b ∈ p, plain b) ∧
+            (r = [] ∨ ∃ e r2, r = e :: r2 ∧ plain e = false) := by
+          intro s
+          induction s with
+          | nil => exact ⟨[], [], rfl, by simp, Or.inl rfl⟩
+          | cons b s ih =>
+            by_cases bPlain : plain b
+            · obtain ⟨p, r, rfl, all, stop⟩ := ih
+              refine ⟨b :: p, r, rfl, fun x mem => ?_, stop⟩
+              rcases List.mem_cons.mp mem with rfl | mem
+              · exact bPlain
+              · exact all x mem
+            · exact ⟨[], b :: s, rfl, by simp, Or.inr ⟨b, s, rfl, by simpa using bPlain⟩⟩
+
+        -- After an escape, the decoder has decoded `done` and has the escaped text of
+        -- `rest` left, up to the closing quote.
+        have decode_rest : ∀ (n : Nat) (rest done pre post : List UInt8) (acc stack start : Term),
+            rest.length ≤ n → (∀ b ∈ rest, b.toNat < 128) →
+            «string_ascii/9» (bin (escapeText rest ++ 34 :: post))
+                (bin (pre ++ 34 :: (escapeText (done ++ rest) ++ 34 :: post)))
+                (.integer (pre.length + 1 + (escapeText done).length)) acc stack options start
+                (.integer 0) (bin done) =
+              «continue/7» (bin post) (bin (pre ++ 34 :: (escapeText (done ++ rest) ++ 34 :: post)))
+                (.integer (pre.length + 1 + (escapeText (done ++ rest)).length + 1)) acc stack
+                options (bin (done ++ rest)) := by
+          intro n
+          induction n using Nat.strongRecOn with
+          | ind n ih =>
+            intro rest done pre post acc stack start size ascii
+            obtain ⟨p, r, rfl, pPlain, stop⟩ := split_plain rest
+            have part := binary_part_middle (pre ++ 34 :: escapeText done) p
+              (escapeText r ++ 34 :: post)
+            simp only [escapeText_append, escapeText_plain p pPlain, List.append_assoc,
+              List.cons_append, List.length_append, List.length_cons] at part ⊢
+            push_cast at part ⊢
+            rw [show (pre.length : Int) + ((escapeText done).length + 1) =
+              pre.length + 1 + (escapeText done).length by omega] at part
+            rcases stop with rfl | ⟨e, r, rfl, escaped⟩
+            · simp only [show escapeText [] = [] from rfl, List.nil_append] at part ⊢
+              rw [string_ascii9 p.length p (34 :: post) _ _ _ _ _ _ _ 0 (Nat.le_refl _) pPlain
+                (fun c rs same => by cases same; rfl), Int.zero_add,
+                string9_close _ _ _ _ _ _ _ _ _ part]
+              simp only [List.append_nil, List.length_nil]
+              congr 2
+              push_cast
+              omega
+            · have eAscii := ascii e (by simp)
+              obtain ⟨t, et, unescaped⟩ := unescape_escape e eAscii escaped
+              have escapedHead : escapeText (e :: r) = escapeBytes e ++ escapeText r := by
+                rw [show e :: r = [e] ++ r from rfl, escapeText_append, escapeText_escape e escaped]
+              rw [escapedHead, et] at part ⊢
+              simp only [List.cons_append, List.append_assoc] at part ⊢
+              rw [string_ascii9 p.length p _ _ _ _ _ _ _ _ 0 (Nat.le_refl _) pPlain
+                (fun c rs same => by cases same; rfl), Int.zero_add,
+                string9_escape _ _ _ _ _ _ _ _ _ _ part]
+              rw [unescaped]
+              have next := ih r.length (by simp at size; omega) r (done ++ p ++ [e]) pre post acc
+                stack start (Nat.le_refl _) (fun x mem => ascii x (by simp [mem]))
+              simp only [escapeText_append, escapeText_plain p pPlain, escapeText_escape e escaped,
+                escapedHead, et, List.append_assoc, List.cons_append, List.singleton_append,
+                List.nil_append, List.length_append, List.length_cons] at next ⊢
+              push_cast at next ⊢
+              rw [show (pre.length : Int) + 1 + (escapeText done).length + p.length +
+                  (t.length + 1) = pre.length + 1 + ((escapeText done).length +
+                    (p.length + (t.length + 1))) by omega, next]
+
+        -- The requirement accepts binaries of ASCII bytes.
+        have ascii_bytes : ∀ s : List UInt8,
+            «ascii?/1» (bin s) = .ok Term.true → ∀ b ∈ s, b.toNat < 128 := by
           intro s
           induction s with
           | nil => simp
           | cons b s ih =>
             intro returned
-            unfold «plain?/1» at returned
+            unfold «ascii?/1» at returned
             rw [matchInteger_byte] at returned
-            simp [tail8, matchEnd_byte, Erlang.erlang.«/=/2»] at returned
-            by_cases low : (32 : Int) ≤ b.toNat <;> by_cases high : (b.toNat : Int) < 128 <;>
-              by_cases quote : (b.toNat : Int) = 34 <;> by_cases slash : (b.toNat : Int) = 92 <;>
-              simp [low, high, quote, slash] at returned
+            simp [tail8, matchEnd_byte] at returned
+            by_cases high : (b.toNat : Int) < 128 <;> simp [high] at returned
             intro x mem
             rcases List.mem_cons.mp mem with rfl | mem
-            · simp [plain]
-              omega
+            · omega
             · exact ih returned x mem
 
         -- A leading digit other than zero starts a number of length one.
@@ -1029,27 +1511,6 @@ defmodule JsonProofsTest do
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2», h46, h69,
             h101]
 
-        have binary_part_middle : ∀ (pre mid post : List UInt8),
-            Erlang.erlang.«binary_part/3» (.bitstring ⟨(pre ++ mid ++ post).toArray⟩ 0
-                (valid_aligned _))
-                (.integer pre.length) (.integer mid.length) =
-              .ok (.bitstring ⟨mid.toArray⟩ 0 (valid_aligned _)) := by
-          intro pre mid post
-          have size : (ByteArray.mk (pre ++ mid ++ post).toArray).size = pre.length + mid.length
-              + post.length := by
-            simp [ByteArray.size]; omega
-          have nonneg : ¬ ((mid.length : Int) < 0) := by omega
-          simp only [Erlang.erlang.«binary_part/3», nonneg, if_false, size]
-          have bounds : (0 : Int) ≤ pre.length ∧ (pre.length : Int) ≤ pre.length + mid.length ∧
-              (pre.length + mid.length : Int) ≤ ((pre.length + mid.length + post.length : Nat) :
-                  Int) := by omega
-          simp only [bounds, and_self, if_true]
-          congr 2
-          apply ByteArray.ext
-          rw [ByteArray.data_extract]
-          have : ((pre.length : Int) + mid.length).toNat - pre.length = mid.length := by omega
-          simp [this]
-
         have decode_element : ∀ (x : Int) (pre post : List UInt8) (b : UInt8) (separator :
             b.toNat = 44 ∨ b.toNat = 93) (acc stack : Term) (depth : Nat) (first : UInt8) (rest :
             List UInt8) (encoded : Erlang.erlang.«integer_to_binary/1» (.integer x) = .ok
@@ -1381,26 +1842,49 @@ defmodule JsonProofsTest do
             rw [value_null, show (117 :: 108 :: 108 :: rest : List UInt8) =
               [117, 108, 108] ++ rest from rfl, null_rest]
             simp [Result.resolve_bind, Json.term, Int.add_assoc]
-          | str s ok =>
+          | str s ascii =>
             intro pre rest acc stack depth _
-            rw [show Json.text (.str s ok) = 34 :: (s ++ [34]) from rfl]
+            rw [show Json.text (.str s ascii) = 34 :: (escapeText s ++ [34]) from rfl]
             simp only [List.cons_append, List.append_assoc, List.singleton_append, List.nil_append]
             rw [value_quote]
             simp only [Result.resolve_bind, Erlang.erlang.«+/2_integers», Result.ofExcept_ok,
               Result.ok_bind]
-            rw [string_ascii s.length s (34 :: rest) _ _ _ _ _ 0 (Nat.le_refl _) ok
-              (fun c rs same => by cases same; rfl), string_close]
-            have part := binary_part_middle (pre ++ [34]) s (34 :: rest)
-            simp only [List.append_assoc, List.singleton_append, List.cons_append,
-              List.nil_append, List.length_append, List.length_singleton] at part
-            have skip : (((pre.length + 1 : Nat)) : Int) = pre.length + 1 := by simp
-            rw [skip] at part
-            simp only [Int.zero_add, part, Erlang.erlang.«+/2_integers», Result.ofExcept_ok,
-              Result.ok_bind]
-            have length : (pre.length : Int) + 1 + s.length + 1 =
-                pre.length + (34 :: (s ++ [34])).length := by simp; omega
-            rw [length]
-            rfl
+            obtain ⟨p, r, rfl, pPlain, stop⟩ := split_plain s
+            have part := binary_part_middle (pre ++ [34]) p (escapeText r ++ 34 :: rest)
+            simp only [escapeText_append, escapeText_plain p pPlain, List.append_assoc,
+              List.cons_append, List.singleton_append, List.nil_append, List.length_append,
+              List.length_cons, List.length_nil] at part ⊢
+            push_cast at part ⊢
+            rcases stop with rfl | ⟨e, r, rfl, escaped⟩
+            · simp only [show escapeText [] = [] from rfl, List.nil_append] at part ⊢
+              rw [string_ascii p.length p (34 :: rest) _ _ _ _ _ 0 (Nat.le_refl _) pPlain
+                (fun c rs same => by cases same; rfl), string_close]
+              simp only [Int.zero_add, part, Erlang.erlang.«+/2_integers», Result.ofExcept_ok,
+                Result.ok_bind, List.append_nil]
+              rw [show (pre.length : Int) + 1 + p.length + 1 = pre.length + (p.length + 1 + 1) by
+                omega]
+              rfl
+            · have eAscii := ascii e (by simp)
+              obtain ⟨t, et, unescaped⟩ := unescape_escape e eAscii escaped
+              have escapedHead : escapeText (e :: r) = escapeBytes e ++ escapeText r := by
+                rw [show e :: r = [e] ++ r from rfl, escapeText_append, escapeText_escape e escaped]
+              rw [escapedHead, et] at part
+              simp only [escapedHead, et] at ⊢
+              simp only [List.cons_append, List.append_assoc] at part ⊢
+              rw [string_ascii p.length p _ _ _ _ _ _ 0 (Nat.le_refl _) pPlain
+                (fun c rs same => by cases same; rfl), Int.zero_add,
+                string_escape _ _ _ _ _ _ _ _ part, unescaped]
+              have next := decode_rest r.length r (p ++ [e]) pre rest acc stack
+                (.integer (pre.length + 1 - 1)) (Nat.le_refl _) (fun x mem => ascii x (by simp [mem]))
+              simp only [escapeText_append, escapeText_plain p pPlain, escapeText_escape e escaped,
+                escapedHead, et, List.append_assoc, List.cons_append, List.singleton_append,
+                List.nil_append, List.length_append, List.length_cons] at next ⊢
+              push_cast at next ⊢
+              rw [show (pre.length : Int) + 1 + p.length + (t.length + 1) =
+                pre.length + 1 + (p.length + (t.length + 1)) by omega, next,
+                show (pre.length : Int) + 1 + (p.length + (t.length + (escapeText r).length + 1)) + 1 =
+                  pre.length + (p.length + (t.length + (escapeText r).length + 1 + 1) + 1) by omega]
+              rfl
           | arr l ih =>
             intro pre rest acc stack depth _
             cases l with
@@ -1462,131 +1946,111 @@ defmodule JsonProofsTest do
           simp
 
         -- Encoding a value makes one dynamic call per nesting level.
+        have flat_byte : ∀ (k : UInt8) (r : Term) (y : List UInt8),
+            Erlang.erlang.«iolist_to_binary/1» r = .ok (bin y) →
+            Erlang.erlang.«iolist_to_binary/1» (.cons (.integer k.toNat) r) = .ok (bin (k :: y)) := by
+          intro k r y rest
+          have := k.toNat_lt
+          rw [Erlang.erlang.iolist_to_binary_byte_cons _ _ _ (by omega) (by omega) rest]
+          congr 2
+          rw [show UInt8.ofNat (k.toNat : Int).toNat = k by simp]
+          rfl
+
+        -- Encoding a value makes one dynamic call per nesting level, and builds iodata
+        -- that flattens to its text.
         have list_loop_values : ∀ (xs : List Json) (k : Nat),
-            (∀ y ∈ xs, ∀ depth, y.depth < depth →
+            (∀ y ∈ xs, ∀ depth, y.depth < depth → ∃ io,
               Result.resolve Erlang.program.fun_table depth
-                («do_encode/2» y.term (.function 0 2 #[])) = .ok y.iodata) →
+                («do_encode/2» y.term (.function 0 2 #[])) = .ok io ∧
+              Erlang.erlang.«iolist_to_binary/1» io = .ok (bin y.text)) →
             (∀ y ∈ xs, y.depth < k) →
-            Result.resolve Erlang.program.fun_table (k + 1)
-                («list_loop/2» (Json.terms xs) (.function 0 2 #[])) = .ok (Json.loopIodata xs) := by
+            ∃ io, Result.resolve Erlang.program.fun_table (k + 1)
+                («list_loop/2» (Json.terms xs) (.function 0 2 #[])) = .ok io ∧
+              Erlang.erlang.«iolist_to_binary/1» io = .ok (bin (Json.tailText xs)) := by
           intro xs k encodes bound
           induction xs with
-          | nil => simp [Json.terms, Json.loopIodata, «list_loop/2»]
+          | nil => exact ⟨.cons (.integer 93) .nil, by simp [Json.terms, «list_loop/2»],
+              flat_byte 93 _ _ Erlang.erlang.iolist_to_binary_nil⟩
           | cons y ys ih =>
+            obtain ⟨yio, yres, yflat⟩ := encodes y (by simp) k (bound y (by simp))
+            obtain ⟨lio, lres, lflat⟩ := ih (fun z mem => encodes z (by simp [mem]))
+              (fun z mem => bound z (by simp [mem]))
+            refine ⟨.cons (.integer 44) (.cons yio lio), ?_, flat_byte 44 _ _
+              (flat_join _ _ _ _ yflat lflat)⟩
             simp only [Json.terms, «list_loop/2»]
-            simp [Result.resolve_bind, encodes y (by simp) k (bound y (by simp)),
-              ih (fun z mem => encodes z (by simp [mem])) (fun z mem => bound z (by simp [mem])),
-              Json.loopIodata]
+            simp [Result.resolve_bind, yres, lres]
 
-        have encode_value : ∀ (v : Json) (depth : Nat), v.depth < depth →
+        have encode_value : ∀ (v : Json) (depth : Nat), v.depth < depth → ∃ io,
             Result.resolve Erlang.program.fun_table depth
-                («do_encode/2» v.term (.function 0 2 #[])) = .ok v.iodata := by
+                («do_encode/2» v.term (.function 0 2 #[])) = .ok io ∧
+              Erlang.erlang.«iolist_to_binary/1» io = .ok (bin v.text) := by
           intro v
           induction v using Json.rec (motive_2 := fun l => ∀ x ∈ l, ∀ depth, x.depth < depth →
-              Result.resolve Erlang.program.fun_table depth
-                («do_encode/2» x.term (.function 0 2 #[])) = .ok x.iodata) with
-          | int x => intro depth _; exact encode_integer x depth
+              ∃ io, Result.resolve Erlang.program.fun_table depth
+                («do_encode/2» x.term (.function 0 2 #[])) = .ok io ∧
+              Erlang.erlang.«iolist_to_binary/1» io = .ok (bin x.text)) with
+          | int x => intro depth _; exact ⟨_, encode_integer x depth, flat_bin _⟩
           | bool b =>
             intro depth _
-            unfold «do_encode/2»
-            cases b <;> simp [Json.term, Json.iodata]
+            cases b
+            · exact ⟨bin [102, 97, 108, 115, 101], by unfold «do_encode/2»; simp [Json.term],
+                flat_bin _⟩
+            · exact ⟨bin [116, 114, 117, 101], by unfold «do_encode/2»; simp [Json.term],
+                flat_bin _⟩
           | null =>
             intro depth _
+            exact ⟨bin [110, 117, 108, 108], by unfold «do_encode/2»; simp [Json.term],
+              flat_bin _⟩
+          | str s ascii =>
+            intro depth _
+            obtain ⟨io, encoded, flat⟩ := (encode_string s.length s [] [] (Term.list [.integer 34])
+              (Nat.le_refl _) ascii (by simp) flat_close).2
+            simp only [List.nil_append, List.length_nil] at encoded flat
+            refine ⟨io, ?_, flat⟩
             unfold «do_encode/2»
-            simp [Json.term, Json.iodata]
-          | str s ok => intro depth _; exact encode_plain s depth ok
+            simp [Json.term]
+            exact encoded
           | arr l ih =>
             intro depth bound
             simp only [Json.depth] at bound
             obtain ⟨k, rfl⟩ : ∃ k, depth = k + 1 := ⟨depth - 1, by omega⟩
             cases l with
             | nil =>
+              refine ⟨bin [91, 93], ?_, flat_bin _⟩
               unfold «do_encode/2»
-              simp [Json.term, Json.terms, «do_encode_list/2», Json.iodata,
-                Erlang.erlang.«is_list/1»]
+              simp [Json.term, Json.terms, «do_encode_list/2», Erlang.erlang.«is_list/1»]
             | cons x xs =>
               have elements : ∀ y ∈ x :: xs, y.depth < k := fun y mem => by
                 have := depth_le _ y mem
                 omega
+              obtain ⟨xio, xres, xflat⟩ := ih x (by simp) k (elements x (by simp))
+              obtain ⟨lio, lres, lflat⟩ := list_loop_values xs k (fun y mem => ih y (by simp [mem]))
+                (fun y mem => elements y (by simp [mem]))
+              refine ⟨.cons (.integer 91) (.cons xio lio), ?_, flat_byte 91 _ _
+                (flat_join _ _ _ _ xflat lflat)⟩
               unfold «do_encode/2»
               simp [Json.term, Json.terms, Erlang.erlang.«is_list/1», «do_encode_list/2»,
                 Erlang.erlang.«is_function/2»]
-              rw [ih x (by simp) k (elements x (by simp)), Result.ok_bind, Result.resolve_bind,
-                list_loop_values xs k (fun y mem => ih y (by simp [mem]))
-                  (fun y mem => elements y (by simp [mem])), Result.ok_bind,
+              rw [xres, Result.ok_bind, Result.resolve_bind, lres, Result.ok_bind,
                 Result.resolve_of_isPure _ _ _ (by simp)]
-              rfl
           | nil y mem => cases mem
           | cons x xs hx hxs y mem depth bound =>
             rcases List.mem_cons.mp mem with rfl | mem
             · exact hx depth bound
             · exact hxs y mem depth bound
 
-        have flatten_loop : ∀ xs : List Json,
-            (∀ y ∈ xs, Erlang.erlang.«iolist_to_binary/1» y.iodata =
-              .ok (.bitstring ⟨y.text.toArray⟩ 0 (valid_aligned _))) →
-            Erlang.erlang.«iolist_to_binary/1» (Json.loopIodata xs) =
-              .ok (.bitstring ⟨(Json.tailText xs).toArray⟩ 0 (valid_aligned _)) := by
-          intro xs flat
-          induction xs with
-          | nil =>
-            simp only [Json.loopIodata, Json.tailText]
-            rw [Erlang.erlang.iolist_to_binary_byte_cons 93 .nil ⟨#[]⟩ (by decide) (by decide)
-              Erlang.erlang.iolist_to_binary_nil]
-            rfl
-          | cons y ys ih =>
-            simp only [Json.loopIodata, Json.tailText]
-            have inner := Erlang.erlang.iolist_to_binary_join _ _ _ _ (flat y (by simp))
-              (ih (fun z mem => flat z (by simp [mem])))
-            rw [Erlang.erlang.iolist_to_binary_byte_cons 44 _ _ (by decide) (by decide) inner]
-            congr 2
-
-        have flatten : ∀ v : Json, Erlang.erlang.«iolist_to_binary/1» v.iodata =
-            .ok (.bitstring ⟨v.text.toArray⟩ 0 (valid_aligned _)) := by
-          intro v
-          induction v using Json.rec (motive_2 := fun l => ∀ x ∈ l,
-              Erlang.erlang.«iolist_to_binary/1» x.iodata =
-                .ok (.bitstring ⟨x.text.toArray⟩ 0 (valid_aligned _))) with
-          | int x => exact Erlang.erlang.iolist_to_binary_binary ⟨(textOf x).toArray⟩
-          | bool b =>
-            cases b
-            · exact Erlang.erlang.iolist_to_binary_binary ⟨#[102, 97, 108, 115, 101]⟩
-            · exact Erlang.erlang.iolist_to_binary_binary ⟨#[116, 114, 117, 101]⟩
-          | null => exact Erlang.erlang.iolist_to_binary_binary ⟨#[110, 117, 108, 108]⟩
-          | str s _ =>
-            simp only [Json.iodata, Json.text, Term.list_cons, Term.list_nil]
-            have close := Erlang.erlang.iolist_to_binary_byte_cons 34 .nil ⟨#[]⟩ (by decide)
-              (by decide) Erlang.erlang.iolist_to_binary_nil
-            have inner := Erlang.erlang.iolist_to_binary_join _ _ _ _
-              (Erlang.erlang.iolist_to_binary_binary ⟨s.toArray⟩) close
-            rw [Erlang.erlang.iolist_to_binary_byte_cons 34 _ _ (by decide) (by decide) inner]
-            congr 2
-          | arr l ih =>
-            cases l with
-            | nil => exact Erlang.erlang.iolist_to_binary_binary ⟨#[91, 93]⟩
-            | cons x xs =>
-              simp only [Json.iodata, Json.text]
-              have inner := Erlang.erlang.iolist_to_binary_join _ _ _ _ (ih x (by simp))
-                (flatten_loop xs (fun y mem => ih y (by simp [mem])))
-              rw [Erlang.erlang.iolist_to_binary_byte_cons 91 _ _ (by decide) (by decide) inner]
-              congr 2
-          | nil y mem => cases mem
-          | cons x xs hx hxs y mem =>
-            rcases List.mem_cons.mp mem with rfl | mem
-            · exact hx
-            · exact hxs y mem
-
         have roundtrip_value : ∀ v : Json, (∀ n, v ≠ .int n) → v.depth < 99 →
             Result.resolve Erlang.program.fun_table 100 («roundtrip/1» v.term) = .ok Term.true := by
           intro v number bound
           simp only [«roundtrip/1», «encode/1», «encode/2», Erlang.erlang.«is_function/2»]
           simp
-          rw [encode_value v 99 bound, Result.ok_bind]
+          obtain ⟨io, encoded, flat⟩ := encode_value v 99 bound
+          rw [encoded, Result.ok_bind]
           simp only [Result.resolve_bind,
             Result.resolve_of_isPure _ _ (Result.ok _) (by simp),
             Result.resolve_of_isPure _ _ (Result.ofExcept _) (by simp),
             Result.ofExcept_ok, Result.ok_bind]
-          rw [flatten, Result.ofExcept_ok, Result.ok_bind,
+          rw [flat, Result.ofExcept_ok, Result.ok_bind,
             decode_value v _ number, Result.ok_bind]
           simp [Erlang.erlang.«=:=/2», Result.ofExcept_ok]
 
@@ -1638,7 +2102,7 @@ defmodule JsonProofsTest do
                 have same : Term.bitstring ⟨data⟩ 0 valid = bin data.toList := by simp
                 simp only [same] at returned ⊢
                 simp [Erlang.erlang.«is_integer/1»] at returned
-                exact ⟨.str data.toList (plain_bytes _ returned), rfl, by simp [Json.depth]; omega⟩
+                exact ⟨.str data.toList (ascii_bytes _ returned), rfl, by simp [Json.depth]; omega⟩
               · obtain ⟨_ | k, bound⟩ := last
                 · exact absurd rfl aligned
                 · simp [Erlang.erlang.«is_integer/1», Erlang.erlang.«is_list/1»] at returned
