@@ -124,6 +124,14 @@ theorem enumeration_shadowed :
   rw [Term.mapLookup_mapEntries]
   rfl
 
+/-- Listing a map yields its visible bindings as pairs. -/
+theorem to_list_pairs (entries : List (Term × Term)) :
+    Erlang.maps.«to_list/1» (.map entries) =
+      .ok (Term.list ((Term.mapEntries entries).map fun entry => .tuple #[entry.1, entry.2])) ∧
+    Erlang.maps.«to_list/1» (Term.map []) = .ok .nil ∧
+    Erlang.maps.«to_list/1» one = .error (.error (.tuple #[.atom "badmap", one])) :=
+  ⟨rfl, by simp [Erlang.maps.«to_list/1»], rfl⟩
+
 end LynxTest.Modules.Maps
 
 run_cmd do

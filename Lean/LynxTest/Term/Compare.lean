@@ -139,6 +139,18 @@ theorem comparison_keys_before_values (k l v w : Term)
     Term.compare (.map [(k,v)]) (.map [(l,w)]) = .lt := by
   simp [Term.compare_cons, Term.compare_singleton_map, head, key]
 
+/-- Lists exactly compare their heads first. -/
+theorem exact_comparison_heads_first (a as b bs : Term) (head : Term.exactCompare a b = .lt) :
+    Term.exactCompare (.cons a as) (.cons b bs) = .lt := by
+  simp [Term.exactCompare_cons, head]
+
+/-- Shadowed bindings do not affect exact map equality. -/
+theorem exact_map_equality_by_lookup (k v w : Term) :
+    Term.exactCompare (.map [(k, v), (k, w)]) (.map [(k, v)]) = .eq := by
+  apply Term.map_exactCompare_eq_of_lookup
+  intro q
+  by_cases same : Term.exactCompare q k = .eq <;> simp [same]
+
 end LynxTest.Term.Compare
 
 run_cmd do

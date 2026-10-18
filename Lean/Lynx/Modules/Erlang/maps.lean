@@ -31,6 +31,11 @@ open Lynx
       .error (.error (.tuple #[.atom "badkey", key]))
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
+/-- The visible bindings as `{Key, Value}` pairs, in the order map generators use. -/
+@[expose] def «to_list/1» : Term → Except Exception Term
+  | .map entries => .ok (Term.list ((Term.mapEntries entries).map fun entry => .tuple #[entry.1, entry.2]))
+  | input => .error (.error (.tuple #[.atom "badmap", input]))
+
 /-- Later pairs take precedence, so they shadow earlier ones. -/
 @[expose] def «from_list/1» (list : Term) : Except Exception Term :=
   match Term.pairList? list with
