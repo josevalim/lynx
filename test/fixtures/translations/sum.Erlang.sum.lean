@@ -27,7 +27,7 @@ set_option «match».ignoreUnusedAlts true
 
 #lynx_pure
   def «sum_singleton_ensures/1» (_0 : Lynx.Term) : Lynx.Result := do
-    let _1 ← «sum/1» (Lynx.Term.cons _0 Lynx.Term.nil)
+    let _1 ← «sum/1» (Lynx.Term.list [_0])
     Erlang.erlang.«==/2» _1 _0
 
 end

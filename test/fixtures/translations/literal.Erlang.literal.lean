@@ -14,16 +14,13 @@ set_option «match».ignoreUnusedAlts true
 #lynx_pure
   def «integers/0» : Lynx.Result :=
     pure
-      (Lynx.Term.cons (Lynx.Term.integer (-1))
-        (Lynx.Term.cons (Lynx.Term.integer 0)
-          (Lynx.Term.cons (Lynx.Term.integer 1)
-            (Lynx.Term.cons (Lynx.Term.integer 9223372036854775808) Lynx.Term.nil))))
+      (Lynx.Term.list
+        [Lynx.Term.integer (-1), Lynx.Term.integer 0, Lynx.Term.integer 1,
+          Lynx.Term.integer 9223372036854775808])
 
 #lynx_pure
   def «atoms/0» : Lynx.Result :=
-    pure
-      (Lynx.Term.cons (Lynx.Term.atom "foo")
-        (Lynx.Term.cons (Lynx.Term.atom "bar baz") Lynx.Term.nil))
+    pure (Lynx.Term.list [Lynx.Term.atom "foo", Lynx.Term.atom "bar baz"])
 
 #lynx_pure
   def «empty_list/0» : Lynx.Result :=
@@ -32,31 +29,25 @@ set_option «match».ignoreUnusedAlts true
 #lynx_pure
   def «tuples/0» : Lynx.Result :=
     pure
-      (Lynx.Term.cons (Lynx.Term.tuple #[])
-        (Lynx.Term.cons (Lynx.Term.tuple #[Lynx.Term.atom "ok"])
-          (Lynx.Term.cons (Lynx.Term.tuple #[Lynx.Term.atom "ok", Lynx.Term.integer 1])
-            (Lynx.Term.cons
-              (Lynx.Term.tuple
-                #[Lynx.Term.atom "nested",
-                  Lynx.Term.tuple
-                    #[Lynx.Term.integer 1, Lynx.Term.cons (Lynx.Term.atom "foo") Lynx.Term.nil]])
-              Lynx.Term.nil))))
+      (Lynx.Term.list
+        [Lynx.Term.tuple #[], Lynx.Term.tuple #[Lynx.Term.atom "ok"],
+          Lynx.Term.tuple #[Lynx.Term.atom "ok", Lynx.Term.integer 1],
+          Lynx.Term.tuple
+            #[Lynx.Term.atom "nested",
+              Lynx.Term.tuple #[Lynx.Term.integer 1, Lynx.Term.list [Lynx.Term.atom "foo"]]]])
 
 #lynx_pure
   def «computed_tuples/1» (_0 : Lynx.Term) : Lynx.Result :=
-    pure
-      (Lynx.Term.tuple
-        #[Lynx.Term.atom "ok", _0, Lynx.Term.tuple #[_0, Lynx.Term.cons _0 Lynx.Term.nil]])
+    pure (Lynx.Term.tuple #[Lynx.Term.atom "ok", _0, Lynx.Term.tuple #[_0, Lynx.Term.list [_0]]])
 
 #lynx_pure
   def «maps/0» : Lynx.Result :=
     pure
-      (Lynx.Term.cons (Lynx.Term.map [])
-        (Lynx.Term.cons
-          (Lynx.Term.map
+      (Lynx.Term.list
+        [Lynx.Term.map [],
+          Lynx.Term.map
             [(Lynx.Term.atom "a", Lynx.Term.integer 1),
-              (Lynx.Term.integer 1, Lynx.Term.map [(Lynx.Term.atom "b", Lynx.Term.integer 2)])])
-          Lynx.Term.nil))
+              (Lynx.Term.integer 1, Lynx.Term.map [(Lynx.Term.atom "b", Lynx.Term.integer 2)])]])
 
 #lynx_pure
   def «computed_maps/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result := do
@@ -66,32 +57,26 @@ set_option «match».ignoreUnusedAlts true
 #lynx_pure
   def «floats/0» : Lynx.Result :=
     pure
-      (Lynx.Term.cons (Lynx.Term.float ⟨Bool.true, 1023, 2251799813685248⟩)
-        (Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 0, 0⟩)
-          (Lynx.Term.cons (Lynx.Term.float ⟨Bool.true, 0, 0⟩)
-            (Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 1023, 0⟩)
-              (Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 1019, 2702159776422298⟩)
-                (Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 26, 1528457577689945⟩)
-                  (Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 0, 1⟩)
-                    (Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 2046, 4503599627370495⟩)
-                      (Lynx.Term.cons
-                        (Lynx.Term.tuple
-                          #[Lynx.Term.atom "nested",
-                            Lynx.Term.cons (Lynx.Term.float ⟨Bool.false, 1023, 2251799813685248⟩)
-                              Lynx.Term.nil])
-                        (Lynx.Term.cons
-                          (Lynx.Term.map
-                            [(Lynx.Term.float ⟨Bool.false, 1023, 0⟩,
-                                Lynx.Term.float ⟨Bool.false, 1019, 2702159776422298⟩),
-                              (Lynx.Term.integer 1, Lynx.Term.atom "integer")])
-                          Lynx.Term.nil))))))))))
+      (Lynx.Term.list
+        [Lynx.Term.float ⟨Bool.true, 1023, 2251799813685248⟩, Lynx.Term.float ⟨Bool.false, 0, 0⟩,
+          Lynx.Term.float ⟨Bool.true, 0, 0⟩, Lynx.Term.float ⟨Bool.false, 1023, 0⟩,
+          Lynx.Term.float ⟨Bool.false, 1019, 2702159776422298⟩,
+          Lynx.Term.float ⟨Bool.false, 26, 1528457577689945⟩, Lynx.Term.float ⟨Bool.false, 0, 1⟩,
+          Lynx.Term.float ⟨Bool.false, 2046, 4503599627370495⟩,
+          Lynx.Term.tuple
+            #[Lynx.Term.atom "nested",
+              Lynx.Term.list [Lynx.Term.float ⟨Bool.false, 1023, 2251799813685248⟩]],
+          Lynx.Term.map
+            [(Lynx.Term.float ⟨Bool.false, 1023, 0⟩,
+                Lynx.Term.float ⟨Bool.false, 1019, 2702159776422298⟩),
+              (Lynx.Term.integer 1, Lynx.Term.atom "integer")]])
 
 #lynx_pure
   def «bitstrings/0» : Lynx.Result :=
     pure
-      (Lynx.Term.cons (Lynx.Term.bitstring ⟨#[0, 255]⟩ 0 (by decide))
-        (Lynx.Term.cons (Lynx.Term.bitstring ⟨#[160]⟩ 3 (by decide))
-          (Lynx.Term.cons (Lynx.Term.bitstring ⟨#[128, 255, 128]⟩ 1 (by decide)) Lynx.Term.nil)))
+      (Lynx.Term.list
+        [Lynx.Term.bitstring ⟨#[0, 255]⟩ 0 (by decide), Lynx.Term.bitstring ⟨#[160]⟩ 3 (by decide),
+          Lynx.Term.bitstring ⟨#[128, 255, 128]⟩ 1 (by decide)])
 
 def lynx_literal_xcr6qjiw : Lynx.Term :=
   Lynx.Term.tuple
@@ -116,24 +101,12 @@ def lynx_literal_xcr6qjiw : Lynx.Term :=
     pure (Lynx.Term.tuple #[_3, _2])
 
 def lynx_literal_bbjy4hhz : Lynx.Term :=
-  Lynx.Term.cons (Lynx.Term.integer 1)
-    (Lynx.Term.cons (Lynx.Term.integer 2)
-      (Lynx.Term.cons (Lynx.Term.integer 3)
-        (Lynx.Term.cons (Lynx.Term.integer 4)
-          (Lynx.Term.cons (Lynx.Term.integer 5)
-            (Lynx.Term.cons (Lynx.Term.integer 6)
-              (Lynx.Term.cons (Lynx.Term.integer 7)
-                (Lynx.Term.cons (Lynx.Term.integer 8)
-                  (Lynx.Term.cons
-                    (Lynx.Term.cons (Lynx.Term.integer 9)
-                      (Lynx.Term.cons (Lynx.Term.integer 10)
-                        (Lynx.Term.cons (Lynx.Term.integer 11)
-                          (Lynx.Term.cons (Lynx.Term.integer 12)
-                            (Lynx.Term.cons (Lynx.Term.integer 13)
-                              (Lynx.Term.cons (Lynx.Term.integer 14)
-                                (Lynx.Term.cons (Lynx.Term.integer 15)
-                                  (Lynx.Term.cons (Lynx.Term.integer 16) Lynx.Term.nil))))))))
-                    Lynx.Term.nil))))))))
+  Lynx.Term.list
+    [Lynx.Term.integer 1, Lynx.Term.integer 2, Lynx.Term.integer 3, Lynx.Term.integer 4,
+      Lynx.Term.integer 5, Lynx.Term.integer 6, Lynx.Term.integer 7, Lynx.Term.integer 8,
+      Lynx.Term.list
+        [Lynx.Term.integer 9, Lynx.Term.integer 10, Lynx.Term.integer 11, Lynx.Term.integer 12,
+          Lynx.Term.integer 13, Lynx.Term.integer 14, Lynx.Term.integer 15, Lynx.Term.integer 16]]
 
 #lynx_pure
   def «pooled_list/0» : Lynx.Result :=

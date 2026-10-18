@@ -420,6 +420,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.instReprFiniteFloat",
   "Lynx.Term.integer",
   "Lynx.Term.isMember",
+  "Lynx.Term.list",
   "Lynx.Term.map",
   "Lynx.Term.mapEntries",
   "Lynx.Term.mapEnumeration",

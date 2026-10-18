@@ -785,6 +785,19 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     pure ⟨(mkIdent ``Lynx.Term.nil).raw⟩
   | "cons" => do
     fields j ["kind", "head", "tail", "span"]
+    -- Proper lists build their conses through `Lynx.Term.list`, except in
+    -- patterns, which need constructors.
+    if !pattern then
+      let pooled (node : Json) := (node.getObjVal? "pooled").toOption.isSome
+      let mut heads := #[]
+      let mut rest := j
+      while guardKind rest == "cons" && !pooled rest do
+        heads := heads.push (← field rest "head")
+        rest ← field rest "tail"
+      if guardKind rest == "nil" && !pooled rest then
+        let elements ← heads.mapM (term map info false)
+        let list := mkIdent ``Lynx.Term.list
+        return withSpan info.info (Unhygienic.run `($list [$elements,*]))
     let head ← term map info pattern (← field j "head")
     let tail ← term map info pattern (← field j "tail")
     let ctor := mkIdent ``Lynx.Term.cons

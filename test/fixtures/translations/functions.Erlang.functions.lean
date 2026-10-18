@@ -64,7 +64,7 @@ def «zero_arity_calls/0» : Lynx.Result := do
 
 def «apply_calls/1» (_0 : Lynx.Term) : Lynx.Result := do
   let vF ← «make/1» _0
-  let vA ← «explicit/2» vF (Lynx.Term.cons (Lynx.Term.integer 2) Lynx.Term.nil)
+  let vA ← «explicit/2» vF (Lynx.Term.list [Lynx.Term.integer 2])
   let _3 ← pure (Lynx.Term.function 1 1 #[])
   let _5 ← pure (Lynx.Term.function 2 1 #[])
   let vStore ← «make_store/1» _0

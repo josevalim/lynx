@@ -41,7 +41,7 @@ def «map/2» (_0 : Lynx.Term) (_v_F : Lynx.Term) : Lynx.Result :=
     Lynx.Result.andAlso («proper_list/1» _0) do
       let _8 ← pure (Lynx.Term.function 0 1 #[])
       let _5 ← pure (Lynx.Term.function 1 1 #[])
-      Erlang.lists.«member/2» _1 (Lynx.Term.cons _8 (Lynx.Term.cons _5 Lynx.Term.nil))
+      Erlang.lists.«member/2» _1 (Lynx.Term.list [_8, _5])
 
 def «map_returns_list_ensures/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result := do
   let _2 ← «map/2» _0 _1

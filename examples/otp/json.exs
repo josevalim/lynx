@@ -543,7 +543,7 @@ defmodule JsonProofsTest do
           | a :: b :: c :: rest =>
             unfold Erlang.lists.«reverse/1»
             simp only [ints]
-            rw [show Term.cons (.integer b) (Term.cons (.integer a) .nil) = ints [b, a] from rfl,
+            rw [show Term.list [.integer b, .integer a] = ints [b, a] from rfl,
               show Term.cons (.integer c) (ints rest) = ints (c :: rest) from rfl, reverse2_ints]
             simp
 

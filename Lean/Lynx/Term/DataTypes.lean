@@ -40,6 +40,20 @@ inductive Term where
         | decide) : Term
 deriving Repr
 
+namespace Term
+
+/-- A proper list of the given elements. -/
+@[expose, reducible] def list : List Term → Term
+  | [] => .nil
+  | head :: tail => .cons head (list tail)
+
+@[simp] theorem list_nil : list [] = .nil := rfl
+
+@[simp] theorem list_cons (head : Term) (tail : List Term) :
+    list (head :: tail) = .cons head (list tail) := rfl
+
+end Term
+
 inductive Exception where
   | error : Term → Exception
   | throw : Term → Exception
