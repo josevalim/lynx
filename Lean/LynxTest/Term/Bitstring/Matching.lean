@@ -442,6 +442,19 @@ theorem match_leading_bytes :
   simpa using Lynx.Term.Bitstring.matchInteger_bytes [1, 2] [3]
     (Lynx.Term.Bitstring.valid_aligned _) 16 rfl
 
+/-- Byte-aligned binaries are built by concatenating their bytes. -/
+theorem build_from_bytes :
+    Lynx.Term.Bitstring.append (.bitstring ⟨#[1]⟩ 0) (.bitstring ⟨#[2, 3]⟩ 0) =
+        .ok (.bitstring ⟨#[1, 2, 3]⟩ 0) ∧
+      Lynx.Term.Bitstring.integerSegment (.integer 200) (.integer 8) 1 false =
+        .ok (.bitstring ⟨#[200]⟩ 0) ∧
+      Lynx.Term.Bitstring.utf8Segment (.integer 65) = .ok (.bitstring ⟨#[65]⟩ 0) ∧
+      Lynx.Term.Bitstring.binarySegment (.bitstring ⟨#[1, 2]⟩ 0) (.atom "all") 8 =
+        .ok (.bitstring ⟨#[1, 2]⟩ 0) :=
+  ⟨Lynx.Term.Bitstring.append_bytes [1] [2, 3], Lynx.Term.Bitstring.integerSegment_byte 200,
+    Lynx.Term.Bitstring.utf8Segment_ascii 65 (by decide),
+    Lynx.Term.Bitstring.binarySegment_aligned _⟩
+
 /-- Simp rewrites an extraction inside `extract`, then selects its branch. -/
 theorem extract_rewrites (found : Lynx.Term → Lynx.Term → Lynx.Result) (missing : Unit → Lynx.Result) :
     Lynx.Term.Bitstring.extract

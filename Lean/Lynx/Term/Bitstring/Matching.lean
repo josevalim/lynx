@@ -386,6 +386,61 @@ public theorem matchInteger_bytes (head rest : List UInt8) (valid : Valid ⟨(he
   simp only [Bool.false_eq_true, ↓reduceIte]
   rw [decode_bytes]
 
+private theorem toBits_bytes (bytes : List UInt8) :
+    toBits ⟨bytes.toArray⟩ 0 =
+      bytes.flatMap fun b => (List.range 8).map fun i => b.toBitVec.getMsbD i := by
+  have empty : toBits ⟨([] : List UInt8).toArray⟩ 0 = [] :=
+    List.eq_nil_of_length_eq_zero (by rw [toBits_length_aligned]; rfl)
+  have whole := toBits_append bytes []
+  rwa [List.append_nil, empty, List.append_nil] at whole
+
+/-- Appending byte-aligned binaries concatenates their bytes. -/
+public theorem append_bytes (left right : List UInt8) :
+    append (.bitstring ⟨left.toArray⟩ 0 (valid_aligned _)) (.bitstring ⟨right.toArray⟩ 0 (valid_aligned _)) =
+      .ok (.bitstring ⟨(left ++ right).toArray⟩ 0 (valid_aligned _)) := by
+  simp only [append]
+  rw [← ofBits_toBits_aligned, toBits_append, toBits_bytes left]
+
+private theorem integerBits_byte_fin : ∀ n : Fin 256,
+    integerBits (n.val : Int) 8 Bool.false =
+      (List.range 8).map fun i => (UInt8.ofNat n.val).toBitVec.getMsbD i := by
+  decide +kernel
+
+private theorem integerBits_byte (b : UInt8) :
+    integerBits (b.toNat : Int) 8 Bool.false = (List.range 8).map fun i => b.toBitVec.getMsbD i := by
+  simpa using integerBits_byte_fin ⟨b.toNat, b.toNat_lt⟩
+
+/-- An 8-bit integer segment of a byte constructs that byte. -/
+public theorem integerSegment_byte (b : UInt8) :
+    integerSegment (.integer b.toNat) (.integer 8) 1 Bool.false =
+      .ok (.bitstring ⟨#[b]⟩ 0 (valid_aligned _)) := by
+  have bits : integerSegment (.integer b.toNat) (.integer 8) 1 Bool.false =
+      .ok (ofBits (integerBits b.toNat 8 Bool.false)) := integerSegment_bits _ 8
+  rw [bits, ← ofBits_toBits_aligned, show (⟨#[b]⟩ : ByteArray) = ⟨[b].toArray⟩ from rfl,
+    toBits_bytes, integerBits_byte]
+  simp
+
+/-- A UTF-8 segment of an ASCII code point constructs its byte. -/
+public theorem utf8Segment_ascii (b : UInt8) (ascii : b.toNat < 128) :
+    utf8Segment (.integer b.toNat) = .ok (.bitstring ⟨#[b]⟩ 0 (valid_aligned _)) := by
+  have bits := integerSegment_byte b
+  have segment : integerSegment (.integer b.toNat) (.integer 8) 1 Bool.false =
+      .ok (ofBits (integerBits b.toNat 8 Bool.false)) := integerSegment_bits _ 8
+  rw [segment] at bits
+  simp only [utf8Segment]
+  have range : (0 : Int) ≤ b.toNat ∧ (b.toNat : Int) ≤ 0x10ffff ∧
+      ((b.toNat : Int) < 0xd800 ∨ 0xdfff < (b.toNat : Int)) := by omega
+  simp only [range, and_self, ↓reduceIte, Int.toNat_natCast, ascii, List.flatMap_cons,
+    List.flatMap_nil, List.append_nil]
+  simpa using bits
+
+/-- A whole binary segment of a byte-aligned binary is that binary. -/
+public theorem binarySegment_aligned (bytes : ByteArray) :
+    binarySegment (.bitstring bytes 0 (valid_aligned _)) (.atom "all") 8 =
+      .ok (.bitstring bytes 0 (valid_aligned _)) := by
+  simp [binarySegment, bitSize]
+  split <;> omega
+
 /-- An empty binary ends a pattern. -/
 public theorem matchEnd_byte_nil :
     matchEnd (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (valid_aligned _)) = Bool.true := rfl
