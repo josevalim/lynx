@@ -1,6 +1,7 @@
 -module(functions).
 -export([captured_closures/1, zero_arity_calls/0, apply_calls/1, sequence_calls/1,
-         make/1, explicit/2, inc/1, zero/0, remember/1, make_store/1, references/0]).
+         make/1, explicit/2, inc/1, zero/0, remember/1, make_store/1, references/0,
+         qualified_capture/1]).
 
 %% Two closures share code but retain different captured values.
 captured_closures(X) ->
@@ -44,3 +45,8 @@ references() ->
     MakeRef = fun erlang:make_ref/0,
     Second = MakeRef(),
     {is_reference(First), First =:= Second, #{First => Second}}.
+
+%% Qualified references to translated functions share the remote-call wrapper.
+qualified_capture(X) ->
+    Inc = fun functions:inc/1,
+    {Inc(X), explicit(Inc, [X])}.

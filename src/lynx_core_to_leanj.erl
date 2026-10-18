@@ -434,6 +434,17 @@ expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
         when Class =:= error; Class =:= throw; Class =:= exit ->
     {TranslatedReason, State1} = value(Reason, State0),
     {node(~"raise", Anno, #{~"class" => atom_to_binary(Class, utf8), ~"reason" => TranslatedReason}), State1};
+%% Function references and calls must name their module and function at
+%% translation time. The compiler folds literal references, such as
+%% &Foo.bar/1, into function literals and literal applies into calls, so
+%% these only remain when computed, such as &mod.bar/1 or apply(M, F, Args).
+expression(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = make_fun},
+                   args = [_, _, _]} = Core, _State) ->
+    core_error(Core, <<"dynamic function references, such as &mod.fun/1 or fun M:F/A, "
+                       "are not supported">>);
+expression(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = apply},
+                   args = [_, _, _]} = Core, _State) ->
+    core_error(Core, <<"dynamic calls, such as apply(M, F, Args), are not supported">>);
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX
 %% Erlang: ?MODULE:f(X) (non-builtin)
@@ -452,6 +463,8 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
                 State0#state{funs = NewFuns, remote = {NewContext, Callback}}, Args),
             {remote_call_node(module_name(Module), atom_to_binary(Name, utf8), TranslatedArgs, Anno), State1#state{purity = join_purity(State1#state.purity, Purity)}}
     end;
+expression(#c_call{} = Core, _State) ->
+    core_error(Core, <<"dynamic calls, such as mod.fun(x) or M:F(X), are not supported">>);
 expression(#c_primop{anno = Anno, name = #c_literal{val = Op}, args = Args}, State) ->
     prim_op(Op, Anno, Args, State);
 %% Integer construction is a computation: invalid values or sizes raise badarg.

@@ -187,6 +187,11 @@ defmodule Lynx do
       other enumerations visit each key once, but proofs cannot rely on any
       particular order.
 
+    * Function references and calls must name their module and function at
+      compile time. `&Foo.bar/1`, `fun foo:bar/1`, and `Foo.bar(x)` are
+      supported, while dynamic references and calls, such as `&mod.bar/1`,
+      `mod.bar(x)`, and `apply(mod, fun, args)`, produce translation errors.
+
     * Laws cannot quantify over arbitrary functions. A function parameter ranges
       over every function term, with no behavior of its own; calling one resolves
       only against the functions the program defines. Restrict function

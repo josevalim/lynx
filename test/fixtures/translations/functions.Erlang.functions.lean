@@ -58,7 +58,7 @@ def «captured_closures/1» (_0 : Lynx.Term) : Lynx.Result := do
 
 def «zero_arity_calls/0» : Lynx.Result := do
   let vZ ← «zero/0»
-  let _1 ← pure (Lynx.Term.function 4 0 #[])
+  let _1 ← pure (Lynx.Term.function 5 0 #[])
   let vC ← Lynx.Term.apply _1 #[]
   Erlang.erlang.«+/2» vZ vC
 
@@ -75,6 +75,15 @@ def «apply_calls/1» (_0 : Lynx.Term) : Lynx.Result := do
 def «sequence_calls/1» (_0 : Lynx.Term) : Lynx.Result := do
   let _ ← «remember/1» _0
   pure _0
+
+def «qualified_capture/1» (_0 : Lynx.Term) : Lynx.Result := do
+  let _3 ← «inc/1» _0
+  let _2 ← «explicit/2» (Lynx.Term.function 4 1 #[]) (Lynx.Term.list [_0])
+  pure (Lynx.Term.tuple #[_3, _2])
+
+#lynx_pure
+  def «$lynx_fun_4/1» (_0 : Lynx.Term) : Lynx.Result :=
+    «inc/1» _0
 
 end
 

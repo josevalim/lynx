@@ -1217,6 +1217,25 @@ defmodule Lynx.CoreToLeanjTest do
     assert reason =~ "unsupported"
   end
 
+  test "rejects dynamic function references and calls" do
+    module = :cerl.c_var(:M)
+    name = :cerl.c_atom(:f)
+
+    for {body, message} <- [
+          {:cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:make_fun), [
+             module,
+             name,
+             :cerl.c_int(1)
+           ]), "dynamic function references"},
+          {:cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:apply), [module, name, :cerl.c_nil()]),
+           "dynamic calls, such as apply(M, F, Args)"},
+          {:cerl.c_call(module, name, []), "dynamic calls, such as mod.fun(x)"}
+        ] do
+      assert {:error, _, reason} = translate(definitions([definition(:entry, body)]))
+      assert reason =~ message
+    end
+  end
+
   test "translates laws without a requires helper" do
     definitions =
       :lynx_core_to_leanj.to_definitions(law_core(%{name: {:entry, [:x]}, ensures: :expected}))
