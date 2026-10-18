@@ -455,6 +455,18 @@ theorem build_from_bytes :
     Lynx.Term.Bitstring.utf8Segment_ascii 65 (by decide),
     Lynx.Term.Bitstring.binarySegment_aligned _⟩
 
+/-- UTF-8 matches only well-formed sequences, so an overlong encoding never matches. -/
+theorem match_utf8_rejects_overlong :
+    Lynx.Term.Bitstring.matchUtf8 (.bitstring ⟨#[0xC0, 0x80]⟩ 0) = none := by
+  rcases matched : Lynx.Term.Bitstring.matchUtf8 _ with _ | ⟨value, rest⟩
+  · rfl
+  · obtain ⟨head, tail, same, -, rows⟩ :=
+      Lynx.Term.Bitstring.matchUtf8_bytes (bytes := [0xC0, 0x80]) matched
+    rcases rows with ⟨b, rfl, low⟩ | ⟨b, c, rfl, low, -⟩ | ⟨b, c, d, rfl, -⟩ | ⟨b, c, d, e, rfl, -⟩
+    all_goals simp at same
+    · obtain ⟨rfl, -⟩ := same; exact absurd low (by decide)
+    · obtain ⟨rfl, -⟩ := same; exact absurd low (by decide)
+
 /-- Simp rewrites an extraction inside `extract`, then selects its branch. -/
 theorem extract_rewrites (found : Lynx.Term → Lynx.Term → Lynx.Result) (missing : Unit → Lynx.Result) :
     Lynx.Term.Bitstring.extract
