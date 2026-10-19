@@ -61,17 +61,37 @@ nonnegative integers; the Core unit is a compile-time value in `1..256`. -/
   | _, _ => .error (.error (.atom "badarg"))
 
 /-- The bit width of a float segment whose size is computed at runtime. Sizes
-other than nonnegative integers have width zero, which no float segment accepts. -/
+other than nonnegative integers have width one, which no float segment accepts. -/
 @[expose] public def floatWidth (size : Term) (unit : Nat) : Nat :=
   match size with
-  | .integer size => size.toNat * unit
-  | _ => 0
+  | .integer size => if 0 ≤ size ∧ 1 ≤ unit then size.toNat * unit else 1
+  | _ => 1
+
+/-- Encode a binary16 or binary32 segment. Floats round to nearest with ties to
+even, and values beyond the format's range encode infinity. On a 64-bit VM,
+integers in `-2 ^ 59 ≤ value < 2 ^ 59` round directly to binary32, while larger
+integers are first rounded to binary64, failing with badarg if that overflows. -/
+@[expose] public def narrowFloatSegment (value : Term) (width : Nat) (little : Bool) :
+    Except Exception Term :=
+  let spec := if width = 16 then Term.FiniteFloat.binary16 else .binary32
+  let encoded := match value with
+    | .float value => some (Term.FiniteFloat.narrow spec value)
+    | .integer value =>
+      if width = 32 ∧ -2 ^ 59 ≤ value ∧ value < 2 ^ 59 then
+        some (Term.FiniteFloat.narrowInt spec value)
+      else (Term.FiniteFloat.ofInt value).map (Term.FiniteFloat.narrow spec)
+    | _ => none
+  match encoded with
+  | some encoded => integerSegment (.integer (Int.ofNat encoded)) (.integer width) 1 little
+  | none => .error (.error (.atom "badarg"))
 
 /-- Encode binary64 fields without rounding. Integer operands are first rounded
 into binary64, failing with badarg if conversion overflows. Binary16 and
-binary32 are not modeled yet and currently return badarg. -/
+binary32 segments are encoded by `narrowFloatSegment`; other widths raise badarg. -/
 @[expose] public def floatSegment (value : Term) (width : Nat) (little : Bool) : Except Exception Term :=
-  if width != 64 then .error (.error (.atom "badarg"))
+  if width != 64 then
+    if width = 16 ∨ width = 32 then narrowFloatSegment value width little
+    else .error (.error (.atom "badarg"))
   else
     let converted := match value with
       | .float value => some value

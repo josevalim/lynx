@@ -2,7 +2,7 @@
 -export([empty/1, empty_or_byte/1, literal/1, partial_literal/1, binary_literal/1, string_literal/1, signed_literal/1, integers/1, integer_sized/1, integer_external_size/2,
          utf8/1, utf8_little/1, utf16/1, utf16_big/1, utf16_little/1,
          utf32/1, utf32_big/1, utf32_little/1, utf_mixed/1, utf_literal/1, utf_pinned/2,
-         float64/1, float_sized/2, binary_tail/1, bitstring_tail/1, binary_literal_tail/1,
+         float16/1, float32/1, float64/1, float_sized/2, binary_tail/1, bitstring_tail/1, binary_literal_tail/1,
          bitstring_literal_tail/1, binary_fixed/2,
          bitstring_fixed/2, binary_prefix/2, nested/1, guarded/1, alias/1, pinned/2]).
 
@@ -37,6 +37,12 @@ integer_sized(_) -> other.
 
 integer_external_size(Size, Bits) ->
     case Bits of <<X:Size/unit:3, Tail/bitstring>> -> {X, Tail}; _ -> other end.
+
+float16(<<X:16/float, Rest/bits>>) -> {X, Rest};
+float16(_) -> other.
+
+float32(<<X:32/float-big, Y:32/float-little>>) -> {X, Y};
+float32(_) -> other.
 
 float64(<<X:64/float-big, Y:64/float-little>>) -> {X, Y};
 float64(_) -> other.

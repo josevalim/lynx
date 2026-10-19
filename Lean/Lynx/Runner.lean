@@ -85,12 +85,13 @@ private def str (j : Json) (key : String) : Except String String := do
 private def arr (j : Json) (key : String) : Except String (Array Json) := do
   (← field j key).getArr?
 
-/-- Literal float segment sizes are resolved to their width, keeping generated
-proofs free of runtime size computations. Other sizes are computed at runtime. -/
+/-- Nonnegative literal float segment sizes are resolved to their width, keeping
+generated proofs free of runtime size computations. Other sizes are computed at runtime. -/
 private def literalFloatWidth (segment : Json) (unit : Nat) : Except String (Option Nat) := do
   let size ← field segment "size"
   if (← str size "kind") == "integer" then
-    pure (some ((← (← field size "value").getInt?).toNat * unit))
+    let size ← (← field size "value").getInt?
+    pure (if 0 ≤ size then some (size.toNat * unit) else none)
   else pure none
 
 private inductive Location where
@@ -730,9 +731,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
           let unit ← (← field segment "unit").getNat?
           unless 1 ≤ unit && unit ≤ 256 do throw "float segment unit must be in 1..256"
           let width ← match ← literalFloatWidth segment unit with
-            | some width => do
-              if width == 16 || width == 32 then throw "only binary64 float matching is implemented"
-              pure ⟨Syntax.mkNumLit (toString width)⟩
+            | some width => pure ⟨Syntax.mkNumLit (toString width)⟩
             | none => do
               let size ← term map si false (← field segment "size")
               let unit : TSyntax `term := ⟨Syntax.mkNumLit (toString unit)⟩
