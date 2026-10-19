@@ -151,6 +151,29 @@ theorem exact_map_equality_by_lookup (k v w : Term) :
   intro q
   by_cases same : Term.exactCompare q k = .eq <;> simp [same]
 
+/-- Binaries are never exactly equal to other kinds of terms, such as `[]` or `%{}`. -/
+theorem binary_exact_kinds (bytes : ByteArray) :
+    Term.exactCompare (.bitstring bytes 0 (Term.Bitstring.valid_aligned _)) .nil ≠ .eq ∧
+    Term.exactCompare (.bitstring bytes 0 (Term.Bitstring.valid_aligned _)) (.map []) ≠ .eq := by
+  constructor <;> intro equal <;>
+    obtain ⟨_, _, _, kind⟩ := Term.bitstring_exactCompare_eq _ _ _ _ equal <;> cases kind
+
+/-- Nonempty lists are never exactly equal to `[]` or `%{}`. -/
+theorem list_exact_kinds (head tail : Term) :
+    Term.exactCompare (.cons head tail) .nil ≠ .eq ∧ Term.exactCompare (.cons head tail) (.map []) ≠ .eq := by
+  constructor <;> intro equal <;>
+    obtain ⟨_, _, kind⟩ := Term.cons_exactCompare_eq _ _ _ equal <;> cases kind
+
+/-- Binaries are exactly equal when their bytes are. -/
+theorem binary_exact_bytes :
+    Term.exactCompare (.bitstring ⟨#[1, 2]⟩ 0 (Term.Bitstring.valid_aligned _))
+        (.bitstring ⟨#[1, 2]⟩ 0 (Term.Bitstring.valid_aligned _)) = .eq ∧
+      Term.exactCompare (.bitstring ⟨#[1, 2]⟩ 0 (Term.Bitstring.valid_aligned _))
+        (.bitstring ⟨#[1]⟩ 0 (Term.Bitstring.valid_aligned _)) ≠ .eq := by
+  refine ⟨(Term.binary_exactCompare_eq _ _).mpr rfl, fun equal => ?_⟩
+  have := (Term.binary_exactCompare_eq _ _).mp equal
+  simp [ByteArray.mk.injEq] at this
+
 end LynxTest.Term.Compare
 
 run_cmd do
