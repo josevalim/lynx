@@ -22,6 +22,87 @@ defmodule Lynx.CoreToLeanjTest do
             }, []} = translate(defs)
   end
 
+  test "calls nested in arguments are bound in order before the call" do
+    abs = :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:abs), [:cerl.c_var(0)])
+    neg = :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:-), [:cerl.c_var(0)])
+    body = :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:+), [abs, neg])
+
+    assert {:ok,
+            %{
+              {:entry, 1} => %{
+                translation: %{
+                  "body" => %{
+                    "kind" => "bind",
+                    "vars" => [%{"kind" => "var", "name" => %{"generated" => 0}} = first],
+                    "computation" => %{"kind" => "remote_call", "name" => "abs"},
+                    "body" => %{
+                      "kind" => "bind",
+                      "vars" => [%{"kind" => "var", "name" => %{"generated" => 1}} = second],
+                      "computation" => %{"kind" => "remote_call", "name" => "-"},
+                      "body" => %{
+                        "kind" => "remote_call",
+                        "name" => "+",
+                        "args" => [first, second]
+                      }
+                    }
+                  }
+                }
+              }
+            }, _} = translate(definitions([definition(:entry, body)]))
+  end
+
+  test "binaries nested in arguments are constructed before the call" do
+    segment =
+      :cerl.c_bitstr(
+        :cerl.c_var(0),
+        :cerl.c_int(8),
+        :cerl.c_int(1),
+        :cerl.c_atom(:integer),
+        :cerl.abstract([:unsigned, :big])
+      )
+
+    body =
+      :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:byte_size), [
+        :cerl.c_binary([segment])
+      ])
+
+    assert {:ok,
+            %{
+              {:entry, 1} => %{
+                translation: %{
+                  "body" => %{
+                    "kind" => "bind",
+                    "vars" => [%{"kind" => "var"} = var],
+                    "computation" => %{"kind" => "bitstring_constructor"},
+                    "body" => %{"kind" => "remote_call", "name" => "byte_size", "args" => [var]}
+                  }
+                }
+              }
+            }, _} = translate(definitions([definition(:entry, body)]))
+  end
+
+  test "calls nested in constructors are bound before the constructor" do
+    abs = :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:abs), [:cerl.c_var(0)])
+    body = :cerl.c_cons(abs, :cerl.c_nil())
+
+    assert {:ok,
+            %{
+              {:entry, 1} => %{
+                translation: %{
+                  "body" => %{
+                    "kind" => "bind",
+                    "vars" => [%{"kind" => "var"} = var],
+                    "computation" => %{"kind" => "remote_call", "name" => "abs"},
+                    "body" => %{
+                      "kind" => "return",
+                      "values" => [%{"kind" => "cons", "head" => var}]
+                    }
+                  }
+                }
+              }
+            }, _} = translate(definitions([definition(:entry, body)]))
+  end
+
   test "writable binary allocation starts with an empty binary" do
     body = :cerl.c_primop(:cerl.c_atom(:bs_init_writable), [:cerl.c_int(256)])
 

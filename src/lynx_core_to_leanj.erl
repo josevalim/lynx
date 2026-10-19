@@ -20,7 +20,7 @@
 -record(state, {module, name, defs, translated, laws = #{}, funs = #{},
                 local_calls = #{}, purity = pure, remote, next_var = 0, labels = #{},
                 local_funs = #{}, size_facts = #{}, size_calls = [], suffixed = [],
-                literals = #{}}).
+                literals = #{}, binds = [], pattern = false}).
 
 -spec module_name(module()) -> binary().
 module_name(Module) ->
@@ -326,10 +326,22 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
                  literals = State2#state.literals, funs = State2#state.funs,
                  remote = State2#state.remote}.
 
+%% Core expects values in arguments and constructors, but the optimizer may
+%% nest computations in their place, such as when inlining lists:foldl/3.
+%% value/2 binds those to generated variables, which are bound in evaluation
+%% order before the expression that uses them.
+expression(Core, State0) ->
+    {Translated, State1} = computation(Core, State0#state{binds = []}),
+    Bound = lists:foldl(fun({Var, Computation}, Body) ->
+        node(~"bind", cerl:get_ann(Core), #{~"vars" => [Var],
+            ~"computation" => Computation, ~"body" => Body})
+    end, Translated, State1#state.binds),
+    {Bound, State1#state{binds = State0#state.binds}}.
+
 %% OTP lowers receive to a local scan/wait loop. Recover the operation before
 %% translating ordinary expressions; loop identity is checked structurally,
 %% never inferred from the compiler's generated function spelling.
-expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
+computation(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
              #c_fun{vars = [], body = #c_let{arg = #c_primop{
                  name = #c_literal{val = ReceiveOp}}} = LoopBody}}],
              body = #c_apply{op = #c_var{name = Loop}, args = []}} = Core, State0)
@@ -352,7 +364,7 @@ expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
         ~"cases" => TranslatedClauses, ~"timeout" => TranslatedTimeout,
         ~"after" => TranslatedAction}), State4#state{purity = concurrent}};
 %% Preserve nonrecursive compiler labels; Lean renders the shared continuation.
-expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Label},
+computation(#c_letrec{anno = Anno, defs = [{#c_var{name = Label},
              #c_fun{vars = [], body = Fallback}}], body = Body} = Core, State0) ->
     case lists:member(letrec_goto, Anno) andalso
             not lists:member(Label, cerl_trees:free_variables(Fallback)) of
@@ -366,10 +378,10 @@ expression(#c_letrec{anno = Anno, defs = [{#c_var{name = Label},
         false -> expression_local_function(Core, State0)
     end;
 %% Named local functions, including comprehension loops, use the same call path.
-expression(#c_letrec{defs = [{#c_var{}, #c_fun{}}]} = Core, State0) ->
+computation(#c_letrec{defs = [{#c_var{}, #c_fun{}}]} = Core, State0) ->
     expression_local_function(Core, State0);
 %% Core try catches only the protected expression, not its success continuation.
-expression(#c_try{anno = Anno, arg = Arg, vars = Vars, body = Body,
+computation(#c_try{anno = Anno, arg = Arg, vars = Vars, body = Body,
                   evars = EVars, handler = Handler}, State0) ->
     {TranslatedArg, State1} = expression(Arg, State0),
     {TranslatedBody, State2} = expression(Body, State1),
@@ -379,7 +391,7 @@ expression(#c_try{anno = Anno, arg = Arg, vars = Vars, body = Body,
         ~"exception_vars" => [variable(V) || V <- EVars],
         ~"handler" => TranslatedHandler}), State3};
 %% Multiple Core return values are internal Lean products, not Erlang tuples.
-expression(#c_values{anno = Anno, es = Values}, State0) ->
+computation(#c_values{anno = Anno, es = Values}, State0) ->
     {Translated, State1} = lists:mapfoldl(fun value/2, State0, Values),
     {node(~"return", Anno, #{~"values" => Translated}), State1};
 %% Erlang: case X of [] -> 0; Other -> 1 end
@@ -389,7 +401,7 @@ expression(#c_values{anno = Anno, es = Values}, State0) ->
 %%   | vOther => Lynx.Result.ok (Lynx.Term.integer 1)
 %% Erlang: A orelse B
 %% Lean: Lynx.Result.orElse a b
-expression(#c_case{anno = Anno} = Case, State0) ->
+computation(#c_case{anno = Anno} = Case, State0) ->
     case short_circuit(Case) of
         {~"orelse", _} ->
             short_circuit_chain(~"orelse", Anno, membership(operands(~"orelse", Case)), State0);
@@ -398,21 +410,21 @@ expression(#c_case{anno = Anno} = Case, State0) ->
     end;
 %% Erlang: Y = f(X), g(Y)
 %% Lean: Lynx.Result.bind («f/1» vX) fun vY => «g/1» vY
-expression(#c_let{anno = Anno, vars = Vars, arg = Arg, body = Body}, State0) ->
+computation(#c_let{anno = Anno, vars = Vars, arg = Arg, body = Body}, State0) ->
     {TranslatedArg, State1} = expression(Arg, State0),
     {TranslatedBody, State2} = expression(Body, State1),
     {node(~"bind", Anno, #{~"vars" => [variable(V) || V <- Vars],
         ~"computation" => TranslatedArg, ~"body" => TranslatedBody}), State2};
 %% Erlang: f(X), g(X)
 %% Lean: do let _ ← «f/1» vX; «g/1» vX
-expression(#c_seq{anno = Anno, arg = Arg, body = Body}, State0) ->
+computation(#c_seq{anno = Anno, arg = Arg, body = Body}, State0) ->
     {TranslatedArg, State1} = expression(Arg, State0),
     {TranslatedBody, State2} = expression(Body, State1),
     {node(~"bind", Anno, #{~"vars" => [node(~"wildcard", Anno, #{})],
         ~"computation" => TranslatedArg, ~"body" => TranslatedBody}), State2};
 %% Erlang: f(X, Y)
 %% Lean: «f/2» vX vY
-expression(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args} = Core, State0) ->
+computation(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args} = Core, State0) ->
     case maps:find(Name, State0#state.local_funs) of
         {ok, {Lifted, Captures}} ->
             expression(#c_apply{anno = Anno, op = #c_var{name = Lifted},
@@ -422,14 +434,14 @@ expression(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args}
     end;
 %% Erlang: F(X, Y)
 %% Lean: Lynx.Term.apply vF #[vX, vY]
-expression(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->
+computation(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->
     {Function, State1} = value(Op, State0),
     {TranslatedArgs, State2} = lists:mapfoldl(fun value/2, State1, Args),
     {node(~"fun_call", Anno, #{~"function" => Function, ~"args" => TranslatedArgs}),
      State2#state{purity = join_purity(State2#state.purity, dynamic)}};
 %% Erlang: error(Reason)
 %% Lean: Lynx.Result.error (Lynx.Exception.error reason)
-expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
+computation(#c_call{anno = Anno, module = #c_literal{val = erlang},
                    name = #c_literal{val = Class}, args = [Reason]}, State0)
         when Class =:= error; Class =:= throw; Class =:= exit ->
     {TranslatedReason, State1} = value(Reason, State0),
@@ -438,18 +450,18 @@ expression(#c_call{anno = Anno, module = #c_literal{val = erlang},
 %% translation time. The compiler folds literal references, such as
 %% &Foo.bar/1, into function literals and literal applies into calls, so
 %% these only remain when computed, such as &mod.bar/1 or apply(M, F, Args).
-expression(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = make_fun},
+computation(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = make_fun},
                    args = [_, _, _]} = Core, _State) ->
     core_error(Core, <<"dynamic function references, such as &mod.fun/1 or fun M:F/A, "
                        "are not supported">>);
-expression(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = apply},
+computation(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = apply},
                    args = [_, _, _]} = Core, _State) ->
     core_error(Core, <<"dynamic calls, such as apply(M, F, Args), are not supported">>);
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX
 %% Erlang: ?MODULE:f(X) (non-builtin)
 %% Lean: «f/1» vX
-expression(#c_call{anno = Anno, module = #c_literal{val = Module},
+computation(#c_call{anno = Anno, module = #c_literal{val = Module},
                    name = #c_literal{val = Name}, args = Args}, State0)
         when is_atom(Module), is_atom(Name) ->
     Arity = length(Args),
@@ -465,16 +477,16 @@ expression(#c_call{anno = Anno, module = #c_literal{val = Module},
                 TranslatedArgs, Purity, Anno),
             {Call, State1#state{purity = join_purity(State1#state.purity, Purity)}}
     end;
-expression(#c_call{} = Core, _State) ->
+computation(#c_call{} = Core, _State) ->
     core_error(Core, <<"dynamic calls, such as mod.fun(x) or M:F(X), are not supported">>);
-expression(#c_primop{anno = Anno, name = #c_literal{val = Op}, args = Args}, State) ->
+computation(#c_primop{anno = Anno, name = #c_literal{val = Op}, args = Args}, State) ->
     prim_op(Op, Anno, Args, State);
 %% Integer construction is a computation: invalid values or sizes raise badarg.
-expression(#c_binary{anno = Anno, segments = Segments}, State0) ->
+computation(#c_binary{anno = Anno, segments = Segments}, State0) ->
     {Translated, State1} = lists:mapfoldl(fun binary_segment/2, State0, Segments),
     {node(~"bitstring_constructor", Anno, #{~"segments" => Translated}), State1};
 %% Construction remains a value; updates may fail and are computations.
-expression(#c_map{arg = #c_literal{val = Base}, is_pat = false} = Map, State0)
+computation(#c_map{arg = #c_literal{val = Base}, is_pat = false} = Map, State0)
         when is_map(Base), map_size(Base) =:= 0 ->
     case lists:all(fun(#c_map_pair{op = #c_literal{val = assoc}}) -> true;
                      (_) -> false end, Map#c_map.es) of
@@ -483,13 +495,17 @@ expression(#c_map{arg = #c_literal{val = Base}, is_pat = false} = Map, State0)
             {node(~"return", Map#c_map.anno, #{~"values" => [Translated]}), State1};
         false -> map_update(Map, State0)
     end;
-expression(#c_map{is_pat = false} = Map, State0) ->
+computation(#c_map{is_pat = false} = Map, State0) ->
     map_update(Map, State0);
 %% Everything else (literals, cons, etc)
 %% Lean: Lynx.Result.ok (Lynx.Term.integer 0)
-expression(Value, State0) ->
+computation(Value, State0) when is_record(Value, c_literal); is_record(Value, c_var);
+                                is_record(Value, c_fun); is_record(Value, c_cons);
+                                is_record(Value, c_tuple) ->
     {Translated, State1} = value(Value, State0),
-    {node(~"return", cerl:get_ann(Value), #{~"values" => [Translated]}), State1}.
+    {node(~"return", cerl:get_ann(Value), #{~"values" => [Translated]}), State1};
+computation(Core, _State) ->
+    unsupported(Core).
 
 %% Core lowers orelse and andalso to a case on the left operand, raising badarg
 %% on other values unless the compiler knows the operand is a Boolean. The
@@ -821,12 +837,12 @@ pattern_facts(_Pattern, _Fact, _Inside) ->
     [].
 
 clause(#c_clause{anno = Anno, pats = Patterns, guard = #c_literal{val = true}, body = Body}, State0) ->
-    {Pats, State1} = lists:mapfoldl(fun value/2, State0, Patterns),
+    {Pats, State1} = lists:mapfoldl(fun pattern/2, State0, Patterns),
     {TranslatedBody, State2} = expression(Body, State1),
     {#{~"span" => span(Anno), ~"patterns" => Pats,
        ~"body" => TranslatedBody}, State2};
 clause(#c_clause{anno = Anno, pats = Patterns, guard = Guard, body = Body}, State0) ->
-    {Pats, State1} = lists:mapfoldl(fun value/2, State0, Patterns),
+    {Pats, State1} = lists:mapfoldl(fun pattern/2, State0, Patterns),
     {TranslatedGuard, State2} = expression(guard_test(Guard), State1),
     {TranslatedBody, State3} = expression(Body, State2),
     {#{~"span" => span(Anno), ~"patterns" => Pats,
@@ -893,13 +909,19 @@ receive_scan_clauses([], _, _) -> [];
 receive_scan_clauses(_, _, Core) -> unsupported(Core).
 
 receive_clause(#c_clause{anno = Anno, pats = [Pattern], guard = Guard, body = Body}, State0) ->
-    {Pat, State1} = value(Pattern, State0),
+    {Pat, State1} = pattern(Pattern, State0),
     {TranslatedGuard, State2} = expression(guard_test(Guard), State1),
     {TranslatedBody, State3} = expression(Body, State2),
     Bound = ordsets:intersection(cerl_trees:variables(Pattern), cerl_trees:free_variables(Body)),
     Vars = [variable(#c_var{name = Name}) || Name <- Bound],
     {#{~"span" => span(Anno), ~"pattern" => Pat, ~"vars" => Vars,
        ~"guard" => TranslatedGuard, ~"body" => TranslatedBody}, State3}.
+
+%% Patterns share the syntax of values, but binaries in patterns match
+%% segments rather than construct them, and patterns never nest computations.
+pattern(Core, State0) ->
+    {Translated, State1} = value(Core, State0#state{pattern = true}),
+    {Translated, State1#state{pattern = false}}.
 
 %% Core separates values from computations; only computations produce Result.
 value(#c_fun{vars = Vars} = Fun, State0) ->
@@ -922,7 +944,7 @@ value(#c_alias{anno = Anno, var = Var, pat = Pattern}, State0) ->
     {node(~"alias", Anno, #{~"var" => variable(Var), ~"pattern" => Translated}), State1};
 value(#c_var{} = Var, State) ->
     {variable(Var), State};
-value(#c_binary{anno = Anno, segments = Segments}, State0) ->
+value(#c_binary{anno = Anno, segments = Segments}, #state{pattern = true} = State0) ->
     case not lists:member(lynx_segments, Anno) andalso binary_pattern_literal(Segments, <<>>) of
         {ok, Bits} -> value(#c_literal{anno = Anno, val = Bits}, State0);
         _ ->
@@ -972,8 +994,13 @@ value(#c_map{anno = Anno, arg = #c_literal{val = Base}, es = Pairs,
              is_pat = false}, State0) when is_map(Base), map_size(Base) =:= 0 ->
     {Entries, State1} = lists:mapfoldl(fun map_entry/2, State0, Pairs),
     {node(~"map", Anno, #{~"entries" => Entries}), State1};
-value(Core, _State) ->
-    unsupported(Core).
+value(Core, #state{pattern = true}) ->
+    unsupported(Core);
+value(Core, State0) ->
+    {Computation, State1} = expression(Core, State0),
+    Var = var_node(#{~"generated" => State1#state.next_var}, cerl:get_ann(Core)),
+    {Var, State1#state{next_var = State1#state.next_var + 1,
+                       binds = [{Var, Computation} | State1#state.binds]}}.
 
 literal_value(#c_literal{anno = Anno, val = Fun} = Core, State0) when is_function(Fun) ->
     case erlang:fun_info(Fun, type) of
