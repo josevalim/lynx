@@ -315,13 +315,18 @@ defmodule Lynx.RunnerDiagnosticsTest do
   @literal_erl "../test/fixtures/translations/literal.erl"
   @moduletag timeout: to_timeout(minute: 10)
 
+  @header "module\npublic import Lynx\npublic section\n"
+
   test "checks prelude imports, caching, source locations, and proof axioms" do
+    # The header imports a runtime module the declarations refer to.
     source = %{
       "file" => "elaborators.exs",
       "span" => [10, 5],
       "indentation" => 4,
       "source" =>
-        "open Lean Elab Tactic\nelab \"custom_finish\" : tactic => do evalTactic (← `(tactic| rfl))\n"
+        "module\npublic import Lynx.Modules.Erlang.erlang\npublic section\n" <>
+          "def runtimeCall := @Erlang.erlang.«is_atom/1»\n" <>
+          "open Lean Elab Tactic\nelab \"custom_finish\" : tactic => do evalTactic (← `(tactic| rfl))\n"
     }
 
     support = file("elaborators.exs", "Lynx.Prelude.Cached", []) |> Map.put("preludes", [source])
@@ -360,7 +365,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
       "file" => "custom.exs",
       "span" => [10, 7],
       "indentation" => 4,
-      "source" => "open Lean Elab Tactic\nelab \"broken\" : tactic => missing\n"
+      "source" => @header <> "open Lean Elab Tactic\nelab \"broken\" : tactic => missing\n"
     }
 
     support = file("custom.exs", "Lynx.Prelude.Broken", []) |> Map.put("preludes", [source])
@@ -371,7 +376,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
     assert %{
              file: "custom.exs",
              declaration: nil,
-             line: 11,
+             line: 14,
              column: 31,
              message: "Unknown identifier `missing`"
            } = error
@@ -383,7 +388,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
       end
 
     assert [
-             %{status: :error, diagnostics: [%{file: "custom.exs", line: 21} = line]},
+             %{status: :error, diagnostics: [%{file: "custom.exs", line: 24} = line]},
              %{status: :error, diagnostics: [unknown]}
            ] = Lynx.Commands.verify!(@lean_dir, imprecise)
 
@@ -394,7 +399,8 @@ defmodule Lynx.RunnerDiagnosticsTest do
     source = %{
       source
       | "source" =>
-          "open Lean Elab Tactic\nelab \"untrusted\" : tactic => do evalTactic (← `(tactic| sorry))\n"
+          @header <>
+            "open Lean Elab Tactic\nelab \"untrusted\" : tactic => do evalTactic (← `(tactic| sorry))\n"
     }
 
     support = file("custom.exs", "Lynx.Prelude.Untrusted", []) |> Map.put("preludes", [source])
@@ -414,6 +420,12 @@ defmodule Lynx.RunnerDiagnosticsTest do
              Lynx.Commands.verify!(@lean_dir, [support, client])
 
     assert Enum.any?(diagnostics, &(&1.message =~ "unexpected axiom: sorryAx"))
+
+    headless = %{source | "source" => "theorem truth : True := trivial\n"}
+    support = file("custom.exs", "Lynx.Prelude.Headless", []) |> Map.put("preludes", [headless])
+
+    assert [%{status: :error, diagnostics: [%{message: "a prelude must begin with a module header"}]}] =
+             Lynx.Commands.verify!(@lean_dir, [support])
   end
 
   test "reports expected and actual values for expects" do

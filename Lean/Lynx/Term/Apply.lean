@@ -159,4 +159,37 @@ public theorem resolve_apply_pure (table : Term.FunTable) (depth id arity : Nat)
         reply, ofExcept, resume, Result.error_bind] <;>
       rw [resolve] <;> rfl
 
+/-- A pure table entry runs inside its caller's `try`: the protected call returns
+the entry's result, or raises the entry's exception, without using call depth. -/
+public theorem resolve_tryWith_apply_pure (table : Term.FunTable) (depth id arity : Nat)
+    (captures arguments : Array Term) (body : Array Term → Term.PureFun)
+    (next : Term → Result α) (handler : Exception → Result α)
+    (entry : table[id]? = some (.pure body)) (size : arguments.size = arity) :
+    resolve table depth (Result.tryWith (Term.apply (.function id arity captures) arguments)
+        next handler) =
+      resolve table depth (Result.tryWith (ofExcept (body captures arguments)) next handler) := by
+  have shape : Result.tryWith (Term.apply (.function id arity captures) arguments) next handler =
+      .apply (.function id arity captures) arguments
+        (fun reply => Result.tryWith (ofExcept reply) next handler) := by
+    have call : Term.apply (.function id arity captures) arguments =
+        .apply (.function id arity captures) arguments ofExcept := by
+      simp only [Term.apply, size, ite_true]
+      congr 1
+      funext reply
+      cases reply <;> rfl
+    rw [call]
+    rfl
+  rw [shape]
+  conv => lhs; rw [resolve]
+  cases reply : body captures arguments with
+  | ok value =>
+    simp only [expand, entry, size, bne_self_eq_false, Bool.false_eq_true, ite_false,
+      reply, ofExcept, resume]
+    rw [resolve]; rfl
+  | error exception =>
+    cases exception <;>
+      simp only [expand, entry, size, bne_self_eq_false, Bool.false_eq_true, ite_false,
+        reply, ofExcept, resume] <;>
+      rw [resolve] <;> rfl
+
 end Lynx.Result

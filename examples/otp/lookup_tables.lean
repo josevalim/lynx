@@ -1,4 +1,10 @@
 -- Lookup table helpers shared by the Base64 and hex laws. Loaded by `prelude`.
+module
+
+public import Lynx
+
+public section
+
 meta section
 namespace LookupTables
 open Lean Meta Elab Tactic

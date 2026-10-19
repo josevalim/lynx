@@ -130,6 +130,9 @@ defmodule Lynx.CaseTest do
 
       laws "custom syntax" do
         prelude ~LEAN"""
+        module
+        public import Lynx
+        public section
         namespace PreludeTest
         theorem truth : True := by trivial
         end PreludeTest
@@ -163,6 +166,9 @@ defmodule Lynx.CaseTest do
 
       laws "independent registration" do
         prelude ~LEAN"""
+        module
+        public import Lynx
+        public section
         open Lean Elab Tactic
         elab "test_finish" : tactic => throwError "second prelude loaded"
         """
