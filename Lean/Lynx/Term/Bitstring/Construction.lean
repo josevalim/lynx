@@ -60,6 +60,13 @@ nonnegative integers; the Core unit is a compile-time value in `1..256`. -/
     else .error (.error (.atom "badarg"))
   | _, _ => .error (.error (.atom "badarg"))
 
+/-- The bit width of a float segment whose size is computed at runtime. Sizes
+other than nonnegative integers have width zero, which no float segment accepts. -/
+@[expose] public def floatWidth (size : Term) (unit : Nat) : Nat :=
+  match size with
+  | .integer size => size.toNat * unit
+  | _ => 0
+
 /-- Encode binary64 fields without rounding. Integer operands are first rounded
 into binary64, failing with badarg if conversion overflows. Binary16 and
 binary32 are not modeled yet and currently return badarg. -/

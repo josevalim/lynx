@@ -336,6 +336,36 @@ defmodule Lynx.CoreToLeanjTest do
     end
   end
 
+  test "translates float segment sizes computed at runtime" do
+    segment =
+      :cerl.c_bitstr(
+        :cerl.c_int(1),
+        :cerl.c_var(0),
+        :cerl.c_int(2),
+        :cerl.c_atom(:float),
+        :cerl.abstract([:unsigned, :big])
+      )
+
+    assert {:ok,
+            %{
+              {:entry, 1} => %{
+                translation: %{
+                  "body" => %{
+                    "kind" => "bitstring_constructor",
+                    "segments" => [
+                      %{
+                        "type" => "float",
+                        "value" => %{"kind" => "integer", "value" => 1},
+                        "size" => %{"kind" => "var", "name" => 0},
+                        "unit" => 2
+                      }
+                    ]
+                  }
+                }
+              }
+            }, []} = translate(definitions([definition(:entry, :cerl.c_binary([segment]))]))
+  end
+
   test "translates UTF construction with no size or unit and resolves native endianness" do
     for type <- [:utf8, :utf16, :utf32], endian <- [:big, :little, :native] do
       segment =

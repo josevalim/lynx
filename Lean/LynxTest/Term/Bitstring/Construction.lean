@@ -283,6 +283,15 @@ theorem float64_unaligned_concatenation :
       .ok (.bitstring ⟨#[32, 0, 0, 0, 0, 0, 30, 7, 255]⟩ 0 (by decide)) := by
   rfl
 
+-- Runtime sizes count units; invalid sizes raise badarg as in OTP 29.
+theorem runtime_float_widths (value : Term) (little : Bool) :
+    Term.Bitstring.floatWidth (.integer 32) 2 = 64 ∧
+    Term.Bitstring.floatSegment value (Term.Bitstring.floatWidth (.integer (-1)) 1) little =
+      .error (.error (.atom "badarg")) ∧
+    Term.Bitstring.floatSegment value (Term.Bitstring.floatWidth (.atom "size") 1) little =
+      .error (.error (.atom "badarg")) := by
+  refine ⟨rfl, ?_, ?_⟩ <;> rfl
+
 theorem unimplemented_float_widths (value : Term) (little : Bool) :
     Term.Bitstring.floatSegment value 16 little = .error (.error (.atom "badarg")) ∧
     Term.Bitstring.floatSegment value 32 little = .error (.error (.atom "badarg")) := by

@@ -83,6 +83,9 @@ def «float16/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
 def «float32/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   Lynx.Term.Bitstring.floatSegment _0 32 Bool.false
 
+def «float_sized/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
+  Lynx.Term.Bitstring.floatSegment _0 (Lynx.Term.Bitstring.floatWidth _1 2) Bool.false
+
 def «binary_all/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   Lynx.Term.Bitstring.binarySegment _0 (Lynx.Term.atom "all") 8
 
