@@ -85,5 +85,6 @@ measure verification without cached results. Run `lake test` from `Lean/` to
 check runtime proofs and axiom audits.
 
 **Proof performance is more important than executable runtime performance.**
-This priority concerns Lean's implementation and proof infrastructure; integration
-examples may take time to verify.
+This priority concerns Lean's implementation and proof infrastructure; integration examples may take time to verify.
+
+**DO NOT ADD CO-AUTHORED TO ANY OF THE COMMITS. Use ASSISTED-BY attribution instead.**
