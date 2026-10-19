@@ -15,7 +15,8 @@ defmodule Lynx.Translation do
   @runtime_purity %{
     {:erlang, :spawn, 1} => :concurrent,
     {:erlang, :send, 2} => :concurrent,
-    {:erlang, :apply, 2} => :dynamic
+    {:erlang, :apply, 2} => :dynamic,
+    {:maps, :fold, 3} => :dynamic
   }
 
   @external_resource Path.expand("../../Lean/modules.json", __DIR__)

@@ -11,6 +11,7 @@ import LynxTest.Term.Order
 import LynxTest.Term.ShortCircuit
 import LynxTest.Modules.Erlang
 import LynxTest.Modules.Maps
+import LynxTest.Modules.Binary
 import LynxTest.Modules.ErtsInternal
 import LynxTest.Modules.Math
 import LynxTest.Modules.Conversions
