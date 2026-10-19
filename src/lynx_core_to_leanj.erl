@@ -308,11 +308,10 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
                 ~"body" => node(~"cutoff", Anno, #{})
             }), State1};
         {function, Body} ->
-            {Translated, Next0} = expression(Body, State1),
-            {TranslatedBody, Next} = lists:foldr(fun(Size, {Acc, AccState}) ->
-                {TranslatedSize, NextState} = value(Size, AccState),
-                {node(~"nonzero_width", Anno, #{~"size" => TranslatedSize, ~"body" => Acc}), NextState}
-            end, {Translated, Next0}, proplists:get_value(lynx_nonzero_widths, Anno, [])),
+            {Translated, Next} = expression(Body, State1),
+            TranslatedBody = lists:foldr(fun(Size, Acc) ->
+                node(~"nonzero_width", Anno, #{~"size" => variable(Size), ~"body" => Acc})
+            end, Translated, proplists:get_value(lynx_nonzero_widths, Anno, [])),
             {node(~"def", Anno, #{
                 ~"name" => function_name(Name),
                 ~"params" => [variable(Var) || Var <- Vars],
@@ -375,11 +374,11 @@ computation(#c_letrec{anno = Anno, defs = [{#c_var{name = Label},
             {node(~"label", Anno, #{~"label" => function_name(Label),
                 ~"continuation" => TranslatedFallback, ~"body" => TranslatedBody}),
              State2#state{labels = State0#state.labels}};
-        false -> expression_local_function(Core, State0)
+        false -> computation_local_function(Core, State0)
     end;
 %% Named local functions, including comprehension loops, use the same call path.
 computation(#c_letrec{defs = [{#c_var{}, #c_fun{}}]} = Core, State0) ->
-    expression_local_function(Core, State0);
+    computation_local_function(Core, State0);
 %% Core try catches only the protected expression, not its success continuation.
 computation(#c_try{anno = Anno, arg = Arg, vars = Vars, body = Body,
                   evars = EVars, handler = Handler}, State0) ->
@@ -406,7 +405,7 @@ computation(#c_case{anno = Anno} = Case, State0) ->
         {~"orelse", _} ->
             short_circuit_chain(~"orelse", Anno, membership(operands(~"orelse", Case)), State0);
         {Kind, _} -> short_circuit_chain(Kind, Anno, operands(Kind, Case), State0);
-        none -> expression_case(Case, State0)
+        none -> computation_case(Case, State0)
     end;
 %% Erlang: Y = f(X), g(Y)
 %% Lean: Lynx.Result.bind («f/1» vX) fun vY => «g/1» vY
@@ -430,7 +429,7 @@ computation(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args
             expression(#c_apply{anno = Anno, op = #c_var{name = Lifted},
                                args = Args ++ Captures},
                        State0);
-        error -> expression_apply(Core, State0)
+        error -> computation_apply(Core, State0)
     end;
 %% Erlang: F(X, Y)
 %% Lean: Lynx.Term.apply vF #[vX, vY]
@@ -602,7 +601,7 @@ badarg_raise(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = 
 badarg_raise(_, _) ->
     false.
 
-expression_case(#c_case{anno = Anno, arg = Arg, clauses = Clauses0}, State0) ->
+computation_case(#c_case{anno = Anno, arg = Arg, clauses = Clauses0}, State0) ->
     Clauses = segment_patterns(Clauses0),
     {Translated, Next} = expression(Arg, State0),
     {Args, Bind, State1} = case Translated of
@@ -660,7 +659,7 @@ segment_pattern(#c_binary{anno = Anno} = Pattern, true) ->
 segment_pattern(Pattern, _) ->
     Pattern.
 
-expression_local_function(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
+computation_local_function(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
              #c_fun{vars = Vars} = Fun}], body = Body}, State0) ->
     Captures = local_captures(Fun, State0, [Loop]),
     Name = local_function_name(map_size(State0#state.translated),
@@ -755,7 +754,7 @@ pattern_size_variables(Fun) ->
 
 var_names(Vars) -> [Name || #c_var{name = Name} <- Vars].
 
-expression_apply(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args} = Core, State0) ->
+computation_apply(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args} = Core, State0) ->
     case maps:is_key(Name, State0#state.labels) of
         true when Args =:= [] ->
             {node(~"jump", Anno, #{~"label" => function_name(Name)}), State0};
@@ -777,7 +776,7 @@ expression_apply(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args} = 
 %% Lean (the generated fallback body):
 %%   Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
 %% The writable binary primop only preallocates storage; its Erlang value is empty.
-prim_op(bs_init_writable, Anno, [_Capacity], State) ->
+prim_op(bs_init_writable, Anno, [#c_literal{}], State) ->
     expression(#c_literal{anno = Anno, val = <<>>}, State);
 prim_op(match_fail, Anno, [#c_literal{val = {function_clause}}], State) ->
     {error_node(function_clause, Anno), State};
@@ -921,9 +920,10 @@ receive_clause(#c_clause{anno = Anno, pats = [Pattern], guard = Guard, body = Bo
 %% segments rather than construct them, and patterns never nest computations.
 pattern(Core, State0) ->
     {Translated, State1} = value(Core, State0#state{pattern = true}),
-    {Translated, State1#state{pattern = false}}.
+    {Translated, State1#state{pattern = State0#state.pattern}}.
 
 %% Core separates values from computations; only computations produce Result.
+%% Computations the optimizer nests in values are bound by expression/2.
 value(#c_fun{vars = Vars} = Fun, State0) ->
     Captures = local_captures(Fun, State0, []),
     Id = map_size(State0#state.funs),
