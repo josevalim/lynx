@@ -424,7 +424,12 @@ defmodule Lynx.RunnerDiagnosticsTest do
     headless = %{source | "source" => "theorem truth : True := trivial\n"}
     support = file("custom.exs", "Lynx.Prelude.Headless", []) |> Map.put("preludes", [headless])
 
-    assert [%{status: :error, diagnostics: [%{message: "a prelude must begin with a module header"}]}] =
+    assert [
+             %{
+               status: :error,
+               diagnostics: [%{message: "a prelude must begin with a module header"}]
+             }
+           ] =
              Lynx.Commands.verify!(@lean_dir, [support])
   end
 
