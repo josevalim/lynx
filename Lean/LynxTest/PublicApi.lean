@@ -4,6 +4,7 @@ meta import Lean
 public import Lynx.Runner
 public import Lynx
 public import Lynx.Modules.Erlang.erlang
+public import Lynx.Modules.Erlang.binary
 public import Lynx.Modules.Erlang.lists
 public import Lynx.Modules.Erlang.maps
 public import Lynx.Modules.Erlang.erts_internal
@@ -185,6 +186,11 @@ namespace LynxTest.PublicApi
 open Lean Elab Command
 
 private def expectedDeclarations : Array String := #[
+  "Erlang.binary.«last/1»",
+  "Erlang.binary.«match/2»",
+  "Erlang.binary.«match/3»",
+  "Erlang.binary.«split/2»",
+  "Erlang.binary.«split/3»",
   "Erlang.erlang.«*/2»",
   "Erlang.erlang.«++/2»",
   "Erlang.erlang.«+/1»",
@@ -280,6 +286,7 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erts_internal.«mc_refill/1»",
   "Erlang.lists.«member/2»",
   "Erlang.lists.«reverse/2»",
+  "Erlang.maps.«fold/3»",
   "Erlang.maps.«from_list/1»",
   "Erlang.maps.«get/2»",
   "Erlang.maps.«merge/2»",
