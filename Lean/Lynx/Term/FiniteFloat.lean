@@ -38,6 +38,43 @@ private def ofModel (value : Float.Model) : Option FiniteFloat :=
       ⟨bits % 2 ^ 52, Nat.mod_lt _ (by decide)⟩⟩
   else none
 
+/-- IEEE binary16, which Lean's float model does not predefine. -/
+public abbrev binary16 : Float.Model.Format where
+  mantissaBitsWithoutImplicit := 10
+  exponentBits := 5
+
+/-- Round to the encoding of a narrower IEEE format, to nearest with ties to
+even. Values beyond the format's range overflow to infinity. -/
+@[expose] public def narrow (spec : Float.Model.Format) (value : FiniteFloat) : Nat :=
+  let sign : Float.Model.UnpackedFloat.Sign := if value.negative then .negative else .positive
+  let rounded : Float.Model.UnpackedFloat :=
+    if value.exponent.val = 0 then
+      if value.fraction.val = 0 then .zero sign
+      else .round spec sign value.fraction.val (-1074)
+    else .round spec sign (2 ^ 52 + value.fraction.val) (Int.ofNat value.exponent.val - 1075)
+  (Float.Model.UnpackedFloat.pack spec rounded).toNat
+
+/-- Round an integer directly to the encoding of an IEEE format, overflowing to
+infinity. Zero is positive. -/
+@[expose] public def narrowInt (spec : Float.Model.Format) (value : Int) : Nat :=
+  (Float.Model.UnpackedFloat.pack spec (.ofInt spec value)).toNat
+
+/-- Convert an encoding of a narrower IEEE format exactly to binary64, failing
+on infinities and NaNs. -/
+@[expose] public def widen (spec : Float.Model.Format) (bits : Nat) : Option FiniteFloat :=
+  let unpacked := Float.Model.UnpackedFloat.unpack spec (BitVec.ofNat _ bits)
+  let packed : Option Float.Model.UnpackedFloat := match unpacked with
+    | .zero sign => some (.zero sign)
+    | .finite sign mantissa exponent _ => some (.round .binary64 sign mantissa exponent)
+    | _ => none
+  packed.bind fun packed =>
+    let bits := (Float.Model.UnpackedFloat.pack .binary64 packed).toNat
+    let exponent := bits / 2 ^ 52 % 2048
+    if h : exponent < 2047 then
+      some ⟨bits / 2 ^ 63 != 0, ⟨exponent, h⟩,
+        ⟨bits % 2 ^ 52, Nat.mod_lt _ (by decide)⟩⟩
+    else none
+
 /-- Round `mantissa * 10 ^ exponent` to binary64 with the given sign, failing on
 overflow. -/
 public def ofScientific (negative : Bool) (mantissa : Nat) (exponent : Int) :

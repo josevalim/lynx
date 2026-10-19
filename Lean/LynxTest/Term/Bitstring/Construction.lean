@@ -292,10 +292,97 @@ theorem runtime_float_widths (value : Term) (little : Bool) :
       .error (.error (.atom "badarg")) := by
   refine ⟨rfl, ?_, ?_⟩ <;> rfl
 
-theorem unimplemented_float_widths (value : Term) (little : Bool) :
-    Term.Bitstring.floatSegment value 16 little = .error (.error (.atom "badarg")) ∧
-    Term.Bitstring.floatSegment value 32 little = .error (.error (.atom "badarg")) := by
-  constructor <;> rfl
+-- Binary16 cases from OTP's erts bs_construct_SUITE fp16/1, with expected bytes
+-- checked against OTP 29. Each value is also encoded negated, little-endian.
+set_option maxRecDepth 4096 in
+theorem float16_construction :
+    Term.Bitstring.floatSegment (.float ⟨false, 999, 16971005⟩) 16 false = .ok (.bitstring ⟨#[0, 1]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 999, 16971005⟩) 16 true = .ok (.bitstring ⟨#[1, 128]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1008, 4494803592606853⟩) 16 false = .ok (.bitstring ⟨#[3, 255]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1008, 4494803592606853⟩) 16 true = .ok (.bitstring ⟨#[255, 131]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1009, 0⟩) 16 false = .ok (.bitstring ⟨#[4, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1009, 0⟩) 16 true = .ok (.bitstring ⟨#[0, 132]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (65504)) 16 false = .ok (.bitstring ⟨#[123, 255]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (-65504)) 16 true = .ok (.bitstring ⟨#[255, 251]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1038, 4499201580859392⟩) 16 false = .ok (.bitstring ⟨#[123, 255]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1038, 4499201580859392⟩) 16 true = .ok (.bitstring ⟨#[255, 251]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1022, 4499201592118391⟩) 16 false = .ok (.bitstring ⟨#[59, 255]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1022, 4499201592118391⟩) 16 true = .ok (.bitstring ⟨#[255, 187]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 0, 0⟩) 16 false = .ok (.bitstring ⟨#[0, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 0, 0⟩) 16 true = .ok (.bitstring ⟨#[0, 128]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (1)) 16 false = .ok (.bitstring ⟨#[60, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (-1)) 16 true = .ok (.bitstring ⟨#[0, 188]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1023, 0⟩) 16 false = .ok (.bitstring ⟨#[60, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1023, 0⟩) 16 true = .ok (.bitstring ⟨#[0, 188]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1023, 4398035252105⟩) 16 false = .ok (.bitstring ⟨#[60, 1]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1023, 4398035252105⟩) 16 true = .ok (.bitstring ⟨#[1, 188]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1021, 1499733803991469⟩) 16 false = .ok (.bitstring ⟨#[53, 85]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1021, 1499733803991469⟩) 16 true = .ok (.bitstring ⟨#[85, 181]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (1000000000)) 16 false = .ok (.bitstring ⟨#[124, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (-1000000000)) 16 true = .ok (.bitstring ⟨#[0, 252]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (2)) 16 false = .ok (.bitstring ⟨#[64, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.integer (-2)) 16 true = .ok (.bitstring ⟨#[0, 192]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1024, 0⟩) 16 false = .ok (.bitstring ⟨#[64, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1024, 0⟩) 16 true = .ok (.bitstring ⟨#[0, 192]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1004, 2674012278751232⟩) 16 false = .ok (.bitstring ⟨#[0, 51]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1004, 2674012278751232⟩) 16 true = .ok (.bitstring ⟨#[51, 128]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1001, 1125899906842624⟩) 16 false = .ok (.bitstring ⟨#[0, 5]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1001, 1125899906842624⟩) 16 true = .ok (.bitstring ⟨#[5, 128]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1008, 0⟩) 16 false = .ok (.bitstring ⟨#[2, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1008, 0⟩) 16 true = .ok (.bitstring ⟨#[0, 130]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1007, 1741626418397184⟩) 16 false = .ok (.bitstring ⟨#[1, 99]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1007, 1741626418397184⟩) 16 true = .ok (.bitstring ⟨#[99, 129]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1023, 2199560126464⟩) 16 false = .ok (.bitstring ⟨#[60, 1]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1023, 2199560126464⟩) 16 true = .ok (.bitstring ⟨#[1, 188]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1023, 2199023255552⟩) 16 false = .ok (.bitstring ⟨#[60, 0]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1023, 2199023255552⟩) 16 true = .ok (.bitstring ⟨#[0, 188]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1023, 2199027449856⟩) 16 false = .ok (.bitstring ⟨#[60, 1]⟩ 0 (by decide)) ∧
+    Term.Bitstring.floatSegment (.float ⟨true, 1023, 2199027449856⟩) 16 true = .ok (.bitstring ⟨#[1, 188]⟩ 0 (by decide)) := by
+  repeat first | apply And.intro | rfl
+
+-- Binary32 cases from OTP's construction suites, plus rounding, overflow, and
+-- integer conversions checked against OTP 29 on a 64-bit VM.
+set_option maxRecDepth 4096 in
+theorem float32_construction :
+    -- Zero
+    Term.Bitstring.floatSegment (.float ⟨false, 0, 0⟩) 32 false = .ok (.bitstring ⟨#[0, 0, 0, 0]⟩ 0 (by decide)) ∧
+    -- OTP
+    Term.Bitstring.floatSegment (.float ⟨false, 1020, 0⟩) 32 false = .ok (.bitstring ⟨#[62, 0, 0, 0]⟩ 0 (by decide)) ∧
+    -- OTP
+    Term.Bitstring.floatSegment (.float ⟨false, 1020, 0⟩) 32 true = .ok (.bitstring ⟨#[0, 0, 0, 62]⟩ 0 (by decide)) ∧
+    -- Negative zero
+    Term.Bitstring.floatSegment (.float ⟨true, 0, 0⟩) 32 false = .ok (.bitstring ⟨#[128, 0, 0, 0]⟩ 0 (by decide)) ∧
+    -- Overflow
+    Term.Bitstring.floatSegment (.float ⟨false, 2019, 2221273467876764⟩) 32 false = .ok (.bitstring ⟨#[127, 128, 0, 0]⟩ 0 (by decide)) ∧
+    -- Overflow
+    Term.Bitstring.floatSegment (.float ⟨true, 2019, 2221273467876764⟩) 32 true = .ok (.bitstring ⟨#[0, 0, 128, 255]⟩ 0 (by decide)) ∧
+    -- Underflow
+    Term.Bitstring.floatSegment (.float ⟨false, 856, 3921383706114079⟩) 32 false = .ok (.bitstring ⟨#[0, 0, 0, 0]⟩ 0 (by decide)) ∧
+    -- Rounded
+    Term.Bitstring.floatSegment (.float ⟨false, 1019, 2702159776422298⟩) 32 false = .ok (.bitstring ⟨#[61, 204, 204, 205]⟩ 0 (by decide)) ∧
+    -- Small integer rounds once
+    Term.Bitstring.floatSegment (.integer (288230393331580929)) 32 false = .ok (.bitstring ⟨#[92, 128, 0, 1]⟩ 0 (by decide)) ∧
+    -- Small integer rounds once
+    Term.Bitstring.floatSegment (.integer (-288230393331580929)) 32 false = .ok (.bitstring ⟨#[220, 128, 0, 1]⟩ 0 (by decide)) ∧
+    -- Bignum rounds through binary64
+    Term.Bitstring.floatSegment (.integer (576460786663161857)) 32 false = .ok (.bitstring ⟨#[93, 0, 0, 0]⟩ 0 (by decide)) ∧
+    -- Bignum rounds through binary64
+    Term.Bitstring.floatSegment (.integer (-576460786663161857)) 32 false = .ok (.bitstring ⟨#[221, 0, 0, 0]⟩ 0 (by decide)) ∧
+    -- Largest small integer
+    Term.Bitstring.floatSegment (.integer (576460752303423487)) 32 false = .ok (.bitstring ⟨#[93, 0, 0, 0]⟩ 0 (by decide)) ∧
+    -- Overflow
+    Term.Bitstring.floatSegment (.integer (2 ^ 200)) 32 false = .ok (.bitstring ⟨#[127, 128, 0, 0]⟩ 0 (by decide)) := by
+  repeat first | apply And.intro | rfl
+
+set_option exponentiation.threshold 1024 in
+set_option maxRecDepth 4096 in
+theorem narrow_float_errors (little : Bool) :
+    Term.Bitstring.floatSegment (.integer (2 ^ 1024)) 32 little = .error (.error (.atom "badarg")) ∧
+    Term.Bitstring.floatSegment (.integer (2 ^ 1024)) 16 little = .error (.error (.atom "badarg")) ∧
+    Term.Bitstring.floatSegment (.atom "one") 16 little = .error (.error (.atom "badarg")) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1023, 0⟩) 0 little = .error (.error (.atom "badarg")) ∧
+    Term.Bitstring.floatSegment (.float ⟨false, 1023, 0⟩) 8 little = .error (.error (.atom "badarg")) := by
+  repeat first | apply And.intro | rfl
 
 -- Expected bytes checked against OTP 29, including noncharacters and scalar boundaries.
 private def utfBytes (value : Int) (utf8 big16 little16 big32 little32 : List UInt8) : Prop :=

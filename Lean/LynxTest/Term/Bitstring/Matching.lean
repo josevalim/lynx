@@ -90,7 +90,20 @@ theorem float_extraction_returns_float (input : Term) (width : Nat) (little : Bo
     ∃ float : Term.FiniteFloat, value = .float float := by
   simp only [Term.Bitstring.matchFloat] at returned
   split at returned
-  · contradiction
+  · split at returned <;> try contradiction
+    unfold Term.Bitstring.matchNarrowFloat at returned
+    split at returned
+    · split at returned <;> try contradiction
+      cases returned
+      exact ⟨_, rfl⟩
+    · cases read : Term.Bitstring.matchInteger input (.integer width) 1 Bool.false little with
+      | none => simp [read] at returned
+      | some pair =>
+        rcases pair with ⟨head, tail⟩
+        cases head <;> simp only [read] at returned <;> try contradiction
+        obtain ⟨float, -, same⟩ := Option.map_eq_some_iff.mp returned
+        cases same
+        exact ⟨float, rfl⟩
   · cases read : Term.Bitstring.matchInteger input (.integer 64) 1 Bool.false little with
     | none => simp [read] at returned
     | some pair =>
@@ -100,11 +113,49 @@ theorem float_extraction_returns_float (input : Term) (width : Nat) (little : Bo
       exact ⟨_, equality.symm⟩
 
 
--- Runtime sizes that are not 64 bits fail the pattern rather than raising.
+-- Invalid runtime sizes fail the pattern rather than raising.
 theorem runtime_float_widths (input : Term) (little : Bool) :
     Term.Bitstring.matchFloat input (Term.Bitstring.floatWidth (.integer (-1)) 1) little = none ∧
     Term.Bitstring.matchFloat input (Term.Bitstring.floatWidth (.atom "size") 1) little = none := by
   constructor <;> rfl
+
+-- Binary16 cases from OTP's erts bs_match_misc_SUITE fp16/1 and t_float/1,
+-- with expected values checked against OTP 29.
+set_option maxRecDepth 4096 in
+theorem float16_matching :
+    Term.Bitstring.matchFloat (.bitstring ⟨#[0, 1]⟩ 0 (by decide)) 16 false = some (.float ⟨false, 999, 0⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[3, 255]⟩ 0 (by decide)) 16 false = some (.float ⟨false, 1008, 4494803534348288⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[4, 0]⟩ 0 (by decide)) 16 false = some (.float ⟨false, 1009, 0⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[123, 255]⟩ 0 (by decide)) 16 false = some (.float ⟨false, 1038, 4499201580859392⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[53, 85]⟩ 0 (by decide)) 16 false = some (.float ⟨false, 1021, 1499733860286464⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[128, 0]⟩ 0 (by decide)) 16 false = some (.float ⟨true, 0, 0⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[192, 0]⟩ 0 (by decide)) 16 false = some (.float ⟨true, 1024, 0⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[0x7c, 0]⟩ 0 (by decide)) 16 false = none ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[0x7e, 0x2a]⟩ 0 (by decide)) 16 false = none ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[0x3c]⟩ 0 (by decide)) 16 false = none := by
+  repeat first | apply And.intro | rfl
+
+-- Binary32 cases from OTP's bs_match_misc_SUITE t_float/1 and little_float/1.
+set_option maxRecDepth 4096 in
+theorem float32_matching :
+    Term.Bitstring.matchFloat (.bitstring ⟨#[63, 128, 0, 0]⟩ 0 (by decide)) 32 false = some (.float ⟨false, 1023, 0⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[0, 0, 0, 1]⟩ 0 (by decide)) 32 false = some (.float ⟨false, 874, 0⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[127, 127, 255, 255]⟩ 0 (by decide)) 32 false = some (.float ⟨false, 1150, 4503599090499584⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[61, 204, 204, 205]⟩ 0 (by decide)) 32 false = some (.float ⟨false, 1019, 2702159883796480⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[128, 0, 0, 0]⟩ 0 (by decide)) 32 false = some (.float ⟨true, 0, 0⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[0, 0, 128, 63]⟩ 0 (by decide)) 32 true =
+      some (.float ⟨false, 1023, 0⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[0x7f, 0x80, 0, 0]⟩ 0 (by decide)) 32 false = none ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[0x7f, 0xc0, 0, 0]⟩ 0 (by decide)) 32 false = none := by
+  repeat first | apply And.intro | rfl
+
+-- A zero-width float matches 0.0 without consuming bits; other widths fail.
+theorem float_zero_and_invalid_widths :
+    Term.Bitstring.matchFloat (.bitstring ⟨#[1]⟩ 0 (by decide)) 0 false =
+      some (.float ⟨false, 0, 0⟩, .bitstring ⟨#[1]⟩ 0 (by decide)) ∧
+    Term.Bitstring.matchFloat empty 0 true = some (.float ⟨false, 0, 0⟩, empty) ∧
+    Term.Bitstring.matchFloat (.bitstring ⟨#[0, 0]⟩ 0 (by decide)) 8 false = none := by
+  refine ⟨?_, ?_, ?_⟩ <;> rfl
 
 set_option maxRecDepth 2048 in
 theorem float64_signed_zero_and_subnormal :

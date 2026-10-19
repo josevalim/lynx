@@ -67,11 +67,30 @@ public theorem floatSegment_fields (value : Term.FiniteFloat) :
     simpa only [Nat.add_zero, Nat.shiftRight_zero, Int.cast_ofNat_Int, fields.2.2,
       integerBits, List.range_zero, List.map_nil] using result
 
+/-- Extract a binary16 or binary32 float, converted exactly to binary64.
+Non-finite encodings fail the pattern. A zero-width float is `0.0` and
+consumes nothing. -/
+@[expose] public def matchNarrowFloat (input : Term) (width : Nat) (little : Bool) :
+    Option (Term × Term) := do
+  if width = 0 then
+    match input with
+    | .bitstring .. => some (.float ⟨Bool.false, 0, 0⟩, input)
+    | _ => none
+  else
+    let spec := if width = 16 then Term.FiniteFloat.binary16 else .binary32
+    match matchInteger input (.integer width) 1 Bool.false little with
+    | some (.integer value, rest) =>
+      (Term.FiniteFloat.widen spec value.toNat).map fun float => (.float float, rest)
+    | _ => none
+
 /-- Extract a finite binary64 float. Non-finite encodings fail the pattern.
-Binary16 and binary32 decoding are not implemented yet. -/
+Zero, 16, and 32-bit widths are extracted by `matchNarrowFloat`; other widths
+fail the pattern. -/
 @[expose] public def matchFloat (input : Term) (width : Nat) (little : Bool) :
     Option (Term × Term) := do
-  if width != 64 then none else do
+  if width != 64 then
+    if width = 0 ∨ width = 16 ∨ width = 32 then matchNarrowFloat input width little else none
+  else do
     let (.integer value, rest) ← matchInteger input (.integer 64) 1 Bool.false little | none
     let encoded := value.toNat
     let exponent := encoded / 2 ^ 52 % 2048
@@ -653,17 +672,55 @@ public theorem matchBinary_sizeOf_nonzero {input size value rest : Term} {unit :
 
 public theorem matchFloat_sizeOf {input value rest : Term} {width : Nat} {little : Bool}
     (matched : matchFloat input width little = some (value, rest)) :
-    sizeOf rest + 64 = sizeOf input := by
+    sizeOf rest + width = sizeOf input := by
   unfold matchFloat at matched
-  split at matched <;> try contradiction
-  cases extracted : matchInteger input (.integer 64) 1 Bool.false little with
-  | none => simp [extracted] at matched
-  | some pair =>
-    obtain ⟨integer, suffix⟩ := pair
-    have length := matchInteger_sizeOf_integer extracted
-    cases integer <;> simp [extracted] at matched
-    obtain ⟨_, _, rfl⟩ := matched
-    simpa using length
+  split at matched
+  · split at matched <;> try contradiction
+    unfold matchNarrowFloat at matched
+    split at matched
+    · rename_i zero
+      split at matched <;> try contradiction
+      cases matched
+      simp [zero]
+    · cases extracted : matchInteger input (.integer width) 1 Bool.false little with
+      | none => simp [extracted] at matched
+      | some pair =>
+        obtain ⟨integer, suffix⟩ := pair
+        have length := matchInteger_sizeOf_integer extracted
+        cases integer <;> simp only [extracted] at matched <;> try contradiction
+        obtain ⟨_, -, same⟩ := Option.map_eq_some_iff.mp matched
+        cases same
+        simpa using length
+  · rename_i wide
+    simp only [bne_iff_ne, ne_eq, Decidable.not_not] at wide
+    subst wide
+    cases extracted : matchInteger input (.integer 64) 1 Bool.false little with
+    | none => simp [extracted] at matched
+    | some pair =>
+      obtain ⟨integer, suffix⟩ := pair
+      have length := matchInteger_sizeOf_integer extracted
+      cases integer <;> simp [extracted] at matched
+      obtain ⟨_, _, rfl⟩ := matched
+      simpa using length
+
+/-- Float extractions whose runtime size was checked to be nonzero consume bits. -/
+public theorem matchFloat_sizeOf_nonzero {input size value rest : Term} {unit : Nat} {little : Bool}
+    (nonzero : ¬zeroWidth size = Bool.true)
+    (matched : matchFloat input (floatWidth size unit) little = some (value, rest)) :
+    sizeOf rest < sizeOf input := by
+  have length := matchFloat_sizeOf matched
+  have positive : 0 < floatWidth size unit := by
+    unfold floatWidth
+    split
+    · rename_i width
+      simp only [zeroWidth, beq_iff_eq] at nonzero
+      split
+      · rename_i valid
+        have : 1 ≤ width.toNat := by omega
+        exact Nat.mul_pos this valid.2
+      · decide
+    · decide
+  omega
 
 public theorem matchUtf8_sizeOf {input value rest : Term}
     (matched : matchUtf8 input = some (value, rest)) :
@@ -809,7 +866,8 @@ private meta def extractionFacts : Array Name := #[
 /-- Facts about extractions whose variable size was checked to be nonzero. -/
 private meta def nonzeroFacts : Array Name := #[
   ``matchInteger_sizeOf_nonzero,
-  ``matchBinary_sizeOf_nonzero]
+  ``matchBinary_sizeOf_nonzero,
+  ``matchFloat_sizeOf_nonzero]
 
 /-- Record the measure left by every extraction equation in context. Local
 definitions are unfolded in the goal and the new facts, so `omega` relates
