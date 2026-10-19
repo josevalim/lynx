@@ -386,6 +386,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.Bitstring.extract",
   "Lynx.Term.Bitstring.extractWith",
   "Lynx.Term.Bitstring.floatSegment",
+  "Lynx.Term.Bitstring.floatWidth",
   "Lynx.Term.Bitstring.instDecidableValid",
   "Lynx.Term.Bitstring.integerBits",
   "Lynx.Term.Bitstring.integerSegment",

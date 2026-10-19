@@ -957,12 +957,31 @@ defmodule Lynx.TranslationTest do
     end
 
     test "raises on unsupported binary segments" do
+      # No source syntax yields an unknown segment type, so rewrite the Core.
+      unknown_type = fn node ->
+        if :cerl.type(node) == :bitstr do
+          :cerl.update_c_bitstr(
+            node,
+            :cerl.bitstr_val(node),
+            :cerl.bitstr_size(node),
+            :cerl.bitstr_unit(node),
+            :cerl.c_atom(:unknown),
+            :cerl.bitstr_flags(node)
+          )
+        else
+          node
+        end
+      end
+
       core =
-        cerl("""
-        -module(example).
-        -export([entry/1]).
-        entry(<<Size:8, X:Size/float>>) -> X.
-        """)
+        :cerl_trees.map(
+          unknown_type,
+          cerl("""
+          -module(example).
+          -export([entry/1]).
+          entry(X) -> <<X:8>>.
+          """)
+        )
 
       error =
         assert_raise CompileError, fn ->

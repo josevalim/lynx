@@ -85,6 +85,14 @@ private def str (j : Json) (key : String) : Except String String := do
 private def arr (j : Json) (key : String) : Except String (Array Json) := do
   (← field j key).getArr?
 
+/-- Literal float segment sizes are resolved to their width, keeping generated
+proofs free of runtime size computations. Other sizes are computed at runtime. -/
+private def literalFloatWidth (segment : Json) (unit : Nat) : Except String (Option Nat) := do
+  let size ← field segment "size"
+  if (← str size "kind") == "integer" then
+    pure (some ((← (← field size "value").getInt?).toNat * unit))
+  else pure none
+
 private inductive Location where
   | unknown
   | line (line : Nat)
@@ -718,10 +726,18 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
           let extract := mkIdent ``Lynx.Term.Bitstring.matchInteger
           pure (Unhygienic.run `($extract $remaining $size $unit $signed $little))
         else if segmentType == "float" then do
-          fields segment ["type", "value", "size", "endian", "span"]
-          let width ← (← field segment "size").getNat?
-          unless width == 64 do throw "only binary64 float matching is implemented"
-          let width : TSyntax `term := ⟨Syntax.mkNumLit (toString width)⟩
+          fields segment ["type", "value", "size", "unit", "endian", "span"]
+          let unit ← (← field segment "unit").getNat?
+          unless 1 ≤ unit && unit ≤ 256 do throw "float segment unit must be in 1..256"
+          let width ← match ← literalFloatWidth segment unit with
+            | some width => do
+              if width == 16 || width == 32 then throw "only binary64 float matching is implemented"
+              pure ⟨Syntax.mkNumLit (toString width)⟩
+            | none => do
+              let size ← term map si false (← field segment "size")
+              let unit : TSyntax `term := ⟨Syntax.mkNumLit (toString unit)⟩
+              let floatWidth := mkIdent ``Lynx.Term.Bitstring.floatWidth
+              pure (Unhygienic.run `($floatWidth $size $unit))
           let extract := mkIdent ``Lynx.Term.Bitstring.matchFloat
           pure (Unhygienic.run `($extract $remaining $width $little))
         else if segmentType == "utf8" || segmentType == "utf16" || segmentType == "utf32" then do
@@ -769,7 +785,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       let segmentType ← str segment "type"
       match segmentType with
       | "integer" => fields segment ["type", "value", "size", "unit", "signed", "endian", "span"]
-      | "float" => fields segment ["type", "value", "size", "endian", "span"]
+      | "float" => fields segment ["type", "value", "size", "unit", "endian", "span"]
       | "binary" => fields segment ["type", "value", "size", "unit", "span"]
       | "utf8" | "utf16" | "utf32" => fields segment ["type", "value", "endian", "span"]
       | other => throw s!"unsupported bitstring segment type '{other}'"
@@ -795,10 +811,15 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
             ``Lynx.Term.Bitstring.utf16Segment else ``Lynx.Term.Bitstring.utf32Segment)
           pure (Unhygienic.run `($build $value $little))
         else if segmentType == "float" then do
-          let width ← (← field segment "size").getNat?
-          unless width == 16 || width == 32 || width == 64 do
-            throw "float segment size must be 16, 32, or 64"
-          let width : TSyntax `term := ⟨Syntax.mkNumLit (toString width)⟩
+          let unit ← (← field segment "unit").getNat?
+          unless 1 ≤ unit && unit ≤ 256 do throw "float segment unit must be in 1..256"
+          let width ← match ← literalFloatWidth segment unit with
+            | some width => pure ⟨Syntax.mkNumLit (toString width)⟩
+            | none => do
+              let size ← term map si false (← field segment "size")
+              let unit : TSyntax `term := ⟨Syntax.mkNumLit (toString unit)⟩
+              let floatWidth := mkIdent ``Lynx.Term.Bitstring.floatWidth
+              pure (Unhygienic.run `($floatWidth $size $unit))
           let build := mkIdent ``Lynx.Term.Bitstring.floatSegment
           pure (Unhygienic.run `($build $value $width $little))
         else do

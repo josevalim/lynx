@@ -100,6 +100,12 @@ theorem float_extraction_returns_float (input : Term) (width : Nat) (little : Bo
       exact ⟨_, equality.symm⟩
 
 
+-- Runtime sizes that are not 64 bits fail the pattern rather than raising.
+theorem runtime_float_widths (input : Term) (little : Bool) :
+    Term.Bitstring.matchFloat input (Term.Bitstring.floatWidth (.integer (-1)) 1) little = none ∧
+    Term.Bitstring.matchFloat input (Term.Bitstring.floatWidth (.atom "size") 1) little = none := by
+  constructor <;> rfl
+
 set_option maxRecDepth 2048 in
 theorem float64_signed_zero_and_subnormal :
     Term.Bitstring.matchFloat (.bitstring ⟨#[0x80, 0, 0, 0, 0, 0, 0, 0]⟩ 0 (by decide)) 64 false =
