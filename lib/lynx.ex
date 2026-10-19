@@ -106,6 +106,17 @@ defmodule Lynx do
   by construction, so the direct statement is equivalent to running it. Proofs
   citing other laws receive the statements of those laws.
 
+  ### Proofs and versions
+
+  Proofs are tied to the implementation they verify. Lynx translates the compiled
+  code of your functions and all of their dependencies, including functions from
+  Elixir and Erlang's standard library. The translated code is also shaped by the
+  compiler, which may inline helpers, reorder clauses, or rewrite expressions.
+
+  Therefore, updating Elixir, Erlang/OTP, or any of your dependencies may change
+  the generated Lean code, even when the behavior is the same. Laws that held
+  before may require further proofs afterwards.
+
   ### Guidelines
 
   A few tools and proof patterns help when working with existing library code:
