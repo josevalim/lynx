@@ -535,6 +535,58 @@ namespace Lynx.Term
     exactCompare a (.atom name) = .eq ↔ a = .atom name := by
   cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
 
+/-- Only bitstrings are exactly equal to a bitstring. -/
+theorem bitstring_exactCompare_eq (bytes : ByteArray) (lastBits : Fin 8)
+    (valid : Bitstring.Valid bytes lastBits) (a : Term)
+    (equal : exactCompare (.bitstring bytes lastBits valid) a = .eq) :
+    ∃ other otherBits otherValid, a = .bitstring other otherBits otherValid := by
+  cases a <;> rw [exactCompare_eq_step] at equal <;> simp [Compare.compareStep] at equal
+  exact ⟨_, _, _, rfl⟩
+
+/-- Binaries are exactly equal when they have the same bytes. -/
+theorem binary_exactCompare_eq (a b : ByteArray) :
+    exactCompare (.bitstring a 0 (Bitstring.valid_aligned a)) (.bitstring b 0 (Bitstring.valid_aligned b)) =
+      .eq ↔ a = b := by
+  rw [exactCompare_eq_step]
+  simp only [Compare.compareStep]
+  constructor
+  · intro equal
+    have bits := Std.LawfulEqCmp.eq_of_compare equal
+    rw [← Bitstring.pack_toBits_aligned a, ← Bitstring.pack_toBits_aligned b, bits]
+  · rintro rfl
+    exact Std.ReflCmp.compare_self
+
+private theorem mapViewInsert_ne_nil (cmp : α → α → Ordering) (e : α × α) (xs : List (α × α)) :
+    Compare.mapViewInsert cmp e xs ≠ [] := by
+  cases xs with
+  | nil => simp [Compare.mapViewInsert]
+  | cons p xs =>
+    simp only [Compare.mapViewInsert]
+    split <;> simp
+
+/-- Only maps without bindings are exactly equal to the empty map. -/
+theorem map_exactCompare_empty (entries : List (Term × Term))
+    (equal : exactCompare (.map entries) (.map []) = .eq) : entries = [] := by
+  cases entries with
+  | nil => rfl
+  | cons e es =>
+    exfalso
+    rw [exactCompare_eq_step] at equal
+    simp only [Compare.compareStep, Compare.mapView] at equal
+    have nonempty := mapViewInsert_ne_nil exactCompare e (Compare.mapView exactCompare es)
+    obtain ⟨p, ps, view⟩ := List.exists_cons_of_ne_nil nonempty
+    rw [view] at equal
+    simp [Compare.compareMapViews, compareLex, Compare.compareOn] at equal
+
+@[simp] theorem exactCompare_eq_nil (a : Term) : exactCompare a .nil = .eq ↔ a = .nil := by
+  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
+
+/-- Only nonempty lists are exactly equal to a nonempty list. -/
+theorem cons_exactCompare_eq (head tail a : Term) (equal : exactCompare (.cons head tail) a = .eq) :
+    ∃ otherHead otherTail, a = .cons otherHead otherTail := by
+  cases a <;> rw [exactCompare_eq_step] at equal <;> simp [Compare.compareStep] at equal
+  exact ⟨_, _, rfl⟩
+
 @[simp] theorem exactCompare_eq_integer (a : Term) (n : Int) :
     exactCompare a (.integer n) = .eq ↔ a = .integer n := by
   cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
@@ -578,6 +630,19 @@ namespace Lynx.Term
     compare (.reference a) (.reference b) = Ord.compare a b := by
   rw [compare_eq_step]
   rfl
+
+/-- Binaries compare equal when they have the same bytes. -/
+theorem binary_compare_eq (a b : ByteArray) :
+    compare (.bitstring a 0 (Bitstring.valid_aligned a)) (.bitstring b 0 (Bitstring.valid_aligned b)) =
+      .eq ↔ a = b := by
+  rw [compare_eq_step]
+  simp only [Compare.compareStep]
+  constructor
+  · intro equal
+    have bits := Std.LawfulEqCmp.eq_of_compare equal
+    rw [← Bitstring.pack_toBits_aligned a, ← Bitstring.pack_toBits_aligned b, bits]
+  · rintro rfl
+    exact Std.ReflCmp.compare_self
 
 @[simp] theorem compare_eq_nil (a : Term) : compare a .nil = .eq ↔ a = .nil := by
   cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
