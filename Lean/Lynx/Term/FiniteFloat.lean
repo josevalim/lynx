@@ -1,6 +1,7 @@
 module
 
 public import Std
+import Lynx.Term.FiniteFloat.Rounding
 
 namespace Lynx.Term
 
@@ -117,6 +118,80 @@ public theorem toRat_integral_of_exponent (value : FiniteFloat) (large : 1075 �
   cases sign : value.negative
   · exact ⟨n, by simp [Lynx.Term.FiniteFloat.toRat, sign, magnitude, Rat.intCast_natCast]⟩
   · exact ⟨-(n : Int), by simp [Lynx.Term.FiniteFloat.toRat, sign, magnitude, Rat.intCast_natCast, Rat.intCast_neg]⟩
+
+private theorem ofModel_bits {value : Float.Model} {n : Nat} (bits : value.toBits.toNat = n)
+    (finite : n / 2 ^ 52 % 2048 < 2047) :
+    ofModel value = some ⟨n / 2 ^ 63 != 0, ⟨n / 2 ^ 52 % 2048, finite⟩,
+      ⟨n % 2 ^ 52, Nat.mod_lt _ (by decide)⟩⟩ := by
+  unfold ofModel
+  simp only [bits]
+  rw [dif_pos finite]
+
+/-- Converting `mantissa * 10 ^ exponent` depends only on its value. -/
+public theorem ofScientific_congr {negative : Bool} {m₁ m₂ : Nat} {e₁ e₂ : Int}
+    (h : (m₁ : Rat) * 10 ^ e₁ = m₂ * 10 ^ e₂) :
+    ofScientific negative m₁ e₁ = ofScientific negative m₂ e₂ := by
+  simp only [ofScientific, Rounding.model_ofScientific_congr h]
+
+/-- A negative sign negates the converted value. -/
+public theorem ofScientific_neg {m : Nat} {e : Int} {value : FiniteFloat}
+    (h : ofScientific false m e = some value) :
+    ofScientific true m e = some { value with negative := !value.negative } := by
+  simp only [ofScientific, Bool.false_eq_true, if_false, if_true] at h ⊢
+  generalize Float.Model.ofScientific m e = model at h ⊢
+  have lt := model.toBits.toNat_lt
+  generalize bits : model.toBits.toNat = n at lt
+  by_cases finite : n / 2 ^ 52 % 2048 < 2047
+  · rw [ofModel_bits bits finite] at h
+    cases h
+    have neg := Rounding.toNat_neg model (by rw [bits]; exact finite)
+    rw [bits] at neg
+    rw [ofModel_bits neg (by omega)]
+    simp only [Option.some.injEq, FiniteFloat.mk.injEq]
+    refine ⟨?_, Fin.ext (by simp; omega), Fin.ext (by simp; omega)⟩
+    by_cases high : n / 2 ^ 63 = 0
+    · have : (n + 2 ^ 63) % 2 ^ 64 / 2 ^ 63 = 1 := by omega
+      simp [this, high]
+    · have : (n + 2 ^ 63) % 2 ^ 64 / 2 ^ 63 = 0 := by omega
+      simp [this, high]
+  · unfold ofModel at h
+    simp only [bits] at h
+    rw [dif_neg finite] at h
+    cases h
+
+/-- Converting the exact value of a finite float gives the float back. -/
+public theorem ofScientific_magnitude (value : FiniteFloat) {m : Nat} {e : Int}
+    (h : (m : Rat) * 10 ^ e = value.magnitude) : ofScientific value.negative m e = some value := by
+  obtain ⟨negative, ⟨exponent, elt⟩, ⟨fraction, flt⟩⟩ := value
+  have positive : ofScientific false m e = some ⟨false, ⟨exponent, elt⟩, ⟨fraction, flt⟩⟩ := by
+    simp only [ofScientific, Bool.false_eq_true, if_false]
+    simp only [magnitude] at h
+    by_cases e0 : exponent = 0
+    · subst e0
+      by_cases f0 : fraction = 0
+      · subst f0
+        simp only [if_true] at h
+        have m0 : m = 0 := by
+          have p : (0 : Rat) < 10 ^ e := Rat.zpow_pos (by decide)
+          rcases Rat.mul_eq_zero.mp h with z | z
+          · exact_mod_cast z
+          · exact absurd z (Rat.ne_of_gt p)
+        subst m0
+        rw [ofModel_bits (Rounding.toNat_ofScientific_zero e) (by decide)]
+        rfl
+      · simp only [if_true, if_neg f0] at h
+        rw [ofModel_bits (Rounding.toNat_ofScientific_subnormal (by omega) flt h) (by omega)]
+        simp only [Option.some.injEq, FiniteFloat.mk.injEq]
+        refine ⟨by simp; omega, Fin.ext (by simp; omega), Fin.ext (by simp; omega)⟩
+    · simp only [if_neg e0] at h
+      have toNat := Rounding.toNat_ofScientific_normal (F := 2 ^ 52 + fraction)
+        (E := (exponent : Int) - 1075) (by omega) (by omega) (by omega) (by omega) h
+      rw [ofModel_bits toNat (by omega)]
+      simp only [Option.some.injEq, FiniteFloat.mk.injEq]
+      refine ⟨by simp; omega, Fin.ext (by simp; omega), Fin.ext (by simp; omega)⟩
+  cases negative
+  · exact positive
+  · exact ofScientific_neg positive
 
 end FiniteFloat
 end Lynx.Term

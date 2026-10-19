@@ -32,8 +32,9 @@ Verified artifacts are cached below `cache_dir/lean-VERSION-HASH`, using Lake’
 Only successful elaboration and axiom audits are cached; updates include a `cached` Boolean.
 Input files are an ordered array of {file, module, imports, contents, cache_key} objects.
 A prelude file has empty contents and a preludes array of {source, file, span,
-indentation} blocks. Its ordinary Lean declarations are parsed and elaborated
-sequentially. Dependent files import the prelude before their embedded proofs
+indentation} blocks, joined in order into one module. The first block begins with
+the module header, whose imports are loaded before the blocks are parsed and
+elaborated sequentially. Dependent files import the prelude before their embedded proofs
 and termination suffixes are parsed; no declarations leak through request order.
 Theorem nodes contain name, named params, an optional requires helper, an ensures helper,
 and a proof object. Helpers are ordinary Result computations called with the theorem's
@@ -1890,9 +1891,7 @@ private def parsingDiagnostics (file : DecodedFile) : Array Json :=
 private def renderFile (file : DecodedFile) (env : Lean.Environment) : IO String := do
   if !file.preludes.isEmpty then
     let sources ← file.preludes.mapM fun block => IO.ofExcept (str block "source")
-    let imports := "public import Lynx" :: file.imports.toList.map ("public import " ++ ·)
-    return "module\n\n" ++ String.intercalate "\n" imports ++ "\n\npublic section\n\n" ++
-      String.intercalate "\n\n" sources.toList ++ "\nend\n"
+    return String.intercalate "\n\n" sources.toList ++ "\n"
   let action : CoreM String := do
     let commands ← file.commands.mapM fun cmd => do
       return (← PrettyPrinter.ppCommand cmd).pretty 100
@@ -1967,38 +1966,65 @@ private def preludeLocation (file : DecodedFile) (message : Message) : Location 
       return .unknown
   return .unknown
 
-/-- Elaborate support declarations sequentially, so each command can extend the
-parser for later commands. The frontend retains the sigil's original positions. -/
+/-- A prelude block's source, padded so positions match the block's original span. -/
+private def preludeSource (block : Json) : Except String (String × String) := do
+  fields block ["source", "file", "span", "indentation"]
+  let origin ← str block "file"
+  let source ← str block "source"
+  let indentation ← (← field block "indentation").getNat?
+  let span ← arr block "span"
+  let line ← if let some line := span[0]? then line.getNat? else pure 1
+  let column ← if let some column := span[1]? then column.getNat? else pure 1
+  let lines := source.splitOn "\n"
+  let source := String.ofList (List.replicate (line - 1) '\n') ++
+    String.ofList (List.replicate (column - 1) ' ') ++
+    String.intercalate ("\n" ++ String.ofList (List.replicate indentation ' ')) lines
+  pure (origin, source)
+
+/-- The module header the first prelude block begins with, parsed by Lean. -/
+private def preludeHeader (block : Json) :
+    IO (Parser.InputContext × Elab.HeaderSyntax × Parser.ModuleParserState × MessageLog) := do
+  let (origin, source) ← IO.ofExcept (preludeSource block)
+  let input := Parser.mkInputContext source origin (normalizeLineEndings := false)
+  let (header, state, messages) ← Parser.parseHeader input
+  return (input, header, state, messages)
+
+/-- The imports a prelude declares in its header. -/
+private def preludeImports (entry : Json) : IO (Array Import) := do
+  let preludes := (arr entry "preludes").toOption.getD #[]
+  let some first := preludes[0]? | return #[]
+  let (_, header, _, _) ← preludeHeader first
+  return header.imports (includeInit := false)
+
+/-- Elaborate a prelude as one module: the first block begins with its header, and
+blocks follow in order, so each command can extend the parser for later commands.
+The frontend retains the sigils' original positions. -/
 private def elaboratePreludes (env : Lean.Environment) (file : DecodedFile) :
     IO (Elab.Command.State × Array (Message × Option Name) × Array Json) := do
-  let visibility := Unhygienic.run `(public section)
-  let (initial, _, _) ← elaborateFile env file.fileName file.fileMap #[visibility] #[]
+  let (initial, _, _) ← elaborateFile env file.fileName file.fileMap #[] #[]
   let mut state := initial
-  let mut messages := #[]
+  let mut messages : Array (Message × Option Name) := #[]
+  let mut first := true
   for block in file.preludes do
-    let (origin, source) ← IO.ofExcept do
-      fields block ["source", "file", "span", "indentation"]
-      let origin ← str block "file"
-      let source ← str block "source"
-      let indentation ← (← field block "indentation").getNat?
-      let span ← arr block "span"
-      let line ← if let some line := span[0]? then line.getNat? else pure 1
-      let column ← if let some column := span[1]? then column.getNat? else pure 1
-      let lines := source.splitOn "\n"
-      let source := String.ofList (List.replicate (line - 1) '\n') ++
-        String.ofList (List.replicate (column - 1) ' ') ++
-        String.intercalate ("\n" ++ String.ofList (List.replicate indentation ' ')) lines
-      pure (origin, source)
-    let input := Parser.mkInputContext source origin (normalizeLineEndings := false)
-    let result ← Elab.IO.processCommands input {} { state with messages := {} }
+    let (input, parserState) ← if first then
+        let (input, header, parserState, headerMessages) ← preludeHeader block
+        for message in headerMessages.toList do
+          messages := messages.push (message, none)
+        unless header.isModule do
+          let message : Message := {
+            fileName := input.fileName, pos := ⟨1, 0⟩, severity := .error,
+            data := "a prelude must begin with a module header" }
+          messages := messages.push (message, none)
+        pure (input, parserState)
+      else
+        let (origin, source) ← IO.ofExcept (preludeSource block)
+        pure (Parser.mkInputContext source origin (normalizeLineEndings := false), {})
+    first := false
+    let result ← Elab.IO.processCommands input parserState { state with messages := {} }
     state := result.commandState
     for message in state.messages.toList do
       messages := messages.push (message, none)
-  let input := Parser.mkInputContext "end\n" file.fileName
-  let result ← Elab.IO.processCommands input {} { state with messages := {} }
-  for message in result.commandState.messages.toList do
-    messages := messages.push (message, none)
-  return (result.commandState, messages, #[])
+  return (state, messages, #[])
 
 /-- Verify against explicit imports, reusing only successfully audited module artifacts. -/
 private def verify (files : Array Json) (options : Array (TSyntax `command)) (runtime : Runtime)
@@ -2029,6 +2055,10 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
             s!"import '{name}' must precede this file and verify successfully")
         unless imports.any (·.module == moduleName) do
           imports := imports.push { module := moduleName, isExported := reexport }
+      -- A prelude declares its own imports in its header.
+      for declared in ← preludeImports entry do
+        unless imports.any (·.module == declared.module) do
+          imports := imports.push declared
       -- Syntax extensions are available only after importing this file's declared
       -- dependencies. Never decode all proofs against the bare runtime up front.
       let env ← if missingImport then pure runtime.env else importFile runtime imports artifacts

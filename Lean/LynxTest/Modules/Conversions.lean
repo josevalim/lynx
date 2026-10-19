@@ -120,6 +120,12 @@ theorem integer_binary_round_trip (n : Int) :
       .ok (.integer n) :=
   Erlang.erlang.binary_to_integer_integer_to_binary n
 
+/-- Shortest float text produced by `float_to_binary/2` reads back as the same float. -/
+theorem float_binary_round_trip (value : Lynx.Term.FiniteFloat) :
+    (Erlang.erlang.«float_to_binary/2» (.float value) (.cons (.atom "short") .nil) >>=
+        Erlang.erlang.«binary_to_float/1») = .ok (.float value) :=
+  Erlang.erlang.binary_to_float_float_to_binary value
+
 /-- The part spanning a whole binary is the binary itself. -/
 theorem binary_part_of_whole :
     Erlang.erlang.«binary_part/3» (.bitstring ⟨#[1, 2]⟩ 0) (.integer 0) (.integer 2) =

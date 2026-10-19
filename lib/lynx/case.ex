@@ -148,13 +148,19 @@ defmodule Lynx.Case do
   Adds Lean declarations to the prelude for this laws group.
 
       prelude ~LEAN"""
+      module
+      public import Lynx
+      public section
+
       open Lean Elab Tactic
       elab "finish" : tactic => do evalTactic (← `(tactic| rfl))
       """
 
-  Blocks contain complete Lean declarations and are elaborated in order in a
-  separate public module importing `Lynx`. Every translated module imports the
-  prelude before its proofs and termination suffixes are parsed. Definitions,
+  Blocks are joined in order into one Lean module, so the first block begins
+  with its header, such as `module` and its imports, which may include runtime
+  modules like `Lynx.Modules.Erlang.erlang`. Later blocks continue the module.
+  Every translated module imports the prelude before its proofs and termination
+  suffixes are parsed, along with the prelude's public imports. Definitions,
   lemmas, macros, and elaborators may be declared; namespaces are chosen by the
   source. Meta helper definitions must use Lean's `meta` modifier as usual.
 
