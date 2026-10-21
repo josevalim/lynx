@@ -10,7 +10,7 @@ import all Lynx.Term
 import all Lynx.Term.DataTypes
 import all Lynx.Term.FiniteFloat
 import all Lynx.Term.Compare
-import all Lynx.Term.Apply
+import all Lynx.Term.Dispatch
 import all Lynx.Term.Runner
 import all Lynx.Modules.Erlang.erlang.Guards
 import all Lynx.Modules.Erlang.erlang.Process
@@ -60,17 +60,18 @@ private def firstFun (args : Array Term) : Result :=
   | [left, _] => .ok left
   | _ => .error (.error (.atom "unexpected_arguments"))
 
-private def rememberSelf : Result := do
-  let pid ← «self/0»
-  let _ ← «put/2» (.atom "pid") pid
+private def rememberSelf (dispatcher : Dispatcher) : Result := do
+  let pid ← «self/0» dispatcher
+  let _ ← «put/2» dispatcher (.atom "pid") pid
   .ok pid
 
-private def rememberSelfFun (args : Array Term) : Result :=
+private def rememberSelfFun (dispatcher : Dispatcher) (args : Array Term) : Result :=
   match args.toList with
-  | [] => rememberSelf
+  | [] => rememberSelf dispatcher
   | _ => .error (.error (.atom "unexpected_arguments"))
 
-private def functions : Term.FunTable := #[.effectful fun _ => identityFun, .effectful fun _ => firstFun, .effectful fun _ => rememberSelfFun]
+private def functions : Term.FunTable := #[.effectful fun _ _ => identityFun,
+  .effectful fun _ _ => firstFun, .effectful fun dispatcher _ => rememberSelfFun dispatcher]
 
 private def floatOne : Term.FiniteFloat :=
   ⟨false, 1023, 0⟩
@@ -334,7 +335,7 @@ private theorem floatOne_toRat : floatOne.toRat = 1 := by
   exact Rat.mul_inv_cancel _ (by decide)
 
 private def applyWith (table : Term.FunTable) (function arguments : Term) : Result :=
-  Result.resolve table 1 («apply/2» function arguments)
+  «apply/2» (Dispatcher.ofTable table 1) function arguments
 
 theorem dynamic_apply_2 :
     applyWith functions (.function 0 1 #[]) (.cons (.integer 7) .nil) = .ok (.integer 7) ∧
@@ -347,20 +348,21 @@ theorem dynamic_apply_2 :
 
 /-- Native argument arrays preserve both the dispatch result and error payloads. -/
 theorem dynamic_apply_array :
-    Result.resolve functions 1 (Term.apply (.function 0 1 #[]) #[.integer 7]) =
+    (Dispatcher.ofTable functions 1).call (.function 0 1 #[]) #[.integer 7] =
       .ok (.integer 7) ∧
-    Term.apply (.atom "not_a_fun") #[] =
+    (Dispatcher.ofTable functions 1).call (.atom "not_a_fun") #[] =
       .error (.error (.tuple #[.atom "badfun", .atom "not_a_fun"])) ∧
-    Term.apply (.function 0 0 #[]) #[.integer 7, .atom "last"] =
+    (Dispatcher.ofTable functions 1).call (.function 0 0 #[]) #[.integer 7, .atom "last"] =
       .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 0 #[],
         .cons (.integer 7) (.cons (.atom "last") .nil)]])) ∧
-    «apply/2» (.function 0 0 #[]) (.cons (.integer 7) (.atom "improper")) =
+    («apply/2» (Dispatcher.ofTable functions 1) (.function 0 0 #[])
+        (.cons (.integer 7) (.atom "improper")) : Result) =
       .error (.error (.atom "badarg")) := by
   repeat' apply And.intro
   all_goals cbv
 
 private def closureFunctions : Term.FunTable := #[
-  .effectful fun captures args =>
+  .effectful fun _ captures args =>
     match captures.toList, args.toList with
     | [captured], [argument] => Result.ofExcept («+/2» captured argument)
     | _, _ => .error (.error (.atom "badarg"))
@@ -422,51 +424,61 @@ theorem reflexive_operators (a : Term) :
   simp [«</2», «>/2», «=</2», «>=/2»]
 
 /-- Callers remain in direct style even when the helper they invoke spawns. -/
-private def spawnFromHelper : Result :=
-  «spawn/1» (.function 2 0 #[])
+private def spawnFromHelper (dispatcher : Dispatcher) : Result :=
+  «spawn/1» dispatcher (.function 2 0 #[])
 
-private def spawnCaller : Result := do
-  let childPid ← spawnFromHelper
-  let parentPid ← rememberSelf
+private def spawnCaller (dispatcher : Dispatcher) : Result := do
+  let childPid ← spawnFromHelper dispatcher
+  let parentPid ← rememberSelf dispatcher
   pure (.tuple #[childPid, parentPid])
 
 theorem spawn_schedules_child_or_parent_first :
     let final : Environment := {
       pidCounter := 2
       currentProcess := { pdict := [(.atom "pid", .pid 1)] } }
-    spawnCaller.runWith functions 1 { schedule := [.swap 2] } =
+    (spawnCaller (Dispatcher.ofTable functions 1)).run { schedule := [.swap 2] } =
       (.ok (.tuple #[.pid 2, .pid 1]), final) ∧
-    spawnCaller.runWith functions 1 { schedule := [.current] } =
+    (spawnCaller (Dispatcher.ofTable functions 1)).run { schedule := [.current] } =
       (.ok (.tuple #[.pid 2, .pid 1]), final) := by
   cbv
 
-private def nestedSpawnFun (args : Array Term) : Result :=
+private def nestedSpawnFun (dispatcher : Dispatcher) (args : Array Term) : Result :=
   match args.toList with
-  | [] => «spawn/1» (.function 2 0 #[])
+  | [] => «spawn/1» dispatcher (.function 2 0 #[])
   | _ => .error (.error (.atom "unexpected_arguments"))
 
-private def nestedSpawnCaller : Result :=
-  «spawn/1» (.function 3 0 #[])
+private def nestedSpawnCaller (dispatcher : Dispatcher) : Result :=
+  «spawn/1» dispatcher (.function 3 0 #[])
 
-private def nestedFunctions : Term.FunTable := functions.push (.effectful fun _ => nestedSpawnFun)
+private def nestedFunctions : Term.FunTable :=
+  functions.push (.effectful fun dispatcher _ => nestedSpawnFun dispatcher)
 
 theorem completed_nested_processes_are_removed :
     let final : Environment := { pidCounter := 3 }
-    nestedSpawnCaller.runWith nestedFunctions 2 { schedule := [.swap 2, .swap 3] } =
+    (nestedSpawnCaller (Dispatcher.ofTable nestedFunctions 2)).run
+        { schedule := [.swap 2, .swap 3] } =
       (.ok (.pid 2), final) ∧
-    nestedSpawnCaller.runWith nestedFunctions 2 { schedule := [.current, .current] } =
+    (nestedSpawnCaller (Dispatcher.ofTable nestedFunctions 2)).run
+        { schedule := [.current, .current] } =
       (.ok (.pid 2), final) := by
   cbv
 
 theorem spawn_rejects_invalid_fun :
-    Lynx.schedule («spawn/1» (.atom "not_a_fun")) [] functions =
+    Lynx.concurrent («spawn/1» (Dispatcher.ofTable functions 100) (.atom "not_a_fun")) [] =
       .error (.error (.atom "badarg")) ∧
-    Lynx.schedule («spawn/1» (.function 9 0 #[])) [] functions =
-      .error (.error (.atom "badarg")) ∧
-    Lynx.schedule («spawn/1» (.function 0 1 #[])) [] functions =
+    Lynx.concurrent («spawn/1» (Dispatcher.ofTable functions 100) (.function 0 1 #[])) [] =
       .error (.error (.atom "badarg")) := by
   repeat' apply And.intro
   all_goals cbv
+
+/-- A function value that names no table entry fails in the child, as calling it would. -/
+theorem spawn_unknown_fun_fails_in_child :
+    Lynx.concurrent («spawn/1» (Dispatcher.ofTable functions 100) (.function 9 0 #[])) [] =
+      .ok (.pid 2) := by
+  cbv
+
+/-- Process-dictionary operations make no dynamic calls. -/
+private def noFunctions : Dispatcher := Dispatcher.ofTable #[] 0
 
 theorem tuple_equality :
     «==/2» (.tuple #[]) (.tuple #[]) = .ok Term.true ∧
@@ -502,19 +514,19 @@ theorem semantic_comparison_operators :
   repeat' first | apply And.intro | rfl
 
 theorem process_dictionary_empty :
-    Lynx.run «get/0» = .ok .nil ∧
-    Lynx.run («get/1» (.atom "missing")) = .ok (.atom "undefined") ∧
-    Lynx.run «get_keys/0» = .ok .nil ∧
-    Lynx.run «erase/0» = .ok .nil := by
+    Lynx.sequential («get/0» noFunctions) = .ok .nil ∧
+    Lynx.sequential («get/1» noFunctions (.atom "missing")) = .ok (.atom "undefined") ∧
+    Lynx.sequential («get_keys/0» noFunctions) = .ok .nil ∧
+    Lynx.sequential («erase/0» noFunctions) = .ok .nil := by
   repeat' first | apply And.intro | rfl
 
 theorem process_dictionary_put_replace_erase :
-    Lynx.run (do
-      let missing ← «put/2» (.atom "key") (.integer 1)
-      let previous ← «put/2» (.atom "key") (.integer 2)
-      let found ← «get/1» (.atom "key")
-      let erased ← «erase/1» (.atom "key")
-      let absent ← «get/1» (.atom "key")
+    Lynx.sequential (do
+      let missing ← «put/2» noFunctions (.atom "key") (.integer 1)
+      let previous ← «put/2» noFunctions (.atom "key") (.integer 2)
+      let found ← «get/1» noFunctions (.atom "key")
+      let erased ← «erase/1» noFunctions (.atom "key")
+      let absent ← «get/1» noFunctions (.atom "key")
       Result.ok (Term.tuple #[missing, previous, found, erased, absent])) =
       .ok (Term.tuple #[.atom "undefined", .integer 1, .integer 2,
         .integer 2, .atom "undefined"]) := by
@@ -522,10 +534,10 @@ theorem process_dictionary_put_replace_erase :
 
 theorem process_dictionary_numeric_types_are_distinct :
     Result.run (do
-      let _ ← «put/2» (.integer 1) (.atom "integer")
-      let _ ← «put/2» (.float floatOne) (.atom "float")
-      let integer ← «get/1» (.integer 1)
-      let float ← «get/1» (.float floatOne)
+      let _ ← «put/2» noFunctions (.integer 1) (.atom "integer")
+      let _ ← «put/2» noFunctions (.float floatOne) (.atom "float")
+      let integer ← «get/1» noFunctions (.integer 1)
+      let float ← «get/1» noFunctions (.float floatOne)
       Result.ok (Term.tuple #[integer, float])) {} =
       (.ok (Term.tuple #[.atom "integer", .atom "float"]), { currentProcess := { pdict :=
             [(.float floatOne, .atom "float"), (.integer 1, .atom "integer")] } }) := by
@@ -534,12 +546,12 @@ theorem process_dictionary_numeric_types_are_distinct :
 theorem process_dictionary_queries :
     let env : Environment := {
       currentProcess := { pdict := [(.atom "a", .integer 1), (.atom "b", .integer 1)] } }
-    «get/0» env = (.ok (.cons (.tuple #[.atom "a", .integer 1])
+    («get/0» noFunctions) env = (.ok (.cons (.tuple #[.atom "a", .integer 1])
       (.cons (.tuple #[.atom "b", .integer 1]) .nil)), env) ∧
-    «get_keys/0» env = (.ok (.cons (.atom "a") (.cons (.atom "b") .nil)), env) ∧
-    «get_keys/1» (.integer 1) env =
+    («get_keys/0» noFunctions) env = (.ok (.cons (.atom "a") (.cons (.atom "b") .nil)), env) ∧
+    «get_keys/1» noFunctions (.integer 1) env =
       (.ok (.cons (.atom "a") (.cons (.atom "b") .nil)), env) ∧
-    «erase/0» env = (.ok (.cons (.tuple #[.atom "a", .integer 1])
+    («erase/0» noFunctions) env = (.ok (.cons (.tuple #[.atom "a", .integer 1])
       (.cons (.tuple #[.atom "b", .integer 1]) .nil)), {}) := by
   repeat' first | apply And.intro | rfl
 

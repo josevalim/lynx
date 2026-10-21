@@ -1,6 +1,8 @@
 Start with the README.md to understand the general project scope.
 Do not change the README.md unless asked to do so.
 
+See `lib/lynx.ex` for general information on writing proofs.
+
 ## Translation
 
 The translation code is done by `lib/lynx/translation.ex` and `src/lynx_core_to_leanj.erl`.
@@ -50,17 +52,7 @@ If a proof needs to unfold a public operation, deliberately expose its body with
 `import all` is reserved for intentional dependencies within the implementation
 and for proof audits that inspect private declarations in test modules.
 
-Functions that neither inspect nor change the environment and perform no process
-effects return `Except Exception Term`. They may still raise exceptions. Other
-computations embed their calls with `Result.ofExcept`. Functions that may
-additionally not return, such as cutoffs and partial fixed points, also return
-`Except`: not returning raises `Exception.exhausted`, the least element of the
-order used by `partial_fixpoint`. It is not an Erlang exception. Every handler,
-guard, and the scheduler must propagate it without catching it.
-
-Proofs must not introduce untrusted axioms or `sorry`
-
-### Proofs and examples
+### Examples
 
 Do not add new examples unless explicitly requested. Existing examples may be
 run as regression checks.

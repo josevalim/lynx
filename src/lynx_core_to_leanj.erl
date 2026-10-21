@@ -1,14 +1,16 @@
 -module(lynx_core_to_leanj).
 
--export([module_name/1, to_definitions/1, translate/8, fun_table/2, join_purity/2]).
+-export([module_name/1, to_definitions/1, translate/8, fun_table/2, join_purity/2,
+         with_purity/2]).
 
 %% Purity levels, ordered by what running a definition requires: `pure` needs
-%% nothing, `sequential` needs the function table and an environment, and
-%% `concurrent` also needs scheduler choices. Pure definitions may still not
-%% return, such as cutoffs. `dynamic` marks calls to function values, whose
-%% purity depends on the complete program table; Lynx.Translation resolves it to
-%% `sequential` or `concurrent` before assembly.
--type purity() :: pure | sequential | dynamic | concurrent.
+%% nothing, `apply` needs a dispatcher to call function values, `sequential`
+%% also needs an environment, and `concurrent` also needs scheduler choices.
+%% Pure definitions may still not return, such as cutoffs. Definitions record
+%% their purity apart from calls to function values, and separately whether they
+%% dispatch such calls: those depend on the complete program table, so the runner
+%% raises dispatching definitions to the program's `dispatcher_purity`.
+-type purity() :: pure | apply | sequential | concurrent.
 
 -include_lib("compiler/src/core_parse.hrl").
 
@@ -18,7 +20,8 @@
 %% smaller than; size_calls records what each local call passes, so groups
 %% of recursive definitions can be given termination measures.
 -record(state, {module, name, defs, translated, laws = #{}, funs = #{},
-                local_calls = #{}, purity = pure, remote, next_var = 0, labels = #{},
+                local_calls = #{}, purity = pure, dispatches = false, remote, next_var = 0,
+                labels = #{},
                 local_funs = #{}, size_facts = #{}, size_calls = [], suffixed = [],
                 literals = #{}, binds = [], pattern = false}).
 
@@ -103,8 +106,9 @@ attribute_proof(Core) -> core_error(Core, ~"proof must be a binary").
 -spec fun_table(map(), map()) -> [map()].
 fun_table(Funs, Modules) ->
     Entries = [begin
-        #{Module := #{translations := #{Name := #{translation := Definition, purity := Purity}}}} = Modules,
-        {Id, Module, Fun, Definition, Purity}
+        #{Module := #{translations := #{Name := Translated}}} = Modules,
+        #{translation := Definition} = Translated,
+        {Id, Module, Fun, Definition, purity_of(Translated)}
     end || _ := #{id := Id, module := Module, name := Name} = Fun <- Funs],
     [fun_entry(Entry) || Entry <- lists:sort(Entries)].
 
@@ -114,8 +118,20 @@ fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Nam
     Args = [var_node(<<"arg", (integer_to_binary(I))/binary>>, [])
             || I <- lists:seq(1, Arity)],
     Body = remote_call_node(module_name(Module), Name, Captures ++ Args, Purity, []),
-    #{~"body" => Body, ~"captures" => Captures, ~"args" => Args,
-      ~"purity" => atom_to_binary(Purity), ~"span" => []}.
+    with_purity(#{~"body" => Body, ~"captures" => Captures, ~"args" => Args, ~"span" => []},
+                Purity).
+
+%% A translated definition's purity, and whether it calls function values.
+purity_of(#{purity := Purity, dispatches := Dispatches}) -> {Purity, Dispatches}.
+
+%% Nodes record calls to function values only when they make them.
+-spec with_purity(map(), {purity(), boolean()}) -> map().
+with_purity(Node, {Purity, Dispatches}) ->
+    Node1 = Node#{~"purity" => atom_to_binary(Purity)},
+    case Dispatches of
+        true -> Node1#{~"dispatches" => true};
+        false -> Node1
+    end.
 
 -spec join_purity(purity(), purity()) -> purity().
 join_purity(Left, Right) ->
@@ -125,8 +141,8 @@ join_purity(Left, Right) ->
     end.
 
 purity_rank(pure) -> 0;
-purity_rank(sequential) -> 1;
-purity_rank(dynamic) -> 2;
+purity_rank(apply) -> 1;
+purity_rank(sequential) -> 2;
 purity_rank(concurrent) -> 3.
 
 %% Translate the requested functions and laws, plus their reachable local callees.
@@ -134,12 +150,13 @@ purity_rank(concurrent) -> 3.
 %% The supplied maps contain this module's definitions, its literal pool, and the
 %% program-wide function registry.
 %% Suffixed functions have user termination suffixes, which refer to Core's parameter names.
-%% The callback returns remote callee purity. Local purity is propagated by Lynx.Translation.
+%% The callback returns the remote callee's purity and whether it calls function values.
+%% Local purity is propagated by Lynx.Translation.
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
 -spec translate(module(), #{{atom(), arity()} => {function | cutoff, cerl:c_fun()} | {law, map()}}, [{atom(), arity()}], map(),
                 #{term() => binary()}, map(), [{atom(), arity()}],
                 {term(), fun((term(), module(), atom(), arity(), list(), map()) ->
-                    {purity(), map(), term()} | local)}) ->
+                    {{purity(), boolean()}, map(), term()} | local)}) ->
     {ok, map(), map(), map(), map(), term()} | {error, list(), binary()}.
 translate(Module, Definitions, Names, Translated, Literals, Funs, Suffixed, Remote) ->
     try
@@ -297,7 +314,8 @@ rename_variables(Tree, Substitution) ->
 translate_definition(Name, Anno, Vars, Definition, State0) ->
     Facts = maps:from_list([{Var, {Index, eq}} ||
         {#c_var{name = Var}, Index} <- lists:zip(Vars, lists:seq(0, length(Vars) - 1))]),
-    State1 = State0#state{name = Name, local_calls = #{}, purity = pure, next_var = 0, labels = #{},
+    State1 = State0#state{name = Name, local_calls = #{}, purity = pure, dispatches = false,
+                          next_var = 0, labels = #{},
                           size_facts = Facts, size_calls = [],
                           translated = (State0#state.translated)#{Name => pending}},
     {Def, State2} = case Definition of
@@ -320,7 +338,7 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
     end,
     Entry = #{translation => Def, local_calls => maps:keys(State2#state.local_calls),
               size_calls => lists:reverse(State2#state.size_calls),
-              purity => State2#state.purity},
+              purity => State2#state.purity, dispatches => State2#state.dispatches},
     State0#state{translated = (State2#state.translated)#{Name => Entry},
                  literals = State2#state.literals, funs = State2#state.funs,
                  remote = State2#state.remote}.
@@ -432,12 +450,13 @@ computation(#c_apply{anno = Anno, op = #c_var{name = {_, _} = Name}, args = Args
         error -> computation_apply(Core, State0)
     end;
 %% Erlang: F(X, Y)
-%% Lean: Lynx.Term.apply vF #[vX, vY]
+%% Lean: Lynx.Dispatcher.pure lynxDispatch vF #[vX, vY], or Lynx.Dispatcher.call
+%% in computations returning Result
 computation(#c_apply{anno = Anno, op = Op, args = Args}, State0) ->
     {Function, State1} = value(Op, State0),
     {TranslatedArgs, State2} = lists:mapfoldl(fun value/2, State1, Args),
     {node(~"fun_call", Anno, #{~"function" => Function, ~"args" => TranslatedArgs}),
-     State2#state{purity = join_purity(State2#state.purity, dynamic)}};
+     State2#state{dispatches = true}};
 %% Erlang: error(Reason)
 %% Lean: Lynx.Result.error (Lynx.Exception.error reason)
 computation(#c_call{anno = Anno, module = #c_literal{val = erlang},
@@ -469,12 +488,12 @@ computation(#c_call{anno = Anno, module = #c_literal{val = Module},
         local when Module =:= State0#state.module ->
             expression(#c_apply{anno = Anno, op = #c_var{name = {Name, Arity}}, args = Args},
                 State0);
-        {Purity, NewFuns, NewContext} ->
+        {Callee, NewFuns, NewContext} ->
             {TranslatedArgs, State1} = lists:mapfoldl(fun value/2,
                 State0#state{funs = NewFuns, remote = {NewContext, Callback}}, Args),
             Call = remote_call_node(module_name(Module), atom_to_binary(Name, utf8),
-                TranslatedArgs, Purity, Anno),
-            {Call, State1#state{purity = join_purity(State1#state.purity, Purity)}}
+                TranslatedArgs, Callee, Anno),
+            {Call, call_purity(Callee, State1)}
     end;
 computation(#c_call{} = Core, _State) ->
     core_error(Core, <<"dynamic calls, such as mod.fun(x) or M:F(X), are not supported">>);
@@ -1182,7 +1201,7 @@ local_function_value(Lifted, Captures, Arity, Anno, State0) ->
                 ~"name" => function_name(Name), ~"params" => CaptureArgs ++ Args,
                 ~"body" => local_call_node(function_name(Lifted), Args ++ CaptureArgs, Anno)}),
             Wrapper = #{translation => Definition, local_calls => [Lifted], size_calls => [],
-                        purity => pure},
+                        purity => pure, dispatches => false},
             State4 = State3#state{translated = (State3#state.translated)#{Name => Wrapper}},
             function_node(Entry, Anno, State4)
     end.
@@ -1228,13 +1247,13 @@ map_updates([#c_map_pair{anno = Anno, op = #c_literal{val = Op},
         when Op =:= assoc; Op =:= exact ->
     Name = case Op of assoc -> put; exact -> update end,
     {Context, Callback} = State0#state.remote,
-    {Purity, NewFuns, NewContext} = Callback(Context, maps, Name, 3, Anno, State0#state.funs),
+    {Callee, NewFuns, NewContext} = Callback(Context, maps, Name, 3, Anno, State0#state.funs),
     {TranslatedKey, State1} = value(Key,
         State0#state{funs = NewFuns, remote = {NewContext, Callback}}),
     {TranslatedValue, State2} = value(Value, State1),
     Call = remote_call_node(module_name(maps), atom_to_binary(Name, utf8),
-        [TranslatedKey, TranslatedValue, Base], Purity, Anno),
-    State3 = State2#state{purity = join_purity(State2#state.purity, Purity)},
+        [TranslatedKey, TranslatedValue, Base], Callee, Anno),
+    State3 = call_purity(Callee, State2),
     case Rest of
         [] -> {Call, State3};
         _ ->
@@ -1291,9 +1310,14 @@ local_call_node(Name, Args, Anno) ->
     node(~"local_call", Anno, #{~"name" => Name, ~"args" => Args}).
 
 %% Calls carry the callee's purity: other computations embed pure callees.
-remote_call_node(Module, Name, Args, Purity, Anno) ->
-    node(~"remote_call", Anno, #{~"module" => Module, ~"name" => Name, ~"args" => Args,
-                                 ~"purity" => atom_to_binary(Purity)}).
+remote_call_node(Module, Name, Args, Callee, Anno) ->
+    node(~"remote_call", Anno,
+         with_purity(#{~"module" => Module, ~"name" => Name, ~"args" => Args}, Callee)).
+
+%% A caller is as impure as its callees, and calls function values when they do.
+call_purity({Purity, Dispatches}, State) ->
+    State#state{purity = join_purity(State#state.purity, Purity),
+                dispatches = State#state.dispatches orelse Dispatches}.
 
 node(Kind, Anno, Fields) ->
     Fields#{~"kind" => Kind, ~"span" => span(Anno)}.

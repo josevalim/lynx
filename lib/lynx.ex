@@ -64,15 +64,24 @@ defmodule Lynx do
       Handlers never catch it, so a law proving a value or an Erlang exception
       also proves that the computation returns.
 
+    * `apply` — pure, except that it invokes anonymous functions, when every
+      function in the program's table is pure or `apply`. It also returns
+      `Except`, and receives a `Lynx.Dispatcher`, which calls anonymous
+      functions through the program's function table.
+
     * `sequential` — runs in a single process, but uses the process dictionary,
-      references, `self()`, or invokes anonymous functions, which are resolved
-      against the program's function table.
+      references, or `self()`. Invoking anonymous functions is sequential when
+      any function in the program's table is.
 
     * `concurrent` — may spawn processes, send messages, or receive them.
       Invoking anonymous functions is concurrent when any function in the
       program's table is.
 
-  Each law then uses the strongest construction its purity allows:
+  Code at the `apply` level and above receives the dispatcher as its first
+  parameter. Laws pass it through `Lynx.apply helper table`, where `table` is the
+  program's function table, `Erlang.program.fun_table`, and the dispatcher
+  resolves it up to a call depth of 100. Each law then uses the strongest
+  construction its purity allows:
 
     * Pure code is stated directly, as an `Except` value:
 
@@ -80,20 +89,25 @@ defmodule Lynx do
               (requires : «law:requires/1» x = .ok Lynx.Term.true) :
               «law:ensures/1» x = .ok Lynx.Term.true
 
-    * Sequential code is stated through `Lynx.run`, which executes the code from
-      a fresh runtime against the function table:
+    * Code at the `apply` level is also stated directly, as an `Except` value:
 
-          Lynx.run («law:ensures/1» x) table 100 = .ok Lynx.Term.true
+          Lynx.apply «law:ensures/1» table x = .ok Lynx.Term.true
 
-    * Concurrent code is stated through `Lynx.schedule`, which also takes the
+    * Sequential code is stated through `Lynx.sequential`, which executes the
+      code from a fresh runtime:
+
+          Lynx.sequential (Lynx.apply «law:ensures/1» table x) = .ok Lynx.Term.true
+
+    * Concurrent code is stated through `Lynx.concurrent`, which also takes the
       scheduler's choices. The precondition must hold under some schedule, and
       the expectation under all of them:
 
-          (requires : ∃ schedule, Lynx.schedule («law:requires/1» x) schedule table 100 = .ok Lynx.Term.true)
+          (requires : ∃ schedule,
+            Lynx.concurrent (Lynx.apply «law:requires/1» table x) schedule = .ok Lynx.Term.true)
           (schedule : List Lynx.ScheduleChoice) :
-          Lynx.schedule («law:ensures/1» x) schedule table 100 = .ok Lynx.Term.true
+          Lynx.concurrent (Lynx.apply «law:ensures/1» table x) schedule = .ok Lynx.Term.true
 
-  Both `Lynx.run` and `Lynx.schedule` start from a fresh runtime: a single
+  Both `Lynx.sequential` and `Lynx.concurrent` start from a fresh runtime: a single
   process, with an empty process dictionary, and an empty mailbox. The
   precondition and the expectation each start from this runtime separately,
   so nothing stored or sent by one is visible to the other. Laws over sequential
@@ -101,10 +115,7 @@ defmodule Lynx do
   `Process.get(:key) == nil` is provable, even though it does not hold in a
   process that has stored `:key`.
 
-  A direct statement is the strongest: code that returns `true` directly also does
-  so when run, under every schedule. For preconditions, pure code returns `Except`
-  by construction, so the direct statement is equivalent to running it. Proofs
-  citing other laws receive the statements of those laws.
+  Proofs must not introduce untrusted axioms or `sorry`
 
   ### Proofs and versions
 

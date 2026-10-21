@@ -10,13 +10,14 @@ defmodule Lynx.Translation do
             builtin_modules: %{},
             stack: []
 
-  # Runtime functions without purity proofs use the process environment,
-  # except those that make process requests or call function values.
+  # Runtime functions that are not pure use the process environment, except
+  # those that make process requests. Those calling function values dispatch
+  # them, and are otherwise pure.
   @runtime_purity %{
-    {:erlang, :spawn, 1} => :concurrent,
-    {:erlang, :send, 2} => :concurrent,
-    {:erlang, :apply, 2} => :dynamic,
-    {:maps, :fold, 3} => :dynamic
+    {:erlang, :spawn, 1} => {:concurrent, false},
+    {:erlang, :send, 2} => {:concurrent, false},
+    {:erlang, :apply, 2} => {:pure, true},
+    {:maps, :fold, 3} => {:pure, true}
   }
 
   @external_resource Path.expand("../../Lean/modules.json", __DIR__)
@@ -29,8 +30,8 @@ defmodule Lynx.Translation do
 
     purity =
       if pure,
-        do: :pure,
-        else: Map.get(@runtime_purity, {module, function, arity}, :sequential)
+        do: {:pure, false},
+        else: Map.get(@runtime_purity, {module, function, arity}, {:sequential, false})
 
     defp lean_bif(unquote(module), unquote(function), unquote(arity)),
       do: {:ok, unquote(purity)}
@@ -206,8 +207,10 @@ defmodule Lynx.Translation do
 
     translation = translate(translation, module, [{function, arity}])
 
-    purity = translation.modules[module].translations[{function, arity}].purity
-    {purity, translation.funs, translation}
+    %{purity: purity, dispatches: dispatches} =
+      translation.modules[module].translations[{function, arity}]
+
+    {{purity, dispatches}, translation.funs, translation}
   end
 
   defp source_location(annotations, default_file) do
@@ -362,7 +365,7 @@ defmodule Lynx.Translation do
         update_in(modules, path, &Map.put(&1, "termination_suffix", json))
       end)
 
-    modules = resolve_dynamic(modules, funs)
+    dispatcher_purity = dispatcher_purity(modules, funs)
     {support, keys, support_imports} = assemble_preludes(preludes, cache)
     graph = :digraph.new()
 
@@ -394,28 +397,36 @@ defmodule Lynx.Translation do
             "contents" => assemble_module(module.translations)
           }
 
-          cache_file(file, keys, cache)
+          dispatches? =
+            Enum.any?(module.translations, fn {_, definition} -> definition.dispatches end)
+
+          cache_file(with_dispatcher_purity(file, dispatches?, dispatcher_purity), keys, cache)
         end)
 
       {program, keys} =
         if map_size(funs) == 0 do
           {[], keys}
         else
+          entries = :lynx_core_to_leanj.fun_table(funs, modules)
+
           program = %{
             "module" => "Erlang.program",
             "file" => "Erlang/program.lean",
             "imports" => Enum.map(files, & &1["module"]),
             "contents" => [
-              %{
-                "kind" => "fun_table",
-                "span" => [],
-                "name" => "fun_table",
-                "entries" => :lynx_core_to_leanj.fun_table(funs, modules)
-              }
+              %{"kind" => "fun_table", "span" => [], "name" => "fun_table", "entries" => entries}
             ]
           }
 
-          {program, keys} = cache_file(program, keys, cache)
+          dispatches? = Enum.any?(entries, &Map.has_key?(&1, "dispatches"))
+
+          {program, keys} =
+            cache_file(
+              with_dispatcher_purity(program, dispatches?, dispatcher_purity),
+              keys,
+              cache
+            )
+
           {[program], keys}
         end
 
@@ -431,14 +442,25 @@ defmodule Lynx.Translation do
             module ->
               module_name = :lynx_core_to_leanj.module_name(name)
 
+              contents = assemble_laws(module, program != [])
+
               file = %{
                 "module" => module_name <> ".laws",
                 "file" => module.file,
                 "imports" => support_imports ++ [module_name | Enum.map(program, & &1["module"])],
-                "contents" => assemble_laws(module, program != [])
+                "contents" => contents
               }
 
-              {file, keys} = cache_file(file, keys, cache)
+              dispatches? =
+                Enum.any?(contents, &(&1["requires_dispatches"] || &1["ensures_dispatches"]))
+
+              {file, keys} =
+                cache_file(
+                  with_dispatcher_purity(file, dispatches?, dispatcher_purity),
+                  keys,
+                  cache
+                )
+
               {[file], keys}
           end
         end)
@@ -509,17 +531,19 @@ defmodule Lynx.Translation do
     _ -> :erlang.md5(contents)
   end
 
-  # A definition is as impure as its callees.
+  # A definition is as impure as its callees, and calls function values when they do.
   defp propagate_purity(functions) do
     {functions, changed?} =
       Enum.reduce(functions, {functions, false}, fn {name, definition}, {functions, changed?} ->
-        purity =
-          Enum.reduce(definition.local_calls, definition.purity, fn callee, purity ->
-            join_purity(purity, Map.fetch!(functions, callee).purity)
+        {purity, dispatches} =
+          Enum.reduce(definition.local_calls, {definition.purity, definition.dispatches}, fn
+            callee, {purity, dispatches} ->
+              callee = Map.fetch!(functions, callee)
+              {join_purity(purity, callee.purity), dispatches or callee.dispatches}
           end)
 
-        if purity != definition.purity do
-          {Map.put(functions, name, %{definition | purity: purity}), true}
+        if purity != definition.purity or dispatches != definition.dispatches do
+          {Map.put(functions, name, %{definition | purity: purity, dispatches: dispatches}), true}
         else
           {functions, changed?}
         end
@@ -528,29 +552,22 @@ defmodule Lynx.Translation do
     if changed?, do: propagate_purity(functions), else: functions
   end
 
-  # Calls to function values may reach any entry in the complete program table,
-  # so they are concurrent when an entry is, and sequential otherwise.
-  defp resolve_dynamic(modules, funs) do
-    concurrent? =
-      Enum.any?(funs, fn {_, %{module: module, name: name}} ->
-        modules[module].translations[name].purity == :concurrent
-      end)
-
-    resolved = if concurrent?, do: :concurrent, else: :sequential
-
-    Map.new(modules, fn {name, module} ->
-      translations =
-        Map.new(module.translations, fn
-          {function, %{purity: :dynamic} = definition} ->
-            {function, %{definition | purity: resolved}}
-
-          entry ->
-            entry
-        end)
-
-      {name, %{module | translations: translations}}
+  # Calls to function values may reach any entry in the complete program table.
+  # They are concurrent when an entry is, sequential when an entry is, and
+  # otherwise only apply functions returning `Except`. An entry's own calls to
+  # function values have this same purity, so they do not raise it.
+  defp dispatcher_purity(modules, funs) do
+    Enum.reduce(funs, :apply, fn {_, %{module: module, name: name}}, purity ->
+      join_purity(purity, modules[module].translations[name].purity)
     end)
   end
+
+  # The runner raises dispatching definitions to the program's dispatcher purity,
+  # which is therefore part of their files' cache keys.
+  defp with_dispatcher_purity(file, false, _purity), do: file
+
+  defp with_dispatcher_purity(file, true, purity),
+    do: Map.put(file, "dispatcher_purity", Atom.to_string(purity))
 
   defp join_purity(left, right), do: :lynx_core_to_leanj.join_purity(left, right)
 
@@ -589,7 +606,8 @@ defmodule Lynx.Translation do
         for key <- ["requires", "ensures"], Map.has_key?(law, key), reduce: law do
           law ->
             helper = translations[{String.to_existing_atom(law[key]), arity}]
-            Map.put(law, key <> "_purity", Atom.to_string(helper.purity))
+            law = Map.put(law, key <> "_purity", Atom.to_string(helper.purity))
+            if helper.dispatches, do: Map.put(law, key <> "_dispatches", true), else: law
         end
 
       if table?, do: Map.put(law, "table", "Erlang.program.fun_table"), else: law
@@ -630,16 +648,17 @@ defmodule Lynx.Translation do
   end
 
   defp emit_group(names, functions) do
-    {defs, purity} =
-      Enum.map_reduce(names, :pure, fn name, purity ->
-        %{translation: translation, purity: definition_purity} = Map.fetch!(functions, name)
+    {defs, {purity, dispatches}} =
+      Enum.map_reduce(names, {:pure, false}, fn name, {purity, dispatches} ->
+        %{translation: translation} = function = Map.fetch!(functions, name)
+        definition_purity = {function.purity, function.dispatches}
 
         definition =
           if translation["kind"] == "def",
-            do: Map.put(translation, "purity", Atom.to_string(definition_purity)),
+            do: :lynx_core_to_leanj.with_purity(translation, definition_purity),
             else: translation
 
-        {definition, join_purity(purity, definition_purity)}
+        {definition, {join_purity(purity, function.purity), dispatches or function.dispatches}}
       end)
 
     [first | _] = defs
@@ -650,7 +669,10 @@ defmodule Lynx.Translation do
         definition
 
       defs ->
-        %{"kind" => "mutual", "span" => span, "defs" => defs, "purity" => Atom.to_string(purity)}
+        :lynx_core_to_leanj.with_purity(
+          %{"kind" => "mutual", "span" => span, "defs" => defs},
+          {purity, dispatches}
+        )
     end
   end
 

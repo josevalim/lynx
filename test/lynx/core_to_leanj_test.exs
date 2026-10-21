@@ -1105,6 +1105,42 @@ defmodule Lynx.CoreToLeanjTest do
     assert calls == [{:pure, :entry, 1, []}, {:impure, :entry, 1, []}]
   end
 
+  test "records calls to function values apart from purity" do
+    fun_call = :cerl.c_apply(:cerl.c_var(0), [:cerl.c_int(1)])
+
+    remote = fn module ->
+      :cerl.c_call(:cerl.c_atom(module), :cerl.c_atom(:entry), [:cerl.c_var(0)])
+    end
+
+    purities = %{{:impure, :entry, 1} => :sequential, {:applies, :entry, 1} => {:pure, true}}
+
+    for {body, purity} <- [
+          {fun_call, :pure},
+          {:cerl.c_let([:cerl.c_var(:Y)], remote.(:impure), fun_call), :sequential}
+        ] do
+      assert {:ok, %{{:entry, 1} => %{purity: ^purity, dispatches: true}}, _} =
+               translate(definitions([definition(:entry, body)]), %{}, purities)
+    end
+
+    # Calls to remote callees that call function values record it.
+    assert {:ok, functions, _} =
+             translate(definitions([definition(:entry, remote.(:applies))]), %{}, purities)
+
+    assert %{
+             purity: :pure,
+             dispatches: true,
+             translation: %{
+               "body" => %{"kind" => "remote_call", "purity" => "pure", "dispatches" => true}
+             }
+           } = functions[{:entry, 1}]
+
+    assert {:ok, functions, _} =
+             translate(definitions([definition(:entry, remote.(:impure))]), %{}, purities)
+
+    assert %{dispatches: false, translation: %{"body" => body}} = functions[{:entry, 1}]
+    refute Map.has_key?(body, "dispatches")
+  end
+
   test "extracts paired law attributes and calls their ordinary predicate helpers" do
     core =
       :cerl.c_module(
@@ -1379,8 +1415,13 @@ defmodule Lynx.CoreToLeanjTest do
       if module == :example do
         :local
       else
-        purity = Map.get(purity, {module, function, arity}, :pure)
-        {purity, funs, [{module, function, arity, span_anno} | calls]}
+        callee =
+          case Map.get(purity, {module, function, arity}, :pure) do
+            {_purity, _dispatches} = callee -> callee
+            purity -> {purity, false}
+          end
+
+        {callee, funs, [{module, function, arity, span_anno} | calls]}
       end
     end
 

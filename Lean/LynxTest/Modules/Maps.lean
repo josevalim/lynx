@@ -134,13 +134,16 @@ theorem to_list_pairs (entries : List (Term × Term)) :
 
 private def folder : Term := .function 0 3 #[]
 
+private def fold : Term → Term → Term → Except Exception Term :=
+  Erlang.maps.«fold/3» (Dispatcher.ofTable #[] 0)
+
 theorem fold_inputs :
-    Erlang.maps.«fold/3» folder one (Term.map []) = .ok one ∧
-    Erlang.maps.«fold/3» folder one (.cons (.integer 0) (Term.map [])) = .ok one ∧
-    Erlang.maps.«fold/3» folder one (.atom "none") = .ok one ∧
-    Erlang.maps.«fold/3» folder one one = .error (.error (.tuple #[.atom "badmap", one])) ∧
-    Erlang.maps.«fold/3» (.function 0 2 #[]) one (Term.map []) = .error (.error (.atom "badarg")) := by
-  refine ⟨?_, ?_, rfl, rfl, rfl⟩ <;> simp [Erlang.maps.«fold/3», folder]
+    fold folder one (Term.map []) = .ok one ∧
+    fold folder one (.cons (.integer 0) (Term.map [])) = .ok one ∧
+    fold folder one (.atom "none") = .ok one ∧
+    fold folder one one = .error (.error (.tuple #[.atom "badmap", one])) ∧
+    fold (.function 0 2 #[]) one (Term.map []) = .error (.error (.atom "badarg")) := by
+  refine ⟨?_, ?_, rfl, rfl, rfl⟩ <;> simp [fold, Erlang.maps.«fold/3», folder]
 
 end LynxTest.Modules.Maps
 

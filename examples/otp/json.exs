@@ -1158,54 +1158,57 @@ defmodule JsonProofsTest do
           escape_plain_byte bind_of_ok
 
         -- A quote starts a string.
-        have value_quote : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
-            «value/6» (bin (34 :: bs)) orig skip acc stack dec =
+        have value_quote : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (bs : List UInt8),
+            «value/6» d (bin (34 :: bs)) orig skip acc stack dec =
               (do
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 1))
-                «string_ascii/7» (bin bs) orig next acc stack dec (.integer 0)) := by
-          intro orig skip acc stack dec bs
+                let next ← Erlang.erlang.«+/2» skip (.integer 1)
+                «string_ascii/7» d (bin bs) orig next acc stack dec (.integer 0)) := by
+          intro d orig skip acc stack dec bs
           unfold «value/6»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- The decoder takes bytes that need no escaping as they are.
-        have string_plain_byte : ∀ (b : UInt8) (bs : List UInt8) (orig skip acc stack dec : Term)
+        have string_plain_byte : ∀ {d : Dispatcher} (b : UInt8) (bs : List UInt8)
+            (orig skip acc stack dec : Term)
             (len : Int), plain b →
-            «string/7» (bin (b :: bs)) orig skip acc stack dec (.integer len) =
-              «string/7» (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
-          intro b bs orig skip acc stack dec len ok
+            «string/7» d (bin (b :: bs)) orig skip acc stack dec (.integer len) =
+              «string/7» d (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
+          intro d b bs orig skip acc stack dec len ok
           conv => lhs; unfold «string/7»
           rw [matchInteger_byte]
           simp only [extract_some, isMember_plain, ok]
           simp [matchTail, Nat.mod_one]
 
         -- A closing quote ends the string with the bytes since its start.
-        have string_close : ∀ (rest : List UInt8) (orig skip acc stack : Term) (len : Int),
-            «string/7» (bin (34 :: rest)) orig skip acc stack options (.integer len) =
+        have string_close : ∀ {d : Dispatcher} (rest : List UInt8) (orig skip acc stack : Term)
+            (len : Int),
+            «string/7» d (bin (34 :: rest)) orig skip acc stack options (.integer len) =
               (do
-                let value ← Result.ofExcept (Erlang.erlang.«binary_part/3» orig skip (.integer len))
-                let after ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer len))
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» after (.integer 1))
-                «continue/7» (bin rest) orig next acc stack options value) := by
-          intro rest orig skip acc stack len
+                let value ← Erlang.erlang.«binary_part/3» orig skip (.integer len)
+                let after ← Erlang.erlang.«+/2» skip (.integer len)
+                let next ← Erlang.erlang.«+/2» after (.integer 1)
+                «continue/7» d (bin rest) orig next acc stack options value) := by
+          intro d rest orig skip acc stack len
           conv => lhs; unfold «string/7»
           rw [matchInteger_byte]
           simp only [extract_some, isMember_plain, show plain 34 = false from rfl]
           simp [matchTail, Nat.mod_one]
 
-        have string_ascii_word : ∀ (w rest : List UInt8) (orig skip acc stack dec : Term)
+        have string_ascii_word : ∀ {d : Dispatcher} (w rest : List UInt8)
+            (orig skip acc stack dec : Term)
             (len : Int), w.length = 7 →
-            («string_ascii/7» (bin (w ++ rest)) orig skip acc stack dec (.integer len) =
-                «string_ascii/7» (bin rest) orig skip acc stack dec (.integer (len + 7)) ∧
+            («string_ascii/7» d (bin (w ++ rest)) orig skip acc stack dec (.integer len) =
+                «string_ascii/7» d (bin rest) orig skip acc stack dec (.integer (len + 7)) ∧
               ∀ b ∈ w, plain b) ∨
-            «string_ascii/7» (bin (w ++ rest)) orig skip acc stack dec (.integer len) =
-              «string/7» (bin (w ++ rest)) orig skip acc stack dec (.integer len) := by
-          intro w rest orig skip acc stack dec len seven
-          rw [«string_ascii/7».eq_def (bin (w ++ rest)),
+            «string_ascii/7» d (bin (w ++ rest)) orig skip acc stack dec (.integer len) =
+              «string/7» d (bin (w ++ rest)) orig skip acc stack dec (.integer len) := by
+          intro d w rest orig skip acc stack dec len seven
+          rw [«string_ascii/7».eq_def _ (bin (w ++ rest)),
             matchInteger_bytes _ _ _ 56 (by omega)]
           simp only [extract_some, tail8, band_iband, bxor_ixor, Erlang.erlang.«+/2_integers»,
             Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.exactCompare_integers,
-            Int.compare_eq_eq, Result.ofExcept_ok, Result.ok_bind, Result.andAlso_eq]
+            Int.compare_eq_eq, Lynx.Except.ok_bind, Lynx.Except.andAlso_eq]
           rw [show List.foldl (fun value b => value * 256 + b.toNat) 0 w = bytesValue w from rfl]
           by_cases c1 : iband (bytesValue w) 36170086419038336 = 0
           · by_cases c2 : iband (bytesValue w + 27127564814278752) 36170086419038336 =
@@ -1220,75 +1223,82 @@ defmodule JsonProofsTest do
             · exact Or.inr (by simp [c1, c2])
           · exact Or.inr (by simp [c1])
 
-        have string_ascii_short : ∀ (l : List UInt8) (orig skip acc stack dec : Term) (len : Int),
+        have string_ascii_short : ∀ {d : Dispatcher} (l : List UInt8)
+            (orig skip acc stack dec : Term) (len : Int),
             l.length < 7 →
-            «string_ascii/7» (bin l) orig skip acc stack dec (.integer len) =
-              «string/7» (bin l) orig skip acc stack dec (.integer len) := by
-          intro l orig skip acc stack dec len short
+            «string_ascii/7» d (bin l) orig skip acc stack dec (.integer len) =
+              «string/7» d (bin l) orig skip acc stack dec (.integer len) := by
+          intro d l orig skip acc stack dec len short
           rw [«string_ascii/7».eq_def, short56 _ short]
           rfl
 
         -- A backslash ends the run, which starts the decoded bytes.
-        have string_escape : ∀ (rest p : List UInt8) (orig acc stack dec : Term) (skip len : Int),
+        have string_escape : ∀ {d : Dispatcher} (rest p : List UInt8) (orig acc stack dec : Term)
+            (skip len : Int),
             Erlang.erlang.«binary_part/3» orig (.integer skip) (.integer len) = .ok (bin p) →
-            «string/7» (bin (92 :: rest)) orig (.integer skip) acc stack dec (.integer len) =
-              «unescape/9» (bin rest) orig (.integer skip) acc stack dec (.integer (skip - 1))
+            «string/7» d (bin (92 :: rest)) orig (.integer skip) acc stack dec (.integer len) =
+              «unescape/9» d (bin rest) orig (.integer skip) acc stack dec (.integer (skip - 1))
                 (.integer len) (bin p) := by
-          intro rest p orig acc stack dec skip len part
+          intro d rest p orig acc stack dec skip len part
           conv => lhs; unfold «string/7»
           rw [matchInteger_byte]
           simp only [extract_some, isMember_plain, show plain 92 = false from rfl]
           simp [matchTail, Nat.mod_one, part, binarySegment_aligned, append_bytes, Except.bind]
 
-        have string9_plain_byte : ∀ (b : UInt8) (bs : List UInt8)
+        have string9_plain_byte : ∀ {d : Dispatcher} (b : UInt8) (bs : List UInt8)
             (orig skip acc stack dec start sacc : Term) (len : Int), plain b →
-            «string/9» (bin (b :: bs)) orig skip acc stack dec start (.integer len) sacc =
-              «string/9» (bin bs) orig skip acc stack dec start (.integer (len + 1)) sacc := by
-          intro b bs orig skip acc stack dec start sacc len ok
+            «string/9» d (bin (b :: bs)) orig skip acc stack dec start (.integer len) sacc =
+              «string/9» d (bin bs) orig skip acc stack dec start (.integer (len + 1)) sacc := by
+          intro d b bs orig skip acc stack dec start sacc len ok
           conv => lhs; unfold «string/9»
           rw [matchInteger_byte]
           simp only [extract_some, isMember_plain, ok]
           simp [matchTail, Nat.mod_one]
 
-        have string9_escape : ∀ (rest p sacc : List UInt8) (orig acc stack dec start : Term)
+        have string9_escape : ∀ {d : Dispatcher} (rest p sacc : List UInt8)
+            (orig acc stack dec start : Term)
             (skip len : Int),
             Erlang.erlang.«binary_part/3» orig (.integer skip) (.integer len) = .ok (bin p) →
-            «string/9» (bin (92 :: rest)) orig (.integer skip) acc stack dec start (.integer len)
+            «string/9» d (bin (92 :: rest)) orig (.integer skip) acc stack dec start (.integer len)
                 (bin sacc) =
-              «unescape/9» (bin rest) orig (.integer skip) acc stack dec start (.integer len)
+              «unescape/9» d (bin rest) orig (.integer skip) acc stack dec start (.integer len)
                 (bin (sacc ++ p)) := by
-          intro rest p sacc orig acc stack dec start skip len part
+          intro d rest p sacc orig acc stack dec start skip len part
           conv => lhs; unfold «string/9»
           rw [matchInteger_byte]
           simp only [extract_some, isMember_plain, show plain 92 = false from rfl]
           simp [matchTail, Nat.mod_one, part, binarySegment_aligned, append_bytes, Except.bind]
 
-        have string9_close : ∀ (rest p sacc : List UInt8) (orig acc stack start : Term)
+        have string9_close : ∀ {d : Dispatcher} (rest p sacc : List UInt8)
+            (orig acc stack start : Term)
             (skip len : Int),
             Erlang.erlang.«binary_part/3» orig (.integer skip) (.integer len) = .ok (bin p) →
-            «string/9» (bin (34 :: rest)) orig (.integer skip) acc stack options start (.integer len)
+            «string/9» d (bin (34 :: rest)) orig (.integer skip) acc stack options start
+                (.integer len)
                 (bin sacc) =
-              «continue/7» (bin rest) orig (.integer (skip + len + 1)) acc stack options
+              «continue/7» d (bin rest) orig (.integer (skip + len + 1)) acc stack options
                 (bin (sacc ++ p)) := by
-          intro rest p sacc orig acc stack start skip len part
+          intro d rest p sacc orig acc stack start skip len part
           conv => lhs; unfold «string/9»
           rw [matchInteger_byte]
           simp only [extract_some, isMember_plain, show plain 34 = false from rfl]
           simp [matchTail, Nat.mod_one, part, binarySegment_aligned, append_bytes, Except.bind]
 
-        have string_ascii9_word : ∀ (w rest : List UInt8) (orig skip acc stack dec start sacc : Term)
+        have string_ascii9_word : ∀ {d : Dispatcher} (w rest : List UInt8)
+            (orig skip acc stack dec start sacc : Term)
             (len : Int), w.length = 7 →
-            («string_ascii/9» (bin (w ++ rest)) orig skip acc stack dec start (.integer len) sacc =
-                «string_ascii/9» (bin rest) orig skip acc stack dec start (.integer (len + 7)) sacc ∧
+            («string_ascii/9» d (bin (w ++ rest)) orig skip acc stack dec start (.integer len) sacc
+                = «string_ascii/9» d (bin rest) orig skip acc stack dec start (.integer (len + 7))
+                sacc ∧
               ∀ b ∈ w, plain b) ∨
-            «string_ascii/9» (bin (w ++ rest)) orig skip acc stack dec start (.integer len) sacc =
-              «string/9» (bin (w ++ rest)) orig skip acc stack dec start (.integer len) sacc := by
-          intro w rest orig skip acc stack dec start sacc len seven
-          rw [«string_ascii/9».eq_def (bin (w ++ rest)),
+            «string_ascii/9» d (bin (w ++ rest)) orig skip acc stack dec start (.integer len) sacc =
+              «string/9» d (bin (w ++ rest)) orig skip acc stack dec start (.integer len) sacc := by
+          intro d w rest orig skip acc stack dec start sacc len seven
+          rw [«string_ascii/9».eq_def _ (bin (w ++ rest)),
             matchInteger_bytes _ _ _ 56 (by omega)]
           simp only [extract_some, tail8, band_iband, bxor_ixor, Erlang.erlang.«+/2_integers»,
             Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.exactCompare_integers,
-            Int.compare_eq_eq, Result.ofExcept_ok, Result.ok_bind, Result.andAlso_eq]
+            Int.compare_eq_eq, Lynx.Except.ok_bind, Lynx.Except.andAlso_eq]
           rw [show List.foldl (fun value b => value * 256 + b.toNat) 0 w = bytesValue w from rfl]
           by_cases c1 : iband (bytesValue w) 36170086419038336 = 0
           · by_cases c2 : iband (bytesValue w + 27127564814278752) 36170086419038336 =
@@ -1303,22 +1313,23 @@ defmodule JsonProofsTest do
             · exact Or.inr (by simp [c1, c2])
           · exact Or.inr (by simp [c1])
 
-        have string_ascii9_short : ∀ (l : List UInt8) (orig skip acc stack dec start sacc : Term)
+        have string_ascii9_short : ∀ {d : Dispatcher} (l : List UInt8)
+            (orig skip acc stack dec start sacc : Term)
             (len : Int), l.length < 7 →
-            «string_ascii/9» (bin l) orig skip acc stack dec start (.integer len) sacc =
-              «string/9» (bin l) orig skip acc stack dec start (.integer len) sacc := by
-          intro l orig skip acc stack dec start sacc len short
+            «string_ascii/9» d (bin l) orig skip acc stack dec start (.integer len) sacc =
+              «string/9» d (bin l) orig skip acc stack dec start (.integer len) sacc := by
+          intro d l orig skip acc stack dec start sacc len short
           rw [«string_ascii/9».eq_def, short56 _ short]
           rfl
 
         -- A letter after a backslash stands for one byte.
-        have unescape_char : ∀ (c v : UInt8) (rest sacc : List UInt8)
+        have unescape_char : ∀ {d : Dispatcher} (c v : UInt8) (rest sacc : List UInt8)
             (orig acc stack dec start : Term) (skip len : Int), unescapeChar c = some v →
-            «unescape/9» (bin (c :: rest)) orig (.integer skip) acc stack dec start (.integer len)
+            «unescape/9» d (bin (c :: rest)) orig (.integer skip) acc stack dec start (.integer len)
                 (bin sacc) =
-              «string_ascii/9» (bin rest) orig (.integer (skip + len + 2)) acc stack dec start
+              «string_ascii/9» d (bin rest) orig (.integer (skip + len + 2)) acc stack dec start
                 (.integer 0) (bin (sacc ++ [v])) := by
-          intro c v rest sacc orig acc stack dec start skip len char
+          intro d c v rest sacc orig acc stack dec start skip len char
           conv => lhs; unfold «unescape/9»
           rw [matchInteger_byte]
           simp [matchTail, Nat.mod_one]
@@ -1336,10 +1347,11 @@ defmodule JsonProofsTest do
                unfold unescapeChar at char
                split at char <;> first | omega | simp at char)
 
-        have unescape_unicode : ∀ (rest : List UInt8) (orig skip acc stack dec start len sacc : Term),
-            «unescape/9» (bin (117 :: rest)) orig skip acc stack dec start len sacc =
-              «unescapeu/9» (bin rest) orig skip acc stack dec start len sacc := by
-          intro rest orig skip acc stack dec start len sacc
+        have unescape_unicode : ∀ {d : Dispatcher} (rest : List UInt8)
+            (orig skip acc stack dec start len sacc : Term),
+            «unescape/9» d (bin (117 :: rest)) orig skip acc stack dec start len sacc =
+              «unescapeu/9» d (bin rest) orig skip acc stack dec start len sacc := by
+          intro d rest orig skip acc stack dec start len sacc
           conv => lhs; unfold «unescape/9»
           rw [matchInteger_byte]
           simp [matchTail, Nat.mod_one]
@@ -1369,13 +1381,13 @@ defmodule JsonProofsTest do
           | _ + 16, bound => exact absurd bound (by omega)
 
         -- A control character is escaped as four hexadecimal digits.
-        have unescapeu_control : ∀ (e : UInt8) (rest sacc : List UInt8)
+        have unescapeu_control : ∀ {d : Dispatcher} (e : UInt8) (rest sacc : List UInt8)
             (orig acc stack dec start : Term) (skip len : Int), e.toNat < 32 →
-            «unescapeu/9» (bin (48 :: 48 :: hexDigit (e.toNat / 16) :: hexDigit (e.toNat % 16) ::
+            «unescapeu/9» d (bin (48 :: 48 :: hexDigit (e.toNat / 16) :: hexDigit (e.toNat % 16) ::
                 rest)) orig (.integer skip) acc stack dec start (.integer len) (bin sacc) =
-              «string_ascii/9» (bin rest) orig (.integer (skip + len + 6)) acc stack dec start
+              «string_ascii/9» d (bin rest) orig (.integer (skip + len + 6)) acc stack dec start
                 (.integer 0) (bin (sacc ++ [e])) := by
-          intro e rest sacc orig acc stack dec start skip len control
+          intro d e rest sacc orig acc stack dec start skip len control
           have high := hex_lookup (e.toNat / 16) (by omega)
           have low := hex_lookup (e.toNat % 16) (by omega)
           have zero : Erlang.erlang.«element/2» (.integer 1) lynx_literal_p3xycmru =
@@ -1390,15 +1402,16 @@ defmodule JsonProofsTest do
             binarySegment_aligned, append_bytes, Except.bind]
 
         -- A backslash and the bytes after it stand for one byte that needs escaping.
-        have unescape_escape : ∀ e : UInt8, escaped e = true →
+        have unescape_escape : ∀ {d : Dispatcher} (e : UInt8), escaped e = true →
             ∃ t, escapeBytes e = 92 :: t ∧ ∀ (rest sacc : List UInt8)
               (orig acc stack dec start : Term) (skip len next : Int),
               next = skip + len + (escapeBytes e).length →
-              «unescape/9» (bin (t ++ rest)) orig (.integer skip) acc stack dec start (.integer len)
+              «unescape/9» d (bin (t ++ rest)) orig (.integer skip) acc stack dec start
+                  (.integer len)
                   (bin sacc) =
-                «string_ascii/9» (bin rest) orig (.integer next) acc stack dec start (.integer 0)
+                «string_ascii/9» d (bin rest) orig (.integer next) acc stack dec start (.integer 0)
                   (bin (sacc ++ [e])) := by
-          intro e escape
+          intro d e escape
           have control : e.toNat < 32 ∨ e.toNat = 34 ∨ e.toNat = 92 := by
             simp [escaped] at escape
             omega
@@ -1455,11 +1468,12 @@ defmodule JsonProofsTest do
                 exact ⟨rest2, rfl, rfl⟩
 
         -- The decoder validates a multibyte sequence with the automaton and adds it to the run.
-        have string_utf8_start : ∀ (b : UInt8) (bs : List UInt8) (orig skip acc stack dec len : Term),
+        have string_utf8_start : ∀ {d : Dispatcher} (b : UInt8) (bs : List UInt8)
+            (orig skip acc stack dec len : Term),
             128 ≤ b.toNat → utf8Start b ≠ 12 →
-            «string/7» (bin (b :: bs)) orig skip acc stack dec len =
-              «string_utf8/8» (bin bs) orig skip acc stack dec len (.integer (utf8Start b)) := by
-          intro b bs orig skip acc stack dec len high valid
+            «string/7» d (bin (b :: bs)) orig skip acc stack dec len =
+              «string_utf8/8» d (bin bs) orig skip acc stack dec len (.integer (utf8Start b)) := by
+          intro d b bs orig skip acc stack dec len high valid
           have notPlain : plain b = false := by simp [plain]; omega
           have state : ((utf8Start b : Nat) : Int) ≠ 12 := by omega
           conv => lhs; unfold «string/7»
@@ -1469,36 +1483,40 @@ defmodule JsonProofsTest do
             show (b.toNat : Int) ≠ 34 by omega,
             show ¬ (b.toNat < 32 ∨ b.toNat = 34 ∨ b.toNat = 92) by omega, start_lookup b high, state]
 
-        have string_utf8_accept : ∀ (c : UInt8) (bs : List UInt8) (orig skip acc stack dec : Term)
+        have string_utf8_accept : ∀ {d : Dispatcher} (c : UInt8) (bs : List UInt8)
+            (orig skip acc stack dec : Term)
             (len : Int) (state : Nat), 1 ≤ state → state ≤ 96 → utf8Next state c = 0 →
-            «string_utf8/8» (bin (c :: bs)) orig skip acc stack dec (.integer len) (.integer state) =
-              «string_ascii/7» (bin bs) orig skip acc stack dec (.integer (len + 2)) := by
-          intro c bs orig skip acc stack dec len state low high accept
+            «string_utf8/8» d (bin (c :: bs)) orig skip acc stack dec (.integer len)
+                (.integer state) =
+              «string_ascii/7» d (bin bs) orig skip acc stack dec (.integer (len + 2)) := by
+          intro d c bs orig skip acc stack dec len state low high accept
           conv => lhs; unfold «string_utf8/8»
           rw [matchInteger_byte]
-          simp only [extract_some, tail8, Erlang.erlang.«+/2_integers», Result.ofExcept_ok,
-            Result.ok_bind, type_lookup, next_lookup state c low high, accept]
+          simp only [extract_some, tail8, Erlang.erlang.«+/2_integers»,
+            Lynx.Except.ok_bind, type_lookup, next_lookup state c low high, accept]
           simp
 
-        have string_utf8_more : ∀ (c : UInt8) (bs : List UInt8) (orig skip acc stack dec : Term)
+        have string_utf8_more : ∀ {d : Dispatcher} (c : UInt8) (bs : List UInt8)
+            (orig skip acc stack dec : Term)
             (len : Int) (state : Nat), 1 ≤ state → state ≤ 96 → utf8Next state c ≠ 0 →
             utf8Next state c ≠ 12 →
-            «string_utf8/8» (bin (c :: bs)) orig skip acc stack dec (.integer len) (.integer state) =
-              «string_utf8/8» (bin bs) orig skip acc stack dec (.integer (len + 1))
+            «string_utf8/8» d (bin (c :: bs)) orig skip acc stack dec (.integer len)
+                (.integer state) =
+              «string_utf8/8» d (bin bs) orig skip acc stack dec (.integer (len + 1))
                 (.integer (utf8Next state c)) := by
-          intro c bs orig skip acc stack dec len state low high more valid
+          intro d c bs orig skip acc stack dec len state low high more valid
           conv => lhs; unfold «string_utf8/8»
           rw [matchInteger_byte]
-          simp only [extract_some, tail8, Erlang.erlang.«+/2_integers», Result.ofExcept_ok,
-            Result.ok_bind, type_lookup, next_lookup state c low high]
+          simp only [extract_some, tail8, Erlang.erlang.«+/2_integers»,
+            Lynx.Except.ok_bind, type_lookup, next_lookup state c low high]
           split <;> first | rfl | (rename_i same; simp at same; omega)
 
-        have string9_utf8_start : ∀ (b : UInt8) (bs : List UInt8)
+        have string9_utf8_start : ∀ {d : Dispatcher} (b : UInt8) (bs : List UInt8)
             (orig skip acc stack dec start len sacc : Term), 128 ≤ b.toNat → utf8Start b ≠ 12 →
-            «string/9» (bin (b :: bs)) orig skip acc stack dec start len sacc =
-              «string_utf8/10» (bin bs) orig skip acc stack dec start len sacc
+            «string/9» d (bin (b :: bs)) orig skip acc stack dec start len sacc =
+              «string_utf8/10» d (bin bs) orig skip acc stack dec start len sacc
                 (.integer (utf8Start b)) := by
-          intro b bs orig skip acc stack dec start len sacc high valid
+          intro d b bs orig skip acc stack dec start len sacc high valid
           have notPlain : plain b = false := by simp [plain]; omega
           have state : ((utf8Start b : Nat) : Int) ≠ 12 := by omega
           conv => lhs; unfold «string/9»
@@ -1508,38 +1526,40 @@ defmodule JsonProofsTest do
             show (b.toNat : Int) ≠ 34 by omega,
             show ¬ (b.toNat < 32 ∨ b.toNat = 34 ∨ b.toNat = 92) by omega, start_lookup b high, state]
 
-        have string10_accept : ∀ (c : UInt8) (bs : List UInt8)
+        have string10_accept : ∀ {d : Dispatcher} (c : UInt8) (bs : List UInt8)
             (orig skip acc stack dec start sacc : Term) (len : Int) (state : Nat), 1 ≤ state →
             state ≤ 96 → utf8Next state c = 0 →
-            «string_utf8/10» (bin (c :: bs)) orig skip acc stack dec start (.integer len) sacc
+            «string_utf8/10» d (bin (c :: bs)) orig skip acc stack dec start (.integer len) sacc
                 (.integer state) =
-              «string_ascii/9» (bin bs) orig skip acc stack dec start (.integer (len + 2)) sacc := by
-          intro c bs orig skip acc stack dec start sacc len state low high accept
+              «string_ascii/9» d (bin bs) orig skip acc stack dec start (.integer (len + 2)) sacc
+                  := by
+          intro d c bs orig skip acc stack dec start sacc len state low high accept
           conv => lhs; unfold «string_utf8/10»
           rw [matchInteger_byte]
-          simp only [extract_some, tail8, Erlang.erlang.«+/2_integers», Result.ofExcept_ok,
-            Result.ok_bind, type_lookup, next_lookup state c low high, accept]
+          simp only [extract_some, tail8, Erlang.erlang.«+/2_integers»,
+            Lynx.Except.ok_bind, type_lookup, next_lookup state c low high, accept]
           simp
 
-        have string10_more : ∀ (c : UInt8) (bs : List UInt8)
+        have string10_more : ∀ {d : Dispatcher} (c : UInt8) (bs : List UInt8)
             (orig skip acc stack dec start sacc : Term) (len : Int) (state : Nat), 1 ≤ state →
             state ≤ 96 → utf8Next state c ≠ 0 → utf8Next state c ≠ 12 →
-            «string_utf8/10» (bin (c :: bs)) orig skip acc stack dec start (.integer len) sacc
+            «string_utf8/10» d (bin (c :: bs)) orig skip acc stack dec start (.integer len) sacc
                 (.integer state) =
-              «string_utf8/10» (bin bs) orig skip acc stack dec start (.integer (len + 1)) sacc
+              «string_utf8/10» d (bin bs) orig skip acc stack dec start (.integer (len + 1)) sacc
                 (.integer (utf8Next state c)) := by
-          intro c bs orig skip acc stack dec start sacc len state low high more valid
+          intro d c bs orig skip acc stack dec start sacc len state low high more valid
           conv => lhs; unfold «string_utf8/10»
           rw [matchInteger_byte]
-          simp only [extract_some, tail8, Erlang.erlang.«+/2_integers», Result.ofExcept_ok,
-            Result.ok_bind, type_lookup, next_lookup state c low high]
+          simp only [extract_some, tail8, Erlang.erlang.«+/2_integers»,
+            Lynx.Except.ok_bind, type_lookup, next_lookup state c low high]
           split <;> first | rfl | (rename_i same; simp at same; omega)
 
-        have string_utf8 : ∀ (u bs : List UInt8) (orig skip acc stack dec : Term) (len : Int),
+        have string_utf8 : ∀ {d : Dispatcher} (u bs : List UInt8) (orig skip acc stack dec : Term)
+            (len : Int),
             Multibyte u →
-            «string/7» (bin (u ++ bs)) orig skip acc stack dec (.integer len) =
-              «string_ascii/7» (bin bs) orig skip acc stack dec (.integer (len + u.length)) := by
-          intro u bs orig skip acc stack dec len unit
+            «string/7» d (bin (u ++ bs)) orig skip acc stack dec (.integer len) =
+              «string_ascii/7» d (bin bs) orig skip acc stack dec (.integer (len + u.length)) := by
+          intro d u bs orig skip acc stack dec len unit
           rcases unit with ⟨b, c, rfl, lead⟩ | ⟨b, c, d, rfl, lead⟩ | ⟨b, c, d, e, rfl, lead⟩
           · obtain ⟨start, accept⟩ := utf8_two b c lead
             have high : 128 ≤ b.toNat := by have := lead.1; omega
@@ -1570,12 +1590,13 @@ defmodule JsonProofsTest do
             simp
             omega
 
-        have string9_utf8 : ∀ (u bs : List UInt8) (orig skip acc stack dec start sacc : Term)
+        have string9_utf8 : ∀ {d : Dispatcher} (u bs : List UInt8)
+            (orig skip acc stack dec start sacc : Term)
             (len : Int), Multibyte u →
-            «string/9» (bin (u ++ bs)) orig skip acc stack dec start (.integer len) sacc =
-              «string_ascii/9» (bin bs) orig skip acc stack dec start (.integer (len + u.length))
+            «string/9» d (bin (u ++ bs)) orig skip acc stack dec start (.integer len) sacc =
+              «string_ascii/9» d (bin bs) orig skip acc stack dec start (.integer (len + u.length))
                 sacc := by
-          intro u bs orig skip acc stack dec start sacc len unit
+          intro d u bs orig skip acc stack dec start sacc len unit
           rcases unit with ⟨b, c, rfl, lead⟩ | ⟨b, c, d, rfl, lead⟩ | ⟨b, c, d, e, rfl, lead⟩
           · obtain ⟨start', accept⟩ := utf8_two b c lead
             have high : 128 ≤ b.toNat := by have := lead.1; omega
@@ -1614,23 +1635,24 @@ defmodule JsonProofsTest do
 
         -- After an escape, the decoder has decoded `done`, holds a run of copied bytes since
         -- then, and has the text of `rest` left up to the closing quote.
-        have decode9 : ∀ (n : Nat) (rest done run pre post : List UInt8) (acc stack start : Term)
+        have decode9 : ∀ {d : Dispatcher} (n : Nat) (rest done run pre post : List UInt8)
+            (acc stack start : Term)
             (skip len stop : Int), rest.length ≤ n → Utf8 rest → (∀ b ∈ run, escaped b = false) →
             skip = pre.length + 1 + (escapeText done).length → len = run.length →
             stop = skip + len + (escapeText rest).length + 1 →
-            («string/9» (bin (escapeText rest ++ 34 :: post))
+            («string/9» d (bin (escapeText rest ++ 34 :: post))
                 (bin (pre ++ 34 :: (escapeText done ++ (run ++ (escapeText rest ++ 34 :: post)))))
                 (.integer skip) acc stack options start (.integer len) (bin done) =
-              «continue/7» (bin post)
+              «continue/7» d (bin post)
                 (bin (pre ++ 34 :: (escapeText done ++ (run ++ (escapeText rest ++ 34 :: post)))))
                 (.integer stop) acc stack options (bin (done ++ (run ++ rest)))) ∧
-            («string_ascii/9» (bin (escapeText rest ++ 34 :: post))
+            («string_ascii/9» d (bin (escapeText rest ++ 34 :: post))
                 (bin (pre ++ 34 :: (escapeText done ++ (run ++ (escapeText rest ++ 34 :: post)))))
                 (.integer skip) acc stack options start (.integer len) (bin done) =
-              «continue/7» (bin post)
+              «continue/7» d (bin post)
                 (bin (pre ++ 34 :: (escapeText done ++ (run ++ (escapeText rest ++ 34 :: post)))))
                 (.integer stop) acc stack options (bin (done ++ (run ++ rest)))) := by
-          intro n
+          intro d n
           induction n using Nat.strongRecOn with
           | ind n ih =>
             intro rest done run pre post acc stack start skip len stop size valid verbatim
@@ -1638,10 +1660,10 @@ defmodule JsonProofsTest do
             -- After adding copied bytes to the run, the SWAR loop resumes.
             have extend : ∀ u rest', rest = u ++ rest' → 0 < u.length → Utf8 rest' →
                 (∀ b ∈ u, escaped b = false) →
-                «string_ascii/9» (bin (escapeText rest' ++ 34 :: post))
+                «string_ascii/9» d (bin (escapeText rest' ++ 34 :: post))
                     (bin (pre ++ 34 :: (escapeText done ++ (run ++ (escapeText rest ++ 34 :: post)))))
                     (.integer skip) acc stack options start (.integer (len + u.length)) (bin done) =
-                  «continue/7» (bin post)
+                  «continue/7» d (bin post)
                     (bin (pre ++ 34 :: (escapeText done ++ (run ++ (escapeText rest ++ 34 :: post)))))
                     (.integer stop) acc stack options (bin (done ++ (run ++ rest))) := by
               intro u rest' same nonempty valid' copied
@@ -1656,10 +1678,10 @@ defmodule JsonProofsTest do
                 (by simp [escapeText_append, escapeText_verbatim u copied] at stopped; omega)).2
               simp only [escapeText_append, escapeText_verbatim u copied, List.append_assoc] at next ⊢
               exact next
-            have main : «string/9» (bin (escapeText rest ++ 34 :: post))
+            have main : «string/9» d (bin (escapeText rest ++ 34 :: post))
                 (bin (pre ++ 34 :: (escapeText done ++ (run ++ (escapeText rest ++ 34 :: post)))))
                 (.integer skip) acc stack options start (.integer len) (bin done) =
-              «continue/7» (bin post)
+              «continue/7» d (bin post)
                 (bin (pre ++ 34 :: (escapeText done ++ (run ++ (escapeText rest ++ 34 :: post)))))
                 (.integer stop) acc stack options (bin (done ++ (run ++ rest))) := by
               rcases utf8_cases rest valid with rfl | ⟨b, rest', rfl, ascii, valid'⟩ |
@@ -1693,7 +1715,7 @@ defmodule JsonProofsTest do
                     cases copied : escaped b
                     · exact absurd (ascii_plain b ascii copied) bPlain
                     · rfl
-                  obtain ⟨t, et, unescaped⟩ := unescape_escape b escape
+                  obtain ⟨t, et, unescaped⟩ := unescape_escape (d := d) b escape
                   have text : escapeText (b :: rest') = 92 :: (t ++ escapeText rest') := by
                     rw [show b :: rest' = [b] ++ rest' from rfl, escapeText_append,
                       escapeText_escape b escape, et]
@@ -1759,31 +1781,35 @@ defmodule JsonProofsTest do
               exact main
 
         -- Before an escape, the decoder holds a run of copied bytes since the opening quote.
-        have decode7 : ∀ (n : Nat) (rest run pre post : List UInt8) (acc stack : Term)
+        have decode7 : ∀ {d : Dispatcher} (n : Nat) (rest run pre post : List UInt8)
+            (acc stack : Term)
             (skip len stop : Int), rest.length ≤ n → Utf8 rest → (∀ b ∈ run, escaped b = false) →
             skip = pre.length + 1 → len = run.length →
             stop = skip + len + (escapeText rest).length + 1 →
-            («string/7» (bin (escapeText rest ++ 34 :: post))
+            («string/7» d (bin (escapeText rest ++ 34 :: post))
                 (bin (pre ++ 34 :: (run ++ (escapeText rest ++ 34 :: post))))
                 (.integer skip) acc stack options (.integer len) =
-              «continue/7» (bin post) (bin (pre ++ 34 :: (run ++ (escapeText rest ++ 34 :: post))))
+              «continue/7» d (bin post)
+                  (bin (pre ++ 34 :: (run ++ (escapeText rest ++ 34 :: post))))
                 (.integer stop) acc stack options (bin (run ++ rest))) ∧
-            («string_ascii/7» (bin (escapeText rest ++ 34 :: post))
+            («string_ascii/7» d (bin (escapeText rest ++ 34 :: post))
                 (bin (pre ++ 34 :: (run ++ (escapeText rest ++ 34 :: post))))
                 (.integer skip) acc stack options (.integer len) =
-              «continue/7» (bin post) (bin (pre ++ 34 :: (run ++ (escapeText rest ++ 34 :: post))))
+              «continue/7» d (bin post)
+                  (bin (pre ++ 34 :: (run ++ (escapeText rest ++ 34 :: post))))
                 (.integer stop) acc stack options (bin (run ++ rest))) := by
-          intro n
+          intro d n
           induction n using Nat.strongRecOn with
           | ind n ih =>
             intro rest run pre post acc stack skip len stop size valid verbatim skipped running
               stopped
             have extend : ∀ u rest', rest = u ++ rest' → 0 < u.length → Utf8 rest' →
                 (∀ b ∈ u, escaped b = false) →
-                «string_ascii/7» (bin (escapeText rest' ++ 34 :: post))
+                «string_ascii/7» d (bin (escapeText rest' ++ 34 :: post))
                     (bin (pre ++ 34 :: (run ++ (escapeText rest ++ 34 :: post))))
                     (.integer skip) acc stack options (.integer (len + u.length)) =
-                  «continue/7» (bin post) (bin (pre ++ 34 :: (run ++ (escapeText rest ++ 34 :: post))))
+                  «continue/7» d (bin post)
+                      (bin (pre ++ 34 :: (run ++ (escapeText rest ++ 34 :: post))))
                     (.integer stop) acc stack options (bin (run ++ rest)) := by
               intro u rest' same nonempty valid' copied
               subst same
@@ -1797,10 +1823,11 @@ defmodule JsonProofsTest do
                 (by simp [escapeText_append, escapeText_verbatim u copied] at stopped; omega)).2
               simp only [escapeText_append, escapeText_verbatim u copied, List.append_assoc] at next ⊢
               exact next
-            have main : «string/7» (bin (escapeText rest ++ 34 :: post))
+            have main : «string/7» d (bin (escapeText rest ++ 34 :: post))
                 (bin (pre ++ 34 :: (run ++ (escapeText rest ++ 34 :: post))))
                 (.integer skip) acc stack options (.integer len) =
-              «continue/7» (bin post) (bin (pre ++ 34 :: (run ++ (escapeText rest ++ 34 :: post))))
+              «continue/7» d (bin post)
+                  (bin (pre ++ 34 :: (run ++ (escapeText rest ++ 34 :: post))))
                 (.integer stop) acc stack options (bin (run ++ rest)) := by
               rcases utf8_cases rest valid with rfl | ⟨b, rest', rfl, ascii, valid'⟩ |
                   ⟨u, rest', rfl, unit, copied, valid'⟩
@@ -1811,7 +1838,7 @@ defmodule JsonProofsTest do
                   List.length_nil] at stopped ⊢
                 rw [show skip = ((pre.length + (0 + 1) : Nat) : Int) by push_cast; omega, running,
                   string_close _ _ _ _ _ _ ]
-                simp only [part, Erlang.erlang.«+/2_integers», Result.ofExcept_ok, Result.ok_bind]
+                simp only [part, Erlang.erlang.«+/2_integers», Lynx.Except.ok_bind]
                 congr 2
                 push_cast
                 omega
@@ -1834,7 +1861,7 @@ defmodule JsonProofsTest do
                     cases copied : escaped b
                     · exact absurd (ascii_plain b ascii copied) bPlain
                     · rfl
-                  obtain ⟨t, et, unescaped⟩ := unescape_escape b escape
+                  obtain ⟨t, et, unescaped⟩ := unescape_escape (d := d) b escape
                   have text : escapeText (b :: rest') = 92 :: (t ++ escapeText rest') := by
                     rw [show b :: rest' = [b] ++ rest' from rfl, escapeText_append,
                       escapeText_escape b escape, et]
@@ -1850,7 +1877,8 @@ defmodule JsonProofsTest do
                     unescaped _ _ _ _ _ _ _ _ _ (pre.length + 1 + (escapeText ([] ++ run ++ [b])).length)
                       (by simp [escapeText_append, escapeText_verbatim run verbatim,
                         escapeText_escape b escape]; omega)]
-                  have next := (decode9 rest'.length rest' (run ++ [b]) [] pre post acc stack
+                  have next :=
+                      (decode9 (d := d) rest'.length rest' (run ++ [b]) [] pre post acc stack
                     (.integer (((pre.length + (0 + 1) : Nat) : Int) - 1)) _ 0 stop (Nat.le_refl _)
                     valid' (by simp) rfl rfl
                     (by
@@ -1932,13 +1960,14 @@ defmodule JsonProofsTest do
           ascii_plain plain_verbatim escapeText_escape escapeText_verbatim escapeText_append tail8
 
         -- A leading digit other than zero starts a number of length one.
-        have value_digit : ∀ (orig skip acc stack dec : Term) (b : UInt8) (bs : List UInt8),
+        have value_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (b : UInt8)
+            (bs : List UInt8),
             49 ≤ b.toNat → b.toNat ≤ 57 →
-            «value/6» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc stack
+            «value/6» d (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc stack
                 dec =
-              «number/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec
+              «number/7» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec
                 (.integer 1) := by
-          intro orig skip acc stack dec b bs low high
+          intro d orig skip acc stack dec b bs low high
           unfold «value/6»
           have h32 : (b.toNat : Int) ≠ 32 := by omega
           have h9 : (b.toNat : Int) ≠ 9 := by omega
@@ -1954,39 +1983,40 @@ defmodule JsonProofsTest do
           rcases digit with h | h | h | h | h | h | h | h | h <;> simp [h]
 
         -- A minus sign is followed by a number.
-        have value_minus : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
-            «value/6» (.bitstring ⟨((45 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
+        have value_minus : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (bs : List UInt8),
+            «value/6» d (.bitstring ⟨((45 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
                 acc
               stack dec =
-              «number_minus/6» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack
+              «number_minus/6» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack
                   dec := by
-          intro orig skip acc stack dec bs
+          intro d orig skip acc stack dec bs
           unfold «value/6»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- A leading zero starts a number that only continues with a fraction or exponent.
-        have value_zero : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
-            «value/6» (.bitstring ⟨((48 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
+        have value_zero : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (bs : List UInt8),
+            «value/6» d (.bitstring ⟨((48 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
                 acc
               stack dec =
-              «number_zero/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack
+              «number_zero/7» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack
                   dec
                 (.integer 1) := by
-          intro orig skip acc stack dec bs
+          intro d orig skip acc stack dec bs
           unfold «value/6»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
-        have number_minus_digit : ∀ (orig skip acc stack dec : Term) (b : UInt8) (bs : List
+        have number_minus_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (b : UInt8)
+            (bs : List
             UInt8),
             49 ≤ b.toNat → b.toNat ≤ 57 →
-            «number_minus/6» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc
+            «number_minus/6» d (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc
                 stack
               dec =
-              «number/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec
+              «number/7» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec
                 (.integer 2) := by
-          intro orig skip acc stack dec b bs low high
+          intro d orig skip acc stack dec b bs low high
           have h48 : (b.toNat : Int) ≠ 48 := by omega
           have digit : (b.toNat : Int) = 49 ∨ (b.toNat : Int) = 50 ∨ (b.toNat : Int) = 51 ∨
               (b.toNat : Int) = 52 ∨ (b.toNat : Int) = 53 ∨ (b.toNat : Int) = 54 ∨
@@ -1997,14 +2027,15 @@ defmodule JsonProofsTest do
           rcases digit with h | h | h | h | h | h | h | h | h <;> simp [h]
 
         -- Each digit extends the number by one byte.
-        have number_digit : ∀ (orig skip acc stack dec : Term) (len : Int) (b : UInt8)
+        have number_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int)
+            (b : UInt8)
             (bs : List UInt8), 48 ≤ b.toNat → b.toNat ≤ 57 →
-            «number/7» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc stack
+            «number/7» d (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc stack
                 dec
               (.integer len) =
-              «number/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec
+              «number/7» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec
                 (.integer (len + 1)) := by
-          intro orig skip acc stack dec len b bs low high
+          intro d orig skip acc stack dec len b bs low high
           conv => lhs; unfold «number/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           have ge : (compare (b.toNat : Int) 48).isGE = true := by
@@ -2013,14 +2044,15 @@ defmodule JsonProofsTest do
             simp [Ordering.isLE_iff_ne_gt, Int.compare_eq_gt]; omega
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», ge, le]
 
-        have number_digits : ∀ (orig skip acc stack dec : Term) (digits rest : List UInt8),
+        have number_digits : ∀ {d : Dispatcher} (orig skip acc stack dec : Term)
+            (digits rest : List UInt8),
             (∀ d ∈ digits, 48 ≤ d.toNat ∧ d.toNat ≤ 57) → ∀ len : Int,
-            «number/7» (.bitstring ⟨(digits ++ rest).toArray⟩ 0 (valid_aligned _)) orig skip acc
+            «number/7» d (.bitstring ⟨(digits ++ rest).toArray⟩ 0 (valid_aligned _)) orig skip acc
                 stack
               dec (.integer len) =
-              «number/7» (.bitstring ⟨rest.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec
+              «number/7» d (.bitstring ⟨rest.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec
                 (.integer (len + digits.length)) := by
-          intro orig skip acc stack dec digits rest all len
+          intro d orig skip acc stack dec digits rest all len
           induction digits generalizing len with
           | nil => simp
           | cons d ds ih =>
@@ -2032,30 +2064,31 @@ defmodule JsonProofsTest do
             rw [this]
 
         -- At the end of the input, the integer decoder reads the number's text.
-        have number_end : ∀ (orig skip acc stack : Term) (len : Int),
-            «number/7» (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (valid_aligned _)) orig skip acc
+        have number_end : ∀ {d : Dispatcher} (orig skip acc stack : Term) (len : Int),
+            «number/7» d (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (valid_aligned _)) orig skip acc
               stack options
               (.integer len) =
               (do
-                let token ← Result.ofExcept (Erlang.erlang.«binary_part/3» orig skip (.integer len))
-                let value ← Term.apply (.function 2 1 #[]) #[token]
-                Result.ofExcept («unexpected/8» orig skip acc stack options
+                let token ← Erlang.erlang.«binary_part/3» orig skip (.integer len)
+                let value ← Dispatcher.pure d (.function 2 1 #[]) #[token]
+                («unexpected/8» orig skip acc stack options
                   (.integer len) (.integer 0) (.tuple #[.atom "number", value]))) := by
-          intro orig skip acc stack len
+          intro d orig skip acc stack len
           conv => lhs; unfold «number/7»
           simp only [matchInteger_byte_nil, extract_none, matchEnd_byte_nil]
           simp
 
-        have number_zero_end : ∀ (orig skip acc stack : Term) (len : Int),
-            «number_zero/7» (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (valid_aligned _)) orig skip
+        have number_zero_end : ∀ {d : Dispatcher} (orig skip acc stack : Term) (len : Int),
+            «number_zero/7» d (.bitstring ⟨([] : List UInt8).toArray⟩ 0 (valid_aligned _)) orig skip
               acc stack options
               (.integer len) =
               (do
-                let value ← Term.apply (.function 2 1 #[]) #[.bitstring ⟨#[48]⟩ 0 (valid_aligned
+                let value ← Dispatcher.pure d (.function 2 1 #[]) #[.bitstring ⟨#[48]⟩ 0
+                    (valid_aligned
                     _)]
-                Result.ofExcept («unexpected/8» orig skip acc stack options
+                («unexpected/8» orig skip acc stack options
                   (.integer len) (.integer 0) (.tuple #[.atom "number", value]))) := by
-          intro orig skip acc stack len
+          intro d orig skip acc stack len
           conv => lhs; unfold «number_zero/7»
           simp only [matchInteger_byte_nil, extract_none, matchEnd_byte_nil]
           simp
@@ -2081,7 +2114,8 @@ defmodule JsonProofsTest do
 
         have decode_integer : ∀ (n : Int) (depth : Nat) (text : Term),
             Erlang.erlang.«integer_to_binary/1» (.integer n) = .ok text →
-            Result.resolve Erlang.program.fun_table depth («decode/1» text) = .ok (.integer n) :=
+            «decode/1» (Dispatcher.ofTable Erlang.program.fun_table depth) text = .ok (.integer n)
+                :=
                 by
           intro n depth text encoded
           have parsed := Erlang.erlang.binary_to_integer_integer_to_binary n
@@ -2106,7 +2140,7 @@ defmodule JsonProofsTest do
             unfold «decode/1»
             simp only []
             rw [value_minus, number_minus_digit _ _ _ _ _ first rest firstPositive firstHigh]
-            have loop := number_digits
+            have loop := number_digits (d := Dispatcher.ofTable Erlang.program.fun_table depth)
               (.bitstring ⟨((45 : UInt8) :: first :: rest).toArray⟩ 0 (valid_aligned _))
               (.integer 0) (.atom "ok") .nil
               options rest [] restDigits 2
@@ -2131,7 +2165,8 @@ defmodule JsonProofsTest do
               rw [len]
               simp [«$lynx_fun_2/1», parsed, unexpected_whole]
             · rw [value_digit _ _ _ _ _ first rest (by omega) firstHigh]
-              have loop := number_digits (.bitstring ⟨(first :: rest).toArray⟩ 0 (valid_aligned
+              have loop := number_digits (d := Dispatcher.ofTable Erlang.program.fun_table depth)
+                  (.bitstring ⟨(first :: rest).toArray⟩ 0 (valid_aligned
                   _))
                 (.integer 0) (.atom "ok") .nil
                 options rest [] restDigits 1
@@ -2145,7 +2180,7 @@ defmodule JsonProofsTest do
 
         -- The encoder dispatches through the program table to integer_to_binary/1.
         have roundtrip_integer : ∀ n : Int,
-            Result.resolve Erlang.program.fun_table 100 («roundtrip/1» (.integer n)) =
+            «roundtrip/1» (Dispatcher.ofTable Erlang.program.fun_table 100) (.integer n) =
               .ok Term.true := by
           intro n
           simp only [«roundtrip/1», «encode/1», «encode/2», Erlang.erlang.«is_function/2»]
@@ -2153,25 +2188,26 @@ defmodule JsonProofsTest do
           unfold «do_encode/2»
           simp only []
           obtain ⟨first, rest, text, -, -⟩ := Erlang.erlang.integer_to_binary_decimal n
-          simp [text, Result.resolve_bind, Erlang.erlang.iolist_to_binary_binary,
+          simp [text, Erlang.erlang.iolist_to_binary_binary,
             decode_integer n 100 _ text, Erlang.erlang.«=:=/2»]
 
-        have continue_array : ∀ (bs : List UInt8) (orig skip acc rest value : Term),
-            «continue/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc (.cons
+        have continue_array : ∀ {d : Dispatcher} (bs : List UInt8)
+            (orig skip acc rest value : Term),
+            «continue/7» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc (.cons
                 (.atom "array") rest) options value =
-              «array_push/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc (.cons
+              «array_push/7» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc (.cons
                   (.atom "array") rest) options value := by
-          intro bs orig skip acc rest value
+          intro d bs orig skip acc rest value
           conv => lhs; unfold «continue/7»
           simp [matchTail, Nat.mod_one]
 
-        have continue_top : ∀ (bs : List UInt8) (orig skip acc value : Term),
-            «continue/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc .nil options
+        have continue_top : ∀ {d : Dispatcher} (bs : List UInt8) (orig skip acc value : Term),
+            «continue/7» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc .nil options
                 value =
-              Result.ofExcept («terminate/5» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc
+              («terminate/5» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc
                 value) :=
                   by
-          intro bs orig skip acc value
+          intro d bs orig skip acc value
           conv => lhs; unfold «continue/7»
           simp [matchTail, Nat.mod_one]
 
@@ -2184,55 +2220,58 @@ defmodule JsonProofsTest do
           unfold «terminate/5»
           simp [matchInteger_byte_nil, matchEnd_byte_nil]
 
-        have array_push_comma : ∀ (bs : List UInt8) (orig skip acc stack value : Term),
-            «array_push/7» (.bitstring ⟨((44 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig
+        have array_push_comma : ∀ {d : Dispatcher} (bs : List UInt8)
+            (orig skip acc stack value : Term),
+            «array_push/7» d (.bitstring ⟨((44 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig
                 skip acc stack options value =
               (do
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 1))
-                «value/6» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig next (.cons value
+                let next ← Erlang.erlang.«+/2» skip (.integer 1)
+                «value/6» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig next (.cons value
                     acc) stack options) := by
-          intro bs orig skip acc stack value
+          intro d bs orig skip acc stack value
           conv => lhs; unfold «array_push/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
-        have array_push_close : ∀ (bs : List UInt8) (orig skip acc old stack value : Term),
-            «array_push/7» (.bitstring ⟨((93 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig
+        have array_push_close : ∀ {d : Dispatcher} (bs : List UInt8)
+            (orig skip acc old stack value : Term),
+            «array_push/7» d (.bitstring ⟨((93 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig
                 skip acc
                 (.cons (.atom "array") (.cons old stack)) options value =
               (do
-                let list ← Result.ofExcept (Erlang.lists.«reverse/1» (.cons value acc))
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 1))
-                «continue/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig next old stack
+                let list ← Erlang.lists.«reverse/1» (.cons value acc)
+                let next ← Erlang.erlang.«+/2» skip (.integer 1)
+                «continue/7» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig next old stack
                     options list) := by
-          intro bs orig skip acc old stack value
+          intro d bs orig skip acc old stack value
           conv => lhs; unfold «array_push/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
-        have value_open : ∀ (bs : List UInt8) (orig skip acc stack : Term),
-            «value/6» (.bitstring ⟨((91 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
+        have value_open : ∀ {d : Dispatcher} (bs : List UInt8) (orig skip acc stack : Term),
+            «value/6» d (.bitstring ⟨((91 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
                 acc stack options =
-              «array_start/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack
+              «array_start/7» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack
                   options (.integer 1) := by
-          intro bs orig skip acc stack
+          intro d bs orig skip acc stack
           unfold «value/6»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- An array whose first element starts with a minus sign, a digit, a bracket, a
         -- letter, a quote, or a brace.
-        have array_start_value : ∀ (b : UInt8) (bs : List UInt8) (orig skip acc stack : Term)
+        have array_start_value : ∀ {d : Dispatcher} (b : UInt8) (bs : List UInt8)
+            (orig skip acc stack : Term)
             (len : Int) (start : b.toNat = 45 ∨ (48 ≤ b.toNat ∧ b.toNat ≤ 57) ∨
             b.toNat = 91 ∨ b.toNat = 116 ∨ b.toNat = 102 ∨ b.toNat = 110 ∨ b.toNat = 34 ∨
             b.toNat = 123),
-            «array_start/7» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc
+            «array_start/7» d (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc
                 stack options (.integer len) =
               (do
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer len))
-                «value/6» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig next .nil
+                let next ← Erlang.erlang.«+/2» skip (.integer len)
+                «value/6» d (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig next .nil
                   (.cons (.atom "array") (.cons acc stack)) options) := by
-          intro b bs orig skip acc stack len start
+          intro d b bs orig skip acc stack len start
           have h32 : (b.toNat : Int) ≠ 32 := by omega
           have h9 : (b.toNat : Int) ≠ 9 := by omega
           have h13 : (b.toNat : Int) ≠ 13 := by omega
@@ -2243,32 +2282,34 @@ defmodule JsonProofsTest do
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2», h32, h9,
             h13, h10, h93]
 
-        have array_start_close : ∀ (bs : List UInt8) (orig skip acc stack : Term) (len : Int),
-            «array_start/7» (.bitstring ⟨((93 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig
+        have array_start_close : ∀ {d : Dispatcher} (bs : List UInt8) (orig skip acc stack : Term)
+            (len : Int),
+            «array_start/7» d (.bitstring ⟨((93 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig
                 skip acc stack options
                 (.integer len) =
               (do
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer len))
-                let after ← Result.ofExcept (Erlang.erlang.«+/2» next (.integer 1))
-                «continue/7» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig after acc stack
+                let next ← Erlang.erlang.«+/2» skip (.integer len)
+                let after ← Erlang.erlang.«+/2» next (.integer 1)
+                «continue/7» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig after acc stack
                     options .nil) := by
-          intro bs orig skip acc stack len
+          intro d bs orig skip acc stack len
           conv => lhs; unfold «array_start/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- A number stops at a separator, reading its text with the integer decoder.
-        have number_stop : ∀ (b : UInt8) (bs : List UInt8) (orig skip acc stack : Term) (len :
+        have number_stop : ∀ {d : Dispatcher} (b : UInt8) (bs : List UInt8)
+            (orig skip acc stack : Term) (len :
             Int) (separator : b.toNat = 44 ∨ b.toNat = 93 ∨ b.toNat = 125),
-            «number/7» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc stack
+            «number/7» d (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc stack
                 options (.integer len) =
               (do
-                let token ← Result.ofExcept (Erlang.erlang.«binary_part/3» orig skip (.integer len))
-                let value ← Term.apply (.function 2 1 #[]) #[token]
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer len))
-                «continue/7» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig next acc
+                let token ← Erlang.erlang.«binary_part/3» orig skip (.integer len)
+                let value ← Dispatcher.pure d (.function 2 1 #[]) #[token]
+                let next ← Erlang.erlang.«+/2» skip (.integer len)
+                «continue/7» d (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig next acc
                     stack options value) := by
-          intro b bs orig skip acc stack len separator
+          intro d b bs orig skip acc stack len separator
           have h46 : (b.toNat : Int) ≠ 46 := by omega
           have h69 : (b.toNat : Int) ≠ 69 := by omega
           have h101 : (b.toNat : Int) ≠ 101 := by omega
@@ -2288,17 +2329,19 @@ defmodule JsonProofsTest do
               Erlang.erlang.«=:=/2»,
               Erlang.erlang.«or/2», ge, le, h46, h69, h101]
 
-        have number_zero_stop : ∀ (b : UInt8) (bs : List UInt8) (orig skip acc stack : Term) (len
+        have number_zero_stop : ∀ {d : Dispatcher} (b : UInt8) (bs : List UInt8)
+            (orig skip acc stack : Term) (len
             : Int) (separator : b.toNat = 44 ∨ b.toNat = 93 ∨ b.toNat = 125),
-            «number_zero/7» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc
+            «number_zero/7» d (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc
                 stack options (.integer len) =
               (do
-                let value ← Term.apply (.function 2 1 #[]) #[.bitstring ⟨#[48]⟩ 0 (valid_aligned
+                let value ← Dispatcher.pure d (.function 2 1 #[]) #[.bitstring ⟨#[48]⟩ 0
+                    (valid_aligned
                     _)]
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer len))
-                «continue/7» (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig next acc
+                let next ← Erlang.erlang.«+/2» skip (.integer len)
+                «continue/7» d (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig next acc
                     stack options value) := by
-          intro b bs orig skip acc stack len separator
+          intro d b bs orig skip acc stack len separator
           have h46 : (b.toNat : Int) ≠ 46 := by omega
           have h69 : (b.toNat : Int) ≠ 69 := by omega
           have h101 : (b.toNat : Int) ≠ 101 := by omega
@@ -2313,16 +2356,16 @@ defmodule JsonProofsTest do
             (.bitstring ⟨((if x < 0 then [45] else []) ++ first :: rest).toArray⟩ 0
             (valid_aligned _))) (digits : ∀ d ∈ first :: rest, 48 ≤ d.toNat ∧ d.toNat ≤ 57) (zero
             : first.toNat = 48 → x = 0 ∧ rest = []),
-            Result.resolve Erlang.program.fun_table depth
-                («value/6» (.bitstring ⟨(((if x < 0 then [45] else []) ++ first :: rest) ++ b ::
+            («value/6» (Dispatcher.ofTable Erlang.program.fun_table depth) (.bitstring ⟨(((if x < 0
+                then [45] else []) ++ first :: rest) ++ b ::
                     post).toArray⟩ 0
                     (valid_aligned _))
                   (.bitstring ⟨(pre ++ ((if x < 0 then [45] else []) ++ first :: rest) ++ b ::
                       post).toArray⟩ 0
                     (valid_aligned _))
                   (.integer pre.length) acc stack options) =
-              Result.resolve Erlang.program.fun_table depth
-                («continue/7» (.bitstring ⟨(b :: post).toArray⟩ 0 (valid_aligned _))
+              («continue/7» (Dispatcher.ofTable Erlang.program.fun_table depth) (.bitstring ⟨(b ::
+                  post).toArray⟩ 0 (valid_aligned _))
                   (.bitstring ⟨(pre ++ ((if x < 0 then [45] else []) ++ first :: rest) ++ b ::
                       post).toArray⟩ 0
                     (valid_aligned _))
@@ -2389,12 +2432,12 @@ defmodule JsonProofsTest do
         -- A number embedded in the input, followed by a separator, continues with its value.
         have element : ∀ (x : Int) (pre post : List UInt8) (b : UInt8) (separator : b.toNat = 44
             ∨ b.toNat = 93 ∨ b.toNat = 125) (acc stack : Term) (depth : Nat),
-            Result.resolve Erlang.program.fun_table depth
-                («value/6» (.bitstring ⟨(textOf x ++ b :: post).toArray⟩ 0 (valid_aligned _))
+            («value/6» (Dispatcher.ofTable Erlang.program.fun_table depth) (.bitstring ⟨(textOf x ++
+                b :: post).toArray⟩ 0 (valid_aligned _))
                   (.bitstring ⟨(pre ++ textOf x ++ b :: post).toArray⟩ 0 (valid_aligned _))
                   (.integer pre.length) acc stack options) =
-              Result.resolve Erlang.program.fun_table depth
-                («continue/7» (.bitstring ⟨(b :: post).toArray⟩ 0 (valid_aligned _))
+              («continue/7» (Dispatcher.ofTable Erlang.program.fun_table depth) (.bitstring ⟨(b ::
+                  post).toArray⟩ 0 (valid_aligned _))
                   (.bitstring ⟨(pre ++ textOf x ++ b :: post).toArray⟩ 0 (valid_aligned _))
                   (.integer (pre.length + (textOf x).length)) acc stack options (.integer x)) :=
                       by
@@ -2404,38 +2447,37 @@ defmodule JsonProofsTest do
           exact decode_element x pre post b separator acc stack depth first rest encoded digits zero
 
         have encode_integer : ∀ (x : Int) (depth : Nat),
-            Result.resolve Erlang.program.fun_table depth («do_encode/2» (.integer x) (.function
+            («do_encode/2» (Dispatcher.ofTable Erlang.program.fun_table depth) (.integer x)
+                (.function
                 0 2 #[])) =
               .ok (.bitstring ⟨(textOf x).toArray⟩ 0 (valid_aligned _)) := by
           intro x depth
           obtain ⟨first, rest, text, encoded, -, -⟩ := textOf_decimal x
           unfold «do_encode/2»
           simp only []
-          rw [encoded, Result.resolve_of_isPure _ _ _ (by simp), text, Result.ofExcept_ok]
+          rw [encoded, text]
 
         -- json decodes floats with binary_to_float/1 inside a try.
-        have try_float : ∀ {α : Type} (depth : Nat) (token : Term) (next : Term → Result α)
-            (handler : Exception → Result α),
-            Result.resolve Erlang.program.fun_table depth
-                (Result.tryWith (Term.apply (.function 1 1 #[]) #[token]) next handler) =
-              Result.resolve Erlang.program.fun_table depth
-                (Result.tryWith (Result.ofExcept (Erlang.erlang.«binary_to_float/1» token)) next
+        have try_float : ∀ {α : Type} (depth : Nat) (token : Term)
+            (next : Term → Except Exception α)
+            (handler : Exception → Except Exception α),
+            (Lynx.Except.tryWith (Dispatcher.pure (Dispatcher.ofTable Erlang.program.fun_table
+                depth) (.function 1 1 #[]) #[token]) next handler) =
+              (Lynx.Except.tryWith (Erlang.erlang.«binary_to_float/1» token) next
                   handler) :=
-          fun depth token next handler =>
-            Result.resolve_tryWith_apply_pure Erlang.program.fun_table depth 1 1 #[] #[token] _ next
-              handler (by rfl) (by rfl)
+          fun depth token next handler => by simp [«$lynx_fun_1/1»]
 
         have float_decode_end : ∀ (orig skip acc stack : Term) (len : Int) (token : Term)
             (f : Term.FiniteFloat) (depth : Nat),
             Erlang.erlang.«binary_to_float/1» token = .ok (.float f) →
-            Result.resolve Erlang.program.fun_table depth
-                («float_decode/8» (bin []) orig skip acc stack options (.integer len) token) =
-              Result.ofExcept («unexpected/8» orig skip acc stack options (.integer len)
+            «float_decode/8» (Dispatcher.ofTable Erlang.program.fun_table depth) (bin []) orig skip
+                acc stack options (.integer len) token =
+              («unexpected/8» orig skip acc stack options (.integer len)
                 (.integer 0) (.tuple #[.atom "number", .float f])) := by
           intro orig skip acc stack len token f depth parsed
           unfold «float_decode/8»
           simp only [matchEnd_byte_nil]
-          simp only [show ∀ (g : Term → Result Term) (x : Term), (pure x >>= g) = g x from
+          simp only [show ∀ (g : Term → Except Exception Term) (x : Term), (pure x >>= g) = g x from
             fun _ _ => rfl]
           rw [try_float, parsed]
           simp
@@ -2447,45 +2489,48 @@ defmodule JsonProofsTest do
         have float_decode_rest : ∀ (b : UInt8) (post : List UInt8) (orig skip acc stack : Term)
             (len : Int) (token : Term) (f : Term.FiniteFloat) (depth : Nat),
             Erlang.erlang.«binary_to_float/1» token = .ok (.float f) →
-            Result.resolve Erlang.program.fun_table depth
-                («float_decode/8» (bin (b :: post)) orig skip acc stack options (.integer len) token) =
-              Result.resolve Erlang.program.fun_table depth
-                (do
-                  let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer len))
-                  «continue/7» (bin (b :: post)) orig next acc stack options (.float f)) := by
+            «float_decode/8» (Dispatcher.ofTable Erlang.program.fun_table depth) (bin (b :: post))
+                orig skip acc stack options (.integer len) token =
+              (do
+                  let next ← Erlang.erlang.«+/2» skip (.integer len)
+                  «continue/7» (Dispatcher.ofTable Erlang.program.fun_table depth) (bin (b :: post))
+                      orig next acc stack options (.float f)) := by
           intro b post orig skip acc stack len token f depth parsed
           have whole : matchTail (bin (b :: post)) (.atom "all") 1 = true := by
             simp [matchTail, Nat.mod_one]
           unfold «float_decode/8»
           simp only [matchEnd_byte, whole]
-          simp only [show ∀ (g : Term → Result Term) (x : Term), (pure x >>= g) = g x from
+          simp only [show ∀ (g : Term → Except Exception Term) (x : Term), (pure x >>= g) = g x from
             fun _ _ => rfl]
           rw [try_float, parsed]
           simp
 
         -- A minus sign followed by zero continues as a leading zero.
-        have number_minus_zero : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
-            «number_minus/6» (bin ((48 : UInt8) :: bs)) orig skip acc stack dec =
-              «number_zero/7» (bin bs) orig skip acc stack dec (.integer 2) := by
-          intro orig skip acc stack dec bs
+        have number_minus_zero : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (bs : List
+            UInt8),
+            «number_minus/6» d (bin ((48 : UInt8) :: bs)) orig skip acc stack dec =
+              «number_zero/7» d (bin bs) orig skip acc stack dec (.integer 2) := by
+          intro d orig skip acc stack dec bs
           unfold «number_minus/6»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one]
 
         -- A point after the whole part starts the fraction.
-        have number_point : ∀ (orig skip acc stack dec : Term) (len : Int) (bs : List UInt8),
-            «number/7» (bin ((46 : UInt8) :: bs)) orig skip acc stack dec (.integer len) =
-              «number_frac/7» (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
-          intro orig skip acc stack dec len bs
+        have number_point : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int)
+            (bs : List UInt8),
+            «number/7» d (bin ((46 : UInt8) :: bs)) orig skip acc stack dec (.integer len) =
+              «number_frac/7» d (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
+          intro d orig skip acc stack dec len bs
           have below : (compare (46 : Int) 48).isGE = false := by decide
           conv => lhs; unfold «number/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», below]
 
-        have number_zero_point : ∀ (orig skip acc stack dec : Term) (len : Int) (bs : List UInt8),
-            «number_zero/7» (bin ((46 : UInt8) :: bs)) orig skip acc stack dec (.integer len) =
-              «number_frac/7» (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
-          intro orig skip acc stack dec len bs
+        have number_zero_point : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int)
+            (bs : List UInt8),
+            «number_zero/7» d (bin ((46 : UInt8) :: bs)) orig skip acc stack dec (.integer len) =
+              «number_frac/7» d (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
+          intro d orig skip acc stack dec len bs
           conv => lhs; unfold «number_zero/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one]
@@ -2498,61 +2543,67 @@ defmodule JsonProofsTest do
           · simp [Ordering.isGE_iff_ne_lt, Int.compare_eq_lt]; omega
           · simp [Ordering.isLE_iff_ne_gt, Int.compare_eq_gt]; omega
 
-        have frac_digit : ∀ (orig skip acc stack dec : Term) (len : Int) (b : UInt8)
+        have frac_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int)
+            (b : UInt8)
             (bs : List UInt8), 48 ≤ b.toNat → b.toNat ≤ 57 →
-            «number_frac/7» (bin (b :: bs)) orig skip acc stack dec (.integer len) =
-              «number_frac_cont/7» (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
-          intro orig skip acc stack dec len b bs low high
+            «number_frac/7» d (bin (b :: bs)) orig skip acc stack dec (.integer len) =
+              «number_frac_cont/7» d (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
+          intro d orig skip acc stack dec len b bs low high
           obtain ⟨ge, le⟩ := digit_guard b low high
           conv => lhs; unfold «number_frac/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», ge, le]
 
-        have frac_cont_digit : ∀ (orig skip acc stack dec : Term) (len : Int) (b : UInt8)
+        have frac_cont_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int)
+            (b : UInt8)
             (bs : List UInt8), 48 ≤ b.toNat → b.toNat ≤ 57 →
-            «number_frac_cont/7» (bin (b :: bs)) orig skip acc stack dec (.integer len) =
-              «number_frac_cont/7» (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
-          intro orig skip acc stack dec len b bs low high
+            «number_frac_cont/7» d (bin (b :: bs)) orig skip acc stack dec (.integer len) =
+              «number_frac_cont/7» d (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
+          intro d orig skip acc stack dec len b bs low high
           obtain ⟨ge, le⟩ := digit_guard b low high
           conv => lhs; unfold «number_frac_cont/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», ge, le]
 
-        have exp_digit : ∀ (orig skip acc stack dec : Term) (len : Int) (b : UInt8)
+        have exp_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int) (b : UInt8)
             (bs : List UInt8), 48 ≤ b.toNat → b.toNat ≤ 57 →
-            «number_exp/7» (bin (b :: bs)) orig skip acc stack dec (.integer len) =
-              «number_exp_cont/7» (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
-          intro orig skip acc stack dec len b bs low high
+            «number_exp/7» d (bin (b :: bs)) orig skip acc stack dec (.integer len) =
+              «number_exp_cont/7» d (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
+          intro d orig skip acc stack dec len b bs low high
           obtain ⟨ge, le⟩ := digit_guard b low high
           conv => lhs; unfold «number_exp/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», ge, le]
 
-        have exp_sign_digit : ∀ (orig skip acc stack dec : Term) (len : Int) (b : UInt8)
+        have exp_sign_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int)
+            (b : UInt8)
             (bs : List UInt8), 48 ≤ b.toNat → b.toNat ≤ 57 →
-            «number_exp_sign/7» (bin (b :: bs)) orig skip acc stack dec (.integer len) =
-              «number_exp_cont/7» (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
-          intro orig skip acc stack dec len b bs low high
+            «number_exp_sign/7» d (bin (b :: bs)) orig skip acc stack dec (.integer len) =
+              «number_exp_cont/7» d (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
+          intro d orig skip acc stack dec len b bs low high
           obtain ⟨ge, le⟩ := digit_guard b low high
           conv => lhs; unfold «number_exp_sign/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», ge, le]
 
-        have exp_cont_digit : ∀ (orig skip acc stack dec : Term) (len : Int) (b : UInt8)
+        have exp_cont_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int)
+            (b : UInt8)
             (bs : List UInt8), 48 ≤ b.toNat → b.toNat ≤ 57 →
-            «number_exp_cont/7» (bin (b :: bs)) orig skip acc stack dec (.integer len) =
-              «number_exp_cont/7» (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
-          intro orig skip acc stack dec len b bs low high
+            «number_exp_cont/7» d (bin (b :: bs)) orig skip acc stack dec (.integer len) =
+              «number_exp_cont/7» d (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
+          intro d orig skip acc stack dec len b bs low high
           obtain ⟨ge, le⟩ := digit_guard b low high
           conv => lhs; unfold «number_exp_cont/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», ge, le]
 
         -- An `e` after the fraction starts the exponent, which may have a minus sign.
-        have frac_cont_exp : ∀ (orig skip acc stack dec : Term) (len : Int) (bs : List UInt8),
-            «number_frac_cont/7» (bin ((101 : UInt8) :: bs)) orig skip acc stack dec (.integer len) =
-              «number_exp/7» (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
-          intro orig skip acc stack dec len bs
+        have frac_cont_exp : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int)
+            (bs : List UInt8),
+            «number_frac_cont/7» d (bin ((101 : UInt8) :: bs)) orig skip acc stack dec
+                (.integer len) =
+              «number_exp/7» d (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
+          intro d orig skip acc stack dec len bs
           have ge : (compare (101 : Int) 48).isGE = true := by decide
           have above : (compare (101 : Int) 57).isLE = false := by decide
           conv => lhs; unfold «number_frac_cont/7»
@@ -2560,10 +2611,11 @@ defmodule JsonProofsTest do
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2»,
             Erlang.erlang.«=:=/2», Erlang.erlang.«or/2», ge, above]
 
-        have exp_minus : ∀ (orig skip acc stack dec : Term) (len : Int) (bs : List UInt8),
-            «number_exp/7» (bin ((45 : UInt8) :: bs)) orig skip acc stack dec (.integer len) =
-              «number_exp_sign/7» (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
-          intro orig skip acc stack dec len bs
+        have exp_minus : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int) (bs : List
+            UInt8),
+            «number_exp/7» d (bin ((45 : UInt8) :: bs)) orig skip acc stack dec (.integer len) =
+              «number_exp_sign/7» d (bin bs) orig skip acc stack dec (.integer (len + 1)) := by
+          intro d orig skip acc stack dec len bs
           have below : (compare (45 : Int) 48).isGE = false := by decide
           conv => lhs; unfold «number_exp/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
@@ -2571,14 +2623,16 @@ defmodule JsonProofsTest do
             Erlang.erlang.«=:=/2», Erlang.erlang.«or/2», below]
 
         -- A number ends at the end of the input or before a separator.
-        have frac_cont_done : ∀ (orig skip acc stack : Term) (len : Int) (rest : List UInt8),
+        have frac_cont_done : ∀ {d : Dispatcher} (orig skip acc stack : Term) (len : Int)
+            (rest : List UInt8),
             (rest = [] ∨ ∃ b post, rest = b :: post ∧
               (b.toNat = 44 ∨ b.toNat = 93 ∨ b.toNat = 125)) →
-            «number_frac_cont/7» (bin rest) orig skip acc stack options (.integer len) =
+            «number_frac_cont/7» d (bin rest) orig skip acc stack options (.integer len) =
               (do
-                let token ← Result.ofExcept (Erlang.erlang.«binary_part/3» orig skip (.integer len))
-                «float_decode/8» (bin rest) orig skip acc stack options (.integer len) token) := by
-          intro orig skip acc stack len rest stops
+                let token ← Erlang.erlang.«binary_part/3» orig skip (.integer len)
+                «float_decode/8» d (bin rest) orig skip acc stack options (.integer len) token) :=
+                    by
+          intro d orig skip acc stack len rest stops
           rcases stops with rfl | ⟨b, post, rfl, separator⟩
           · conv => lhs; unfold «number_frac_cont/7»
             simp only [matchInteger_byte_nil, extract_none]
@@ -2598,14 +2652,16 @@ defmodule JsonProofsTest do
               simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2»,
                 Erlang.erlang.«=:=/2», Erlang.erlang.«or/2», ge, le, h69, h101]
 
-        have exp_cont_done : ∀ (orig skip acc stack : Term) (len : Int) (rest : List UInt8),
+        have exp_cont_done : ∀ {d : Dispatcher} (orig skip acc stack : Term) (len : Int)
+            (rest : List UInt8),
             (rest = [] ∨ ∃ b post, rest = b :: post ∧
               (b.toNat = 44 ∨ b.toNat = 93 ∨ b.toNat = 125)) →
-            «number_exp_cont/7» (bin rest) orig skip acc stack options (.integer len) =
+            «number_exp_cont/7» d (bin rest) orig skip acc stack options (.integer len) =
               (do
-                let token ← Result.ofExcept (Erlang.erlang.«binary_part/3» orig skip (.integer len))
-                «float_decode/8» (bin rest) orig skip acc stack options (.integer len) token) := by
-          intro orig skip acc stack len rest stops
+                let token ← Erlang.erlang.«binary_part/3» orig skip (.integer len)
+                «float_decode/8» d (bin rest) orig skip acc stack options (.integer len) token) :=
+                    by
+          intro d orig skip acc stack len rest stops
           rcases stops with rfl | ⟨b, post, rfl, separator⟩
           · conv => lhs; unfold «number_exp_cont/7»
             simp only [matchInteger_byte_nil, extract_none]
@@ -2621,12 +2677,13 @@ defmodule JsonProofsTest do
                 simp [Ordering.isLE_iff_ne_gt, Int.compare_eq_gt]; omega
               simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», ge, le]
 
-        have frac_cont_digits : ∀ (orig skip acc stack dec : Term) (digits rest : List UInt8),
+        have frac_cont_digits : ∀ {d : Dispatcher} (orig skip acc stack dec : Term)
+            (digits rest : List UInt8),
             (∀ d ∈ digits, 48 ≤ d.toNat ∧ d.toNat ≤ 57) → ∀ len : Int,
-            «number_frac_cont/7» (bin (digits ++ rest)) orig skip acc stack dec (.integer len) =
-              «number_frac_cont/7» (bin rest) orig skip acc stack dec
+            «number_frac_cont/7» d (bin (digits ++ rest)) orig skip acc stack dec (.integer len) =
+              «number_frac_cont/7» d (bin rest) orig skip acc stack dec
                 (.integer (len + digits.length)) := by
-          intro orig skip acc stack dec digits rest all len
+          intro d orig skip acc stack dec digits rest all len
           induction digits generalizing len with
           | nil => simp
           | cons d ds ih =>
@@ -2637,12 +2694,13 @@ defmodule JsonProofsTest do
             have : len + 1 + (ds.length : Int) = len + ((d :: ds).length : Int) := by simp; omega
             rw [this]
 
-        have exp_cont_digits : ∀ (orig skip acc stack dec : Term) (digits rest : List UInt8),
+        have exp_cont_digits : ∀ {d : Dispatcher} (orig skip acc stack dec : Term)
+            (digits rest : List UInt8),
             (∀ d ∈ digits, 48 ≤ d.toNat ∧ d.toNat ≤ 57) → ∀ len : Int,
-            «number_exp_cont/7» (bin (digits ++ rest)) orig skip acc stack dec (.integer len) =
-              «number_exp_cont/7» (bin rest) orig skip acc stack dec
+            «number_exp_cont/7» d (bin (digits ++ rest)) orig skip acc stack dec (.integer len) =
+              «number_exp_cont/7» d (bin rest) orig skip acc stack dec
                 (.integer (len + digits.length)) := by
-          intro orig skip acc stack dec digits rest all len
+          intro d orig skip acc stack dec digits rest all len
           induction digits generalizing len with
           | nil => simp
           | cons d ds ih =>
@@ -2654,28 +2712,29 @@ defmodule JsonProofsTest do
             rw [this]
 
         -- The fraction and the optional exponent end with the float decoder on the token.
-        have after_point : ∀ (fraction exponent rest : List UInt8) (orig skip acc stack : Term)
+        have after_point : ∀ {d : Dispatcher} (fraction exponent rest : List UInt8)
+            (orig skip acc stack : Term)
             (len : Int), fraction ≠ [] → (∀ d ∈ fraction, 48 ≤ d.toNat ∧ d.toNat ≤ 57) →
             (exponent = [] ∨ ∃ esign digits, exponent = 101 :: (esign ++ digits) ∧
               (esign = [] ∨ esign = [45]) ∧ digits ≠ [] ∧
               ∀ d ∈ digits, 48 ≤ d.toNat ∧ d.toNat ≤ 57) →
             (rest = [] ∨ ∃ b post, rest = b :: post ∧
               (b.toNat = 44 ∨ b.toNat = 93 ∨ b.toNat = 125)) →
-            «number_frac/7» (bin (fraction ++ exponent ++ rest)) orig skip acc stack options
+            «number_frac/7» d (bin (fraction ++ exponent ++ rest)) orig skip acc stack options
                 (.integer len) =
               (do
-                let token ← Result.ofExcept (Erlang.erlang.«binary_part/3» orig skip
+                let token ← (Erlang.erlang.«binary_part/3» orig skip
                   (.integer (len + (fraction ++ exponent).length)))
-                «float_decode/8» (bin rest) orig skip acc stack options
+                «float_decode/8» d (bin rest) orig skip acc stack options
                   (.integer (len + (fraction ++ exponent).length)) token) := by
-          intro fraction exponent rest orig skip acc stack len fne fd ex stops
+          intro d fraction exponent rest orig skip acc stack len fne fd ex stops
           have done : ∀ a b : Int, a = b →
               (do
-                let token ← Result.ofExcept (Erlang.erlang.«binary_part/3» orig skip (.integer a))
-                «float_decode/8» (bin rest) orig skip acc stack options (.integer a) token) =
+                let token ← Erlang.erlang.«binary_part/3» orig skip (.integer a)
+                «float_decode/8» d (bin rest) orig skip acc stack options (.integer a) token) =
               (do
-                let token ← Result.ofExcept (Erlang.erlang.«binary_part/3» orig skip (.integer b))
-                «float_decode/8» (bin rest) orig skip acc stack options (.integer b) token) := by
+                let token ← Erlang.erlang.«binary_part/3» orig skip (.integer b)
+                «float_decode/8» d (bin rest) orig skip acc stack options (.integer b) token) := by
             intro a b h; rw [h]
           obtain ⟨f, fs, rfl⟩ := List.exists_cons_of_ne_nil fne
           have fb := fd f (by simp)
@@ -2701,16 +2760,17 @@ defmodule JsonProofsTest do
               exact done _ _ (by simp; omega)
 
         -- An optional minus sign and the whole part lead to the point.
-        have before_point : ∀ (sign whole tail : List UInt8) (orig skip acc stack : Term),
+        have before_point : ∀ {d : Dispatcher} (sign whole tail : List UInt8)
+            (orig skip acc stack : Term),
             (sign = [] ∨ sign = [45]) → whole ≠ [] →
             (∀ d ∈ whole, 48 ≤ d.toNat ∧ d.toNat ≤ 57) → (∀ r, whole = 48 :: r → r = []) →
-            «value/6» (bin (sign ++ whole ++ 46 :: tail)) orig skip acc stack options =
-              «number_frac/7» (bin tail) orig skip acc stack options
+            «value/6» d (bin (sign ++ whole ++ 46 :: tail)) orig skip acc stack options =
+              «number_frac/7» d (bin tail) orig skip acc stack options
                 (.integer ((sign ++ whole).length + 1)) := by
-          intro sign whole tail orig skip acc stack sign_ wne wd leading
+          intro d sign whole tail orig skip acc stack sign_ wne wd leading
           have frac : ∀ a b : Int, a = b →
-              «number_frac/7» (bin tail) orig skip acc stack options (.integer a) =
-                «number_frac/7» (bin tail) orig skip acc stack options (.integer b) := by
+              «number_frac/7» d (bin tail) orig skip acc stack options (.integer a) =
+                «number_frac/7» d (bin tail) orig skip acc stack options (.integer b) := by
             intro a b h; rw [h]
           obtain ⟨w, ws, rfl⟩ := List.exists_cons_of_ne_nil wne
           have wb := wd w (by simp)
@@ -2763,16 +2823,18 @@ defmodule JsonProofsTest do
             by rw [text]; exact parsed, s1, s2, s3, s4, s5, s6, s7⟩
 
         have decode_float : ∀ (f : Term.FiniteFloat) (depth : Nat),
-            Result.resolve Erlang.program.fun_table depth («decode/1» (bin (floatText f))) =
+            «decode/1» (Dispatcher.ofTable Erlang.program.fun_table depth) (bin (floatText f)) =
               .ok (.float f) := by
           intro f depth
           obtain ⟨sign, whole, fraction, exponent, text, -, parsed, s1, s2, s3, s4, s5, s6, s7⟩ :=
             float_text f
           rw [text] at parsed ⊢
-          have before := before_point sign whole (fraction ++ exponent)
+          have before := before_point (d := Dispatcher.ofTable Erlang.program.fun_table depth) sign
+              whole (fraction ++ exponent)
             (bin (sign ++ whole ++ 46 :: (fraction ++ exponent))) (.integer 0) (.atom "ok") .nil
             s1 s2 s3 s4
-          have after := after_point fraction exponent []
+          have after := after_point (d := Dispatcher.ofTable Erlang.program.fun_table depth)
+              fraction exponent []
             (bin (sign ++ whole ++ 46 :: (fraction ++ exponent))) (.integer 0) (.atom "ok") .nil
             ((sign ++ whole).length + 1) s5 s6 s7 (Or.inl rfl)
           rw [List.append_nil] at after
@@ -2782,13 +2844,13 @@ defmodule JsonProofsTest do
           unfold «decode/1»
           simp only []
           rw [before, after, len]
-          simp only [Erlang.erlang.binary_part_whole, Result.ofExcept_ok, Result.ok_bind,
-            Result.resolve_bind]
+          simp only [Erlang.erlang.binary_part_whole, Lynx.Except.ok_bind,
+            ]
           rw [float_decode_end _ _ _ _ _ _ f depth parsed, unexpected_whole]
           simp
 
         have roundtrip_float : ∀ f : Term.FiniteFloat,
-            Result.resolve Erlang.program.fun_table 100 («roundtrip/1» (.float f)) =
+            «roundtrip/1» (Dispatcher.ofTable Erlang.program.fun_table 100) (.float f) =
               .ok Term.true := by
           intro f
           obtain ⟨-, -, -, -, -, encoded, -⟩ := float_text f
@@ -2796,19 +2858,19 @@ defmodule JsonProofsTest do
           simp
           unfold «do_encode/2»
           simp only [Term.list]
-          simp [encoded, Result.resolve_bind, Erlang.erlang.iolist_to_binary_binary,
+          simp [encoded, Erlang.erlang.iolist_to_binary_binary,
             decode_float f 100, Erlang.erlang.«=:=/2»]
 
         -- A float embedded in the input, followed by a separator, continues with its value.
         have float_element : ∀ (f : Term.FiniteFloat) (pre post : List UInt8) (b : UInt8)
             (separator : b.toNat = 44 ∨ b.toNat = 93 ∨ b.toNat = 125) (acc stack : Term)
             (depth : Nat),
-            Result.resolve Erlang.program.fun_table depth
-                («value/6» (.bitstring ⟨(floatText f ++ b :: post).toArray⟩ 0 (valid_aligned _))
+            («value/6» (Dispatcher.ofTable Erlang.program.fun_table depth) (.bitstring ⟨(floatText f
+                ++ b :: post).toArray⟩ 0 (valid_aligned _))
                   (.bitstring ⟨(pre ++ floatText f ++ b :: post).toArray⟩ 0 (valid_aligned _))
                   (.integer pre.length) acc stack options) =
-              Result.resolve Erlang.program.fun_table depth
-                («continue/7» (.bitstring ⟨(b :: post).toArray⟩ 0 (valid_aligned _))
+              («continue/7» (Dispatcher.ofTable Erlang.program.fun_table depth) (.bitstring ⟨(b ::
+                  post).toArray⟩ 0 (valid_aligned _))
                   (.bitstring ⟨(pre ++ floatText f ++ b :: post).toArray⟩ 0 (valid_aligned _))
                   (.integer (pre.length + (floatText f).length)) acc stack options (.float f)) := by
           intro f pre post b separator acc stack depth
@@ -2816,10 +2878,12 @@ defmodule JsonProofsTest do
             float_text f
           have part := binary_part_middle pre (floatText f) (b :: post)
           rw [text] at parsed part ⊢
-          have before := before_point sign whole (fraction ++ exponent ++ b :: post)
+          have before := before_point (d := Dispatcher.ofTable Erlang.program.fun_table depth) sign
+              whole (fraction ++ exponent ++ b :: post)
             (bin (pre ++ (sign ++ whole ++ 46 :: (fraction ++ exponent)) ++ b :: post))
             (.integer pre.length) acc stack s1 s2 s3 s4
-          have after := after_point fraction exponent (b :: post)
+          have after := after_point (d := Dispatcher.ofTable Erlang.program.fun_table depth)
+              fraction exponent (b :: post)
             (bin (pre ++ (sign ++ whole ++ 46 :: (fraction ++ exponent)) ++ b :: post))
             (.integer pre.length) acc stack ((sign ++ whole).length + 1) s5 s6 s7
             (Or.inr ⟨b, post, rfl, separator⟩)
@@ -2829,70 +2893,71 @@ defmodule JsonProofsTest do
           rw [len] at after
           rw [show sign ++ whole ++ 46 :: (fraction ++ exponent) ++ b :: post =
             sign ++ whole ++ 46 :: (fraction ++ exponent ++ b :: post) by simp, before, after]
-          simp only [Result.resolve_bind, part, Result.ofExcept_ok, Result.ok_bind]
+          simp only [part, Lynx.Except.ok_bind]
           rw [float_decode_rest _ _ _ _ _ _ _ _ f depth parsed]
-          simp [Result.resolve_bind]
+          simp []
 
         -- Keywords dispatch on their first letter and match their other letters at once.
-        have value_true : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
-            «value/6» (.bitstring ⟨((116 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
+        have value_true : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (bs : List UInt8),
+            «value/6» d (.bitstring ⟨((116 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
                 acc stack dec =
-              «true/6» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec := by
-          intro orig skip acc stack dec bs
+              «true/6» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec := by
+          intro d orig skip acc stack dec bs
           unfold «value/6»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
-        have value_false : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
-            «value/6» (.bitstring ⟨((102 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
+        have value_false : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (bs : List UInt8),
+            «value/6» d (.bitstring ⟨((102 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
                 acc stack dec =
-              «false/6» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec := by
-          intro orig skip acc stack dec bs
+              «false/6» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec :=
+                  by
+          intro d orig skip acc stack dec bs
           unfold «value/6»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
-        have value_null : ∀ (orig skip acc stack dec : Term) (bs : List UInt8),
-            «value/6» (.bitstring ⟨((110 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
+        have value_null : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (bs : List UInt8),
+            «value/6» d (.bitstring ⟨((110 : UInt8) :: bs).toArray⟩ 0 (valid_aligned _)) orig skip
                 acc stack dec =
-              «null/6» (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec := by
-          intro orig skip acc stack dec bs
+              «null/6» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec := by
+          intro d orig skip acc stack dec bs
           unfold «value/6»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
-        have true_rest : ∀ (orig skip acc stack dec : Term) (post : List UInt8),
-            «true/6» (.bitstring ⟨([114, 117, 101] ++ post).toArray⟩ 0 (valid_aligned _)) orig
+        have true_rest : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (post : List UInt8),
+            «true/6» d (.bitstring ⟨([114, 117, 101] ++ post).toArray⟩ 0 (valid_aligned _)) orig
                 skip acc stack dec =
               (do
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 4))
-                «continue/7» (.bitstring ⟨post.toArray⟩ 0 (valid_aligned _)) orig next acc stack
+                let next ← Erlang.erlang.«+/2» skip (.integer 4)
+                «continue/7» d (.bitstring ⟨post.toArray⟩ 0 (valid_aligned _)) orig next acc stack
                   dec (.atom "true")) := by
-          intro orig skip acc stack dec post
+          intro d orig skip acc stack dec post
           unfold «true/6»
           simp only [matchInteger_bytes [114, 117, 101] post _ 24 (by decide), extract_some]
           simp [matchTail, Nat.mod_one]
 
-        have false_rest : ∀ (orig skip acc stack dec : Term) (post : List UInt8),
-            «false/6» (.bitstring ⟨([97, 108, 115, 101] ++ post).toArray⟩ 0 (valid_aligned _))
+        have false_rest : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (post : List UInt8),
+            «false/6» d (.bitstring ⟨([97, 108, 115, 101] ++ post).toArray⟩ 0 (valid_aligned _))
                 orig skip acc stack dec =
               (do
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 5))
-                «continue/7» (.bitstring ⟨post.toArray⟩ 0 (valid_aligned _)) orig next acc stack
+                let next ← Erlang.erlang.«+/2» skip (.integer 5)
+                «continue/7» d (.bitstring ⟨post.toArray⟩ 0 (valid_aligned _)) orig next acc stack
                   dec (.atom "false")) := by
-          intro orig skip acc stack dec post
+          intro d orig skip acc stack dec post
           unfold «false/6»
           simp only [matchInteger_bytes [97, 108, 115, 101] post _ 32 (by decide), extract_some]
           simp [matchTail, Nat.mod_one]
 
-        have null_rest : ∀ (orig skip acc stack : Term) (post : List UInt8),
-            «null/6» (.bitstring ⟨([117, 108, 108] ++ post).toArray⟩ 0 (valid_aligned _)) orig
+        have null_rest : ∀ {d : Dispatcher} (orig skip acc stack : Term) (post : List UInt8),
+            «null/6» d (.bitstring ⟨([117, 108, 108] ++ post).toArray⟩ 0 (valid_aligned _)) orig
                 skip acc stack options =
               (do
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 4))
-                «continue/7» (.bitstring ⟨post.toArray⟩ 0 (valid_aligned _)) orig next acc stack
+                let next ← Erlang.erlang.«+/2» skip (.integer 4)
+                «continue/7» d (.bitstring ⟨post.toArray⟩ 0 (valid_aligned _)) orig next acc stack
                   options (.atom "null")) := by
-          intro orig skip acc stack post
+          intro d orig skip acc stack post
           unfold «null/6»
           simp only [matchInteger_bytes [117, 108, 108] post _ 24 (by decide), extract_some]
           simp [matchTail, Nat.mod_one]
@@ -2958,95 +3023,103 @@ defmodule JsonProofsTest do
           exp_cont_done frac_cont_digits exp_cont_digits after_point before_point decode_float
 
         -- An opening brace starts an object.
-        have value_brace : ∀ (bs : List UInt8) (orig skip acc stack : Term),
-            «value/6» (bin (123 :: bs)) orig skip acc stack options =
-              «object_start/7» (bin bs) orig skip acc stack options (.integer 1) := by
-          intro bs orig skip acc stack
+        have value_brace : ∀ {d : Dispatcher} (bs : List UInt8) (orig skip acc stack : Term),
+            «value/6» d (bin (123 :: bs)) orig skip acc stack options =
+              «object_start/7» d (bin bs) orig skip acc stack options (.integer 1) := by
+          intro d bs orig skip acc stack
           unfold «value/6»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
-        have object_start_close : ∀ (bs : List UInt8) (orig skip acc stack : Term) (len : Int),
-            «object_start/7» (bin (125 :: bs)) orig skip acc stack options (.integer len) =
+        have object_start_close : ∀ {d : Dispatcher} (bs : List UInt8) (orig skip acc stack : Term)
+            (len : Int),
+            «object_start/7» d (bin (125 :: bs)) orig skip acc stack options (.integer len) =
               (do
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer len))
-                let after ← Result.ofExcept (Erlang.erlang.«+/2» next (.integer 1))
-                «continue/7» (bin bs) orig after acc stack options (.map [])) := by
-          intro bs orig skip acc stack len
+                let next ← Erlang.erlang.«+/2» skip (.integer len)
+                let after ← Erlang.erlang.«+/2» next (.integer 1)
+                «continue/7» d (bin bs) orig after acc stack options (.map [])) := by
+          intro d bs orig skip acc stack len
           conv => lhs; unfold «object_start/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- An object frame decodes its first key with the outer accumulator saved.
-        have object_start_quote : ∀ (bs : List UInt8) (orig skip acc stack : Term) (len : Int),
-            «object_start/7» (bin (34 :: bs)) orig skip acc stack options (.integer len) =
+        have object_start_quote : ∀ {d : Dispatcher} (bs : List UInt8) (orig skip acc stack : Term)
+            (len : Int),
+            «object_start/7» d (bin (34 :: bs)) orig skip acc stack options (.integer len) =
               (do
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer len))
-                let after ← Result.ofExcept (Erlang.erlang.«+/2» next (.integer 1))
-                «string_ascii/7» (bin bs) orig after .nil (.cons (.atom "object") (.cons acc stack))
+                let next ← Erlang.erlang.«+/2» skip (.integer len)
+                let after ← Erlang.erlang.«+/2» next (.integer 1)
+                «string_ascii/7» d (bin bs) orig after .nil
+                    (.cons (.atom "object") (.cons acc stack))
                   options (.integer 0)) := by
-          intro bs orig skip acc stack len
+          intro d bs orig skip acc stack len
           conv => lhs; unfold «object_start/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- A decoded key waits for its colon, and a decoded value is pushed with its key.
-        have continue_object : ∀ (bs : List UInt8) (orig skip acc rest value : Term),
-            «continue/7» (bin bs) orig skip acc (.cons (.atom "object") rest) options value =
-              «object_value/7» (bin bs) orig skip acc (.cons (.atom "object") rest) options
+        have continue_object : ∀ {d : Dispatcher} (bs : List UInt8)
+            (orig skip acc rest value : Term),
+            «continue/7» d (bin bs) orig skip acc (.cons (.atom "object") rest) options value =
+              «object_value/7» d (bin bs) orig skip acc (.cons (.atom "object") rest) options
                 value := by
-          intro bs orig skip acc rest value
+          intro d bs orig skip acc rest value
           conv => lhs; unfold «continue/7»
           simp [matchTail, Nat.mod_one]
 
-        have object_value_colon : ∀ (bs : List UInt8) (orig skip acc stack key : Term),
-            «object_value/7» (bin (58 :: bs)) orig skip acc stack options key =
+        have object_value_colon : ∀ {d : Dispatcher} (bs : List UInt8)
+            (orig skip acc stack key : Term),
+            «object_value/7» d (bin (58 :: bs)) orig skip acc stack options key =
               (do
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 1))
-                «value/6» (bin bs) orig next acc (.cons key stack) options) := by
-          intro bs orig skip acc stack key
+                let next ← Erlang.erlang.«+/2» skip (.integer 1)
+                «value/6» d (bin bs) orig next acc (.cons key stack) options) := by
+          intro d bs orig skip acc stack key
           conv => lhs; unfold «object_value/7»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
-        have continue_key : ∀ (bs key : List UInt8) (orig skip acc rest value : Term),
-            «continue/7» (bin bs) orig skip acc (.cons (bin key) rest) options value =
-              «object_push/8» (bin bs) orig skip acc rest options value (bin key) := by
-          intro bs key orig skip acc rest value
+        have continue_key : ∀ {d : Dispatcher} (bs key : List UInt8)
+            (orig skip acc rest value : Term),
+            «continue/7» d (bin bs) orig skip acc (.cons (bin key) rest) options value =
+              «object_push/8» d (bin bs) orig skip acc rest options value (bin key) := by
+          intro d bs key orig skip acc rest value
           conv => lhs; unfold «continue/7»
           simp [matchTail, Nat.mod_one]
 
-        have object_push_comma : ∀ (bs : List UInt8) (orig skip acc stack value key : Term),
-            «object_push/8» (bin (44 :: bs)) orig skip acc stack options value key =
+        have object_push_comma : ∀ {d : Dispatcher} (bs : List UInt8)
+            (orig skip acc stack value key : Term),
+            «object_push/8» d (bin (44 :: bs)) orig skip acc stack options value key =
               (do
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 1))
-                «object_key/6» (bin bs) orig next (.cons (.tuple #[key, value]) acc) stack
+                let next ← Erlang.erlang.«+/2» skip (.integer 1)
+                «object_key/6» d (bin bs) orig next (.cons (.tuple #[key, value]) acc) stack
                   options) := by
-          intro bs orig skip acc stack value key
+          intro d bs orig skip acc stack value key
           conv => lhs; unfold «object_push/8»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- The closing brace builds the map from the pushed pairs and restores the outer frame.
-        have object_push_close : ∀ (bs : List UInt8) (orig skip acc frame old stack value key : Term),
-            «object_push/8» (bin (125 :: bs)) orig skip acc (.cons frame (.cons old stack)) options
+        have object_push_close : ∀ {d : Dispatcher} (bs : List UInt8)
+            (orig skip acc frame old stack value key : Term),
+            «object_push/8» d (bin (125 :: bs)) orig skip acc (.cons frame (.cons old stack))
+                options
                 value key =
               (do
-                let map ← Result.ofExcept
-                  (Erlang.maps.«from_list/1» (.cons (.tuple #[key, value]) acc))
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 1))
-                «continue/7» (bin bs) orig next old stack options map) := by
-          intro bs orig skip acc frame old stack value key
+                let map ← Erlang.maps.«from_list/1» (.cons (.tuple #[key, value]) acc)
+                let next ← Erlang.erlang.«+/2» skip (.integer 1)
+                «continue/7» d (bin bs) orig next old stack options map) := by
+          intro d bs orig skip acc frame old stack value key
           conv => lhs; unfold «object_push/8»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
-        have object_key_quote : ∀ (bs : List UInt8) (orig skip acc stack : Term),
-            «object_key/6» (bin (34 :: bs)) orig skip acc stack options =
+        have object_key_quote : ∀ {d : Dispatcher} (bs : List UInt8) (orig skip acc stack : Term),
+            «object_key/6» d (bin (34 :: bs)) orig skip acc stack options =
               (do
-                let next ← Result.ofExcept (Erlang.erlang.«+/2» skip (.integer 1))
-                «string_ascii/7» (bin bs) orig next acc stack options (.integer 0)) := by
-          intro bs orig skip acc stack
+                let next ← Erlang.erlang.«+/2» skip (.integer 1)
+                «string_ascii/7» d (bin bs) orig next acc stack options (.integer 0)) := by
+          intro d bs orig skip acc stack
           conv => lhs; unfold «object_key/6»
           simp only [matchInteger_byte, extract_some, matchEnd_byte]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
@@ -3109,12 +3182,12 @@ defmodule JsonProofsTest do
             (depth : Nat),
             ((∃ b post, rest = b :: post ∧ (b.toNat = 44 ∨ b.toNat = 93 ∨ b.toNat = 125)) ∨
               (∀ n, v ≠ .int n) ∧ ∀ f, v ≠ .float f) →
-            Result.resolve Erlang.program.fun_table depth
-                («value/6» (.bitstring ⟨(v.text ++ rest).toArray⟩ 0 (valid_aligned _))
+            «value/6» (Dispatcher.ofTable Erlang.program.fun_table depth)
+                  (.bitstring ⟨(v.text ++ rest).toArray⟩ 0 (valid_aligned _))
                   (.bitstring ⟨(pre ++ v.text ++ rest).toArray⟩ 0 (valid_aligned _))
-                  (.integer pre.length) acc stack options) =
-              Result.resolve Erlang.program.fun_table depth
-                («continue/7» (.bitstring ⟨rest.toArray⟩ 0 (valid_aligned _))
+                  (.integer pre.length) acc stack options =
+              («continue/7» (Dispatcher.ofTable Erlang.program.fun_table depth)
+                  (.bitstring ⟨rest.toArray⟩ 0 (valid_aligned _))
                   (.bitstring ⟨(pre ++ v.text ++ rest).toArray⟩ 0 (valid_aligned _))
                   (.integer (pre.length + v.text.length)) acc stack options v.term)
 
@@ -3130,26 +3203,28 @@ defmodule JsonProofsTest do
         have field_step : ∀ (k : Key) (v : Json), Decodes v → ∀ (fs : List (Key × Json))
             (pre rest : List UInt8) (acc frame : Term) (skip : Int) (depth : Nat),
             skip = pre.length + 1 →
-            Result.resolve Erlang.program.fun_table depth
-                («string_ascii/7» (bin (escapeText k.1 ++ 34 :: 58 ::
+            («string_ascii/7» (Dispatcher.ofTable Erlang.program.fun_table depth) (bin (escapeText
+                k.1 ++ 34 :: 58 ::
                     (v.text ++ (Json.fieldsText fs ++ rest))))
                   (bin (pre ++ 34 :: (escapeText k.1 ++ 34 :: 58 ::
                     (v.text ++ (Json.fieldsText fs ++ rest)))))
                   (.integer skip) acc (.cons (.atom "object") frame) options (.integer 0)) =
-              Result.resolve Erlang.program.fun_table depth
-                («object_push/8» (bin (Json.fieldsText fs ++ rest))
+              («object_push/8» (Dispatcher.ofTable Erlang.program.fun_table depth) (bin
+                  (Json.fieldsText fs ++ rest))
                   (bin (pre ++ 34 :: (escapeText k.1 ++ 34 :: 58 ::
                     (v.text ++ (Json.fieldsText fs ++ rest)))))
                   (.integer (pre.length + (escapeText k.1).length + 3 + v.text.length)) acc
                   (.cons (.atom "object") frame) options v.term (bin k.1)) := by
           intro k v decodes fs pre rest acc frame skip depth skipped
-          have key := (decode7 k.1.length k.1 [] pre (58 :: (v.text ++ (Json.fieldsText fs ++ rest)))
+          have key :=
+              (decode7 (d := Dispatcher.ofTable Erlang.program.fun_table depth) k.1.length k.1 []
+              pre (58 :: (v.text ++ (Json.fieldsText fs ++ rest)))
             acc (.cons (.atom "object") frame) skip 0 (skip + (escapeText k.1).length + 1)
             (Nat.le_refl _) k.2 (by simp) skipped (by simp) (by simp)).2
           simp only [List.nil_append] at key
           rw [key, continue_object, object_value_colon]
-          simp only [Result.resolve_bind, Erlang.erlang.«+/2_integers», Result.ofExcept_ok,
-            Result.ok_bind]
+          simp only [Erlang.erlang.«+/2_integers»,
+            Lynx.Except.ok_bind]
           obtain ⟨b, post, start, separator⟩ := fields_start fs
           have value := decodes (pre ++ 34 :: (escapeText k.1 ++ [34, 58]))
             (Json.fieldsText fs ++ rest) acc (.cons (bin k.1) (.cons (.atom "object") frame)) depth
@@ -3166,13 +3241,13 @@ defmodule JsonProofsTest do
         have object_loop : ∀ fs : List (Key × Json), (∀ f ∈ fs, Decodes f.2) →
             ∀ (done : List (Term × Term)) (key value : Term) (pre rest : List UInt8)
               (old stack : Term) (depth : Nat),
-            Result.resolve Erlang.program.fun_table depth
-                («object_push/8» (bin (Json.fieldsText fs ++ rest))
+            («object_push/8» (Dispatcher.ofTable Erlang.program.fun_table depth) (bin
+                (Json.fieldsText fs ++ rest))
                   (bin (pre ++ (Json.fieldsText fs ++ rest))) (.integer pre.length)
                   (Term.list ((done.map fun p => .tuple #[p.1, p.2]).reverse))
                   (.cons (.atom "object") (.cons old stack)) options value key) =
-              Result.resolve Erlang.program.fun_table depth
-                («continue/7» (bin rest) (bin (pre ++ (Json.fieldsText fs ++ rest)))
+              («continue/7» (Dispatcher.ofTable Erlang.program.fun_table depth) (bin rest) (bin (pre
+                  ++ (Json.fieldsText fs ++ rest)))
                   (.integer (pre.length + (Json.fieldsText fs).length)) old stack options
                   (.map (done ++ (key, value) :: Json.fieldTerms fs))) := by
           intro fs
@@ -3186,7 +3261,7 @@ defmodule JsonProofsTest do
             simp only [List.map_reverse, List.reverse_reverse, List.map_append, List.map_cons,
               List.map_nil, List.reverse_append, List.reverse_cons, List.reverse_nil,
               List.nil_append, List.singleton_append, Term.list_cons] at collected
-            simp [Result.resolve_bind, collected, Json.fieldTerms]
+            simp [collected, Json.fieldTerms]
           | cons f fs ih =>
             intro all done key value pre rest old stack depth
             obtain ⟨k, v⟩ := f
@@ -3194,11 +3269,11 @@ defmodule JsonProofsTest do
               44 :: 34 :: (escapeText k.1 ++ 34 :: 58 :: (v.text ++ Json.fieldsText fs)) from rfl]
             simp only [List.cons_append, List.append_assoc]
             rw [object_push_comma]
-            simp only [Result.resolve_bind, Erlang.erlang.«+/2_integers», Result.ofExcept_ok,
-              Result.ok_bind]
+            simp only [Erlang.erlang.«+/2_integers»,
+              Lynx.Except.ok_bind]
             rw [object_key_quote]
-            simp only [Result.resolve_bind, Erlang.erlang.«+/2_integers», Result.ofExcept_ok,
-              Result.ok_bind]
+            simp only [Erlang.erlang.«+/2_integers»,
+              Lynx.Except.ok_bind]
             have step := field_step k v (all (k, v) (by simp)) fs (pre ++ [44]) rest
               (.cons (.tuple #[key, value]) (Term.list ((done.map fun p => .tuple #[p.1, p.2]).reverse)))
               (.cons old stack) _ depth rfl
@@ -3221,21 +3296,21 @@ defmodule JsonProofsTest do
               next]
             simp only [Json.fieldTerms, List.append_assoc, List.singleton_append, List.length_cons,
               List.length_append]
-            congr 3
+            congr 2
             omega
 
         -- An array frame pushes each element and closes with the reversed list.
         have loop : ∀ xs : List Json, (∀ y ∈ xs, Decodes y) →
             ∀ (done : List Term) (value : Term) (pre rest : List UInt8) (old stack : Term)
               (depth : Nat),
-            Result.resolve Erlang.program.fun_table depth
-                («array_push/7» (.bitstring ⟨(Json.tailText xs ++ rest).toArray⟩ 0
+            («array_push/7» (Dispatcher.ofTable Erlang.program.fun_table depth) (.bitstring
+                ⟨(Json.tailText xs ++ rest).toArray⟩ 0
                     (valid_aligned _))
                   (.bitstring ⟨(pre ++ Json.tailText xs ++ rest).toArray⟩ 0 (valid_aligned _))
                   (.integer pre.length) (Term.list done.reverse)
                   (.cons (.atom "array") (.cons old stack)) options value) =
-              Result.resolve Erlang.program.fun_table depth
-                («continue/7» (.bitstring ⟨rest.toArray⟩ 0 (valid_aligned _))
+              («continue/7» (Dispatcher.ofTable Erlang.program.fun_table depth) (.bitstring
+                  ⟨rest.toArray⟩ 0 (valid_aligned _))
                   (.bitstring ⟨(pre ++ Json.tailText xs ++ rest).toArray⟩ 0 (valid_aligned _))
                   (.integer (pre.length + (Json.tailText xs).length)) old stack options
                   (Term.list (done ++ value :: xs.map Json.term))) := by
@@ -3248,7 +3323,7 @@ defmodule JsonProofsTest do
             rw [array_push_close,
               show Term.cons value (Term.list done.reverse) =
                 Term.list (value :: done.reverse) from rfl, reverse1]
-            simp [Result.resolve_bind]
+            simp []
           | cons y ys ih =>
             intro all done value pre rest old stack depth
             obtain ⟨b, post, tail, separator⟩ := tail_start ys
@@ -3267,10 +3342,8 @@ defmodule JsonProofsTest do
             rw [show Json.tailText (y :: ys) = 44 :: (y.text ++ Json.tailText ys) from rfl]
             simp only [List.cons_append, List.append_assoc]
             rw [array_push_comma]
-            simp only [Result.resolve_bind, Erlang.erlang.«+/2_integers»,
-              Result.ofExcept_ok, Result.ok_bind,
-              Result.resolve_of_isPure _ _ (Result.ok _) (by simp),
-              Result.resolve_of_isPure _ _ (Result.ofExcept _) (by simp)]
+            simp only [Erlang.erlang.«+/2_integers»,
+              Lynx.Except.ok_bind]
             rw [first, continue_array]
             rw [next]
             have length : (pre.length : Int) + 1 + y.text.length + (Json.tailText ys).length =
@@ -3302,28 +3375,30 @@ defmodule JsonProofsTest do
               simp only [List.cons_append, List.nil_append]
               rw [value_false, show (97 :: 108 :: 115 :: 101 :: rest : List UInt8) =
                 [97, 108, 115, 101] ++ rest from rfl, false_rest]
-              simp [Result.resolve_bind, Json.term, Int.add_assoc]
+              simp [Json.term, Int.add_assoc]
             · rw [show Json.text (.bool true) = [116, 114, 117, 101] from rfl]
               simp only [List.cons_append, List.nil_append]
               rw [value_true, show (114 :: 117 :: 101 :: rest : List UInt8) =
                 [114, 117, 101] ++ rest from rfl, true_rest]
-              simp [Result.resolve_bind, Json.term, Int.add_assoc]
+              simp [Json.term, Int.add_assoc]
           case decodesNull =>
             intro pre rest acc stack depth _
             rw [show Json.text .null = [110, 117, 108, 108] from rfl]
             simp only [List.cons_append, List.nil_append]
             rw [value_null, show (117 :: 108 :: 108 :: rest : List UInt8) =
               [117, 108, 108] ++ rest from rfl, null_rest]
-            simp [Result.resolve_bind, Json.term, Int.add_assoc]
+            simp [Json.term, Int.add_assoc]
           case decodesStr =>
             intro s valid
             intro pre rest acc stack depth _
             rw [show Json.text (.str s valid) = 34 :: (escapeText s ++ [34]) from rfl]
             simp only [List.cons_append, List.append_assoc, List.singleton_append, List.nil_append]
             rw [value_quote]
-            simp only [Result.resolve_bind, Erlang.erlang.«+/2_integers», Result.ofExcept_ok,
-              Result.ok_bind]
-            have decoded := (decode7 s.length s [] pre rest acc stack (pre.length + 1) 0
+            simp only [Erlang.erlang.«+/2_integers»,
+              Lynx.Except.ok_bind]
+            have decoded :=
+                (decode7 (d := Dispatcher.ofTable Erlang.program.fun_table depth) s.length s [] pre
+                rest acc stack (pre.length + 1) 0
               (pre.length + (34 :: (escapeText s ++ [34])).length) (Nat.le_refl _) valid (by simp)
               rfl (by simp) (by simp; omega)).2
             simp only [List.nil_append] at decoded
@@ -3337,11 +3412,13 @@ defmodule JsonProofsTest do
               rw [show Json.text (.arr []) = [91, 93] from rfl]
               simp only [List.cons_append, List.nil_append]
               rw [value_open, array_start_close]
-              simp [Result.resolve_bind, Json.term, Json.terms, Int.add_assoc]
+              simp [Json.term, Json.terms, Int.add_assoc]
             | cons x xs =>
               obtain ⟨b, bs, head, start⟩ := first_byte x
               obtain ⟨c, post, tail, separator⟩ := tail_start xs
-              have opened := array_start_value b (bs ++ (Json.tailText xs ++ rest))
+              have opened := array_start_value
+                  (d := Dispatcher.ofTable Erlang.program.fun_table depth) b
+                  (bs ++ (Json.tailText xs ++ rest))
                 (.bitstring ⟨(pre ++ 91 :: (x.text ++ (Json.tailText xs ++ rest))).toArray⟩ 0
                   (valid_aligned _))
                 (.integer pre.length) acc stack 1 start
@@ -3362,10 +3439,8 @@ defmodule JsonProofsTest do
               rw [show Json.text (.arr (x :: xs)) = 91 :: (x.text ++ Json.tailText xs) from rfl]
               simp only [List.cons_append, List.append_assoc]
               rw [value_open, opened]
-              simp only [Result.resolve_bind, Erlang.erlang.«+/2_integers»,
-                Result.ofExcept_ok, Result.ok_bind,
-                Result.resolve_of_isPure _ _ (Result.ok _) (by simp),
-                Result.resolve_of_isPure _ _ (Result.ofExcept _) (by simp)]
+              simp only [Erlang.erlang.«+/2_integers»,
+                Lynx.Except.ok_bind]
               rw [first, continue_array]
               rw [next]
               have length : (pre.length : Int) + 1 + x.text.length + (Json.tailText xs).length =
@@ -3377,13 +3452,13 @@ defmodule JsonProofsTest do
             · rw [show Json.text (.obj []) = [123, 125] from rfl]
               simp only [List.cons_append, List.nil_append]
               rw [value_brace, object_start_close]
-              simp [Result.resolve_bind, Json.term, Json.fieldTerms, Int.add_assoc]
+              simp [Json.term, Json.fieldTerms, Int.add_assoc]
             · rw [show Json.text (.obj ((k, v) :: fs)) =
                 123 :: 34 :: (escapeText k.1 ++ 34 :: 58 :: (v.text ++ Json.fieldsText fs)) from rfl]
               simp only [List.cons_append, List.append_assoc]
               rw [value_brace, object_start_quote]
-              simp only [Result.resolve_bind, Erlang.erlang.«+/2_integers», Result.ofExcept_ok,
-                Result.ok_bind]
+              simp only [Erlang.erlang.«+/2_integers»,
+                Lynx.Except.ok_bind]
               have step := field_step k v (ih (k, v) (by simp)) fs (pre ++ [123]) rest .nil
                 (.cons acc stack) _ depth rfl
               simp only [List.append_assoc, List.singleton_append, List.cons_append,
@@ -3400,7 +3475,7 @@ defmodule JsonProofsTest do
               rw [show (Term.list [] : Term) = .nil from rfl] at next
               rw [next]
               simp only [Json.term, Json.fieldTerms, List.length_cons, List.length_append]
-              congr 3
+              congr 2
               omega
           case decodesNil => intro y mem; cases mem
           case decodesCons =>
@@ -3417,15 +3492,14 @@ defmodule JsonProofsTest do
           case decodesField => intro k v hv; exact hv
 
         have decode_value : ∀ (v : Json) (depth : Nat), (∀ n, v ≠ .int n) ∧ (∀ f, v ≠ .float f) →
-            Result.resolve Erlang.program.fun_table depth
-                («decode/1» (.bitstring ⟨v.text.toArray⟩ 0 (valid_aligned _))) = .ok v.term := by
+            «decode/1» (Dispatcher.ofTable Erlang.program.fun_table depth) (.bitstring
+                ⟨v.text.toArray⟩ 0 (valid_aligned _)) = .ok v.term := by
           intro v depth number
           have whole := decodes v [] [] (.atom "ok") .nil depth (Or.inr number)
           simp only [List.nil_append, List.append_nil, List.length_nil, Int.zero_add] at whole
           rw [show ((0 : Nat) : Int) = 0 from rfl] at whole
           unfold «decode/1»
           simp only []
-          simp only [Result.resolve_bind]
           rw [whole, continue_top, terminate_end]
           simp
 
@@ -3451,14 +3525,15 @@ defmodule JsonProofsTest do
         -- Encoding a value makes one dynamic call per nesting level, and builds iodata
         -- that flattens to its text.
         let Encodes : Json → Prop := fun v => ∀ (t : Term) (depth : Nat), Represents t v →
-            v.depth < depth → ∃ io, Result.resolve Erlang.program.fun_table depth
-                («do_encode/2» t (.function 0 2 #[])) = .ok io ∧
+            v.depth < depth → ∃ io, «do_encode/2»
+                (Dispatcher.ofTable Erlang.program.fun_table depth)
+                t (.function 0 2 #[]) = .ok io ∧
               Erlang.erlang.«iolist_to_binary/1» io = .ok (bin v.text)
 
         have list_loop_values : ∀ (xs : List Json) (ts : Term) (k : Nat), RepresentsList ts xs →
             (∀ y ∈ xs, Encodes y) → (∀ y ∈ xs, y.depth < k) →
-            ∃ io, Result.resolve Erlang.program.fun_table (k + 1)
-                («list_loop/2» ts (.function 0 2 #[])) = .ok io ∧
+            ∃ io, («list_loop/2» (Dispatcher.ofTable Erlang.program.fun_table (k + 1)) ts
+                (.function 0 2 #[])) = .ok io ∧
               Erlang.erlang.«iolist_to_binary/1» io = .ok (bin (Json.tailText xs)) := by
           intro xs
           induction xs with
@@ -3477,11 +3552,11 @@ defmodule JsonProofsTest do
               refine ⟨.cons (.integer 44) (.cons yio lio), ?_, flat_byte 44 _ _
                 (flat_join _ _ _ _ yflat lflat)⟩
               simp only [«list_loop/2»]
-              simp [Result.resolve_bind, yres, lres]
+              simp [yres, lres]
 
         have encode_str : ∀ (s : List UInt8) (valid : Utf8 s) (depth : Nat), ∃ io,
-            Result.resolve Erlang.program.fun_table depth
-                («do_encode/2» (bin s) (.function 0 2 #[])) = .ok io ∧
+            «do_encode/2» (Dispatcher.ofTable Erlang.program.fun_table depth) (bin s)
+                (.function 0 2 #[]) = .ok io ∧
               Erlang.erlang.«iolist_to_binary/1» io = .ok (bin (34 :: (escapeText s ++ [34]))) := by
           intro s valid depth
           obtain ⟨io, encoded, flat⟩ := (encode_string s.length s [] [] (Term.list [.integer 34])
@@ -3495,8 +3570,8 @@ defmodule JsonProofsTest do
         -- The map generator yields each binding as a tuple with the rest of the iterator.
         have fields_loop : ∀ (fs : List (Key × Json)) (es : List (Term × Term)) (k : Nat),
             RepresentsFields es fs → (∀ f ∈ fs, Encodes f.2) → (∀ f ∈ fs, f.2.depth < k) →
-            ∃ io text, Result.resolve Erlang.program.fun_table (k + 1)
-                («lynx_local_10/2» (es.foldr (fun e rest => .tuple #[e.1, e.2, rest]) (.atom "none"))
+            ∃ io text, («lynx_local_10/2» (Dispatcher.ofTable Erlang.program.fun_table (k + 1))
+                (es.foldr (fun e rest => .tuple #[e.1, e.2, rest]) (.atom "none"))
                   (.function 0 2 #[])) = .ok io ∧
               Erlang.erlang.«iolist_to_binary/1» io = .ok (bin text) ∧
               text ++ [125] = Json.fieldsText fs := by
@@ -3520,7 +3595,7 @@ defmodule JsonProofsTest do
               refine ⟨.cons (.cons (.integer 44) (.cons kio (.cons (.integer 58) vio))) lio,
                 44 :: ((34 :: (escapeText key.1 ++ [34])) ++ 58 :: v.text) ++ text, ?_, ?_, ?_⟩
               · simp only [List.foldr_cons, «lynx_local_10/2», «key/2»]
-                simp [Result.resolve_bind, kres, vres, lres]
+                simp [kres, vres, lres]
               · exact flat_join _ _ _ _ (flat_byte 44 _ _ (flat_join _ _ _ _ kflat
                   (flat_byte 58 _ _ vflat))) lflat |>.trans (by simp)
               · simp [Json.fieldsText, ← closed]
@@ -3543,7 +3618,7 @@ defmodule JsonProofsTest do
             refine ⟨_, ?_, flat_bin _⟩
             unfold «do_encode/2»
             simp only [Term.list]
-            rw [encoded, Result.resolve_of_isPure _ _ _ (by simp), Result.ofExcept_ok]
+            rw [encoded]
             rfl
           case encodesBool =>
             intro b
@@ -3587,8 +3662,7 @@ defmodule JsonProofsTest do
                 (flat_join _ _ _ _ xflat lflat)⟩
               unfold «do_encode/2»
               simp [Erlang.erlang.«is_list/1», «do_encode_list/2», Erlang.erlang.«is_function/2»]
-              rw [xres, Result.ok_bind, Result.resolve_bind, lres, Result.ok_bind,
-                Result.resolve_of_isPure _ _ _ (by simp)]
+              rw [xres, Lynx.Except.ok_bind, lres, Lynx.Except.ok_bind]
           case encodesObj =>
             intro fields ih t depth represents bound
             simp only [Json.depth] at bound
@@ -3616,8 +3690,8 @@ defmodule JsonProofsTest do
                 (fun g mem => ih g (by simp [mem])) (fun g mem => below g (by simp [mem]))
               refine ⟨Term.list [.integer 123, .cons kio (.cons (.integer 58) vio), lio, .integer 125],
                 ?_, ?_⟩
-              · simp only [List.foldr_cons, Result.ok_bind, «lynx_local_10/2», «key/2»]
-                simp [Result.resolve_bind, kres, vres, lres]
+              · simp only [List.foldr_cons, Lynx.Except.ok_bind, «lynx_local_10/2», «key/2»]
+                simp [kres, vres, lres]
               · have joined := flat_byte 123 _ _ (flat_join _ _ _ _ (flat_join _ _ _ _ kflat
                   (flat_byte 58 _ _ vflat)) (flat_join _ _ _ _ lflat (flat_byte 125 _ _
                     Erlang.erlang.iolist_to_binary_nil)))
@@ -3685,19 +3759,15 @@ defmodule JsonProofsTest do
         have roundtrip_value : ∀ (v : Json) (t : Term), Represents t v →
             (∀ n, v ≠ .int n) ∧ (∀ f, v ≠ .float f) →
             v.depth < 99 →
-            Result.resolve Erlang.program.fun_table 100 («roundtrip/1» t) = .ok Term.true := by
+            «roundtrip/1» (Dispatcher.ofTable Erlang.program.fun_table 100) t = .ok Term.true := by
           intro v t represents number bound
           simp only [«roundtrip/1», «encode/1», «encode/2», Erlang.erlang.«is_function/2»]
           simp
           obtain ⟨io, encoded, flat⟩ := encode_value v t 99 represents bound
-          rw [encoded, Result.ok_bind]
-          simp only [Result.resolve_bind,
-            Result.resolve_of_isPure _ _ (Result.ok _) (by simp),
-            Result.resolve_of_isPure _ _ (Result.ofExcept _) (by simp),
-            Result.ofExcept_ok, Result.ok_bind]
-          rw [flat, Result.ofExcept_ok, Result.ok_bind,
-            decode_value v _ number, Result.ok_bind]
-          simp [Erlang.erlang.«=:=/2», Result.ofExcept_ok, represents_eq v t represents]
+          rw [encoded, Lynx.Except.ok_bind]
+          rw [flat, Lynx.Except.ok_bind,
+            decode_value v _ number, Lynx.Except.ok_bind]
+          simp [Erlang.erlang.«=:=/2», represents_eq v t represents]
 
         clear represents_eq encode_value fields_loop encode_str list_loop_values flat_byte
           decode_value decodes depth_le field_depth_le encode_integer encode_string flat_close
@@ -3837,7 +3907,6 @@ defmodule JsonProofsTest do
             | _ => simp [Erlang.erlang.«is_integer/1», Erlang.erlang.«is_float/1», Erlang.erlang.«is_list/1»,
                 Erlang.erlang.«is_map/1»] at returned
 
-        apply Lynx.run_of_resolve rfl
         simp only [«json_roundtrip:requires/1», «supported?/1»] at requires
         obtain ⟨v, represents, bound⟩ := extract 64 data requires
         cases v with

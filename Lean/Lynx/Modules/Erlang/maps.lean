@@ -39,17 +39,18 @@ open Lynx
 /-- Fold over the visible bindings in the order `to_list/1` returns them.
 Unordered iterators from `iterator/1` fold like their map. Ordered and partially
 traversed iterators are not modeled, so folding them does not return. -/
-@[expose] def «fold/3» (function init input : Term) : Result :=
+@[expose] def «fold/3» {m : Type → Type u} [Monad m] [MonadExceptOf Exception m] [Dispatch m]
+    (dispatcher : Dispatcher) (function init input : Term) : m Term :=
   match function with
   | .function _ 3 _ =>
     match input with
     | .map entries | .cons (.integer 0) (.map entries) =>
-      (Term.mapEntries entries).foldlM (fun acc entry => Term.apply function #[entry.1, entry.2, acc])
-        init
-    | .atom "none" => .ok init
-    | .cons _ (.map _) | .tuple ⟨[_, _, _]⟩ => .error .exhausted
-    | _ => .error (.error (.tuple #[.atom "badmap", input]))
-  | _ => .error (.error (.atom "badarg"))
+      (Term.mapEntries entries).foldlM
+        (fun acc entry => Dispatch.dispatch dispatcher function #[entry.1, entry.2, acc]) init
+    | .atom "none" => pure init
+    | .cons _ (.map _) | .tuple ⟨[_, _, _]⟩ => throw .exhausted
+    | _ => throw (.error (.tuple #[.atom "badmap", input]))
+  | _ => throw (.error (.atom "badarg"))
 
 /-- Later pairs take precedence, so they shadow earlier ones. -/
 @[expose] def «from_list/1» (list : Term) : Except Exception Term :=

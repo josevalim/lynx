@@ -11,7 +11,7 @@ section
 
 set_option «match».ignoreUnusedAlts true
 
-def «plain/0» : Lynx.Result :=
+def «plain/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith (Lynx.Term.atom "infinity")
     (fun (_lynxReceiveEnv : Lynx.Environment) (_0 : Lynx.Term) =>
       (match _0 with
@@ -23,7 +23,7 @@ def «plain/0» : Lynx.Result :=
         | _0 => pure _0
       | Option.none => pure (Lynx.Term.atom "true"))
 
-def «selective/1» (_0 : Lynx.Term) : Lynx.Result :=
+def «selective/1» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith (Lynx.Term.atom "infinity")
     (fun (_lynxReceiveEnv : Lynx.Environment) (_3 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) =>
@@ -48,7 +48,7 @@ def «selective/1» (_0 : Lynx.Term) : Lynx.Result :=
         | Sum.inr () => pure (Lynx.Term.atom "done")
       | Option.none => pure (Lynx.Term.atom "true"))
 
-def «guarded/1» (_0 : Lynx.Term) : Lynx.Result :=
+def «guarded/1» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith (Lynx.Term.atom "infinity")
     (fun (_lynxReceiveEnv : Lynx.Environment) (_12 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) =>
@@ -117,7 +117,7 @@ def «guarded/1» (_0 : Lynx.Term) : Lynx.Result :=
         | Sum.inr (Sum.inr (Sum.inr ())) => pure (Lynx.Term.atom "done")
       | Option.none => pure (Lynx.Term.atom "true"))
 
-def «self_guard/0» : Lynx.Result :=
+def «self_guard/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith (Lynx.Term.atom "infinity")
     (fun (_lynxReceiveEnv : Lynx.Environment) (_1 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) => (Option.none : Option Lynx.Term)
@@ -127,7 +127,7 @@ def «self_guard/0» : Lynx.Result :=
             (Lynx.Result.toExceptRead
               (Lynx.Result.tryWith
                 (do
-                  let _0 ← Erlang.erlang.«self/0»
+                  let _0 ← Erlang.erlang.«self/0» lynxDispatch
                   Lynx.Result.ofExcept (Erlang.erlang.«=:=/2» vPid _0))
                 (fun vTry => pure vTry)
                 (fun lynxException =>
@@ -145,7 +145,7 @@ def «self_guard/0» : Lynx.Result :=
         | vX => pure vX
       | Option.none => pure (Lynx.Term.atom "true"))
 
-def «poll/0» : Lynx.Result :=
+def «poll/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith (Lynx.Term.integer 0)
     (fun (_lynxReceiveEnv : Lynx.Environment) (_0 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) => (Option.none : Option Lynx.Term)
@@ -159,7 +159,7 @@ def «poll/0» : Lynx.Result :=
         | vX => pure vX
       | Option.none => pure (Lynx.Term.atom "timeout"))
 
-def «timed/1» (_0 : Lynx.Term) : Lynx.Result :=
+def «timed/1» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith _0
     (fun (_lynxReceiveEnv : Lynx.Environment) (_2 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) => (Option.none : Option Lynx.Term)
@@ -173,14 +173,14 @@ def «timed/1» (_0 : Lynx.Term) : Lynx.Result :=
         | vX => pure vX
       | Option.none => pure (Lynx.Term.atom "timeout"))
 
-def «sleep/1» (_0 : Lynx.Term) : Lynx.Result :=
+def «sleep/1» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith _0
     (fun (_ : Lynx.Environment) (_ : Lynx.Term) => (Option.none : Option Empty))
     (fun
       | Option.some lynxReceived => nomatch lynxReceived
       | Option.none => pure (Lynx.Term.atom "done"))
 
-def «computed/1» (_0 : Lynx.Term) : Lynx.Result := do
+def «computed/1» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) : Lynx.Result Lynx.Term := do
   let _2 ← Lynx.Result.ofExcept (Erlang.erlang.«+/2» _0 (Lynx.Term.integer 1))
   Lynx.Result.receiveWith _2
       (fun (_lynxReceiveEnv : Lynx.Environment) (_3 : Lynx.Term) =>
@@ -193,7 +193,7 @@ def «computed/1» (_0 : Lynx.Term) : Lynx.Result := do
           | _3 => pure _3
         | Option.none => pure (Lynx.Term.atom "timeout"))
 
-def «nested/0» : Lynx.Result :=
+def «nested/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith (Lynx.Term.atom "infinity")
     (fun (_lynxReceiveEnv : Lynx.Environment) (_4 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) =>
@@ -229,7 +229,7 @@ def «nested/0» : Lynx.Result :=
         | Sum.inr () => pure (Lynx.Term.atom "no")
       | Option.none => pure (Lynx.Term.atom "true"))
 
-def «bindings/0» : Lynx.Result :=
+def «bindings/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith (Lynx.Term.atom "infinity")
     (fun (_lynxReceiveEnv : Lynx.Environment) (_0 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) =>
@@ -250,7 +250,7 @@ def «bindings/0» : Lynx.Result :=
         | Sum.inr () => pure (Lynx.Term.atom "done")
       | Option.none => pure (Lynx.Term.atom "true"))
 
-def «repeated/0» : Lynx.Result :=
+def «repeated/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith (Lynx.Term.integer 0)
     (fun (_lynxReceiveEnv : Lynx.Environment) (_1 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) => (Option.none : Option Lynx.Term)
@@ -269,7 +269,7 @@ def «repeated/0» : Lynx.Result :=
         | vX => pure vX
       | Option.none => pure (Lynx.Term.atom "timeout"))
 
-def «alias/0» : Lynx.Result :=
+def «alias/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith (Lynx.Term.atom "infinity")
     (fun (_lynxReceiveEnv : Lynx.Environment) (_0 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) =>
@@ -284,7 +284,7 @@ def «alias/0» : Lynx.Result :=
         | (vPair, (vX, vY)) => pure (Lynx.Term.tuple #[vPair, vX, vY])
       | Option.none => pure (Lynx.Term.atom "true"))
 
-def «lists/0» : Lynx.Result :=
+def «lists/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith (Lynx.Term.integer 0)
     (fun (_lynxReceiveEnv : Lynx.Environment) (_0 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) =>
@@ -299,7 +299,7 @@ def «lists/0» : Lynx.Result :=
         | (vRest, (vX, vY)) => pure (Lynx.Term.tuple #[vX, vY, vRest])
       | Option.none => pure (Lynx.Term.atom "timeout"))
 
-def «alternatives/0» : Lynx.Result :=
+def «alternatives/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term :=
   Lynx.Result.receiveWith (Lynx.Term.integer 0)
     (fun (_lynxReceiveEnv : Lynx.Environment) (_3 : Lynx.Term) =>
       (let lynxReceiveNext := fun (_ : Unit) => (Option.none : Option Lynx.Term)
@@ -324,7 +324,7 @@ def «alternatives/0» : Lynx.Result :=
         | vX => pure vX
       | Option.none => pure (Lynx.Term.atom "timeout"))
 
-def «sequence/0» : Lynx.Result := do
+def «sequence/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term := do
   let _ ←
     Lynx.Result.receiveWith (Lynx.Term.integer 0)
         (fun (_ : Lynx.Environment) (_ : Lynx.Term) => (Option.none : Option Empty))

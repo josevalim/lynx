@@ -15,7 +15,7 @@ private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) �
     Lynx.Term.Bitstring.Valid bytes lastBits → Lynx.Term :=
   fun bytes lastBits valid => Lynx.Term.bitstring bytes lastBits valid
 private def referenceConstructor : Nat → Lynx.Term := Lynx.Term.reference
-private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0»
+private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatcher.ofTable #[] 0)
 
 -- Bit-field proof interfaces are available through ordinary public imports.
 private theorem decodeBigEndian (value width : Nat) :
@@ -88,29 +88,33 @@ private theorem makeRefContinuationEquation (next : Lynx.Term → Lynx.Result α
       { env with refCounter := env.refCounter + 1 } := by
   simp [makeRef]
 example : Nat → Nat → Array Lynx.Term → Lynx.Term := Lynx.Term.function
-example (entry : Array Lynx.Term → Array Lynx.Term → Lynx.Result) :
+example (entry : Lynx.Dispatcher → Array Lynx.Term → Array Lynx.Term → Lynx.Result) :
     Lynx.Term.FunTable := #[.effectful entry]
+example (entry : Lynx.Dispatcher → Array Lynx.Term → Array Lynx.Term →
+    Except Lynx.Exception Lynx.Term) :
+    Lynx.Term.FunTable := #[.apply entry]
 example (entry : Array Lynx.Term → Array Lynx.Term → Except Lynx.Exception Lynx.Term) :
     Lynx.Term.FunTable := #[.pure entry]
 
-example : Lynx.Result → Lynx.Term.FunTable → Nat → Lynx.Environment →
-    Lynx.Outcome Lynx.Term × Lynx.Environment :=
-  Lynx.Result.runWith
-example : Lynx.Result → Lynx.Term.FunTable → Nat → Lynx.Outcome Lynx.Term :=
-  fun computation table callDepth => Lynx.run computation table callDepth
-example : Lynx.Result → List Lynx.ScheduleChoice → Lynx.Term.FunTable → Nat →
-    Lynx.Outcome Lynx.Term :=
-  fun computation schedule table callDepth => Lynx.schedule computation schedule table callDepth
-example : Lynx.Term → Lynx.Term → Lynx.Result := Erlang.erlang.«apply/2»
-example : Lynx.Term → Array Lynx.Term → Lynx.Result := Lynx.Term.apply
-example : Lynx.Term → Lynx.Result := Erlang.erlang.«spawn/1»
+example : Lynx.Term.FunTable → Nat → Lynx.Dispatcher := Lynx.Dispatcher.ofTable
+example : Lynx.Dispatcher → Lynx.Term → Array Lynx.Term → Except Lynx.Exception Lynx.Term :=
+  Lynx.Dispatcher.pure
+example : Lynx.Dispatcher → Lynx.Term → Array Lynx.Term → Lynx.Result := Lynx.Dispatcher.call
+example : Lynx.Result → Lynx.Environment → Lynx.Outcome Lynx.Term × Lynx.Environment :=
+  Lynx.Result.run
+example : Lynx.Result → Lynx.Outcome Lynx.Term := fun computation => Lynx.sequential computation
+example : Lynx.Result → List Lynx.ScheduleChoice → Lynx.Outcome Lynx.Term :=
+  fun computation schedule => Lynx.concurrent computation schedule
+example : Lynx.Dispatcher → Lynx.Term → Lynx.Term → Lynx.Result := Erlang.erlang.«apply/2»
+example : Lynx.Dispatcher → Lynx.Term → Lynx.Term → Except Lynx.Exception Lynx.Term :=
+  Erlang.erlang.«apply/2»
+example : (Lynx.Dispatcher → Lynx.Term → Except Lynx.Exception Lynx.Term) →
+    Lynx.Term.FunTable → Lynx.Term → Except Lynx.Exception Lynx.Term := Lynx.apply
+example : Lynx.Dispatcher → Lynx.Term → Lynx.Result := Erlang.erlang.«spawn/1»
 example : Lynx.Term → (Lynx.Environment → Lynx.Term → Option β) →
     (Option β → Lynx.Result α) → Lynx.Result α :=
   Lynx.Result.receiveWith
 example : Lynx.PID → Lynx.ScheduleChoice := Lynx.ScheduleChoice.timeout
-
-example : Lynx.Term → (Except Lynx.Exception Lynx.Term → Lynx.Result α) → Lynx.Result α :=
-  Lynx.Result.spawn
 
 example : List Lynx.Term → Lynx.Term → List Lynx.Term := Lynx.Term.getMapKeys
 
@@ -132,40 +136,38 @@ example (computation : Lynx.Result α) (pure : Lynx.Result.IsPure computation) :
     Lynx.Result.ofExcept (Lynx.Result.toExcept computation pure) = computation := by
   simp
 
-example (table : Lynx.Term.FunTable) (depth : Nat) (computation : Lynx.Result α)
-    (pure : Lynx.Result.IsPure computation) :
-    Lynx.Result.resolve table depth computation = computation := by
-  simp [pure]
-
+-- Table entries apply through the dispatcher, consuming depth unless pure.
 example (table : Lynx.Term.FunTable) (depth id arity : Nat)
     (captures arguments : Array Lynx.Term) (body : Array Lynx.Term → Lynx.Term.PureFun)
-    (next : Lynx.Term → Lynx.Result α)
     (entry : table[id]? = some (.pure body)) (size : arguments.size = arity) :
-    Lynx.Result.resolve table depth (Lynx.Term.apply (.function id arity captures) arguments >>= next) =
-      Lynx.Result.resolve table depth (Lynx.Result.ofExcept (body captures arguments) >>= next) :=
-  Lynx.Result.resolve_apply_pure table depth id arity captures arguments body next entry size
-
-example (table : Lynx.Term.FunTable) (depth : Nat) (computation : Lynx.Result α)
-    (next : α → Lynx.Result β) :
-    Lynx.Result.resolve table depth (computation >>= next) =
-      (Lynx.Result.resolve table depth computation >>= fun value =>
-        Lynx.Result.resolve table depth (next value)) :=
-  Lynx.Result.resolve_bind table depth computation next
+    (Lynx.Dispatcher.ofTable table depth).pure (.function id arity captures) arguments =
+      body captures arguments :=
+  Lynx.Dispatcher.pure_pure entry size
 
 example (table : Lynx.Term.FunTable) (depth id arity : Nat)
-    (captures arguments : Array Lynx.Term) (body : Array Lynx.Term → Lynx.Term.Fun)
+    (captures arguments : Array Lynx.Term)
+    (body : Lynx.Dispatcher → Array Lynx.Term → Lynx.Term.PureFun)
+    (entry : table[id]? = some (.apply body)) (size : arguments.size = arity) :
+    (Lynx.Dispatcher.ofTable table (depth + 1)).pure (.function id arity captures) arguments =
+      body (Lynx.Dispatcher.ofTable table depth) captures arguments :=
+  Lynx.Dispatcher.pure_apply entry size
+
+example (table : Lynx.Term.FunTable) (depth id arity : Nat)
+    (captures arguments : Array Lynx.Term)
+    (body : Lynx.Dispatcher → Array Lynx.Term → Lynx.Term.Fun)
     (entry : table[id]? = some (.effectful body)) (size : arguments.size = arity) :
-    Lynx.Result.resolve table (depth + 1) (Lynx.Term.apply (.function id arity captures) arguments) =
-      Lynx.Result.resolve table depth (body captures arguments) :=
-  Lynx.Result.resolve_apply_effectful table depth id arity captures arguments body entry size
+    (Lynx.Dispatcher.ofTable table (depth + 1)).call (.function id arity captures) arguments =
+      body (Lynx.Dispatcher.ofTable table depth) captures arguments :=
+  Lynx.Dispatcher.call_effectful entry size
 
 example (computation : Lynx.Result α) :
     (do let value ← computation; pure value) = computation := by
   simp
 
 -- Ordinary guard evaluation supports environment reads without process effects.
-example (env : Lynx.Environment) :
-    Lynx.Result.toExceptRead Erlang.erlang.«self/0» env Erlang.erlang.self_readOnly =
+example (dispatcher : Lynx.Dispatcher) (env : Lynx.Environment) :
+    Lynx.Result.toExceptRead (Erlang.erlang.«self/0» dispatcher) env
+        (Erlang.erlang.self_readOnly dispatcher) =
       .ok (.pid env.currentPid) := by rfl
 
 example (computation : Lynx.Result α) (next : α → Lynx.Result β)
@@ -296,6 +298,14 @@ private def expectedDeclarations : Array String := #[
   "Erlang.maps.«update/3»",
   "Erlang.math.«ceil/1»",
   "Erlang.math.«floor/1»",
+  "Lynx.Dispatch",
+  "Lynx.Dispatch.dispatch",
+  "Lynx.Dispatch.mk",
+  "Lynx.Dispatcher",
+  "Lynx.Dispatcher.call",
+  "Lynx.Dispatcher.mk",
+  "Lynx.Dispatcher.ofTable",
+  "Lynx.Dispatcher.pure",
   "Lynx.Environment",
   "Lynx.Environment.currentPid",
   "Lynx.Environment.currentProcess",
@@ -343,7 +353,6 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.IsPure",
   "Lynx.Result.IsReadOnly",
   "Lynx.Result.andAlso",
-  "Lynx.Result.apply",
   "Lynx.Result.bind",
   "Lynx.Result.error",
   "Lynx.Result.get",
@@ -360,14 +369,11 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.orElse",
   "Lynx.Result.receive",
   "Lynx.Result.receiveWith",
-  "Lynx.Result.resolve",
   "Lynx.Result.resultCCPO",
   "Lynx.Result.run",
-  "Lynx.Result.runWith",
   "Lynx.Result.schedule",
   "Lynx.Result.send",
   "Lynx.Result.set",
-  "Lynx.Result.spawn",
   "Lynx.Result.toExcept",
   "Lynx.Result.toExceptRead",
   "Lynx.Result.tryWith",
@@ -426,11 +432,11 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.FiniteFloat.widen",
   "Lynx.Term.Fun",
   "Lynx.Term.FunEntry",
+  "Lynx.Term.FunEntry.apply",
   "Lynx.Term.FunEntry.effectful",
   "Lynx.Term.FunEntry.pure",
   "Lynx.Term.FunTable",
   "Lynx.Term.PureFun",
-  "Lynx.Term.apply",
   "Lynx.Term.atom",
   "Lynx.Term.bitstring",
   "Lynx.Term.compare",
@@ -455,8 +461,12 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.reference",
   "Lynx.Term.true",
   "Lynx.Term.tuple",
+  "Lynx.apply",
+  "Lynx.concurrent",
   "Lynx.instBEqTerm",
   "Lynx.instCoeFunResultForallEnvironmentProdOutcome",
+  "Lynx.instDispatchExceptException",
+  "Lynx.instDispatchResult",
   "Lynx.instInhabitedEnvironment",
   "Lynx.instInhabitedException",
   "Lynx.instInhabitedProcessState",
@@ -469,8 +479,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.instReprReceiveTimeout",
   "Lynx.instReprScheduleChoice",
   "Lynx.instReprTerm",
-  "Lynx.run",
-  "Lynx.schedule",
+  "Lynx.sequential",
   "main"
 ]
 

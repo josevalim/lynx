@@ -185,8 +185,7 @@ defmodule Lynx.RunnerTest do
       )
 
     # Purity metadata only decides how calls are embedded. Claiming that an
-    # effectful callee is pure makes its `Result` a type error where pure
-    # computations return `Except`.
+    # effectful callee is pure omits the dispatcher it receives, a type error.
     wrong_entry =
       entry
       |> Map.put("purity", "pure")
@@ -201,7 +200,7 @@ defmodule Lynx.RunnerTest do
 
     assert Enum.any?(diagnostics, fn diagnostic ->
              diagnostic.severity == :error and diagnostic.module == source_file["module"] and
-               diagnostic.message =~ "Except Lynx.Exception Lynx.Term"
+               diagnostic.message =~ "expected to have type\n  Lynx.Dispatcher"
            end)
   end
 
