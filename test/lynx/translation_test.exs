@@ -467,7 +467,8 @@ defmodule Lynx.TranslationTest do
       |> Translation.translate(:example, [{:entry, 2}])
 
     assert %{
-             purity: :dynamic,
+             purity: :pure,
+             dispatches: true,
              translation: %{
                "body" => %{
                  "kind" => "remote_call",
@@ -614,12 +615,16 @@ defmodule Lynx.TranslationTest do
       direct = Translation.translate(base, :caller, [{:entry, 1}, {:pure, 1}])
       assert Translation.assemble(translation) == Translation.assemble(direct)
 
+      # Reading the process dictionary remains sequential whatever the table holds.
+      purity = if :erlang in caller_imports, do: :sequential, else: :pure
+
       for name <- [:entry, :helper] do
-        assert %{purity: :dynamic} = translation.modules.caller.translations[{name, 1}]
+        assert %{purity: ^purity, dispatches: true} =
+                 translation.modules.caller.translations[{name, 1}]
       end
 
       for {_, definition} <- translation.modules.dependency.translations do
-        assert %{purity: :dynamic} = definition
+        assert %{purity: :pure, dispatches: true} = definition
       end
 
       assert translation.builtin_modules ==
@@ -659,33 +664,43 @@ defmodule Lynx.TranslationTest do
       commands =
         for %{"contents" => contents} <- files,
             %{"purity" => "pure"} = command <- contents,
+            not Map.has_key?(command, "dispatches"),
             do: command
 
       assert [%{"kind" => "def", "name" => "pure", "purity" => "pure"}] = commands
     end
   end
 
-  test "dynamic calls are concurrent only when a table entry is" do
+  test "dynamic calls are as impure as the program's table entries" do
     core =
       cerl("""
       -module(example).
-      -export([call/1, waiter/0, sender/0]).
+      -export([call/1, waiter/0, reader/0, sender/0]).
       call(F) -> F(1).
       waiter() -> fun(_) -> receive Message -> Message end end.
+      reader() -> fun(Key) -> erlang:get(Key) end.
       sender() -> fun(X) -> X end.
       """)
 
     base = Translation.new() |> Translation.add({"example.erl", core})
 
     for {roots, purity} <- [
-          {[{:call, 1}, {:sender, 0}], "sequential"},
+          {[{:call, 1}], "apply"},
+          {[{:call, 1}, {:sender, 0}], "apply"},
+          {[{:call, 1}, {:sender, 0}, {:reader, 0}], "sequential"},
           {[{:call, 1}, {:sender, 0}, {:waiter, 0}], "concurrent"}
         ] do
       translation = Translation.translate(base, :example, roots)
-      assert %{purity: :dynamic} = translation.modules.example.translations[{:call, 1}]
 
-      assert [%{"contents" => contents} | _] = Translation.assemble(translation)
-      assert %{"purity" => ^purity} = Enum.find(contents, &(&1["name"] == "call"))
+      assert %{purity: :pure, dispatches: true} =
+               translation.modules.example.translations[{:call, 1}]
+
+      # The runner raises the calling definition to the program's dispatcher purity.
+      assert [%{"contents" => contents, "dispatcher_purity" => ^purity} | _] =
+               Translation.assemble(translation)
+
+      assert %{"purity" => "pure", "dispatches" => true} =
+               Enum.find(contents, &(&1["name"] == "call"))
     end
   end
 
@@ -740,7 +755,9 @@ defmodule Lynx.TranslationTest do
 
     assert %{purity: :pure, local_calls: []} = updated.modules.caller.translations[{:extra, 1}]
     assert %{purity: :sequential} = updated.modules.caller.translations[{:"$lynx_fun_4", 1}]
-    assert %{purity: :dynamic} = updated.modules.dependency.translations[{:"$lynx_fun_2", 3}]
+
+    assert %{purity: :pure, dispatches: true} =
+             updated.modules.dependency.translations[{:"$lynx_fun_2", 3}]
 
     assert %{
              "body" => %{"kind" => "return", "values" => [function]}
@@ -753,6 +770,7 @@ defmodule Lynx.TranslationTest do
 
     assert %{
              "module" => "Erlang.program",
+             "dispatcher_purity" => "sequential",
              "contents" => [
                %{"kind" => "fun_table", "entries" => entries} =
                  table
@@ -784,8 +802,15 @@ defmodule Lynx.TranslationTest do
              {"Erlang.caller", "$lynx_fun_4"}
            ]
 
-    assert Enum.map(entries, & &1["purity"]) ==
-             ["pure", "pure", "sequential", "sequential", "sequential"]
+    # Entries calling function values run at the program's dispatcher purity.
+    assert Enum.map(entries, &{&1["purity"], Map.has_key?(&1, "dispatches")}) ==
+             [
+               {"pure", false},
+               {"pure", false},
+               {"pure", true},
+               {"pure", true},
+               {"sequential", false}
+             ]
   end
 
   test "imports a module BIF if used" do

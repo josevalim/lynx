@@ -1,6 +1,6 @@
 module
 
-public import Lynx.Term.Apply
+public import Lynx.Term.Dispatch
 
 /-! Finite local-process execution. Sends insert directly into the destination
 mailbox; message transit, remote processes, links, and monitors are not
@@ -64,10 +64,6 @@ private inductive Pool (α : Type) where
 /-- Each step replaces a computation by its continuations, possibly in either
 parallel branch. This relation ignores scheduler and mailbox contents. -/
 private inductive Progress : Pool α → Pool α → Prop where
-  | apply : Progress (.process processId (next (.error (.error (.tuple #[.atom "badfun", callee])))) finish)
-      (.process processId (.apply callee arguments next) finish)
-  | spawn : Progress (.process processId (next (.error (.error (.atom "badarg")))) finish)
-      (.process processId (.spawn child next) finish)
   | ok : Progress .empty (.process processId (.ok value) finish)
   | error : Progress .empty (.process processId (.error exception) finish)
   | get : Progress (.process processId (next env) finish) (.process processId (.get next) finish)
@@ -101,12 +97,6 @@ private theorem accProcess {β : Type} (computation : Result β) :
     ∀ (processId : PID) (finish : Except Exception β → Option (Except Exception α)),
       Acc Progress (.process processId computation finish) := by
   induction computation with
-  | apply callee arguments next ih | spawn child next ih =>
-    intro processId finish
-    constructor
-    intro p h
-    cases h
-    apply ih
   | ok value =>
     intro processId finish
     constructor
@@ -251,13 +241,6 @@ private def step (pool : Pool α) (env : Environment) (chosen : PID) (expire : B
       -- A process that does not return ends the whole run.
       | .error .exhausted => some {
           next := .empty, decreases := .error, environment := active, exhausted := true }
-      | .apply callee _ next => some {
-          next := .process processId
-            (next (.error (.error (.tuple #[.atom "badfun", callee])))) finish
-          decreases := .apply, environment := save active }
-      | .spawn _ next => some {
-          next := .process processId (next (.error (.error (.atom "badarg")))) finish
-          decreases := .spawn, environment := save active }
       | .ok value => some {
           next := .empty, decreases := .ok, environment := active
           finished := (finish (.ok value)).map (·, active.currentProcess) }
@@ -334,9 +317,6 @@ decreasing_by exact transition.decreases
 through the process tree, without an execution budget. -/
 def run (computation : Result α) (env : Environment) : Outcome α × Environment :=
   match computation with
-  | .apply callee _ next =>
-      run (next (.error (.error (.tuple #[.atom "badfun", callee])))) env
-  | .spawn _ next => run (next (.error (.error (.atom "badarg")))) env
   | .ok value => (.ok value, env)
   | .error exception => (.error exception, env)
   | .get next => run (next env) env
@@ -350,29 +330,17 @@ public section
 
 namespace Lynx
 
-/-- Execute a computation in an existing environment. Use `Lynx.run` to start
+/-- Execute a computation in an existing environment. Use `Lynx.sequential` to start
 from a fresh runtime. The implementation is hidden; the application lemmas
-below describe its behavior. Without a program table, dynamic calls report
-`badfun`; use `runWith` for programs containing function values. -/
+below describe its behavior. Function values are called through the
+`Dispatcher` the computation received, so running needs no program table. -/
 def Result.run (computation : Result α) (env : Environment) : Outcome α × Environment :=
   Term.Runner.run computation env
-
-/-- Execute with the immutable program table and an explicit dynamic-call depth. -/
-def Result.runWith (computation : Result α) (table : Term.FunTable)
-    (callDepth : Nat) (env : Environment) : Outcome α × Environment :=
-  Term.Runner.run (Result.resolve table callDepth computation) env
 
 instance : CoeFun (Result α) fun _ => Environment → Outcome α × Environment :=
   ⟨Result.run⟩
 
 namespace Result
-
-/-- Executing with a table first resolves the computation's dynamic calls. -/
-theorem runWith_apply (computation : Result α) (table : Term.FunTable) (callDepth : Nat)
-    (env : Environment) :
-    computation.runWith table callDepth env = (resolve table callDepth computation) env := by
-  unfold Result.runWith Result.run
-  rfl
 
 @[simp] theorem ok_apply (value : α) (env : Environment) :
     (Result.ok value : Result α) env = (.ok value, env) := by

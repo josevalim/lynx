@@ -923,29 +923,32 @@ mutual
   termination_by (sizeOf✝ _2, (1, sizeOf✝ _7))
 end
 
-def «named/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result := do
+def «named/2» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) (_1 : Lynx.Term) :
+    Except Lynx.Exception Lynx.Term := do
   let vF ← pure (Lynx.Term.function 0 1 #[_0])
-  Lynx.Term.apply vF #[_1]
+  Lynx.Dispatcher.pure lynxDispatch vF #[_1]
 
-def «lynx_local_54/2» (_3 : Lynx.Term) (_0 : Lynx.Term) : Lynx.Result := do
+def «lynx_local_54/2» (lynxDispatch : Lynx.Dispatcher) (_3 : Lynx.Term) (_0 : Lynx.Term) :
+    Except Lynx.Exception Lynx.Term := do
   let vLoop ← pure (Lynx.Term.function 0 1 #[_0])
   match _3 with
     | Lynx.Term.nil => pure Lynx.Term.nil
     | Lynx.Term.cons vX vXs => do
-      let _2 ← Lynx.Term.apply vLoop #[vXs]
+      let _2 ← Lynx.Dispatcher.pure lynxDispatch vLoop #[vXs]
       pure (Lynx.Term.cons (Lynx.Term.tuple #[_0, vX]) _2)
-    | _4 => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
+    | _4 => Except.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
 
-def «self_reference/0» : Lynx.Result := do
+def «self_reference/0» (lynxDispatch : Lynx.Dispatcher) : Except Lynx.Exception Lynx.Term := do
   let vF ← pure (Lynx.Term.function 1 0 #[])
-  let _1 ← Lynx.Term.apply vF #[]
-  Lynx.Result.ofExcept (Erlang.erlang.«=:=/2» vF _1)
+  let _1 ← Lynx.Dispatcher.pure lynxDispatch vF #[]
+  Erlang.erlang.«=:=/2» vF _1
 
 def «lynx_local_57/0» : Except Lynx.Exception Lynx.Term :=
   pure (Lynx.Term.function 1 0 #[])
 
-def «$lynx_fun_0/2» (_0 : Lynx.Term) (lynxGenerated0 : Lynx.Term) : Lynx.Result :=
-  «lynx_local_54/2» lynxGenerated0 _0
+def «$lynx_fun_0/2» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) (lynxGenerated0 : Lynx.Term) :
+    Except Lynx.Exception Lynx.Term :=
+  «lynx_local_54/2» lynxDispatch lynxGenerated0 _0
 
 def «$lynx_fun_1/0» : Except Lynx.Exception Lynx.Term :=
   «lynx_local_57/0»

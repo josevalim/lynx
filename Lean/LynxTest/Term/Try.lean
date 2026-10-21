@@ -6,7 +6,7 @@ import all Lynx.Term
 import all Lynx.Term.DataTypes
 import all Lynx.Term.Compare
 import all Lynx.Term.Runner
-import all Lynx.Term.Apply
+import all Lynx.Term.Dispatch
 import all Std
 import all Init.Data.List.Basic
 import all Init.Data.List.Control
@@ -62,23 +62,26 @@ theorem reraise_preserves_class (exception : Exception) (reason : Term)
 
 theorem stacktrace_is_empty (exception : Exception) : exception.stacktrace = .nil := rfl
 
+/-- These operations make no dynamic calls. -/
+private def noFunctions : Dispatcher := Dispatcher.ofTable #[] 0
+
 /-- State changes in the protected computation remain visible in its handler. -/
 theorem protected_effects_survive_failure :
     Result.run (Result.tryWith (do
-      let _ ← «put/2» (.atom "key") (.atom "protected")
+      let _ ← «put/2» noFunctions (.atom "key") (.atom "protected")
       Result.ofExcept («throw/1» (.atom "failure")))
       Result.ok (fun exception => do
-        let value ← «get/1» (.atom "key")
+        let value ← «get/1» noFunctions (.atom "key")
         pure (.tuple #[exception.classTerm, exception.reason, value]))) {} =
       (.ok (.tuple #[.atom "throw", .atom "failure", .atom "protected"]), { currentProcess := { pdict := [(.atom "key", .atom "protected")] } }) := by cbv
 
 private def cleanup (computation : Result) : Result :=
   Result.tryWith computation
     (fun value => do
-      let _ ← «put/2» (.atom "cleanup") (.atom "done")
+      let _ ← «put/2» noFunctions (.atom "cleanup") (.atom "done")
       pure value)
     (fun exception => do
-      let _ ← «put/2» (.atom "cleanup") (.atom "done")
+      let _ ← «put/2» noFunctions (.atom "cleanup") (.atom "done")
       .error exception)
 
 theorem cleanup_runs_on_success_and_failure :
@@ -97,33 +100,36 @@ theorem cleanup_failure_overrides_previous_outcome :
       .error (.exit (.atom "cleanup")) := by constructor <;> rfl
 
 private def failingTable : Term.FunTable := #[
-  .effectful fun _ _ => Result.ofExcept («throw/1» (.atom "dispatched"))]
+  .effectful fun _ _ _ => Result.ofExcept («throw/1» (.atom "dispatched"))]
+
+private def call (depth : Nat) : Result :=
+  (Dispatcher.ofTable failingTable depth).call (.function 0 0 #[]) #[]
 
 theorem dispatched_exception_is_caught :
-    Lynx.schedule (Result.tryWith (Term.apply (.function 0 0 #[]) #[])
-      Result.ok (fun exception => .ok exception.reason)) [] failingTable =
+    Lynx.concurrent (Result.tryWith (call 100)
+      Result.ok (fun exception => .ok exception.reason)) [] =
       .ok (.atom "dispatched") := by cbv
 
 theorem dispatched_success_body_exception_escapes :
-    Lynx.schedule (Result.tryWith (.ok Term.nil)
-      (fun _ => Term.apply (.function 0 0 #[]) #[])
-      (fun _ => .ok (Term.atom "caught"))) [] failingTable =
+    Lynx.concurrent (Result.tryWith (.ok Term.nil)
+      (fun _ => call 100)
+      (fun _ => .ok (Term.atom "caught"))) [] =
       .error (.throw (.atom "dispatched")) := by cbv
 
 theorem exhaustion_is_not_caught :
-    Lynx.schedule (Result.tryWith (Term.apply (.function 0 0 #[]) #[])
-      Result.ok (fun _ => .ok (Term.atom "caught"))) [] failingTable 0 =
+    Lynx.concurrent (Result.tryWith (call 0)
+      Result.ok (fun _ => .ok (Term.atom "caught"))) [] =
       .error .exhausted := by cbv
 
 theorem blocking_is_not_caught :
-    Lynx.run (Result.tryWith (Result.receiveWith (.atom "infinity") (fun _ => some)
+    Lynx.sequential (Result.tryWith (Result.receiveWith (.atom "infinity") (fun _ => some)
       (fun | some value => .ok value | none => .ok .nil))
       Result.ok (fun _ => .ok (Term.atom "caught"))) = .deadlock := by cbv
 
 /-- The protected handler remains installed across a receive suspension. -/
 theorem resumed_receive_exception_is_caught :
     Result.run (Result.tryWith (do
-      let _ ← Result.schedule («send/2» (.pid 1) (.integer 7))
+      let _ ← Result.schedule («send/2» noFunctions (.pid 1) (.integer 7))
         (fun pid => .ok (Term.pid pid))
       Result.receiveWith (.atom "infinity") (fun _ => some)
         (fun | some value => .error (.throw value) | none => .ok .nil))
@@ -135,4 +141,4 @@ end LynxTest.Term.Try
 run_cmd do
   LynxTest.ProofAudit.checkModule `LynxTest.Term.Try
   LynxTest.ProofAudit.checkModule `Lynx.Term.Runner
-  LynxTest.ProofAudit.checkModule `Lynx.Term.Apply
+  LynxTest.ProofAudit.checkModule `Lynx.Term.Dispatch

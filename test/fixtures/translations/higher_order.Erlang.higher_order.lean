@@ -12,14 +12,15 @@ section
 
 set_option «match».ignoreUnusedAlts true
 
-def «map/2» (_0 : Lynx.Term) (_v_F : Lynx.Term) : Lynx.Result :=
+def «map/2» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) (_v_F : Lynx.Term) :
+    Except Lynx.Exception Lynx.Term :=
   match _0 with
   | Lynx.Term.nil => pure Lynx.Term.nil
   | Lynx.Term.cons vHead vTail => do
-    let _3 ← Lynx.Term.apply _v_F #[vHead]
-    let _2 ← «map/2» vTail _v_F
+    let _3 ← Lynx.Dispatcher.pure lynxDispatch _v_F #[vHead]
+    let _2 ← «map/2» lynxDispatch vTail _v_F
     pure (Lynx.Term.cons _3 _2)
-  | _5 => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
+  | _5 => Except.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
 
 def «proper_list/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   match _0 with
@@ -40,9 +41,10 @@ def «map_returns_list_requires/2» (_0 : Lynx.Term) (_1 : Lynx.Term) :
     let _5 ← pure (Lynx.Term.function 1 1 #[])
     Erlang.lists.«member/2» _1 (Lynx.Term.list [_8, _5])
 
-def «map_returns_list_ensures/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Lynx.Result := do
-  let _2 ← «map/2» _0 _1
-  Lynx.Result.ofExcept (Erlang.erlang.«is_list/1» _2)
+def «map_returns_list_ensures/2» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term)
+    (_1 : Lynx.Term) : Except Lynx.Exception Lynx.Term := do
+  let _2 ← «map/2» lynxDispatch _0 _1
+  Erlang.erlang.«is_list/1» _2
 
 end
 

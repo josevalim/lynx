@@ -176,7 +176,7 @@ theorem exhausted_result_is_not_caught (next : Term → Result) (handler : Excep
 
 -- Embedded in a process, a computation that does not return ends the run.
 theorem exhausted_run (a : Term) :
-    Lynx.run (Result.ofExcept («succeeds/1» a)) = .error .exhausted := by
+    Lynx.sequential (Result.ofExcept («succeeds/1» a)) = .error .exhausted := by
   simp [cutoff_is_not_caught]
 
 end LynxTest.Purity

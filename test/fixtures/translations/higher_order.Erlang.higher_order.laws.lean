@@ -10,8 +10,8 @@ namespace Erlang.higher_order.laws
 
 theorem «map_returns_list/2» (list : Lynx.Term) (callback : Lynx.Term)
     (requires : «map_returns_list_requires/2» list callback = Except.ok Lynx.Term.true) :
-    Lynx.run («map_returns_list_ensures/2» list callback) Erlang.program.fun_table 100 =
-      Lynx.Outcome.ok Lynx.Term.true :=
+    Lynx.apply «map_returns_list_ensures/2» Erlang.program.fun_table list callback =
+      Except.ok Lynx.Term.true :=
   by
   have valid :
     «proper_list/1» list = .ok Lynx.Term.true ∧
@@ -24,7 +24,7 @@ theorem «map_returns_list/2» (list : Lynx.Term) (callback : Lynx.Term)
     ∀ input,
       «proper_list/1» input = .ok Lynx.Term.true →
         ∃ out,
-          Lynx.Result.resolve Erlang.program.fun_table 100 («map/2» input callback) = .ok out ∧
+          «map/2» (Lynx.Dispatcher.ofTable Erlang.program.fun_table 100) input callback = .ok out ∧
             Erlang.erlang.«is_list/1» out = .ok Lynx.Term.true :=
     by
     intro input proper
@@ -32,20 +32,12 @@ theorem «map_returns_list/2» (list : Lynx.Term) (callback : Lynx.Term)
     | case1 => exact ⟨.nil, by simp [«map/2»], rfl⟩
     | case2 head tail
       ih =>
-      obtain ⟨out, resolved, _⟩ := ih (by simpa [«proper_list/1»] using proper)
+      obtain ⟨out, returned, _⟩ := ih (by simpa [«proper_list/1»] using proper)
       rcases valid.2 with rfl | rfl
-      ·
-        exact
-          ⟨.cons head out, by simp [«map/2», Lynx.Result.resolve_bind, resolved, «$lynx_fun_0/1»],
-            rfl⟩
-      ·
-        exact
-          ⟨.cons (.tuple #[head]) out, by
-            simp [«map/2», Lynx.Result.resolve_bind, resolved, «$lynx_fun_1/1»], rfl⟩
+      · exact ⟨.cons head out, by simp [«map/2», returned, «$lynx_fun_0/1»], rfl⟩
+      · exact ⟨.cons (.tuple #[head]) out, by simp [«map/2», returned, «$lynx_fun_1/1»], rfl⟩
     | case3 => simp_all [«proper_list/1»]
-  obtain ⟨out, resolved, list⟩ := maps list valid.1
-  exact
-    Lynx.run_of_resolve rfl
-      (by simp [«map_returns_list_ensures/2», Lynx.Result.resolve_bind, resolved, list])
+  obtain ⟨out, returned, list⟩ := maps list valid.1
+  simp [«map_returns_list_ensures/2», returned, list]
 
 end Erlang.higher_order.laws

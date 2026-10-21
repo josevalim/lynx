@@ -17,10 +17,12 @@ private def properList? : Term → Option (List Term)
   | _ => none
 
 /-- Dynamically apply a function to an Erlang list of arguments. Internal
-application uses an array and does not retain the source list encoding. -/
-def «apply/2» (function arguments : Term) : Result :=
+application uses an array and does not retain the source list encoding. It
+returns `Except` when the program's function values do. -/
+def «apply/2» {m : Type → Type u} [Monad m] [MonadExceptOf Exception m] [Dispatch m]
+    (dispatcher : Dispatcher) (function arguments : Term) : m Term :=
   match properList? arguments with
-  | none => .error (.error (.atom "badarg"))
-  | some decoded => Term.apply function decoded.toArray
+  | none => throw (.error (.atom "badarg"))
+  | some decoded => Dispatch.dispatch dispatcher function decoded.toArray
 
 end Erlang.erlang

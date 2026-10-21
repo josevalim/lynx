@@ -76,16 +76,16 @@ def «reraised/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
       | Lynx.Term.atom "error", vR, _6 => Except.error (Lynx.Exception.error vR)
       | _7, _8, _9 => Except.error (Lynx.Exception.withReason _9 _8))
 
-def «after_effect/1» (_0 : Lynx.Term) : Lynx.Result :=
+def «after_effect/1» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) : Lynx.Result Lynx.Term :=
   Lynx.Result.tryWith (Lynx.Result.ofExcept (Erlang.erlang.«+/2» _0 (Lynx.Term.integer 1)))
     (fun _2 => do
-      let _ ← Erlang.erlang.«put/2» (Lynx.Term.atom "key") (Lynx.Term.atom "done")
+      let _ ← Erlang.erlang.«put/2» lynxDispatch (Lynx.Term.atom "key") (Lynx.Term.atom "done")
       pure _2)
     (fun _3 =>
       let _5 := Lynx.Exception.classTerm _3
       let _4 := Lynx.Exception.reason _3
       do
-      let _ ← Erlang.erlang.«put/2» (Lynx.Term.atom "key") (Lynx.Term.atom "done")
+      let _ ← Erlang.erlang.«put/2» lynxDispatch (Lynx.Term.atom "key") (Lynx.Term.atom "done")
       Lynx.Result.error (Lynx.Exception.withReason _3 _4))
 
 def «after_raises/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
@@ -108,25 +108,26 @@ def «success_clause/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
       let _4 := Lynx.Exception.reason _3
       pure (Lynx.Term.atom "caught"))
 
-def «dynamic/1» (_0 : Lynx.Term) : Lynx.Result :=
-  Lynx.Result.tryWith (Lynx.Term.apply _0 #[])
+def «dynamic/1» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) :
+    Except Lynx.Exception Lynx.Term :=
+  Lynx.Except.tryWith (Lynx.Dispatcher.pure lynxDispatch _0 #[])
     (fun _1 => pure (Lynx.Term.tuple #[Lynx.Term.atom "ok", _1]))
     (fun _3 =>
       let _5 := Lynx.Exception.classTerm _3
       let _4 := Lynx.Exception.reason _3
       pure (Lynx.Term.tuple #[_5, _4]))
 
-def «effectful/0» : Lynx.Result :=
+def «effectful/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term :=
   Lynx.Result.tryWith
     (do
-      let _ ← Erlang.erlang.«put/2» (Lynx.Term.atom "key") (Lynx.Term.atom "protected")
+      let _ ← Erlang.erlang.«put/2» lynxDispatch (Lynx.Term.atom "key") (Lynx.Term.atom "protected")
       Lynx.Result.error (Lynx.Exception.throw (Lynx.Term.atom "failure")))
     (fun _0 => pure _0)
     (fun _1 =>
       let _3 := Lynx.Exception.classTerm _1
       let _2 := Lynx.Exception.reason _1
       do
-      let _4 ← Erlang.erlang.«get/1» (Lynx.Term.atom "key")
+      let _4 ← Erlang.erlang.«get/1» lynxDispatch (Lynx.Term.atom "key")
       pure (Lynx.Term.tuple #[_3, _2, _4]))
 
 def «nested/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=

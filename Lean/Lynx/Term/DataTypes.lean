@@ -150,7 +150,7 @@ def setPdict (env : Environment) (pdict : List (Term × Term)) : Environment :=
 end Environment
 
 /-- How a run ended. The final environment is returned separately by the
-low-level runners, so laws and callers of `Lynx.run` compare outcomes alone. -/
+low-level runners, so laws and callers of `Lynx.sequential` compare outcomes alone. -/
 inductive Outcome (α : Type) where
   | ok : α → Outcome α
   /-- An uncaught exception. `Exception.exhausted` means some process did not
@@ -173,15 +173,9 @@ does not require translated functions to use continuation-passing style. -/
 inductive Result : (α : Type := Term) → Type 1 where
   | ok {α : Type} : α → Result α
   | error {α : Type} : Exception → Result α
-  /-- Request a call through the program table. Both returns and exceptions resume
-  the caller so surrounding exception handlers also cover dispatched code. -/
-  | apply {α : Type} : Term → Array Term → (Except Exception Term → Result α) → Result α
   | get {α : Type} : (Environment → Result α) → Result α
   | set {α : Type} : Environment → Result α → Result α
-  /-- Request a zero-arity function spawn through the program table. Validation
-  errors resume the caller; execution of the function belongs to the child. -/
-  | spawn {α : Type} : Term → (Except Exception Term → Result α) → Result α
-  /-- Internal scheduled child, produced after resolving a function value. -/
+  /-- A spawned child process, then the continuation receiving its PID. -/
   | schedule {α : Type} : Result Term → (PID → Result α) → Result α
   /-- Local asynchronous send. The continuation receives control after delivery. -/
   | send {α : Type} : PID → Term → Result α → Result α
@@ -205,12 +199,8 @@ namespace Result
   match computation with
   | .ok value => next value
   | .error exception => .error exception
-  | .apply function arguments continuation =>
-      .apply function arguments fun result => Result.bind (continuation result) next
   | .get continuation => .get fun env => Result.bind (continuation env) next
   | .set env continuation => .set env (Result.bind continuation next)
-  | .spawn child continuation =>
-      .spawn child fun result => Result.bind (continuation result) next
   | Result.schedule child continuation => Result.schedule child fun pid => Result.bind (continuation pid) next
   | .send pid message continuation => .send pid message (Result.bind continuation next)
   | .receive timeout select continuation =>
@@ -244,12 +234,8 @@ exception, so it propagates without reaching the handler. -/
   | .ok value => .ok value
   | .error .exhausted => .error .exhausted
   | .error exception => handler exception
-  | .apply function arguments continuation =>
-      .apply function arguments fun result => Result.handle (continuation result) handler
   | .get continuation => .get fun env => Result.handle (continuation env) handler
   | .set env continuation => .set env (Result.handle continuation handler)
-  | .spawn child continuation =>
-      .spawn child fun result => Result.handle (continuation result) handler
   | Result.schedule child continuation => Result.schedule child fun pid => Result.handle (continuation pid) handler
   | .send pid message continuation => .send pid message (Result.handle continuation handler)
   | .receive timeout select continuation =>
@@ -319,11 +305,6 @@ instance : MonadExceptOf Exception @Result where
   change Result.bind computation .ok = computation
   induction computation with
   | ok | error => rfl
-  | apply function arguments continuation ih | spawn function continuation ih =>
-      simp only [Result.bind]
-      congr
-      funext result
-      exact ih result
   | get continuation ih =>
       simp only [Result.bind]
       congr
@@ -348,11 +329,6 @@ private theorem bind_assoc_proof (computation : Result α)
       Result.bind computation fun value => Result.bind (next value) final := by
   induction computation with
   | ok | error => rfl
-  | apply function arguments continuation ih | spawn function continuation ih =>
-      simp only [Result.bind]
-      congr
-      funext result
-      exact ih result next
   | get continuation ih =>
       simp only [Result.bind]
       congr
@@ -383,16 +359,11 @@ instance : LawfulMonad @Result := LawfulMonad.mk' _
 
 @[simp] theorem isPure_ok (value : α) : IsPure (.ok value) := trivial
 @[simp] theorem isPure_error (exception : Exception) : IsPure (.error exception : Result α) := trivial
-@[simp] theorem not_isPure_apply (function : Term) (arguments : Array Term)
-    (next : Except Exception Term → Result α) :
-    ¬ IsPure (.apply function arguments next) := by simp [IsPure]
 
 @[simp] theorem not_isPure_get (next : Environment → Result α) :
     ¬ IsPure (.get next) := by simp [IsPure]
 @[simp] theorem not_isPure_set (env : Environment) (next : Result α) :
     ¬ IsPure (.set env next) := by simp [IsPure]
-@[simp] theorem not_isPure_spawn (child : Term) (next : Except Exception Term → Result α) :
-    ¬ IsPure (.spawn child next) := by simp [IsPure]
 
 @[simp] theorem not_isPure_schedule (child : Result Term) (next : PID → Result α) :
     ¬ IsPure (Result.schedule child next) := by simp [IsPure]
@@ -546,7 +517,7 @@ or make unresolved calls. Every environment read must eventually terminate. -/
   | .ok value => .ok value
   | .error exception => .error exception
   | .get next => toExceptRead (next env) env (readOnly env)
-  | .apply .. | .set .. | .spawn .. | .schedule .. | .send .. | .receive .. =>
+  | .set .. | .schedule .. | .send .. | .receive .. =>
       False.elim readOnly
 
 @[simp] theorem ok_bind (value : α) (next : α → Result β) :
@@ -554,22 +525,12 @@ or make unresolved calls. Every environment read must eventually terminate. -/
 @[simp] theorem error_bind (exception : Exception) (next : α → Result β) :
     (Result.error exception >>= next) = .error exception := by rfl
 
-@[simp] theorem apply_bind (function : Term) (arguments : Array Term)
-    (continuation : Except Exception Term → Result α) (next : α → Result β) :
-    (Result.apply function arguments continuation >>= next) =
-      .apply function arguments (fun result => continuation result >>= next) := rfl
-
 @[simp] theorem get_bind (continuation : Environment → Result α) (next : α → Result β) :
     (Result.get continuation >>= next) =
       .get (fun env => continuation env >>= next) := by rfl
 @[simp] theorem set_bind (env : Environment) (continuation : Result α)
     (next : α → Result β) :
     (Result.set env continuation >>= next) = .set env (continuation >>= next) := by rfl
-@[simp] theorem spawn_bind (child : Term) (continuation : Except Exception Term → Result α)
-    (next : α → Result β) :
-    (Result.spawn child continuation >>= next) =
-      .spawn child (fun result => continuation result >>= next) := rfl
-
 @[simp] theorem schedule_bind (child : Result Term) (continuation : PID → Result α)
     (next : α → Result β) :
     (Result.schedule child continuation >>= next) =
@@ -601,10 +562,31 @@ public abbrev Fun := Array Term → Result
 /-- Completed pure calls cannot contain runtime requests. -/
 public abbrev PureFun := Array Term → Except Exception Term
 
-/-- Purity is enforced by the callable's return type, rather than a boolean. -/
+end Lynx.Term
+
+namespace Lynx
+
+/-- Calls function values through the program table. Translated definitions that
+are not pure receive it as their first parameter, so calls to function values
+are ordinary calls rather than runtime requests. -/
+public structure Dispatcher where
+  /-- Call from a computation returning `Except`. Entries that are not pure apart
+  from their own calls to function values do not return. -/
+  pure : Term → Array Term → Except Exception Term
+  /-- Call from a computation returning `Result`. -/
+  call : Term → Array Term → Result Term
+
+end Lynx
+
+namespace Lynx.Term
+
+/-- Purity is enforced by the callable's return type, rather than a boolean.
+Entries that dispatch further receive the dispatcher for the remaining call depth. -/
 public inductive FunEntry where
   | pure : (Array Term → PureFun) → FunEntry
-  | effectful : (Array Term → Fun) → FunEntry
+  /-- Pure apart from calling function values. -/
+  | apply : (Dispatcher → Array Term → PureFun) → FunEntry
+  | effectful : (Dispatcher → Array Term → Fun) → FunEntry
 
 /-- Program-local function implementations indexed by `Term.function` IDs.
 Each entry receives the captured values before the invocation arguments. -/
@@ -625,8 +607,7 @@ namespace Lynx.Result
   match computation with
   | .ok value => .ok value
   | .error exception => .error exception
-  | .apply .. | .get .. | .set .. | .spawn .. | .schedule ..
-    | .send .. | .receive .. => False.elim pure
+  | .get .. | .set .. | .schedule .. | .send .. | .receive .. => False.elim pure
 
 /-- Read-only evaluation agrees with pure extraction when there are no reads. -/
 @[simp] public theorem toExceptRead_pure (computation : Result α) (env : Environment)
