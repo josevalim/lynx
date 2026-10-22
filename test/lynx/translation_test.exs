@@ -572,7 +572,7 @@ defmodule Lynx.TranslationTest do
     end
   end
 
-  test "dynamic application makes local, remote, and recursive callers impure" do
+  test "dynamic application marks local, remote, and recursive callers as dispatching" do
     dependency =
       cerl("""
       -module(dependency).
