@@ -647,19 +647,18 @@ defmodule Lynx.Translation do
     end
   end
 
-  defp emit_group(names, functions) do
-    {defs, {purity, dispatches}} =
-      Enum.map_reduce(names, {:pure, false}, fn name, {purity, dispatches} ->
-        %{translation: translation} = function = Map.fetch!(functions, name)
-        definition_purity = {function.purity, function.dispatches}
+  # Members of a recursive group reach each other, so they share their purity.
+  defp emit_group([name | _] = names, functions) do
+    %{purity: purity, dispatches: dispatches} = Map.fetch!(functions, name)
 
-        definition =
-          if translation["kind"] == "def",
-            do: :lynx_core_to_leanj.with_purity(translation, definition_purity),
-            else: translation
+    defs =
+      for name <- names do
+        %{translation: translation} = Map.fetch!(functions, name)
 
-        {definition, {join_purity(purity, function.purity), dispatches or function.dispatches}}
-      end)
+        if translation["kind"] == "def",
+          do: :lynx_core_to_leanj.with_purity(translation, {purity, dispatches}),
+          else: translation
+      end
 
     [first | _] = defs
     span = first["span"]
