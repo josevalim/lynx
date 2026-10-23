@@ -1,6 +1,5 @@
 module
 
-public import Std
 public import Lynx.Term.FiniteFloat
 public import Lynx.Term.Bitstring
 

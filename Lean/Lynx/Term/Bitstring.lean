@@ -1,6 +1,5 @@
 module
 
-public import Std
 
 /-! Packed-bit operations exposed for reduction in proofs. -/
 

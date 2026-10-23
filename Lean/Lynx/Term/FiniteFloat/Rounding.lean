@@ -1,6 +1,5 @@
 module
 
-public import Std
 
 /-! Facts about rounding in Lean's `Float.Model`, which comes without lemmas. -/
 
@@ -722,7 +721,8 @@ public theorem toNat_neg (a : Float.Model) (finite : a.toBits.toNat / 2 ^ 52 % 2
     · have mz' : N % 2 ^ 52 = 0 := by rw [← fm, mz]; rfl
       rw [dite_eq_left mz]
       simp only [UnpackedFloat.neg, UnpackedFloat.pack, packedZero, toNat_packComponents, sign]
-      simp
+      -- Avoid `simp` here: external checkers exhaust their reduction fuel on its proof.
+      rw [show BitVec.toNat (0 : BitVec 11) = 0 from rfl, show BitVec.toNat (0 : BitVec 52) = 0 from rfl]
       omega
     · have mz' : N % 2 ^ 52 ≠ 0 := by
         intro z; exact mz (BitVec.eq_of_toNat_eq (by rw [fm, z]; rfl))

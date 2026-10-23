@@ -141,19 +141,25 @@ def «+/2» : Term → Term → Except Exception Term
     «+/2» (.float left) (.float right) =
       (match left.add right with
       | some result => .ok (.float result)
-      | none => .error (.error (.atom "badarith"))) := by rfl
+      | none => .error (.error (.atom "badarith"))) := by
+  simp only [«+/2»]
+  cases left.add right <;> rfl
 
 @[simp] theorem «+/2_integer_float» (left : Int) (right : Term.FiniteFloat) :
     «+/2» (.integer left) (.float right) =
       (match Term.FiniteFloat.ofInt left >>= (·.add right) with
       | some result => .ok (.float result)
-      | none => .error (.error (.atom "badarith"))) := by rfl
+      | none => .error (.error (.atom "badarith"))) := by
+  simp only [«+/2»]
+  cases Term.FiniteFloat.ofInt left >>= (·.add right) <;> rfl
 
 @[simp] theorem «+/2_float_integer» (left : Term.FiniteFloat) (right : Int) :
     «+/2» (.float left) (.integer right) =
       (match Term.FiniteFloat.ofInt right >>= left.add with
       | some result => .ok (.float result)
-      | none => .error (.error (.atom "badarith"))) := by rfl
+      | none => .error (.error (.atom "badarith"))) := by
+  simp only [«+/2»]
+  cases Term.FiniteFloat.ofInt right >>= left.add <;> rfl
 
 def «-/2» : Term → Term → Except Exception Term
   | .integer x, .integer y => .ok (.integer (x - y))
