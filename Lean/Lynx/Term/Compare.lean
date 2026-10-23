@@ -306,12 +306,18 @@ private theorem boundedStep_eq (exact : Bool) (n : Nat)
     (ha : sizeOf a ≤ n) (hb : sizeOf b ≤ n) :
     boundedStep exact n (fun a b => cmp a.val b.val) (fun a b => exactCmp a.val b.val)
       a b ha hb = compareStep exact cmp exactCmp a b := by
-  cases a <;> cases b <;> simp only [boundedStep, compareStep]
-  all_goals try rfl
-  · rw [← lex_map exactCmp Subtype.val, boundedList_val, boundedList_val]
-  · rw [← lex_map cmp Subtype.val, boundedList_val, boundedList_val]
-  · rw [← compareMapViews_map exactCmp cmp Subtype.val, mapView_map, mapView_map,
+  cases a <;> cases b
+  case function.function =>
+    simp only [boundedStep, compareStep]
+    rw [← lex_map exactCmp Subtype.val, boundedList_val, boundedList_val]
+  case tuple.tuple =>
+    simp only [boundedStep, compareStep]
+    rw [← lex_map cmp Subtype.val, boundedList_val, boundedList_val]
+  case map.map =>
+    simp only [boundedStep, compareStep]
+    rw [← compareMapViews_map exactCmp cmp Subtype.val, mapView_map, mapView_map,
       boundedEntries_val, boundedEntries_val]
+  all_goals rfl
 
 end Lynx.Term.Compare
 
@@ -338,57 +344,92 @@ end Lynx.Term
 
 namespace Lynx.Term.Compare
 
+/-- Erlang's type order, with integers and floats sharing the number rank. -/
+private def rank : Term → Nat
+  | .integer _ | .float _ => 0
+  | .atom _ => 1
+  | .reference _ => 2
+  | .function _ _ _ => 3
+  | .pid _ => 4
+  | .tuple _ => 5
+  | .map _ => 6
+  | .nil => 7
+  | .cons _ _ => 8
+  | .bitstring _ _ _ => 9
+
+/-- Terms of different ranks compare by rank alone. -/
+private theorem compareStep_of_rank_ne {exact : Bool} {cmp exactCmp : Term → Term → Ordering}
+    {a b : Term} (h : rank a ≠ rank b) :
+    compareStep exact cmp exactCmp a b = Ord.compare (rank a) (rank b) := by
+  cases a <;> cases b <;> first | exact absurd rfl h | rfl
+
 private instance (exact : Bool) (cmp exactCmp : Term → Term → Ordering)
     [Std.TransCmp cmp] [Std.TransCmp exactCmp] :
     Std.TransCmp (compareStep exact cmp exactCmp) where
   eq_swap := by
     intro a b
-    cases exact <;> cases a <;> cases b <;> simp only [compareStep, Bool.false_eq_true,
-      ite_false, ite_true, Ordering.swap_then,
-      Ordering.swap_eq, Ordering.swap_lt, Ordering.swap_gt]
-    all_goals try rfl
-    all_goals first
-      | exact Std.OrientedCmp.eq_swap
-      | (congr 1 <;> exact Std.OrientedCmp.eq_swap)
-      | (congr 1 <;> first
-          | exact Std.OrientedCmp.eq_swap
-          | (congr 1 <;> exact Std.OrientedCmp.eq_swap))
+    by_cases rab : rank a = rank b
+    · cases a <;> cases b <;> simp only [rank, Nat.reduceEqDiff] at rab <;> cases exact <;>
+        simp only [compareStep, Bool.false_eq_true, ite_false, ite_true, Ordering.swap_then,
+          Ordering.swap_eq, Ordering.swap_lt, Ordering.swap_gt]
+      all_goals first
+        | exact Std.OrientedCmp.eq_swap
+        | rfl
+        | (congr 1 <;> exact Std.OrientedCmp.eq_swap)
+        | (congr 1 <;> first
+            | exact Std.OrientedCmp.eq_swap
+            | (congr 1 <;> exact Std.OrientedCmp.eq_swap))
+    · rw [compareStep_of_rank_ne rab, compareStep_of_rank_ne (Ne.symm rab)]
+      exact Std.OrientedCmp.eq_swap
   isLE_trans := by
     intro a b c ab bc
-    cases exact <;> cases a <;> cases b <;> cases c <;>
-      simp only [compareStep, Ordering.isLE_lt, Ordering.isLE_eq, Ordering.isLE_gt,
-        Bool.false_eq_true, ite_false, ite_true] at ab bc ⊢
-    all_goals try contradiction
-    all_goals try trivial
-    all_goals try exact Std.TransCmp.isLE_trans ab bc
-    case false.function.function.function aid arity ac bid barity bcaps cid carity cc =>
-      exact Std.TransCmp.isLE_trans
-        (cmp := compareLex (compareOn Ord.compare Prod.fst)
-          (compareLex (compareOn Ord.compare fun p : Nat × Nat × List Term => p.2.1)
-            (compareOn (List.compareLex exactCmp) fun p : Nat × Nat × List Term => p.2.2)))
-        (a := (aid, arity, ac.toList)) (b := (bid, barity, bcaps.toList))
-        (c := (cid, carity, cc.toList)) ab bc
-    case true.function.function.function aid arity ac bid barity bcaps cid carity cc =>
-      exact Std.TransCmp.isLE_trans
-        (cmp := compareLex (compareOn Ord.compare Prod.fst)
-          (compareLex (compareOn Ord.compare fun p : Nat × Nat × List Term => p.2.1)
-            (compareOn (List.compareLex exactCmp) fun p : Nat × Nat × List Term => p.2.2)))
-        (a := (aid, arity, ac.toList)) (b := (bid, barity, bcaps.toList))
-        (c := (cid, carity, cc.toList)) ab bc
-    case false.tuple.tuple.tuple a b c =>
-      exact Std.TransCmp.isLE_trans
-        (cmp := compareLex (compareOn Ord.compare Array.size) (compareOn (List.compareLex cmp) Array.toList)) ab bc
-    case true.tuple.tuple.tuple a b c =>
-      exact Std.TransCmp.isLE_trans
-        (cmp := compareLex (compareOn Ord.compare Array.size) (compareOn (List.compareLex cmp) Array.toList)) ab bc
-    case false.cons.cons.cons ah ats bh bt ch ct =>
-      exact Std.TransCmp.isLE_trans
-        (cmp := compareLex (compareOn cmp Prod.fst) (compareOn cmp Prod.snd))
-        (a := (ah,ats)) (b := (bh,bt)) (c := (ch,ct)) ab bc
-    case true.cons.cons.cons ah ats bh bt ch ct =>
-      exact Std.TransCmp.isLE_trans
-        (cmp := compareLex (compareOn cmp Prod.fst) (compareOn cmp Prod.snd))
-        (a := (ah,ats)) (b := (bh,bt)) (c := (ch,ct)) ab bc
+    by_cases rab : rank a = rank b
+    · by_cases rbc : rank b = rank c
+      · cases a <;> cases b <;> simp only [rank, Nat.reduceEqDiff] at rab <;>
+          cases c <;> simp only [rank, Nat.reduceEqDiff] at rbc <;> cases exact <;>
+          simp only [compareStep, Ordering.isLE_lt, Ordering.isLE_eq, Ordering.isLE_gt,
+            Bool.false_eq_true, ite_false, ite_true] at ab bc ⊢
+        all_goals try contradiction
+        all_goals try trivial
+        all_goals try exact Std.TransCmp.isLE_trans ab bc
+        case function.function.function.false aid arity ac bid barity bcaps cid carity cc =>
+          exact Std.TransCmp.isLE_trans
+            (cmp := compareLex (compareOn Ord.compare Prod.fst)
+              (compareLex (compareOn Ord.compare fun p : Nat × Nat × List Term => p.2.1)
+                (compareOn (List.compareLex exactCmp) fun p : Nat × Nat × List Term => p.2.2)))
+            (a := (aid, arity, ac.toList)) (b := (bid, barity, bcaps.toList))
+            (c := (cid, carity, cc.toList)) ab bc
+        case function.function.function.true aid arity ac bid barity bcaps cid carity cc =>
+          exact Std.TransCmp.isLE_trans
+            (cmp := compareLex (compareOn Ord.compare Prod.fst)
+              (compareLex (compareOn Ord.compare fun p : Nat × Nat × List Term => p.2.1)
+                (compareOn (List.compareLex exactCmp) fun p : Nat × Nat × List Term => p.2.2)))
+            (a := (aid, arity, ac.toList)) (b := (bid, barity, bcaps.toList))
+            (c := (cid, carity, cc.toList)) ab bc
+        case tuple.tuple.tuple.false a b c =>
+          exact Std.TransCmp.isLE_trans
+            (cmp := compareLex (compareOn Ord.compare Array.size) (compareOn (List.compareLex cmp) Array.toList)) ab bc
+        case tuple.tuple.tuple.true a b c =>
+          exact Std.TransCmp.isLE_trans
+            (cmp := compareLex (compareOn Ord.compare Array.size) (compareOn (List.compareLex cmp) Array.toList)) ab bc
+        case cons.cons.cons.false ah ats bh bt ch ct =>
+          exact Std.TransCmp.isLE_trans
+            (cmp := compareLex (compareOn cmp Prod.fst) (compareOn cmp Prod.snd))
+            (a := (ah,ats)) (b := (bh,bt)) (c := (ch,ct)) ab bc
+        case cons.cons.cons.true ah ats bh bt ch ct =>
+          exact Std.TransCmp.isLE_trans
+            (cmp := compareLex (compareOn cmp Prod.fst) (compareOn cmp Prod.snd))
+            (a := (ah,ats)) (b := (bh,bt)) (c := (ch,ct)) ab bc
+      · rw [compareStep_of_rank_ne rbc, Nat.isLE_compare] at bc
+        rw [compareStep_of_rank_ne (by omega), Nat.isLE_compare]
+        omega
+    · rw [compareStep_of_rank_ne rab, Nat.isLE_compare] at ab
+      by_cases rbc : rank b = rank c
+      · rw [compareStep_of_rank_ne (by omega), Nat.isLE_compare]
+        omega
+      · rw [compareStep_of_rank_ne rbc, Nat.isLE_compare] at bc
+        rw [compareStep_of_rank_ne (by omega), Nat.isLE_compare]
+        omega
 
 /-- Finite approximations used only to prove ordering laws. Executable comparison
 uses well-founded recursion, not a runtime depth counter. -/
