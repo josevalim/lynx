@@ -637,14 +637,13 @@ theorem pack_ofScientific_congr {m₁ m₂ : Nat} {e₁ e₂ : Int}
     rcases c₁ with ⟨b₁, eq₁⟩ | ⟨b₁, eq₁⟩ | ⟨n₁, t₁, a₁, i₁, eq₁⟩ <;>
     rcases c₂ with ⟨b₂, eq₂⟩ | ⟨b₂, eq₂⟩ | ⟨n₂, t₂, a₂, i₂, eq₂⟩ <;>
     rw [eq₁, eq₂]
-    all_goals first
-      | rfl
-      | (exfalso; grind)
-      | exact (pack_overflow i₂ b₁).symm
-      | exact pack_overflow i₁ b₂
-      | rw [round_underflow i₂ b₁]
-      | rw [round_underflow i₁ b₂]
-      | rw [roundWithAccuracy_congr i₁.1 i₂.1 i₁.2 i₂.2]
+    · exfalso; grind
+    · exact (pack_overflow i₂ b₁).symm
+    · exfalso; grind
+    · rw [round_underflow i₂ b₁]
+    · exact pack_overflow i₁ b₂
+    · rw [round_underflow i₁ b₂]
+    · rw [roundWithAccuracy_congr i₁.1 i₂.1 i₁.2 i₂.2]
 
 /-- `Float.Model.ofScientific m e` depends only on the value `m * 10 ^ e`. -/
 public theorem model_ofScientific_congr {m₁ m₂ : Nat} {e₁ e₂ : Int}
@@ -723,6 +722,7 @@ public theorem toNat_neg (a : Float.Model) (finite : a.toBits.toNat / 2 ^ 52 % 2
       simp only [UnpackedFloat.neg, UnpackedFloat.pack, packedZero, toNat_packComponents, sign]
       -- Avoid `simp` here: external checkers exhaust their reduction fuel on its proof.
       rw [show BitVec.toNat (0 : BitVec 11) = 0 from rfl, show BitVec.toNat (0 : BitVec 52) = 0 from rfl]
+      clear fm fe fs sign notInf ez mz bv bias
       omega
     · have mz' : N % 2 ^ 52 ≠ 0 := by
         intro z; exact mz (BitVec.eq_of_toNat_eq (by rw [fm, z]; rfl))
@@ -733,6 +733,7 @@ public theorem toNat_neg (a : Float.Model) (finite : a.toBits.toNat / 2 ^ 52 % 2
       rw [ite_eq_right (by rw [ez]; simp), ite_eq_right (by simp only [Format.mantissaBits]; omega),
         toNat_packComponents, sign]
       simp only [BitVec.toNat_ofNat, fm]
+      clear fm fe fs sign notInf ez mz log bv bias
       omega
   · have ez' : N / 2 ^ 52 % 2 ^ 11 ≠ 0 := by
       intro z; exact ez (BitVec.eq_of_toNat_eq (by rw [fe, z]; rfl))
@@ -749,6 +750,7 @@ public theorem toNat_neg (a : Float.Model) (finite : a.toBits.toNat / 2 ^ 52 % 2
     rw [ite_eq_right (by rw [fe]; omega), ite_eq_left (by simp only [Format.mantissaBits]),
       toNat_packComponents, sign]
     simp only [BitVec.toNat_ofNat, fe, append]
+    clear fm fe fs sign append log notInf ez bv bias
     omega
 
 theorem canonical_target {F : Nat} {E : Int}
