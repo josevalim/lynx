@@ -1,6 +1,7 @@
 module
 
 import Lynx
+import Lynx.Runner.Elab
 import Lean
 
 /-! JSON runner for verification and Lean source rendering. Positions are one-based Unicode character positions.
@@ -1797,7 +1798,8 @@ private structure Runtime where
   env : Lean.Environment
   imports : ImportState
 
-private def runtimeImports : Array Import := #[{ module := `Lynx, isExported := true }]
+private def runtimeImports : Array Import :=
+  #[{ module := `Lynx, isExported := true }, { module := `Lynx.Runner.Elab, isExported := true }]
 
 private def getRuntime (cache : IO.Ref (Option Runtime)) : IO Runtime := do
   if let some runtime ← cache.get then return runtime

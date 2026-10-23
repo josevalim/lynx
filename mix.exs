@@ -22,8 +22,11 @@ defmodule Lynx.MixProject do
     lean_dir = Path.join(__DIR__, "Lean")
     lock_dir = Mix.Project.config()[:lockfile] |> Path.expand() |> Path.dirname()
 
+    # The runner is not a default target, so `lake check` covers only the library.
+    args = ["--dir", lean_dir, "build", "Lynx", "Lynx.Runner"]
+
     # Port output may split multibyte characters, so let Lake write directly.
-    case Mix.shell().cmd({"lake", ["--dir", lean_dir, "build"]}, cd: lock_dir, use_stdio: false) do
+    case Mix.shell().cmd({"lake", args}, cd: lock_dir, use_stdio: false) do
       0 -> :ok
       status -> Mix.raise("Lake build failed with status #{status}")
     end

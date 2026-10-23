@@ -30,8 +30,6 @@ jobs:
       - uses: leanprover/lean-action@v1
         with:
           lake-package-directory: Lean
-          auto-config: "false"
-          build: "false"
           test: "false"
       - name: Install bubblewrap
         run: |

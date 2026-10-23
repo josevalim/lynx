@@ -1,6 +1,5 @@
 module
 
-public import Std
 import Lynx.Term.FiniteFloat.Rounding
 
 namespace Lynx.Term
