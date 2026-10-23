@@ -7,7 +7,7 @@
 Write proofs about Erlang/Elixir programs using Lean.
 
 This is done by writing laws, in Erlang/Elixir, with a Lean proof
-that guarantees your Erlang/Elixir code obey those laws. This is done
+that guarantees your Erlang/Elixir code obeys those laws. This is done
 by implementing a model of the Erlang runtime in Lean and automatically
 translating your Erlang/Elixir code to Lean.
 
@@ -83,7 +83,7 @@ end
 `requires:` states the input assumptions and `expects:` must evaluate to `true`
 under those assumptions. Each `laws` block registers one ExUnit test and verifies
 all its laws together. The `~LEAN` sigils contain the proofs checked by Lean.
-Laws also remain callable from ordinary tests, as shown above.
+Laws also remain callable from ordinary tests.
 
 Run the example or all law groups with:
 
@@ -134,7 +134,7 @@ predicate names replaced by their Erlang equivalents.
 The argument names in `name` become Lean theorem parameters. The predicate
 helpers receive those arguments in order and remain callable from Erlang.
 `ensures` is required, while `requires` may be omitted for an unconditional
-law. Then call `Lynx.Laws.verify!/1` with the module name to validate the proofs.
+law. Then call `Lynx.Laws.verify!([:sum_proofs])` to validate the proofs.
 
 ## Installation
 
@@ -185,13 +185,6 @@ Before committing:
 mix precommit
 ```
 
-The Lean source code can be found in the `Lean` directory,
-you can run `lake` commands from that directory whenever working
+The Lean source code can be found in the `Lean` directory.
+You can run `lake` commands from that directory whenever working
 with Lean directly.
-
-Benchmarks comparing the translated examples with native ones
-can be run with:
-
-```console
-sh Lean/Benchmarks/run.sh 5
-```
