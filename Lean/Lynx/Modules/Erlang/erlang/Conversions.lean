@@ -76,13 +76,13 @@ private theorem toList_loop (bs : ByteArray) (i : Nat) (r : List UInt8) :
     ByteArray.toList.loop bs i r = r.reverse ++ bs.data.toList.drop i := by
   induction i, r using ByteArray.toList.loop.induct bs with
   | case1 i r h ih =>
-    rw [ByteArray.toList.loop, if_pos h, ih]
+    rw [ByteArray.toList.loop, ite_eq_left h, ih]
     have hi : i < bs.data.size := h
     have hd : i < bs.data.toList.length := by rw [Array.length_toList]; exact hi
     rw [List.drop_eq_getElem_cons hd]
     simp [ByteArray.get!, getElem!_pos bs.data i hi]
   | case2 i r h =>
-    rw [ByteArray.toList.loop, if_neg h]
+    rw [ByteArray.toList.loop, ite_eq_right h]
     have : bs.data.toList.length ≤ i := by
       rw [Array.length_toList]; exact Nat.le_of_not_lt h
     rw [List.drop_eq_nil_of_le this, List.append_nil]
@@ -99,13 +99,13 @@ private theorem digitChar_bytes (d : Nat) (h : d < 10) :
     String.utf8EncodeChar d.digitChar = [UInt8.ofNat (48 + d)] := by
   have hc : d.digitChar.val.toNat = 48 + d := Nat.toNat_digitChar_of_lt_ten h
   have small : 48 + d ≤ 127 := by omega
-  simp only [String.utf8EncodeChar, hc, small, if_true]
+  simp only [String.utf8EncodeChar, hc, small, ite_true]
 
 private theorem toDigits_utf8Encode (m : Nat) :
     (Nat.toDigits 10 m).utf8Encode = (decimalBytes m).toByteArray := by
   induction m using Nat.strongRecOn with
   | ind m ih =>
-    rw [Nat.toDigits_eq_if (by decide), decimalBytes]
+    rw [Nat.toDigits_eq_ite (by decide), decimalBytes]
     split
     · simp [List.utf8Encode_singleton, digitChar_bytes m ‹_›]
     · rw [List.utf8Encode_append, ih (m / 10) (by omega), List.utf8Encode_singleton,
@@ -164,17 +164,17 @@ private theorem repr_bytes (m : Nat) : (Nat.repr m).toByteArray = (decimalBytes 
 public theorem binary_to_integer_integer_to_binary (n : Int) :
     («integer_to_binary/1» (.integer n) >>= «binary_to_integer/1») = .ok (.integer n) := by
   simp only [«integer_to_binary/1», Except.ok_bind, «binary_to_integer/1», String.toUTF8_eq_toByteArray,
-    Int.toString_eq_repr, Int.repr_eq_if]
+    Int.toString_eq_repr, Int.repr_eq_ite]
   by_cases nonneg : 0 ≤ n
   · have bytes : n.toNat.repr.toByteArray.toList = decimalBytes n.toNat := by
       rw [repr_bytes, toList_eq_data, List.toList_data_toByteArray]
-    simp only [nonneg, if_true, bytes, splitSign_decimalBytes, digitsValue_decimalBytes]
+    simp only [nonneg, ite_true, bytes, splitSign_decimalBytes, digitsValue_decimalBytes]
     simp; omega
   · have bytes : ("-" ++ (-n).toNat.repr).toByteArray.toList = 45 :: decimalBytes (-n).toNat := by
       rw [String.toByteArray_append, repr_bytes, toList_eq_data]
       simp [ByteArray.data_append]
       rfl
-    simp only [nonneg, if_false, bytes, splitSign, digitsValue_decimalBytes]
+    simp only [nonneg, ite_false, bytes, splitSign, digitsValue_decimalBytes]
     simp; omega
 
 private theorem decimalBytes_head (m : Nat) (positive : 0 < m) :
@@ -223,16 +223,16 @@ public theorem integer_to_binary_decimal (n : Int) :
       (vb : Term.Bitstring.Valid b 0) : Term.bitstring a 0 va = Term.bitstring b 0 vb := by
     subst same; rfl
   simp only [«integer_to_binary/1», String.toUTF8_eq_toByteArray, Int.toString_eq_repr,
-    Int.repr_eq_if]
+    Int.repr_eq_ite]
   by_cases nonneg : 0 ≤ n
-  · simp only [nonneg, if_true, show ¬n < 0 by omega, if_false, List.nil_append]
+  · simp only [nonneg, ite_true, show ¬n < 0 by omega, ite_false, List.nil_append]
     by_cases zero : n.toNat = 0
     · have text := bytes_of_toList n.toNat.repr.toByteArray [48] (by rw [repr, zero, decimalBytes_zero])
       exact ⟨48, [], congrArg Except.ok (congr _ _ text _ _), by simp, fun _ => ⟨by omega, rfl⟩⟩
     · obtain ⟨first, rest, text, digits, low⟩ :=
         positive n.toNat [] n.toNat.repr.toByteArray (by omega) (by rw [repr]; rfl)
       exact ⟨first, rest, congrArg Except.ok (congr _ _ text _ _), digits, fun h => by omega⟩
-  · simp only [nonneg, if_false, show n < 0 by omega, if_true]
+  · simp only [nonneg, ite_false, show n < 0 by omega, ite_true]
     have sign : ("-" : String).toByteArray.data.toList = [45] := by decide
     obtain ⟨first, rest, text, digits, low⟩ :=
       positive (-n).toNat [45] ("-" ++ (-n).toNat.repr).toByteArray (by omega) (by
@@ -431,7 +431,7 @@ private theorem splitSign_intBytes (k : Int) :
   unfold intBytes
   by_cases neg : k < 0
   · simp [neg, splitSign]
-  · simp only [neg, if_false, splitSign_decimalBytes, decide_false]
+  · simp only [neg, ite_false, splitSign_decimalBytes, decide_false]
     congr 2
     omega
 
@@ -448,7 +448,7 @@ private theorem parseFloat_parts (negative : Bool) {whole fraction tail : List U
     cases negative
     · obtain ⟨b, w, rfl⟩ := List.exists_cons_of_ne_nil wne
       have hb := wd b (by simp)
-      simp only [Bool.false_eq_true, if_false, List.nil_append, List.cons_append]
+      simp only [Bool.false_eq_true, ite_false, List.nil_append, List.cons_append]
       unfold splitSign
       split
       · rename_i r eq; cases eq; simp [isDigit] at hb
@@ -492,7 +492,7 @@ private theorem stripZeros_value (fuel d : Nat) (e : Int) :
   | succ fuel ih =>
     simp only [stripZeros]
     by_cases strip : (d ≠ 0 && d % 10 == 0) = true
-    · rw [if_pos strip]
+    · rw [ite_eq_left strip]
       simp only [Bool.and_eq_true, ne_eq, decide_eq_true_eq, beq_iff_eq] at strip
       obtain ⟨value, nonzero⟩ := ih (d / 10) (e + 1)
       refine ⟨?_, fun _ => nonzero (by omega)⟩
@@ -500,7 +500,7 @@ private theorem stripZeros_value (fuel d : Nat) (e : Int) :
       have := scale_ten (d / 10) 1 (e + 1)
       rw [show d / 10 * 10 ^ 1 = d by omega, show e + 1 - ((1 : Nat) : Int) = e by omega] at this
       exact this.symm
-    · rw [if_neg strip]
+    · rw [ite_eq_right strip]
       exact ⟨rfl, id⟩
 
 private theorem candidateDigits_spec {positive : Term.FiniteFloat} {exponent : Int} {count d : Nat}
@@ -530,13 +530,13 @@ private theorem exactDigits_spec (value : Term.FiniteFloat) (nonzero : value.mag
           Rat) * 10 ^ (if 0 ≤ e then (sig * 2 ^ e.toNat, (0 : Int)) else (sig * 5 ^ (-e).toNat, e)).2 =
           (sig : Rat) * 2 ^ e := by
     by_cases nonneg : 0 ≤ e
-    · simp only [nonneg, if_true]
+    · simp only [nonneg, ite_true]
       refine ⟨Nat.mul_ne_zero pos (by simp), ?_⟩
       rw [Rat.zpow_zero, Rat.mul_one, Rat.natCast_mul, Rat.natCast_pow,
         show e = ((e.toNat : Nat) : Int) by omega, Rat.zpow_natCast]
       simp
       rw [show (max e 0).toNat = e.toNat by omega]
-    · simp only [nonneg, if_false]
+    · simp only [nonneg, ite_false]
       refine ⟨Nat.mul_ne_zero pos (by simp), ?_⟩
       have k : e = -(((-e).toNat : Nat) : Int) := by omega
       generalize (-e).toNat = n at k
@@ -557,9 +557,9 @@ private theorem exactDigits_spec (value : Term.FiniteFloat) (nonzero : value.mag
   by_cases e0 : value.exponent.val = 0
   · have f0 : value.fraction.val ≠ 0 := by
       intro f0; simp [e0, f0] at nonzero
-    simp only [e0, if_true, if_neg f0]
+    simp only [e0, ite_true, ite_eq_right f0]
     exact decimal _ _ f0
-  · simp only [e0, if_false]
+  · simp only [e0, ite_false]
     exact decimal _ _ (by omega)
 
 private theorem shortestDigits_spec (value : Term.FiniteFloat) (nonzero : value.magnitude ≠ 0) :
@@ -727,7 +727,7 @@ private theorem shortBytes_parts (value : Term.FiniteFloat) :
       ?round⟩
     case eq =>
       unfold shortBytes
-      rw [if_neg (by simpa using zero), found]
+      rw [ite_eq_right (by simpa using zero), found]
     case parts =>
       exact parts_ite (fixed_parts strippedNonzero _) (scientific_parts strippedNonzero _)
     case round =>
@@ -784,7 +784,7 @@ public theorem float_to_binary_decimal (value : Term.FiniteFloat) :
       unfold intBytes
       by_cases neg : k < 0
       · simp [neg]
-      · simp only [neg, if_false, List.nil_append]
+      · simp only [neg, ite_false, List.nil_append]
         congr 2
         omega
 

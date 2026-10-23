@@ -139,7 +139,7 @@ law. Then call `Lynx.Laws.verify!([:sum_proofs])` to validate the proofs.
 ## Installation
 
 Install Elixir 1.18+ and Elan, Lean's toolchain manager, with `lake` available on
-`PATH`. The project's `lean-toolchain` selects Lean 4.33.1.
+`PATH`. The project's `lean-toolchain` selects Lean 4.35.0.
 
 Add Lynx to your application's `mix.exs` dependencies:
 
@@ -163,7 +163,7 @@ produced by coding agents with limited review.
 
 ## Contributing
 
-The project requires Elixir 1.18+ and Lean 4.33.1+, which includes Lake.
+The project requires Elixir 1.18+ and Lean 4.35.0+, which includes Lake.
 With those installed, fetch dependencies and compile the project with:
 
 ```console

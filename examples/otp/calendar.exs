@@ -250,7 +250,7 @@ defmodule CalendarProofsTest do
           Erlang.erlang.«+/2_integers», Erlang.erlang.«-/2_integers»,
           Erlang.erlang.«*/2_integers», divide, Erlang.erlang.«>=/2_integers», greater,
           Erlang.erlang.«=</2_integers», branch, iteResult, iteInteger, pureOk, okBind,
-          positive, if_true, Erlang.erlang.«and/2», branchTrue, Lynx.Except.tryWith_ok]
+          positive, ite_true, Erlang.erlang.«and/2», branchTrue, Lynx.Except.tryWith_ok]
         simp only [Lynx.Term.true, branchTrue]
         apply congrArg (fun value : Int => Except.ok (Lynx.Term.integer value))
         dsimp [dateNumber]
@@ -302,7 +302,7 @@ defmodule CalendarProofsTest do
           have century : y/100=0 ∨ y/100=1 ∨ y/100=2 ∨ y/100=3 := by omega
           have residue : y%4=0 ∨ y%4=1 ∨ y%4=2 ∨ y%4=3 := by omega
           by_cases isLeap : leap (y+1)
-          all_goals simp only [isLeap, if_true, if_false]
+          all_goals simp only [isLeap, ite_true, ite_false]
           all_goals rcases century with h|h|h|h <;>
             rcases residue with rem|rem|rem|rem <;> dsimp [leap,y] at * <;> omega
         have leapBound := leapSpec d dLo dHi
@@ -313,7 +313,7 @@ defmodule CalendarProofsTest do
             (if 0≤z then z.tdiv 400 else (z-399).tdiv 400) = z/400 := by
           by_cases h : 0≤z
           · simp [h, Int.tdiv_eq_ediv_of_nonneg h]
-          · simp only [h, if_false, Int.tdiv_eq_ediv, show Int.sign 400=1 by rfl]
+          · simp only [h, ite_false, Int.tdiv_eq_ediv, show Int.sign 400=1 by rfl]
             split <;> omega
         have adjusted : (if (if mp<10 then mp+3 else mp-9)≤2 then
             (y+e*400+if mp<10 then 0 else 1)-1 else y+e*400+if mp<10 then 0 else 1) = y+e*400 := by
@@ -335,7 +335,7 @@ defmodule CalendarProofsTest do
           · have casesMP : mp=0 ∨ mp=1 ∨ mp=2 ∨ mp=3 ∨ mp=4 ∨ mp=5 ∨
                 mp=6 ∨ mp=7 ∨ mp=8 ∨ mp=9 ∨ mp=10 ∨ mp=11 := by omega
             rcases casesMP with h|h|h|h|h|h|h|h|h|h|h|h
-            all_goals simp only [h, Int.reduceLT, if_true, if_false, Int.add_zero, Int.reduceAdd,
+            all_goals simp only [h, Int.reduceLT, ite_true, ite_false, Int.add_zero, Int.reduceAdd,
               Int.reduceSub, monthDays, Int.reduceEq, or_false, or_true]
             all_goals try (dsimp [mp] at h; omega)
 
@@ -410,7 +410,7 @@ defmodule CalendarProofsTest do
             (if 0≤z then z.tdiv 146097 else (z-146096).tdiv 146097) = z/146097 := by
           by_cases h : 0≤z
           · simp [h, Int.tdiv_eq_ediv_of_nonneg h]
-          · simp only [h, if_false, Int.tdiv_eq_ediv, show Int.sign 146097=1 by rfl]
+          · simp only [h, ite_false, Int.tdiv_eq_ediv, show Int.sign 146097=1 by rfl]
             split <;> omega
         have eEq : rawEra n=e := by
           have regroup : n-60-146097+1=n-60-146096 := by omega
@@ -436,7 +436,7 @@ defmodule CalendarProofsTest do
         have translated := decodedRaw n
         simp only [eEq,yEq,rEq,mpEq,rawMonth,monthCondition,
           Int.tdiv_eq_ediv_of_nonneg (show 0≤153*mp+2 by omega)] at translated
-        by_cases h : mp<10 <;> simpa only [h,if_true,if_false,not_false_eq_true,not_true_eq_false] using translated
+        by_cases h : mp<10 <;> simpa only [h,ite_true,ite_false,not_false_eq_true,not_true_eq_false] using translated
 
       cases days <;> simp [«gregorian_days_roundtrip:requires/1», Erlang.erlang.«is_integer/1»] at requires
       rename_i n

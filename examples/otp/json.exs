@@ -784,11 +784,11 @@ defmodule JsonProofsTest do
               + post.length := by
             simp [ByteArray.size]; omega
           have nonneg : ¬ ((mid.length : Int) < 0) := by omega
-          simp only [Erlang.erlang.«binary_part/3», nonneg, if_false, size]
+          simp only [Erlang.erlang.«binary_part/3», nonneg, ite_false, size]
           have bounds : (0 : Int) ≤ pre.length ∧ (pre.length : Int) ≤ pre.length + mid.length ∧
               (pre.length + mid.length : Int) ≤ ((pre.length + mid.length + post.length : Nat) :
                   Int) := by omega
-          simp only [bounds, and_self, if_true]
+          simp only [bounds, and_self, ite_true]
           congr 2
           apply ByteArray.ext
           rw [ByteArray.data_extract]
@@ -1123,7 +1123,7 @@ defmodule JsonProofsTest do
                     simp only [List.append_assoc, List.singleton_append, List.nil_append,
                       List.length_append, List.length_singleton, List.length_nil] at next
                     push_cast at next
-                    simp only [len, if_false, part, Lynx.Except.ok_bind]
+                    simp only [len, ite_false, part, Lynx.Except.ok_bind]
                     simpa [Int.add_assoc] using next
               · rw [escape_utf8 _ _ _ _ _ _ unit]
                 exact extend u rest rfl (by
@@ -1460,7 +1460,7 @@ defmodule JsonProofsTest do
                 rw [← same.1] at aPlain
                 exact absurd aPlain (by decide)
               · simp only [escapeText, List.flatMap_cons, escape] at same
-                simp only [Bool.false_eq_true, if_false, List.cons_append, List.singleton_append,
+                simp only [Bool.false_eq_true, ite_false, List.cons_append, List.singleton_append,
                   List.cons.injEq] at same
                 obtain ⟨rfl, same⟩ := same
                 obtain ⟨rest2, rfl, rfl⟩ := ih rest post Y (fun x mem => all x (by simp [mem]))
@@ -2136,7 +2136,7 @@ defmodule JsonProofsTest do
               by_cases eq : first.toNat = 48
               · have := (zero eq).1; omega
               · omega
-            simp only [negative, if_true, List.cons_append, List.nil_append] at parsed ⊢
+            simp only [negative, ite_true, List.cons_append, List.nil_append] at parsed ⊢
             unfold «decode/1»
             simp only []
             rw [value_minus, number_minus_digit _ _ _ _ _ first rest firstPositive firstHigh]
@@ -2151,7 +2151,7 @@ defmodule JsonProofsTest do
               rw [size]; simp; omega
             rw [len]
             simp [Erlang.erlang.binary_part_whole, «$lynx_fun_2/1», parsed, unexpected_whole]
-          · simp only [negative, if_false, List.nil_append] at parsed ⊢
+          · simp only [negative, ite_false, List.nil_append] at parsed ⊢
             unfold «decode/1»
             simp only []
             by_cases leading : first.toNat = 48
@@ -2385,7 +2385,7 @@ defmodule JsonProofsTest do
               by_cases eq : first.toNat = 48
               · have := (zero eq).1; omega
               · omega
-            simp only [negative, if_true, List.cons_append, List.nil_append] at parsed ⊢
+            simp only [negative, ite_true, List.cons_append, List.nil_append] at parsed ⊢
             rw [value_minus,
               number_minus_digit _ _ _ _ _ first (rest ++ b :: post) firstPositive firstHigh,
               number_digits _ _ _ _ _ rest (b :: post) restDigits 2, number_stop b post _ _ _ _ _
@@ -2395,7 +2395,7 @@ defmodule JsonProofsTest do
             have len : (2 + (rest.length : Int)) = ((rest.length + 1 + 1 : Nat) : Int) := by omega
             rw [len, part]
             simp [«$lynx_fun_2/1», parsed]
-          · simp only [negative, if_false, List.nil_append] at parsed ⊢
+          · simp only [negative, ite_false, List.nil_append] at parsed ⊢
             by_cases leading : first.toNat = 48
             · obtain ⟨_, restNil⟩ := zero leading
               subst restNil

@@ -134,7 +134,7 @@ defmodule Base64ProofsTest do
               conv => lhs; unfold Erlang.base64.«encode_binary/4»
               lynx_fold_table encodeTable
               simp (disch := omega) only [extract_some, extract_none, noEmpty,
-                if_pos, if_neg, field, tailMatch0, tailMatch,
+                ite_eq_left, ite_eq_right, field, tailMatch0, tailMatch,
                 List.length_drop, List.drop_drop, matchTail_bits,
                 Erlang.erlang.«+/2_integers», encodeLookup, okBind, Except.bind,
                 construct8, binarySegment_bits, append_bits]

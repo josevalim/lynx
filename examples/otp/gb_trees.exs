@@ -210,7 +210,7 @@ defmodule GbTreesProofsTest do
                   have input : encode (xs ++ tail) =
                       encode (xs.take ln ++ (((key, value) :: restXs) ++ tail)) := by
                     rw [← List.append_assoc, ← joined]
-                  simp only [greater, positive, if_true, Lynx.Except.guard_eq, Lynx.Except.tryWith_ok,
+                  simp only [greater, positive, ite_true, Lynx.Except.guard_eq, Lynx.Except.tryWith_ok,
                     Lynx.Term.true, Erlang.erlang.«-/2_integers»,
                     Lynx.Except.ok_bind, divided, subtracted, input, leftReturned]
                   simp only [encode, List.foldr_cons, pair, List.cons_append] at rightReturned ⊢
@@ -257,7 +257,7 @@ defmodule GbTreesProofsTest do
         rename_i count
         have nonnegative : 0 ≤ count := by
           by_cases h : 0 ≤ count <;> simp [h] at requires <;> omega
-        simp only [nonnegative, if_true, Lynx.Except.ok_bind] at requires
+        simp only [nonnegative, ite_true, Lynx.Except.ok_bind] at requires
         rcases pureCases («nodes/1» root) with returned | failed
         · obtain ⟨output, returned⟩ := returned
           obtain ⟨xs, original⟩ := flatten root output returned

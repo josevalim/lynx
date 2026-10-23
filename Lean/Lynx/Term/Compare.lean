@@ -344,7 +344,7 @@ private instance (exact : Bool) (cmp exactCmp : Term → Term → Ordering)
   eq_swap := by
     intro a b
     cases exact <;> cases a <;> cases b <;> simp only [compareStep, Bool.false_eq_true,
-      if_false, if_true, Ordering.swap_then,
+      ite_false, ite_true, Ordering.swap_then,
       Ordering.swap_eq, Ordering.swap_lt, Ordering.swap_gt]
     all_goals try rfl
     all_goals first
@@ -357,7 +357,7 @@ private instance (exact : Bool) (cmp exactCmp : Term → Term → Ordering)
     intro a b c ab bc
     cases exact <;> cases a <;> cases b <;> cases c <;>
       simp only [compareStep, Ordering.isLE_lt, Ordering.isLE_eq, Ordering.isLE_gt,
-        Bool.false_eq_true, if_false, if_true] at ab bc ⊢
+        Bool.false_eq_true, ite_false, ite_true] at ab bc ⊢
     all_goals try contradiction
     all_goals try trivial
     all_goals try exact Std.TransCmp.isLE_trans ab bc

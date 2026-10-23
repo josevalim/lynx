@@ -77,13 +77,13 @@ defmodule ListsProofsTest do
       have firstNil (descending : Bool) (head : Lynx.Term) (ys acc : List Lynx.Term) :
           first descending (encode []) head (encode ys) (encode acc) =
             .ok (encode ((head :: ys).reverse ++ acc)) := by
-        cases descending <;> simp only [first, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [first, Bool.false_eq_true, ite_false, ite_true]
         all_goals first | rw [Erlang.lists.«merge2_1/4».eq_def] | rw [Erlang.lists.«rmerge2_1/4».eq_def]
         all_goals simpa [encode, List.reverse_cons, List.append_assoc] using reverseModel ys (head :: acc)
       have secondNil (descending : Bool) (head previous : Lynx.Term) (xs acc : List Lynx.Term) :
           second descending (encode xs) previous (encode []) (encode acc) head =
             .ok (encode ((head :: xs).reverse ++ previous :: acc)) := by
-        cases descending <;> simp only [second, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [second, Bool.false_eq_true, ite_false, ite_true]
         all_goals first | rw [Erlang.lists.«merge2_2/5».eq_def] | rw [Erlang.lists.«rmerge2_2/5».eq_def]
         all_goals simpa [encode, List.reverse_cons, List.append_assoc] using reverseModel xs (head :: previous :: acc)
       have firstStep (descending : Bool) (x head : Lynx.Term) (xs ys acc : List Lynx.Term) :
@@ -92,11 +92,11 @@ defmodule ListsProofsTest do
               first descending (encode xs) head (encode ys) (encode (x :: acc))
             else second descending (encode xs) head (encode ys) (encode acc) x := by
         cases descending
-        · simp only [first, second, select, Bool.false_eq_true, if_false, if_true]
+        · simp only [first, second, select, Bool.false_eq_true, ite_false, ite_true]
           rw [Erlang.lists.«merge2_1/4».eq_def]
           cases comparison : Lynx.Term.compare x head <;>
             simp [encode, Erlang.erlang.«=</2», comparison]
-        · simp only [first, second, select, Bool.false_eq_true, if_false, if_true]
+        · simp only [first, second, select, Bool.false_eq_true, ite_false, ite_true]
           rw [Erlang.lists.«rmerge2_1/4».eq_def]
           cases comparison : Lynx.Term.compare x head <;>
             simp [encode, Erlang.erlang.«=</2», comparison]
@@ -106,11 +106,11 @@ defmodule ListsProofsTest do
               first descending (encode xs) y (encode ys) (encode (head :: previous :: acc))
             else second descending (encode xs) y (encode ys) (encode (previous :: acc)) head := by
         cases descending
-        · simp only [first, second, select, Bool.false_eq_true, if_false, if_true]
+        · simp only [first, second, select, Bool.false_eq_true, ite_false, ite_true]
           rw [Erlang.lists.«merge2_2/5».eq_def]
           cases comparison : Lynx.Term.compare head y <;>
             simp [encode, Erlang.erlang.«=</2», comparison]
-        · simp only [first, second, select, Bool.false_eq_true, if_false, if_true]
+        · simp only [first, second, select, Bool.false_eq_true, ite_false, ite_true]
           rw [Erlang.lists.«rmerge2_2/5».eq_def]
           cases comparison : Lynx.Term.compare head y <;>
             simp [encode, Erlang.erlang.«=</2», comparison]
@@ -166,7 +166,7 @@ defmodule ListsProofsTest do
       have f1Nil (descending : Bool) (acc ys zs : List Lynx.Term) (h2 h3 : Lynx.Term) :
           f1 descending [] acc h2 ys h3 zs =
             first descending (encode (h2 :: ys)) h3 (encode zs) (encode acc) := by
-        cases descending <;> simp only [f1, first, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [f1, first, Bool.false_eq_true, ite_false, ite_true]
         · conv => lhs; rw [Erlang.lists.«merge3_1/6».eq_def]
           conv => rhs; rw [Erlang.lists.«merge2_1/4».eq_def]
           simp [encode]
@@ -176,7 +176,7 @@ defmodule ListsProofsTest do
       have f2Nil (descending : Bool) (xs acc zs : List Lynx.Term) (h1 h3 : Lynx.Term) :
           f2 descending xs h1 acc [] h3 zs =
             first descending (encode (h1 :: xs)) h3 (encode zs) (encode acc) := by
-        cases descending <;> simp only [f2, first, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [f2, first, Bool.false_eq_true, ite_false, ite_true]
         · conv => lhs; rw [Erlang.lists.«merge3_2/6».eq_def]
           conv => rhs; rw [Erlang.lists.«merge2_1/4».eq_def]
           simp [encode]
@@ -186,7 +186,7 @@ defmodule ListsProofsTest do
       have f12Nil (descending : Bool) (xs ys acc : List Lynx.Term) (h1 h2 : Lynx.Term) :
           f12 descending xs h1 h2 ys acc [] =
             first descending (encode xs) h2 (encode ys) (encode (h1 :: acc)) := by
-        cases descending <;> simp only [f12, first, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [f12, first, Bool.false_eq_true, ite_false, ite_true]
         · rw [Erlang.lists.«merge3_12_3/6».eq_def]
           rfl
         · rw [Erlang.lists.«rmerge3_21_3/6».eq_def]
@@ -194,7 +194,7 @@ defmodule ListsProofsTest do
       have f21Nil (descending : Bool) (xs ys acc : List Lynx.Term) (h1 h2 : Lynx.Term) :
           f21 descending xs h1 h2 ys acc [] =
             second descending (encode xs) h2 (encode ys) (encode acc) h1 := by
-        cases descending <;> simp only [f21, second, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [f21, second, Bool.false_eq_true, ite_false, ite_true]
         · rw [Erlang.lists.«merge3_21_3/6».eq_def]
           rfl
         · rw [Erlang.lists.«rmerge3_12_3/6».eq_def]
@@ -207,14 +207,14 @@ defmodule ListsProofsTest do
             else
               if select descending h2 h3 then f2 descending xs x (h2 :: acc) ys h3 zs
               else f21 descending xs x h2 ys (h3 :: acc) zs := by
-        cases descending <;> simp only [f1, f2, f12, f21, select, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [f1, f2, f12, f21, select, Bool.false_eq_true, ite_false, ite_true]
         all_goals first | rw [Erlang.lists.«merge3_1/6».eq_def] | rw [Erlang.lists.«rmerge3_1/6».eq_def]
         all_goals cases a : Lynx.Term.compare x h2 <;> cases b : Lynx.Term.compare x h3 <;>
           cases c : Lynx.Term.compare h2 h3 <;> simp [encode, Erlang.erlang.«=</2», a, b, c]
       have f2Step (descending : Bool) (h1 h2 h3 : Lynx.Term) (xs acc ys zs : List Lynx.Term) :
           f2 descending xs h1 acc (h2 :: ys) h3 zs =
             f1 descending (h1 :: xs) acc h2 ys h3 zs := by
-        cases descending <;> simp only [f1, f2, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [f1, f2, Bool.false_eq_true, ite_false, ite_true]
         · conv => lhs; rw [Erlang.lists.«merge3_2/6».eq_def]
           conv => rhs; rw [Erlang.lists.«merge3_1/6».eq_def]
           simp [encode]
@@ -225,14 +225,14 @@ defmodule ListsProofsTest do
           f12 descending xs h1 h2 ys acc (h3 :: zs) =
             if select descending h1 h3 then f1 descending xs (h1 :: acc) h2 ys h3 zs
             else f12 descending xs h1 h2 ys (h3 :: acc) zs := by
-        cases descending <;> simp only [f1, f12, select, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [f1, f12, select, Bool.false_eq_true, ite_false, ite_true]
         all_goals first | rw [Erlang.lists.«merge3_12_3/6».eq_def] | rw [Erlang.lists.«rmerge3_21_3/6».eq_def]
         all_goals cases comparison : Lynx.Term.compare h1 h3 <;> simp [encode, Erlang.erlang.«=</2», comparison]
       have f21Step (descending : Bool) (h1 h2 h3 : Lynx.Term) (xs ys acc zs : List Lynx.Term) :
           f21 descending xs h1 h2 ys acc (h3 :: zs) =
             if select descending h2 h3 then f2 descending xs h1 (h2 :: acc) ys h3 zs
             else f21 descending xs h1 h2 ys (h3 :: acc) zs := by
-        cases descending <;> simp only [f2, f21, select, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [f2, f21, select, Bool.false_eq_true, ite_false, ite_true]
         all_goals first | rw [Erlang.lists.«merge3_21_3/6».eq_def] | rw [Erlang.lists.«rmerge3_12_3/6».eq_def]
         all_goals cases comparison : Lynx.Term.compare h2 h3 <;> simp [encode, Erlang.erlang.«=</2», comparison]
       let merged (descending : Bool) (xs ys zs : List Lynx.Term) :=
@@ -360,7 +360,7 @@ defmodule ListsProofsTest do
           | cons y ys ihy =>
             rw [List.cons_merge_cons]
             by_cases selected : select descending x y
-            · rw [if_pos selected]
+            · rw [ite_eq_left selected]
               apply List.pairwise_cons.mpr
               refine ⟨?_, ih (y :: ys) (List.pairwise_cons.mp left).2 right⟩
               intro z member
@@ -370,7 +370,7 @@ defmodule ListsProofsTest do
                 · exact (selectedOrder descending x z).1 selected
                 · exact orderTrans descending x y z ((selectedOrder descending x y).1 selected)
                     ((List.pairwise_cons.mp right).1 z member)
-            · rw [if_neg selected]
+            · rw [ite_eq_right selected]
               apply List.pairwise_cons.mpr
               refine ⟨?_, ihy (List.pairwise_cons.mp right).2⟩
               intro z member
@@ -384,7 +384,7 @@ defmodule ListsProofsTest do
           (sorted : xs.Pairwise (fun a b => order descending a b)) :
           xs.reverse.Pairwise (fun a b => order (!descending) a b) := by
         cases descending <;> simpa only [List.pairwise_reverse, order, Bool.not_false, Bool.not_true,
-          Bool.false_eq_true, if_false, if_true] using sorted
+          Bool.false_eq_true, ite_false, ite_true] using sorted
       let combine (descending : Bool) (xs ys zs : List Lynx.Term) := (merged descending xs ys zs).reverse
       have combineMass (descending : Bool) (weight : Lynx.Term → Nat) (xs ys zs : List Lynx.Term) :
           mass weight (combine descending xs ys zs) = mass weight xs + mass weight ys + mass weight zs := by
@@ -425,22 +425,22 @@ defmodule ListsProofsTest do
             .ok (encode (combine descending xs (h2 :: ys) (h3 :: zs))) := by
         simpa [combine] using (threeModel descending _).1 xs ys zs rfl h2 h3 []
       have ascendingEmpty : schedule false [] [] = .ok (encode []) := by
-        simp only [schedule, Bool.false_eq_true, if_false]
+        simp only [schedule, Bool.false_eq_true, ite_false]
         rw [Erlang.lists.«mergel/2».eq_def]
         rfl
       have ascendingLeaf (x : Lynx.Term) (xs : List Lynx.Term) :
           schedule false [x :: xs] [] = .ok (encode (x :: xs)) := by
-        simp only [schedule, Bool.false_eq_true, if_false]
+        simp only [schedule, Bool.false_eq_true, ite_false]
         rw [Erlang.lists.«mergel/2».eq_def]
         rfl
       have ascendingBoundary (run : List Lynx.Term) (acc : List (List Lynx.Term)) :
           schedule false [] (run :: acc) = schedule true (run :: acc) [] := by
-        simp only [schedule, Bool.false_eq_true, if_false, if_true]
+        simp only [schedule, Bool.false_eq_true, ite_false, ite_true]
         rw [Erlang.lists.«mergel/2».eq_def]
         rfl
       have descendingBoundary (acc : List (List Lynx.Term)) :
           schedule true [] acc = schedule false acc [] := by
-        simp only [schedule, Bool.false_eq_true, if_false, if_true]
+        simp only [schedule, Bool.false_eq_true, ite_false, ite_true]
         rw [Erlang.lists.«rmergel/2».eq_def]
         rfl
       have ascendingOne (x : Lynx.Term) (xs run : List Lynx.Term) (acc : List (List Lynx.Term)) :
@@ -448,46 +448,46 @@ defmodule ListsProofsTest do
             schedule true ((x :: xs).reverse :: run :: acc) [] := by
         have returned := reverseModel (x :: xs) []
         simp only [encode, List.foldr_cons, List.foldr_nil, List.append_nil] at returned
-        simp only [schedule, Bool.false_eq_true, if_false, if_true]
+        simp only [schedule, Bool.false_eq_true, ite_false, ite_true]
         rw [Erlang.lists.«mergel/2».eq_def]
         simp [pack, encode, returned]
       have descendingOne (run : List Lynx.Term) (acc : List (List Lynx.Term)) :
           schedule true [run] acc = schedule false (run.reverse :: acc) [] := by
         have returned := reverseModel run []
         simp only [encode, List.foldr_nil, List.append_nil] at returned
-        simp only [schedule, Bool.false_eq_true, if_false, if_true]
+        simp only [schedule, Bool.false_eq_true, ite_false, ite_true]
         rw [Erlang.lists.«rmergel/2».eq_def]
         simp [pack, encode, returned]
       have ascendingTwo (x y : Lynx.Term) (xs ys : List Lynx.Term) (acc : List (List Lynx.Term)) :
           schedule false [x :: xs, y :: ys] acc =
             schedule true (combine false (x :: xs) (y :: ys) [] :: acc) [] := by
         have returned := mergeTwoEval false (x :: xs) ys y
-        simp only [first, Bool.false_eq_true, if_false, encode, List.foldr_cons, List.foldr_nil] at returned
-        simp only [schedule, Bool.false_eq_true, if_false, if_true]
+        simp only [first, Bool.false_eq_true, ite_false, encode, List.foldr_cons, List.foldr_nil] at returned
+        simp only [schedule, Bool.false_eq_true, ite_false, ite_true]
         rw [Erlang.lists.«mergel/2».eq_def]
         simp [pack, encode, returned]
       have descendingTwo (x y : Lynx.Term) (xs ys : List Lynx.Term) (acc : List (List Lynx.Term)) :
           schedule true [x :: xs, y :: ys] acc =
             schedule false (combine true (y :: ys) (x :: xs) [] :: acc) [] := by
         have returned := mergeTwoEval true (y :: ys) xs x
-        simp only [first, if_true, encode, List.foldr_cons, List.foldr_nil] at returned
-        simp only [schedule, Bool.false_eq_true, if_false, if_true]
+        simp only [first, ite_true, encode, List.foldr_cons, List.foldr_nil] at returned
+        simp only [schedule, Bool.false_eq_true, ite_false, ite_true]
         rw [Erlang.lists.«rmergel/2».eq_def]
         simp [pack, encode, returned]
       have ascendingThree (x y z : Lynx.Term) (xs ys zs : List Lynx.Term) (runs acc : List (List Lynx.Term)) :
           schedule false ((x :: xs) :: (y :: ys) :: (z :: zs) :: runs) acc =
             schedule false runs (combine false (x :: xs) (y :: ys) (z :: zs) :: acc) := by
         have returned := mergeThreeEval false (x :: xs) ys zs y z
-        simp only [f1, Bool.false_eq_true, if_false, encode, List.foldr_cons, List.foldr_nil] at returned
-        simp only [schedule, Bool.false_eq_true, if_false, if_true]
+        simp only [f1, Bool.false_eq_true, ite_false, encode, List.foldr_cons, List.foldr_nil] at returned
+        simp only [schedule, Bool.false_eq_true, ite_false, ite_true]
         rw [Erlang.lists.«mergel/2».eq_def]
         simp [pack, encode, returned]
       have descendingThree (x y z : Lynx.Term) (xs ys zs : List Lynx.Term) (runs acc : List (List Lynx.Term)) :
           schedule true ((x :: xs) :: (y :: ys) :: (z :: zs) :: runs) acc =
             schedule true runs (combine true (z :: zs) (y :: ys) (x :: xs) :: acc) := by
         have returned := mergeThreeEval true (z :: zs) ys xs y x
-        simp only [f1, if_true, encode, List.foldr_cons, List.foldr_nil] at returned
-        simp only [schedule, Bool.false_eq_true, if_false, if_true]
+        simp only [f1, ite_true, encode, List.foldr_cons, List.foldr_nil] at returned
+        simp only [schedule, Bool.false_eq_true, ite_false, ite_true]
         rw [Erlang.lists.«rmergel/2».eq_def]
         simp [pack, encode, returned]
       have runsNil (descending : Bool) : runsGood descending [] := by simp [runsGood]
@@ -635,7 +635,7 @@ defmodule ListsProofsTest do
           start descending x y [] r runs =
             if descending then schedule false (runs.reverse ++ [y :: x :: r]) []
             else schedule true ((y :: x :: r) :: runs) [] := by
-        cases descending <;> simp only [start, schedule, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [start, schedule, Bool.false_eq_true, ite_false, ite_true]
         · rw [Erlang.lists.«split_1/5».eq_def]
           rfl
         · have returned := reversePack runs [y :: x :: r]
@@ -646,7 +646,7 @@ defmodule ListsProofsTest do
           pending descending x y [] r runs saved =
             if descending then schedule false (runs.reverse ++ [y :: x :: r, [saved]]) []
             else schedule true ([saved] :: (y :: x :: r) :: runs) [] := by
-        cases descending <;> simp only [pending, schedule, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [pending, schedule, Bool.false_eq_true, ite_false, ite_true]
         · rw [Erlang.lists.«split_1_1/6».eq_def]
           rfl
         · have returned := reversePack runs [y :: x :: r, [saved]]
@@ -660,7 +660,7 @@ defmodule ListsProofsTest do
             else if r.isEmpty then start descending x y xs [z] runs
             else pending descending x y xs r runs z := by
         cases descending <;> cases r <;>
-          simp only [start, pending, select, Bool.false_eq_true, if_false, if_true]
+          simp only [start, pending, select, Bool.false_eq_true, ite_false, ite_true]
         all_goals first | rw [Erlang.lists.«split_1/5».eq_def] | rw [Erlang.lists.«split_2/5».eq_def]
         all_goals cases a : Lynx.Term.compare y z <;> cases b : Lynx.Term.compare x z <;>
           simp [encode, Erlang.erlang.«>=/2», Erlang.erlang.«>/2», geFlip, a, b]
@@ -670,7 +670,7 @@ defmodule ListsProofsTest do
             else if select descending x z then pending descending z y xs (x :: r) runs saved
             else if select descending saved z then start descending saved z xs [] ((y :: x :: r) :: runs)
             else start descending z saved xs [] ((y :: x :: r) :: runs) := by
-        cases descending <;> simp only [start, pending, select, Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [start, pending, select, Bool.false_eq_true, ite_false, ite_true]
         all_goals first | rw [Erlang.lists.«split_1_1/6».eq_def] | rw [Erlang.lists.«split_2_1/6».eq_def]
         all_goals cases a : Lynx.Term.compare y z <;> cases b : Lynx.Term.compare x z <;>
           cases c : Lynx.Term.compare saved z <;>
@@ -720,7 +720,7 @@ defmodule ListsProofsTest do
           (saved : runsGood (!descending) runs) :
           good ([x, y] ++ r ++ runs.flatten) (start descending x y [] r runs) := by
         rw [startNil]
-        cases descending <;> simp only [Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [Bool.false_eq_true, ite_false, ite_true]
         · have valid := (runsCons true _ runs).mpr ⟨⟨by simp, partialSorted⟩, saved⟩
           have checked := scheduler _ true ((y :: x :: r) :: runs) [] rfl valid (runsNil false)
           refine goodTransfer _ _ _ checked ?_
@@ -741,7 +741,7 @@ defmodule ListsProofsTest do
           (saved : runsGood (!descending) runs) :
           good ([s, x, y] ++ r ++ runs.flatten) (pending descending x y [] r runs s) := by
         rw [pendingNil]
-        cases descending <;> simp only [Bool.false_eq_true, if_false, if_true]
+        cases descending <;> simp only [Bool.false_eq_true, ite_false, ite_true]
         · have valid := (runsCons true [s] ((y :: x :: r) :: runs)).mpr ⟨⟨by simp, by simp⟩,
             (runsCons true _ runs).mpr ⟨⟨by simp, partialSorted⟩, saved⟩⟩
           have checked := scheduler _ true ([s] :: (y :: x :: r) :: runs) [] rfl valid (runsNil false)
@@ -781,7 +781,7 @@ defmodule ListsProofsTest do
             · intro x y r runs sorted saved
               rw [startStep]
               by_cases yz : select descending y z
-              · rw [if_pos yz]
+              · rw [ite_eq_left yz]
                 have newSorted := prependRun (!descending) z y (x :: r)
                   (by simpa only [flipped] using (selectedOrder descending y z).1 yz) sorted
                 have child := previous.1 y z (x :: r) runs newSorted saved
@@ -789,9 +789,9 @@ defmodule ListsProofsTest do
                 intro weight
                 simp only [massAppend, massCons, massNil]
                 omega
-              · rw [if_neg yz]
+              · rw [ite_eq_right yz]
                 by_cases xz : select descending x z
-                · rw [if_pos xz]
+                · rw [ite_eq_left xz]
                   have zx := prependRun (!descending) z x r
                     (by simpa only [flipped] using (selectedOrder descending x z).1 xz)
                     (List.pairwise_cons.mp sorted).2
@@ -802,10 +802,10 @@ defmodule ListsProofsTest do
                   intro weight
                   simp only [massAppend, massCons, massNil]
                   omega
-                · rw [if_neg xz]
+                · rw [ite_eq_right xz]
                   cases r with
                   | nil =>
-                    rw [if_pos (by rfl)]
+                    rw [ite_eq_left (by rfl)]
                     have xzSorted := prependRun (!descending) x z []
                       (by simpa only [flipped] using (selectedOrder descending x z).2 xz) (by simp)
                     have newSorted := prependRun (!descending) y x [z]
@@ -816,7 +816,7 @@ defmodule ListsProofsTest do
                     simp only [massAppend, massCons, massNil]
                     omega
                   | cons a r =>
-                    rw [if_neg (by simp)]
+                    rw [ite_eq_right (by simp)]
                     have child := previous.2 x y (a :: r) runs z sorted saved
                     refine goodTransfer _ _ _ child ?_
                     intro weight
@@ -825,7 +825,7 @@ defmodule ListsProofsTest do
             · intro x y r runs s sorted saved
               rw [pendingStep]
               by_cases yz : select descending y z
-              · rw [if_pos yz]
+              · rw [ite_eq_left yz]
                 have newSorted := prependRun (!descending) z y (x :: r)
                   (by simpa only [flipped] using (selectedOrder descending y z).1 yz) sorted
                 have child := previous.2 y z (x :: r) runs s newSorted saved
@@ -833,9 +833,9 @@ defmodule ListsProofsTest do
                 intro weight
                 simp only [massAppend, massCons, massNil]
                 omega
-              · rw [if_neg yz]
+              · rw [ite_eq_right yz]
                 by_cases xz : select descending x z
-                · rw [if_pos xz]
+                · rw [ite_eq_left xz]
                   have zx := prependRun (!descending) z x r
                     (by simpa only [flipped] using (selectedOrder descending x z).1 xz)
                     (List.pairwise_cons.mp sorted).2
@@ -846,10 +846,10 @@ defmodule ListsProofsTest do
                   intro weight
                   simp only [massAppend, massCons, massNil]
                   omega
-                · rw [if_neg xz]
+                · rw [ite_eq_right xz]
                   have savedRun := (runsCons (!descending) _ runs).mpr ⟨⟨by simp, sorted⟩, saved⟩
                   by_cases sz : select descending s z
-                  · rw [if_pos sz]
+                  · rw [ite_eq_left sz]
                     have newSorted := prependRun (!descending) z s []
                       (by simpa only [flipped] using (selectedOrder descending s z).1 sz) (by simp)
                     have child := previous.1 s z [] ((y :: x :: r) :: runs) newSorted savedRun
@@ -857,7 +857,7 @@ defmodule ListsProofsTest do
                     intro weight
                     simp only [List.flatten_cons, massAppend, massCons, massNil]
                     omega
-                  · rw [if_neg sz]
+                  · rw [ite_eq_right sz]
                     have newSorted := prependRun (!descending) s z []
                       (by simpa only [flipped] using (selectedOrder descending s z).2 sz) (by simp)
                     have child := previous.1 z s [] ((y :: x :: r) :: runs) newSorted savedRun
@@ -880,7 +880,7 @@ defmodule ListsProofsTest do
             | .gt => start true x y xs [] [r.reverse] := by
         have returned := reverseModel r []
         simp only [encode, List.foldr_nil, List.append_nil] at returned
-        simp only [initial, start, Bool.false_eq_true, if_false, if_true]
+        simp only [initial, start, Bool.false_eq_true, ite_false, ite_true]
         rw [Erlang.lists.«sort_1/3».eq_def]
         cases comparison : Lynx.Term.compare x y <;>
           simp [encode, pack, Erlang.erlang.«==/2», Erlang.erlang.«</2», comparison, returned]
@@ -934,7 +934,7 @@ defmodule ListsProofsTest do
         else if select false y z then [y, z, x] else [z, y, x]
       have smallSorted (x y z : Lynx.Term) : (small x y z).Pairwise (fun a b => order false a b) := by
         by_cases xy : select false x y <;> by_cases yz : select false y z <;> by_cases xz : select false x z
-        all_goals simp only [small, xy, yz, xz, Bool.false_eq_true, if_true, if_false, chainStep, List.pairwise_singleton]
+        all_goals simp only [small, xy, yz, xz, Bool.false_eq_true, ite_true, ite_false, chainStep, List.pairwise_singleton]
         all_goals repeat' constructor
         all_goals first
           | exact (selectedOrder false x y).1 xy
@@ -945,7 +945,7 @@ defmodule ListsProofsTest do
           | exact (selectedOrder false x z).2 xz
       have smallMass (weight : Lynx.Term → Nat) (x y z : Lynx.Term) : mass weight (small x y z) = mass weight [x,y,z] := by
         by_cases xy : select false x y <;> by_cases yz : select false y z <;> by_cases xz : select false x z <;>
-          simp only [small, xy, yz, xz, Bool.false_eq_true, if_true, if_false, massCons, massNil] <;> omega
+          simp only [small, xy, yz, xz, Bool.false_eq_true, ite_true, ite_false, massCons, massNil] <;> omega
       have sortTwo (x y : Lynx.Term) : Erlang.lists.«sort/1» (encode [x,y]) =
           .ok (encode (if select false x y then [x,y] else [y,x])) := by
         rw [Erlang.lists.«sort/1».eq_def]
@@ -986,23 +986,23 @@ defmodule ListsProofsTest do
         | x :: y :: z :: w :: xs =>
           rw [sortMany]
           by_cases choice : select false x y
-          · rw [if_pos choice]
+          · rw [ite_eq_left choice]
             by_cases same : Lynx.Term.compare x y = .eq
-            · rw [if_pos same]
+            · rw [ite_eq_left same]
               have prefixSorted := prependRun true y x [] (by simp [order, same]) (by simp)
               have child := initialModel _ (z :: w :: xs) rfl y [x] (by simp) prefixSorted
               refine goodTransfer _ _ _ child ?_
               intro weight
               simp only [massAppend, massCons, massNil]
               omega
-            · rw [if_neg same]
+            · rw [ite_eq_right same]
               have prefixSorted := prependRun true y x [] (by exact choice) (by simp)
               have child := (splitModel false _ (z :: w :: xs) rfl).1 x y [] [] prefixSorted (runsNil true)
               refine goodTransfer _ _ _ child ?_
               intro weight
               simp only [List.flatten_nil, massAppend, massCons, massNil]
               omega
-          · rw [if_neg choice]
+          · rw [ite_eq_right choice]
             have prefixSorted := prependRun false y x [] ((selectedOrder false x y).2 choice) (by simp)
             have child := (splitModel true _ (z :: w :: xs) rfl).1 x y [] [] prefixSorted (runsNil false)
             refine goodTransfer _ _ _ child ?_
@@ -1024,12 +1024,12 @@ defmodule ListsProofsTest do
         induction xs generalizing x y r with
         | nil =>
           rw [startNil]
-          simp only [Bool.false_eq_true, if_false]
+          simp only [Bool.false_eq_true, ite_false]
           simpa only [List.reverse_cons, List.reverse_singleton, List.singleton_append,
             List.append_nil, List.append_assoc] using descendingAny (y :: x :: r) (by simp)
         | cons z xs ih =>
           have ordered : select false y z := (List.pairwise_cons.mp sorted).1 z (by simp)
-          rw [startStep, if_pos ordered]
+          rw [startStep, ite_eq_left ordered]
           simpa only [List.reverse_cons, List.reverse_singleton, List.append_assoc,
             List.singleton_append, List.cons_append, List.nil_append] using
             ih y z (x :: r) (List.pairwise_cons.mp sorted).2
@@ -1057,18 +1057,18 @@ defmodule ListsProofsTest do
         | [x] => rw [Erlang.lists.«sort/1».eq_def]; rfl
         | [x,y] =>
           have ordered : select false x y := (List.pairwise_cons.mp sorted).1 y (by simp)
-          simpa only [ordered, if_true] using sortTwo x y
+          simpa only [ordered, ite_true] using sortTwo x y
         | [x,y,z] =>
           have xy : select false x y := (List.pairwise_cons.mp sorted).1 y (by simp)
           have yz : select false y z := (List.pairwise_cons.mp (List.pairwise_cons.mp sorted).2).1 z (by simp)
-          simpa only [small, xy, yz, if_true] using sortThree x y z
+          simpa only [small, xy, yz, ite_true] using sortThree x y z
         | x :: y :: z :: w :: xs =>
           have ordered : select false x y := (List.pairwise_cons.mp sorted).1 y (by simp)
-          rw [sortMany, if_pos ordered]
+          rw [sortMany, ite_eq_left ordered]
           by_cases same : Lynx.Term.compare x y = .eq
-          · rw [if_pos same]
+          · rw [ite_eq_left same]
             simpa using initialSorted (z :: w :: xs) y [x] (List.pairwise_cons.mp sorted).2
-          · rw [if_neg same]
+          · rw [ite_eq_right same]
             simpa using startSorted (z :: w :: xs) x y [] (List.pairwise_cons.mp sorted).2
       have properModel (input : Lynx.Term) (accepted : «proper_list/1» input = .ok Lynx.Term.true) :
           ∃ xs : List Lynx.Term, encode xs = input := by
@@ -1152,7 +1152,7 @@ defmodule ListsProofsTest do
             have nEq : n = (n-4)+1+1+1+1 := by omega
             have arith (k : Int) : a + k*d-d = a + (k-1)*d := by simp only [Int.sub_mul, Int.one_mul]; omega
             simp only [Erlang.erlang.«>=/2_integers», Erlang.erlang.«-/2_integers»,
-              show (4 : Int) ≤ n by omega, if_true, Lynx.Except.tryWith_ok,
+              show (4 : Int) ≤ n by omega, ite_true, Lynx.Except.tryWith_ok,
               Lynx.Except.ok_bind]
             simp only [arith]
             have expanded : series n a d = series (n-4) a d ++
@@ -1172,7 +1172,7 @@ defmodule ListsProofsTest do
               have arith (k : Int) : a + k*d-d = a + (k-1)*d := by simp only [Int.sub_mul, Int.one_mul]; omega
               simp only [Erlang.erlang.«>=/2_integers», Erlang.erlang.«-/2_integers»,
                 show ¬ (4 : Int) ≤ n by omega, show (2 : Int) ≤ n by omega,
-                if_true, if_false, Lynx.Except.tryWith_ok,
+                ite_true, ite_false, Lynx.Except.tryWith_ok,
                 Lynx.Except.ok_bind]
               simp only [arith]
               have expanded : series n a d = series (n-2) a d ++
@@ -1301,7 +1301,7 @@ defmodule ListsProofsTest do
       simp only [«sequence_formula:ensures/4», «sequence_contract/4», returned,
         Lynx.Except.ok_bind]
       by_cases zero : d = 0
-      · have one : n = 1 := by simp only [zero, if_true] at counted; omega
+      · have one : n = 1 := by simp only [zero, ite_true] at counted; omega
         subst n
         subst d
         clear counted size count worker seriesStep nthWorker nthModel lengthModel len
@@ -1310,7 +1310,7 @@ defmodule ListsProofsTest do
           simp_all [Erlang.erlang.«==/2», Erlang.erlang.«=:=/2»,
             series, encode, Erlang.lists.«nth/2»,
             Erlang.erlang.«length/1»]
-      · simp only [zero, if_false] at counted
+      · simp only [zero, ite_false] at counted
         by_cases outside : (n : Int) ≤ i
         · simp [lengthModel, len, Erlang.erlang.«==/2», Erlang.erlang.«div/2»,
             Erlang.erlang.«=:=/2», counted, outside, zero]
