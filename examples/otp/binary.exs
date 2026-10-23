@@ -410,7 +410,7 @@ defmodule BinaryProofsTest do
             simp only [«hex_roundtrip:ensures/2», «hex_contract/2»]
             rw [encoded]
             simp only [okBind,decoded]
-            simp only [Erlang.erlang.«=:=/2», Lynx.Term.exactCompare_self, if_true, Lynx.Term.true, okBind]
+            simp only [Erlang.erlang.«=:=/2», Lynx.Term.exactCompare_self, ite_true, Lynx.Term.true, okBind]
             rw [wireSize]
             simp [Erlang.erlang.«=:=/2», Lynx.Term.true,
               Erlang.erlang.«byte_size/1», Erlang.erlang.«*/2_integers», nsLength,

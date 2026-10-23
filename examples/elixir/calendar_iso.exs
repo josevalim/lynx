@@ -178,7 +178,7 @@ defmodule CalendarISOProofsTest do
         rcases choice with rfl | rfl <;>
           by_cases sign : 0 ≤ z
         all_goals try { simp [sign, Int.tdiv_eq_ediv_of_nonneg sign] }
-        all_goals simp only [if_neg sign]
+        all_goals simp only [ite_eq_right sign]
         all_goals rw [Int.tdiv_eq_ediv]
         all_goals simp only [Int.dvd_iff_emod_eq_zero]
         all_goals split <;> (try simp only [show Int.sign 400 = 1 from rfl, show Int.sign 146097 = 1 from rfl]) <;> omega
@@ -301,7 +301,7 @@ defmodule CalendarISOProofsTest do
             have actual := leapNext year era y eqYear next
             simpa [feb, actual] using (show day ≤ 29 by simpa [feb, next] using bound)
           · have small : day ≤ 28 := by simpa [feb, next] using bound
-            simp only [if_pos feb]
+            simp only [ite_eq_left feb]
             split <;> omega
         · simpa [feb] using bound
       have marchYear (era y month : Int) :

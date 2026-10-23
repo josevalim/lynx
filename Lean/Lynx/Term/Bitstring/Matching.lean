@@ -528,7 +528,7 @@ public theorem matchUtf8_bytes {bytes : List UInt8} {value rest : Term}
   have range2 : List.range 2 = [0, 1] := rfl
   have range3 : List.range 3 = [0, 1, 2] := rfl
   by_cases two : 0xc2 ≤ b.toNat ∧ b.toNat ≤ 0xdf
-  · simp only [ascii, two, and_self, if_true, if_false] at matched
+  · simp only [ascii, two, and_self, ite_true, ite_false] at matched
     rw [drop_bytes] at matched
     rcases bs with _ | ⟨c, bs⟩
     · simp at matched
@@ -536,7 +536,7 @@ public theorem matchUtf8_bytes {bytes : List UInt8} {value rest : Term}
     obtain ⟨⟨-, ⟨cLow, cHigh⟩, -⟩, -, rfl⟩ := matched
     exact ⟨[b, c], bs, rfl, binary bs, Or.inr (Or.inl ⟨b, c, rfl, two.1, two.2, cLow, cHigh⟩)⟩
   by_cases three : 0xe0 ≤ b.toNat ∧ b.toNat ≤ 0xef
-  · simp only [ascii, two, three, and_self, if_true, if_false] at matched
+  · simp only [ascii, two, three, and_self, ite_true, ite_false] at matched
     rw [drop_bytes] at matched
     rcases bs with _ | ⟨c, _ | ⟨d, bs⟩⟩
     · simp at matched
@@ -546,7 +546,7 @@ public theorem matchUtf8_bytes {bytes : List UInt8} {value rest : Term}
     refine ⟨[b, c, d], bs, rfl, binary bs, Or.inr (Or.inr (Or.inl ⟨b, c, d, rfl, ?_, dCont⟩))⟩
     omega
   by_cases four : 0xf0 ≤ b.toNat ∧ b.toNat ≤ 0xf4
-  · simp only [ascii, two, three, four, and_self, if_true, if_false] at matched
+  · simp only [ascii, two, three, four, and_self, ite_true, ite_false] at matched
     rw [drop_bytes] at matched
     rcases bs with _ | ⟨c, _ | ⟨d, _ | ⟨e, bs⟩⟩⟩
     · simp at matched
@@ -877,18 +877,18 @@ elab "lynx_extraction_facts" : tactic => do
     let mut goal ← goal.change (← zetaReduce (← instantiateMVars (← goal.getType)))
     let declarations := (← getLCtx).foldl (init := #[]) fun acc declaration =>
       if declaration.isImplementationDetail then acc else acc.push declaration
-    let assert (goal : MVarId) (proof : Expr) : MetaM MVarId := do
+    let assertFact (goal : MVarId) (proof : Expr) : MetaM MVarId := do
       let fact ← zetaReduce (← instantiateMVars (← inferType proof))
       let (_, next) ← (← goal.assert `consumed fact proof).intro1P
       return next
     for declaration in declarations do
       unless (← instantiateMVars declaration.type).isAppOfArity ``Eq 3 do continue
       for lemma in extractionFacts do
-        try goal ← assert goal (← mkAppM lemma #[declaration.toExpr]) catch _ => pure ()
+        try goal ← assertFact goal (← mkAppM lemma #[declaration.toExpr]) catch _ => pure ()
       for check in declarations do
         unless (← instantiateMVars check.type).isAppOfArity ``Not 1 do continue
         for lemma in nonzeroFacts do
-          try goal ← assert goal (← mkAppM lemma #[check.toExpr, declaration.toExpr])
+          try goal ← assertFact goal (← mkAppM lemma #[check.toExpr, declaration.toExpr])
           catch _ => pure ()
     return [goal]
 

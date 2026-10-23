@@ -199,7 +199,7 @@ private theorem find_first (c : UInt8) (low high : Nat) (tail : List UInt8) :
     simp only [List.length_nil, Nat.add_zero] at below
     have head : longest [[c]] (c :: tail) (high - offset) = some 1 := by
       simp [longest_single]; omega
-    rw [List.nil_append, find, if_neg (by omega), if_neg (by omega), head]
+    rw [List.nil_append, find, ite_eq_right (by omega), ite_eq_right (by omega), head]
     rfl
   | b :: rest, offset, absent, lower, below => by
     simp only [List.mem_cons, not_or] at absent
@@ -207,7 +207,7 @@ private theorem find_first (c : UInt8) (low high : Nat) (tail : List UInt8) :
     have ih := find_first c low high tail rest (offset + 1) absent.2 (by omega) (by omega)
     have head : longest [[c]] (b :: (rest ++ c :: tail)) (high - offset) = none := by
       simp [longest_single, Ne.symm absent.1]
-    rw [List.cons_append, find, if_neg (by omega), if_neg (by omega), head, ih]
+    rw [List.cons_append, find, ite_eq_right (by omega), ite_eq_right (by omega), head, ih]
     simp only [List.length_cons]
     congr 2
     omega
@@ -244,7 +244,7 @@ private theorem parts_global (c : UInt8) (high : Nat) :
     have ih := parts_global c high (next :: rest) fuel (offset + part.length + 1)
       (by simp) restAbsent (by simp only [List.length_cons] at enough ⊢; omega) (by omega)
     rw [List.append_assoc, List.singleton_append, parts, first]
-    simp only [Nat.add_sub_cancel_left, if_true]
+    simp only [Nat.add_sub_cancel_left, ite_true]
     have take : List.take part.length (part ++ c :: List.intercalate [c] (next :: rest)) = part := by
       simp
     have drop : List.drop (part.length + 1) (part ++ c :: List.intercalate [c] (next :: rest)) =

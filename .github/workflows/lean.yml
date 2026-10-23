@@ -21,3 +21,24 @@ jobs:
         run: |
           lake env lean --run ExportModules.lean > "$RUNNER_TEMP/modules.json"
           diff -u modules.json "$RUNNER_TEMP/modules.json"
+
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: Lean
+          auto-config: "false"
+          build: "false"
+          test: "false"
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Ubuntu restricts unprivileged user namespaces, which bwrap requires.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Check with Lean's kernel and every bundled external checker
+        working-directory: Lean
+        run: lake check --paranoid

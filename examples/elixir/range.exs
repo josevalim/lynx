@@ -395,19 +395,19 @@ defmodule RangeProofsTest do
       let k := max 0 (min q n)
       have returned := (splitTwo f l s c nonzero).trans (splitFour f l s q nonzero)
       by_cases valid : (0<s ∧ f≤l) ∨ (s<0 ∧ l≤f)
-      · rw [if_pos valid] at returned
+      · rw [ite_eq_left valid] at returned
         have facts : count f (middle f l s q) s = k ∧
             count (middle f l s q+s) l s = n-k ∧
             (k<n → middle f l s q+s=f+k*s) := by
           by_cases pos : 0<s
           · have ordered : f≤l := by omega
-            simpa only [middle, if_pos pos] using positivePartition f l s q pos ordered
+            simpa only [middle, ite_eq_left pos] using positivePartition f l s q pos ordered
           · have neg : s<0 := by omega
             have ordered : l≤f := by omega
-            simpa only [middle, if_neg pos] using negativePartition f l s q neg ordered
+            simpa only [middle, ite_eq_right pos] using negativePartition f l s q neg ordered
         exact finish f l s c i (middle f l s q) (middle f l s q+s) n k nonzero
           returned rfl rfl facts.1 facts.2.1 facts.2.2
-      · rw [if_neg valid] at returned
+      · rw [ite_eq_right valid] at returned
         have empty : (0<s ∧ l<f) ∨ (s<0 ∧ f<l) := by omega
         have nZero : n=0 := by simp [n, count, empty]
         have kZero : k=0 := by dsimp [k]; omega

@@ -19,7 +19,7 @@ theorem reverse_improper (a tail : Term) :
 theorem reverse_non_list (tail : Term) :
     «reverse/2» (.integer 1) tail = .error (.error (.atom "badarg")) := rfl
 
-theorem member_found (a b : Term) :
+theorem member_found (a : Term) :
     «member/2» (.atom "b") (.cons a (.cons (.atom "b") (.atom "improper"))) = .ok Term.true := by
   cases a <;> simp [«member/2»]
 

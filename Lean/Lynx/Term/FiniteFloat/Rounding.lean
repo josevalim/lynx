@@ -26,18 +26,18 @@ theorem describes_shiftRightOne {y : Rat} {em : ExtendedMantissa} (d : Describes
   rcases Nat.mod_two_eq_zero_or_one m with even | odd
   · obtain ⟨q, rfl⟩ : ∃ q, m = 2 * q := ⟨m / 2, by omega⟩
     have div : 2 * q / 2 = q := by omega
-    simp only [div, even, bne_self_eq_false, Bool.false_eq_true, false_iff, if_false,
+    simp only [div, even, bne_self_eq_false, Bool.false_eq_true, false_iff, ite_false,
       Rat.natCast_mul] at *
     refine ⟨by grind, by grind, by grind, ?_⟩
     cases r <;> cases s <;> simp only [Bool.false_eq_true, false_iff, true_iff,
-      Bool.false_or, Bool.true_or, if_true, if_false] at round sticky ⊢ <;> grind
+      Bool.false_or, Bool.true_or, ite_true, ite_false] at round sticky ⊢ <;> grind
   · obtain ⟨q, rfl⟩ : ∃ q, m = 2 * q + 1 := ⟨m / 2, by omega⟩
     have div : (2 * q + 1) / 2 = q := by omega
-    simp only [div, odd, show (1 != 0) = true from rfl, true_iff, if_true,
+    simp only [div, odd, show (1 != 0) = true from rfl, true_iff, ite_true,
       Rat.natCast_mul, Rat.natCast_add] at *
     refine ⟨by grind, by grind, by grind, ?_⟩
     cases r <;> cases s <;> simp only [Bool.false_eq_true, false_iff, true_iff,
-      Bool.false_or, Bool.true_or, if_true, if_false] at round sticky ⊢ <;> grind
+      Bool.false_or, Bool.true_or, ite_true, ite_false] at round sticky ⊢ <;> grind
 
 theorem describes_shift {y : Rat} {em : ExtendedMantissa} (d : Describes y em) (k : Nat) :
     Describes (y / 2 ^ k) (em >>> k) := by
@@ -261,9 +261,9 @@ theorem describes_fraction (n d : Nat) (pos : 0 < d) :
   simp only [Describes, accuracyOfFraction]
   by_cases zero : r = 0
   · subst zero
-    simp only [if_pos, ExtendedMantissa.ofMantissaAndAccuracy]
+    simp only [ite_eq_left, ExtendedMantissa.ofMantissaAndAccuracy]
     refine ⟨by grind, by grind, ?_, ?_⟩ <;> simp <;> grind
-  · simp only [if_neg zero]
+  · simp only [ite_eq_right zero]
     have rpos : (0 : Rat) < (r : Rat) / d := by
       rw [Rat.div_def]
       exact Rat.mul_pos (by exact_mod_cast Nat.pos_of_ne_zero zero) (Rat.inv_pos.mpr dpos)
@@ -359,13 +359,13 @@ theorem ofScientific_regular {spec : Format} {m : Nat} {e : Int} (hm : m ≠ 0)
     (big : ¬e > 2 ^ spec.exponentBits) (small : ¬e < -((2 ^ spec.exponentBits : Int) + m.log2)) :
     ∃ n t a, Input spec ((m : Rat) * 10 ^ e) n t a ∧
       UnpackedFloat.ofScientific spec m e = roundWithAccuracy spec .positive n t a := by
-  rw [UnpackedFloat.ofScientific, dif_neg hm, if_neg big, if_neg small]
+  rw [UnpackedFloat.ofScientific, dite_eq_right hm, ite_eq_right big, ite_eq_right small]
   by_cases nonneg : 0 ≤ e
-  · rw [if_pos nonneg]
+  · rw [ite_eq_left nonneg]
     have input := mul_input (spec := spec) (k := e.toNat) hm
     rw [show ((e.toNat : Nat) : Int) = e by omega] at input
     exact ⟨_, _, _, input, rfl⟩
-  · rw [if_neg nonneg]
+  · rw [ite_eq_right nonneg]
     have input := div_input (spec := spec) (k := (-e).toNat) hm
     rw [show -(((-e).toNat : Nat) : Int) = e by omega] at input
     exact ⟨_, _, _, input, rfl⟩
@@ -438,7 +438,7 @@ theorem finish_finite {spec : Format} {sign : Sign} {em : ExtendedMantissa} {e :
   generalize shiftToTargetExponent spec em.roundedMantissa e .exact = p at nonzero grows
   obtain ⟨fem, fe⟩ := p
   simp only at nonzero grows ⊢
-  rw [dif_neg nonzero]
+  rw [dite_eq_right nonzero]
   exact ⟨_, _, Nat.pos_of_ne_zero nonzero, rfl, grows⟩
 
 theorem finish_zero {spec : Format} {sign : Sign} {em : ExtendedMantissa} {e : Int}
@@ -449,7 +449,7 @@ theorem finish_zero {spec : Format} {sign : Sign} {em : ExtendedMantissa} {e : I
   have rounded : ExtendedMantissa.roundedMantissa ⟨0, false, st⟩ = 0 := by
     cases st <;> rfl
   simp only [finish, rounded, shiftToTargetExponent, shiftToExponent]
-  rw [dif_pos (by rw [shift_mantissa, mantissa_ofMantissaAndAccuracy]; simp)]
+  rw [dite_eq_left (by rw [shift_mantissa, mantissa_ofMantissaAndAccuracy]; simp)]
 
 theorem minExponent_binary64 : Format.binary64.minExponent = -1074 := by decide
 
@@ -493,7 +493,7 @@ theorem pack_overflow {sign : Sign} {x : Rat} {n : Nat} {t : Int} {a : Accuracy}
   obtain ⟨m, fe, h, eq, le⟩ := finish_finite (spec := .binary64) (sign := sign) pos tmin
   rw [eq]
   simp only [UnpackedFloat.pack]
-  rw [if_pos (by
+  rw [ite_eq_left (by
     simp only [Format.exponentBias]
     omega)]
 
@@ -597,16 +597,16 @@ theorem ofScientific_cases {m : Nat} {e : Int} (hm : m ≠ 0) :
   by_cases big : e > 2 ^ Format.binary64.exponentBits
   · left
     refine ⟨overflow_bound hm big, ?_⟩
-    rw [UnpackedFloat.ofScientific, dif_neg hm, if_pos big]
+    rw [UnpackedFloat.ofScientific, dite_eq_right hm, ite_eq_left big]
   · by_cases small : e < -((2 ^ Format.binary64.exponentBits : Int) + m.log2)
     · right; left
       refine ⟨underflow_bound small, ?_⟩
-      rw [UnpackedFloat.ofScientific, dif_neg hm, if_neg big, if_pos small]
+      rw [UnpackedFloat.ofScientific, dite_eq_right hm, ite_eq_right big, ite_eq_left small]
     · right; right
       exact ofScientific_regular hm big small
 
 theorem ofScientific_zero (e : Int) : UnpackedFloat.ofScientific .binary64 0 e = .zero .positive := by
-  rw [UnpackedFloat.ofScientific, dif_pos rfl]
+  rw [UnpackedFloat.ofScientific, dite_eq_left rfl]
 
 theorem pack_ofScientific_congr {m₁ m₂ : Nat} {e₁ e₂ : Int}
     (h : (m₁ : Rat) * 10 ^ e₁ = m₂ * 10 ^ e₂) :
@@ -670,7 +670,7 @@ theorem pack_normal {F : Nat} {E : Int} (h : 0 < F) (low : 2 ^ 52 ≤ F) (high :
     omega
   simp only [UnpackedFloat.pack, log]
   have bias : Format.binary64.exponentBias = 1023 := by decide
-  rw [bias, if_neg (by omega), if_pos (by simp only [Format.mantissaBits]), toNat_packComponents]
+  rw [bias, ite_eq_right (by omega), ite_eq_left (by simp only [Format.mantissaBits]), toNat_packComponents]
   simp only [Sign.toBitVec, BitVec.toNat_ofNat]
   omega
 
@@ -679,7 +679,7 @@ theorem pack_subnormal {F : Nat} (h : 0 < F) (high : F < 2 ^ 52) :
   have log : F.log2 < 52 := (Nat.log2_lt (by omega)).mpr high
   simp only [UnpackedFloat.pack]
   have bias : Format.binary64.exponentBias = 1023 := by decide
-  rw [bias, if_neg (by omega), if_neg (by simp only [Format.mantissaBits]; omega), toNat_packComponents]
+  rw [bias, ite_eq_right (by omega), ite_eq_right (by simp only [Format.mantissaBits]; omega), toNat_packComponents]
   simp only [Sign.toBitVec, BitVec.toNat_ofNat]
   omega
 
@@ -687,7 +687,7 @@ theorem fields (b : BitVec 64) :
     (unpackMantissa (spec := .binary64) b).toNat = b.toNat % 2 ^ 52 ∧
     (unpackExponent (spec := .binary64) b).toNat = b.toNat / 2 ^ 52 % 2 ^ 11 ∧
     (unpackSign (spec := .binary64) b).toNat = b.toNat / 2 ^ 63 % 2 := by
-  simp only [unpackMantissa, unpackExponent, unpackSign, BitVec.toNat_cast, BitVec.extractLsb_toNat,
+  simp only [unpackMantissa, unpackExponent, unpackSign, BitVec.extractLsb'_toNat,
     Nat.shiftRight_eq_div_pow]
   simp
 
@@ -706,37 +706,37 @@ public theorem toNat_neg (a : Float.Model) (finite : a.toBits.toNat / 2 ^ 52 % 2
       1 - N / 2 ^ 63 % 2 := by
     simp only [Sign.ofBitVec]
     by_cases h : unpackSign (spec := .binary64) b = 0#1
-    · rw [if_pos h]; rw [h] at fs; simp at fs; simp only [Sign.toBitVec]; simp; omega
-    · rw [if_neg h]
+    · rw [ite_eq_left h]; rw [h] at fs; simp at fs; simp only [Sign.toBitVec]; simp; omega
+    · rw [ite_eq_right h]
       have : (unpackSign (spec := .binary64) b).toNat ≠ 0 := by
         intro z; exact h (BitVec.eq_of_toNat_eq (by simp [z]))
       simp only [Sign.toBitVec]; simp; omega
   have notInf : ¬unpackExponent (spec := .binary64) b = -1#11 := by
     intro h; rw [h] at fe; simp at fe; omega
   simp only [UnpackedFloat.unpack]
-  rw [if_neg notInf]
+  rw [ite_eq_right notInf]
   by_cases ez : unpackExponent (spec := .binary64) b = 0#11
   · have ez' : N / 2 ^ 52 % 2 ^ 11 = 0 := by rw [← fe, ez]; rfl
-    rw [if_pos ez]
+    rw [ite_eq_left ez]
     by_cases mz : unpackMantissa (spec := .binary64) b = 0#52
     · have mz' : N % 2 ^ 52 = 0 := by rw [← fm, mz]; rfl
-      rw [dif_pos mz]
+      rw [dite_eq_left mz]
       simp only [UnpackedFloat.neg, UnpackedFloat.pack, packedZero, toNat_packComponents, sign]
       simp
       omega
     · have mz' : N % 2 ^ 52 ≠ 0 := by
         intro z; exact mz (BitVec.eq_of_toNat_eq (by rw [fm, z]; rfl))
-      rw [dif_neg mz]
+      rw [dite_eq_right mz]
       have log : (unpackMantissa (spec := .binary64) b).toNat.log2 < 52 :=
         (Nat.log2_lt (by omega)).mpr (by rw [fm]; omega)
       simp only [UnpackedFloat.neg, UnpackedFloat.pack, bias]
-      rw [if_neg (by rw [ez]; simp), if_neg (by simp only [Format.mantissaBits]; omega),
+      rw [ite_eq_right (by rw [ez]; simp), ite_eq_right (by simp only [Format.mantissaBits]; omega),
         toNat_packComponents, sign]
       simp only [BitVec.toNat_ofNat, fm]
       omega
   · have ez' : N / 2 ^ 52 % 2 ^ 11 ≠ 0 := by
       intro z; exact ez (BitVec.eq_of_toNat_eq (by rw [fe, z]; rfl))
-    rw [if_neg ez]
+    rw [ite_eq_right ez]
     have append : (1#1 ++ unpackMantissa (spec := .binary64) b).toNat = 2 ^ 52 + N % 2 ^ 52 := by
       rw [BitVec.toNat_append, ← Nat.shiftLeft_add_eq_or_of_lt (by rw [fm]; omega), fm]
       simp [Nat.shiftLeft_eq]
@@ -746,7 +746,7 @@ public theorem toNat_neg (a : Float.Model) (finite : a.toBits.toNat / 2 ^ 52 % 2
       have := (Nat.log2_lt (n := 2 ^ 52 + N % 2 ^ 52) (k := 53) (by omega)).mpr (by omega)
       omega
     simp only [UnpackedFloat.neg, UnpackedFloat.pack, bias, log]
-    rw [if_neg (by rw [fe]; omega), if_pos (by simp only [Format.mantissaBits]),
+    rw [ite_eq_right (by rw [fe]; omega), ite_eq_left (by simp only [Format.mantissaBits]),
       toNat_packComponents, sign]
     simp only [BitVec.toNat_ofNat, fe, append]
     omega
@@ -785,7 +785,7 @@ theorem round_exact {F : Nat} {E : Int} (pos : 0 < F)
   have rounded : ExtendedMantissa.roundedMantissa ⟨F, false, false⟩ = F := rfl
   rw [rounded, first]
   simp only
-  rw [dif_neg (by omega)]
+  rw [dite_eq_right (by omega)]
 
 /-- A value with an exact binary64 encoding converts to it. -/
 theorem ofScientific_exact {m F : Nat} {e E : Int} (pos : 0 < F)

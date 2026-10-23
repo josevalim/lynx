@@ -190,12 +190,12 @@ defmodule FloatProofsTest do
             · simp [Lynx.Term.FiniteFloat.magnitude, exp0, frac0]
             · have nonzero : (value.fraction.val : Rat) * (2 : Rat) ^ (-1074 : Int) ≠ 0 :=
                 Rat.ne_of_gt (Rat.mul_pos (Rat.natCast_pos.mpr (by omega)) (Rat.zpow_pos (by decide)))
-              simp only [Lynx.Term.FiniteFloat.magnitude, if_pos exp0, if_neg frac0]
+              simp only [Lynx.Term.FiniteFloat.magnitude, ite_eq_left exp0, ite_eq_right frac0]
               exact ⟨fun h => False.elim (nonzero h), fun h => False.elim (frac0 h.2)⟩
           · have nonzero : ((2 ^ 52 + value.fraction.val : Nat) : Rat) *
                 (2 : Rat) ^ ((value.exponent.val : Int) - 1075) ≠ 0 :=
               Rat.ne_of_gt (Rat.mul_pos (Rat.natCast_pos.mpr (by omega)) (Rat.zpow_pos (by decide)))
-            simp only [Lynx.Term.FiniteFloat.magnitude, if_neg exp0]
+            simp only [Lynx.Term.FiniteFloat.magnitude, ite_eq_right exp0]
             exact ⟨fun h => False.elim (nonzero h), fun h => False.elim (exp0 h.1)⟩
         unfold Lynx.Term.FiniteFloat.toRat
         cases hn : value.negative
@@ -233,7 +233,7 @@ defmodule FloatProofsTest do
         · simp [Elixir.Float.«ratio/1», Erlang.erlang.«is_float/1», Erlang.erlang.«=:=/2», Erlang.erlang.«==/2», zero, float_zero_iff, exp0, frac0]
         · simp [Elixir.Float.«ratio/1», Erlang.erlang.«is_float/1», Erlang.erlang.«=:=/2», Erlang.erlang.«==/2», zero, Erlang.erlang.«/=/2»,
             float_zero_iff, exp0, frac0, built, sign, exponent, fraction, empty]
-        · rw [if_neg (by simp [exp0]), if_neg exp0, if_pos frac0]
+        · rw [ite_eq_right (by simp [exp0]), ite_eq_right exp0, ite_eq_left frac0]
           rw [Elixir.Float.«reduce_to_ratio/3».eq_def]
           simp [Elixir.Float.«ratio/1», Erlang.erlang.«is_float/1», Erlang.erlang.«=:=/2», Erlang.erlang.«==/2», zero, Erlang.erlang.«/=/2»,
             Erlang.erlang.«band/2», Erlang.erlang.«-/1», float_zero_iff, exp0, frac0, built, sign, exponent, fraction, empty]
@@ -249,11 +249,11 @@ defmodule FloatProofsTest do
               .ok (.tuple #[.integer numerator, .integer denominator]) := by
         rw [ratio_decomposes]
         by_cases exp0 : value.exponent.val = 0 <;> by_cases frac0 : value.fraction.val = 0
-        · rw [if_pos ⟨exp0, frac0⟩]
+        · rw [ite_eq_left ⟨exp0, frac0⟩]
           refine ⟨0, 1, by decide, by simp, ?_, rfl⟩
           have zero := (float_zero_iff value).mpr ⟨exp0, frac0⟩
           simp [zero, Rat.div_def]
-        · rw [if_neg (by simp [frac0]), if_pos exp0]
+        · rw [ite_eq_right (by simp [frac0]), ite_eq_left exp0]
           obtain ⟨num, den, denPos, coprime, equality, returned⟩ :=
             reduced_properties value.fraction.val (-1074) value.negative (by omega)
           refine ⟨num, den, denPos, coprime, ?_, returned⟩
@@ -261,7 +261,7 @@ defmodule FloatProofsTest do
           cases hn : value.negative <;>
             simp [Lynx.Term.FiniteFloat.toRat, Lynx.Term.FiniteFloat.magnitude, exp0, frac0, hn,
               Rat.neg_mul]
-        · rw [if_neg (by simp [exp0]), if_neg exp0, if_pos frac0]
+        · rw [ite_eq_right (by simp [exp0]), ite_eq_right exp0, ite_eq_left frac0]
           obtain ⟨num, den, denPos, coprime, equality, returned⟩ :=
             reduced_properties 1 ((value.exponent.val : Int) - 1023) value.negative (by decide)
           refine ⟨num, den, denPos, coprime, ?_, returned⟩
@@ -274,7 +274,7 @@ defmodule FloatProofsTest do
           cases hn : value.negative <;>
             simp [Lynx.Term.FiniteFloat.toRat, Lynx.Term.FiniteFloat.magnitude, exp0, frac0, hn,
               Rat.neg_mul]
-        · rw [if_neg (by simp [exp0]), if_neg exp0, if_neg frac0]
+        · rw [ite_eq_right (by simp [exp0]), ite_eq_right exp0, ite_eq_right frac0]
           obtain ⟨num, den, denPos, coprime, equality, returned⟩ :=
             reduced_properties (2 ^ 52 + value.fraction.val) ((value.exponent.val : Int) - 1075)
               value.negative (by omega)
@@ -293,14 +293,14 @@ defmodule FloatProofsTest do
           rw [← Rat.mul_assoc, ← Rat.mul_assoc, Rat.mul_comm a b]
         cases shift with
         | ofNat k =>
-          rw [if_pos (by simp [Int.ofNat_eq_natCast])]
+          rw [ite_eq_left (by simp [Int.ofNat_eq_natCast])]
           apply Rat.intCast_inj.mp
           have result := congrArg (fun q : Rat => q * (den : Rat)) equality
           rw [Rat.div_mul_cancel den_ne] at result
           simpa [Int.shiftLeft_eq, Rat.intCast_mul, Rat.intCast_pow, Rat.zpow_natCast,
             Rat.intCast_natCast, Rat.mul_assoc] using result
         | negSucc k =>
-          rw [if_neg (by simp [Int.negSucc_eq])]
+          rw [ite_eq_right (by simp [Int.negSucc_eq])]
           have exponent : Int.negSucc k = -((k + 1 : Nat) : Int) := by omega
           rw [exponent, Rat.zpow_neg, Rat.zpow_natCast] at equality
           have scale_ne : (2 : Rat) ^ (k + 1) ≠ 0 := Rat.ne_of_gt (Rat.pow_pos (by decide))
@@ -353,12 +353,12 @@ defmodule FloatProofsTest do
         cases shift with
         | ofNat k =>
           have nonnegative : (0 : Int) ≤ Int.ofNat k := Int.natCast_nonneg _
-          simp only [if_pos nonnegative] at cross
+          simp only [ite_eq_left nonnegative] at cross
           simp [Elixir.FloatProofsTest.«scaled_ratio_matches/4», Erlang.erlang.«bsl/2»,
             Erlang.erlang.«=:=/2», cross]
         | negSucc k =>
           have negative : ¬ (0 : Int) ≤ Int.negSucc k := by simp [Int.negSucc_eq]
-          simp only [if_neg negative] at cross
+          simp only [ite_eq_right negative] at cross
           change num <<< (k + 1) = sig * (den : Int) at cross
           simp [Elixir.FloatProofsTest.«scaled_ratio_matches/4», Erlang.erlang.«bsl/2»,
             Erlang.erlang.«-/1», Erlang.erlang.«=:=/2», ← Int.natCast_add, cross]
