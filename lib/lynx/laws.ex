@@ -126,12 +126,20 @@ defmodule Lynx.Laws do
   `maxRecDepth`, at the top of every translated module. Names are passed to
   Lean as given. Proofs remain kernel-checked.
 
+  Pass `export: path` to write the elaborated declarations of the translated modules,
+  with their dependencies, in Lean's export format. Check them with Lean's kernel and
+  the independent checkers bundled with Lean using `lake check --from-export`, as
+  described in `Lynx`. Exporting bypasses the verification cache, and the export is
+  written only when every module verifies.
+
   Raises on translation failures, including modules without laws or unsupported
   code, and on failures to run Lean or read its response.
   """
   @spec verify!([module() | binary()], keyword()) :: [report()]
   def verify!(modules, opts \\ []) when is_list(modules) do
     {names, source} = Enum.split_with(modules, &is_atom/1)
+    # Cached modules are not elaborated, so exports always verify from scratch.
+    opts = if opts[:export], do: Keyword.put(opts, :cache, false), else: opts
     translation = Enum.reduce(source, Lynx.Translation.new(opts), &Lynx.Translation.add(&2, &1))
 
     files =
@@ -141,7 +149,7 @@ defmodule Lynx.Laws do
       end)
       |> Lynx.Translation.assemble(opts)
 
-    Lynx.Commands.verify!(@lean_dir, files, Keyword.get(opts, :options, []))
+    Lynx.Commands.verify!(@lean_dir, files, Keyword.take(opts, [:options, :export]))
   end
 
   defmacro __using__(_opts) do

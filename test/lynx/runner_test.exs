@@ -43,6 +43,24 @@ defmodule Lynx.RunnerTest do
     assert runtime.message =~ "Unknown identifier `Erlang.maps.«new/0»`"
   end
 
+  @tag :tmp_dir
+  test "exports verified declarations only when every file verifies", %{tmp_dir: tmp_dir} do
+    files = [file(@literal_erl, "Elixir.Exported", [definition("value", success())])]
+    path = Path.join([tmp_dir, "nested", "export.ndjson"])
+
+    assert [%{status: :ok}] = Lynx.Commands.verify!(@lean_dir, files, export: path)
+    [metadata | records] = path |> File.read!() |> String.split("\n", trim: true)
+    assert %{"meta" => %{"lean" => %{"version" => _}}} = JSON.decode!(metadata)
+    assert Enum.any?(records, &match?(%{"str" => %{"str" => "value/0"}}, JSON.decode!(&1)))
+
+    File.rm!(path)
+
+    assert [%{status: :error}] =
+             Lynx.Commands.verify!(@lean_dir, files, options: [maxRecDepth: 1], export: path)
+
+    refute File.exists?(path)
+  end
+
   test "sets Lean options in translated modules and caches them separately" do
     key = :crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)
 
@@ -54,7 +72,7 @@ defmodule Lynx.RunnerTest do
     assert [%{status: :ok, cached: false}] = Lynx.Commands.verify!(@lean_dir, files)
 
     assert [%{status: :error, cached: false, source: source}] =
-             Lynx.Commands.verify!(@lean_dir, files, maxRecDepth: 1)
+             Lynx.Commands.verify!(@lean_dir, files, options: [maxRecDepth: 1])
 
     assert source =~ "set_option maxRecDepth 1"
     assert [%{status: :ok, cached: true}] = Lynx.Commands.verify!(@lean_dir, files)
@@ -328,7 +346,8 @@ defmodule Lynx.RunnerDiagnosticsTest do
           "open Lean Elab Tactic\nelab \"custom_finish\" : tactic => do evalTactic (← `(tactic| rfl))\n"
     }
 
-    support = file("elaborators.exs", "Lynx.Prelude.Cached", []) |> Map.put("preludes", [source])
+    support =
+      file("elaborators.exs", "Erlang.prelude.Cached", []) |> Map.put("preludes", [source])
 
     client =
       file(
@@ -338,7 +357,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
           definition("ensures", success()),
           theorem("law", "custom_finish")
         ],
-        ["Lynx.Prelude.Cached"]
+        ["Erlang.prelude.Cached"]
       )
 
     unrelated = %{client | "module" => "Elixir.UnrelatedClient", "imports" => []}
@@ -367,7 +386,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
       "source" => @header <> "open Lean Elab Tactic\nelab \"broken\" : tactic => missing\n"
     }
 
-    support = file("custom.exs", "Lynx.Prelude.Broken", []) |> Map.put("preludes", [source])
+    support = file("custom.exs", "Erlang.prelude.Broken", []) |> Map.put("preludes", [source])
 
     assert [%{status: :error, diagnostics: [error]}] =
              Lynx.Commands.verify!(@lean_dir, [support])
@@ -382,7 +401,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
 
     imprecise =
       for {name, span} <- [{"Line", [20]}, {"Unknown", []}] do
-        file("custom.exs", "Lynx.Prelude." <> name, [])
+        file("custom.exs", "Erlang.prelude." <> name, [])
         |> Map.put("preludes", [%{source | "span" => span}])
       end
 
@@ -402,7 +421,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
             "open Lean Elab Tactic\nelab \"untrusted\" : tactic => do evalTactic (← `(tactic| sorry))\n"
     }
 
-    support = file("custom.exs", "Lynx.Prelude.Untrusted", []) |> Map.put("preludes", [source])
+    support = file("custom.exs", "Erlang.prelude.Untrusted", []) |> Map.put("preludes", [source])
 
     client =
       file(
@@ -412,7 +431,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
           definition("ensures", success()),
           theorem("law", "untrusted")
         ],
-        ["Lynx.Prelude.Untrusted"]
+        ["Erlang.prelude.Untrusted"]
       )
 
     assert [%{status: :ok}, %{status: :error, diagnostics: diagnostics}] =
@@ -421,7 +440,7 @@ defmodule Lynx.RunnerDiagnosticsTest do
     assert Enum.any?(diagnostics, &(&1.message =~ "unexpected axiom: sorryAx"))
 
     headless = %{source | "source" => "theorem truth : True := trivial\n"}
-    support = file("custom.exs", "Lynx.Prelude.Headless", []) |> Map.put("preludes", [headless])
+    support = file("custom.exs", "Erlang.prelude.Headless", []) |> Map.put("preludes", [headless])
 
     assert [
              %{

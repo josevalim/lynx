@@ -34,14 +34,23 @@ defmodule Lynx.Commands do
   Module names, declarations, source, paths, and messages remain strings.
   Uses the current Mix build directory for cached artifacts, falling back to `_build/dev`.
 
-  `options` is a keyword list of Lean options, such as `[maxRecDepth: 10_000]`,
-  set at the top of every translated module. Values are integers, booleans, or
-  strings. They are part of every cache key.
+  ## Options
+
+    * `:options` - a keyword list of Lean options, such as `[maxRecDepth: 10_000]`,
+      set at the top of every translated module. Values are integers, booleans, or
+      strings. They are part of every cache key.
+
+    * `:export` - a path where the declarations of the verified modules and their
+      dependencies are written in Lean's export format, for `lake check --from-export`.
+      It is written only when every module verifies.
+
   """
   @spec verify!(String.t(), [map()], keyword()) :: [Lynx.Laws.report()]
-  def verify!(project_dir, files, options \\ []) when is_list(files) and is_list(options) do
+  def verify!(project_dir, files, opts \\ []) when is_list(files) and is_list(opts) do
     options =
-      Map.new(options, fn
+      opts
+      |> Keyword.get(:options, [])
+      |> Map.new(fn
         {name, value}
         when is_atom(name) and (is_integer(value) or is_boolean(value) or is_binary(value)) ->
           {Atom.to_string(name), value}
@@ -50,13 +59,26 @@ defmodule Lynx.Commands do
           raise ArgumentError, "invalid Lean option: #{inspect(option)}"
       end)
 
-    runner!(project_dir, %{
+    request = %{
       "command" => "verify",
       "version" => @protocol_version,
       "cache_dir" => cache_dir(),
       "options" => options,
       "files" => files
-    })
+    }
+
+    request =
+      case Keyword.fetch(opts, :export) do
+        {:ok, path} ->
+          path = Path.expand(path)
+          File.mkdir_p!(Path.dirname(path))
+          Map.put(request, "export", path)
+
+        :error ->
+          request
+      end
+
+    runner!(project_dir, request)
     |> Enum.map(&decode_verify!/1)
   end
 
