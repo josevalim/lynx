@@ -1,4 +1,4 @@
-# LYNX_PROFILE=1 LYNX_CACHE=0 mix run examples/elixir/calendar_iso.exs
+# LYNX_DEBUG=1 LYNX_CACHE=0 mix run examples/elixir/calendar_iso.exs
 # Prove the installed Calendar.ISO, translated from BEAM debug information.
 # Checked against Elixir 1.21.0-dev (3790cd8), Erlang/OTP 29.1.2.
 # Source reference: ../elixir/lib/elixir/lib/calendar/iso.ex.

@@ -1,4 +1,4 @@
-# LYNX_PROFILE=1 LYNX_CACHE=0 mix run examples/elixir/range.exs
+# LYNX_DEBUG=1 LYNX_CACHE=0 mix run examples/elixir/range.exs
 # Verify installed Range and Integer implementations translated from BEAM.
 # Checked against Elixir 1.21.0-dev (3790cd8), Erlang/OTP 29.1.2.
 # Source references: ../elixir/lib/elixir/lib/{range,integer}.ex.

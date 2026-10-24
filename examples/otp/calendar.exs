@@ -1,4 +1,4 @@
-# LYNX_PROFILE=1 LYNX_CACHE=0 mix run examples/otp/calendar.exs
+# LYNX_DEBUG=1 LYNX_CACHE=0 mix run examples/otp/calendar.exs
 # Prove the installed OTP calendar module, translated from BEAM debug information.
 # Checked against Erlang/OTP 29.1.2 (stdlib 8.1.1, ERTS 17.1.1).
 # These proofs depend on implementation details; rerun them after OTP upgrades.

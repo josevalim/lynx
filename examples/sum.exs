@@ -1,4 +1,4 @@
-# LYNX_PROFILE=1 mix run examples/sum.exs
+# LYNX_DEBUG=1 mix run examples/sum.exs
 ExUnit.start()
 
 defmodule SumProofsTest do

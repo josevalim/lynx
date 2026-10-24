@@ -1,4 +1,4 @@
-# LYNX_PROFILE=1 LYNX_CACHE=0 mix run examples/elixir/float.exs
+# LYNX_DEBUG=1 LYNX_CACHE=0 mix run examples/elixir/float.exs
 # Prove the installed Float module, translated from BEAM debug information.
 # Checked against Elixir 1.21.0-dev (3790cd8), Erlang/OTP 29.
 # Source reference: ../elixir/lib/elixir/lib/float.ex.

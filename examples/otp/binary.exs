@@ -1,4 +1,4 @@
-# LYNX_PROFILE=1 LYNX_CACHE=0 mix run examples/otp/binary.exs
+# LYNX_DEBUG=1 LYNX_CACHE=0 mix run examples/otp/binary.exs
 # Checked against Erlang/OTP 29.1.2 (stdlib 8.1.1).
 # encode_hex/2 and decode_hex/1 are Erlang implementations in this OTP release.
 ExUnit.start()

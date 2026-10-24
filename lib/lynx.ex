@@ -172,7 +172,7 @@ defmodule Lynx do
     * Use `options: [maxHeartbeats: 1_000_000]` on a laws group when a proof
       needs a larger Lean elaboration budget. It does not weaken kernel checking.
       First look for repeated expansion or unnecessary case splits. Measure
-      verification with `LYNX_PROFILE=1 LYNX_CACHE=0` so cached results do not
+      verification with `LYNX_DEBUG=1 LYNX_CACHE=0` so cached results do not
       hide slow proofs.
 
   ## Limitations
