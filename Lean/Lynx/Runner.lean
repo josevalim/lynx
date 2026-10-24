@@ -28,6 +28,9 @@ Requests include `cache_dir` and may include `options`, an object of Lean option
 at the top of every translated module. Values are natural numbers, Booleans, or strings.
 Input files may include a hexadecimal `cache_key` incorporating dependencies; cached
 artifacts are kept separately for each set of options.
+Requests may include `export`, a path where the declarations of the request's modules
+and their dependencies are written in Lean's export format, for checking with
+`lake check --from-export`. It is written only when every file verifies.
 Files without a key and their dependents are verified without persistent caching.
 Verified artifacts are cached below `cache_dir/lean-VERSION-HASH`, using Lake’s compiled artifact hashes.
 Only successful elaboration and axiom audits are cached; updates include a `cached` Boolean.
@@ -2088,11 +2091,48 @@ private def elaboratePreludes (env : Lean.Environment) (file : DecodedFile) :
       messages := messages.push (message, none)
   return (state, messages, #[])
 
+/-- Export the declarations of the given modules, with everything they depend on, using
+the toolchain's `leanexport`. Modules are imported with their private data so the
+export includes proofs. Unsafe and partial declarations, such as compiled
+`_unsafe_rec` helpers, cannot be used by safe ones, and meta declarations do not
+contribute to proofs, so they are skipped. -/
+private def exportModules (path : System.FilePath) (modules : Array Name)
+    (artifacts : NameMap ImportArtifacts) (temporary : System.FilePath) : IO Unit := do
+  unsafe enableInitializersExecution
+  let env ← importModules (modules.map ({ module := · })) {} (loadExts := true) (arts := artifacts)
+  let constants := env.constants.toList.filterMap fun (name, info) => do
+    let index ← env.getModuleIdxFor? name
+    guard (modules.contains env.header.moduleNames[index.toNat]!)
+    guard !(info.isUnsafe || info.isPartial || isMarkedMeta env name)
+    pure name
+  -- `leanexport` finds modules by name, so lay out the artifacts as a search path.
+  let root := temporary / "export"
+  for module in modules do
+    let some paths := artifacts.find? module | continue
+    for file in paths.toArrays.flatten do
+      -- Artifacts are named `module.<extension>`, such as `module.olean.private`.
+      let some name := file.fileName | continue
+      unless ← file.pathExists do continue
+      let target := modToFilePath root module (name.drop "module.".length).toString
+      IO.FS.createDirAll (target.parent.getD root)
+      IO.FS.writeBinFile target (← IO.FS.readBinFile file)
+  let searchPath := (← IO.getEnv "LEAN_PATH").map (System.SearchPath.separator.toString ++ ·)
+  let output ← IO.Process.output {
+    cmd := ((← findSysroot) / "bin" / "leanexport").toString
+    args := (modules.map toString) ++ #["--"] ++ constants.toArray.map toString
+    env := #[("LEAN_PATH", some (root.toString ++ searchPath.getD ""))]
+  }
+  unless output.exitCode == 0 do
+    throw (IO.userError s!"leanexport failed: {output.stderr}")
+  IO.FS.writeFile path output.stdout
+
 /-- Verify against explicit imports, reusing only successfully audited module artifacts. -/
 private def verify (files : Array Json) (options : Array (TSyntax `command)) (runtime : Runtime)
-    (cacheDirectory : System.FilePath) (emit : Json → IO Unit) : IO Unit := do
+    (cacheDirectory : System.FilePath) (export? : Option System.FilePath)
+    (emit : Json → IO Unit) : IO Unit := do
   IO.FS.withTempDir fun temporary => do
     let mut artifacts : NameMap ImportArtifacts := {}
+    let mut exported : Array Name := #[]
     let mut verified : Std.HashSet String := {}
     let mut uncached : Std.HashSet String := {}
     for entry in files do
@@ -2173,6 +2213,7 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
               writeModule state.env (directory / "module.olean")
         unless fileFailed do
           artifacts := artifacts.insert mainModule (cachedArtifacts directory)
+          exported := exported.push mainModule
           verified := verified.insert file.moduleName
           if key.isNone then uncached := uncached.insert file.moduleName
       let elapsed := (← IO.monoMsNow) - started
@@ -2183,12 +2224,16 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
         ("source", toJson source), ("time_ms", toJson elapsed),
         ("cached", toJson cacheHit), ("theorems", .arr theorems),
         ("diagnostics", .arr diagnostics)])
+    if let some path := export? then
+      if exported.size == files.size then
+        exportModules path exported artifacts temporary
 
 private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
   let (files, options) ← IO.ofExcept do
-    fields j ["command", "version", "files", "cache_dir", "options"]
+    fields j ["command", "version", "files", "cache_dir", "options", "export"]
     pure (← arr j "files", ← optionCommands j)
   let directory := System.FilePath.mk (← IO.ofExcept (str j "cache_dir"))
+  let export? := (str j "export").toOption.map System.FilePath.mk
   unless files.isEmpty do
     let runtime ← getRuntime cache
     -- Options change elaboration, so artifacts are cached per set of options.
@@ -2197,7 +2242,7 @@ private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json �
     let directory ← if files.any (fun file => (field file "cache_key").isOk) then
       pure (directory / s!"lean-{Lean.versionString}-{← runtimeFingerprint}{optionKey}")
       else pure directory
-    verify files options runtime directory emit
+    verify files options runtime directory export? emit
 
 private def run (request : String) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
   try

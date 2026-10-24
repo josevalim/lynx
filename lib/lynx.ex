@@ -223,5 +223,38 @@ defmodule Lynx do
 
   Missing constructs or BIFs produce translation errors. Feel free to
   [open an issue](https://github.com/josevalim/lynx/issues) for missing functionality.
+
+  ## Independent kernel checks
+
+  Lean's kernel checks every proof as Lynx verifies it. Lean also bundles
+  independent checkers, which can check the same declarations again from an
+  export of the elaborated proofs. Set `LYNX_EXPORT` to a directory when running
+  laws defined with `Lynx.Case`:
+
+      LYNX_EXPORT=tmp/export mix test --only laws
+
+  Each laws group writes `tmp/export/<test module>/<group>.ndjson`.
+
+  An export contains the translated modules and every declaration they depend
+  on. Exporting bypasses the verification cache, and an export is written only
+  when every module verifies. Check an export with Lean's kernel and every
+  bundled checker:
+
+      lake --dir deps/lynx/Lean check --paranoid --from-export tmp/export/MyTest/my-group.ndjson
+
+  The command also rejects axioms other than `propext`, `Quot.sound`, and
+  `Classical.choice`. It runs the checkers in a `bwrap` sandbox, available on
+  Linux. Pass `--inadvisably-no-sandbox` to run them without one elsewhere.
+
+  Some checkers bound the reduction they perform. When `con-leche` or `con-ron`
+  report `fuel exhausted`, the proof relies on more computation than they allow,
+  which is not a rejection. Replacing `simp` or `decide` with explicit rewrites
+  where heavy computation happens usually avoids it.
+
+  If you are using Erlang or `Lynx.Laws` directly, pass the file to write with
+  the `:export` option:
+
+      Lynx.Laws.verify!([Sum], export: "tmp/export/sum.ndjson")
+
   """
 end

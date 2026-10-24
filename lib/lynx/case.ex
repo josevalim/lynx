@@ -21,6 +21,10 @@ defmodule Lynx.Case do
   also written to `tmp/` for inspection.
 
   Set `LYNX_CACHE=0` to disable the verification cache.
+
+  Set `LYNX_EXPORT=dir` to write each group's elaborated declarations to
+  `dir/<test module>/<group>.ndjson` for independent kernel checks, as
+  described in `Lynx`. Exporting bypasses the verification cache.
   """
 
   @lean_dir Path.expand("../../Lean", __DIR__)
@@ -349,11 +353,21 @@ defmodule Lynx.Case do
 
   @doc false
   def __verify__(module, name, laws, suffixes, cutoffs, preludes, options) do
+    export =
+      case System.get_env("LYNX_EXPORT") do
+        nil -> []
+        "" -> []
+        dir -> [export: Path.join(group_path(dir, module, name)) <> ".ndjson"]
+      end
+
+    # Cached modules are not elaborated, so exports always verify from scratch.
+    cache = export == [] and System.get_env("LYNX_CACHE") != "0"
+
     files =
       Lynx.Translation.new(termination_suffixes: suffixes, cutoffs: cutoffs, preludes: preludes)
       |> Lynx.Translation.add(Lynx.Bytecode.fetch!(module))
       |> Lynx.Translation.verify(module, laws)
-      |> Lynx.Translation.assemble(cache: System.get_env("LYNX_CACHE") != "0")
+      |> Lynx.Translation.assemble(cache: cache)
 
     signatures =
       for file <- files,
@@ -362,7 +376,7 @@ defmodule Lynx.Case do
         {{file["module"], "#{name}/#{length(params)}"}, "#{name}(#{Enum.join(params, ", ")})"}
       end
 
-    reports = Lynx.Commands.verify!(@lean_dir, files, options)
+    reports = Lynx.Commands.verify!(@lean_dir, files, [options: options] ++ export)
 
     if System.get_env("LYNX_PROFILE") == "1" do
       for report <- reports do
@@ -434,12 +448,7 @@ defmodule Lynx.Case do
   @escape Enum.map(~c" [~#%&*{}\\:<>?/+|\"]", &<<&1::utf8>>)
 
   defp write_translations!(module, name, reports) do
-    path =
-      Path.join([
-        "tmp",
-        String.replace(inspect(module), @escape, "-"),
-        String.replace(to_string(name), @escape, "-")
-      ])
+    path = Path.join(group_path("tmp", module, name))
 
     File.rm_rf!(path)
     File.mkdir_p!(path)
@@ -449,5 +458,13 @@ defmodule Lynx.Case do
     end
 
     path
+  end
+
+  defp group_path(dir, module, name) do
+    [
+      dir,
+      String.replace(inspect(module), @escape, "-"),
+      String.replace(to_string(name), @escape, "-")
+    ]
   end
 end

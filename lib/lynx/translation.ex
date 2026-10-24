@@ -490,7 +490,7 @@ defmodule Lynx.Translation do
         }
       end
 
-    name = "Lynx.Prelude"
+    name = "Erlang.prelude"
 
     {file, keys} =
       cache_file(

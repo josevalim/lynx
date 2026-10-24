@@ -28,7 +28,7 @@ defmodule Lynx.TranslationTest do
 
     assert [
              %{
-               "module" => "Lynx.Prelude",
+               "module" => "Erlang.prelude",
                "cache_key" => support_key,
                "contents" => [],
                "preludes" => [
@@ -42,7 +42,7 @@ defmodule Lynx.TranslationTest do
              },
              %{
                "module" => "Erlang.example",
-               "imports" => ["Lynx.Prelude"],
+               "imports" => ["Erlang.prelude"],
                "cache_key" => client_key
              }
            ] = assemble.(source, [])
@@ -50,7 +50,7 @@ defmodule Lynx.TranslationTest do
     assert body == source.source
 
     assert [
-             %{"module" => "Lynx.Prelude", "cache_key" => changed_support_key},
+             %{"module" => "Erlang.prelude", "cache_key" => changed_support_key},
              %{"cache_key" => changed_client_key}
            ] = assemble.(%{source | source: source.source <> "\n"}, [])
 

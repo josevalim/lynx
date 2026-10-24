@@ -7,16 +7,17 @@
 Write proofs about Erlang/Elixir programs using Lean.
 
 This is done by writing laws, in Erlang/Elixir, with a Lean proof
-that guarantees your Erlang/Elixir code obeys those laws. This is done
-by implementing a model of the Erlang runtime in Lean and automatically
-translating your Erlang/Elixir code to Lean.
+that guarantees your Erlang/Elixir code obeys those laws. The laws are
+automatically translated to Lean and the proofs are checked against a model
+of the Erlang runtime written in Lean.
 
 Lynx implements most Erlang/Elixir language constructs, although several
 built-in functions (BIFs) may be missing. The focus is on verifying sequential
-programs rather than concurrent or distributed ones. Feel free to
-[open an issue](https://github.com/josevalim/lynx/issues) for missing functionality.
+programs although concurrency constructs (spawn, receive, send) are also
+modelled. Feel free to [open an issue](https://github.com/josevalim/lynx/issues)
+for missing functionality.
 
-The operational semantics have not yet been formally validated.
+See the documentation for the Lynx module to get started.
 
 ## Elixir example
 
@@ -158,7 +159,7 @@ instructions to get started.
 
 The Elixir code, the translation layer, and the overall design of the Erlang
 runtime in Lean were done with full human design and review. Proofs, which are
-validated by Lean's kernel, and the deserialization layer in Lean code were
+validated by Lean's kernel, and the deserialization layer in Lean were
 produced by coding agents with limited review.
 
 ## Contributing
