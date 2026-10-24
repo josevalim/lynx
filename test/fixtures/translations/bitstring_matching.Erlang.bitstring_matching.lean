@@ -1,6 +1,7 @@
 module
 
 public import Lynx
+import Lynx.Runner.Elab
 public import Lynx.Modules.Erlang.erlang
 
 @[expose] public section
@@ -21,7 +22,7 @@ def «empty_or_byte/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
         (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
         (fun vX lynxBits0 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits0 (Lynx.Term.atom "all") 8) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits0) with
             | vRest => pure (Lynx.Term.tuple #[vX, vRest])
           | _ => lynxMatchNext ())
@@ -33,7 +34,7 @@ def «empty_or_byte/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
           lynxBody lynxNext)
         (fun lynxMatchNext =>
           match (Lynx.Term.Bitstring.matchEnd _0) with
-          | Bool.true✝ => pure (Lynx.Term.atom "empty")
+          | Bool.true => pure (Lynx.Term.atom "empty")
           | _ => lynxMatchNext ())
         (fun (_ : Unit) =>
           match _0 with
@@ -87,7 +88,7 @@ def «integers/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
                   Bool.true)
                 (fun vC lynxBits3 =>
                   match (Lynx.Term.Bitstring.matchEnd lynxBits3) with
-                  | Bool.true✝ => pure (Lynx.Term.tuple #[vA, vB, vC])
+                  | Bool.true => pure (Lynx.Term.tuple #[vA, vB, vC])
                   | _ => lynxMatchNext ())
                 (fun _ => lynxMatchNext ()))
             (fun _ => lynxMatchNext ()))
@@ -111,7 +112,7 @@ def «integer_sized/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
             (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
             (fun vSize lynxBits4 =>
               match (Lynx.Term.Bitstring.matchTail lynxBits4 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (lynxBits4) with
                 | _3 =>
                   (fun {lynxValue : Type}
@@ -126,7 +127,7 @@ def «integer_sized/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
                         (fun vX lynxBits5 =>
                           match
                             (Lynx.Term.Bitstring.matchTail lynxBits5 (Lynx.Term.atom "all") 1) with
-                          | Bool.true✝ =>
+                          | Bool.true =>
                             match (lynxBits5) with
                             | vTail => pure (Lynx.Term.tuple #[vSize, vX, vTail])
                           | _ => lynxMatchNext ())
@@ -150,7 +151,7 @@ def «integer_external_size/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.
       Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchInteger _1 _0 3 Bool.false Bool.false)
         (fun vX lynxBits6 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits6 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits6) with
             | vTail => pure (Lynx.Term.tuple #[vX, vTail])
           | _ => lynxMatchNext ())
@@ -168,7 +169,7 @@ def «float16/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
       Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchFloat _0 16 Bool.false)
         (fun vX lynxBits7 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits7 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits7) with
             | vRest => pure (Lynx.Term.tuple #[vX, vRest])
           | _ => lynxMatchNext ())
@@ -188,7 +189,7 @@ def «float32/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
           Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchFloat lynxBits8 32 Bool.true)
             (fun vY lynxBits9 =>
               match (Lynx.Term.Bitstring.matchEnd lynxBits9) with
-              | Bool.true✝ => pure (Lynx.Term.tuple #[vX, vY])
+              | Bool.true => pure (Lynx.Term.tuple #[vX, vY])
               | _ => lynxMatchNext ())
             (fun _ => lynxMatchNext ()))
         (fun _ => lynxMatchNext ()))
@@ -207,7 +208,7 @@ def «float64/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
           Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchFloat lynxBits10 64 Bool.true)
             (fun vY lynxBits11 =>
               match (Lynx.Term.Bitstring.matchEnd lynxBits11) with
-              | Bool.true✝ => pure (Lynx.Term.tuple #[vX, vY])
+              | Bool.true => pure (Lynx.Term.tuple #[vX, vY])
               | _ => lynxMatchNext ())
             (fun _ => lynxMatchNext ()))
         (fun _ => lynxMatchNext ()))
@@ -225,7 +226,7 @@ def «float_sized/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exception 
         (Lynx.Term.Bitstring.matchFloat _1 (Lynx.Term.Bitstring.floatWidth _0 2) Bool.false)
         (fun vX lynxBits12 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits12 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits12) with
             | vTail => pure (Lynx.Term.tuple #[vX, vTail])
           | _ => lynxMatchNext ())
@@ -244,7 +245,7 @@ def «binary_tail/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
         (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 3) 1 Bool.false Bool.false)
         (fun vTag lynxBits13 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits13 (Lynx.Term.atom "all") 8) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits13) with
             | vTail => pure (Lynx.Term.tuple #[vTag, vTail])
           | _ => lynxMatchNext ())
@@ -263,7 +264,7 @@ def «bitstring_tail/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
         (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 3) 1 Bool.false Bool.false)
         (fun vTag lynxBits14 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits14 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits14) with
             | vTail => pure (Lynx.Term.tuple #[vTag, vTail])
           | _ => lynxMatchNext ())
@@ -284,7 +285,7 @@ def «binary_literal_tail/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term
           match lynxExtracted with
           | Lynx.Term.integer 1 =>
             match (Lynx.Term.Bitstring.matchTail lynxBits15 (Lynx.Term.atom "all") 8) with
-            | Bool.true✝ =>
+            | Bool.true =>
               match (lynxBits15) with
               | vTail => pure vTail
             | _ => lynxMatchNext ()
@@ -306,7 +307,7 @@ def «bitstring_literal_tail/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.T
           match lynxExtracted with
           | Lynx.Term.integer 1 =>
             match (Lynx.Term.Bitstring.matchTail lynxBits16 (Lynx.Term.atom "all") 1) with
-            | Bool.true✝ =>
+            | Bool.true =>
               match (lynxBits16) with
               | vTail => pure vTail
             | _ => lynxMatchNext ()
@@ -326,7 +327,7 @@ def «binary_fixed/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exception
         (Lynx.Term.Bitstring.matchInteger _1 (Lynx.Term.integer 3) 1 Bool.false Bool.false)
         (fun vTag lynxBits17 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits17 _0 8) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits17) with
             | vTail => pure (Lynx.Term.tuple #[vTag, vTail])
           | _ => lynxMatchNext ())
@@ -345,7 +346,7 @@ def «bitstring_fixed/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Except
         (Lynx.Term.Bitstring.matchInteger _1 (Lynx.Term.integer 3) 1 Bool.false Bool.false)
         (fun vTag lynxBits18 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits18 _0 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits18) with
             | vTail => pure (Lynx.Term.tuple #[vTag, vTail])
           | _ => lynxMatchNext ())
@@ -367,7 +368,7 @@ def «binary_prefix/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exceptio
               Bool.false)
             (fun vTag lynxBits20 =>
               match (Lynx.Term.Bitstring.matchTail lynxBits20 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (lynxBits20) with
                 | vTail => pure (Lynx.Term.tuple #[vPrefix, vTag, vTail])
               | _ => lynxMatchNext ())
@@ -392,7 +393,7 @@ def «nested/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
               Bool.false)
             (fun vX lynxBits22 =>
               match (Lynx.Term.Bitstring.matchTail lynxBits22 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (lynxBits22) with
                 | vRest => pure (Lynx.Term.tuple #[vX, vRest])
               | _ => lynxMatchNext ())
@@ -413,7 +414,7 @@ def «guarded/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
         (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
         (fun vX lynxBits23 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits23 (Lynx.Term.atom "all") 8) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits23) with
             | vRest =>
               Lynx.Except.guard (Erlang.erlang.«>/2» vX (Lynx.Term.integer 10))
@@ -430,7 +431,7 @@ def «guarded/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
             (Lynx.Term.Bitstring.matchInteger _0 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
             (fun vX lynxBits24 =>
               match (Lynx.Term.Bitstring.matchTail lynxBits24 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (lynxBits24) with
                 | vRest => pure (Lynx.Term.tuple #[Lynx.Term.atom "small", vX, vRest])
               | _ => lynxMatchNext ())
@@ -452,7 +453,7 @@ def «alias/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
             Bool.false)
           (fun vX lynxBits26 =>
             match (Lynx.Term.Bitstring.matchTail lynxBits26 (Lynx.Term.atom "all") 1) with
-            | Bool.true✝ =>
+            | Bool.true =>
               match (lynxBits26) with
               | vRest => pure (Lynx.Term.tuple #[vX, vRest, vWhole])
             | _ => lynxMatchNext ())
@@ -471,7 +472,7 @@ def «pinned/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exception Lynx.
         (Lynx.Term.Bitstring.matchInteger _1 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
         (fun _5 lynxBits27 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits27 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits27) with
             | vRest =>
               Lynx.Except.guard (Erlang.erlang.«=:=/2» _5 _0)
@@ -491,7 +492,7 @@ def «utf8/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
       Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf8 _0)
         (fun vX lynxBits28 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits28 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits28) with
             | vRest => pure (Lynx.Term.tuple #[vX, vRest])
           | _ => lynxMatchNext ())
@@ -509,7 +510,7 @@ def «utf8_little/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
       Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf8 _0)
         (fun vX lynxBits29 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits29 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits29) with
             | vRest => pure (Lynx.Term.tuple #[vX, vRest])
           | _ => lynxMatchNext ())
@@ -527,7 +528,7 @@ def «utf16/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
       Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 _0 Bool.false)
         (fun vX lynxBits30 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits30 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits30) with
             | vRest => pure (Lynx.Term.tuple #[vX, vRest])
           | _ => lynxMatchNext ())
@@ -545,7 +546,7 @@ def «utf16_big/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
       Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 _0 Bool.false)
         (fun vX lynxBits31 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits31 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits31) with
             | vRest => pure (Lynx.Term.tuple #[vX, vRest])
           | _ => lynxMatchNext ())
@@ -563,7 +564,7 @@ def «utf16_little/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
       Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf16 _0 Bool.true)
         (fun vX lynxBits32 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits32 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits32) with
             | vRest => pure (Lynx.Term.tuple #[vX, vRest])
           | _ => lynxMatchNext ())
@@ -581,7 +582,7 @@ def «utf32/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
       Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf32 _0 Bool.false)
         (fun vX lynxBits33 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits33 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits33) with
             | vRest => pure (Lynx.Term.tuple #[vX, vRest])
           | _ => lynxMatchNext ())
@@ -599,7 +600,7 @@ def «utf32_big/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
       Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf32 _0 Bool.false)
         (fun vX lynxBits34 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits34 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits34) with
             | vRest => pure (Lynx.Term.tuple #[vX, vRest])
           | _ => lynxMatchNext ())
@@ -617,7 +618,7 @@ def «utf32_little/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
       Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf32 _0 Bool.true)
         (fun vX lynxBits35 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits35 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits35) with
             | vRest => pure (Lynx.Term.tuple #[vX, vRest])
           | _ => lynxMatchNext ())
@@ -642,7 +643,7 @@ def «utf_mixed/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
                   Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf32 lynxBits38 Bool.false)
                     (fun vZ lynxBits39 =>
                       match (Lynx.Term.Bitstring.matchTail lynxBits39 (Lynx.Term.atom "all") 1) with
-                      | Bool.true✝ =>
+                      | Bool.true =>
                         match (lynxBits39) with
                         | vRest => pure (Lynx.Term.tuple #[vTag, vX, vY, vZ, vRest])
                       | _ => lynxMatchNext ())
@@ -673,7 +674,7 @@ def «utf_literal/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
                       match lynxExtracted with
                       | Lynx.Term.integer 1114111 =>
                         match (Lynx.Term.Bitstring.matchEnd lynxBits42) with
-                        | Bool.true✝ => pure (Lynx.Term.atom "matched")
+                        | Bool.true => pure (Lynx.Term.atom "matched")
                         | _ => lynxMatchNext ()
                       | _ => lynxMatchNext ())
                     (fun _ => lynxMatchNext ())
@@ -698,7 +699,7 @@ def «utf_pinned/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exception L
               Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf32 lynxBits44 Bool.true)
                 (fun _7 lynxBits45 =>
                   match (Lynx.Term.Bitstring.matchEnd lynxBits45) with
-                  | Bool.true✝ =>
+                  | Bool.true =>
                     Lynx.Except.guard
                       (do
                         let _10 ← Erlang.erlang.«=:=/2» _5 _0

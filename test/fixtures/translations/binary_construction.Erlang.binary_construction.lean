@@ -37,16 +37,15 @@ def «integer_max_unit/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Excep
 def «integer_mixed/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   Except.bind
     (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer 1) (Lynx.Term.integer 3) 1 Bool.false)
-    (fun lynxBinarySegment✝ =>
+    (fun lynxBinarySegment =>
       Except.bind
         (Except.bind (Lynx.Term.Bitstring.integerSegment _0 (Lynx.Term.integer 12) 1 Bool.true)
-          (fun lynxBinarySegment✝ =>
+          (fun lynxBinarySegment =>
             Except.bind
               (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer (-1)) (Lynx.Term.integer 5) 1
                 Bool.false)
-              (fun lynxBinaryTail✝ =>
-                Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
-        (fun lynxBinaryTail✝ => Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝))
+              (fun lynxBinaryTail => Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail)))
+        (fun lynxBinaryTail => Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail))
 
 def «integer_invalid_size/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   Lynx.Term.Bitstring.integerSegment _0 (Lynx.Term.integer (-1)) 1 Bool.false
@@ -66,16 +65,15 @@ def «float_unit/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
 def «float_mixed/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   Except.bind
     (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer 1) (Lynx.Term.integer 3) 1 Bool.false)
-    (fun lynxBinarySegment✝ =>
+    (fun lynxBinarySegment =>
       Except.bind
         (Except.bind (Lynx.Term.Bitstring.floatSegment _0 64 Bool.true)
-          (fun lynxBinarySegment✝ =>
+          (fun lynxBinarySegment =>
             Except.bind
               (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer (-1)) (Lynx.Term.integer 5) 1
                 Bool.false)
-              (fun lynxBinaryTail✝ =>
-                Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
-        (fun lynxBinaryTail✝ => Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝))
+              (fun lynxBinaryTail => Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail)))
+        (fun lynxBinaryTail => Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail))
 
 def «float16/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   Lynx.Term.Bitstring.floatSegment _0 16 Bool.false
@@ -101,21 +99,20 @@ def «bitstring_unit/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Excepti
 def «binary_mixed/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   Except.bind
     (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer 1) (Lynx.Term.integer 3) 1 Bool.false)
-    (fun lynxBinarySegment✝ =>
+    (fun lynxBinarySegment =>
       Except.bind
         (Except.bind (Lynx.Term.Bitstring.binarySegment _0 (Lynx.Term.atom "all") 1)
-          (fun lynxBinarySegment✝ =>
+          (fun lynxBinarySegment =>
             Except.bind
               (Except.bind (Lynx.Term.Bitstring.binarySegment _1 (Lynx.Term.atom "all") 8)
-                (fun lynxBinarySegment✝ =>
+                (fun lynxBinarySegment =>
                   Except.bind
                     (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer 0) (Lynx.Term.integer 1)
                       1 Bool.false)
-                    (fun lynxBinaryTail✝ =>
-                      Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
-              (fun lynxBinaryTail✝ =>
-                Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
-        (fun lynxBinaryTail✝ => Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝))
+                    (fun lynxBinaryTail =>
+                      Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail)))
+              (fun lynxBinaryTail => Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail)))
+        (fun lynxBinaryTail => Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail))
 
 def «utf8/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   Lynx.Term.Bitstring.utf8Segment _0
@@ -144,26 +141,25 @@ def «utf32_little/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
 def «utf_mixed/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   Except.bind
     (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer 1) (Lynx.Term.integer 3) 1 Bool.false)
-    (fun lynxBinarySegment✝ =>
+    (fun lynxBinarySegment =>
       Except.bind
         (Except.bind (Lynx.Term.Bitstring.utf8Segment _0)
-          (fun lynxBinarySegment✝ =>
+          (fun lynxBinarySegment =>
             Except.bind
               (Except.bind (Lynx.Term.Bitstring.utf16Segment _0 Bool.true)
-                (fun lynxBinarySegment✝ =>
+                (fun lynxBinarySegment =>
                   Except.bind
                     (Except.bind (Lynx.Term.Bitstring.utf32Segment _0 Bool.false)
-                      (fun lynxBinarySegment✝ =>
+                      (fun lynxBinarySegment =>
                         Except.bind
                           (Lynx.Term.Bitstring.integerSegment (Lynx.Term.integer 0)
                             (Lynx.Term.integer 1) 1 Bool.false)
-                          (fun lynxBinaryTail✝ =>
-                            Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
-                    (fun lynxBinaryTail✝ =>
-                      Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
-              (fun lynxBinaryTail✝ =>
-                Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝)))
-        (fun lynxBinaryTail✝ => Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝))
+                          (fun lynxBinaryTail =>
+                            Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail)))
+                    (fun lynxBinaryTail =>
+                      Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail)))
+              (fun lynxBinaryTail => Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail)))
+        (fun lynxBinaryTail => Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail))
 
 end
 
