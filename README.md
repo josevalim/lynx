@@ -135,7 +135,7 @@ predicate names replaced by their Erlang equivalents.
 The argument names in `name` become Lean theorem parameters. The predicate
 helpers receive those arguments in order and remain callable from Erlang.
 `ensures` is required, while `requires` may be omitted for an unconditional
-law. Then call `Lynx.Laws.verify!([:sum_proofs])` to validate the proofs.
+law. Then call `Lynx.Laws.verify([:sum_proofs])` to validate the proofs.
 
 ## Installation
 

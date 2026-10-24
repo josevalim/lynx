@@ -254,7 +254,7 @@ defmodule Lynx do
   If you are using Erlang or `Lynx.Laws` directly, pass the file to write with
   the `:export` option:
 
-      Lynx.Laws.verify!([Sum], export: "tmp/export/sum.ndjson")
+      Lynx.Laws.verify([Sum], export: "tmp/export/sum.ndjson")
 
   """
 end

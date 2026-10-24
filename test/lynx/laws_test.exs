@@ -34,7 +34,7 @@ defmodule Lynx.LawsTest do
                file: file
              }
            ] =
-             Lynx.Laws.verify!([binary])
+             Lynx.Laws.verify([binary])
 
     assert file == __ENV__.file
     assert is_integer(time) and time >= 0
@@ -71,7 +71,7 @@ defmodule Lynx.LawsTest do
     """
 
     assert [%{status: :ok, diagnostics: [], source: source}, %{status: :ok, diagnostics: []}] =
-             Lynx.Laws.verify!([binary],
+             Lynx.Laws.verify([binary],
                termination_suffixes: %{{module, :increment, 1} => suffix}
              )
 
