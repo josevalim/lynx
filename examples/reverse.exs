@@ -1,4 +1,4 @@
-# LYNX_PROFILE=1 LYNX_CACHE=0 mix run examples/reverse.exs
+# LYNX_DEBUG=1 LYNX_CACHE=0 mix run examples/reverse.exs
 ExUnit.start()
 
 defmodule ReverseProofsTest do

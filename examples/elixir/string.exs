@@ -1,4 +1,4 @@
-# LYNX_PROFILE=1 LYNX_CACHE=0 mix run examples/elixir/string.exs
+# LYNX_DEBUG=1 LYNX_CACHE=0 mix run examples/elixir/string.exs
 # Verify installed String functions translated from BEAM debug information.
 # Checked against Elixir 1.21.0-dev, Erlang/OTP 29.1.2.
 # Source reference: ../elixir/lib/elixir/lib/string.ex.

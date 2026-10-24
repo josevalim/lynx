@@ -15,7 +15,7 @@ defmodule Lynx.Case do
   Each group registers one ExUnit test of type `:laws`. Run groups with
   `mix test --only laws`.
 
-  Set `LYNX_PROFILE=1` to print each translated module's reported
+  Set `LYNX_DEBUG=1` to print each translated module's reported
   verification time in milliseconds, status, and whether it was cached,
   as well as the elaboration time of any law. The translated .lean files are
   also written to `tmp/` for inspection.
@@ -378,7 +378,7 @@ defmodule Lynx.Case do
 
     reports = Lynx.Commands.verify!(@lean_dir, files, [options: options] ++ export)
 
-    if System.get_env("LYNX_PROFILE") == "1" do
+    if System.get_env("LYNX_DEBUG") == "1" do
       for report <- reports do
         prefix =
           case report.status do

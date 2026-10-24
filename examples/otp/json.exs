@@ -1,4 +1,4 @@
-# LYNX_PROFILE=1 LYNX_CACHE=0 mix run examples/otp/json.exs
+# LYNX_DEBUG=1 LYNX_CACHE=0 mix run examples/otp/json.exs
 # Verify that OTP's json module decodes what it encodes.
 # Checked against Erlang/OTP 29.1.2 (stdlib 8.1.1).
 ExUnit.start()

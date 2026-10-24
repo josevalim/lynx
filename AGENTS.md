@@ -72,7 +72,7 @@ variables needed for induction and avoid unnecessarily expanding shared binds.
 When adding simp rules or changing public proof interfaces, check representative
 guarantees and properties. Improving one proof can slow another.
 
-Run examples with `LYNX_PROFILE=1 LYNX_CACHE=0 mix run examples/<name>.exs` to
+Run examples with `LYNX_DEBUG=1 LYNX_CACHE=0 mix run examples/<name>.exs` to
 measure verification without cached results. Run `lake test` from `Lean/` to
 check runtime proofs and axiom audits.
 
