@@ -1,4 +1,4 @@
-# LYNX_DEBUG=1 LYNX_CACHE=0 mix run examples/otp/base64.exs
+# LYNX_DEBUG=lean LYNX_CACHE=0 mix run examples/otp/base64.exs
 # Checked against Erlang/OTP 29.1.2 (stdlib 8.1.1).
 ExUnit.start()
 

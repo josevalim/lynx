@@ -12,7 +12,7 @@ never imply a diagnostic column. Function and variable names retain their Erlang
 constructs and escapes their Lean identifiers.
 
 Each verified file emits `{"status": "ok" | "error" | "skipped", "file": ..., "module": ...,
-"source": ..., "time_ms": ..., "theorems": [...], "diagnostics": [...]}`. Time includes rendering, imports,
+"time_ms": ..., "theorems": [...], "diagnostics": [...]}`. Time includes rendering, imports,
 elaboration, auditing, and artifact writing; shared runtime loading is excluded.
 Theorems report `name` (including `/arity`) and `time_ms` for each law command's
 elaboration. They are elaborated sequentially and may use earlier declarations.
@@ -28,6 +28,11 @@ Requests include `cache_dir` and may include `options`, an object of Lean option
 at the top of every translated module. Values are natural numbers, Booleans, or strings.
 Input files may include a hexadecimal `cache_key` incorporating dependencies; cached
 artifacts are kept separately for each set of options.
+Requests may include `debug_dir`, a directory where the rendered source of every module
+is written by module path, such as `Erlang/json.lean`, when a file does not verify.
+With `debug` set to `"lean"` or `"olean"`, they are written even when every file verifies.
+With `"olean"`, the compiled files of every verified module are also written next to its
+source, such as `Erlang/json.olean`, so the directory can be added to `LEAN_PATH`.
 Requests may include `check_source: true` to parse each rendered source and report
 an error where it differs from the elaborated commands.
 Requests may include `export`, a path where the declarations of the request's modules
@@ -2201,6 +2206,20 @@ private def elaboratePreludes (env : Lean.Environment) (file : DecodedFile) :
       messages := messages.push (message, none)
   return (state, messages, #[])
 
+/-- Copy compiled modules into `root` by module path, such as `Erlang/json.olean`, so
+tools that load modules by name through `LEAN_PATH` can use them. -/
+private def layoutArtifacts (root : System.FilePath) (modules : Array Name)
+    (artifacts : NameMap ImportArtifacts) : IO Unit := do
+  for module in modules do
+    let some paths := artifacts.find? module | continue
+    for file in paths.toArrays.flatten do
+      -- Artifacts are named `module.<extension>`, such as `module.olean.private`.
+      let some name := file.fileName | continue
+      unless ← file.pathExists do continue
+      let target := modToFilePath root module (name.drop "module.".length).toString
+      IO.FS.createDirAll (target.parent.getD root)
+      IO.FS.writeBinFile target (← IO.FS.readBinFile file)
+
 /-- Export the declarations of the given modules, with everything they depend on, using
 the toolchain's `leanexport`. Modules are imported with their private data so the
 export includes proofs. Unsafe and partial declarations, such as compiled
@@ -2217,15 +2236,7 @@ private def exportModules (path : System.FilePath) (modules : Array Name)
     pure name
   -- `leanexport` finds modules by name, so lay out the artifacts as a search path.
   let root := temporary / "export"
-  for module in modules do
-    let some paths := artifacts.find? module | continue
-    for file in paths.toArrays.flatten do
-      -- Artifacts are named `module.<extension>`, such as `module.olean.private`.
-      let some name := file.fileName | continue
-      unless ← file.pathExists do continue
-      let target := modToFilePath root module (name.drop "module.".length).toString
-      IO.FS.createDirAll (target.parent.getD root)
-      IO.FS.writeBinFile target (← IO.FS.readBinFile file)
+  layoutArtifacts root modules artifacts
   let searchPath := (← IO.getEnv "LEAN_PATH").map (System.SearchPath.separator.toString ++ ·)
   let output ← IO.Process.output {
     cmd := ((← findSysroot) / "bin" / "leanexport").toString
@@ -2236,12 +2247,32 @@ private def exportModules (path : System.FilePath) (modules : Array Name)
     throw (IO.userError s!"leanexport failed: {output.stderr}")
   IO.FS.writeFile path output.stdout
 
+/-- What debugging writes. Sources are always written; `olean` adds compiled modules. -/
+private inductive DebugMode where
+  | lean
+  | olean
+
+/-- Where and when to write the rendered sources of a request. -/
+private structure Debug where
+  dir : System.FilePath
+  /-- Write even when every file verifies. -/
+  always : Bool
+  mode : DebugMode
+
+/-- Write rendered sources by module path, as Lean lays out modules. -/
+private def writeSources (dir : System.FilePath) (sources : Array (Name × String)) : IO Unit := do
+  for (module, source) in sources do
+    let path := modToFilePath dir module "lean"
+    IO.FS.createDirAll (path.parent.getD dir)
+    IO.FS.writeFile path source
+
 /-- Verify against explicit imports, reusing only successfully audited module artifacts. -/
 private def verify (files : Array Json) (options : Array (TSyntax `command)) (runtime : Runtime)
-    (cacheDirectory : System.FilePath) (export? : Option System.FilePath) (checkSource : Bool)
-    (emit : Json → IO Unit) : IO Unit := do
+    (cacheDirectory : System.FilePath) (export? : Option System.FilePath)
+    (debug? : Option Debug) (checkSource : Bool) (emit : Json → IO Unit) : IO Unit := do
   IO.FS.withTempDir fun temporary => do
     let mut artifacts : NameMap ImportArtifacts := {}
+    let mut sources : Array (Name × String) := #[]
     let mut exported : Array Name := #[]
     let mut verified : Std.HashSet String := {}
     let mut uncached : Std.HashSet String := {}
@@ -2276,6 +2307,8 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
       let env ← if missingImport then pure runtime.env else importFile runtime imports artifacts
       let file ← decodeFile files entry env options
       let source ← renderFile file env
+      let sourceModule ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
+      sources := sources.push (sourceModule.getId, source)
       let mut fileFailed := !file.proofDiagnostics.isEmpty
       diagnostics := diagnostics ++ parsingDiagnostics file
       if checkSource && file.preludes.isEmpty then
@@ -2335,19 +2368,32 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
       emit (Json.mkObj [
         ("status", toJson status),
         ("file", toJson file.fileName), ("module", toJson file.moduleName),
-        ("source", toJson source), ("time_ms", toJson elapsed),
+        ("time_ms", toJson elapsed),
         ("cached", toJson cacheHit), ("theorems", .arr theorems),
         ("diagnostics", .arr diagnostics)])
     if let some path := export? then
       if exported.size == files.size then
         exportModules path exported artifacts temporary
+    if let some debug := debug? then
+      if debug.always || exported.size != files.size then
+        writeSources debug.dir sources
+      if debug.mode matches .olean then
+        layoutArtifacts debug.dir exported artifacts
 
 private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
   let (files, options) ← IO.ofExcept do
-    fields j ["command", "version", "files", "cache_dir", "options", "export", "check_source"]
+    fields j ["command", "version", "files", "cache_dir", "options", "export", "debug_dir", "debug",
+      "check_source"]
     pure (← arr j "files", ← optionCommands j)
   let directory := System.FilePath.mk (← IO.ofExcept (str j "cache_dir"))
   let export? := (str j "export").toOption.map System.FilePath.mk
+  let debug? ← IO.ofExcept (ε := String) do
+    let .ok dir := str j "debug_dir" | pure none
+    match (str j "debug").toOption.getD "" with
+    | "" => pure (some { dir, always := false, mode := .lean : Debug })
+    | "lean" => pure (some { dir, always := true, mode := .lean : Debug })
+    | "olean" => pure (some { dir, always := true, mode := .olean : Debug })
+    | mode => throw s!"unsupported debug mode '{mode}'"
   let checkSource := (field j "check_source" >>= (·.getBool?)).toOption.getD false
   unless files.isEmpty do
     let runtime ← getRuntime cache
@@ -2357,7 +2403,7 @@ private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json �
     let directory ← if files.any (fun file => (field file "cache_key").isOk) then
       pure (directory / s!"lean-{Lean.versionString}-{← runtimeFingerprint}{optionKey}")
       else pure directory
-    verify files options runtime directory export? checkSource emit
+    verify files options runtime directory export? debug? checkSource emit
 
 private def run (request : String) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
   try

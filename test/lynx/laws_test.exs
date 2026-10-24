@@ -3,7 +3,8 @@ defmodule Lynx.LawsTest do
 
   import Lynx.Lean, only: [sigil_LEAN: 2]
 
-  test "verifies laws from a module compiled in memory" do
+  @tag :tmp_dir
+  test "verifies laws from a module compiled in memory", %{tmp_dir: tmp_dir} do
     {:module, _module, binary, _} =
       defmodule Laws do
         @compile :debug_info
@@ -21,7 +22,6 @@ defmodule Lynx.LawsTest do
                status: :ok,
                diagnostics: [],
                module: "Elixir.Lynx.LawsTest.Laws",
-               source: source,
                file: file,
                time_ms: time,
                cached: cached
@@ -30,11 +30,13 @@ defmodule Lynx.LawsTest do
                status: :ok,
                diagnostics: [],
                module: "Elixir.Lynx.LawsTest.Laws.laws",
-               source: laws,
                file: file
              }
            ] =
-             Lynx.Laws.verify([binary])
+             Lynx.Laws.verify([binary], debug_dir: tmp_dir, debug: :lean)
+
+    source = File.read!(Path.join(tmp_dir, "Elixir/Lynx/LawsTest/Laws.lean"))
+    laws = File.read!(Path.join(tmp_dir, "Elixir/Lynx/LawsTest/Laws/laws.lean"))
 
     assert file == __ENV__.file
     assert is_integer(time) and time >= 0
@@ -45,7 +47,8 @@ defmodule Lynx.LawsTest do
     refute source =~ "«unused/0»"
   end
 
-  test "verifies laws with termination suffix options" do
+  @tag :tmp_dir
+  test "verifies laws with termination suffix options", %{tmp_dir: tmp_dir} do
     {:module, module, binary, _} =
       defmodule TerminationSuffix do
         @compile :debug_info
@@ -70,12 +73,15 @@ defmodule Lynx.LawsTest do
       all_goals first | exact h _ | exact Lean.Order.PartialOrder.rel_refl
     """
 
-    assert [%{status: :ok, diagnostics: [], source: source}, %{status: :ok, diagnostics: []}] =
+    assert [%{status: :ok, diagnostics: []}, %{status: :ok, diagnostics: []}] =
              Lynx.Laws.verify([binary],
-               termination_suffixes: %{{module, :increment, 1} => suffix}
+               termination_suffixes: %{{module, :increment, 1} => suffix},
+               debug_dir: tmp_dir,
+               debug: :lean
              )
 
-    assert source =~ "partial_fixpoint monotonicity by"
+    path = Path.join([tmp_dir | String.split(Atom.to_string(module), ".")]) <> ".lean"
+    assert File.read!(path) =~ "partial_fixpoint monotonicity by"
   end
 
   describe "evaluation" do

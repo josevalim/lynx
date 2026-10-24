@@ -1,4 +1,4 @@
-# LYNX_DEBUG=1 LYNX_CACHE=0 mix run examples/otp/queue.exs
+# LYNX_DEBUG=lean LYNX_CACHE=0 mix run examples/otp/queue.exs
 # Prove the installed OTP queue module, translated from BEAM debug information.
 # Checked against Erlang/OTP 29.1.2 (stdlib 8.1.1, ERTS 17.1.1).
 # These proofs depend on implementation details; rerun after OTP upgrades.
