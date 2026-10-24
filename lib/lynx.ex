@@ -173,7 +173,34 @@ defmodule Lynx do
       needs a larger Lean elaboration budget. It does not weaken kernel checking.
       First look for repeated expansion or unnecessary case splits. Measure
       verification with `LYNX_DEBUG=lean LYNX_CACHE=0` so cached results do not
-      hide slow proofs.
+      hide slow proofs, and see "Profiling proofs" to find where time goes.
+
+  ### Profiling proofs
+
+  `LYNX_DEBUG=lean` reports how long each translated module and law takes to
+  verify. To see where the time goes inside a proof, use
+  [leanprof](https://github.com/unbalancedparentheses/leanprof). First, run your
+  laws with `LYNX_DEBUG=olean`, which writes each group's translated sources,
+  together with their compiled modules, to `tmp/<test module>/<group>/`:
+
+      LYNX_DEBUG=olean mix test test/json_test.exs --only laws
+
+  Then profile the laws module from that directory. Its imports are loaded from
+  the compiled modules, so only the given file is elaborated:
+
+      cd tmp/JsonProofsTest/laws-json-round-trip
+      LEAN_PATH=$PWD:$LYNX/Lean/.lake/build/lib/lean ELAN_TOOLCHAIN=$(cat $LYNX/lean-toolchain) \\
+        leanprof elab --heartbeats Elixir/JsonProofsTest/laws.lean
+
+  where `$LYNX` is the absolute path to Lynx, such as your project's `deps/lynx`. Any
+  other module in the directory, such as `Erlang/json.lean`, can be profiled
+  the same way to measure the elaboration of translated code.
+
+  `--heartbeats` counts work instead of time, so results are the same on every
+  run and can be compared before and after changing a proof. The report lists
+  the costliest declarations and tactics by source range, work repeated across
+  goals, and the definitions and simp lemmas behind the work. Locations refer
+  to the translated sources, where proofs appear verbatim as written in your laws.
 
   ## Limitations
 
