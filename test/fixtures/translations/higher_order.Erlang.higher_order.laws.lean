@@ -1,6 +1,7 @@
 module
 
 public import Lynx
+import Lynx.Runner.Elab
 public import Erlang.higher_order
 public import Erlang.program
 

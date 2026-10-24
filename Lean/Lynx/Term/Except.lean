@@ -116,6 +116,11 @@ returns `true`; other values raise `badarg`. -/
       (fun value => match value with | .atom "true" => body () | _ => next ())
       (fun _ => next ()) := rfl
 
+/-- A guard whose computation returns selects its branch from the value. -/
+theorem guard_ok (value : Term) (body next : Unit → Except Exception α) :
+    guard (.ok value) body next = match value with | .atom "true" => body () | _ => next () :=
+  rfl
+
 -- Termination proofs see which branch a guard selected.
 @[wf_preprocess] theorem guard_wf (computation : Except Exception Term)
     (body next : Unit → Except Exception α) :

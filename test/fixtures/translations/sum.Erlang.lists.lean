@@ -1,6 +1,7 @@
 module
 
 public import Lynx
+import Lynx.Runner.Elab
 public import Lynx.Modules.Erlang.erlang
 
 @[expose] public section

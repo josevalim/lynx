@@ -1,4 +1,4 @@
-# LYNX_PROFILE=1 LYNX_CACHE=0 elixir examples/deps/decimal.exs
+# LYNX_DEBUG=lean LYNX_CACHE=0 elixir examples/deps/decimal.exs
 # Prove a Hex dependency, translated from the BEAM debug information that Mix
 # compiles by default. Mix.install/2 cannot run inside a Mix project, so this
 # example runs with `elixir` and installs Lynx from this checkout.

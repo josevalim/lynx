@@ -149,9 +149,6 @@ private structure DecodeState where
   theorems : Array (Name × Span) := #[]
   /-- The source of each theorem's proof, rendered verbatim. -/
   proofSources : Array (Name × String) := #[]
-  /-- Whether the module extracts from bitstrings, whose recursion proves termination
-  with the runner's elaborators. -/
-  extracts : Bool := false
   patternExtractions : Array PatternExtraction := #[]
   nextBitstringPattern : Nat := 0
   /-- Names of the pooled literals already defined in this module. -/
@@ -351,8 +348,7 @@ private def withExtractions (decode : DecodeM α) : DecodeM (α × Array Pattern
 private def addExtraction (lookup pattern : TSyntax `term) (catchAll : Bool := false)
     (nested : Array PatternExtraction := #[]) (rest : Option (TSyntax `term) := none) : DecodeM Unit :=
   modify fun s => { s with
-    patternExtractions := (s.patternExtractions.push ⟨lookup, pattern, catchAll, rest⟩) ++ nested
-    extracts := true }
+    patternExtractions := (s.patternExtractions.push ⟨lookup, pattern, catchAll, rest⟩) ++ nested }
 
 /-- Match extracted values with the clause's fallthrough continuation. -/
 private def patternMatches (patterns : Array PatternExtraction)
@@ -1817,7 +1813,6 @@ structure DecodedFile where
   private proofDiagnostics : Array ProofDiagnostic
   private theorems : Array (Name × Span)
   private proofSources : Array (Name × String)
-  private extracts : Bool
   private reexportImports : Bool
   private preludes : Array Json
 
@@ -1978,7 +1973,7 @@ private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environme
         #[visibility] ++ options ++ #[start] ++ sectionCommands ++ #[stop], state, reexportImports)
     let commands := commands.map fun command => ⟨eraseScopes command.raw⟩
     return ⟨file, moduleName, imports, map, commands, key,
-      state.spans, state.diagnostics, state.theorems, state.proofSources, state.extracts,
+      state.spans, state.diagnostics, state.theorems, state.proofSources,
       reexportImports, preludes⟩
   catch err => throw (IO.userError s!"{file}: {err}")
 
@@ -2024,8 +2019,8 @@ private def renderFile (file : DecodedFile) (env : Lean.Environment) : IO String
     -- Exposed definitions and public law types mention imported operations.
     let importPrefix := if file.reexportImports then "public import " else "import "
     let imports := file.imports.toList.map (importPrefix ++ ·)
-    -- Recursion over bitstring extractions proves termination with the runner's elaborators.
-    let runtime := ["public import Lynx"] ++ if file.extracts then ["import Lynx.Runner.Elab"] else []
+    -- The runner elaborates every file with its elaborators and simplification procedures.
+    let runtime := ["public import Lynx", "import Lynx.Runner.Elab"]
     return "module\n\n" ++ String.intercalate "\n" (runtime ++ imports) ++
       "\n\n" ++ String.intercalate "\n\n" commands.toList ++ "\n"
   (action.run' { fileName := file.fileName, fileMap := file.fileMap }
