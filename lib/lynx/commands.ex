@@ -40,6 +40,9 @@ defmodule Lynx.Commands do
       set at the top of every translated module. Values are integers, booleans, or
       strings. They are part of every cache key.
 
+    * `:check_source` - when `true`, parses each module's rendered source and reports
+      an error where it differs from the elaborated commands. Used by Lynx's own tests.
+
     * `:export` - a path where the declarations of the verified modules and their
       dependencies are written in Lean's export format, for `lake check --from-export`.
       It is written only when every module verifies.
@@ -77,6 +80,11 @@ defmodule Lynx.Commands do
         :error ->
           request
       end
+
+    request =
+      if Keyword.get(opts, :check_source, false),
+        do: Map.put(request, "check_source", true),
+        else: request
 
     runner!(project_dir, request)
     |> Enum.map(&decode_verify!/1)

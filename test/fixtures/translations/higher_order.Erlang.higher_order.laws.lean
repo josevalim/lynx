@@ -11,27 +11,21 @@ namespace Erlang.higher_order.laws
 theorem «map_returns_list/2» (list : Lynx.Term) (callback : Lynx.Term)
     (requires : «map_returns_list_requires/2» list callback = Except.ok Lynx.Term.true) :
     Lynx.apply «map_returns_list_ensures/2» Erlang.program.fun_table list callback =
-      Except.ok Lynx.Term.true :=
-  by
-  have valid :
-    «proper_list/1» list = .ok Lynx.Term.true ∧
-      (callback = .function 0 1 #[] ∨ callback = .function 1 1 #[]) :=
-    by
-    cases proper : «proper_list/1» list <;> simp [«map_returns_list_requires/2», proper] at requires
+      Except.ok Lynx.Term.true := by
+  have valid : «proper_list/1» list = .ok Lynx.Term.true ∧
+      (callback = .function 0 1 #[] ∨ callback = .function 1 1 #[]) := by
+    cases proper : «proper_list/1» list <;>
+      simp [«map_returns_list_requires/2», proper] at requires
     split at requires <;> simp_all [Erlang.lists.«member/2»]
     by_cases first : callback = .function 0 1 #[] <;> simp_all
-  have maps :
-    ∀ input,
-      «proper_list/1» input = .ok Lynx.Term.true →
-        ∃ out,
-          «map/2» (Lynx.Dispatcher.ofTable Erlang.program.fun_table 100) input callback = .ok out ∧
-            Erlang.erlang.«is_list/1» out = .ok Lynx.Term.true :=
-    by
+  -- Each listed function is pure, so calling it consumes no depth.
+  have maps : ∀ input, «proper_list/1» input = .ok Lynx.Term.true →
+      ∃ out, «map/2» (Lynx.Dispatcher.ofTable Erlang.program.fun_table 100) input callback = .ok out ∧
+        Erlang.erlang.«is_list/1» out = .ok Lynx.Term.true := by
     intro input proper
     induction input using «proper_list/1».induct with
     | case1 => exact ⟨.nil, by simp [«map/2»], rfl⟩
-    | case2 head tail
-      ih =>
+    | case2 head tail ih =>
       obtain ⟨out, returned, _⟩ := ih (by simpa [«proper_list/1»] using proper)
       rcases valid.2 with rfl | rfl
       · exact ⟨.cons head out, by simp [«map/2», returned, «$lynx_fun_0/1»], rfl⟩

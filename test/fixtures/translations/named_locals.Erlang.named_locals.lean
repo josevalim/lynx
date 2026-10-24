@@ -1,6 +1,7 @@
 module
 
 public import Lynx
+import Lynx.Runner.Elab
 public import Lynx.Modules.Erlang.erlang
 public import Lynx.Modules.Erlang.erts_internal
 public import Lynx.Modules.Erlang.maps
@@ -41,7 +42,7 @@ mutual
     | Lynx.Term.nil => pure Lynx.Term.nil
     | _7 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _7]))
-  termination_by (sizeOf✝ _6, (0, sizeOf✝ _6))
+  termination_by (sizeOf _6, (0, sizeOf _6))
   def «lynx_local_28/4» (_8 : Lynx.Term) (_1 : Lynx.Term) (_3 : Lynx.Term) (vX : Lynx.Term) :
       Except Lynx.Exception Lynx.Term :=
     match _8 with
@@ -52,7 +53,7 @@ mutual
     | Lynx.Term.nil => «lynx_local_27/2» _3 _1
     | _9 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _9]))
-  termination_by (sizeOf✝ _3, (1, sizeOf✝ _8))
+  termination_by (sizeOf _3, (1, sizeOf _8))
 end
 
 mutual
@@ -64,7 +65,7 @@ mutual
     | Lynx.Term.nil => pure Lynx.Term.nil
     | _10 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _10]))
-  termination_by (sizeOf✝ _9, (0, 0))
+  termination_by (sizeOf _9, (0, 0))
   def «lynx_local_31/5» (_11 : Lynx.Term) (_1 : Lynx.Term) (_2 : Lynx.Term) (_4 : Lynx.Term)
       (vX : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
     match _11 with
@@ -73,7 +74,7 @@ mutual
     | Lynx.Term.nil => «lynx_local_30/3» _4 _1 _2
     | _12 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _12]))
-  termination_by (sizeOf✝ _4, (1 + sizeOf✝ _11, 0))
+  termination_by (sizeOf _4, (1 + sizeOf _11, 0))
   def «lynx_local_32/7» (_13 : Lynx.Term) (_1 : Lynx.Term) (_2 : Lynx.Term) (_4 : Lynx.Term)
       (_6 : Lynx.Term) (vX : Lynx.Term) (vY : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
     match _13 with
@@ -84,7 +85,7 @@ mutual
     | Lynx.Term.nil => «lynx_local_31/5» _6 _1 _2 _4 vX
     | _14 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _14]))
-  termination_by (sizeOf✝ _4, (1 + sizeOf✝ _6, 1 + sizeOf✝ _13))
+  termination_by (sizeOf _4, (1 + sizeOf _6, 1 + sizeOf _13))
 end
 
 mutual
@@ -93,19 +94,19 @@ mutual
     match _12 with
     | Lynx.Term.cons vX _4 => do
       let _6 ←
-        do
-          let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _1
-          match lynxGenerated0 with
-            | Lynx.Term.nil =>
-              Except.error
-                (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _1]))
-            | _7 => pure _7
+        (do
+            let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _1
+            (match lynxGenerated0 with
+              | Lynx.Term.nil =>
+                Except.error
+                  (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _1]))
+              | _7 => pure _7))
       «lynx_local_38/5» _6 _1 _2 _4 vX
     | Lynx.Term.cons _3 _4 => «lynx_local_37/3» _4 _1 _2
     | Lynx.Term.nil => pure Lynx.Term.nil
     | _13 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _13]))
-  termination_by (sizeOf✝ _12, (0, 0))
+  termination_by (sizeOf _12, (0, 0))
   def «lynx_local_38/5» (_14 : Lynx.Term) (_1 : Lynx.Term) (_2 : Lynx.Term) (_4 : Lynx.Term)
       (vX : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
     (fun {lynxValue : Type}
@@ -128,7 +129,7 @@ mutual
         | _15 =>
           Except.error
             (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _15])))
-  termination_by (sizeOf✝ _4, (1 + sizeOf✝ _14, 0))
+  termination_by (sizeOf _4, (1 + sizeOf _14, 0))
   def «lynx_local_39/7» (_16 : Lynx.Term) (_1 : Lynx.Term) (_2 : Lynx.Term) (_4 : Lynx.Term)
       (_7 : Lynx.Term) (vK : Lynx.Term) (vX : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
     match _16 with
@@ -139,7 +140,7 @@ mutual
     | Lynx.Term.nil => «lynx_local_38/5» _7 _1 _2 _4 vX
     | _17 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _17]))
-  termination_by (sizeOf✝ _4, (1 + sizeOf✝ _7, 1 + sizeOf✝ _16))
+  termination_by (sizeOf _4, (1 + sizeOf _7, 1 + sizeOf _16))
 end
 
 def «lynx_local_44/2» (_7 : Lynx.Term) (_6 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
@@ -211,19 +212,19 @@ mutual
     match _9 with
     | Lynx.Term.cons vX _3 => do
       let _5 ←
-        do
-          let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _1
-          match lynxGenerated0 with
-            | Lynx.Term.nil =>
-              Except.error
-                (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _1]))
-            | _6 => pure _6
+        (do
+            let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _1
+            (match lynxGenerated0 with
+              | Lynx.Term.nil =>
+                Except.error
+                  (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _1]))
+              | _6 => pure _6))
       «lynx_local_25/4» _5 _1 _3 vX
     | Lynx.Term.cons _2 _3 => «lynx_local_24/2» _3 _1
     | Lynx.Term.nil => pure Lynx.Term.nil
     | _10 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _10]))
-  termination_by (sizeOf✝ _9, (0, sizeOf✝ _9))
+  termination_by (sizeOf _9, (0, sizeOf _9))
   def «lynx_local_25/4» (_11 : Lynx.Term) (_1 : Lynx.Term) (_3 : Lynx.Term) (vX : Lynx.Term) :
       Except Lynx.Exception Lynx.Term :=
     match _11 with
@@ -237,7 +238,7 @@ mutual
       «lynx_local_25/4» _6 _1 _3 vX
     | _12 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _12]))
-  termination_by (sizeOf✝ _3, (1, sizeOf✝ _11))
+  termination_by (sizeOf _3, (1, sizeOf _11))
 end
 
 mutual
@@ -251,7 +252,7 @@ mutual
       «lynx_local_34/2» _4 _1
     | _10 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _10]))
-  termination_by (sizeOf✝ _9, (0, sizeOf✝ _9))
+  termination_by (sizeOf _9, (0, sizeOf _9))
   def «lynx_local_35/5» (_11 : Lynx.Term) (_1 : Lynx.Term) (_4 : Lynx.Term) (vK : Lynx.Term)
       (vV : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
     match _11 with
@@ -262,7 +263,7 @@ mutual
     | Lynx.Term.nil => «lynx_local_34/2» _4 _1
     | _12 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _12]))
-  termination_by (sizeOf✝ _4, (1, sizeOf✝ _11))
+  termination_by (sizeOf _4, (1, sizeOf _11))
 end
 
 mutual
@@ -270,19 +271,19 @@ mutual
     match _9 with
     | Lynx.Term.cons (vX@(Lynx.Term.integer _)) _3 => do
       let _5 ←
-        do
-          let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _1
-          match lynxGenerated0 with
-            | Lynx.Term.nil =>
-              Except.error
-                (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _1]))
-            | _6 => pure _6
+        (do
+            let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _1
+            (match lynxGenerated0 with
+              | Lynx.Term.nil =>
+                Except.error
+                  (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _1]))
+              | _6 => pure _6))
       «lynx_local_22/4» _5 _1 _3 vX
     | Lynx.Term.cons _2 _3 => «lynx_local_21/2» _3 _1
     | Lynx.Term.nil => pure Lynx.Term.nil
     | _10 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _10]))
-  termination_by (sizeOf✝ _9, (0, sizeOf✝ _9))
+  termination_by (sizeOf _9, (0, sizeOf _9))
   def «lynx_local_22/4» (_11 : Lynx.Term) (_1 : Lynx.Term) (_3 : Lynx.Term) (vX : Lynx.Term) :
       Except Lynx.Exception Lynx.Term :=
     (fun {lynxValue : Type}
@@ -308,7 +309,7 @@ mutual
         | _12 =>
           Except.error
             (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _12])))
-  termination_by (sizeOf✝ _3, (1, sizeOf✝ _11))
+  termination_by (sizeOf _3, (1, sizeOf _11))
 end
 
 def «lynx_local_3/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
@@ -321,7 +322,7 @@ def «lynx_local_3/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
         (Lynx.Term.Bitstring.matchInteger _2 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
         (fun vX lynxBits0 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits0 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits0) with
             | _1 => do
               let _4 ← «lynx_local_3/1» _1
@@ -338,7 +339,7 @@ def «lynx_local_3/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
             (Lynx.Term.Bitstring.matchInteger _2 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
             (fun vX lynxBits1 =>
               match (Lynx.Term.Bitstring.matchTail lynxBits1 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (lynxBits1) with
                 | _1 => «lynx_local_3/1» _1
               | _ => lynxMatchNext ())
@@ -351,7 +352,7 @@ def «lynx_local_3/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
               lynxBody lynxNext)
             (fun lynxMatchNext =>
               match (Lynx.Term.Bitstring.matchTail _2 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (_2) with
                 | _1 => pure Lynx.Term.nil
               | _ => lynxMatchNext ())
@@ -360,7 +361,7 @@ def «lynx_local_3/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
               | _3 =>
                 Except.error
                   (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _3])))))
-termination_by sizeOf✝ _2
+termination_by sizeOf _2
 
 def «lynx_local_17/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   (fun {lynxValue : Type}
@@ -376,7 +377,7 @@ def «lynx_local_17/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
               Bool.false)
             (fun vY lynxBits3 =>
               match (Lynx.Term.Bitstring.matchTail lynxBits3 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (lynxBits3) with
                 | _1 =>
                   Lynx.Except.guard (Erlang.erlang.«>/2» vX vY)
@@ -401,7 +402,7 @@ def «lynx_local_17/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
                   Bool.false)
                 (fun vY lynxBits5 =>
                   match (Lynx.Term.Bitstring.matchTail lynxBits5 (Lynx.Term.atom "all") 1) with
-                  | Bool.true✝ =>
+                  | Bool.true =>
                     match (lynxBits5) with
                     | _1 => «lynx_local_17/1» _1
                   | _ => lynxMatchNext ())
@@ -415,7 +416,7 @@ def «lynx_local_17/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
               lynxBody lynxNext)
             (fun lynxMatchNext =>
               match (Lynx.Term.Bitstring.matchTail _2 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (_2) with
                 | _1 => pure Lynx.Term.nil
               | _ => lynxMatchNext ())
@@ -424,7 +425,7 @@ def «lynx_local_17/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
               | _3 =>
                 Except.error
                   (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _3])))))
-termination_by sizeOf✝ _2
+termination_by sizeOf _2
 
 def «lynx_local_5/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   (fun {lynxValue : Type}
@@ -436,7 +437,7 @@ def «lynx_local_5/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
         (Lynx.Term.Bitstring.matchInteger _2 (Lynx.Term.integer 16) 1 Bool.false Bool.false)
         (fun vX lynxBits6 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits6 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits6) with
             | _1 => do
               let _4 ← «lynx_local_5/1» _1
@@ -450,7 +451,7 @@ def «lynx_local_5/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
           lynxBody lynxNext)
         (fun lynxMatchNext =>
           match (Lynx.Term.Bitstring.matchEnd _2) with
-          | Bool.true✝ => pure Lynx.Term.nil
+          | Bool.true => pure Lynx.Term.nil
           | _ => lynxMatchNext ())
         (fun (_ : Unit) =>
           (fun {lynxValue : Type}
@@ -460,7 +461,7 @@ def «lynx_local_5/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
               lynxBody lynxNext)
             (fun lynxMatchNext =>
               match (Lynx.Term.Bitstring.matchTail _2 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (_2) with
                 | _1 =>
                   Except.error
@@ -471,7 +472,7 @@ def «lynx_local_5/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
               | _3 =>
                 Except.error
                   (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _3])))))
-termination_by sizeOf✝ _2
+termination_by sizeOf _2
 
 def «lynx_local_62/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   (fun {lynxValue : Type}
@@ -482,7 +483,7 @@ def «lynx_local_62/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
       Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf8 _2)
         (fun vC lynxBits7 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits7 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits7) with
             | _1 => do
               let _4 ← «lynx_local_62/1» _1
@@ -498,7 +499,7 @@ def «lynx_local_62/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
           Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchUtf8 _2)
             (fun vC lynxBits8 =>
               match (Lynx.Term.Bitstring.matchTail lynxBits8 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (lynxBits8) with
                 | _1 => «lynx_local_62/1» _1
               | _ => lynxMatchNext ())
@@ -511,7 +512,7 @@ def «lynx_local_62/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
               lynxBody lynxNext)
             (fun lynxMatchNext =>
               match (Lynx.Term.Bitstring.matchTail _2 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (_2) with
                 | _1 => pure Lynx.Term.nil
               | _ => lynxMatchNext ())
@@ -520,11 +521,11 @@ def «lynx_local_62/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
               | _3 =>
                 Except.error
                   (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _3])))))
-termination_by sizeOf✝ _2
+termination_by sizeOf _2
 
 def «lynx_local_60/2» (_3 : Lynx.Term) (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
-  if lynxNonzero : Lynx.Term.Bitstring.zeroWidth _0 = Bool.true✝ then
-    Except.error (Lynx.Exception.error✝ (Lynx.Term.atom✝ "badarg"))
+  if lynxNonzero : Lynx.Term.Bitstring.zeroWidth _0 = Bool.true then
+    Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))
   else
     (fun {lynxValue : Type}
           (lynxBody : (Unit → Except Lynx.Exception lynxValue) → Except Lynx.Exception lynxValue)
@@ -534,7 +535,7 @@ def «lynx_local_60/2» (_3 : Lynx.Term) (_0 : Lynx.Term) : Except Lynx.Exceptio
         Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchBinary _3 _0 8)
           (fun vX lynxBits9 =>
             match (Lynx.Term.Bitstring.matchTail lynxBits9 (Lynx.Term.atom "all") 1) with
-            | Bool.true✝ =>
+            | Bool.true =>
               match (lynxBits9) with
               | _2 => do
                 let _5 ← «lynx_local_60/2» _2 _0
@@ -551,7 +552,7 @@ def «lynx_local_60/2» (_3 : Lynx.Term) (_0 : Lynx.Term) : Except Lynx.Exceptio
             Lynx.Term.Bitstring.extract (Lynx.Term.Bitstring.matchBinary _3 _0 8)
               (fun vX lynxBits10 =>
                 match (Lynx.Term.Bitstring.matchTail lynxBits10 (Lynx.Term.atom "all") 1) with
-                | Bool.true✝ =>
+                | Bool.true =>
                   match (lynxBits10) with
                   | _2 => «lynx_local_60/2» _2 _0
                 | _ => lynxMatchNext ())
@@ -564,7 +565,7 @@ def «lynx_local_60/2» (_3 : Lynx.Term) (_0 : Lynx.Term) : Except Lynx.Exceptio
                 lynxBody lynxNext)
               (fun lynxMatchNext =>
                 match (Lynx.Term.Bitstring.matchTail _3 (Lynx.Term.atom "all") 1) with
-                | Bool.true✝ =>
+                | Bool.true =>
                   match (_3) with
                   | _2 => pure Lynx.Term.nil
                 | _ => lynxMatchNext ())
@@ -574,7 +575,7 @@ def «lynx_local_60/2» (_3 : Lynx.Term) (_0 : Lynx.Term) : Except Lynx.Exceptio
                   Except.error
                     (Lynx.Exception.error
                       (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _4])))))
-termination_by sizeOf✝ _3
+termination_by sizeOf _3
 
 def «lynx_local_64/1» (_2 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))
@@ -584,10 +585,9 @@ def «lynx_local_1/2» (_5 : Lynx.Term) (_4 : Lynx.Term) : Except Lynx.Exception
   | Lynx.Term.cons vX _3, _8 => do
     let _10 ←
       Except.bind (Lynx.Term.Bitstring.binarySegment _4 (Lynx.Term.atom "all") 1)
-          (fun lynxBinarySegment✝ =>
+          (fun lynxBinarySegment =>
             Except.bind (Lynx.Term.Bitstring.integerSegment vX (Lynx.Term.integer 4) 1 Bool.false)
-              (fun lynxBinaryTail✝ =>
-                Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝))
+              (fun lynxBinaryTail => Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail))
     «lynx_local_1/2» _3 _10
   | Lynx.Term.cons _2 _3, _8 => «lynx_local_1/2» _3 _4
   | Lynx.Term.nil, _8 => pure _4
@@ -610,25 +610,24 @@ def «lynx_local_13/2» (_4 : Lynx.Term) (_3 : Lynx.Term) : Except Lynx.Exceptio
                 Bool.false)
               (fun vY lynxBits12 =>
                 match (Lynx.Term.Bitstring.matchTail lynxBits12 (Lynx.Term.atom "all") 1) with
-                | Bool.true✝ =>
+                | Bool.true =>
                   match (lynxBits12) with
                   | _2 => do
                     let _9 ←
                       Except.bind (Lynx.Term.Bitstring.binarySegment _3 (Lynx.Term.atom "all") 1)
-                          (fun lynxBinarySegment✝ =>
+                          (fun lynxBinarySegment =>
                             Except.bind
                               (Except.bind
                                 (Lynx.Term.Bitstring.integerSegment vY (Lynx.Term.integer 8) 1
                                   Bool.false)
-                                (fun lynxBinarySegment✝ =>
+                                (fun lynxBinarySegment =>
                                   Except.bind
                                     (Lynx.Term.Bitstring.integerSegment vX (Lynx.Term.integer 8) 1
                                       Bool.false)
-                                    (fun lynxBinaryTail✝ =>
-                                      Lynx.Term.Bitstring.append lynxBinarySegment✝
-                                        lynxBinaryTail✝)))
-                              (fun lynxBinaryTail✝ =>
-                                Lynx.Term.Bitstring.append lynxBinarySegment✝ lynxBinaryTail✝))
+                                    (fun lynxBinaryTail =>
+                                      Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail)))
+                              (fun lynxBinaryTail =>
+                                Lynx.Term.Bitstring.append lynxBinarySegment lynxBinaryTail))
                     «lynx_local_13/2» _2 _9
                 | _ => lynxMatchNext ())
               (fun _ => lynxMatchNext ()))
@@ -649,7 +648,7 @@ def «lynx_local_13/2» (_4 : Lynx.Term) (_3 : Lynx.Term) : Except Lynx.Exceptio
                     Bool.false)
                   (fun vY lynxBits14 =>
                     match (Lynx.Term.Bitstring.matchTail lynxBits14 (Lynx.Term.atom "all") 1) with
-                    | Bool.true✝ =>
+                    | Bool.true =>
                       match (lynxBits14) with
                       | _2 => «lynx_local_13/2» _2 _3
                     | _ => lynxMatchNext ())
@@ -665,7 +664,7 @@ def «lynx_local_13/2» (_4 : Lynx.Term) (_3 : Lynx.Term) : Except Lynx.Exceptio
               match _3 with
               | _7 =>
                 match (Lynx.Term.Bitstring.matchTail _4 (Lynx.Term.atom "all") 1) with
-                | Bool.true✝ =>
+                | Bool.true =>
                   match (_4) with
                   | _2 => pure _3
                 | _ => lynxMatchNext ())
@@ -674,7 +673,7 @@ def «lynx_local_13/2» (_4 : Lynx.Term) (_3 : Lynx.Term) : Except Lynx.Exceptio
               | _6, _5 =>
                 Except.error
                   (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _6])))))
-termination_by sizeOf✝ _4
+termination_by sizeOf _4
 
 mutual
   def «lynx_local_10/2» (_4 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
@@ -687,7 +686,7 @@ mutual
           (Lynx.Term.Bitstring.matchInteger _4 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
           (fun vX lynxBits15 =>
             match (Lynx.Term.Bitstring.matchTail lynxBits15 (Lynx.Term.atom "all") 1) with
-            | Bool.true✝ =>
+            | Bool.true =>
               match (lynxBits15) with
               | _2 => «lynx_local_11/4» _1 _1 _2 vX
             | _ => lynxMatchNext ())
@@ -703,7 +702,7 @@ mutual
               (Lynx.Term.Bitstring.matchInteger _4 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
               (fun vX lynxBits16 =>
                 match (Lynx.Term.Bitstring.matchTail lynxBits16 (Lynx.Term.atom "all") 1) with
-                | Bool.true✝ =>
+                | Bool.true =>
                   match (lynxBits16) with
                   | _2 => «lynx_local_10/2» _2 _1
                 | _ => lynxMatchNext ())
@@ -716,7 +715,7 @@ mutual
                 lynxBody lynxNext)
               (fun lynxMatchNext =>
                 match (Lynx.Term.Bitstring.matchTail _4 (Lynx.Term.atom "all") 1) with
-                | Bool.true✝ =>
+                | Bool.true =>
                   match (_4) with
                   | _2 => pure Lynx.Term.nil
                 | _ => lynxMatchNext ())
@@ -726,7 +725,7 @@ mutual
                   Except.error
                     (Lynx.Exception.error
                       (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _5])))))
-  termination_by (sizeOf✝ _4, (0, sizeOf✝ _4))
+  termination_by (sizeOf _4, (0, sizeOf _4))
   def «lynx_local_11/4» (_6 : Lynx.Term) (_1 : Lynx.Term) (_2 : Lynx.Term) (vX : Lynx.Term) :
       Except Lynx.Exception Lynx.Term :=
     (fun {lynxValue : Type}
@@ -738,7 +737,7 @@ mutual
           (Lynx.Term.Bitstring.matchInteger _6 (Lynx.Term.integer 4) 1 Bool.false Bool.false)
           (fun vY lynxBits17 =>
             match (Lynx.Term.Bitstring.matchTail lynxBits17 (Lynx.Term.atom "all") 1) with
-            | Bool.true✝ =>
+            | Bool.true =>
               match (lynxBits17) with
               | _3 => do
                 let _8 ← «lynx_local_11/4» _3 _1 _2 vX
@@ -756,7 +755,7 @@ mutual
               (Lynx.Term.Bitstring.matchInteger _6 (Lynx.Term.integer 4) 1 Bool.false Bool.false)
               (fun vY lynxBits18 =>
                 match (Lynx.Term.Bitstring.matchTail lynxBits18 (Lynx.Term.atom "all") 1) with
-                | Bool.true✝ =>
+                | Bool.true =>
                   match (lynxBits18) with
                   | _3 => «lynx_local_11/4» _3 _1 _2 vX
                 | _ => lynxMatchNext ())
@@ -769,7 +768,7 @@ mutual
                 lynxBody lynxNext)
               (fun lynxMatchNext =>
                 match (Lynx.Term.Bitstring.matchTail _6 (Lynx.Term.atom "all") 1) with
-                | Bool.true✝ =>
+                | Bool.true =>
                   match (_6) with
                   | _3 => «lynx_local_10/2» _2 _1
                 | _ => lynxMatchNext ())
@@ -779,7 +778,7 @@ mutual
                   Except.error
                     (Lynx.Exception.error
                       (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _7])))))
-  termination_by (sizeOf✝ _2, (1, sizeOf✝ _6))
+  termination_by (sizeOf _2, (1, sizeOf _6))
 end
 
 def «lynx_local_15/2» (_5 : Lynx.Term) (_4 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
@@ -792,14 +791,14 @@ def «lynx_local_15/2» (_5 : Lynx.Term) (_4 : Lynx.Term) : Except Lynx.Exceptio
         (Lynx.Term.Bitstring.matchInteger _5 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
         (fun vX lynxBits19 =>
           match (Lynx.Term.Bitstring.matchTail lynxBits19 (Lynx.Term.atom "all") 1) with
-          | Bool.true✝ =>
+          | Bool.true =>
             match (lynxBits19) with
             | _2 =>
               Lynx.Term.Bitstring.extract
                 (Lynx.Term.Bitstring.matchInteger _4 (Lynx.Term.integer 4) 1 Bool.false Bool.false)
                 (fun vY lynxBits20 =>
                   match (Lynx.Term.Bitstring.matchTail lynxBits20 (Lynx.Term.atom "all") 1) with
-                  | Bool.true✝ =>
+                  | Bool.true =>
                     match (lynxBits20) with
                     | _3 => do
                       let _8 ← «lynx_local_15/2» _2 _3
@@ -818,7 +817,7 @@ def «lynx_local_15/2» (_5 : Lynx.Term) (_4 : Lynx.Term) : Except Lynx.Exceptio
             (Lynx.Term.Bitstring.matchInteger _5 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
             (fun vX lynxBits21 =>
               match (Lynx.Term.Bitstring.matchTail lynxBits21 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (lynxBits21) with
                 | _2 =>
                   Lynx.Term.Bitstring.extract
@@ -826,7 +825,7 @@ def «lynx_local_15/2» (_5 : Lynx.Term) (_4 : Lynx.Term) : Except Lynx.Exceptio
                       Bool.false)
                     (fun vY lynxBits22 =>
                       match (Lynx.Term.Bitstring.matchTail lynxBits22 (Lynx.Term.atom "all") 1) with
-                      | Bool.true✝ =>
+                      | Bool.true =>
                         match (lynxBits22) with
                         | _3 => «lynx_local_15/2» _2 _3
                       | _ => lynxMatchNext ())
@@ -841,11 +840,11 @@ def «lynx_local_15/2» (_5 : Lynx.Term) (_4 : Lynx.Term) : Except Lynx.Exceptio
               lynxBody lynxNext)
             (fun lynxMatchNext =>
               match (Lynx.Term.Bitstring.matchTail _5 (Lynx.Term.atom "all") 1) with
-              | Bool.true✝ =>
+              | Bool.true =>
                 match (_5) with
                 | _2 =>
                   match (Lynx.Term.Bitstring.matchTail _4 (Lynx.Term.atom "all") 1) with
-                  | Bool.true✝ =>
+                  | Bool.true =>
                     match (_4) with
                     | _3 => pure Lynx.Term.nil
                   | _ => lynxMatchNext ()
@@ -857,7 +856,7 @@ def «lynx_local_15/2» (_5 : Lynx.Term) (_4 : Lynx.Term) : Except Lynx.Exceptio
                   (Lynx.Exception.error
                     (Lynx.Term.tuple
                       #[Lynx.Term.atom "bad_generators", Lynx.Term.tuple #[_7, _6]])))))
-termination_by sizeOf✝ _5
+termination_by sizeOf _5
 
 mutual
   def «lynx_local_7/2» (_5 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
@@ -870,7 +869,7 @@ mutual
           (Lynx.Term.Bitstring.matchInteger _5 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
           (fun vX lynxBits23 =>
             match (Lynx.Term.Bitstring.matchTail lynxBits23 (Lynx.Term.atom "all") 1) with
-            | Bool.true✝ =>
+            | Bool.true =>
               match (lynxBits23) with
               | _2 => «lynx_local_8/4» _1 _1 _2 vX
             | _ => lynxMatchNext ())
@@ -886,7 +885,7 @@ mutual
               (Lynx.Term.Bitstring.matchInteger _5 (Lynx.Term.integer 8) 1 Bool.false Bool.false)
               (fun vX lynxBits24 =>
                 match (Lynx.Term.Bitstring.matchTail lynxBits24 (Lynx.Term.atom "all") 1) with
-                | Bool.true✝ =>
+                | Bool.true =>
                   match (lynxBits24) with
                   | _2 => «lynx_local_7/2» _2 _1
                 | _ => lynxMatchNext ())
@@ -899,7 +898,7 @@ mutual
                 lynxBody lynxNext)
               (fun lynxMatchNext =>
                 match (Lynx.Term.Bitstring.matchTail _5 (Lynx.Term.atom "all") 1) with
-                | Bool.true✝ =>
+                | Bool.true =>
                   match (_5) with
                   | _2 => pure Lynx.Term.nil
                 | _ => lynxMatchNext ())
@@ -909,7 +908,7 @@ mutual
                   Except.error
                     (Lynx.Exception.error
                       (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _6])))))
-  termination_by (sizeOf✝ _5, (0, sizeOf✝ _5))
+  termination_by (sizeOf _5, (0, sizeOf _5))
   def «lynx_local_8/4» (_7 : Lynx.Term) (_1 : Lynx.Term) (_2 : Lynx.Term) (vX : Lynx.Term) :
       Except Lynx.Exception Lynx.Term :=
     match _7 with
@@ -920,7 +919,7 @@ mutual
     | Lynx.Term.nil => «lynx_local_7/2» _2 _1
     | _8 =>
       Except.error (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _8]))
-  termination_by (sizeOf✝ _2, (1, sizeOf✝ _7))
+  termination_by (sizeOf _2, (1, sizeOf _7))
 end
 
 def «named/2» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) (_1 : Lynx.Term) :
@@ -931,12 +930,12 @@ def «named/2» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) (_1 : Lynx.Ter
 def «lynx_local_54/2» (lynxDispatch : Lynx.Dispatcher) (_3 : Lynx.Term) (_0 : Lynx.Term) :
     Except Lynx.Exception Lynx.Term := do
   let vLoop ← pure (Lynx.Term.function 0 1 #[_0])
-  match _3 with
+  (match _3 with
     | Lynx.Term.nil => pure Lynx.Term.nil
     | Lynx.Term.cons vX vXs => do
       let _2 ← Lynx.Dispatcher.pure lynxDispatch vLoop #[vXs]
       pure (Lynx.Term.cons (Lynx.Term.tuple #[_0, vX]) _2)
-    | _4 => Except.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
+    | _4 => Except.error (Lynx.Exception.error (Lynx.Term.atom "function_clause")))
 
 def «self_reference/0» (lynxDispatch : Lynx.Dispatcher) : Except Lynx.Exception Lynx.Term := do
   let vF ← pure (Lynx.Term.function 1 0 #[])
@@ -983,24 +982,24 @@ def «comprehension_zip/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exce
 
 def «map_generator/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term := do
   let _2 ←
-    do
-      let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _0
-      match lynxGenerated0 with
-        | Lynx.Term.nil =>
-          Except.error
-            (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _0]))
-        | _3 => pure _3
+    (do
+        let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _0
+        (match lynxGenerated0 with
+          | Lynx.Term.nil =>
+            Except.error
+              (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _0]))
+          | _3 => pure _3))
   «lynx_local_48/1» _2
 
 def «map_generator_strict/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term := do
   let _2 ←
-    do
-      let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _0
-      match lynxGenerated0 with
-        | Lynx.Term.nil =>
-          Except.error
-            (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _0]))
-        | _3 => pure _3
+    (do
+        let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _0
+        (match lynxGenerated0 with
+          | Lynx.Term.nil =>
+            Except.error
+              (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _0]))
+          | _3 => pure _3))
   «lynx_local_50/1» _2
 
 def «map_comprehension/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term := do
@@ -1009,16 +1008,16 @@ def «map_comprehension/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :
 
 def «map_to_map/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term := do
   let _9 ←
-    do
-      let _2 ←
-        do
-          let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _0
-          match lynxGenerated0 with
-            | Lynx.Term.nil =>
-              Except.error
-                (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _0]))
-            | _3 => pure _3
-      «lynx_local_52/1» _2
+    (do
+        let _2 ←
+          (do
+              let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _0
+              (match lynxGenerated0 with
+                | Lynx.Term.nil =>
+                  Except.error
+                    (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _0]))
+                | _3 => pure _3))
+        «lynx_local_52/1» _2)
   Erlang.maps.«from_list/1» _9
 
 def «comprehension_list_map/2» (_0 : Lynx.Term) (_1 : Lynx.Term) :
@@ -1028,16 +1027,16 @@ def «comprehension_list_map/2» (_0 : Lynx.Term) (_1 : Lynx.Term) :
 def «comprehension_map_list/2» (_0 : Lynx.Term) (_1 : Lynx.Term) :
     Except Lynx.Exception Lynx.Term := do
   let _14 ←
-    do
-      let _3 ←
-        do
-          let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _0
-          match lynxGenerated0 with
-            | Lynx.Term.nil =>
-              Except.error
-                (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _0]))
-            | _4 => pure _4
-      «lynx_local_34/2» _3 _1
+    (do
+        let _3 ←
+          (do
+              let lynxGenerated0 ← Erlang.erts_internal.«mc_iterator/1» _0
+              (match lynxGenerated0 with
+                | Lynx.Term.nil =>
+                  Except.error
+                    (Lynx.Exception.error (Lynx.Term.tuple #[Lynx.Term.atom "bad_generator", _0]))
+                | _4 => pure _4))
+        «lynx_local_34/2» _3 _1)
   Erlang.maps.«from_list/1» _14
 
 def «comprehension_filtered_maps/2» (_0 : Lynx.Term) (_1 : Lynx.Term) :

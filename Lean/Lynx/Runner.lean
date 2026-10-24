@@ -28,6 +28,8 @@ Requests include `cache_dir` and may include `options`, an object of Lean option
 at the top of every translated module. Values are natural numbers, Booleans, or strings.
 Input files may include a hexadecimal `cache_key` incorporating dependencies; cached
 artifacts are kept separately for each set of options.
+Requests may include `check_source: true` to parse each rendered source and report
+an error where it differs from the elaborated commands.
 Requests may include `export`, a path where the declarations of the request's modules
 and their dependencies are written in Lean's export format, for checking with
 `lake check --from-export`. It is written only when every file verifies.
@@ -140,6 +142,11 @@ private structure DecodeState where
   spans : Array Span := #[]
   diagnostics : Array ProofDiagnostic := #[]
   theorems : Array (Name × Span) := #[]
+  /-- The source of each theorem's proof, rendered verbatim. -/
+  proofSources : Array (Name × String) := #[]
+  /-- Whether the module extracts from bitstrings, whose recursion proves termination
+  with the runner's elaborators. -/
+  extracts : Bool := false
   patternExtractions : Array PatternExtraction := #[]
   nextBitstringPattern : Nat := 0
   /-- Names of the pooled literals already defined in this module. -/
@@ -338,8 +345,9 @@ private def withExtractions (decode : DecodeM α) : DecodeM (α × Array Pattern
 /-- Queue a decoded pattern before the checks that depend on its bindings. -/
 private def addExtraction (lookup pattern : TSyntax `term) (catchAll : Bool := false)
     (nested : Array PatternExtraction := #[]) (rest : Option (TSyntax `term) := none) : DecodeM Unit :=
-  modify fun s => { s with patternExtractions :=
-    (s.patternExtractions.push ⟨lookup, pattern, catchAll, rest⟩) ++ nested }
+  modify fun s => { s with
+    patternExtractions := (s.patternExtractions.push ⟨lookup, pattern, catchAll, rest⟩) ++ nested
+    extracts := true }
 
 /-- Match extracted values with the clause's fallthrough continuation. -/
 private def patternMatches (patterns : Array PatternExtraction)
@@ -613,6 +621,13 @@ private partial def refineGuardPattern (j : Json) (name pattern : Json) : Json :
         e.setObjVal! "value" (refineGuardPattern (e.getObjValD "value") name pattern)))
   | "alias" => return j.setObjVal! "pattern" (refineGuardPattern (j.getObjValD "pattern") name pattern)
   | _ => return j
+
+/-- Terms such as `match`, `if`, and `do` parse as `do` elements when written in a
+`do` block. Parenthesize them so rendered source parses back to the same terms. -/
+private def doTerm (term : TSyntax `term) : TSyntax `term :=
+  let kinds := [``Parser.Term.do, ``Parser.Term.match, ``termIfThenElse, ``termDepIfThenElse,
+    ``termIfLet, ``Parser.Term.let, ``Parser.Term.have]
+  if kinds.any term.raw.isOfKind then Unhygienic.run `(($term)) else term
 
 /-- Refine only locally bound variables. Core sometimes tests a scrutinee variable
 instead of the fresh whole-value binder; map that name to the pattern binder. -/
@@ -1009,7 +1024,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       if (← str binder "kind") == "wildcard" then term map info true binder
       else pure (⟨(← param map info binder).raw⟩ : TSyntax `term)
     let var ← product vars
-    let computation ← term map info false (← field j "computation")
+    let computation := doTerm (← term map info false (← field j "computation"))
     let body ← term map info false (← field j "body")
     -- Identifier binds retain the return witnesses introduced by wf preprocessing.
     let item ← if var.raw.isIdent then do
@@ -1020,7 +1035,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     match body with
     | `(do $items:doSeqItem*) => pure (Unhygienic.run `(do $item:doSeqItem $items:doSeqItem*))
     | _ =>
-      let last := Unhygienic.run `(doSeqItem| $body:term)
+      let last := Unhygienic.run `(doSeqItem| $(doTerm body):term)
       pure (Unhygienic.run `(do $item:doSeqItem $last:doSeqItem))
   | "return" => do
     fields j ["kind", "values", "span"]
@@ -1510,7 +1525,10 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
     let ensuresPurity ← level j "ensures_purity" "ensures_dispatches"
     let ensures := helper (functionName (← str j "ensures") arity) ensuresPurity
     let (proof, proofInfo) ← leanProof map info name.getId (← field j "proof")
-    modify fun s => { s with theorems := s.theorems.push (name.getId, proofInfo) }
+    let source ← str (← field j "proof") "source"
+    modify fun s => { s with
+      theorems := s.theorems.push (name.getId, proofInfo)
+      proofSources := s.proofSources.push (name.getId, source) }
     let ok := mkIdent ``Lynx.Outcome.ok
     let run := mkIdent ``Lynx.sequential
     let scheduled := mkIdent ``Lynx.concurrent
@@ -1793,6 +1811,8 @@ structure DecodedFile where
   private spans : Array Span
   private proofDiagnostics : Array ProofDiagnostic
   private theorems : Array (Name × Span)
+  private proofSources : Array (Name × String)
+  private extracts : Bool
   private reexportImports : Bool
   private preludes : Array Json
 
@@ -1879,6 +1899,13 @@ private def optionCommands (j : Json) : Except String (Array (TSyntax `command))
     | .str string => pure (Unhygienic.run `(set_option $id:ident $(Syntax.mkStrLit string):str))
     | _ => throw s!"option {name} must be a number, Boolean, or string"
 
+/-- `Unhygienic.run` gives every quoted identifier the same macro scope, which source
+rendering would print as `name✝`. Erasing it elaborates the same program as rendered. -/
+private partial def eraseScopes : Syntax → Syntax
+  | .ident info raw name preresolved => .ident info raw name.eraseMacroScopes preresolved
+  | .node info kind args => .node info kind (args.map eraseScopes)
+  | stx => stx
+
 /-- Decode input files after the selected command requests them. -/
 private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environment)
     (options : Array (TSyntax `command)) : IO DecodedFile := do
@@ -1944,8 +1971,10 @@ private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environme
       let stop := Unhygienic.run `(end $namespaceId)
       pure (namespaceId.getId.toString, imports,
         #[visibility] ++ options ++ #[start] ++ sectionCommands ++ #[stop], state, reexportImports)
+    let commands := commands.map fun command => ⟨eraseScopes command.raw⟩
     return ⟨file, moduleName, imports, map, commands, key,
-      state.spans, state.diagnostics, state.theorems, reexportImports, preludes⟩
+      state.spans, state.diagnostics, state.theorems, state.proofSources, state.extracts,
+      reexportImports, preludes⟩
   catch err => throw (IO.userError s!"{file}: {err}")
 
 private def parsingDiagnostics (file : DecodedFile) : Array Json :=
@@ -1953,20 +1982,101 @@ private def parsingDiagnostics (file : DecodedFile) : Array Json :=
     diagnostic (error.fileName.getD file.fileName) file.moduleName "error"
       error.message error.location (some error.declarationName)
 
+/-- The placeholder standing for a theorem's proof while rendering. -/
+private def proofPlaceholder : String := "lynxProofSource"
+
+/-- Replace the proof of a theorem with recorded source by a placeholder.
+Formatting would reflow the proof's tactics, which are sensitive to layout. -/
+private def withProofPlaceholder (file : DecodedFile) (cmd : TSyntax `command) :
+    Option (Nat × TSyntax `command) := do
+  let decl := cmd.raw[1]
+  guard (cmd.raw.isOfKind ``Parser.Command.declaration && decl.isOfKind ``Parser.Command.theorem)
+  let index ← file.proofSources.findIdx? (·.1 == decl[1][0].getId)
+  let value := decl[3]
+  guard (value.isOfKind ``Parser.Command.declValSimple)
+  let value := value.setArg 1 (mkIdent (Name.mkSimple proofPlaceholder))
+  pure (index, ⟨cmd.raw.setArg 1 (decl.setArg 3 value)⟩)
+
+/-- Insert proof source as a tactic block where the placeholder was rendered.
+Theorems are top-level commands, so their tactics are indented by two spaces. -/
+private def insertProofSource (source rendered : String) : String := Id.run do
+  let [before, after] := rendered.splitOn proofPlaceholder | return rendered
+  let before := before.trimAsciiEnd.toString
+  let lines := (source.trimAsciiEnd.toString.splitOn "\n").map fun (line : String) =>
+    if line.trimAscii.isEmpty then "" else "  " ++ line
+  return before ++ " by\n" ++ "\n".intercalate lines ++ after
+
 private def renderFile (file : DecodedFile) (env : Lean.Environment) : IO String := do
   if !file.preludes.isEmpty then
     let sources ← file.preludes.mapM fun block => IO.ofExcept (str block "source")
     return String.intercalate "\n\n" sources.toList ++ "\n"
   let action : CoreM String := do
     let commands ← file.commands.mapM fun cmd => do
-      return (← PrettyPrinter.ppCommand cmd).pretty 100
+      let some (index, cmd) := withProofPlaceholder file cmd
+        | return (← PrettyPrinter.ppCommand cmd).pretty 100
+      return insertProofSource (file.proofSources[index]!.2)
+        ((← PrettyPrinter.ppCommand cmd).pretty 100)
     -- Exposed definitions and public law types mention imported operations.
     let importPrefix := if file.reexportImports then "public import " else "import "
     let imports := file.imports.toList.map (importPrefix ++ ·)
-    return "module\n\n" ++ String.intercalate "\n" ("public import Lynx" :: imports) ++
+    -- Recursion over bitstring extractions proves termination with the runner's elaborators.
+    let runtime := ["public import Lynx"] ++ if file.extracts then ["import Lynx.Runner.Elab"] else []
+    return "module\n\n" ++ String.intercalate "\n" (runtime ++ imports) ++
       "\n\n" ++ String.intercalate "\n\n" commands.toList ++ "\n"
   (action.run' { fileName := file.fileName, fileMap := file.fileMap }
     { env := env }).toIO (fun _ => IO.userError s!"{file.fileName}: Lean source rendering failed")
+
+/-- Remove parentheses, which rendering adds where precedence requires them, and
+other differences that rendering cannot represent. -/
+private partial def unparen (stx : Syntax) : Syntax :=
+  if stx.isOfKind ``Parser.Term.paren then unparen stx[1]
+  -- Applications without arguments render as their function.
+  else if stx.isOfKind ``Parser.Term.app && stx[1].getNumArgs == 0 then unparen stx[0]
+  else stx
+
+/-- The first subterms where two syntax trees differ, ignoring source information
+and parentheses. -/
+private partial def syntaxDifference (expected actual : Syntax) : Option (Syntax × Syntax) :=
+  -- Tactic sequences may end with an empty separator when the source ends with a newline.
+  let trim (args : Array Syntax) : Array Syntax :=
+    if args.back?.any (fun arg => arg.isOfKind nullKind && arg.getNumArgs == 0) then args.pop
+    else args
+  match unparen expected, unparen actual with
+  | .node _ kind args, .node _ kind' args' =>
+    let (args, args') := if kind == nullKind then (trim args, trim args') else (args, args')
+    if kind != kind' || args.size != args'.size then some (unparen expected, unparen actual)
+    else (args.zip args').findSome? fun (a, b) => syntaxDifference a b
+  | .atom _ value, .atom _ value' =>
+    if value == value' then none else some (unparen expected, unparen actual)
+  | .ident _ _ name _, .ident _ _ name' _ =>
+    if name == name' then none else some (unparen expected, unparen actual)
+  | .missing, .missing => none
+  | expected, actual => some (expected, actual)
+
+/-- Parse rendered source and report where it differs from the elaborated commands. -/
+private def checkRendered (file : DecodedFile) (source : String) (env : Lean.Environment) :
+    IO (Option String) := do
+  let input := Parser.mkInputContext source file.fileName
+  let (_, state, messages) ← Parser.parseHeader input
+  let mut state := state
+  let mut messages := messages
+  let mut parsed := #[]
+  repeat
+    let (command, state', messages') :=
+      Parser.parseCommand input { env, options := {} } state messages
+    state := state'
+    messages := messages'
+    if Parser.isTerminalCommand command then break
+    parsed := parsed.push command
+  if let some error := messages.toList.find? (·.severity == .error) then
+    let position := s!"{error.pos.line}:{error.pos.column + 1}"
+    return some s!"rendered source does not parse at {position}: {← error.data.toString}"
+  if parsed.size != file.commands.size then
+    return some s!"rendered source has {parsed.size} commands, expected {file.commands.size}"
+  for (expected, actual) in file.commands.zip parsed do
+    if let some (expected, actual) := syntaxDifference expected.raw actual then
+      return some s!"rendered source parses differently: expected\n{expected}\nbut got\n{actual}"
+  return none
 
 private def cachedArtifacts (directory : System.FilePath) : ImportArtifacts :=
   let path := directory / "module.olean"
@@ -2128,7 +2238,7 @@ private def exportModules (path : System.FilePath) (modules : Array Name)
 
 /-- Verify against explicit imports, reusing only successfully audited module artifacts. -/
 private def verify (files : Array Json) (options : Array (TSyntax `command)) (runtime : Runtime)
-    (cacheDirectory : System.FilePath) (export? : Option System.FilePath)
+    (cacheDirectory : System.FilePath) (export? : Option System.FilePath) (checkSource : Bool)
     (emit : Json → IO Unit) : IO Unit := do
   IO.FS.withTempDir fun temporary => do
     let mut artifacts : NameMap ImportArtifacts := {}
@@ -2168,6 +2278,10 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
       let source ← renderFile file env
       let mut fileFailed := !file.proofDiagnostics.isEmpty
       diagnostics := diagnostics ++ parsingDiagnostics file
+      if checkSource && file.preludes.isEmpty then
+        if let some message ← checkRendered file source env then
+          fileFailed := true
+          diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName "error" message)
       unless missingImport do
         let moduleName ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
         let mainModule := moduleName.getId
@@ -2230,10 +2344,11 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
 
 private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
   let (files, options) ← IO.ofExcept do
-    fields j ["command", "version", "files", "cache_dir", "options", "export"]
+    fields j ["command", "version", "files", "cache_dir", "options", "export", "check_source"]
     pure (← arr j "files", ← optionCommands j)
   let directory := System.FilePath.mk (← IO.ofExcept (str j "cache_dir"))
   let export? := (str j "export").toOption.map System.FilePath.mk
+  let checkSource := (field j "check_source" >>= (·.getBool?)).toOption.getD false
   unless files.isEmpty do
     let runtime ← getRuntime cache
     -- Options change elaboration, so artifacts are cached per set of options.
@@ -2242,7 +2357,7 @@ private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json �
     let directory ← if files.any (fun file => (field file "cache_key").isOk) then
       pure (directory / s!"lean-{Lean.versionString}-{← runtimeFingerprint}{optionKey}")
       else pure directory
-    verify files options runtime directory export? emit
+    verify files options runtime directory export? checkSource emit
 
 private def run (request : String) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
   try
