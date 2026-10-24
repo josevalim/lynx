@@ -1,11 +1,11 @@
 defmodule Lynx do
   @moduledoc """
-  Lynx allows you to write proofs about Erlang/Elixir programs using Lean.
+  Write proofs about Erlang/Elixir programs using Lean.
 
   This is done by writing laws, in Erlang/Elixir, with a Lean proof
-  that guarantees your Erlang/Elixir code obey those laws. This is done
-  by implementing a model of the Erlang runtime in Lean and automatically
-  translating your Erlang/Elixir code to Lean.
+  that guarantees your Erlang/Elixir code obeys those laws. The laws are
+  automatically translated to Lean and the proofs are checked against a model
+  of the Erlang runtime written in Lean.
 
   ## Usage
 
@@ -172,7 +172,7 @@ defmodule Lynx do
     * Use `options: [maxHeartbeats: 1_000_000]` on a laws group when a proof
       needs a larger Lean elaboration budget. It does not weaken kernel checking.
       First look for repeated expansion or unnecessary case splits. Measure
-      verification with `LYNX_DEBUG=1 LYNX_CACHE=0` so cached results do not
+      verification with `LYNX_DEBUG=lean LYNX_CACHE=0` so cached results do not
       hide slow proofs.
 
   ## Limitations

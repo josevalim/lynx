@@ -75,7 +75,6 @@ defmodule Lynx.Laws do
           status: :ok | :error | :skipped,
           file: String.t(),
           module: String.t(),
-          source: String.t(),
           time_ms: non_neg_integer(),
           cached: boolean(),
           theorems: [%{name: String.t(), time_ms: non_neg_integer()}],
@@ -94,8 +93,7 @@ defmodule Lynx.Laws do
   info in all cases.
 
   Returns one report per translated module, in dependency order, including
-  dependencies. Each report contains its Lean source, which is useful
-  to understand the translated code, especially when writing proofs.
+  dependencies.
 
   A report's `:status` is `:ok` when verification succeeds, `:error` when it fails,
   or `:skipped` when a dependency failed. Lean verification failures are returned
@@ -126,6 +124,14 @@ defmodule Lynx.Laws do
   `maxRecDepth`, at the top of every translated module. Names are passed to
   Lean as given. Proofs remain kernel-checked.
 
+  Pass `debug_dir: dir` to write the Lean source of every translated module to
+  `dir` by module path, such as `dir/Erlang/json.lean`, when a module does not
+  verify. Also pass `debug: :lean` to write them even when every module verifies.
+  The sources show the translated code, which is useful when writing proofs.
+  Pass `debug: :olean` to also write the compiled files of every verified module
+  next to its source, such as `dir/Erlang/json.olean`. Adding `dir` to `LEAN_PATH`
+  then lets Lean tools, such as profilers, load the translated modules by name.
+
   Pass `export: path` to write the elaborated declarations of the translated modules,
   with their dependencies, in Lean's export format. Check them with Lean's kernel and
   the independent checkers bundled with Lean using `lake check --from-export`, as
@@ -149,7 +155,8 @@ defmodule Lynx.Laws do
       end)
       |> Lynx.Translation.assemble(opts)
 
-    Lynx.Commands.verify!(@lean_dir, files, Keyword.take(opts, [:options, :export]))
+    opts = Keyword.take(opts, [:options, :export, :debug_dir, :debug])
+    Lynx.Commands.verify!(@lean_dir, files, opts)
   end
 
   defmacro __using__(_opts) do

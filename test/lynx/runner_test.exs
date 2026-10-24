@@ -6,7 +6,8 @@ defmodule Lynx.RunnerTest do
   @literal_erl "../test/fixtures/translations/literal.erl"
   @moduletag timeout: to_timeout(minute: 10)
 
-  test "only exposes declared imports and their dependencies" do
+  @tag :tmp_dir
+  test "only exposes declared imports and their dependencies", %{tmp_dir: tmp_dir} do
     calls = [
       definition("source", call("Erlang.maps", "value")),
       definition("runtime", call("Erlang.maps", "new"))
@@ -21,13 +22,15 @@ defmodule Lynx.RunnerTest do
     ]
 
     assert [
-             %{status: :ok, source: runtime_source, diagnostics: []},
+             %{status: :ok, diagnostics: []},
              %{status: :error, diagnostics: [source, runtime]},
-             %{status: :ok, source: translated_source, diagnostics: []}
-           ] = Lynx.Commands.verify!(@lean_dir, files)
+             %{status: :ok, diagnostics: []}
+           ] = Lynx.Commands.verify!(@lean_dir, files, debug_dir: tmp_dir)
 
-    assert runtime_source =~ "public import Lynx.Modules.Erlang.maps"
-    assert translated_source =~ "public import Erlang.maps"
+    assert File.read!(Path.join(tmp_dir, "Erlang/maps.lean")) =~
+             "public import Lynx.Modules.Erlang.maps"
+
+    assert File.read!(Path.join(tmp_dir, "Elixir/Declared.lean")) =~ "public import Erlang.maps"
 
     assert %{
              file: @literal_erl,
@@ -61,7 +64,19 @@ defmodule Lynx.RunnerTest do
     refute File.exists?(path)
   end
 
-  test "sets Lean options in translated modules and caches them separately" do
+  @tag :tmp_dir
+  test "writes compiled modules next to their sources in olean mode", %{tmp_dir: tmp_dir} do
+    files = [file(@literal_erl, "Elixir.Debugged", [definition("value", success())])]
+
+    assert [%{status: :ok}] =
+             Lynx.Commands.verify!(@lean_dir, files, debug_dir: tmp_dir, debug: :olean)
+
+    assert File.exists?(Path.join(tmp_dir, "Elixir/Debugged.lean"))
+    assert File.exists?(Path.join(tmp_dir, "Elixir/Debugged.olean"))
+  end
+
+  @tag :tmp_dir
+  test "sets Lean options in translated modules and caches them separately", %{tmp_dir: tmp_dir} do
     key = :crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)
 
     files = [
@@ -71,10 +86,13 @@ defmodule Lynx.RunnerTest do
 
     assert [%{status: :ok, cached: false}] = Lynx.Commands.verify!(@lean_dir, files)
 
-    assert [%{status: :error, cached: false, source: source}] =
-             Lynx.Commands.verify!(@lean_dir, files, options: [maxRecDepth: 1])
+    assert [%{status: :error, cached: false}] =
+             Lynx.Commands.verify!(@lean_dir, files,
+               options: [maxRecDepth: 1],
+               debug_dir: tmp_dir
+             )
 
-    assert source =~ "set_option maxRecDepth 1"
+    assert File.read!(Path.join(tmp_dir, "Elixir/Options.lean")) =~ "set_option maxRecDepth 1"
     assert [%{status: :ok, cached: true}] = Lynx.Commands.verify!(@lean_dir, files)
   end
 

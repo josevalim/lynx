@@ -1,4 +1,4 @@
-# LYNX_DEBUG=1 LYNX_CACHE=0 mix run examples/otp/rand.exs
+# LYNX_DEBUG=lean LYNX_CACHE=0 mix run examples/otp/rand.exs
 # Prove the installed OTP rand module, translated from its BEAM debug information.
 # Verified against Erlang/OTP 29.1.2 (stdlib 8.1.1, ERTS 17.1.1).
 # The proofs depend on shuffle_s/2's implementation; rerun them after OTP upgrades.

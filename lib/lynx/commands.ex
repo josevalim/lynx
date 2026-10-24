@@ -8,7 +8,7 @@ defmodule Lynx.Commands do
   @doc """
   Runs a protocol request and collects its JSON updates in order.
 
-  Each update includes rendered source, elapsed milliseconds, and diagnostics.
+  Each update includes elapsed milliseconds and diagnostics.
   Returns verification errors and skipped files as updates. Raises on failure responses,
   invalid JSON output, or unexpected exit statuses.
   The caller supplies the complete request, including its command and version.
@@ -27,11 +27,11 @@ defmodule Lynx.Commands do
   end
 
   @doc """
-  Verifies assembled files and returns their source, timings, and diagnostics.
+  Verifies assembled files and returns their timings and diagnostics.
 
   Verification errors and skipped files are returned as updates. Runner failures raise.
   Reports and diagnostics have atom keys; statuses and severities are atoms.
-  Module names, declarations, source, paths, and messages remain strings.
+  Module names, declarations, paths, and messages remain strings.
   Uses the current Mix build directory for cached artifacts, falling back to `_build/dev`.
 
   ## Options
@@ -39,6 +39,13 @@ defmodule Lynx.Commands do
     * `:options` - a keyword list of Lean options, such as `[maxRecDepth: 10_000]`,
       set at the top of every translated module. Values are integers, booleans, or
       strings. They are part of every cache key.
+
+    * `:debug_dir` - a directory where the rendered Lean source of every module is
+      written by module path, such as `Erlang/json.lean`, when a module does not verify.
+
+    * `:debug` - set to `:lean` to write the sources to `:debug_dir` even when every
+      module verifies. Set to `:olean` to also write the compiled files of every
+      verified module next to its source, such as `Erlang/json.olean`.
 
     * `:check_source` - when `true`, parses each module's rendered source and reports
       an error where it differs from the elaborated commands. Used by Lynx's own tests.
@@ -82,6 +89,15 @@ defmodule Lynx.Commands do
       end
 
     request =
+      case Keyword.fetch(opts, :debug_dir) do
+        {:ok, dir} ->
+          Map.merge(request, %{"debug_dir" => Path.expand(dir), "debug" => "#{opts[:debug]}"})
+
+        :error ->
+          request
+      end
+
+    request =
       if Keyword.get(opts, :check_source, false),
         do: Map.put(request, "check_source", true),
         else: request
@@ -95,20 +111,18 @@ defmodule Lynx.Commands do
          "status" => status,
          "file" => file,
          "module" => module,
-         "source" => source,
          "time_ms" => time,
          "cached" => cached,
          "theorems" => theorems,
          "diagnostics" => diagnostics
        })
        when status in ["ok", "error", "skipped"] and is_binary(file) and is_binary(module) and
-              is_binary(source) and is_integer(time) and time >= 0 and is_boolean(cached) and
+              is_integer(time) and time >= 0 and is_boolean(cached) and
               is_list(diagnostics) and is_list(theorems) do
     %{
       status: Map.fetch!(@statuses, status),
       file: file,
       module: module,
-      source: source,
       time_ms: time,
       cached: cached,
       theorems: Enum.map(theorems, &decode_theorem!/1),

@@ -15,10 +15,13 @@ defmodule Lynx.Case do
   Each group registers one ExUnit test of type `:laws`. Run groups with
   `mix test --only laws`.
 
-  Set `LYNX_DEBUG=1` to print each translated module's reported
+  Set `LYNX_DEBUG=lean` to print each translated module's reported
   verification time in milliseconds, status, and whether it was cached,
   as well as the elaboration time of any law. The translated .lean files are
   also written by module path to `tmp/<test module>/<group>/` for inspection.
+  Set `LYNX_DEBUG=olean` to also write the compiled `.olean` files of every
+  verified module next to its source, so Lean tools such as profilers can load
+  the translated modules by adding the directory to `LEAN_PATH`.
 
   Set `LYNX_CACHE=0` to disable the verification cache.
 
@@ -363,7 +366,17 @@ defmodule Lynx.Case do
     # Cached modules are not elaborated, so exports always verify from scratch.
     cache = export == [] and System.get_env("LYNX_CACHE") != "0"
 
+    debug =
+      case System.get_env("LYNX_DEBUG", "") do
+        "" -> []
+        "lean" -> [debug: :lean]
+        "olean" -> [debug: :olean]
+        other -> raise ArgumentError, "LYNX_DEBUG must be lean or olean, got: #{inspect(other)}"
+      end
+
+    # The runner writes the translated sources here when a law fails, or always when debugging.
     dir = Path.join(group_path("tmp", module, name))
+    File.rm_rf!(dir)
 
     files =
       Lynx.Translation.new(termination_suffixes: suffixes, cutoffs: cutoffs, preludes: preludes)
@@ -378,9 +391,14 @@ defmodule Lynx.Case do
         {{file["module"], "#{name}/#{length(params)}"}, "#{name}(#{Enum.join(params, ", ")})"}
       end
 
-    reports = Lynx.Commands.verify!(@lean_dir, files, [options: options] ++ export)
+    reports =
+      Lynx.Commands.verify!(
+        @lean_dir,
+        files,
+        [options: options, debug_dir: dir] ++ debug ++ export
+      )
 
-    if System.get_env("LYNX_DEBUG") == "1" do
+    if debug != [] do
       for report <- reports do
         prefix =
           case report.status do
@@ -400,7 +418,6 @@ defmodule Lynx.Case do
         end
       end
 
-      write_translations!(dir, reports)
       IO.puts("Translated .lean files written to #{dir}")
     end
 
@@ -433,8 +450,6 @@ defmodule Lynx.Case do
       end
 
     if errors != [] do
-      write_translations!(dir, reports)
-
       errors =
         List.update_at(errors, -1, fn {kind, error, stack} ->
           message = error.message <> "\n\nThe translated .lean files are available at #{dir}"
@@ -449,17 +464,6 @@ defmodule Lynx.Case do
 
   # Match ExUnit's tmp_dir path sanitization.
   @escape Enum.map(~c" [~#%&*{}\\:<>?/+|\"]", &<<&1::utf8>>)
-
-  # Sources are written by module path, as Lean expects, such as `Erlang/json.lean`.
-  defp write_translations!(dir, reports) do
-    File.rm_rf!(dir)
-
-    for report <- reports do
-      path = Path.join([dir | String.split(report.module, ".")]) <> ".lean"
-      File.mkdir_p!(Path.dirname(path))
-      File.write!(path, report.source)
-    end
-  end
 
   defp group_path(dir, module, name) do
     [

@@ -6,12 +6,13 @@ defmodule Lynx.Integration.TranslationTest do
 
   for fixture <- Path.wildcard(Path.join(@translations_dir, "*.erl")) do
     @tag timeout: to_timeout(minute: 10)
-    test "translates #{Path.basename(fixture)}" do
-      check_translation(unquote(fixture))
+    @tag :tmp_dir
+    test "translates #{Path.basename(fixture)}", %{tmp_dir: tmp_dir} do
+      check_translation(unquote(fixture), tmp_dir)
     end
   end
 
-  defp check_translation(fixture) do
+  defp check_translation(fixture, tmp_dir) do
     source = "../test/fixtures/translations/#{Path.basename(fixture)}"
     {module, core} = core(fixture, source)
 
@@ -52,22 +53,21 @@ defmodule Lynx.Integration.TranslationTest do
       assert left_file == right_file
     end
 
-    updates = Lynx.Commands.verify!(@lean_dir, files, check_source: true)
+    updates =
+      Lynx.Commands.verify!(@lean_dir, files,
+        check_source: true,
+        debug_dir: tmp_dir,
+        debug: :lean
+      )
+
     assert length(updates) == length(files)
 
     for {file, update} <- Enum.zip(files, updates) do
-      assert %{
-               status: :ok,
-               module: module,
-               source: left_file,
-               time_ms: elapsed,
-               diagnostics: []
-             } = update
-
+      assert %{status: :ok, module: module, time_ms: elapsed, diagnostics: []} = update
       assert module == file["module"]
       assert is_integer(elapsed) and elapsed >= 0
-      path = Path.rootname(fixture) <> "." <> module <> ".lean"
-      right_file = File.read!(path)
+      left_file = File.read!(Path.join([tmp_dir | String.split(module, ".")]) <> ".lean")
+      right_file = File.read!(Path.rootname(fixture) <> "." <> module <> ".lean")
       assert left_file == right_file
     end
   end

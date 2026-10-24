@@ -42,15 +42,18 @@ defmodule Lynx.Fixtures.Regenerate do
 
     for fixture <- Path.wildcard(Path.join(__DIR__, "*.json")) do
       %{"files" => files} = fixture |> File.read!() |> JSON.decode!()
-      updates = Lynx.Commands.verify!(@lean_dir, files)
+      # The runner writes the rendered sources, cleared first so none are stale.
+      dir = Path.join(["tmp", "fixtures", Path.basename(fixture, ".json")])
+      File.rm_rf!(dir)
+      updates = Lynx.Commands.verify!(@lean_dir, files, debug_dir: dir, debug: :lean)
 
       unless Enum.all?(updates, &(&1.status == :ok)) do
         Mix.raise("cannot verify #{fixture}: #{inspect(updates)}")
       end
 
-      for %{module: module, source: source} <- updates do
-        path = Path.rootname(fixture) <> "." <> module <> ".lean"
-        write(path, source)
+      for %{module: module} <- updates do
+        source = File.read!(Path.join([dir | String.split(module, ".")]) <> ".lean")
+        write(Path.rootname(fixture) <> "." <> module <> ".lean", source)
       end
     end
   end
