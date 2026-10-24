@@ -255,14 +255,14 @@ defmodule Lynx.CaseTest do
     path = "tmp/Lynx.CaseTest.LawFailure/laws-invalid---proof---errors-"
     assert String.ends_with?(second, "The translated .lean files are available at #{path}")
 
-    assert Enum.sort(File.ls!(path)) == [
-             "Elixir.Function.lean",
-             "Elixir.Lynx.CaseTest.LawFailure.laws.lean",
-             "Elixir.Lynx.CaseTest.LawFailure.lean"
+    assert path |> Path.join("**/*.lean") |> Path.wildcard() |> Enum.sort() == [
+             "#{path}/Elixir/Function.lean",
+             "#{path}/Elixir/Lynx/CaseTest/LawFailure.lean",
+             "#{path}/Elixir/Lynx/CaseTest/LawFailure/laws.lean"
            ]
 
-    assert File.read!(Path.join(path, "Elixir.Function.lean")) =~ "identity/1"
-    assert File.read!(Path.join(path, "Elixir.Lynx.CaseTest.LawFailure.laws.lean")) =~ "sum_bar/2"
+    assert File.read!(Path.join(path, "Elixir/Function.lean")) =~ "identity/1"
+    assert File.read!(Path.join(path, "Elixir/Lynx/CaseTest/LawFailure/laws.lean")) =~ "sum_bar/2"
   end
 
   describe "errors" do

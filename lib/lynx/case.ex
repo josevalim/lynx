@@ -18,7 +18,7 @@ defmodule Lynx.Case do
   Set `LYNX_DEBUG=1` to print each translated module's reported
   verification time in milliseconds, status, and whether it was cached,
   as well as the elaboration time of any law. The translated .lean files are
-  also written to `tmp/` for inspection.
+  also written by module path to `tmp/<test module>/<group>/` for inspection.
 
   Set `LYNX_CACHE=0` to disable the verification cache.
 
@@ -363,6 +363,8 @@ defmodule Lynx.Case do
     # Cached modules are not elaborated, so exports always verify from scratch.
     cache = export == [] and System.get_env("LYNX_CACHE") != "0"
 
+    dir = Path.join(group_path("tmp", module, name))
+
     files =
       Lynx.Translation.new(termination_suffixes: suffixes, cutoffs: cutoffs, preludes: preludes)
       |> Lynx.Translation.add(Lynx.Bytecode.fetch!(module))
@@ -398,7 +400,8 @@ defmodule Lynx.Case do
         end
       end
 
-      IO.puts("Translated .lean files written to #{write_translations!(module, name, reports)}")
+      write_translations!(dir, reports)
+      IO.puts("Translated .lean files written to #{dir}")
     end
 
     errors =
@@ -430,11 +433,11 @@ defmodule Lynx.Case do
       end
 
     if errors != [] do
-      path = write_translations!(module, name, reports)
+      write_translations!(dir, reports)
 
       errors =
         List.update_at(errors, -1, fn {kind, error, stack} ->
-          message = error.message <> "\n\nThe translated .lean files are available at #{path}"
+          message = error.message <> "\n\nThe translated .lean files are available at #{dir}"
           {kind, %{error | message: message}, stack}
         end)
 
@@ -447,17 +450,15 @@ defmodule Lynx.Case do
   # Match ExUnit's tmp_dir path sanitization.
   @escape Enum.map(~c" [~#%&*{}\\:<>?/+|\"]", &<<&1::utf8>>)
 
-  defp write_translations!(module, name, reports) do
-    path = Path.join(group_path("tmp", module, name))
-
-    File.rm_rf!(path)
-    File.mkdir_p!(path)
+  # Sources are written by module path, as Lean expects, such as `Erlang/json.lean`.
+  defp write_translations!(dir, reports) do
+    File.rm_rf!(dir)
 
     for report <- reports do
-      File.write!(Path.join(path, report.module <> ".lean"), report.source)
+      path = Path.join([dir | String.split(report.module, ".")]) <> ".lean"
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, report.source)
     end
-
-    path
   end
 
   defp group_path(dir, module, name) do
