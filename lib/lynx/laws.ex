@@ -20,7 +20,7 @@ defmodule Lynx.Laws do
       end
 
   Call `Sum.sum_empty/0` to check the law at runtime. Add a `proof: ~LEAN"..."`
-  option to verify it with `Lynx.Laws.verify!([Sum])`.
+  option to verify it with `Lynx.Laws.verify([Sum])`.
 
   ## Erlang example
 
@@ -42,7 +42,7 @@ defmodule Lynx.Laws do
   ```
 
   Add a binary `-proof` attribute immediately after the `-law` attribute, then
-  call `Lynx.Laws.verify!([:sum])` to verify the law.
+  call `Lynx.Laws.verify([:sum])` to verify the law.
 
   The `-law` map accepts these keys:
 
@@ -135,8 +135,8 @@ defmodule Lynx.Laws do
   Raises on translation failures, including modules without laws or unsupported
   code, and on failures to run Lean or read its response.
   """
-  @spec verify!([module() | binary()], keyword()) :: [report()]
-  def verify!(modules, opts \\ []) when is_list(modules) do
+  @spec verify([module() | binary()], keyword()) :: [report()]
+  def verify(modules, opts \\ []) when is_list(modules) do
     {names, source} = Enum.split_with(modules, &is_atom/1)
     # Cached modules are not elaborated, so exports always verify from scratch.
     opts = if opts[:export], do: Keyword.put(opts, :cache, false), else: opts
