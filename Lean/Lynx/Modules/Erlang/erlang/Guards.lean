@@ -203,6 +203,10 @@ def «*/2» : Term → Term → Except Exception Term
       else .ok (.integer (x.tmod y))
   | _, _ => throw (.error (.atom "badarith"))
 
+@[simp] theorem «rem/2_integers» (x y : Int) (nonzero : y ≠ 0) :
+    «rem/2» (.integer x) (.integer y) = .ok (.integer (x.tmod y)) := by
+  simp [«rem/2», nonzero]
+
 /-- Infinite two's complement AND. For mixed signs, clear the bits of the
 nonnegative operand selected by the complement of the negative operand. -/
 @[expose] def «band/2» : Term → Term → Except Exception Term
@@ -253,6 +257,14 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
 
 @[expose] def «=/=/2» (left right : Term) : Except Exception Term :=
   .ok (if Term.exactCompare left right = .eq then Term.false else Term.true)
+
+@[simp] theorem «=:=/2_integers» (x y : Int) :
+    «=:=/2» (.integer x) (.integer y) = .ok (if x = y then Term.true else Term.false) := by
+  simp [«=:=/2»]
+
+@[simp] theorem «=/=/2_integers» (x y : Int) :
+    «=/=/2» (.integer x) (.integer y) = .ok (if x = y then Term.false else Term.true) := by
+  simp [«=/=/2»]
 
 @[expose] def «</2» (left right : Term) : Except Exception Term :=
   .ok (if (Term.compare left right).isLT then Term.true else Term.false)
@@ -405,6 +417,8 @@ theorem binary_part_whole (bytes : ByteArray) :
   | .float f => .ok (.float { f with negative := !f.negative })
   | _ => throw (.error (.atom "badarith"))
 
+@[simp] theorem «-/1_integer» (n : Int) : «-/1» (.integer n) = .ok (.integer (-n)) := rfl
+
 @[expose] def «abs/1» : Term → Except Exception Term
   | .integer n => .ok (.integer n.natAbs)
   | .float f => .ok (.float { f with negative := false })
@@ -445,6 +459,10 @@ theorem binary_part_whole (bytes : ByteArray) :
     if y = 0 then throw (.error (.atom "badarith"))
     else .ok (.integer (x.tdiv y))
   | _, _ => throw (.error (.atom "badarith"))
+
+@[simp] theorem «div/2_integers» (x y : Int) (nonzero : y ≠ 0) :
+    «div/2» (.integer x) (.integer y) = .ok (.integer (x.tdiv y)) := by
+  simp [«div/2», nonzero]
 
 @[expose] def «bnot/1» : Term → Except Exception Term
   | .integer x => .ok (.integer (-x - 1))
