@@ -6,20 +6,35 @@
 
 Write proofs about Erlang/Elixir programs using Lean.
 
-This is done by writing laws, in Erlang/Elixir, with a Lean proof
-that guarantees your Erlang/Elixir code obeys those laws. The laws are
-automatically translated to Lean and the proofs are checked against a model
-of the Erlang runtime written in Lean.
+You write laws in Erlang/Elixir, which are automatically translated to
+Lean alongside your Erlang/Elixir code, and you write proofs in Lean.
+The laws and proofs are assembled together and verified by Lean's kernel.
 
-Lynx implements most Erlang/Elixir language constructs, although several
-built-in functions (BIFs) may be missing. The focus is on verifying sequential
-programs although concurrency constructs (spawn, receive, send) are also
-modelled. Feel free to [open an issue](https://github.com/josevalim/lynx/issues)
-for missing functionality.
+This technique is also known as _shallow embedding_, since it translates
+Erlang/Elixir to Lean and then use the features and properties of Lean
+for proofs. If there are no bugs during translation (or in Lean's kernel),
+then the proofs are correct. However, given the early nature of this project,
+you must expect bugs and find plenty of limitations (for example, we do not
+yet implement all of Erlang builtin functions). Please file bug reports
+whenever you run into them!
 
-See the documentation for the Lynx module to get started.
+See the documentation for [the Lynx module](https://lynx.hexdocs.pm) to get
+started or ask your coding agent to run `mix help Lynx`.
 
-## Elixir example
+> [!IMPORTANT]
+> **A quick word on formal verification**
+>
+> Formal verification is not a silver bullet and it cannot prove your software
+> is generally bug free! Instead, projects like Lynx allow you to prove that
+> certain properties of a given program hold for all specified inputs. Proofs
+> can be automated by coding agents, but defining the underlying properties and
+> valid inputs is very likely to benefit from developer guidance.
+>
+> See the ["Getting started with proofs"](#getting-started-with-proofs) section below.
+
+## Examples
+
+### Elixir
 
 Use Lynx with ExUnit to run proofs alongside ordinary tests. Save this example
 as `test/laws/sum_test.exs`. It defines a recursive sum and proves that the empty
@@ -93,7 +108,7 @@ mix test test/laws/sum_test.exs
 mix test --only laws
 ```
 
-## Erlang example
+### Erlang
 
 Lynx can also verify laws written in Erlang.
 
@@ -154,6 +169,54 @@ end
 
 For agentic usage, you can ask your agent to run `mix help Lynx` and get all
 instructions to get started.
+
+## Getting started with proofs
+
+A law states a property, `expects:`, that must hold for every input satisfying
+its assumptions, `requires:`. Several kinds of properties are straightforward
+to state and often catch real bugs. Here are some examples:
+
+  * **Totality** — the function returns for every valid input, without raising
+    or looping forever. Since a law can only prove its expectation when the
+    computation returns, any law doubles as a proof of totality. The simplest one
+    checks the result's shape: `expects: is_binary(encode(term))`.
+
+  * **Roundtrip** — one function undoes another, as with encoding and decoding,
+    serializing and parsing, or compressing and decompressing:
+    `expects: decode(encode(term)) == {:ok, term}`.
+
+  * **Oracle** — the function agrees with a simpler, obviously correct
+    implementation, such as an optimized version against a naive one, or a
+    rewrite against the code it replaces: `expects: fast_sort(list) == naive_sort(list)`.
+
+  * **Invariants** — some aspect of the input is preserved, or some structure
+    of the output always holds, such as sorting preserving the length of a
+    list: `expects: length(sort(list)) == length(list)`.
+
+  * **Idempotence** — applying a function twice is the same as applying it
+    once, as with normalization and formatting: `expects: normalize(normalize(x)) == normalize(x)`.
+
+  * **Algebraic laws** — the function interacts predictably with other
+    operations, such as the `sum(l) + sum(r) == sum(l ++ r)` law in the
+    examples below.
+
+Note that a property does not necessarily imply the absence of bugs.
+For example, proving that a JSON encoder roundtrips for some terms,
+such as `JSON.decode(JSON.encode!(term)) == {:ok, term}`,
+does not prove that it emits JSON according to its specification.
+Similarly, the algebraic law written above for `sum` also holds for `length`.
+Therefore, it is important to have additional properties and tests to ensure
+the correctness of your programs.
+
+Each law also states which inputs it is about. Assumptions that are too strong
+make a law hold vacuously, while missing assumptions make it unprovable, so
+review `requires:` as carefully as `expects:`.
+
+Finally, because Lynx translates your Erlang/Elixir program to Lean, it relies
+on whole program analysis. It supports both sequential and concurrent features
+of the Erlang runtime, such as the process dictionary and spawning processes,
+but it cannot prove anything that involves external systems, running either over
+the network (sockets) or I/O (ports).
 
 ## Disclaimer
 

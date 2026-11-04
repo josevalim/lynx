@@ -2,10 +2,14 @@ defmodule Lynx do
   @moduledoc """
   Write proofs about Erlang/Elixir programs using Lean.
 
-  This is done by writing laws, in Erlang/Elixir, with a Lean proof
-  that guarantees your Erlang/Elixir code obeys those laws. The laws are
-  automatically translated to Lean and the proofs are checked against a model
-  of the Erlang runtime written in Lean.
+  You write laws in Erlang/Elixir, which are automatically translated to
+  Lean alongside your Erlang/Elixir code, and you write proofs in Lean.
+  The laws and proofs are assembled together and verified by Lean's kernel.
+
+  This technique is also known as _shallow embedding_, since it translates
+  Erlang/Elixir to Lean and then use the features and properties of Lean
+  for proofs. If there are no bugs during translation (or in Lean's kernel),
+  then the proofs are correct.
 
   ## Usage
 
@@ -48,6 +52,12 @@ defmodule Lynx do
 
   Furthermore, when running proofs with ExUnit, the error reports include the path to
   folder with all `.lean` files. Use this to debug and guide your proofs.
+
+  Finally, because the Lynx translates your Erlang/Elixir program to Lean,
+  it relies on whole program analysis. As seen below, it does support both
+  sequential and concurrent features of the Erlang runtime, but it cannot
+  prove anything that involves external systems, running either over the network
+  (sockets) or I/O (ports).
 
   ### Purity model
 
@@ -115,7 +125,7 @@ defmodule Lynx do
   `Process.get(:key) == nil` is provable, even though it does not hold in a
   process that has stored `:key`.
 
-  Proofs must not introduce untrusted axioms or `sorry`
+  Proofs must not introduce untrusted axioms or `sorry`.
 
   ### Proofs and versions
 
@@ -175,34 +185,7 @@ defmodule Lynx do
       verification with `LYNX_DEBUG=lean LYNX_CACHE=0` so cached results do not
       hide slow proofs, and see "Profiling proofs" to find where time goes.
 
-  ### Profiling proofs
-
-  `LYNX_DEBUG=lean` reports how long each translated module and law takes to
-  verify. To see where the time goes inside a proof, use
-  [leanprof](https://github.com/unbalancedparentheses/leanprof). First, run your
-  laws with `LYNX_DEBUG=olean`, which writes each group's translated sources,
-  together with their compiled modules, to `tmp/<test module>/<group>/`:
-
-      LYNX_DEBUG=olean mix test test/json_test.exs --only laws
-
-  Then profile the laws module from that directory. Its imports are loaded from
-  the compiled modules, so only the given file is elaborated:
-
-      cd tmp/JsonProofsTest/laws-json-round-trip
-      LEAN_PATH=$PWD:$LYNX/Lean/.lake/build/lib/lean ELAN_TOOLCHAIN=$(cat $LYNX/lean-toolchain) \\
-        leanprof elab --heartbeats Elixir/JsonProofsTest/laws.lean
-
-  where `$LYNX` is the absolute path to Lynx, such as your project's `deps/lynx`. Any
-  other module in the directory, such as `Erlang/json.lean`, can be profiled
-  the same way to measure the elaboration of translated code.
-
-  `--heartbeats` counts work instead of time, so results are the same on every
-  run and can be compared before and after changing a proof. The report lists
-  the costliest declarations and tactics by source range, work repeated across
-  goals, and the definitions and simp lemmas behind the work. Locations refer
-  to the translated sources, where proofs appear verbatim as written in your laws.
-
-  ## Limitations
+  ### Limitations
 
   Lynx implements most Erlang/Elixir language constructs, although several
   built-in functions (BIFs) may be missing. The focus is on verifying sequential
@@ -237,14 +220,80 @@ defmodule Lynx do
       supported, while dynamic references and calls, such as `&mod.bar/1`,
       `mod.bar(x)`, and `apply(mod, fun, args)`, produce translation errors.
 
-    * Laws cannot quantify over arbitrary functions. A function parameter ranges
-      over every function term, with no behavior of its own; calling one resolves
-      only against the functions the program defines. Restrict function
-      parameters in `requires:` to explicitly listed functions, for example
-      `fun in [fn x -> x end, fn x -> {x} end]`.
+    * Laws cannot quantify over arbitrary functions, only over the functions
+      the program defines. See "Anonymous functions" below.
 
   Missing constructs or BIFs produce translation errors. Feel free to
   [open an issue](https://github.com/josevalim/lynx/issues) for missing functionality.
+
+  ### Anonymous functions
+
+  Lynx collects every anonymous function and function reference in the
+  translated program, including those in dependencies, into a single table,
+  `Erlang.program.fun_table`. A function value is a `Lynx.Term.function` holding
+  an index into that table, its arity, and its captured values. Invoking it calls
+  the table entry with the captured values followed by the arguments. Indexes
+  outside the table raise `badfun`, and calls with the wrong number of arguments
+  raise `badarity`, as per Erlang semantics.
+
+  This has several consequences for laws:
+
+    * A function parameter ranges over every function term, not over every
+      function. Calling one resolves only against the functions the program
+      defines, paired with arbitrary captured values, including values the
+      function's own code could never capture. A law proven for every function
+      parameter therefore holds for the program's functions, and not necessarily
+      for functions defined elsewhere. To reason about particular functions,
+      restrict the parameter in `requires:`, for example
+      `fun in [fn x -> x end, fn x -> {x} end]`.
+
+    * The table depends on the whole program. Adding an anonymous function
+      anywhere, including in a dependency or after updating Elixir or
+      Erlang/OTP, changes it. Prefer proofs that hold for any table entry over
+      proofs that enumerate the table, which are slower and break when it changes.
+
+    * Invoking a function value has the purity of the most impure function in
+      the table. A single function that uses the process dictionary makes every
+      invocation sequential, so laws that call function parameters are then
+      stated through `Lynx.sequential`, even when the functions they call are pure.
+
+    * `requires:` is an Erlang expression, so it cannot assume a property of a
+      function for every input. Check the property against the data the law
+      uses instead, such as `Enum.all?(list, &is_boolean(fun.(&1)))`.
+
+    * Invocations are bounded by a call depth of 100. Pure functions consume no
+      depth, and neither do calls in sequence, such as `Enum.map/2` invoking
+      `fun` once per element. A function that itself invokes function values
+      consumes one level for the invocations it makes. Exceeding the depth
+      raises `Lynx.Exception.exhausted`, so laws about deeply nested invocations
+      cannot be proven.
+
+  ### Profiling proofs
+
+  `LYNX_DEBUG=lean` reports how long each translated module and law takes to
+  verify. To see where the time goes inside a proof, use
+  [leanprof](https://github.com/unbalancedparentheses/leanprof). First, run your
+  laws with `LYNX_DEBUG=olean`, which writes each group's translated sources,
+  together with their compiled modules, to `tmp/<test module>/<group>/`:
+
+      LYNX_DEBUG=olean mix test test/json_test.exs --only laws
+
+  Then profile the laws module from that directory. Its imports are loaded from
+  the compiled modules, so only the given file is elaborated:
+
+      cd tmp/JsonProofsTest/laws-json-round-trip
+      LEAN_PATH=$PWD:$LYNX/Lean/.lake/build/lib/lean ELAN_TOOLCHAIN=$(cat $LYNX/lean-toolchain) \\
+        leanprof elab --heartbeats Elixir/JsonProofsTest/laws.lean
+
+  where `$LYNX` is the absolute path to Lynx, such as your project's `deps/lynx`. Any
+  other module in the directory, such as `Erlang/json.lean`, can be profiled
+  the same way to measure the elaboration of translated code.
+
+  `--heartbeats` counts work instead of time, so results are the same on every
+  run and can be compared before and after changing a proof. The report lists
+  the costliest declarations and tactics by source range, work repeated across
+  goals, and the definitions and simp lemmas behind the work. Locations refer
+  to the translated sources, where proofs appear verbatim as written in your laws.
 
   ## Independent kernel checks
 
