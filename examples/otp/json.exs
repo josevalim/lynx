@@ -3800,13 +3800,11 @@ defmodule JsonProofsTest do
                 | cons x xs =>
                   simp only [Term.cons.sizeOf_spec] at size
                   cases first : «supported?/2» x (.integer ((m : Int) - 1)) <;>
-                    simp [first, Bind.bind, Except.bind] at returned
-                  split at returned
-                  · simp at returned
-                  · obtain ⟨v, head, vDepth⟩ := smaller x positive first
-                    obtain ⟨l, tail, lDepth⟩ := ihs xs (by omega) positive returned
-                    exact ⟨v :: l, .cons head tail, by simp [Json.depths]; omega⟩
-                  · simp at returned
+                    simp [first] at returned
+                  obtain ⟨rfl, returned⟩ := returned
+                  obtain ⟨v, head, vDepth⟩ := smaller x positive first
+                  obtain ⟨l, tail, lDepth⟩ := ihs xs (by omega) positive returned
+                  exact ⟨v :: l, .cons head tail, by simp [Json.depths]; omega⟩
                 | _ => simp at returned
             -- The bindings of a map within the budget.
             have fields : ∀ es : List (Term × Term), 0 < m →
@@ -3829,27 +3827,8 @@ defmodule JsonProofsTest do
                 rcases bytes with ⟨data⟩
                 have same : Term.bitstring ⟨data⟩ ⟨0, bound⟩ valid = bin data.toList := rfl
                 simp only [same] at returned
-                -- Each conjunct returns true.
-                have strict : ∀ (left right : Except Exception Term),
-                    (left >>= fun result => match result with
-                      | .atom "false" => pure (.atom "false")
-                      | .atom "true" => right
-                      | other => Except.error (Exception.error
-                          (.tuple #[.atom "badbool", .atom "and", other]))) = .ok Term.true →
-                    left = .ok Term.true ∧ right = .ok Term.true := by
-                  intro left right both
-                  cases left with
-                  | error e => simp at both
-                  | ok result =>
-                    simp only [Lynx.Except.ok_bind] at both
-                    split at both
-                    · simp at both
-                    · exact ⟨rfl, both⟩
-                    · simp at both
                 simp [Erlang.erlang.«is_binary/1»] at returned
-                rw [← bind_assoc] at returned
-                obtain ⟨first, restValid⟩ := strict _ _ returned
-                obtain ⟨keyValid, valueValid⟩ := strict _ _ first
+                obtain ⟨⟨keyValid, valueValid⟩, restValid⟩ := returned
                 obtain ⟨v, head, vDepth⟩ := smaller value positive valueValid
                 obtain ⟨fs, tail, fDepth⟩ := ih restValid
                 rw [same]

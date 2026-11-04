@@ -1012,6 +1012,99 @@ defmodule Lynx.CoreToLeanjTest do
     assert name == %{"generated" => 0}
   end
 
+  test "Elixir's strict and/or raise badbool" do
+    body =
+      :cerl.c_case(call(:left), [
+        :cerl.c_clause([:cerl.c_atom(false)], :cerl.c_atom(false)),
+        :cerl.c_clause([:cerl.c_atom(true)], call(:right)),
+        :cerl.c_clause(
+          [:cerl.c_var(:X)],
+          :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:error), [
+            :cerl.c_tuple([:cerl.c_atom(:badbool), :cerl.c_atom(:and), :cerl.c_var(:X)])
+          ])
+        )
+      ])
+
+    defs =
+      definitions([
+        definition(:entry, body),
+        definition(:left, :cerl.c_atom(true)),
+        definition(:right, :cerl.c_atom(true))
+      ])
+
+    assert {:ok, %{{:entry, 1} => %{translation: %{"body" => translated}}}, _} = translate(defs)
+
+    assert %{
+             "kind" => "andalso",
+             "badbool" => true,
+             "left" => %{"kind" => "local_call"},
+             "right" => %{"kind" => "local_call"}
+           } = translated
+  end
+
+  test "Elixir's and/or nest to the left, collapsing only Boolean left operands" do
+    erlang = fn name, args -> :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(name), args) end
+    var = :cerl.c_var(:Left)
+
+    # (is_integer(x) and Right) and x < 5, with a compiler-checked inner case
+    outer = fn inner_right ->
+      left =
+        :cerl.c_case(erlang.(:is_integer, [:cerl.c_var(0)]), [
+          :cerl.ann_c_clause([:compiler_generated], [:cerl.c_atom(false)], :cerl.c_atom(false)),
+          :cerl.c_clause([:cerl.c_atom(true)], inner_right)
+        ])
+
+      case_on_left =
+        :cerl.c_case(var, [
+          :cerl.c_clause([:cerl.c_atom(false)], :cerl.c_atom(false)),
+          :cerl.c_clause([:cerl.c_atom(true)], erlang.(:<, [:cerl.c_var(0), :cerl.c_int(5)])),
+          :cerl.c_clause(
+            [:cerl.c_var(:Other)],
+            :cerl.c_primop(:cerl.c_atom(:match_fail), [
+              :cerl.c_tuple([:cerl.c_atom(:case_clause), :cerl.c_var(:Other)])
+            ])
+          )
+        ])
+
+      result = :cerl.c_var(:Result)
+
+      {:cerl.c_let([var], left, case_on_left),
+       :cerl.c_let([var], left, :cerl.c_let([result], case_on_left, result))}
+    end
+
+    translate_body = fn body ->
+      defs = definitions([definition(:entry, body), definition(:check, :cerl.c_atom(true))])
+      {:ok, %{{:entry, 1} => %{translation: %{"body" => translated}}}, _} = translate(defs)
+      translated
+    end
+
+    # A Boolean inner chain cannot reach case_clause, so it becomes the left operand.
+    zero = :cerl.c_var(:Zero)
+
+    {direct, bound} =
+      outer.(:cerl.c_let([zero], :cerl.c_int(0), erlang.(:>=, [:cerl.c_var(0), zero])))
+
+    assert %{
+             "kind" => "andalso",
+             "left" => %{
+               "kind" => "andalso",
+               "left" => %{"kind" => "remote_call", "name" => "is_integer"},
+               "right" => %{
+                 "kind" => "bind",
+                 "body" => %{"kind" => "remote_call", "name" => ">="}
+               }
+             },
+             "right" => %{"kind" => "remote_call", "name" => "<"}
+           } = translated = translate_body.(direct)
+
+    refute Map.has_key?(translated, "badbool")
+    assert %{"kind" => "bind", "computation" => ^translated} = translate_body.(bound)
+
+    # Otherwise the inner chain may return any value and the case stays.
+    {direct, _} = outer.(call(:check))
+    assert %{"kind" => "bind", "body" => %{"kind" => "match"}} = translate_body.(direct)
+  end
+
   test "threads the remote callback context through local functions and reuses translations" do
     remote = fn module ->
       :cerl.c_call(:cerl.c_atom(module), :cerl.c_atom(:entry), [:cerl.c_var(0)])

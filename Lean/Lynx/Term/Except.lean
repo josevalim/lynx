@@ -68,35 +68,133 @@ report reaching untranslated code. -/
 
 @[simp] theorem cutoff_eq : (cutoff : Except Exception α) = .error .exhausted := rfl
 
-/-- Erlang `orelse`. The right operand is selected only after the left one
-returns `false`; other values raise `badarg`. -/
-@[expose, macro_inline] def orElse (left right : Except Exception Term) : Except Exception Term :=
+/-- Erlang `orelse`, or Elixir's strict `or` when `badbool`. The right operand is
+selected only after the left one returns `false`; other values raise `badarg`,
+or `badbool` for Elixir. -/
+@[expose, macro_inline] def orElse (left right : Except Exception Term)
+    (badbool : Bool := false) : Except Exception Term :=
   left >>= fun value => match value with
     | .atom "true" => .ok (.atom "true")
     | .atom "false" => right
-    | other => .error (.error (.tuple #[.atom "badarg", other]))
+    | other => .error (.error (if badbool then .tuple #[.atom "badbool", .atom "or", other]
+        else .tuple #[.atom "badarg", other]))
 
-/-- Erlang `andalso`. The right operand is selected only after the left one
-returns `true`; other values raise `badarg`. -/
-@[expose, macro_inline] def andAlso (left right : Except Exception Term) : Except Exception Term :=
+/-- Erlang `andalso`, or Elixir's strict `and` when `badbool`. The right operand
+is selected only after the left one returns `true`; other values raise `badarg`,
+or `badbool` for Elixir. -/
+@[expose, macro_inline] def andAlso (left right : Except Exception Term)
+    (badbool : Bool := false) : Except Exception Term :=
   left >>= fun value => match value with
     | .atom "true" => right
     | .atom "false" => .ok (.atom "false")
-    | other => .error (.error (.tuple #[.atom "badarg", other]))
+    | other => .error (.error (if badbool then .tuple #[.atom "badbool", .atom "and", other]
+        else .tuple #[.atom "badarg", other]))
 
-/-- Proofs see the case on the left operand that Core's lowering produces. -/
-@[simp] theorem orElse_eq (left right : Except Exception Term) :
-    orElse left right = left >>= fun value => match value with
+/-- The case on the left operand that Core's lowering produces. Proofs simplify
+by the left operand's value instead, with the lemmas below. -/
+theorem orElse_eq (left right : Except Exception Term) (badbool : Bool) :
+    orElse left right badbool = left >>= fun value => match value with
       | .atom "true" => .ok (.atom "true")
       | .atom "false" => right
-      | other => .error (.error (.tuple #[.atom "badarg", other])) := rfl
+      | other => .error (.error (if badbool then .tuple #[.atom "badbool", .atom "or", other]
+          else .tuple #[.atom "badarg", other])) := rfl
 
-/-- Proofs see the case on the left operand that Core's lowering produces. -/
-@[simp] theorem andAlso_eq (left right : Except Exception Term) :
-    andAlso left right = left >>= fun value => match value with
+/-- The case on the left operand that Core's lowering produces. Proofs simplify
+by the left operand's value instead, with the lemmas below. -/
+theorem andAlso_eq (left right : Except Exception Term) (badbool : Bool) :
+    andAlso left right badbool = left >>= fun value => match value with
       | .atom "true" => right
       | .atom "false" => .ok (.atom "false")
-      | other => .error (.error (.tuple #[.atom "badarg", other])) := rfl
+      | other => .error (.error (if badbool then .tuple #[.atom "badbool", .atom "and", other]
+          else .tuple #[.atom "badarg", other])) := rfl
+
+@[simp] theorem orElse_error (exception : Exception) (right : Except Exception Term)
+    (badbool : Bool) : orElse (.error exception) right badbool = .error exception := rfl
+
+@[simp] theorem orElse_true (right : Except Exception Term) (badbool : Bool) :
+    orElse (.ok (.atom "true")) right badbool = .ok (.atom "true") := rfl
+
+@[simp] theorem orElse_false (right : Except Exception Term) (badbool : Bool) :
+    orElse (.ok (.atom "false")) right badbool = right := rfl
+
+/-- A comparison selects the right operand on the branch where it fails. -/
+@[simp] theorem orElse_ite (p : Prop) [Decidable p] (right : Except Exception Term)
+    (badbool : Bool) :
+    orElse (.ok (if p then .atom "true" else .atom "false")) right badbool =
+      if p then .ok (.atom "true") else right := by
+  by_cases p <;> simp [*, orElse]
+
+@[simp] theorem orElse_ite_not (p : Prop) [Decidable p] (right : Except Exception Term)
+    (badbool : Bool) :
+    orElse (.ok (if p then .atom "false" else .atom "true")) right badbool =
+      if p then right else .ok (.atom "true") := by
+  by_cases p <;> simp [*, orElse]
+
+@[simp] theorem andAlso_error (exception : Exception) (right : Except Exception Term)
+    (badbool : Bool) : andAlso (.error exception) right badbool = .error exception := rfl
+
+@[simp] theorem andAlso_true (right : Except Exception Term) (badbool : Bool) :
+    andAlso (.ok (.atom "true")) right badbool = right := rfl
+
+@[simp] theorem andAlso_false (right : Except Exception Term) (badbool : Bool) :
+    andAlso (.ok (.atom "false")) right badbool = .ok (.atom "false") := rfl
+
+/-- A comparison selects the right operand on the branch where it holds. -/
+@[simp] theorem andAlso_ite (p : Prop) [Decidable p] (right : Except Exception Term)
+    (badbool : Bool) :
+    andAlso (.ok (if p then .atom "true" else .atom "false")) right badbool =
+      if p then right else .ok (.atom "false") := by
+  by_cases p <;> simp [*, andAlso]
+
+@[simp] theorem andAlso_ite_not (p : Prop) [Decidable p] (right : Except Exception Term)
+    (badbool : Bool) :
+    andAlso (.ok (if p then .atom "false" else .atom "true")) right badbool =
+      if p then .ok (.atom "false") else right := by
+  by_cases p <;> simp [*, andAlso]
+
+/-- A left operand selected by a condition, as in left-nested chains, selects the
+right operand on each branch. -/
+@[simp] theorem orElse_ite_left (p : Prop) [Decidable p] (onTrue onFalse right : Except Exception Term)
+    (badbool : Bool) :
+    orElse (if p then onTrue else onFalse) right badbool =
+      if p then orElse onTrue right badbool else orElse onFalse right badbool := by
+  by_cases p <;> simp [*]
+
+@[simp] theorem andAlso_ite_left (p : Prop) [Decidable p] (onTrue onFalse right : Except Exception Term)
+    (badbool : Bool) :
+    andAlso (if p then onTrue else onFalse) right badbool =
+      if p then andAlso onTrue right badbool else andAlso onFalse right badbool := by
+  by_cases p <;> simp [*]
+
+/-- `andalso` returns `true` exactly when both operands do, whatever the left value. -/
+@[simp] theorem andAlso_eq_true (left right : Except Exception Term) (badbool : Bool) :
+    andAlso left right badbool = .ok (.atom "true") ↔
+      left = .ok (.atom "true") ∧ right = .ok (.atom "true") := by
+  rw [andAlso_eq]
+  cases left with
+  | error => simp
+  | ok value => simp only [ok_bind]; split <;> simp_all
+
+/-- `orelse` returns `true` when the left operand does, or returns `false` and the
+right operand returns `true`, whatever the left value. -/
+@[simp] theorem orElse_eq_true (left right : Except Exception Term) (badbool : Bool) :
+    orElse left right badbool = .ok (.atom "true") ↔
+      left = .ok (.atom "true") ∨ left = .ok (.atom "false") ∧ right = .ok (.atom "true") := by
+  rw [orElse_eq]
+  cases left with
+  | error => simp
+  | ok value => simp only [ok_bind]; split <;> simp_all
+
+/-- A conjunction returns `true` when each operand does. -/
+@[simp] theorem ite_false_eq_true (p : Prop) [Decidable p] (right : Except Exception Term) :
+    (if p then right else .ok (.atom "false")) = .ok (.atom "true") ↔
+      p ∧ right = .ok (.atom "true") := by
+  by_cases p <;> simp [*]
+
+@[simp] theorem ite_not_false_eq_true (p : Prop) [Decidable p] (right : Except Exception Term) :
+    (if p then .ok (.atom "false") else right) = .ok (.atom "true") ↔
+      ¬p ∧ right = .ok (.atom "true") := by
+  by_cases p <;> simp [*]
 
 /-- Erlang guards select their body only on the atom `true`. -/
 @[expose] def guardPassed : Except Exception Term → Bool

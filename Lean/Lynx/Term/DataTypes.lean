@@ -263,37 +263,43 @@ continuation propagate to an enclosing handler. -/
 @[simp] theorem tryWith_exhausted (next : α → Result β) (handler : Exception → Result β) :
     Result.tryWith (.error .exhausted) next handler = .error .exhausted := rfl
 
-/-- Erlang `orelse`. The right operand is selected only after the left one
-returns `false`; other values raise `badarg`. Like `||`, compiled code inlines
-it so that the right operand is not evaluated before the choice. -/
-@[expose, macro_inline] def orElse (left right : Result) : Result :=
+/-- Erlang `orelse`, or Elixir's strict `or` when `badbool`. The right operand is
+selected only after the left one returns `false`; other values raise `badarg`,
+or `badbool` for Elixir. Like `||`, compiled code inlines it so that the right
+operand is not evaluated before the choice. -/
+@[expose, macro_inline] def orElse (left right : Result) (badbool : Bool := false) : Result :=
   Result.bind left fun value => match value with
     | .atom "true" => .ok (.atom "true")
     | .atom "false" => right
-    | other => .error (.error (.tuple #[.atom "badarg", other]))
+    | other => .error (.error (if badbool then .tuple #[.atom "badbool", .atom "or", other]
+        else .tuple #[.atom "badarg", other]))
 
-/-- Erlang `andalso`. The right operand is selected only after the left one
-returns `true`; other values raise `badarg`. Like `&&`, compiled code inlines
-it so that the right operand is not evaluated before the choice. -/
-@[expose, macro_inline] def andAlso (left right : Result) : Result :=
+/-- Erlang `andalso`, or Elixir's strict `and` when `badbool`. The right operand
+is selected only after the left one returns `true`; other values raise `badarg`,
+or `badbool` for Elixir. Like `&&`, compiled code inlines it so that the right
+operand is not evaluated before the choice. -/
+@[expose, macro_inline] def andAlso (left right : Result) (badbool : Bool := false) : Result :=
   Result.bind left fun value => match value with
     | .atom "true" => right
     | .atom "false" => .ok (.atom "false")
-    | other => .error (.error (.tuple #[.atom "badarg", other]))
+    | other => .error (.error (if badbool then .tuple #[.atom "badbool", .atom "and", other]
+        else .tuple #[.atom "badarg", other]))
 
 /-- Proofs see the case on the left operand that Core's lowering produces. -/
-@[simp] theorem orElse_eq (left right : Result) :
-    orElse left right = left >>= fun value => match value with
+@[simp] theorem orElse_eq (left right : Result) (badbool : Bool) :
+    orElse left right badbool = left >>= fun value => match value with
       | .atom "true" => .ok (.atom "true")
       | .atom "false" => right
-      | other => .error (.error (.tuple #[.atom "badarg", other])) := rfl
+      | other => .error (.error (if badbool then .tuple #[.atom "badbool", .atom "or", other]
+          else .tuple #[.atom "badarg", other])) := rfl
 
 /-- Proofs see the case on the left operand that Core's lowering produces. -/
-@[simp] theorem andAlso_eq (left right : Result) :
-    andAlso left right = left >>= fun value => match value with
+@[simp] theorem andAlso_eq (left right : Result) (badbool : Bool) :
+    andAlso left right badbool = left >>= fun value => match value with
       | .atom "true" => right
       | .atom "false" => .ok (.atom "false")
-      | other => .error (.error (.tuple #[.atom "badarg", other])) := rfl
+      | other => .error (.error (if badbool then .tuple #[.atom "badbool", .atom "and", other]
+          else .tuple #[.atom "badarg", other])) := rfl
 
 instance : MonadExceptOf Exception @Result where
   throw := .error
@@ -426,14 +432,14 @@ theorem IsPure.shared (next : α → Result β) (body : (α → Result β) → R
   cases computation <;> try (rename_i exception; cases exception)
   all_goals simp_all [IsPure, Result.tryWith, Result.bind, Result.handle]
 
-@[simp↓] theorem IsPure.orElse (left right : Result) (leftPure : IsPure left)
-    (rightPure : IsPure right) : IsPure (Result.orElse left right) := by
+@[simp↓] theorem IsPure.orElse (left right : Result) (badbool : Bool) (leftPure : IsPure left)
+    (rightPure : IsPure right) : IsPure (Result.orElse left right badbool) := by
   apply IsPure.bind_explicit _ _ leftPure
   intro value
   split <;> simp_all [IsPure]
 
-@[simp↓] theorem IsPure.andAlso (left right : Result) (leftPure : IsPure left)
-    (rightPure : IsPure right) : IsPure (Result.andAlso left right) := by
+@[simp↓] theorem IsPure.andAlso (left right : Result) (badbool : Bool) (leftPure : IsPure left)
+    (rightPure : IsPure right) : IsPure (Result.andAlso left right badbool) := by
   apply IsPure.bind_explicit _ _ leftPure
   intro value
   split <;> simp_all [IsPure]
@@ -497,14 +503,16 @@ or make unresolved calls. Every environment read must eventually terminate. -/
     | ok value => exact nextReadOnly value
     | error exception => exact handlerReadOnly exception
 
-@[simp↓] theorem IsReadOnly.orElse (left right : Result) (leftReadOnly : IsReadOnly left)
-    (rightReadOnly : IsReadOnly right) : IsReadOnly (Result.orElse left right) := by
+@[simp↓] theorem IsReadOnly.orElse (left right : Result) (badbool : Bool)
+    (leftReadOnly : IsReadOnly left) (rightReadOnly : IsReadOnly right) :
+    IsReadOnly (Result.orElse left right badbool) := by
   apply IsReadOnly.bind _ _ leftReadOnly
   intro value
   split <;> simp_all
 
-@[simp↓] theorem IsReadOnly.andAlso (left right : Result) (leftReadOnly : IsReadOnly left)
-    (rightReadOnly : IsReadOnly right) : IsReadOnly (Result.andAlso left right) := by
+@[simp↓] theorem IsReadOnly.andAlso (left right : Result) (badbool : Bool)
+    (leftReadOnly : IsReadOnly left) (rightReadOnly : IsReadOnly right) :
+    IsReadOnly (Result.andAlso left right badbool) := by
   apply IsReadOnly.bind _ _ leftReadOnly
   intro value
   split <;> simp_all

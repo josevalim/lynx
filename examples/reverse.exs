@@ -33,8 +33,7 @@ defmodule ReverseProofsTest do
         | case3 input acc notNil notCons => simp_all [«proper_list/1»]
       have validity : «proper_list/1» list = .ok Lynx.Term.true ∧
           «proper_list/1» acc = .ok Lynx.Term.true := by
-        cases left : «proper_list/1» list <;> simp [«reverse_list:requires/2», left] at requires
-        split at requires <;> simp_all [Lynx.Term.true]
+        simpa [«reverse_list:requires/2»] using requires
       obtain ⟨output, returned, proper⟩ := reverses list acc validity.1 validity.2
       simp [«reverse_list:ensures/2», returned, proper]
       """

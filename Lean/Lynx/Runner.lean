@@ -1063,12 +1063,15 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let ok ← contextual ``Except.ok ``Lynx.Result.ok
     pure (Unhygienic.run `($ok ($member $value [$elements,*])))
   | "orelse" | "andalso" => do
-    fields j ["kind", "left", "right", "span"]
+    fields j ["kind", "left", "right", "badbool", "span"]
     let left ← term map info false (← field j "left")
     let right ← term map info false (← field j "right")
     let combinator ← if kind == "orelse" then contextual ``Lynx.Except.orElse ``Lynx.Result.orElse
       else contextual ``Lynx.Except.andAlso ``Lynx.Result.andAlso
-    pure (Unhygienic.run `($combinator $left $right))
+    -- Elixir's strict operators raise badbool instead of badarg.
+    match (j.getObjValAs? Bool "badbool").toOption with
+    | some true => pure (Unhygienic.run `($combinator $left $right true))
+    | _ => pure (Unhygienic.run `($combinator $left $right))
   | "nonzero_width" => do
     fields j ["kind", "size", "body", "span"]
     let size ← term map info false (← field j "size")

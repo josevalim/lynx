@@ -10,7 +10,7 @@
 have valid : «proper_list/1» list = .ok Lynx.Term.true ∧
     (callback = .function 0 1 #[] ∨ callback = .function 1 1 #[]) := by
   cases proper : «proper_list/1» list <;>
-    simp [«map_returns_list_requires/2», proper] at requires
+    simp [«map_returns_list_requires/2», proper, Lynx.Except.andAlso_eq] at requires
   split at requires <;> simp_all [Erlang.lists.«member/2»]
   by_cases first : callback = .function 0 1 #[] <;> simp_all
 -- Each listed function is pure, so calling it consumes no depth.

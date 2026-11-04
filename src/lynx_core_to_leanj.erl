@@ -420,18 +420,37 @@ computation(#c_values{anno = Anno, es = Values}, State0) ->
 %% Lean: Lynx.Result.orElse a b
 computation(#c_case{anno = Anno} = Case, State0) ->
     case short_circuit(Case) of
-        {~"orelse", _} ->
-            short_circuit_chain(~"orelse", Anno, membership(operands(~"orelse", Case)), State0);
-        {Kind, _} -> short_circuit_chain(Kind, Anno, operands(Kind, Case), State0);
+        {Kind, Badbool, _} ->
+            Operands = operands(Kind, Badbool, Case),
+            Chain = case Kind of
+                ~"orelse" -> membership(Operands);
+                ~"andalso" -> Operands
+            end,
+            short_circuit_chain(Kind, Badbool, Anno, Chain, State0);
         none -> computation_case(Case, State0)
+    end;
+%% Elixir's and/or associate to the left, so Core binds the left chain before
+%% the case on it, either as the result or as the next binding. Matching on the
+%% chain directly keeps a single expression, evaluated at the same point.
+%% Elixir: (a and b) and c
+%% Lean: Lynx.Except.andAlso (Lynx.Except.andAlso a b) c
+computation(#c_let{vars = [#c_var{name = Name}], arg = Arg,
+                   body = #c_case{arg = #c_var{name = Name}} = Case} = Let, State0) ->
+    case left_operand(Name, Case#c_case{arg = Arg}, []) of
+        true -> computation(Case#c_case{arg = Arg}, State0);
+        false -> let_bind(Let, State0)
+    end;
+computation(#c_let{vars = [#c_var{name = Name}], arg = Arg,
+                   body = #c_let{arg = #c_case{arg = #c_var{name = Name}} = Case, body = Rest} = Next} = Let,
+            State0) ->
+    case left_operand(Name, Case#c_case{arg = Arg}, [Rest]) of
+        true -> computation(Next#c_let{arg = Case#c_case{arg = Arg}}, State0);
+        false -> let_bind(Let, State0)
     end;
 %% Erlang: Y = f(X), g(Y)
 %% Lean: Lynx.Result.bind («f/1» vX) fun vY => «g/1» vY
-computation(#c_let{anno = Anno, vars = Vars, arg = Arg, body = Body}, State0) ->
-    {TranslatedArg, State1} = expression(Arg, State0),
-    {TranslatedBody, State2} = expression(Body, State1),
-    {node(~"bind", Anno, #{~"vars" => [variable(V) || V <- Vars],
-        ~"computation" => TranslatedArg, ~"body" => TranslatedBody}), State2};
+computation(#c_let{} = Let, State0) ->
+    let_bind(Let, State0);
 %% Erlang: f(X), g(X)
 %% Lean: do let _ ← «f/1» vX; «g/1» vX
 computation(#c_seq{anno = Anno, arg = Arg, body = Body}, State0) ->
@@ -526,42 +545,71 @@ computation(Core, _State) ->
     unsupported(Core).
 
 %% Core lowers orelse and andalso to a case on the left operand, raising badarg
-%% on other values unless the compiler knows the operand is a Boolean. The
+%% on other values unless the compiler knows the operand is a Boolean. Elixir
+%% lowers its strict and/or the same way, matching false first and raising
+%% {badbool, Op, Value} instead. When Elixir's operators nest to the left, the
+%% outer cases raise case_clause, which cannot happen for Boolean operands. The
 %% combinators keep the short circuit: the right operand is selected only after
 %% the left one returns.
 short_circuit(#c_case{arg = #c_values{}}) ->
     none;
 short_circuit(#c_case{clauses = [
-        #c_clause{pats = [#c_literal{val = true}], guard = #c_literal{val = true}, body = OnTrue} = First,
-        #c_clause{pats = [#c_literal{val = false}], guard = #c_literal{val = true}, body = OnFalse}
-        | Rest]}) ->
-    Checked = case Rest of
-        [] -> lists:member(compiler_generated, cerl:get_ann(First));
-        [#c_clause{pats = [#c_var{name = Var}], guard = #c_literal{val = true}, body = Raise}] ->
-            badarg_raise(Raise, Var);
-        _ -> false
+        #c_clause{pats = [#c_literal{val = FirstVal}], guard = #c_literal{val = true}, body = FirstBody} = First,
+        #c_clause{pats = [#c_literal{val = SecondVal}], guard = #c_literal{val = true}, body = SecondBody}
+        | Rest]} = Case) when {FirstVal, SecondVal} =:= {true, false}; {FirstVal, SecondVal} =:= {false, true} ->
+    {OnTrue, OnFalse} = case FirstVal of
+        true -> {FirstBody, SecondBody};
+        false -> {SecondBody, FirstBody}
     end,
-    case {Checked, OnTrue, OnFalse} of
-        {true, #c_literal{val = true}, Right} -> {~"orelse", Right};
-        {true, Right, #c_literal{val = false}} -> {~"andalso", Right};
+    Raises = case Rest of
+        [] ->
+            case lists:member(compiler_generated, cerl:get_ann(First)) of
+                true -> any;
+                false -> none
+            end;
+        [#c_clause{pats = [#c_var{name = Var}], guard = #c_literal{val = true}, body = Raise}] ->
+            fallback_raise(Raise, Var);
+        _ -> none
+    end,
+    Badbool = case Raises of
+        any -> false;
+        badarg -> false;
+        {badbool, Op} -> Op;
+        case_clause ->
+            case boolean(cerl:case_arg(Case)) of
+                true -> false;
+                false -> none
+            end;
+        none -> none
+    end,
+    case {Badbool, OnTrue, OnFalse} of
+        {none, _, _} -> none;
+        {_, #c_literal{val = true}, Right} when Badbool =/= 'and' ->
+            {~"orelse", Badbool =:= 'or', Right};
+        {_, Right, #c_literal{val = false}} when Badbool =/= 'or' ->
+            {~"andalso", Badbool =:= 'and', Right};
         _ -> none
     end;
 short_circuit(_) ->
     none.
 
-%% The operands of a right-nested chain of the same operator.
-operands(Kind, Expression) ->
+%% The operands of a right-nested chain of the same operator and error.
+operands(Kind, Badbool, Expression) ->
     case short_circuit(Expression) of
-        {Kind, Right} -> [cerl:case_arg(Expression) | operands(Kind, Right)];
+        {Kind, Badbool, Right} -> [cerl:case_arg(Expression) | operands(Kind, Badbool, Right)];
         _ -> [Expression]
     end.
 
-short_circuit_chain(_Kind, _Anno, [Last], State) ->
+short_circuit_chain(_Kind, _Badbool, _Anno, [Last], State) ->
     operand(Last, State);
-short_circuit_chain(Kind, Anno, [Left | Rest], State0) ->
+short_circuit_chain(Kind, Badbool, Anno, [Left | Rest], State0) ->
     {TranslatedLeft, State1} = operand(Left, State0),
-    {TranslatedRight, State2} = short_circuit_chain(Kind, Anno, Rest, State1),
-    {node(Kind, Anno, #{~"left" => TranslatedLeft, ~"right" => TranslatedRight}), State2}.
+    {TranslatedRight, State2} = short_circuit_chain(Kind, Badbool, Anno, Rest, State1),
+    Fields = #{~"left" => TranslatedLeft, ~"right" => TranslatedRight},
+    {node(Kind, Anno, case Badbool of
+        true -> Fields#{~"badbool" => true};
+        false -> Fields
+    end), State2}.
 
 operand({in, Anno, Var, Literals}, State0) ->
     {Value, State1} = value(Var, State0),
@@ -614,11 +662,53 @@ exact_equality('==', Name, Var, Literal) when is_atom(Literal); is_bitstring(Lit
 exact_equality('==', _Name, _Var, _Literal) ->
     none.
 
-badarg_raise(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = error},
-                     args = [#c_tuple{es = [#c_literal{val = badarg}, #c_var{name = Var}]}]}, Var) ->
-    true;
-badarg_raise(_, _) ->
+fallback_raise(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = error},
+                       args = [#c_tuple{es = [#c_literal{val = badarg}, #c_var{name = Var}]}]}, Var) ->
+    badarg;
+fallback_raise(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = error},
+                       args = [#c_tuple{es = [#c_literal{val = badbool}, #c_literal{val = Op},
+                                              #c_var{name = Var}]}]}, Var)
+        when Op =:= 'and'; Op =:= 'or' ->
+    {badbool, Op};
+fallback_raise(#c_primop{name = #c_literal{val = match_fail},
+                         args = [#c_tuple{es = [#c_literal{val = case_clause}, #c_var{name = Var}]}]},
+               Var) ->
+    case_clause;
+fallback_raise(_, _) ->
+    none.
+
+%% Whether an expression returns a Boolean whenever it returns: comparisons,
+%% type tests, and short circuits whose right operands are Booleans, including
+%% after the bindings that compute their arguments.
+boolean(#c_literal{val = Value}) ->
+    is_boolean(Value);
+boolean(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = Name}, args = Args}) ->
+    erl_internal:comp_op(Name, length(Args)) orelse
+        erl_internal:new_type_test(Name, length(Args)) orelse
+        erl_internal:bool_op(Name, length(Args));
+boolean(#c_let{body = Body}) ->
+    boolean(Body);
+boolean(#c_seq{body = Body}) ->
+    boolean(Body);
+boolean(#c_case{} = Case) ->
+    case short_circuit(Case) of
+        {_, _, Right} -> boolean(Right);
+        none -> false
+    end;
+boolean(_) ->
     false.
+
+%% Whether a short-circuit case is the only use of its bound left operand.
+left_operand(Name, #c_case{clauses = Clauses} = Case, Others) ->
+    short_circuit(Case) =/= none andalso
+        not lists:any(fun(Tree) -> lists:member(Name, cerl_trees:free_variables(Tree)) end,
+                      Clauses ++ Others).
+
+let_bind(#c_let{anno = Anno, vars = Vars, arg = Arg, body = Body}, State0) ->
+    {TranslatedArg, State1} = expression(Arg, State0),
+    {TranslatedBody, State2} = expression(Body, State1),
+    {node(~"bind", Anno, #{~"vars" => [variable(V) || V <- Vars],
+        ~"computation" => TranslatedArg, ~"body" => TranslatedBody}), State2}.
 
 computation_case(#c_case{anno = Anno, arg = Arg, clauses = Clauses0}, State0) ->
     Clauses = segment_patterns(Clauses0),
