@@ -207,6 +207,12 @@ def «*/2» : Term → Term → Except Exception Term
     «rem/2» (.integer x) (.integer y) = .ok (.integer (x.tmod y)) := by
   simp [«rem/2», nonzero]
 
+/-- Truncation and Euclidean remainder agree on nonnegative dividends, where
+`omega` and other arithmetic decision procedures understand the latter. -/
+@[simp high] theorem «rem/2_nonneg» (x y : Int) (nonnegative : 0 ≤ x) (nonzero : y ≠ 0) :
+    «rem/2» (.integer x) (.integer y) = .ok (.integer (x % y)) := by
+  simp [«rem/2», nonzero, Int.tmod_eq_emod_of_nonneg nonnegative]
+
 /-- Infinite two's complement AND. For mixed signs, clear the bits of the
 nonnegative operand selected by the complement of the negative operand. -/
 @[expose] def «band/2» : Term → Term → Except Exception Term
@@ -463,6 +469,12 @@ theorem binary_part_whole (bytes : ByteArray) :
 @[simp] theorem «div/2_integers» (x y : Int) (nonzero : y ≠ 0) :
     «div/2» (.integer x) (.integer y) = .ok (.integer (x.tdiv y)) := by
   simp [«div/2», nonzero]
+
+/-- Truncation and Euclidean division agree on nonnegative dividends, where
+`omega` and other arithmetic decision procedures understand the latter. -/
+@[simp high] theorem «div/2_nonneg» (x y : Int) (nonnegative : 0 ≤ x) (nonzero : y ≠ 0) :
+    «div/2» (.integer x) (.integer y) = .ok (.integer (x / y)) := by
+  simp [«div/2», nonzero, Int.tdiv_eq_ediv_of_nonneg nonnegative]
 
 @[expose] def «bnot/1» : Term → Except Exception Term
   | .integer x => .ok (.integer (-x - 1))

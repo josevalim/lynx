@@ -48,20 +48,17 @@ defmodule SVBench.ProdbinLlTest do
           · subst zero
             simp at inv
             simp [«check/1», inv]
-          · have tmod := Int.tmod_eq_emod_of_nonneg (b := 2) nonneg
-            by_cases odd : y.tmod 2 = 1
-            · have tdiv := Int.tdiv_eq_ediv_of_nonneg (b := 2) (show 0 ≤ y - 1 by omega)
-              have next := ih ((y - 1).tdiv 2).toNat (by omega) (2 * x) ((y - 1).tdiv 2) (z + x)
+          · by_cases odd : y % 2 = 1
+            · have next := ih ((y - 1) / 2).toNat (by omega) (2 * x) ((y - 1) / 2) (z + x)
                 (by omega) (by omega) (by
                   have half : y - 1 = 2 * ((y - 1) / 2) := by omega
-                  rw [tdiv]; grind)
-              simp [«check/1», inv, zero, odd, next]
-            · have tdiv := Int.tdiv_eq_ediv_of_nonneg (b := 2) nonneg
-              have next := ih (y.tdiv 2).toNat (by omega) (2 * x) (y.tdiv 2) z
+                  grind)
+              simp [«check/1», inv, zero, odd, next, nonneg, show 1 ≤ y by omega]
+            · have next := ih (y / 2).toNat (by omega) (2 * x) (y / 2) z
                 (by omega) (by omega) (by
                   have half : y = 2 * (y / 2) := by omega
-                  rw [tdiv]; grind)
-              simp [«check/1», inv, zero, odd, next]
+                  grind)
+              simp [«check/1», inv, zero, odd, next, nonneg]
       cases a <;> cases b <;>
         simp [«prodbin_ll:requires/2», Erlang.erlang.«is_integer/1»] at requires
       rename_i a b
