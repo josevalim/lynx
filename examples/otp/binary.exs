@@ -352,9 +352,7 @@ defmodule BinaryProofsTest do
             cases lower <;> simpa [Erlang.binary.«encode_hex/2», offset] using encoded
           have decodePublic (lower : Bool) (ns : List (Fin 16)) (even : ns.length%2=0) :
               Erlang.binary.«decode_hex/1» (ofBits (wire lower ns))=.ok (ofBits (source ns)) := by
-            have remainder : Erlang.erlang.«rem/2» (.integer ns.length) (.integer 2)=.ok (.integer 0) := by
-              change Except.ok (Lynx.Term.integer (ns.length%2 : Nat))=Except.ok (Lynx.Term.integer 0)
-              rw [even]; rfl
+            have remainder : (ns.length : Int) % 2 = 0 := by omega
             unfold Erlang.binary.«decode_hex/1»
             simp [wireSize, remainder, Erlang.erlang.«=:=/2», Lynx.Except.guard, decodeFull]
           have nibbleModel (bits : List Bool) (aligned : bits.length%4=0) :
