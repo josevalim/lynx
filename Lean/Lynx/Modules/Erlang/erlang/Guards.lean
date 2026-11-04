@@ -240,6 +240,14 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
 @[expose] def «/=/2» (left right : Term) : Except Exception Term :=
   .ok (if Term.compare left right = .eq then Term.false else Term.true)
 
+@[simp] theorem «==/2_integers» (x y : Int) :
+    «==/2» (.integer x) (.integer y) = .ok (if x = y then Term.true else Term.false) := by
+  simp [«==/2»]
+
+@[simp] theorem «/=/2_integers» (x y : Int) :
+    «/=/2» (.integer x) (.integer y) = .ok (if x = y then Term.false else Term.true) := by
+  simp [«/=/2»]
+
 @[expose] def «=:=/2» (left right : Term) : Except Exception Term :=
   .ok (if Term.exactCompare left right = .eq then Term.true else Term.false)
 
@@ -261,6 +269,10 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
 @[simp] theorem «>=/2_integers» (x y : Int) :
     «>=/2» (.integer x) (.integer y) = .ok (if y ≤ x then Term.true else Term.false) := by
   simp [«>=/2», Int.isGE_compare]
+
+@[simp] theorem «>/2_integers» (x y : Int) :
+    «>/2» (.integer x) (.integer y) = .ok (if y < x then Term.true else Term.false) := by
+  simp [«>/2», Ordering.isGT_iff_eq_gt, Int.compare_eq_gt]
 
 @[simp] theorem «</2_integers» (x y : Int) :
     «</2» (.integer x) (.integer y) = .ok (if x < y then Term.true else Term.false) := by
