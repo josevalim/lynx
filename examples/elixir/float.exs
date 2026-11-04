@@ -57,13 +57,9 @@ defmodule FloatProofsTest do
 
   # The private reducer loops on zero. Keep it partial; the law proves the
   # public function terminates, including both signed zeros.
-  @ratio_fixpoint ~LEAN"""
-  partial_fixpoint
-  """
-
   laws "Float exact reduced ratios" do
-    termination_suffix &Float.reduce_to_ratio/3, @ratio_fixpoint
-    termination_suffix &Integer.gcd_positive/2, @ratio_fixpoint
+    termination_suffix &Float.reduce_to_ratio/3, ~LEAN"partial_fixpoint"
+    termination_suffix &Integer.gcd_positive/2, ~LEAN"partial_fixpoint"
 
     law ratio_exact_reduced_and_total(number),
       requires: is_float(number),
