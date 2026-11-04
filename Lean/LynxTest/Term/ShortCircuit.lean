@@ -39,6 +39,28 @@ theorem andAlso_rejects_non_boolean :
 theorem orElse_keeps_left_requests (next : Environment → Result) (right : Result) :
     Result.orElse (.get next) right = .get fun env => Result.orElse (next env) right := by rfl
 
+/-- Elixir's strict `and` raises `badbool`, naming the operator. -/
+theorem and_rejects_non_boolean :
+    Except.andAlso (.ok (.integer 1)) (.ok (.atom "true")) true =
+      .error (.error (.tuple #[.atom "badbool", .atom "and", .integer 1])) := by rfl
+
+/-- A chain of comparisons returns `true` exactly when each comparison holds. -/
+theorem andAlso_chain_conjunction (x : Int) :
+    Except.andAlso (Erlang.erlang.«>=/2» (.integer x) (.integer 0))
+        (Except.andAlso (Erlang.erlang.«=</2» (.integer x) (.integer 10))
+          (Erlang.erlang.«/=/2» (.integer x) (.integer 5))) = .ok Term.true ↔
+      0 ≤ x ∧ x ≤ 10 ∧ x ≠ 5 := by
+  simp
+
+/-- Left-nested chains, as Elixir's `and` builds them, also reduce to conjunctions. -/
+theorem andAlso_left_chain_conjunction (x : Int) :
+    Except.andAlso
+        (Except.andAlso (Erlang.erlang.«>=/2» (.integer x) (.integer 0))
+          (Erlang.erlang.«=</2» (.integer x) (.integer 10)))
+        (Erlang.erlang.«/=/2» (.integer x) (.integer 5)) true = .ok Term.true ↔
+      0 ≤ x ∧ x ≤ 10 ∧ x ≠ 5 := by
+  simp
+
 /-- Membership compares exactly, like `=:=`: an integer does not match a float. -/
 theorem isMember_exact :
     Term.isMember (.integer 1) [.float ⟨false, 1023, 0⟩, .integer 2] = .atom "false" := by simp

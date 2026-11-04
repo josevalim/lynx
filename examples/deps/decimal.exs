@@ -116,36 +116,18 @@ defmodule DecimalProofsTest do
         rcases sign with rfl | rfl <;>
           simp [Elixir.Decimal.«new/3», Erlang.erlang.«=:=/2», Erlang.erlang.«is_integer/1»,
             Erlang.erlang.«>=/2», Int.isGE_compare, nonneg]
-      cases coef1 <;> simp [«same_exponent_compare:requires/5», Erlang.erlang.«is_integer/1»,
-        Erlang.erlang.«>=/2», Int.isGE_compare] at requires
-      rename_i c1
-      have nonneg1 : 0 ≤ c1 := by
-        by_cases nonneg : 0 ≤ c1
-        · exact nonneg
-        · simp [nonneg] at requires
-      cases coef2 <;> simp [Erlang.erlang.«is_integer/1», Int.isGE_compare, nonneg1] at requires
-      rename_i c2
-      have nonneg2 : 0 ≤ c2 := by
-        by_cases nonneg : 0 ≤ c2
-        · exact nonneg
-        · simp [nonneg] at requires
-      cases exp <;> simp [Erlang.erlang.«is_integer/1», Int.isGE_compare, nonneg2] at requires
-      rename_i e
-      cases sign1 <;> simp [Erlang.erlang.«=:=/2»] at requires
-      rename_i s1
-      have sign1 : s1 = 1 ∨ s1 = -1 := by
-        by_cases valid : s1 = 1 ∨ s1 = -1
-        · exact valid
-        · simp [show s1 ≠ 1 by omega, show s1 ≠ -1 by omega] at requires
-      rcases sign1 with rfl | rfl
-      all_goals
-        cases sign2 <;> simp [Erlang.erlang.«=:=/2»] at requires
-        rename_i s2
-        have sign2 : s2 = 1 ∨ s2 = -1 := by
-          by_cases valid : s2 = 1 ∨ s2 = -1
-          · exact valid
-          · simp [show s2 ≠ 1 by omega, show s2 ≠ -1 by omega] at requires
-        rcases sign2 with rfl | rfl
+      simp [«same_exponent_compare:requires/5»] at requires
+      obtain ⟨⟨⟨⟨⟨⟨int1, nonneg1⟩, int2⟩, nonneg2⟩, int3⟩, valid1⟩, valid2⟩ := requires
+      cases coef1 <;> simp [Erlang.erlang.«is_integer/1»] at int1
+      cases coef2 <;> simp [Erlang.erlang.«is_integer/1»] at int2
+      cases exp <;> simp [Erlang.erlang.«is_integer/1»] at int3
+      rename_i c1 c2 e
+      simp at nonneg1 nonneg2
+      replace valid1 : sign1 = .integer 1 ∨ sign1 = .integer (-1) := by
+        by_cases one : sign1 = .integer 1 <;> simp_all
+      replace valid2 : sign2 = .integer 1 ∨ sign2 = .integer (-1) := by
+        by_cases one : sign2 = .integer 1 <;> simp_all
+      rcases valid1 with rfl | rfl <;> rcases valid2 with rfl | rfl
       all_goals
         simp only [«same_exponent_compare:ensures/5»]
         simp [created, nonneg1, nonneg2]

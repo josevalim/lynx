@@ -410,8 +410,8 @@ defmodule RandProofsTest do
           peel h
           exact ⟨_, _, rfl⟩
       simp only [Lynx.apply_eq, «shuffle_short_consumes_nothing:requires/3», «shuffle_returns/3»,
-        Lynx.Except.bind_eq_ok] at requires
-      obtain ⟨tested, ⟨state, seeded, r, returned, paired⟩, short⟩ := requires
+        Lynx.Term.true, Lynx.Except.andAlso_eq_true, Lynx.Except.bind_eq_ok] at requires
+      obtain ⟨⟨state, seeded, r, returned, paired⟩, short⟩ := requires
       have result := returned
       unfold Erlang.rand.«shuffle_s/2» at result
       simp only [Lynx.Except.guard_eq] at result
@@ -420,9 +420,6 @@ defmodule RandProofsTest do
       obtain ⟨P, W, bits⟩ := init _ _ _ initialized
       simp only [Lynx.Term.cons.injEq] at bits
       obtain ⟨rfl, rfl⟩ := bits
-      simp only [Lynx.Except.pure_eq_ok, Except.ok.injEq] at paired
-      subst paired
-      simp only [Lynx.Term.true] at short
       rcases list with _ | _ | _ | _ | _ | _ | _ | _ | _ |
           ⟨head, _ | _ | _ | _ | _ | _ | _ | _ | _ | ⟨_, _⟩ | _⟩ | _ <;>
         simp [«at_most_one/1»] at short

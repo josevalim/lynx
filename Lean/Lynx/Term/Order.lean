@@ -152,9 +152,9 @@ private theorem bot_rel (computation : Except Exception α) :
     exact nextMono x y below ()
 
 @[partial_fixpoint_monotone] theorem monotone_orElse [PartialOrder γ]
-    (left right : γ → Except Exception Term) (leftMono : monotone left)
+    (left right : γ → Except Exception Term) (badbool : Bool) (leftMono : monotone left)
     (rightMono : monotone right) :
-    monotone fun x => orElse (left x) (right x) := by
+    monotone fun x => orElse (left x) (right x) badbool := by
   apply monotone_bind (Except Exception) _ _ leftMono
   intro x y below value
   dsimp only
@@ -164,9 +164,9 @@ private theorem bot_rel (computation : Except Exception α) :
   · exact PartialOrder.rel_refl
 
 @[partial_fixpoint_monotone] theorem monotone_andAlso [PartialOrder γ]
-    (left right : γ → Except Exception Term) (leftMono : monotone left)
+    (left right : γ → Except Exception Term) (badbool : Bool) (leftMono : monotone left)
     (rightMono : monotone right) :
-    monotone fun x => andAlso (left x) (right x) := by
+    monotone fun x => andAlso (left x) (right x) badbool := by
   apply monotone_bind (Except Exception) _ _ leftMono
   intro x y below value
   dsimp only

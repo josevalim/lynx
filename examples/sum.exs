@@ -39,8 +39,7 @@ defmodule SumProofsTest do
         | case3 input notNil notCons => simp_all [«is_integer_list/1»]
       have validity : «is_integer_list/1» l = .ok Lynx.Term.true ∧
           «is_integer_list/1» r = .ok Lynx.Term.true := by
-        cases left : «is_integer_list/1» l <;> simp [«sum_append:requires/2», left] at requires
-        split at requires <;> simp_all [Lynx.Term.true]
+        simpa [«sum_append:requires/2»] using requires
       obtain ⟨leftSum, leftReturned, append⟩ := sums l validity.1
       obtain ⟨rightSum, rightReturned, _⟩ := sums r validity.2
       obtain ⟨joined, appended, combined⟩ := append r rightSum rightReturned
