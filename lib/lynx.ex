@@ -163,8 +163,11 @@ defmodule Lynx do
       proves its monotonicity for translated code. Inputs on which the function
       diverges raise `Lynx.Exception.exhausted`. Use the generated `.eq_def`
       equation and induction on a decreasing measure to establish that calls
-      in the domain return. The suffix alone does not prove totality, and does
-      not change the function's purity.
+      in the domain return. To prove a property of every value the function
+      returns, use its `fixpoint_induct` principle with
+      `Lynx.Except.admissible_returnsN` instead (see `Lynx.Case.termination_suffix/2`).
+      The suffix alone does not prove totality, and does not change the
+      function's purity.
 
     * Inspect the generated Lean before writing the proof. BEAM compilation
       can inline helpers or replace arithmetic with bit operations. Prove

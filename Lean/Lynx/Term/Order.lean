@@ -108,6 +108,78 @@ theorem admissible_success (post : α → Prop) :
       ∀ value, computation = .ok value → post value) :=
   admissible_of_bottom _ (by simp)
 
+/-! Postconditions on every successful return of a function, for its fixed-point
+induction principle. The motive of `f.fixpoint_induct` for a translated function
+`f` of `n` arguments has the shape of `admissible_returnsN`:
+
+    apply f.fixpoint_induct (motive := fun f => ∀ a₁ … aₙ v, f a₁ … aₙ = .ok v → post a₁ … aₙ v)
+    · exact Lynx.Except.admissible_returnsN _
+-/
+
+theorem admissible_returns1 (post : α₁ → β → Prop) :
+    admissible (fun f : α₁ → Except Exception β =>
+      ∀ a₁ v, f a₁ = .ok v → post a₁ v) :=
+  admissible_pi_apply (fun a₁ (g : Except Exception β) => ∀ v, g = .ok v → post a₁ v)
+    fun a₁ => admissible_success (post a₁)
+
+theorem admissible_returns2 (post : α₁ → α₂ → β → Prop) :
+    admissible (fun f : α₁ → α₂ → Except Exception β =>
+      ∀ a₁ a₂ v, f a₁ a₂ = .ok v → post a₁ a₂ v) :=
+  admissible_pi_apply
+    (fun a₁ (g : α₂ → Except Exception β) => ∀ a₂ v, g a₂ = .ok v → post a₁ a₂ v)
+    fun a₁ => admissible_returns1 (post a₁)
+
+theorem admissible_returns3 (post : α₁ → α₂ → α₃ → β → Prop) :
+    admissible (fun f : α₁ → α₂ → α₃ → Except Exception β =>
+      ∀ a₁ a₂ a₃ v, f a₁ a₂ a₃ = .ok v → post a₁ a₂ a₃ v) :=
+  admissible_pi_apply
+    (fun a₁ (g : α₂ → α₃ → Except Exception β) => ∀ a₂ a₃ v, g a₂ a₃ = .ok v → post a₁ a₂ a₃ v)
+    fun a₁ => admissible_returns2 (post a₁)
+
+theorem admissible_returns4 (post : α₁ → α₂ → α₃ → α₄ → β → Prop) :
+    admissible (fun f : α₁ → α₂ → α₃ → α₄ → Except Exception β =>
+      ∀ a₁ a₂ a₃ a₄ v, f a₁ a₂ a₃ a₄ = .ok v → post a₁ a₂ a₃ a₄ v) :=
+  admissible_pi_apply
+    (fun a₁ (g : α₂ → α₃ → α₄ → Except Exception β) =>
+      ∀ a₂ a₃ a₄ v, g a₂ a₃ a₄ = .ok v → post a₁ a₂ a₃ a₄ v)
+    fun a₁ => admissible_returns3 (post a₁)
+
+theorem admissible_returns5 (post : α₁ → α₂ → α₃ → α₄ → α₅ → β → Prop) :
+    admissible (fun f : α₁ → α₂ → α₃ → α₄ → α₅ → Except Exception β =>
+      ∀ a₁ a₂ a₃ a₄ a₅ v, f a₁ a₂ a₃ a₄ a₅ = .ok v → post a₁ a₂ a₃ a₄ a₅ v) :=
+  admissible_pi_apply
+    (fun a₁ (g : α₂ → α₃ → α₄ → α₅ → Except Exception β) =>
+      ∀ a₂ a₃ a₄ a₅ v, g a₂ a₃ a₄ a₅ = .ok v → post a₁ a₂ a₃ a₄ a₅ v)
+    fun a₁ => admissible_returns4 (post a₁)
+
+theorem admissible_returns6 (post : α₁ → α₂ → α₃ → α₄ → α₅ → α₆ → β → Prop) :
+    admissible (fun f : α₁ → α₂ → α₃ → α₄ → α₅ → α₆ → Except Exception β =>
+      ∀ a₁ a₂ a₃ a₄ a₅ a₆ v, f a₁ a₂ a₃ a₄ a₅ a₆ = .ok v → post a₁ a₂ a₃ a₄ a₅ a₆ v) :=
+  admissible_pi_apply
+    (fun a₁ (g : α₂ → α₃ → α₄ → α₅ → α₆ → Except Exception β) =>
+      ∀ a₂ a₃ a₄ a₅ a₆ v, g a₂ a₃ a₄ a₅ a₆ = .ok v → post a₁ a₂ a₃ a₄ a₅ a₆ v)
+    fun a₁ => admissible_returns5 (post a₁)
+
+-- Deeper function types need a larger instance search for their order.
+set_option synthInstance.maxSize 2048 in
+theorem admissible_returns7 (post : α₁ → α₂ → α₃ → α₄ → α₅ → α₆ → α₇ → β → Prop) :
+    admissible (fun f : α₁ → α₂ → α₃ → α₄ → α₅ → α₆ → α₇ → Except Exception β =>
+      ∀ a₁ a₂ a₃ a₄ a₅ a₆ a₇ v, f a₁ a₂ a₃ a₄ a₅ a₆ a₇ = .ok v → post a₁ a₂ a₃ a₄ a₅ a₆ a₇ v) :=
+  admissible_pi_apply
+    (fun a₁ (g : α₂ → α₃ → α₄ → α₅ → α₆ → α₇ → Except Exception β) =>
+      ∀ a₂ a₃ a₄ a₅ a₆ a₇ v, g a₂ a₃ a₄ a₅ a₆ a₇ = .ok v → post a₁ a₂ a₃ a₄ a₅ a₆ a₇ v)
+    fun a₁ => admissible_returns6 (post a₁)
+
+set_option synthInstance.maxSize 2048 in
+theorem admissible_returns8 (post : α₁ → α₂ → α₃ → α₄ → α₅ → α₆ → α₇ → α₈ → β → Prop) :
+    admissible (fun f : α₁ → α₂ → α₃ → α₄ → α₅ → α₆ → α₇ → α₈ → Except Exception β =>
+      ∀ a₁ a₂ a₃ a₄ a₅ a₆ a₇ a₈ v,
+        f a₁ a₂ a₃ a₄ a₅ a₆ a₇ a₈ = .ok v → post a₁ a₂ a₃ a₄ a₅ a₆ a₇ a₈ v) :=
+  admissible_pi_apply
+    (fun a₁ (g : α₂ → α₃ → α₄ → α₅ → α₆ → α₇ → α₈ → Except Exception β) =>
+      ∀ a₂ a₃ a₄ a₅ a₆ a₇ a₈ v, g a₂ a₃ a₄ a₅ a₆ a₇ a₈ = .ok v → post a₁ a₂ a₃ a₄ a₅ a₆ a₇ a₈ v)
+    fun a₁ => admissible_returns7 (post a₁)
+
 /-- A computation below another either does not return or equals it. -/
 private theorem rel_cases {left right : Except Exception α} (below : left ⊑ right) :
     left = .error .exhausted ∨ left = right := by
