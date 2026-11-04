@@ -45,15 +45,11 @@ defmodule ListsProofsTest do
       Enum.sort(result) === result
   end
 
-  @merge_fixpoint ~LEAN"""
-  partial_fixpoint
-  """
-
   laws "sort preserves multiplicities and is idempotent" do
     # The list-only law never enters Enum's general enumerable implementation.
     cutoff &Enum.sort/2
-    termination_suffix &:lists.mergel/2, @merge_fixpoint
-    termination_suffix &:lists.rmergel/2, @merge_fixpoint
+    termination_suffix &:lists.mergel/2, ~LEAN"partial_fixpoint"
+    termination_suffix &:lists.rmergel/2, ~LEAN"partial_fixpoint"
 
     law sort_contract_holds(list, value),
       requires: proper_list(list),

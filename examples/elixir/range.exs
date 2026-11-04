@@ -26,12 +26,8 @@ defmodule RangeProofsTest do
       rem(value - first, step) === 0
   end
 
-  @extended_gcd_fixpoint ~LEAN"""
-  partial_fixpoint
-  """
-
   laws "Range intersection arithmetic", options: [maxHeartbeats: 1_000_000] do
-    termination_suffix &Integer.extended_gcd/6, @extended_gcd_fixpoint
+    termination_suffix &Integer.extended_gcd/6, ~LEAN"partial_fixpoint"
 
     law extended_gcd_obeys_bezout(left, right),
       requires: is_integer(left) and is_integer(right),
@@ -188,15 +184,11 @@ defmodule RangeProofsTest do
       end
   end
 
-  @range_size_fixpoint ~LEAN"""
-  partial_fixpoint
-  """
-
   laws "Range split", options: [maxHeartbeats: 1_000_000] do
     cutoff &Kernel.inspect/1
     cutoff &ArgumentError.exception/1
 
-    termination_suffix &Range.size/1, @range_size_fixpoint
+    termination_suffix &Range.size/1, ~LEAN"partial_fixpoint"
 
     law split_preserves_ordered_partition(first, last, step, cut, index),
       requires:
@@ -440,7 +432,7 @@ defmodule RangeProofsTest do
   laws "Range shift", options: [maxHeartbeats: 1_000_000] do
     cutoff &Kernel.inspect/1
     cutoff &ArgumentError.exception/1
-    termination_suffix &Range.size/1, @range_size_fixpoint
+    termination_suffix &Range.size/1, ~LEAN"partial_fixpoint"
 
     law shift_obeys_translation_laws(first, last, step, left, right, point),
       requires:

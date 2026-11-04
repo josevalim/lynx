@@ -61,17 +61,11 @@ defmodule IntegerProofsTest do
     end
   end
 
-  # Private helpers have broader domains than the public API: popcount/2 can
-  # diverge on negative inputs. Prove totality separately on each API's domain.
-  @integer_fixpoint ~LEAN"""
-  partial_fixpoint
-  """
-
   laws "Integer digits" do
     cutoff &ArgumentError.exception/1
     cutoff &String.Chars.to_string/1
-    termination_suffix &Integer.digits/3, @integer_fixpoint
-    termination_suffix &Integer.undigits/3, @integer_fixpoint
+    termination_suffix &Integer.digits/3, ~LEAN"partial_fixpoint"
+    termination_suffix &Integer.undigits/3, ~LEAN"partial_fixpoint"
 
     law digits_round_trip(integer, base),
       requires: is_integer(integer) and is_integer(base) and base >= 2,
@@ -266,8 +260,10 @@ defmodule IntegerProofsTest do
     do: is_integer(count) and count >= 0 and count <= integer and count === 0 === (integer === 0)
 
   laws "Integer recursion and parity" do
-    termination_suffix &Integer.gcd_positive/2, @integer_fixpoint
-    termination_suffix &Integer.popcount/2, @integer_fixpoint
+    # Private helpers have broader domains than the public API: popcount/2 can
+    # diverge on negative inputs. Prove totality separately on each API's domain.
+    termination_suffix &Integer.gcd_positive/2, ~LEAN"partial_fixpoint"
+    termination_suffix &Integer.popcount/2, ~LEAN"partial_fixpoint"
 
     law gcd_characterization(left, right, divisor),
       requires: is_integer(left) and is_integer(right) and is_integer(divisor),
