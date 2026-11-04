@@ -211,11 +211,6 @@ defmodule Lynx do
   Proofs describe Lynx's model of the Erlang runtime. The following restrictions
   matter when interpreting their results:
 
-    * Bitstring float segments support only 64 bits. Float-16 and float-32
-      construction currently raises `badarg` in the model, and matching those
-      sizes is rejected during translation. Float segment sizes must be known
-      at translation time.
-
     * Bitstring generators whose segment widths may all be zero, such as
       `for <<x::size(n) <- bits>>` with `n = 0`, raise `badarg` instead of
       repeating forever as Erlang does.
