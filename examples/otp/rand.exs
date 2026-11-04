@@ -94,124 +94,6 @@ defmodule RandProofsTest do
         onto (xs ++ ys) acc = onto xs (onto ys acc) := by
       induction xs <;> simp_all
 
-    -- Postconditions on successful returns are admissible for fixed point induction.
-    theorem post4 (R : Term → Term → Term → Term → Term → Prop) :
-        Lean.Order.admissible (fun f : Term → Term → Term → Term → Except Exception Term =>
-          ∀ a0 a1 a2 a3 v, f a0 a1 a2 a3 = .ok v → R a0 a1 a2 a3 v) := by
-      apply Lean.Order.admissible_pi_apply
-        (fun a0 (g : Term → Term → Term → Except Exception Term) =>
-          ∀ a1 a2 a3 v, g a1 a2 a3 = .ok v → R a0 a1 a2 a3 v)
-      intro a0
-      apply Lean.Order.admissible_pi_apply
-        (fun a1 (g : Term → Term → Except Exception Term) =>
-          ∀ a2 a3 v, g a2 a3 = .ok v → R a0 a1 a2 a3 v)
-      intro a1
-      apply Lean.Order.admissible_pi_apply
-        (fun a2 (g : Term → Except Exception Term) =>
-          ∀ a3 v, g a3 = .ok v → R a0 a1 a2 a3 v)
-      intro a2
-      apply Lean.Order.admissible_pi_apply
-        (fun a3 (g : Except Exception Term) =>
-          ∀ v, g = .ok v → R a0 a1 a2 a3 v)
-      intro a3
-      exact Lynx.Except.admissible_success _
-
-    theorem post5 (R : Term → Term → Term → Term → Term → Term → Prop) :
-        Lean.Order.admissible (fun f : Term → Term → Term → Term → Term → Except Exception Term =>
-          ∀ a0 a1 a2 a3 a4 v, f a0 a1 a2 a3 a4 = .ok v → R a0 a1 a2 a3 a4 v) := by
-      apply Lean.Order.admissible_pi_apply
-        (fun a0 (g : Term → Term → Term → Term → Except Exception Term) =>
-          ∀ a1 a2 a3 a4 v, g a1 a2 a3 a4 = .ok v → R a0 a1 a2 a3 a4 v)
-      intro a0
-      apply Lean.Order.admissible_pi_apply
-        (fun a1 (g : Term → Term → Term → Except Exception Term) =>
-          ∀ a2 a3 a4 v, g a2 a3 a4 = .ok v → R a0 a1 a2 a3 a4 v)
-      intro a1
-      apply Lean.Order.admissible_pi_apply
-        (fun a2 (g : Term → Term → Except Exception Term) =>
-          ∀ a3 a4 v, g a3 a4 = .ok v → R a0 a1 a2 a3 a4 v)
-      intro a2
-      apply Lean.Order.admissible_pi_apply
-        (fun a3 (g : Term → Except Exception Term) =>
-          ∀ a4 v, g a4 = .ok v → R a0 a1 a2 a3 a4 v)
-      intro a3
-      apply Lean.Order.admissible_pi_apply
-        (fun a4 (g : Except Exception Term) =>
-          ∀ v, g = .ok v → R a0 a1 a2 a3 a4 v)
-      intro a4
-      exact Lynx.Except.admissible_success _
-
-    theorem post6 (R : Term → Term → Term → Term → Term → Term → Term → Prop) :
-        Lean.Order.admissible (fun f : Term → Term → Term → Term → Term → Term →
-            Except Exception Term =>
-          ∀ a0 a1 a2 a3 a4 a5 v, f a0 a1 a2 a3 a4 a5 = .ok v → R a0 a1 a2 a3 a4 a5 v) := by
-      apply Lean.Order.admissible_pi_apply
-        (fun a0 (g : Term → Term → Term → Term → Term → Except Exception Term) =>
-          ∀ a1 a2 a3 a4 a5 v, g a1 a2 a3 a4 a5 = .ok v → R a0 a1 a2 a3 a4 a5 v)
-      intro a0
-      apply Lean.Order.admissible_pi_apply
-        (fun a1 (g : Term → Term → Term → Term → Except Exception Term) =>
-          ∀ a2 a3 a4 a5 v, g a2 a3 a4 a5 = .ok v → R a0 a1 a2 a3 a4 a5 v)
-      intro a1
-      apply Lean.Order.admissible_pi_apply
-        (fun a2 (g : Term → Term → Term → Except Exception Term) =>
-          ∀ a3 a4 a5 v, g a3 a4 a5 = .ok v → R a0 a1 a2 a3 a4 a5 v)
-      intro a2
-      apply Lean.Order.admissible_pi_apply
-        (fun a3 (g : Term → Term → Except Exception Term) =>
-          ∀ a4 a5 v, g a4 a5 = .ok v → R a0 a1 a2 a3 a4 a5 v)
-      intro a3
-      apply Lean.Order.admissible_pi_apply
-        (fun a4 (g : Term → Except Exception Term) =>
-          ∀ a5 v, g a5 = .ok v → R a0 a1 a2 a3 a4 a5 v)
-      intro a4
-      apply Lean.Order.admissible_pi_apply
-        (fun a5 (g : Except Exception Term) =>
-          ∀ v, g = .ok v → R a0 a1 a2 a3 a4 a5 v)
-      intro a5
-      exact Lynx.Except.admissible_success _
-
-    -- Instances for functions of eight arguments nest deeply.
-    set_option synthInstance.maxSize 2048 in
-    theorem post8 (R : Term → Term → Term → Term → Term → Term → Term → Term → Term → Prop) :
-        Lean.Order.admissible (fun f : Term → Term → Term → Term → Term → Term → Term → Term →
-            Except Exception Term =>
-          ∀ a0 a1 a2 a3 a4 a5 a6 a7 v, f a0 a1 a2 a3 a4 a5 a6 a7 = .ok v →
-            R a0 a1 a2 a3 a4 a5 a6 a7 v) := by
-      apply Lean.Order.admissible_pi_apply
-        (fun a0 (g : Term → Term → Term → Term → Term → Term → Term → Except Exception Term) =>
-          ∀ a1 a2 a3 a4 a5 a6 a7 v, g a1 a2 a3 a4 a5 a6 a7 = .ok v → R a0 a1 a2 a3 a4 a5 a6 a7 v)
-      intro a0
-      apply Lean.Order.admissible_pi_apply
-        (fun a1 (g : Term → Term → Term → Term → Term → Term → Except Exception Term) =>
-          ∀ a2 a3 a4 a5 a6 a7 v, g a2 a3 a4 a5 a6 a7 = .ok v → R a0 a1 a2 a3 a4 a5 a6 a7 v)
-      intro a1
-      apply Lean.Order.admissible_pi_apply
-        (fun a2 (g : Term → Term → Term → Term → Term → Except Exception Term) =>
-          ∀ a3 a4 a5 a6 a7 v, g a3 a4 a5 a6 a7 = .ok v → R a0 a1 a2 a3 a4 a5 a6 a7 v)
-      intro a2
-      apply Lean.Order.admissible_pi_apply
-        (fun a3 (g : Term → Term → Term → Term → Except Exception Term) =>
-          ∀ a4 a5 a6 a7 v, g a4 a5 a6 a7 = .ok v → R a0 a1 a2 a3 a4 a5 a6 a7 v)
-      intro a3
-      apply Lean.Order.admissible_pi_apply
-        (fun a4 (g : Term → Term → Term → Except Exception Term) =>
-          ∀ a5 a6 a7 v, g a5 a6 a7 = .ok v → R a0 a1 a2 a3 a4 a5 a6 a7 v)
-      intro a4
-      apply Lean.Order.admissible_pi_apply
-        (fun a5 (g : Term → Term → Except Exception Term) =>
-          ∀ a6 a7 v, g a6 a7 = .ok v → R a0 a1 a2 a3 a4 a5 a6 a7 v)
-      intro a5
-      apply Lean.Order.admissible_pi_apply
-        (fun a6 (g : Term → Except Exception Term) =>
-          ∀ a7 v, g a7 = .ok v → R a0 a1 a2 a3 a4 a5 a6 a7 v)
-      intro a6
-      apply Lean.Order.admissible_pi_apply
-        (fun a7 (g : Except Exception Term) =>
-          ∀ v, g = .ok v → R a0 a1 a2 a3 a4 a5 a6 a7 v)
-      intro a7
-      exact Lynx.Except.admissible_success _
-
     /-- Split a successful return into the paths that produce it, discarding those
     that raise. The values bound along the way are split the same way. -/
     syntax "peel " ident : tactic
@@ -272,7 +154,7 @@ defmodule RandProofsTest do
         apply Erlang.rand.«shuffle_r_2/5».fixpoint_induct d
           (motive := fun f => ∀ X acc P S Y r, f X acc P S Y = .ok r →
             ∃ ys P' S', r = .tuple #[onto ys acc, P', S'] ∧ ys.Perm [X, Y])
-        · exact post5 _
+        · exact Lynx.Except.admissible_returns5 _
         · intro f ih X acc P S Y r h
           simp only [Lynx.Except.guard_eq] at h
           peel h
@@ -287,7 +169,7 @@ defmodule RandProofsTest do
         apply Erlang.rand.«shuffle_r_3/6».fixpoint_induct d
           (motive := fun f => ∀ X acc P S Y Z r, f X acc P S Y Z = .ok r →
             ∃ ys P' S', r = .tuple #[onto ys acc, P', S'] ∧ ys.Perm [X, Y, Z])
-        · exact post6 _
+        · exact Lynx.Except.admissible_returns6 _
         · intro f ih X acc P S Y Z r h
           simp only [Lynx.Except.guard_eq] at h
           peel h
@@ -311,8 +193,8 @@ defmodule RandProofsTest do
             ∃ xs a b c k ys P' S', L = Lynx.Term.list xs ∧ z = Lynx.Term.list a ∧
               o = Lynx.Term.list b ∧ t = Lynx.Term.list c ∧ e = Lynx.Term.list k ∧
               ys.Perm (xs ++ a ++ b ++ c ++ k) ∧ r = .tuple #[onto ys acc, P', S'])
-        · exact post4 _
-        · exact post8 _
+        · exact Lynx.Except.admissible_returns4 _
+        · exact Lynx.Except.admissible_returns8 _
         · intro g ihg L acc P S r h
           peel h
           all_goals first

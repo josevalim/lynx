@@ -111,6 +111,18 @@ defmodule Lynx.Case do
   (see the purity model in `Lynx`). With `partial_fixpoint`, inputs on which
   the function diverges raise `Lynx.Exception.exhausted`.
   Raises if the target function is not translated by the group's laws.
+
+  A function with `partial_fixpoint` also gets a `fixpoint_induct` principle,
+  which proves properties of every successful return without a termination
+  measure, as returns on divergent inputs never happen. For a pure function of
+  `n` arguments, `Lynx.Except.admissible_returnsN` discharges its admissibility
+  goal:
+
+      apply «mod/2».fixpoint_induct
+        (motive := fun f => ∀ a b v, f a b = .ok v → post a b v)
+      · exact Lynx.Except.admissible_returns2 _
+      · intro f ih a b v returned
+        ...
   """
   defmacro termination_suffix(target, source) do
     mfa =
