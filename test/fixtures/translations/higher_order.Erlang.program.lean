@@ -15,8 +15,8 @@ set_option «match».ignoreUnusedAlts true
 def fun_table : Lynx.Term.FunTable :=
   #[Lynx.Term.FunEntry.pure
       (fun captures args =>
-        match captures, args with
-        | #[], #[varg1] => Erlang.higher_order.«$lynx_fun_0/1» varg1
+        match (captures).toList, (args).toList with
+        | [], [varg1] => Erlang.higher_order.«$lynx_fun_0/1» varg1
         | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")))
       (some
         (Lynx.Term.tuple
@@ -24,8 +24,8 @@ def fun_table : Lynx.Term.FunTable :=
             Lynx.Term.integer 1])),
     Lynx.Term.FunEntry.pure
       (fun captures args =>
-        match captures, args with
-        | #[], #[varg1] => Erlang.higher_order.«$lynx_fun_1/1» varg1
+        match (captures).toList, (args).toList with
+        | [], [varg1] => Erlang.higher_order.«$lynx_fun_1/1» varg1
         | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")))
       (some
         (Lynx.Term.tuple

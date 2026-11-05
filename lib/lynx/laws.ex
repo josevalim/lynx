@@ -117,6 +117,9 @@ defmodule Lynx.Laws do
   no handler catches; successful-return proofs must show they are unreachable.
   No return values or Erlang exceptions are assumed for a cutoff.
 
+  Pass `dynamic: [{module, function, arity}]` to declare the functions that calls
+  by name may reach, as with `Lynx.Case.dynamic/1`.
+
   Pass `preludes: [source, ...]` to load `Lynx.Lean` declaration blocks before
   translated definitions and proofs, as with `Lynx.Case.prelude/1`.
 

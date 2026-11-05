@@ -1,7 +1,7 @@
 -module(functions).
 -export([captured_closures/1, zero_arity_calls/0, apply_calls/1, sequence_calls/1,
          make/1, explicit/2, inc/1, zero/0, remember/1, make_store/1, references/0,
-         qualified_capture/1]).
+         qualified_capture/1, calls_by_name/2]).
 
 %% Two closures share code but retain different captured values.
 captured_closures(X) ->
@@ -50,3 +50,9 @@ references() ->
 qualified_capture(X) ->
     Inc = fun functions:inc/1,
     {Inc(X), explicit(Inc, [X])}.
+
+%% Calls by name with a computed module reach the function values the program
+%% creates, here fun functions:inc/1.
+calls_by_name(Module, X) ->
+    Inc = erlang:make_fun(Module, inc, 1),
+    {apply(Module, inc, [X]), Module:inc(X), Inc(X)}.

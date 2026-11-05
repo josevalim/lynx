@@ -19,24 +19,24 @@ variable {α β : Type}
 private def mapViewLookup (cmp : α → α → Ordering) (xs : List (α × α)) (q : α) : Option α :=
   (xs.find? fun e => decide (cmp q e.1 = .eq)).map Prod.snd
 
-private def mapViewInsert (cmp : α → α → Ordering) (e : α × α) : List (α × α) → List (α × α)
+@[expose] def mapViewInsert (cmp : α → α → Ordering) (e : α × α) : List (α × α) → List (α × α)
   | [] => [e]
   | p :: xs => match cmp e.1 p.1 with
     | .eq => e :: xs
     | .lt => e :: p :: xs
     | .gt => p :: mapViewInsert cmp e xs
 
-private def mapView (cmp : α → α → Ordering) : List (α × α) → List (α × α)
+@[expose] def mapView (cmp : α → α → Ordering) : List (α × α) → List (α × α)
   | [] => []
   | e :: xs => mapViewInsert cmp e (mapView cmp xs)
 
-private def compareOn (cmp : β → β → Ordering) (f : α → β) (a b : α) := cmp (f a) (f b)
+@[expose] def compareOn (cmp : β → β → Ordering) (f : α → β) (a b : α) := cmp (f a) (f b)
 
 private instance (cmp : β → β → Ordering) (f : α → β) [Std.TransCmp cmp] : Std.TransCmp (compareOn cmp f) where
   eq_swap := by intros; exact Std.OrientedCmp.eq_swap (cmp := cmp)
   isLE_trans := by intros; exact Std.TransCmp.isLE_trans (cmp := cmp) ‹_› ‹_›
 
-private def ratCompare (a b : Rat) : Ordering := compareOfLessAndEq a b
+@[expose] def ratCompare (a b : Rat) : Ordering := compareOfLessAndEq a b
 
 private theorem rat_lt_trans {a b c : Rat} (hab : a < b) (hbc : b < c) : a < c := by
   rw [Rat.lt_iff_le_and_not_ge]
@@ -76,7 +76,7 @@ private instance : Std.TransCmp ratCompare where
 
 /-- Exact float ordering is numeric first and uses the representation only to
 distinguish numerically equal encodings, notably positive and negative zero. -/
-private def exactFloatCompareSlow (a b : FiniteFloat) : Ordering :=
+@[expose] def exactFloatCompareSlow (a b : FiniteFloat) : Ordering :=
   compareLex (compareOn ratCompare FiniteFloat.toRat)
     (compareLex (compareOn Ord.compare (fun value => !value.negative))
       (compareLex (compareOn Ord.compare FiniteFloat.exponent)
@@ -100,7 +100,7 @@ private instance : Std.TransCmp exactFloatCompareSlow :=
     exact ⟨rfl, rfl, rfl, rfl⟩
 
 /-- Avoid decoding the binary64 value when the representations are already equal. -/
-private def exactFloatCompare (a b : FiniteFloat) : Ordering :=
+@[expose] def exactFloatCompare (a b : FiniteFloat) : Ordering :=
   if a = b then .eq else exactFloatCompareSlow a b
 
 private theorem exactFloatCompare_eq_slow (a b : FiniteFloat) :
@@ -127,7 +127,7 @@ private instance : Std.TransCmp exactFloatCompare where
   rw [exactFloatCompare_eq_slow]
   exact exactFloatCompareSlow_eq_iff a b
 
-private def compareMapViews (keyCmp valueCmp : α → α → Ordering) :
+@[expose] def compareMapViews (keyCmp valueCmp : α → α → Ordering) :
     List (α × α) → List (α × α) → Ordering :=
   compareLex (compareOn Ord.compare List.length)
     (compareLex (compareOn (List.compareLex keyCmp) (List.map Prod.fst))
@@ -171,8 +171,9 @@ end Lynx.Term.Compare
 namespace Lynx.Term.Compare
 
 /-- One comparison step. `exact` controls whether integer and float types are
-distinct. Map keys always use the exact child comparator. -/
-private def compareStep (exact : Bool) (cmp exactCmp : Term → Term → Ordering) :
+distinct. Map keys always use the exact child comparator. Its body is exposed
+so evaluation can compare terms. -/
+@[expose] def compareStep (exact : Bool) (cmp exactCmp : Term → Term → Ordering) :
     Term → Term → Ordering
   | .integer a, .integer b => if exact then Ord.compare a b else ratCompare a b
   | .integer a, .float b => if exact then .lt else ratCompare a b.toRat
@@ -333,7 +334,8 @@ nested terms. The termination bound is erased from executable code. -/
 termination_by max (sizeOf a) (sizeOf b)
 decreasing_by all_goals exact Nat.max_lt.mpr ⟨x.property, y.property⟩
 
-private theorem exactCompare_eq_step (a b : Term) :
+/-- Evaluation compares terms one step at a time. -/
+@[cbv_eval] theorem exactCompare_eq_step (a b : Term) :
     exactCompare a b = Compare.compareStep true exactCompare exactCompare a b := by
   rw [exactCompare]
   exact Compare.boundedStep_eq _ _ _ _ _ _ _ _
@@ -495,7 +497,8 @@ Map keys retain their exact types. -/
 termination_by max (sizeOf a) (sizeOf b)
 decreasing_by exact Nat.max_lt.mpr ⟨x.property, y.property⟩
 
-private theorem compare_eq_step (a b : Term) :
+/-- Evaluation compares terms one step at a time. -/
+@[cbv_eval] theorem compare_eq_step (a b : Term) :
     compare a b = Compare.compareStep false compare exactCompare a b := by
   rw [compare]
   exact Compare.boundedStep_eq _ _ _ _ _ _ _ _
@@ -569,6 +572,11 @@ namespace Lynx.Term
 
 @[simp] theorem exactCompare_reference (a b : List Nat) :
     exactCompare (.reference a) (.reference b) = Ord.compare a b := by
+  rw [exactCompare_eq_step]
+  rfl
+
+@[simp] theorem exactCompare_pid (a b : PID) :
+    exactCompare (.pid a) (.pid b) = Ord.compare a b := by
   rw [exactCompare_eq_step]
   rfl
 
@@ -669,6 +677,11 @@ namespace Lynx.Term
 
 @[simp] theorem compare_reference (a b : List Nat) :
     compare (.reference a) (.reference b) = Ord.compare a b := by
+  rw [compare_eq_step]
+  rfl
+
+@[simp] theorem compare_pid (a b : PID) :
+    compare (.pid a) (.pid b) = Ord.compare a b := by
   rw [compare_eq_step]
   rfl
 

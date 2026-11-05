@@ -4,6 +4,7 @@ defmodule Lynx.Translation do
   defstruct preludes: [],
             termination_suffixes: %{},
             cutoffs: MapSet.new(),
+            dynamic: [],
             modules: %{},
             funs: %{},
             external_calls: %{},
@@ -11,8 +12,8 @@ defmodule Lynx.Translation do
             stack: []
 
   # Runtime functions that are not pure use the process environment, except
-  # those that make process requests. Those calling function values dispatch
-  # them, and are otherwise pure.
+  # those that make process requests. Those receiving the dispatcher, to call
+  # function values or read their information, are otherwise pure.
   @runtime_purity %{
     {:erlang, :spawn, 1} => {:concurrent, false},
     {:erlang, :spawn_link, 1} => {:concurrent, false},
@@ -29,6 +30,8 @@ defmodule Lynx.Translation do
     {:erlang, :is_process_alive, 1} => {:concurrent, false},
     {:erlang, :process_info, 2} => {:concurrent, false},
     {:erlang, :apply, 2} => {:pure, true},
+    {:erlang, :apply, 3} => {:pure, true},
+    {:erlang, :make_fun, 3} => {:pure, true},
     {:erlang, :fun_info_mfa, 1} => {:pure, true},
     {:maps, :fold, 3} => {:pure, true}
   }
@@ -42,9 +45,9 @@ defmodule Lynx.Translation do
     arity = String.to_integer(arity)
 
     purity =
-      if pure,
-        do: {:pure, false},
-        else: Map.get(@runtime_purity, {module, function, arity}, {:sequential, false})
+      Map.get_lazy(@runtime_purity, {module, function, arity}, fn ->
+        if pure, do: {:pure, false}, else: {:sequential, false}
+      end)
 
     defp lean_bif(unquote(module), unquote(function), unquote(arity)),
       do: {:ok, unquote(purity)}
@@ -56,7 +59,8 @@ defmodule Lynx.Translation do
     %__MODULE__{
       preludes: Keyword.get(opts, :preludes, []),
       termination_suffixes: Keyword.get(opts, :termination_suffixes, %{}),
-      cutoffs: MapSet.new(Keyword.get(opts, :cutoffs, []))
+      cutoffs: MapSet.new(Keyword.get(opts, :cutoffs, [])),
+      dynamic: Enum.to_list(Keyword.get(opts, :dynamic, []))
     }
   end
 
@@ -138,6 +142,7 @@ defmodule Lynx.Translation do
            literals,
            funs,
            suffixed,
+           translation.dynamic,
            context
          ) do
       {:ok, functions, literals, laws, funs, translation} ->

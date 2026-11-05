@@ -128,7 +128,7 @@ def «+/2» : Term → Term → Except Exception Term
   | .float x, .integer y => floatResult (Term.FiniteFloat.ofInt y >>= x.add)
   | _, _ => throw (.error (.atom "badarith"))
 
-@[simp↓] theorem «+/2_integers» (left right : Int) :
+@[simp↓, cbv_eval] theorem «+/2_integers» (left right : Int) :
     «+/2» (.integer left) (.integer right) = .ok (.integer (left + right)) := by rfl
 
 /-- An integer sum can only come from two integer operands. -/
@@ -168,7 +168,7 @@ def «-/2» : Term → Term → Except Exception Term
   | .float x, .integer y => floatResult (Term.FiniteFloat.ofInt y >>= x.sub)
   | _, _ => throw (.error (.atom "badarith"))
 
-@[simp↓] theorem «-/2_integers» (left right : Int) :
+@[simp↓, cbv_eval] theorem «-/2_integers» (left right : Int) :
     «-/2» (.integer left) (.integer right) = .ok (.integer (left - right)) := by rfl
 
 /-- Integer subtraction results cannot originate from a float or another term kind. -/
@@ -193,7 +193,7 @@ def «*/2» : Term → Term → Except Exception Term
   | .float x, .integer y => floatResult (Term.FiniteFloat.ofInt y >>= x.mul)
   | _, _ => throw (.error (.atom "badarith"))
 
-@[simp↓] theorem «*/2_integers» (left right : Int) :
+@[simp↓, cbv_eval] theorem «*/2_integers» (left right : Int) :
     «*/2» (.integer left) (.integer right) = .ok (.integer (left * right)) := by rfl
 
 /-- Erlang remainder uses division truncated toward zero, including negative operands. -/

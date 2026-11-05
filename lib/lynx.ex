@@ -225,10 +225,12 @@ defmodule Lynx do
       other enumerations visit each key once, but proofs cannot rely on any
       particular order.
 
-    * Function references and calls must name their module and function at
-      compile time. `&Foo.bar/1`, `fun foo:bar/1`, and `Foo.bar(x)` are
-      supported, while dynamic references and calls, such as `&mod.bar/1`,
-      `mod.bar(x)`, and `apply(mod, fun, args)`, produce translation errors.
+    * Function references and calls that name their module and function at
+      compile time, such as `&Foo.bar/1`, `fun foo:bar/1`, and `Foo.bar(x)`,
+      are translated directly. Dynamic references and calls, such as
+      `&mod.bar/1`, `mod.bar(x)`, and `apply(mod, fun, args)`, only reach the
+      functions the program captures by name and those declared with
+      `Lynx.Case.dynamic/1`. Calls to other functions do not return.
       Spawning a named function, as in `spawn_link(Foo, :bar, [x])`, is
       supported when the module and function are literals and the arguments
       a literal list.
