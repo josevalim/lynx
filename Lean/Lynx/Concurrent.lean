@@ -15,9 +15,9 @@ The scheduler owns the `State` of every process. A running process only
 observes and replaces its own `Environment`: its identity, its process
 dictionary, and the reference allocator. It cannot reach another process's
 dictionary or mailbox, and replacing its `currentPid` does not change which
-process is running. Environment reads and writes are not scheduler
-boundaries: after such a step, the same process continues while it can run,
-so its local code executes atomically between process requests. -/
+process is running. Any live process may take its next step, including between
+environment accesses, which affect only that process. A process that does not
+return ends, and the run's outcome is then `Exception.exhausted`. -/
 
 public section
 
@@ -130,11 +130,9 @@ structure Transition (α : Type) : Type 1 where
   tasks : List (PID × Task α)
   /-- The root's result and final environment, when the root ends. -/
   finished : Option (Except Exception α × Environment) := none
-  /-- Spawns, sends, and receives are scheduler boundaries. -/
-  boundary : Bool := false
   /-- A positive timeout expired, which is the scheduler's choice. -/
   expired : Bool := false
-  /-- The process did not return, which ends the whole run. -/
+  /-- The process did not return, so the run's outcome is `Exception.exhausted`. -/
   exhausted : Bool := false
 
 /-- Every step the process can take in this state: none while blocked, two for
@@ -144,7 +142,8 @@ a positive-timeout receive without a match, one otherwise. -/
     let view := state.view processId
     match computation with
     | .error .exhausted =>
-        [{ event := .exit processId, state, tasks := [], exhausted := true }]
+        [{ event := .exit processId, state := state.update processId none, tasks := []
+           exhausted := true }]
     | .ok value =>
         [{ event := .exit processId, state := state.update processId none, tasks := []
            finished := (finish (.ok value)).map (·, view) }]
@@ -161,12 +160,12 @@ a positive-timeout receive without a match, one otherwise. -/
         let (childPid, spawned) := state.spawn processId
         [{ event := .spawn processId childPid, state := spawned
            tasks := [(processId, ⟨next childPid, finish⟩), (childPid, Task.child child)]
-           boundary := true }]
+           }]
     | .send destination message next =>
         [{ event := .send processId destination message
            state := state.deliver destination message
            tasks := [(processId, ⟨next, finish⟩)]
-           boundary := true }]
+           }]
     | .receive timeout select next =>
         let process := state.process processId
         match selectMessage (select view) process.mailbox with
@@ -174,11 +173,11 @@ a positive-timeout receive without a match, one otherwise. -/
             [{ event := .receive processId message
                state := state.update processId (some { process with mailbox := remaining })
                tasks := [(processId, ⟨next (some value), finish⟩)]
-               boundary := true }]
+               }]
         | none =>
             let timedOut : Transition α := {
               event := .timeout processId, state
-              tasks := [(processId, ⟨next none, finish⟩)], boundary := true }
+              tasks := [(processId, ⟨next none, finish⟩)] }
             match timeout with
             | .infinity => []
             | .immediate => [timedOut]
@@ -194,50 +193,30 @@ inductive Config (α : Type) : Type 1 where
   /-- Before its first process request, a computation reads and replaces its
   environment directly. -/
   | start (env : Environment) (computation : Result α)
-  /-- Live processes in tree order, the root's result once it ends, and the
-  process that must keep running while it is ready, after an environment
-  access or exit rather than a scheduler boundary. -/
+  /-- Live processes in tree order, the root's result once it ends, and whether
+  some process did not return. -/
   | running (state : State) (tasks : List (PID × Task α))
-      (finished : Option (Except Exception α × Environment)) (current : Option PID)
-  /-- Some process did not return. -/
-  | halted
+      (finished : Option (Except Exception α × Environment)) (exhausted : Bool)
 
-/-- The process can make progress other than by expiring a timeout. -/
-@[expose] def Ready (state : State) (tasks : List (PID × Task α)) (processId : PID) : Prop :=
-  ∃ task, (processId, task) ∈ tasks ∧
-    ∃ transition ∈ task.transitions state processId, transition.expired = false
+/-- The configuration a process step leads to. -/
+@[expose] def Transition.apply (transition : Transition α) (before after : List (PID × Task α))
+    (finished : Option (Except Exception α × Environment)) (exhausted : Bool) : Config α :=
+  .running transition.state (before ++ transition.tasks ++ after)
+    (transition.finished.orElse fun _ => finished) (exhausted || transition.exhausted)
 
-/-- The current process keeps running while it is ready. Otherwise any process
-may take any of its steps. -/
-@[expose] def Allowed (state : State) (tasks : List (PID × Task α)) (current : Option PID)
-    (processId : PID) (transition : Transition α) : Prop :=
-  ∀ running, current = some running → Ready state tasks running →
-    processId = running ∧ transition.expired = false
-
-/-- The process that keeps running after a step. -/
-@[expose] def Transition.current (transition : Transition α) (processId : PID) : Option PID :=
-  if transition.boundary then none else some processId
-
+/-- Any live process may take its step. The runner keeps running the current
+process after an environment access, which is one of these interleavings. -/
 inductive Step {α : Type} : Config α → Event → Config α → Prop where
   | get : Step (.start env (.get next)) (.internal env.currentPid) (.start env (next env))
   | set : Step (.start env (.set updated next)) (.internal env.currentPid) (.start updated next)
   /-- The first request starts the scheduler, with the current process as the root. -/
   | enter (request : isRequest computation = true) :
       Step (.start env computation) (.internal env.currentPid)
-        (.running (State.initial env) [(env.currentPid, Task.root computation)] none
-          (some env.currentPid))
+        (.running (State.initial env) [(env.currentPid, Task.root computation)] none false)
   | run (split : tasks = before ++ (processId, task) :: after)
-      (possible : transition ∈ task.transitions state processId)
-      (allowed : Allowed state tasks current processId transition)
-      (returns : transition.exhausted = false) :
-      Step (.running state tasks finished current) transition.event
-        (.running transition.state (before ++ transition.tasks ++ after)
-          (transition.finished.orElse fun _ => finished) (transition.current processId))
-  | exhaust (split : tasks = before ++ (processId, task) :: after)
-      (possible : transition ∈ task.transitions state processId)
-      (allowed : Allowed state tasks current processId transition)
-      (exhausted : transition.exhausted = true) :
-      Step (.running state tasks finished current) transition.event .halted
+      (possible : transition ∈ task.transitions state processId) :
+      Step (.running state tasks finished exhausted) transition.event
+        (transition.apply before after finished exhausted)
 
 /-- Consecutive steps and the trace of their events. -/
 inductive Run {α : Type} : Config α → List Event → Config α → Prop where
@@ -248,15 +227,18 @@ inductive Run {α : Type} : Config α → List Event → Config α → Prop wher
 inductive Terminal {α : Type} : Config α → Outcome α → Prop where
   | ok : Terminal (.start env (.ok value)) (.ok value)
   | error : Terminal (.start env (.error exception)) (.error exception)
-  | halted : Terminal .halted (.error .exhausted)
-  | returned : Terminal (.running state [] (some (.ok value, env)) current) (.ok value)
-  | raised : Terminal (.running state [] (some (.error exception, env)) current)
+  /-- Some process did not return, and no other process can step. -/
+  | exhausted (blocked : ∀ processId task, (processId, task) ∈ tasks →
+        task.transitions state processId = []) :
+      Terminal (.running state tasks finished true) (.error .exhausted)
+  | returned : Terminal (.running state [] (some (.ok value, env)) false) (.ok value)
+  | raised : Terminal (.running state [] (some (.error exception, env)) false)
       (.error exception)
   /-- Every process is blocked, or the root never produced a result. -/
   | deadlock (blocked : ∀ processId task, (processId, task) ∈ tasks →
         task.transitions state processId = [])
       (pending : tasks = [] → finished = none) :
-      Terminal (.running state tasks finished current) .deadlock
+      Terminal (.running state tasks finished false) .deadlock
 
 /-- A property preserved by every step holds after every run. -/
 theorem Run.invariant {invariant : Config α → Prop}
@@ -297,47 +279,6 @@ theorem eq_of_mem_splits {tasks before after : List γ} {item : γ}
     · rfl
     · simp [ih mem]
 
-/-- Decide `Ready`. -/
-@[expose] def isReady (state : State) (tasks : List (PID × Task α)) (processId : PID) : Bool :=
-  tasks.any fun (candidate, task) => candidate == processId &&
-    (task.transitions state candidate).any fun transition => !transition.expired
-
-theorem isReady_iff {state : State} {tasks : List (PID × Task α)} {processId : PID} :
-    isReady state tasks processId = true ↔ Ready state tasks processId := by
-  simp only [isReady, List.any_eq_true, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true',
-    Prod.exists, Ready]
-  constructor
-  · rintro ⟨_, task, mem, rfl, transition, possible, unexpired⟩
-    exact ⟨task, mem, transition, possible, unexpired⟩
-  · rintro ⟨task, mem, transition, possible, unexpired⟩
-    exact ⟨_, task, mem, rfl, transition, possible, unexpired⟩
-
-/-- The configuration a process step leads to. -/
-@[expose] def Transition.apply (transition : Transition α) (processId : PID)
-    (before after : List (PID × Task α))
-    (finished : Option (Except Exception α × Environment)) : Config α :=
-  if transition.exhausted then .halted else
-    .running transition.state (before ++ transition.tasks ++ after)
-      (transition.finished.orElse fun _ => finished) (transition.current processId)
-
-/-- Whether the current process, if ready, permits a process's step. -/
-@[expose] def permits (state : State) (tasks : List (PID × Task α)) (current : Option PID)
-    (processId : PID) (transition : Transition α) : Bool :=
-  match current with
-  | some running => !isReady state tasks running || (processId == running && !transition.expired)
-  | none => true
-
-theorem permits_iff {state : State} {tasks : List (PID × Task α)} {current : Option PID}
-    {processId : PID} {transition : Transition α} :
-    permits state tasks current processId transition = true ↔
-      Allowed state tasks current processId transition := by
-  cases current with
-  | none => simp [permits, Allowed]
-  | some running =>
-    simp only [permits, Bool.or_eq_true, Bool.not_eq_true', Bool.and_eq_true, beq_iff_eq,
-      Allowed, Option.some.injEq, forall_eq', ← isReady_iff]
-    cases isReady state tasks running <;> simp
-
 /-- Every step of a configuration, with its event. -/
 @[expose] def Config.successors : Config α → List (Event × Config α)
   | .start env computation =>
@@ -347,16 +288,12 @@ theorem permits_iff {state : State} {tasks : List (PID × Task α)} {current : O
       | computation =>
           if isRequest computation then
             [(.internal env.currentPid,
-              .running (State.initial env) [(env.currentPid, Task.root computation)] none
-                (some env.currentPid))]
+              .running (State.initial env) [(env.currentPid, Task.root computation)] none false)]
           else []
-  | .running state tasks finished current =>
+  | .running state tasks finished exhausted =>
       (splits tasks).flatMap fun (before, (processId, task), after) =>
-        (task.transitions state processId).filterMap fun transition =>
-          if permits state tasks current processId transition then
-            some (transition.event, transition.apply processId before after finished)
-          else none
-  | .halted => []
+        (task.transitions state processId).map fun transition =>
+          (transition.event, transition.apply before after finished exhausted)
 
 theorem Step.mem_successors {first next : Config α} {event : Event}
     (step : Step first event next) : (event, next) ∈ first.successors := by
@@ -365,22 +302,20 @@ theorem Step.mem_successors {first next : Config α} {event : Event}
   | set => simp [Config.successors]
   | @enter computation env request =>
     cases computation <;> simp_all [isRequest, Config.successors]
-  | run split possible allowed returns
-  | exhaust split possible allowed returns =>
+  | run split possible =>
     subst split
-    simp only [Config.successors, List.mem_flatMap, Prod.exists, List.mem_filterMap]
-    refine ⟨_, _, _, _, mem_splits, _, possible, ?_⟩
-    simp [permits_iff.mpr allowed, Transition.apply, returns]
+    simp only [Config.successors, List.mem_flatMap, Prod.exists, List.mem_map]
+    exact ⟨_, _, _, _, mem_splits, _, possible, rfl⟩
 
 /-- The outcome of a configuration without steps. -/
 @[expose] def Config.outcome : Config α → Outcome α
   | .start _ (.ok value) => .ok value
   | .start _ (.error exception) => .error exception
   | .start _ _ => .deadlock
-  | .running _ [] (some (.ok value, _)) _ => .ok value
-  | .running _ [] (some (.error exception, _)) _ => .error exception
+  | .running _ _ _ true => .error .exhausted
+  | .running _ [] (some (.ok value, _)) false => .ok value
+  | .running _ [] (some (.error exception, _)) false => .error exception
   | .running .. => .deadlock
-  | .halted => .error .exhausted
 
 theorem Terminal.outcome_eq {config : Config α} {outcome : Outcome α}
     (terminal : Terminal config outcome) : config.outcome = outcome := by
@@ -388,12 +323,13 @@ theorem Terminal.outcome_eq {config : Config α} {outcome : Outcome α}
   | deadlock blocked pending =>
     unfold Config.outcome
     split <;> simp_all
+  | exhausted => simp [Config.outcome]
   | _ => rfl
 
 theorem Terminal.successors_eq_nil {config : Config α} {outcome : Outcome α}
     (terminal : Terminal config outcome) : config.successors = [] := by
   cases terminal with
-  | deadlock blocked =>
+  | deadlock blocked | exhausted blocked =>
     simp only [Config.successors, List.flatMap_eq_nil_iff, Prod.forall]
     intro before processId task after mem
     simp [blocked processId task (by rw [eq_of_mem_splits mem]; simp)]
