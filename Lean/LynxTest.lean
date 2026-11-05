@@ -16,4 +16,5 @@ import LynxTest.Modules.ErtsInternal
 import LynxTest.Modules.Math
 import LynxTest.Modules.Conversions
 import LynxTest.Modules.Process
+import LynxTest.Modules.Signals
 import LynxTest.Purity

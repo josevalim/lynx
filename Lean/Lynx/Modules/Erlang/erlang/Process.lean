@@ -8,6 +8,34 @@ public section
 Like every computation that is not pure, they receive the program's dispatcher,
 which only spawning uses. -/
 
+namespace Lynx.Term
+
+/-- The elements of a proper list. -/
+@[expose] def properList? : Term → Option (List Term)
+  | .nil => some []
+  | .cons head tail => (properList? tail).map (head :: ·)
+  | _ => none
+
+/-- Whether monitor options create an alias. Aliases are only modeled with
+`demonitor`, and tags are not modeled; neither returns. -/
+@[expose] def monitorAlias : List Term → Except Exception Bool
+  | [] => .ok Bool.false
+  | .tuple ⟨[.atom "alias", .atom "demonitor"]⟩ :: rest => (monitorAlias rest).map fun _ => Bool.true
+  | .tuple ⟨[.atom "alias", .atom "explicit_unalias"]⟩ :: _ => .error .exhausted
+  | .tuple ⟨[.atom "alias", .atom "reply_demonitor"]⟩ :: _ => .error .exhausted
+  | .tuple ⟨[.atom "tag", _]⟩ :: _ => .error .exhausted
+  | _ :: _ => .error (.error (.atom "badarg"))
+
+/-- Whether to flush a `DOWN` message and whether to report if the monitor was
+found. -/
+@[expose] def demonitorOptions : List Term → Option (Bool × Bool)
+  | [] => some (Bool.false, Bool.false)
+  | .atom "flush" :: rest => (demonitorOptions rest).map fun (_, info) => (Bool.true, info)
+  | .atom "info" :: rest => (demonitorOptions rest).map fun (flush, _) => (flush, Bool.true)
+  | _ :: _ => none
+
+end Lynx.Term
+
 namespace Erlang.erlang
 
 open Lynx
@@ -42,7 +70,7 @@ introduce a scheduler boundary. -/
 which reports calling a function value the table does not contain. -/
 @[expose] def «spawn/1» (dispatcher : Dispatcher) (child : Term) : Result :=
   match child with
-  | .function _ 0 _ => .schedule (dispatcher.call child #[]) fun pid => .ok (.pid pid)
+  | .function _ 0 _ => .schedule {} (dispatcher.call child #[]) fun pid => .ok (.pid pid)
   | _ => .error (.error (.atom "badarg"))
 
 /-- Return the PID of the process running the current computation. -/
@@ -56,13 +84,112 @@ which reports calling a function value the table does not contain. -/
   intro env
   trivial
 
-/-- Send to a local PID and return the message. A nonexistent or terminated
-PID silently discards the message. Registered names and remote destinations
-are not modeled. Sending is a scheduler boundary, even to self or a dead PID. -/
+/-- Send to a local PID or an alias and return the message. A nonexistent or
+terminated PID, or an inactive alias, silently discards the message. Registered
+names and remote destinations are not modeled. Sending is a scheduler boundary,
+even to self or a dead PID. -/
 @[expose] def «send/2» (_ : Dispatcher) (destination message : Term) : Result :=
   match destination with
   | .pid pid => .send pid message (.ok message)
+  | .reference alias => .request (.sendAlias alias message) .ok
   | _ => .error (.error (.atom "badarg"))
+
+/-- Spawn a zero-arity function value linked to the caller, in the same step. -/
+@[expose] def «spawn_link/1» (dispatcher : Dispatcher) (child : Term) : Result :=
+  match child with
+  | .function _ 0 _ =>
+      .schedule { link := true } (dispatcher.call child #[]) fun pid => .ok (.pid pid)
+  | _ => .error (.error (.atom "badarg"))
+
+/-- Spawn a zero-arity function value monitored by the caller, in the same step.
+The monitor's reference is the caller's next one. -/
+@[expose] def «spawn_monitor/1» (dispatcher : Dispatcher) (child : Term) : Result :=
+  match child with
+  | .function _ 0 _ =>
+      .schedule { monitor := true } (dispatcher.call child #[]) fun pid => do
+        let env ← get
+        .ok (.tuple #[.pid pid, .reference (env.currentPid ++ [env.refCounter])])
+  | _ => .error (.error (.atom "badarg"))
+
+/-- Monitor a process. Monitoring a process that does not exist delivers its
+`DOWN` message at once, with reason `noproc`. Registered names are not
+modeled and do not return. -/
+@[expose] def «monitor/2» (_ : Dispatcher) (kind target : Term) : Result :=
+  match kind, target with
+  | .atom "process", .pid pid => .request (.monitor pid false) .ok
+  | .atom "process", .atom _ => .error .exhausted
+  | _, _ => .error (.error (.atom "badarg"))
+
+/-- Monitor a process with options. With `{alias, demonitor}`, the reference
+also receives messages for the caller until the monitor ends. -/
+@[expose] def «monitor/3» (_ : Dispatcher) (kind target options : Term) : Result :=
+  match kind, target, (Term.properList? options).map Term.monitorAlias with
+  | .atom "process", .pid pid, some (.ok alias) => .request (.monitor pid alias) .ok
+  | .atom "process", .atom _, some (.ok _) => .error .exhausted
+  | _, _, some (.error .exhausted) => .error .exhausted
+  | _, _, _ => .error (.error (.atom "badarg"))
+
+/-- End a monitor and its alias. -/
+@[expose] def «demonitor/1» (_ : Dispatcher) (reference : Term) : Result :=
+  match reference with
+  | .reference id => .request (.demonitor id false) fun _ => .ok (.atom "true")
+  | _ => .error (.error (.atom "badarg"))
+
+/-- End a monitor and its alias. `flush` removes its `DOWN` message from the
+mailbox, and `info` returns whether the monitor was still active. -/
+@[expose] def «demonitor/2» (_ : Dispatcher) (reference options : Term) : Result :=
+  match reference, (Term.properList? options).bind Term.demonitorOptions with
+  | .reference id, some (flush, info) =>
+      .request (.demonitor id flush) fun found => .ok (if info = true then found else .atom "true")
+  | _, _ => .error (.error (.atom "badarg"))
+
+/-- Link to a process. Linking to a process that does not exist raises
+`noproc`, unless the caller traps exits and receives an `EXIT` message. -/
+@[expose] def «link/1» (_ : Dispatcher) (target : Term) : Result :=
+  match target with
+  | .pid pid => .request (.link pid) fun reply =>
+      match reply with
+      | .atom "noproc" => .error (.error (.atom "noproc"))
+      | reply => .ok reply
+  | _ => .error (.error (.atom "badarg"))
+
+@[expose] def «unlink/1» (_ : Dispatcher) (target : Term) : Result :=
+  match target with
+  | .pid pid => .request (.unlink pid) .ok
+  | _ => .error (.error (.atom "badarg"))
+
+/-- Send an exit signal. `kill` cannot be trapped, and `normal` is ignored
+unless the target traps exits or is the caller. The target acts on the signal
+at its next step. -/
+@[expose] def «exit/2» (_ : Dispatcher) (target reason : Term) : Result :=
+  match target with
+  | .pid pid => .request (.exit pid reason) .ok
+  | _ => .error (.error (.atom "badarg"))
+
+/-- Set whether exit signals arrive as `EXIT` messages, returning the previous
+value. Other flags are not modeled and do not return. -/
+@[expose] def «process_flag/2» (_ : Dispatcher) (flag value : Term) : Result :=
+  match flag, value with
+  | .atom "trap_exit", .atom "true" => .request (.trapExit true) .ok
+  | .atom "trap_exit", .atom "false" => .request (.trapExit false) .ok
+  | .atom "trap_exit", _ => .error (.error (.atom "badarg"))
+  | _, _ => .error .exhausted
+
+@[expose] def «is_process_alive/1» (_ : Dispatcher) (target : Term) : Result :=
+  match target with
+  | .pid pid => .request (.alive pid) .ok
+  | _ => .error (.error (.atom "badarg"))
+
+/-- Process information. Only `registered_name` is modeled: processes have no
+registered names, so it is `[]` for live processes. Other items do not return. -/
+@[expose] def «process_info/2» (_ : Dispatcher) (target item : Term) : Result :=
+  match target, item with
+  | .pid pid, .atom "registered_name" => .request (.alive pid) fun alive =>
+      .ok (match alive with
+        | .atom "true" => .nil
+        | _ => .atom "undefined")
+  | .pid _, _ => .error .exhausted
+  | _, _ => .error (.error (.atom "badarg"))
 
 /-- Return all process-dictionary bindings. Their order is unspecified by Erlang.erlang. -/
 @[expose] def «get/0» (_ : Dispatcher) : Result := do

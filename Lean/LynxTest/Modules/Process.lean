@@ -109,7 +109,7 @@ theorem dictionary_preserves_reference_counter :
 
 private def referenceExchange : Result := do
   let first ← («make_ref/0» noFunctions)
-  let _ ← Result.schedule (do
+  let _ ← Result.schedule {} (do
     let ref ← («make_ref/0» noFunctions)
     «send/2» noFunctions (.pid []) ref) (fun pid => .ok (Term.pid pid))
   let second ← («make_ref/0» noFunctions)
@@ -194,7 +194,7 @@ theorem finite_timeout_progress :
     Lynx.sequential (receiveTimed (.integer 10000)) = .ok (.atom "timeout") := by cbv
 
 private def timeoutRace : Result := do
-  let _ ← Result.schedule («send/2» noFunctions (.pid []) (.atom "wanted")) (fun pid => .ok (Term.pid pid))
+  let _ ← Result.schedule {} («send/2» noFunctions (.pid []) (.atom "wanted")) (fun pid => .ok (Term.pid pid))
   receiveTimed (.integer 10)
 
 /-- Blocking consumes a choice: the same program can receive or time out first. -/
@@ -205,7 +205,7 @@ theorem timeout_is_a_scheduler_choice :
 /-- Timer choices target waiting children as well as the root process. -/
 theorem timeout_can_expire_child :
     Result.run (do
-      let _ ← Result.schedule (do
+      let _ ← Result.schedule {} (do
         let value ← receiveTimed (.integer 10)
         «send/2» noFunctions (.pid []) value) (fun processId => .ok (Term.pid processId))
       receiveAny) {} [.current, .timeout [1]] = (.ok (.atom "timeout"), {}) := by cbv
@@ -235,7 +235,7 @@ private def receiveSelf : Result :=
 
 theorem guard_reads_waiting_child_identity :
     Result.run (do
-      let child ← Result.schedule (do
+      let child ← Result.schedule {} (do
         let value ← receiveSelf
         «send/2» noFunctions (.pid []) value) (fun pid => .ok (Term.pid pid))
       let _ ← «send/2» noFunctions child child
@@ -275,7 +275,7 @@ theorem try_handler_exception_propagates :
       .error (.exit (.atom "handler")) := by cbv
 
 private def handshake : Result := do
-  let child ← Result.schedule (do
+  let child ← Result.schedule {} (do
     let _ ← receiveAtom "start"
     «send/2» noFunctions (.pid []) (.atom "done")) (fun pid => .ok (Term.pid pid))
   let _ ← «send/2» noFunctions child (.atom "start")
@@ -288,7 +288,7 @@ theorem blocked_processes_resume :
   cbv
 
 private def interleavedSends : Result := do
-  let _ ← Result.schedule («send/2» noFunctions (.pid []) (.atom "child")) (fun pid => .ok (Term.pid pid))
+  let _ ← Result.schedule {} («send/2» noFunctions (.pid []) (.atom "child")) (fun pid => .ok (Term.pid pid))
   let _ ← «send/2» noFunctions (.pid []) (.atom "first")
   let _ ← «send/2» noFunctions (.pid []) (.atom "second")
   let first ← receiveAny
@@ -306,8 +306,8 @@ theorem send_is_a_scheduling_boundary :
   cbv
 
 private def twoSenders : Result := do
-  let _ ← Result.schedule («send/2» noFunctions (.pid []) (.atom "left")) (fun pid => .ok (Term.pid pid))
-  let _ ← Result.schedule («send/2» noFunctions (.pid []) (.atom "right")) (fun pid => .ok (Term.pid pid))
+  let _ ← Result.schedule {} («send/2» noFunctions (.pid []) (.atom "left")) (fun pid => .ok (Term.pid pid))
+  let _ ← Result.schedule {} («send/2» noFunctions (.pid []) (.atom "right")) (fun pid => .ok (Term.pid pid))
   let first ← receiveAny
   let second ← receiveAny
   pure (.tuple #[first, second])
@@ -333,7 +333,7 @@ theorem nonmatching_receive_deadlocks :
 
 /-- Whole-tree completion cannot hide a child that is still waiting. -/
 theorem blocked_child_prevents_completion :
-    Result.run (Result.schedule receiveAny (fun _ => .ok (Term.atom "done"))) {} =
+    Result.run (Result.schedule {} receiveAny (fun _ => .ok (Term.atom "done"))) {} =
       (.deadlock, {}) := by cbv
 
 /-- A receive cannot be recovered by an exception handler when no message matches. -/
@@ -350,16 +350,16 @@ theorem receive_body_exception_is_caught :
 /-- A child finishing first disappears; sending to its old PID creates no state. -/
 theorem terminated_child_is_not_revived :
     Result.run (do
-      let child ← Result.schedule (.ok .nil) (fun pid => .ok (Term.pid pid))
+      let child ← Result.schedule {} (.ok .nil) (fun pid => .ok (Term.pid pid))
       «send/2» noFunctions child (.atom "ignored")) {} [.swap [1]] =
       (.ok (.atom "ignored"), {}) := by cbv
 
 /-- Root termination also closes its mailbox: a late message neither revives
 the root nor blocks the remaining children, under any schedule. -/
 theorem terminated_root_discards_late_messages (choices : List ScheduleChoice) :
-    Lynx.concurrent (Result.schedule («send/2» noFunctions (.pid []) (.atom "late"))
+    Lynx.concurrent (Result.schedule {} («send/2» noFunctions (.pid []) (.atom "late"))
       (fun _ => .ok Term.nil)) choices = .ok Term.nil := by
-  have checked := concurrent_of_check (Result.schedule («send/2» noFunctions (.pid [])
+  have checked := concurrent_of_check (Result.schedule {} («send/2» noFunctions (.pid [])
     (.atom "late")) (fun _ => .ok Term.nil)) (fun | .ok .nil => true | _ => false) 16 (by cbv)
     choices
   split at checked
@@ -368,13 +368,13 @@ theorem terminated_root_discards_late_messages (choices : List ScheduleChoice) :
 
 /-- Child exceptions do not become exceptions in the unlinked parent. -/
 theorem child_exception_is_isolated :
-    Result.run (Result.schedule (.error (.error (.atom "failure")))
+    Result.run (Result.schedule {} (.error (.error (.atom "failure")))
       (fun _ => .ok (Term.atom "done"))) {} [.swap [1]] =
       (.ok (.atom "done"), {}) := by cbv
 
 private def isolatedDictionaries : Result := do
   let _ ← «put/2» noFunctions (.atom "key") (.atom "parent")
-  let child ← Result.schedule (do
+  let child ← Result.schedule {} (do
     let _ ← «put/2» noFunctions (.atom "key") (.atom "child")
     let _ ← receiveAtom "start"
     «send/2» noFunctions (.pid []) (← «get/1» noFunctions (.atom "key"))) (fun pid => .ok (Term.pid pid))
@@ -388,7 +388,7 @@ theorem suspended_processes_keep_their_dictionaries :
       .ok (.tuple #[.atom "parent", .atom "child"]) := by cbv
 
 private def receiveBoundary : Result := do
-  let _ ← Result.schedule (do
+  let _ ← Result.schedule {} (do
     let _ ← receiveAtom "start"
     «send/2» noFunctions (.pid []) (.atom "child")) (fun pid => .ok (Term.pid pid))
   let _ ← «send/2» noFunctions (.pid [1]) (.atom "start")

@@ -144,6 +144,39 @@ inductive ReceiveTimeout where
   | finite
 deriving Repr, Inhabited
 
+/-- How a spawn relates the parent to its child. -/
+structure SpawnOptions where
+  /-- Link the parent and the child. -/
+  link : Bool := false
+  /-- Monitor the child, allocating the monitor's reference from the parent's
+  counter. -/
+  monitor : Bool := false
+deriving Repr, Inhabited
+
+/-- A request about other processes, which the scheduler answers with a term. -/
+inductive Request where
+  /-- Monitor a process, replying with the monitor's reference. An alias also
+  makes the reference a destination for the requester until the monitor ends. -/
+  | monitor (target : PID) (alias : Bool)
+  /-- End a monitor, removing its `DOWN` message from the mailbox when flushing.
+  Replies whether the monitor was active. -/
+  | demonitor (reference : List Nat) (flush : Bool)
+  /-- Link to a process. Replies `true`, or `noproc` when the process does not
+  exist and the requester does not trap exits. -/
+  | link (target : PID)
+  /-- Remove a link. Replies `true`. -/
+  | unlink (target : PID)
+  /-- Send an exit signal. Replies `true`. -/
+  | exit (target : PID) (reason : Term)
+  /-- Set whether exit signals arrive as messages. Replies the previous value. -/
+  | trapExit (enabled : Bool)
+  /-- Reply whether a process is alive. -/
+  | alive (target : PID)
+  /-- Send to an alias, discarding the message once the alias is inactive.
+  Replies the message. -/
+  | sendAlias (alias : List Nat) (message : Term)
+deriving Repr
+
 /-- A resumable process computation. Bind stores continuations so scheduling
 does not require translated functions to use continuation-passing style. -/
 inductive Result : (α : Type := Term) → Type 1 where
@@ -152,13 +185,15 @@ inductive Result : (α : Type := Term) → Type 1 where
   | get {α : Type} : (Environment → Result α) → Result α
   | set {α : Type} : Environment → Result α → Result α
   /-- A spawned child process, then the continuation receiving its PID. -/
-  | schedule {α : Type} : Result Term → (PID → Result α) → Result α
+  | schedule {α : Type} : SpawnOptions → Result Term → (PID → Result α) → Result α
   /-- Local asynchronous send. The continuation receives control after delivery. -/
   | send {α : Type} : PID → Term → Result α → Result α
   /-- A receive with an already validated timeout. Select the oldest matching
   message and schedule before executing its body. `some` carries clause bindings;
   `none` resumes the timeout body. No match without expiry suspends the process. -/
   | receive {α β : Type} : ReceiveTimeout → (Environment → Term → Option β) → (Option β → Result α) → Result α
+  /-- A request about other processes, then the continuation receiving the reply. -/
+  | request {α : Type} : Request → (Term → Result α) → Result α
 
 /-- Validate before scanning, including when a matching message is queued.
 Positive durations are abstract scheduler events, not elapsed milliseconds. -/
@@ -177,10 +212,12 @@ namespace Result
   | .error exception => .error exception
   | .get continuation => .get fun env => Result.bind (continuation env) next
   | .set env continuation => .set env (Result.bind continuation next)
-  | Result.schedule child continuation => Result.schedule child fun pid => Result.bind (continuation pid) next
+  | Result.schedule options child continuation =>
+      Result.schedule options child fun pid => Result.bind (continuation pid) next
   | .send pid message continuation => .send pid message (Result.bind continuation next)
   | .receive timeout select continuation =>
       .receive timeout select fun reply => Result.bind (continuation reply) next
+  | .request query continuation => .request query fun reply => Result.bind (continuation reply) next
 
 instance : Monad @Result where
   pure := .ok
@@ -212,10 +249,13 @@ exception, so it propagates without reaching the handler. -/
   | .error exception => handler exception
   | .get continuation => .get fun env => Result.handle (continuation env) handler
   | .set env continuation => .set env (Result.handle continuation handler)
-  | Result.schedule child continuation => Result.schedule child fun pid => Result.handle (continuation pid) handler
+  | Result.schedule options child continuation =>
+      Result.schedule options child fun pid => Result.handle (continuation pid) handler
   | .send pid message continuation => .send pid message (Result.handle continuation handler)
   | .receive timeout select continuation =>
       .receive timeout select fun reply => Result.handle (continuation reply) handler
+  | .request query continuation =>
+      .request query fun reply => Result.handle (continuation reply) handler
 
 /-- Catch only the protected computation. Exceptions raised by either
 continuation propagate to an enclosing handler. -/
@@ -293,7 +333,7 @@ instance : MonadExceptOf Exception @Result where
       funext env
       exact ih env
   | set env continuation ih => simp [Result.bind, ih]
-  | schedule child continuation childIh continuationIh =>
+  | schedule options child continuation childIh continuationIh =>
       simp only [Result.bind]
       congr
       funext pid
@@ -304,6 +344,11 @@ instance : MonadExceptOf Exception @Result where
       congr
       funext value
       exact ih value
+  | request query continuation ih =>
+      simp only [Result.bind]
+      congr
+      funext reply
+      exact ih reply
 
 private theorem bind_assoc_proof (computation : Result α)
     (next : α → Result β) (final : β → Result γ) :
@@ -317,7 +362,7 @@ private theorem bind_assoc_proof (computation : Result α)
       funext env
       exact ih env next
   | set env continuation ih => simp [Result.bind, ih next]
-  | schedule child continuation childIh continuationIh =>
+  | schedule options child continuation childIh continuationIh =>
       simp only [Result.bind]
       congr
       funext pid
@@ -328,6 +373,11 @@ private theorem bind_assoc_proof (computation : Result α)
       congr
       funext value
       exact ih value next
+  | request query continuation ih =>
+      simp only [Result.bind]
+      congr
+      funext reply
+      exact ih reply next
 
 instance : LawfulMonad @Result := LawfulMonad.mk' _
   (id_map := fun computation => bind_ok computation)
@@ -347,14 +397,17 @@ instance : LawfulMonad @Result := LawfulMonad.mk' _
 @[simp] theorem not_isPure_set (env : Environment) (next : Result α) :
     ¬ IsPure (.set env next) := by simp [IsPure]
 
-@[simp] theorem not_isPure_schedule (child : Result Term) (next : PID → Result α) :
-    ¬ IsPure (Result.schedule child next) := by simp [IsPure]
+@[simp] theorem not_isPure_schedule (options : SpawnOptions) (child : Result Term)
+    (next : PID → Result α) :
+    ¬ IsPure (Result.schedule options child next) := by simp [IsPure]
 
 @[simp] theorem not_isPure_send (pid : PID) (message : Term) (next : Result α) :
     ¬ IsPure (.send pid message next) := by simp [IsPure]
 @[simp] theorem not_isPure_receive (timeout : ReceiveTimeout) (select : Environment → Term → Option β)
     (next : Option β → Result α) :
     ¬ IsPure (.receive timeout select next) := by simp [IsPure]
+@[simp] theorem not_isPure_request (query : Request) (next : Term → Result α) :
+    ¬ IsPure (.request query next) := by simp [IsPure]
 
 end Result
 
@@ -501,7 +554,7 @@ or make unresolved calls. Every environment read must eventually terminate. -/
   | .ok value => .ok value
   | .error exception => .error exception
   | .get next => toExceptRead (next env) env (readOnly env)
-  | .set .. | .schedule .. | .send .. | .receive .. =>
+  | .set .. | .schedule .. | .send .. | .receive .. | .request .. =>
       False.elim readOnly
 
 @[simp] theorem ok_bind (value : α) (next : α → Result β) :
@@ -515,10 +568,15 @@ or make unresolved calls. Every environment read must eventually terminate. -/
 @[simp] theorem set_bind (env : Environment) (continuation : Result α)
     (next : α → Result β) :
     (Result.set env continuation >>= next) = .set env (continuation >>= next) := by rfl
-@[simp] theorem schedule_bind (child : Result Term) (continuation : PID → Result α)
+@[simp] theorem schedule_bind (options : SpawnOptions) (child : Result Term)
+    (continuation : PID → Result α) (next : α → Result β) :
+    (Result.schedule options child continuation >>= next) =
+      Result.schedule options child (fun pid => continuation pid >>= next) := by rfl
+
+@[simp] theorem request_bind (query : Request) (continuation : Term → Result α)
     (next : α → Result β) :
-    (Result.schedule child continuation >>= next) =
-      Result.schedule child (fun pid => continuation pid >>= next) := by rfl
+    (Result.request query continuation >>= next) =
+      .request query (fun reply => continuation reply >>= next) := rfl
 
 @[simp] theorem send_bind (pid : PID) (message : Term) (continuation : Result α)
     (next : α → Result β) :
@@ -591,7 +649,7 @@ namespace Lynx.Result
   match computation with
   | .ok value => .ok value
   | .error exception => .error exception
-  | .get .. | .set .. | .schedule .. | .send .. | .receive .. => False.elim pure
+  | .get .. | .set .. | .schedule .. | .send .. | .receive .. | .request .. => False.elim pure
 
 /-- Read-only evaluation agrees with pure extraction when there are no reads. -/
 @[simp] public theorem toExceptRead_pure (computation : Result α) (env : Environment)

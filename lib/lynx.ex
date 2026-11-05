@@ -206,8 +206,15 @@ defmodule Lynx do
       Lynx. The generated Lean code retains that choice when used elsewhere.
 
     * `node()` (`:erlang.node/0`) always returns `:nonode@nohost`. Distributed
-      nodes are not modeled. Sending messages supports local PIDs only;
+      nodes are not modeled. Sending messages supports local PIDs and aliases;
       registered names and remote destinations are not modeled.
+
+    * Links, monitors, aliases created by `monitor/3` with `{alias, demonitor}`,
+      and exit signals are modeled between local processes. A process acts on
+      an exit signal at its next step, as signals arrive asynchronously. Other
+      alias modes, monitor tags, process flags other than `trap_exit`, and
+      `process_info/2` items other than `registered_name` are not modeled and
+      do not return. Timers are not modeled.
 
     * Receive timeouts do not measure wall-clock time. Positive timeouts expire
       according to the modeled scheduler's choices, or when no process can run.
