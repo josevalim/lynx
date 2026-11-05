@@ -37,7 +37,15 @@ defmodule Lynx.Case do
       Lynx.Case.__register__(__MODULE__)
 
       import Lynx.Case,
-        only: [law: 2, laws: 2, laws: 3, termination_suffix: 2, cutoff: 1, prelude: 1]
+        only: [
+          law: 2,
+          laws: 2,
+          laws: 3,
+          termination_suffix: 2,
+          cutoff: 1,
+          dynamic: 1,
+          prelude: 1
+        ]
 
       import Lynx.Lean, only: [sigil_LEAN: 2]
     end
@@ -220,28 +228,57 @@ defmodule Lynx.Case do
   paths. The function remains pure (see the purity model in `Lynx`).
   """
   defmacro cutoff(target) do
-    mfa =
-      case target do
-        {:&, _, [{:/, _, [{{:., _, [module, name]}, _, []}, arity]}]}
-        when is_atom(name) and is_integer(arity) and arity >= 0 ->
-          module = Macro.expand(module, __CALLER__)
-          if not is_atom(module), do: raise(ArgumentError, "expected a module in cutoff")
-          {module, name, arity}
-
-        _ ->
-          raise ArgumentError, "cutoff expects &Module.function/arity"
-      end
+    mfa = mfa!(target, "cutoff", __CALLER__)
 
     quote do
-      Lynx.Case.__cutoff__(__MODULE__, unquote(Macro.escape(mfa)))
+      Lynx.Case.__declare__(__MODULE__, :lynx_cutoffs, unquote(Macro.escape(mfa)))
+    end
+  end
+
+  @doc """
+  Declares a function that calls by name may reach in this laws group.
+
+      dynamic &:erlang.apply/2
+
+  Calls whose module or function is computed, such as `apply(mod, fun, args)`
+  or `mod.fun(x)`, and computed references, such as `&mod.fun/1`, are resolved
+  when the program runs. Lean cannot load code at that point, so they reach
+  only the declared functions and those the program captures by name, such as
+  `&Module.function/arity`. Calls to other functions raise
+  `Lynx.Exception.exhausted`, like a `cutoff`, so a successful-return proof must
+  establish that they are not reached. Declared functions are translated with
+  the program.
+  """
+  defmacro dynamic(target) do
+    mfa = mfa!(target, "dynamic", __CALLER__)
+
+    quote do
+      Lynx.Case.__declare__(__MODULE__, :lynx_dynamic, unquote(Macro.escape(mfa)))
+    end
+  end
+
+  defp mfa!(target, macro, caller) do
+    case target do
+      {:&, _, [{:/, _, [{{:., _, [module, name]}, _, []}, arity]}]}
+      when is_atom(name) and is_integer(arity) and arity >= 0 ->
+        module = Macro.expand(module, caller)
+        if not is_atom(module), do: raise(ArgumentError, "expected a module in #{macro}")
+        {module, name, arity}
+
+      _ ->
+        raise ArgumentError, "#{macro} expects &Module.function/arity"
     end
   end
 
   @doc false
-  def __cutoff__(module, mfa) do
-    case Module.get_attribute(module, :lynx_cutoffs) do
-      nil -> raise ArgumentError, "cutoff must be defined inside a laws group"
-      cutoffs -> Module.put_attribute(module, :lynx_cutoffs, MapSet.put(cutoffs, mfa))
+  def __declare__(module, attribute, mfa) do
+    case Module.get_attribute(module, attribute) do
+      nil ->
+        macro = if attribute == :lynx_cutoffs, do: "cutoff", else: "dynamic"
+        raise ArgumentError, "#{macro} must be defined inside a laws group"
+
+      mfas ->
+        Module.put_attribute(module, attribute, MapSet.put(mfas, mfa))
     end
   end
 
@@ -281,16 +318,14 @@ defmodule Lynx.Case do
             __MODULE__,
             unquote(name),
             unquote(group_laws),
-            unquote(Macro.escape(suffixes)),
-            unquote(Macro.escape(cutoffs)),
-            unquote(Macro.escape(preludes)),
+            unquote(Macro.escape(translation)),
             unquote(Macro.escape(options))
           )
         end
       end
 
     quote do
-      {name, group_laws, suffixes, cutoffs, preludes, options} =
+      {name, group_laws, translation, options} =
         Lynx.Case.__laws__(
           __MODULE__,
           unquote(__CALLER__.file),
@@ -336,6 +371,7 @@ defmodule Lynx.Case do
     Module.put_attribute(module, :lynx_laws, [])
     Module.put_attribute(module, :lynx_termination_suffixes, %{})
     Module.put_attribute(module, :lynx_cutoffs, MapSet.new())
+    Module.put_attribute(module, :lynx_dynamic, MapSet.new())
     Module.put_attribute(module, :lynx_preludes, [])
 
     try do
@@ -348,13 +384,19 @@ defmodule Lynx.Case do
 
       name = ExUnit.Case.register_test(module, file, line, :laws, description, [:laws])
 
-      {name, group_laws, Module.get_attribute(module, :lynx_termination_suffixes),
-       Module.get_attribute(module, :lynx_cutoffs),
-       Enum.reverse(Module.get_attribute(module, :lynx_preludes)), options}
+      translation = [
+        termination_suffixes: Module.get_attribute(module, :lynx_termination_suffixes),
+        cutoffs: Module.get_attribute(module, :lynx_cutoffs),
+        dynamic: Module.get_attribute(module, :lynx_dynamic),
+        preludes: Enum.reverse(Module.get_attribute(module, :lynx_preludes))
+      ]
+
+      {name, group_laws, translation, options}
     after
       Module.delete_attribute(module, :lynx_laws)
       Module.delete_attribute(module, :lynx_termination_suffixes)
       Module.delete_attribute(module, :lynx_cutoffs)
+      Module.delete_attribute(module, :lynx_dynamic)
       Module.delete_attribute(module, :lynx_preludes)
     end
   end
@@ -367,7 +409,7 @@ defmodule Lynx.Case do
   end
 
   @doc false
-  def __verify__(module, name, laws, suffixes, cutoffs, preludes, options) do
+  def __verify__(module, name, laws, translation, options) do
     export =
       case System.get_env("LYNX_EXPORT") do
         nil -> []
@@ -391,7 +433,7 @@ defmodule Lynx.Case do
     File.rm_rf!(dir)
 
     files =
-      Lynx.Translation.new(termination_suffixes: suffixes, cutoffs: cutoffs, preludes: preludes)
+      Lynx.Translation.new(translation)
       |> Lynx.Translation.add(Lynx.Bytecode.fetch!(module))
       |> Lynx.Translation.verify(module, laws)
       |> Lynx.Translation.assemble(cache: cache)

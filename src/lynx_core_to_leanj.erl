@@ -1,6 +1,6 @@
 -module(lynx_core_to_leanj).
 
--export([module_name/1, to_definitions/1, translate/8, fun_table/2, join_purity/2,
+-export([module_name/1, to_definitions/1, translate/9, fun_table/2, join_purity/2,
          with_purity/2]).
 
 %% Purity levels, ordered by what running a definition requires: `pure` needs
@@ -23,7 +23,7 @@
                 local_calls = #{}, purity = pure, dispatches = false, remote, next_var = 0,
                 labels = #{},
                 local_funs = #{}, size_facts = #{}, size_calls = [], suffixed = [],
-                literals = #{}, binds = [], pattern = false}).
+                dynamic = [], literals = #{}, binds = [], pattern = false}).
 
 -spec module_name(module()) -> binary().
 module_name(Module) ->
@@ -123,6 +123,7 @@ fun_entry({_Id, Module, #{arity := Arity} = Fun, #{~"params" := Params, ~"name" 
     with_purity(fun_info(Fun, Entry), Purity).
 
 %% The module, name, and arity the compiler gave the function, when known.
+%% Calls by name, such as apply(M, F, Args), find the function by them.
 fun_info(#{info := {Module, Name, Arity}}, Entry) ->
     Entry#{~"info" => #{~"module" => atom_to_binary(Module, utf8),
                         ~"name" => atom_to_binary(Name, utf8), ~"arity" => Arity}};
@@ -157,15 +158,17 @@ purity_rank(concurrent) -> 3.
 %% The supplied maps contain this module's definitions, its literal pool, and the
 %% program-wide function registry.
 %% Suffixed functions have user termination suffixes, which refer to Core's parameter names.
+%% Dynamic lists the {Module, Function, Arity} targets that calls by name may reach,
+%% such as apply(M, F, Args), in addition to the function values the program creates.
 %% The callback returns the remote callee's purity and whether it calls function values.
 %% Local purity is propagated by Lynx.Translation.
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
 -spec translate(module(), #{{atom(), arity()} => {function | cutoff, cerl:c_fun()} | {law, map()}}, [{atom(), arity()}], map(),
-                #{term() => binary()}, map(), [{atom(), arity()}],
+                #{term() => binary()}, map(), [{atom(), arity()}], [mfa()],
                 {term(), fun((term(), module(), atom(), arity(), list(), map()) ->
                     {{purity(), boolean()}, map(), term()} | local)}) ->
     {ok, map(), map(), map(), map(), term()} | {error, list(), binary()}.
-translate(Module, Definitions, Names, Translated, Literals, Funs, Suffixed, Remote) ->
+translate(Module, Definitions, Names, Translated, Literals, Funs, Suffixed, Dynamic, Remote) ->
     try
         State = #state{
           module = Module,
@@ -174,6 +177,7 @@ translate(Module, Definitions, Names, Translated, Literals, Funs, Suffixed, Remo
           literals = Literals,
           funs = Funs,
           suffixed = Suffixed,
+          dynamic = lists:usort(Dynamic),
           remote = Remote
         },
 
@@ -490,17 +494,20 @@ computation(#c_call{anno = Anno, module = #c_literal{val = erlang},
         when Class =:= error; Class =:= throw; Class =:= exit ->
     {TranslatedReason, State1} = value(Reason, State0),
     {node(~"raise", Anno, #{~"class" => atom_to_binary(Class, utf8), ~"reason" => TranslatedReason}), State1};
-%% Function references and calls must name their module and function at
-%% translation time. The compiler folds literal references, such as
-%% &Foo.bar/1, into function literals and literal applies into calls, so
-%% these only remain when computed, such as &mod.bar/1 or apply(M, F, Args).
-computation(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = make_fun},
-                   args = [_, _, _]} = Core, _State) ->
-    core_error(Core, <<"dynamic function references, such as &mod.fun/1 or fun M:F/A, "
-                       "are not supported">>);
-computation(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = apply},
-                   args = [_, _, _]} = Core, _State) ->
-    core_error(Core, <<"dynamic calls, such as apply(M, F, Args), are not supported">>);
+%% Erlang: apply(M, F, Args) or make_fun(M, F, Arity)
+%% Lean: Erlang.erlang.«apply/3» dispatcher vM vF vArgs
+%% The compiler folds literal references, such as &Foo.bar/1, into function
+%% literals and literal applies into calls, so these remain when computed.
+%% They reach function values through the program table, which includes the
+%% dynamic targets.
+computation(#c_call{anno = Anno, module = #c_literal{val = erlang},
+                   name = #c_literal{val = Name}, args = [_, _, _]} = Core, State0)
+        when Name =:= apply; Name =:= make_fun ->
+    State1 = lists:foldl(fun({Module, Function, Arity}, Acc) ->
+        {_, Next} = external_function_value(Module, Function, Arity, Anno, Acc),
+        Next
+    end, State0, State0#state.dynamic),
+    remote_computation(Core, State1);
 %% Erlang: spawn(M, F, [A1, ..., An]), with literal M and F
 %% Lean: Erlang.erlang.«spawn/1» applied to a function value calling M:F(A1, ..., An)
 %% The arguments are values, so they are evaluated by the caller, as in Erlang.
@@ -525,24 +532,17 @@ computation(#c_call{anno = Anno, module = #c_literal{val = erlang},
 %% Lean: Erlang.other.«f/1» vX
 %% Erlang: ?MODULE:f(X) (non-builtin)
 %% Lean: «f/1» vX
-computation(#c_call{anno = Anno, module = #c_literal{val = Module},
-                   name = #c_literal{val = Name}, args = Args}, State0)
+computation(#c_call{module = #c_literal{val = Module}, name = #c_literal{val = Name}} = Core,
+            State)
         when is_atom(Module), is_atom(Name) ->
-    Arity = length(Args),
-    {Context, Callback} = State0#state.remote,
-    case Callback(Context, Module, Name, Arity, Anno, State0#state.funs) of
-        local when Module =:= State0#state.module ->
-            expression(#c_apply{anno = Anno, op = #c_var{name = {Name, Arity}}, args = Args},
-                State0);
-        {Callee, NewFuns, NewContext} ->
-            {TranslatedArgs, State1} = lists:mapfoldl(fun value/2,
-                State0#state{funs = NewFuns, remote = {NewContext, Callback}}, Args),
-            Call = remote_call_node(module_name(Module), atom_to_binary(Name, utf8),
-                TranslatedArgs, Callee, Anno),
-            {Call, call_purity(Callee, State1)}
-    end;
-computation(#c_call{} = Core, _State) ->
-    core_error(Core, <<"dynamic calls, such as mod.fun(x) or M:F(X), are not supported">>);
+    remote_computation(Core, State);
+%% Erlang: M:F(A1, ..., An), with a computed module or function
+%% Lean: as apply(M, F, [A1, ..., An])
+computation(#c_call{anno = Anno, module = Module, name = Name, args = Args}, State) ->
+    List = lists:foldr(fun(Arg, Tail) -> #c_cons{anno = Anno, hd = Arg, tl = Tail} end,
+        #c_literal{anno = Anno, val = []}, Args),
+    computation(#c_call{anno = Anno, module = #c_literal{val = erlang},
+        name = #c_literal{val = apply}, args = [Module, Name, List]}, State);
 computation(#c_primop{anno = Anno, name = #c_literal{val = Op}, args = Args}, State) ->
     prim_op(Op, Anno, Args, State);
 %% Integer construction is a computation: invalid values or sizes raise badarg.
@@ -570,6 +570,24 @@ computation(Value, State0) when is_record(Value, c_literal); is_record(Value, c_
     {node(~"return", cerl:get_ann(Value), #{~"values" => [Translated]}), State1};
 computation(Core, _State) ->
     unsupported(Core).
+
+%% Calls with a literal module and function, to builtins, other modules, or
+%% this module.
+remote_computation(#c_call{anno = Anno, module = #c_literal{val = Module},
+                           name = #c_literal{val = Name}, args = Args}, State0) ->
+    Arity = length(Args),
+    {Context, Callback} = State0#state.remote,
+    case Callback(Context, Module, Name, Arity, Anno, State0#state.funs) of
+        local when Module =:= State0#state.module ->
+            expression(#c_apply{anno = Anno, op = #c_var{name = {Name, Arity}}, args = Args},
+                State0);
+        {Callee, NewFuns, NewContext} ->
+            {TranslatedArgs, State1} = lists:mapfoldl(fun value/2,
+                State0#state{funs = NewFuns, remote = {NewContext, Callback}}, Args),
+            Call = remote_call_node(module_name(Module), atom_to_binary(Name, utf8),
+                TranslatedArgs, Callee, Anno),
+            {Call, call_purity(Callee, State1)}
+    end.
 
 %% Core lowers orelse and andalso to a case on the left operand, raising badarg
 %% on other values unless the compiler knows the operand is a Boolean. Elixir
@@ -1474,3 +1492,4 @@ unsupported(Core) ->
 
 core_error(Core, Reason) ->
     throw({error, Core, Reason}).
+

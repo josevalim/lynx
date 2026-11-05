@@ -9,16 +9,16 @@ namespace Lynx.Dispatcher
 open Term
 
 /-- Calling a value that is not a function, or that names no table entry. -/
-private def badfun (function : Term) : Exception :=
+@[expose] def badfun (function : Term) : Exception :=
   .error (.tuple #[.atom "badfun", function])
 
 /-- Build an Erlang argument list only when reporting an arity mismatch. -/
-private def badarity (function : Term) (arguments : Array Term) : Exception :=
+@[expose] def badarity (function : Term) (arguments : Array Term) : Exception :=
   .error (.tuple #[.atom "badarity", .tuple #[function, arguments.toList.foldr Term.cons Term.nil]])
 
 /-- The table entry a function value names and its captured values, once its
 arity matches the arguments. -/
-private def lookup (table : FunTable) (function : Term) (arguments : Array Term) :
+@[expose] def lookup (table : FunTable) (function : Term) (arguments : Array Term) :
     Except Exception (FunEntry × Array Term) :=
   match function with
   | .function id arity captures =>
@@ -29,11 +29,30 @@ private def lookup (table : FunTable) (function : Term) (arguments : Array Term)
     else .error (badarity function arguments)
   | _ => .error (badfun function)
 
+/-- The entry named `Module:Name/Arity` by its info, searching from entry `index`.
+Atoms are compared by name, so evaluation needs no term order. -/
+@[expose] def namedFrom (module name : String) (arity : Nat) :
+    Nat → List FunEntry → Option Term
+  | _, [] => none
+  | index, entry :: rest =>
+    match entry.info with
+    | some (.tuple ⟨[.atom entryModule, .atom entryName, .integer entryArity]⟩) =>
+      if entryModule = module ∧ entryName = name ∧ entryArity = arity then
+        some (.function index arity #[])
+      else namedFrom module name arity (index + 1) rest
+    | _ => namedFrom module name arity (index + 1) rest
+
+/-- The function value named `Module:Name/Arity`, when the program has one. -/
+@[expose] def named (table : FunTable) (module name : Term) (arity : Nat) : Option Term :=
+  match module, name with
+  | .atom module, .atom name => namedFrom module name arity 0 table.toList
+  | _, _ => none
+
 /-- Dispatch one call. Entries that dispatch further receive `inner`, and do not
 return without one. Pure entries consume no call depth. A pure caller reaches
 effectful entries only in programs without any, as translation makes the dynamic
 calls of other programs effectful, so they do not return there either. -/
-private def step (table : FunTable) (inner : Option Dispatcher) : Dispatcher where
+@[expose] def step (table : FunTable) (inner : Option Dispatcher) : Dispatcher where
   pure function arguments :=
     match lookup table function arguments with
     | .error exception => .error exception
@@ -65,12 +84,14 @@ private def step (table : FunTable) (inner : Option Dispatcher) : Dispatcher whe
         | none => .error .exhausted
       | none => .error .exhausted
     | _ => .error (.error (.atom "badarg"))
+  resolve := named table
 
 /-- Dispatch through an immutable program table. The depth bounds nested calls
 through entries that dispatch further, including in spawned children, but not
 calls to pure entries; exceeding it does not return. The lemmas below describe
-how it calls table entries. -/
-def ofTable (table : FunTable) : Nat → Dispatcher
+how it calls table entries, and its body is exposed so closed programs can be
+evaluated. -/
+@[expose] def ofTable (table : FunTable) : Nat → Dispatcher
   | 0 => step table none
   | depth + 1 => step table (some (ofTable table depth))
 

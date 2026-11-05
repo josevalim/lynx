@@ -1507,23 +1507,32 @@ defmodule Lynx.CoreToLeanjTest do
     assert reason =~ "unsupported"
   end
 
-  test "rejects dynamic function references and calls" do
-    module = :cerl.c_var(:M)
-    name = :cerl.c_atom(:f)
+  test "dynamic targets join the function table" do
+    body =
+      :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:apply), [
+        :cerl.c_var(:M),
+        :cerl.c_atom(:f),
+        :cerl.c_nil()
+      ])
 
-    for {body, message} <- [
-          {:cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:make_fun), [
-             module,
-             name,
-             :cerl.c_int(1)
-           ]), "dynamic function references"},
-          {:cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:apply), [module, name, :cerl.c_nil()]),
-           "dynamic calls, such as apply(M, F, Args)"},
-          {:cerl.c_call(module, name, []), "dynamic calls, such as mod.fun(x)"}
-        ] do
-      assert {:error, _, reason} = translate(definitions([definition(:entry, body)]))
-      assert reason =~ message
-    end
+    callback = fn _, _, _, _, _, funs -> {{:pure, true}, funs, []} end
+
+    assert {:ok, _, _, _, funs, _} =
+             core_translate(
+               :example,
+               definitions([definition(:entry, body)]),
+               [{:entry, 1}],
+               callback,
+               %{},
+               [{:other, :target, 2}]
+             )
+
+    assert %{
+             {:external, :other, :target, 2} => %{
+               info: {:other, :target, 2},
+               captures: []
+             }
+           } = funs
   end
 
   test "translates laws without a requires helper" do
@@ -1575,7 +1584,7 @@ defmodule Lynx.CoreToLeanjTest do
   end
 
   # Translates roots starting from an empty literal pool and function registry.
-  defp core_translate(module, definitions, roots, callback, translated \\ %{}) do
+  defp core_translate(module, definitions, roots, callback, translated \\ %{}, dynamic \\ []) do
     :lynx_core_to_leanj.translate(
       module,
       definitions,
@@ -1584,6 +1593,7 @@ defmodule Lynx.CoreToLeanjTest do
       %{},
       %{},
       [],
+      dynamic,
       {[], callback}
     )
   end

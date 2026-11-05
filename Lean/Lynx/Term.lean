@@ -8,6 +8,7 @@ public import Lynx.Term.Maps
 public import Lynx.Term.Runner
 public import Lynx.Term.Induction
 public import Lynx.Term.Order
+public import Lynx.Term.Eval
 
 namespace Lynx
 

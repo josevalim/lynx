@@ -14,12 +14,12 @@ set_option «match».ignoreUnusedAlts true
 
 def fun_table : Lynx.Term.FunTable :=
   #[Lynx.Term.FunEntry.apply fun lynxDispatch => fun captures args =>
-      match captures, args with
-      | #[vcap1], #[varg1] => Erlang.named_locals.«$lynx_fun_0/2» lynxDispatch vcap1 varg1
+      match (captures).toList, (args).toList with
+      | [vcap1], [varg1] => Erlang.named_locals.«$lynx_fun_0/2» lynxDispatch vcap1 varg1
       | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")),
     Lynx.Term.FunEntry.pure fun captures args =>
-      match captures, args with
-      | #[], #[] => Erlang.named_locals.«$lynx_fun_1/0»
+      match (captures).toList, (args).toList with
+      | [], [] => Erlang.named_locals.«$lynx_fun_1/0»
       | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))]
 
 @[simp]

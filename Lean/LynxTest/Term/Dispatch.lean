@@ -168,12 +168,48 @@ private def named : Term.FunTable := #[
   .pure fun _ _ => .ok .nil]
 
 theorem fun_info_mfa_reports_compiled_name :
-    Erlang.erlang.«fun_info_mfa/1» (Dispatcher.ofTable named 1) (.function 0 0 #[]) =
-      .ok (.tuple #[.atom "example", .atom "-f/1-fun-0-", .integer 0]) ∧
-    Erlang.erlang.«fun_info_mfa/1» (Dispatcher.ofTable named 1) (.function 1 0 #[]) =
-      .error .exhausted ∧
-    Erlang.erlang.«fun_info_mfa/1» (Dispatcher.ofTable named 1) (.atom "not_a_fun") =
-      .error (.error (.atom "badarg")) := by
+    (Erlang.erlang.«fun_info_mfa/1» (Dispatcher.ofTable named 1) (.function 0 0 #[]) :
+      Except Exception Term) = .ok (.tuple #[.atom "example", .atom "-f/1-fun-0-", .integer 0]) ∧
+    (Erlang.erlang.«fun_info_mfa/1» (Dispatcher.ofTable named 1) (.function 1 0 #[]) :
+      Except Exception Term) = .error .exhausted ∧
+    (Erlang.erlang.«fun_info_mfa/1» (Dispatcher.ofTable named 1) (.atom "not_a_fun") :
+      Except Exception Term) = .error (.error (.atom "badarg")) := by
+  refine ⟨?_, ?_, ?_⟩ <;> cbv
+
+/-- A local function, and `fun erlang:apply/2`. -/
+private def byName : Term.FunTable := #[
+  .pure (fun _ _ => .ok (.atom "done")) (some (.tuple #[.atom "example", .atom "done", .integer 0])),
+  .apply (fun dispatcher captures args =>
+      match captures.toList, args.toList with
+      | [], [function, arguments] => Erlang.erlang.«apply/2» dispatcher function arguments
+      | _, _ => .error (.error (.atom "badarg")))
+    (some (.tuple #[.atom "erlang", .atom "apply", .integer 2]))]
+
+/-- Calls by name find entries by the name and arity they record. -/
+theorem resolve_finds_named_entries :
+    (Dispatcher.ofTable byName 1).resolve (.atom "erlang") (.atom "apply") 2 =
+      some (.function 1 2 #[]) ∧
+    (Dispatcher.ofTable byName 1).resolve (.atom "example") (.atom "done") 0 =
+      some (.function 0 0 #[]) ∧
+    (Dispatcher.ofTable byName 1).resolve (.atom "erlang") (.atom "apply") 3 = none := by
+  refine ⟨?_, ?_, ?_⟩ <;> cbv
+
+theorem apply_calls_by_name :
+    (Erlang.erlang.«apply/3» (Dispatcher.ofTable byName 2) (.atom "erlang") (.atom "apply")
+      (.cons (.function 0 0 #[]) (.cons .nil .nil)) : Except Exception Term) = .ok (.atom "done") ∧
+    (Erlang.erlang.«apply/3» (Dispatcher.ofTable byName 2) (.atom "example") (.atom "missing")
+      .nil : Except Exception Term) = .error .exhausted ∧
+    (Erlang.erlang.«apply/3» (Dispatcher.ofTable byName 2) (.integer 1) (.atom "done")
+      .nil : Except Exception Term) = .error (.error (.atom "badarg")) := by
+  refine ⟨?_, ?_, ?_⟩ <;> cbv
+
+theorem make_fun_resolves_by_name :
+    (Erlang.erlang.«make_fun/3» (Dispatcher.ofTable byName 1) (.atom "erlang") (.atom "apply")
+      (.integer 2) : Except Exception Term) = .ok (.function 1 2 #[]) ∧
+    (Erlang.erlang.«make_fun/3» (Dispatcher.ofTable byName 1) (.atom "example") (.atom "missing")
+      (.integer 0) : Except Exception Term) = .error .exhausted ∧
+    (Erlang.erlang.«make_fun/3» (Dispatcher.ofTable byName 1) (.atom "erlang") (.atom "apply")
+      (.integer (-1)) : Except Exception Term) = .error (.error (.atom "badarg")) := by
   refine ⟨?_, ?_, ?_⟩ <;> cbv
 
 end LynxTest.Term.Dispatch

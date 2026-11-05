@@ -620,6 +620,8 @@ public structure Dispatcher where
   /-- The `{Module, Name, Arity}` the compiler gave a function value. Values
   without one do not return, and other terms raise `badarg`. -/
   info : Term → Except Exception Term := fun _ => .error .exhausted
+  /-- The function value named `Module:Name/Arity`, when the program has one. -/
+  resolve : Term → Term → Nat → Option Term := fun _ _ _ => none
 
 end Lynx
 
@@ -627,7 +629,8 @@ namespace Lynx.Term
 
 /-- Purity is enforced by the callable's return type, rather than a boolean.
 Entries that dispatch further receive the dispatcher for the remaining call depth.
-Each entry may record the `{Module, Name, Arity}` the compiler gave its function. -/
+Each entry may record the `{Module, Name, Arity}` the compiler gave its function,
+which calls by name use to find it. -/
 public inductive FunEntry where
   | pure (body : Array Term → PureFun) (info : Option Term := none)
   /-- Pure apart from calling function values. -/

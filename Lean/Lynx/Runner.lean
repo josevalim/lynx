@@ -1467,9 +1467,11 @@ private def tableEntry (map : FileMap) (info : Span) (entry : Json)
   let atom := mkIdent ``Lynx.Term.atom
   let capturesId := mkIdent `captures
   let argsId := mkIdent `args
+  -- List patterns, unlike array literal patterns, give matches equation lemmas
+  -- that evaluation and simp can use.
   let adapter := Unhygienic.run `(fun $capturesId:ident $argsId:ident =>
-      match $capturesId:ident, $argsId:ident with
-      | #[$captures,*], #[$arguments,*] => $body
+      match ($capturesId:ident).toList, ($argsId:ident).toList with
+      | [$captures,*], [$arguments,*] => $body
       | _, _ => $error ($exceptionError ($atom "badarg")))
   let adapter := if level == "pure" then adapter
     else Unhygienic.run `(fun $dispatcherId:ident => $adapter)

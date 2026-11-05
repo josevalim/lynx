@@ -46,6 +46,14 @@ def «references/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term :=
   let _3 ← pure (Lynx.Term.map [(vFirst, vSecond)])
   pure (Lynx.Term.tuple #[_5, _4, _3])
 
+def «calls_by_name/2» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) (_1 : Lynx.Term) :
+    Lynx.Result Lynx.Term := do
+  let vInc ← Erlang.erlang.«make_fun/3» lynxDispatch _0 (Lynx.Term.atom "inc") (Lynx.Term.integer 1)
+  let _5 ← Erlang.erlang.«apply/3» lynxDispatch _0 (Lynx.Term.atom "inc") (Lynx.Term.list [_1])
+  let _4 ← Erlang.erlang.«apply/3» lynxDispatch _0 (Lynx.Term.atom "inc") (Lynx.Term.list [_1])
+  let _3 ← Lynx.Dispatcher.call lynxDispatch vInc #[_1]
+  pure (Lynx.Term.tuple #[_5, _4, _3])
+
 def «captured_closures/1» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) :
     Lynx.Result Lynx.Term := do
   let vF ← Lynx.Result.ofExcept («make/1» _0)
