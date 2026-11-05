@@ -744,6 +744,11 @@ defmodule Lynx.TranslationTest do
 
     assert map_size(translation.funs) == 4
 
+    # Anonymous functions record the name the compiler gave them.
+    assert %{info: {:dependency, :"-entry/1-fun-0-", 1}} = translation.funs[2]
+    assert %{info: {:caller, :"-entry/1-fun-0-", 1}} = translation.funs[3]
+    refute Map.has_key?(translation.funs[{:caller, {:local, 1}}], :info)
+
     assert Translation.translate(translation, :caller, [{:entry, 1}]) == translation
 
     updated = Translation.translate(translation, :caller, [{:again, 0}, {:extra, 1}])
@@ -785,6 +790,9 @@ defmodule Lynx.TranslationTest do
              contents,
              &match?(%{"kind" => "def", "name" => "extra", "purity" => "pure"}, &1)
            )
+
+    assert %{"info" => %{"module" => "caller", "name" => "-extra/1-fun-0-", "arity" => 0}} =
+             Enum.at(entries, 4)
 
     assert Enum.map(entries, fn %{
                                   "body" => %{

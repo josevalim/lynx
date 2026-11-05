@@ -25,4 +25,9 @@ def «apply/2» {m : Type → Type u} [Monad m] [MonadExceptOf Exception m] [Dis
   | none => throw (.error (.atom "badarg"))
   | some decoded => Dispatch.dispatch dispatcher function decoded.toArray
 
+/-- The `{Module, Name, Arity}` the compiler gave a function value. -/
+@[expose] def «fun_info_mfa/1» (dispatcher : Dispatcher) (function : Term) :
+    Except Exception Term :=
+  dispatcher.info function
+
 end Erlang.erlang

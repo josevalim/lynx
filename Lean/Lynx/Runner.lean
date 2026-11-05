@@ -1445,13 +1445,15 @@ private structure TableEntry where
   body : TSyntax `term
   adapter : TSyntax `term
   level : String
+  /-- The compiler's `{Module, Name, Arity}` for the function, when known. -/
+  info : Option (TSyntax `term) := none
 
 /-- Decode a table entry. Entries that are not pure receive their dispatcher as
 the adapter's first parameter; `dispatcher` instead substitutes a given one into
 the body, for stating its application equations. -/
 private def tableEntry (map : FileMap) (info : Span) (entry : Json)
     (dispatcher : TSyntax `term := ⟨dispatcherId.raw⟩) : DecodeM TableEntry := do
-  fields entry ["body", "captures", "args", "purity", "dispatches", "span"]
+  fields entry ["body", "captures", "args", "purity", "dispatches", "span", "info"]
   let entryInfo ← span map entry info
   let captureIds ← (← arr entry "captures").mapM (param map entryInfo)
   let argumentIds ← (← arr entry "args").mapM (param map entryInfo)
@@ -1471,7 +1473,19 @@ private def tableEntry (map : FileMap) (info : Span) (entry : Json)
       | _, _ => $error ($exceptionError ($atom "badarg")))
   let adapter := if level == "pure" then adapter
     else Unhygienic.run `(fun $dispatcherId:ident => $adapter)
-  return ⟨captureIds, argumentIds, body, withSpan entryInfo.info adapter, level⟩
+  let functionInfo ← match field entry "info" with
+    | .error _ => pure none
+    | .ok value => do
+      fields value ["module", "name", "arity"]
+      let module := Syntax.mkStrLit (← str value "module")
+      let name := Syntax.mkStrLit (← str value "name")
+      let arity := Syntax.mkNumLit (toString (← (← field value "arity").getNat?))
+      let tuple := mkIdent ``Lynx.Term.tuple
+      let atom := mkIdent ``Lynx.Term.atom
+      let integer := mkIdent ``Lynx.Term.integer
+      pure (some (Unhygienic.run `(some ($tuple #[$atom $module, $atom $name, $integer $arity]))))
+  return { captures := captureIds, arguments := argumentIds, body
+           adapter := withSpan entryInfo.info adapter, level, info := functionInfo }
 
 private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
     DecodeM (TSyntax `command) := do
@@ -1488,7 +1502,9 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
         | "pure" => ``Lynx.Term.FunEntry.pure
         | "apply" => ``Lynx.Term.FunEntry.apply
         | _ => ``Lynx.Term.FunEntry.effectful)
-      pure (Unhygienic.run `($ctor $(entry.adapter)))
+      match entry.info with
+      | some info => pure (Unhygienic.run `($ctor $(entry.adapter) $info))
+      | none => pure (Unhygienic.run `($ctor $(entry.adapter)))
     let body := Unhygienic.run `(#[$entries,*])
     let tableType := mkIdent ``Lynx.Term.FunTable
     pure (Unhygienic.run `(def $name : $tableType := $body))

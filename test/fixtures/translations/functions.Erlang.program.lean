@@ -13,10 +13,14 @@ section
 set_option «match».ignoreUnusedAlts true
 
 def fun_table : Lynx.Term.FunTable :=
-  #[Lynx.Term.FunEntry.pure fun captures args =>
-      match captures, args with
-      | #[vcap1], #[varg1] => Erlang.functions.«$lynx_fun_0/2» vcap1 varg1
-      | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")),
+  #[Lynx.Term.FunEntry.pure
+      (fun captures args =>
+        match captures, args with
+        | #[vcap1], #[varg1] => Erlang.functions.«$lynx_fun_0/2» vcap1 varg1
+        | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")))
+      (some
+        (Lynx.Term.tuple
+          #[Lynx.Term.atom "functions", Lynx.Term.atom "-make/1-fun-0-", Lynx.Term.integer 1])),
     Lynx.Term.FunEntry.pure fun captures args =>
       match captures, args with
       | #[], #[varg1] => Erlang.functions.«inc/1» varg1
@@ -25,14 +29,22 @@ def fun_table : Lynx.Term.FunTable :=
       match captures, args with
       | #[], #[varg1] => Erlang.functions.«remember/1» lynxDispatch varg1
       | _, _ => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "badarg")),
-    Lynx.Term.FunEntry.effectful fun lynxDispatch => fun captures args =>
-      match captures, args with
-      | #[vcap1], #[varg1] => Erlang.functions.«$lynx_fun_3/2» lynxDispatch vcap1 varg1
-      | _, _ => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "badarg")),
-    Lynx.Term.FunEntry.pure fun captures args =>
-      match captures, args with
-      | #[], #[varg1] => Erlang.functions.«$lynx_fun_4/1» varg1
-      | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")),
+    Lynx.Term.FunEntry.effectful
+      (fun lynxDispatch => fun captures args =>
+        match captures, args with
+        | #[vcap1], #[varg1] => Erlang.functions.«$lynx_fun_3/2» lynxDispatch vcap1 varg1
+        | _, _ => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "badarg")))
+      (some
+        (Lynx.Term.tuple
+          #[Lynx.Term.atom "functions", Lynx.Term.atom "-make_store/1-fun-0-",
+            Lynx.Term.integer 1])),
+    Lynx.Term.FunEntry.pure
+      (fun captures args =>
+        match captures, args with
+        | #[], #[varg1] => Erlang.functions.«$lynx_fun_4/1» varg1
+        | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")))
+      (some
+        (Lynx.Term.tuple #[Lynx.Term.atom "functions", Lynx.Term.atom "inc", Lynx.Term.integer 1])),
     Lynx.Term.FunEntry.pure fun captures args =>
       match captures, args with
       | #[], #[] => Erlang.functions.«zero/0»

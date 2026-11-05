@@ -112,14 +112,21 @@ fun_table(Funs, Modules) ->
     end || _ := #{id := Id, module := Module, name := Name} = Fun <- Funs],
     [fun_entry(Entry) || Entry <- lists:sort(Entries)].
 
-fun_entry({_Id, Module, #{arity := Arity}, #{~"params" := Params, ~"name" := Name}, Purity}) ->
+fun_entry({_Id, Module, #{arity := Arity} = Fun, #{~"params" := Params, ~"name" := Name},
+           Purity}) ->
     Captures = [var_node(<<"cap", (integer_to_binary(I))/binary>>, [])
                 || I <- lists:seq(1, length(Params) - Arity)],
     Args = [var_node(<<"arg", (integer_to_binary(I))/binary>>, [])
             || I <- lists:seq(1, Arity)],
     Body = remote_call_node(module_name(Module), Name, Captures ++ Args, Purity, []),
-    with_purity(#{~"body" => Body, ~"captures" => Captures, ~"args" => Args, ~"span" => []},
-                Purity).
+    Entry = #{~"body" => Body, ~"captures" => Captures, ~"args" => Args, ~"span" => []},
+    with_purity(fun_info(Fun, Entry), Purity).
+
+%% The module, name, and arity the compiler gave the function, when known.
+fun_info(#{info := {Module, Name, Arity}}, Entry) ->
+    Entry#{~"info" => #{~"module" => atom_to_binary(Module, utf8),
+                        ~"name" => atom_to_binary(Name, utf8), ~"arity" => Arity}};
+fun_info(_, Entry) -> Entry.
 
 %% A translated definition's purity, and whether it calls function values.
 purity_of(#{purity := Purity, dispatches := Dispatches}) -> {Purity, Dispatches}.
@@ -494,6 +501,26 @@ computation(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = m
 computation(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = apply},
                    args = [_, _, _]} = Core, _State) ->
     core_error(Core, <<"dynamic calls, such as apply(M, F, Args), are not supported">>);
+%% Erlang: spawn(M, F, [A1, ..., An]), with literal M and F
+%% Lean: Erlang.erlang.«spawn/1» applied to a function value calling M:F(A1, ..., An)
+%% The arguments are values, so they are evaluated by the caller, as in Erlang.
+%% spawn_link/3 and spawn_monitor/3 are translated the same way.
+computation(#c_call{anno = Anno, module = #c_literal{val = erlang},
+                   name = #c_literal{val = Spawn},
+                   args = [#c_literal{val = Module}, #c_literal{val = Function}, Args]} = Core,
+            State)
+        when (Spawn =:= spawn orelse Spawn =:= spawn_link orelse Spawn =:= spawn_monitor),
+             is_atom(Module), is_atom(Function) ->
+    case spawn_arguments(Args) of
+        {ok, Values} ->
+            Fun = #c_fun{anno = Anno, vars = [], body = #c_call{anno = Anno,
+                module = #c_literal{val = Module}, name = #c_literal{val = Function},
+                args = Values}},
+            computation(Core#c_call{args = [Fun]}, State);
+        error ->
+            core_error(Core, <<"spawning with arguments that are not a list of values "
+                               "is not supported">>)
+    end;
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX
 %% Erlang: ?MODULE:f(X) (non-builtin)
@@ -1031,14 +1058,33 @@ pattern(Core, State0) ->
     {Translated, State1} = value(Core, State0#state{pattern = true}),
     {Translated, State1#state{pattern = State0#state.pattern}}.
 
+%% The elements of a list of values, which can be evaluated before spawning.
+spawn_arguments(#c_literal{val = List}) when is_list(List) ->
+    {ok, [#c_literal{val = Value} || Value <- List]};
+spawn_arguments(#c_cons{hd = Head, tl = Tail}) ->
+    case cerl:is_c_var(Head) orelse cerl:is_literal(Head) of
+        true ->
+            case spawn_arguments(Tail) of
+                {ok, Rest} -> {ok, [Head | Rest]};
+                error -> error
+            end;
+        false -> error
+    end;
+spawn_arguments(_) -> error.
+
 %% Core separates values from computations; only computations produce Result.
 %% Computations the optimizer nests in values are bound by expression/2.
 value(#c_fun{vars = Vars} = Fun, State0) ->
     Captures = local_captures(Fun, State0, []),
     Id = map_size(State0#state.funs),
     Name = {list_to_atom("$lynx_fun_" ++ integer_to_list(Id)), length(Captures) + length(Vars)},
-    Entry = #{id => Id, module => State0#state.module,
-              name => Name, arity => length(Vars), captures => Captures},
+    Entry0 = #{id => Id, module => State0#state.module,
+               name => Name, arity => length(Vars), captures => Captures},
+    %% The compiler names each fun, which erlang:fun_info_mfa/1 reports.
+    Entry = case [Compiled || {id, {_, _, Compiled}} <- cerl:get_ann(Fun)] of
+        [Compiled | _] -> Entry0#{info => {State0#state.module, Compiled, length(Vars)}};
+        [] -> Entry0
+    end,
     State1 = State0#state{funs = (State0#state.funs)#{Id => Entry}},
     State2 = translate_def(Name, {function, Fun#c_fun{vars = Captures ++ Vars}}, State1),
     function_node(Entry, cerl:get_ann(Fun), State2);
@@ -1306,7 +1352,8 @@ external_function_value(Module, Function, Arity, Anno, State0) ->
             Name = {list_to_atom("$lynx_fun_" ++ integer_to_list(Id)), Arity},
             Args = [#c_var{name = Index} || Index <- lists:seq(0, Arity - 1)],
             Entry = #{id => Id, module => State0#state.module,
-                      name => Name, arity => Arity, captures => []},
+                      name => Name, arity => Arity, captures => [],
+                      info => {Module, Function, Arity}},
             Fun = #c_fun{anno = Anno, vars = Args, body = #c_call{anno = Anno,
                 module = #c_literal{val = Module}, name = #c_literal{val = Function}, args = Args}},
             State1 = State0#state{funs = (State0#state.funs)#{Key => Entry}},

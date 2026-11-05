@@ -617,18 +617,26 @@ public structure Dispatcher where
   pure : Term → Array Term → Except Exception Term
   /-- Call from a computation returning `Result`. -/
   call : Term → Array Term → Result Term
+  /-- The `{Module, Name, Arity}` the compiler gave a function value. Values
+  without one do not return, and other terms raise `badarg`. -/
+  info : Term → Except Exception Term := fun _ => .error .exhausted
 
 end Lynx
 
 namespace Lynx.Term
 
 /-- Purity is enforced by the callable's return type, rather than a boolean.
-Entries that dispatch further receive the dispatcher for the remaining call depth. -/
+Entries that dispatch further receive the dispatcher for the remaining call depth.
+Each entry may record the `{Module, Name, Arity}` the compiler gave its function. -/
 public inductive FunEntry where
-  | pure : (Array Term → PureFun) → FunEntry
+  | pure (body : Array Term → PureFun) (info : Option Term := none)
   /-- Pure apart from calling function values. -/
-  | apply : (Dispatcher → Array Term → PureFun) → FunEntry
-  | effectful : (Dispatcher → Array Term → Fun) → FunEntry
+  | apply (body : Dispatcher → Array Term → PureFun) (info : Option Term := none)
+  | effectful (body : Dispatcher → Array Term → Fun) (info : Option Term := none)
+
+/-- The `{Module, Name, Arity}` the compiler gave an entry's function, if known. -/
+@[expose] public def FunEntry.info : FunEntry → Option Term
+  | .pure _ info | .apply _ info | .effectful _ info => info
 
 /-- Program-local function implementations indexed by `Term.function` IDs.
 Each entry receives the captured values before the invocation arguments. -/

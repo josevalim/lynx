@@ -13,14 +13,24 @@ section
 set_option «match».ignoreUnusedAlts true
 
 def fun_table : Lynx.Term.FunTable :=
-  #[Lynx.Term.FunEntry.pure fun captures args =>
-      match captures, args with
-      | #[], #[varg1] => Erlang.higher_order.«$lynx_fun_0/1» varg1
-      | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")),
-    Lynx.Term.FunEntry.pure fun captures args =>
-      match captures, args with
-      | #[], #[varg1] => Erlang.higher_order.«$lynx_fun_1/1» varg1
-      | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))]
+  #[Lynx.Term.FunEntry.pure
+      (fun captures args =>
+        match captures, args with
+        | #[], #[varg1] => Erlang.higher_order.«$lynx_fun_0/1» varg1
+        | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")))
+      (some
+        (Lynx.Term.tuple
+          #[Lynx.Term.atom "higher_order", Lynx.Term.atom "-map_returns_list_requires/2-fun-1-",
+            Lynx.Term.integer 1])),
+    Lynx.Term.FunEntry.pure
+      (fun captures args =>
+        match captures, args with
+        | #[], #[varg1] => Erlang.higher_order.«$lynx_fun_1/1» varg1
+        | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")))
+      (some
+        (Lynx.Term.tuple
+          #[Lynx.Term.atom "higher_order", Lynx.Term.atom "-map_returns_list_requires/2-fun-0-",
+            Lynx.Term.integer 1]))]
 
 @[simp]
 theorem fun_table_pure_0 (depth : Nat) (varg1 : Lynx.Term) :

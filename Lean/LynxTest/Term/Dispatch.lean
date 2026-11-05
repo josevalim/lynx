@@ -162,6 +162,20 @@ theorem recursive_spawn_exhausts :
     | (.error .exhausted, _) => True
     | _ => False := by cbv
 
+/-- Entries can record the name the compiler gave their function. -/
+private def named : Term.FunTable := #[
+  .pure (fun _ _ => .ok .nil) (some (.tuple #[.atom "example", .atom "-f/1-fun-0-", .integer 0])),
+  .pure fun _ _ => .ok .nil]
+
+theorem fun_info_mfa_reports_compiled_name :
+    Erlang.erlang.«fun_info_mfa/1» (Dispatcher.ofTable named 1) (.function 0 0 #[]) =
+      .ok (.tuple #[.atom "example", .atom "-f/1-fun-0-", .integer 0]) ∧
+    Erlang.erlang.«fun_info_mfa/1» (Dispatcher.ofTable named 1) (.function 1 0 #[]) =
+      .error .exhausted ∧
+    Erlang.erlang.«fun_info_mfa/1» (Dispatcher.ofTable named 1) (.atom "not_a_fun") =
+      .error (.error (.atom "badarg")) := by
+  refine ⟨?_, ?_, ?_⟩ <;> cbv
+
 end LynxTest.Term.Dispatch
 
 run_cmd do

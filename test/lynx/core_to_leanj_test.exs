@@ -157,6 +157,56 @@ defmodule Lynx.CoreToLeanjTest do
             }, [{:erlang, :"=<", 2, []}]} = translate(definitions([definition(:entry, body)]))
   end
 
+  test "spawning a literal function with arguments spawns a closure over them" do
+    args = :cerl.c_cons(:cerl.c_var(0), :cerl.c_cons(:cerl.c_atom(:ok), :cerl.c_nil()))
+
+    body =
+      :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:spawn_link), [
+        :cerl.c_atom(:other),
+        :cerl.c_atom(:run),
+        args
+      ])
+
+    assert {:ok,
+            %{
+              {:entry, 1} => %{
+                translation: %{
+                  "body" => %{
+                    "kind" => "remote_call",
+                    "module" => "Erlang.erlang",
+                    "name" => "spawn_link",
+                    "args" => [
+                      %{"kind" => "function", "arity" => 0, "captures" => [%{"name" => 0}]}
+                    ]
+                  }
+                }
+              },
+              {:"$lynx_fun_0", 1} => %{
+                translation: %{
+                  "params" => [%{"name" => 0}],
+                  "body" => %{
+                    "kind" => "remote_call",
+                    "module" => "Erlang.other",
+                    "name" => "run",
+                    "args" => [%{"name" => 0}, %{"kind" => "atom", "value" => "ok"}]
+                  }
+                }
+              }
+            }, _} = translate(definitions([definition(:entry, body)]))
+  end
+
+  test "spawning with arguments that are not a list of values is rejected" do
+    body =
+      :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:spawn), [
+        :cerl.c_atom(:other),
+        :cerl.c_atom(:run),
+        :cerl.c_var(0)
+      ])
+
+    assert {:error, _, message} = translate(definitions([definition(:entry, body)]))
+    assert message =~ "spawning with arguments"
+  end
+
   test "passes captures explicitly through direct local recursion" do
     loop = :cerl.c_fname(:loop, 1)
     input = :cerl.c_var(:input)

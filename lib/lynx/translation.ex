@@ -29,6 +29,7 @@ defmodule Lynx.Translation do
     {:erlang, :is_process_alive, 1} => {:concurrent, false},
     {:erlang, :process_info, 2} => {:concurrent, false},
     {:erlang, :apply, 2} => {:pure, true},
+    {:erlang, :fun_info_mfa, 1} => {:pure, true},
     {:maps, :fold, 3} => {:pure, true}
   }
 
