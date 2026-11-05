@@ -118,15 +118,15 @@ theorem exhaustion_is_not_an_exception :
   first | exact rfl | (cbv <;> rfl)
 
 private def stateful : Term.FunTable := #[.effectful fun _ _ _ =>
-  .get fun env => .set { env with currentProcess.pdict := [(.atom "key", .integer 1)] }
+  .get fun env => .set { env with pdict := [(.atom "key", .integer 1)] }
     (.ok (.integer 7))]
 
 /-- Dispatch preserves state changes for the caller's continuation. -/
 theorem dispatched_state :
     (do let _ ← (Dispatcher.ofTable stateful 1).call (.function 0 0 #[]) #[]
         getThe Environment).run {} =
-      (.ok { currentProcess.pdict := [(.atom "key", .integer 1)] },
-        { currentProcess.pdict := [(.atom "key", .integer 1)] }) := by
+      (.ok { pdict := [(.atom "key", .integer 1)] },
+        { pdict := [(.atom "key", .integer 1)] }) := by
   first | exact rfl | (cbv <;> rfl)
 
 /-- Children receive the dispatcher without adding a scheduling boundary. -/
@@ -134,13 +134,13 @@ theorem spawned_dispatch :
     (Result.schedule ((Dispatcher.ofTable
         #[.effectful fun _ _ _ => .send 1 (.integer 7) (.ok .nil)] 1).call (.function 0 0 #[]) #[])
       fun _ => .receive .infinity (fun _ value => some value) (fun value => .ok (value.getD .nil))).run {} =
-      (.ok (.integer 7), { pidCounter := 2 }) := by cbv
+      (.ok (.integer 7), {}) := by cbv
 
 /-- Pure bodies may be spawned; this still creates a child and a scheduling boundary. -/
 theorem pure_spawn_without_depth :
     (Erlang.erlang.«spawn/1» (Dispatcher.ofTable #[.pure fun _ _ => .ok (.integer 7)] 0)
       (.function 0 0 #[])).run {} =
-      (.ok (.pid 2), { pidCounter := 2 }) := by cbv
+      (.ok (.pid 2), {}) := by cbv
 
 /-- Values that are not zero-arity functions fail in the caller without allocating a
 child. A child calling a function value the table does not contain fails on its own,
@@ -149,9 +149,9 @@ theorem spawn_exception_boundaries :
     (Result.handle (Erlang.erlang.«spawn/1» (Dispatcher.ofTable failing 1) (.atom "not_a_fun"))
       (fun _ => .ok (.atom "caught"))).run {} = (.ok (.atom "caught"), {}) ∧
     (Result.handle (Erlang.erlang.«spawn/1» (Dispatcher.ofTable failing 1) (.function 9 0 #[]))
-      (fun _ => .ok (.atom "caught"))).run {} = (.ok (.pid 2), { pidCounter := 2 }) ∧
+      (fun _ => .ok (.atom "caught"))).run {} = (.ok (.pid 2), {}) ∧
     (Result.handle (Erlang.erlang.«spawn/1» (Dispatcher.ofTable failing 1) (.function 0 0 #[]))
-      (fun _ => .ok (.atom "caught"))).run {} = (.ok (.pid 2), { pidCounter := 2 }) := by
+      (fun _ => .ok (.atom "caught"))).run {} = (.ok (.pid 2), {}) := by
   refine ⟨?_, ?_, ?_⟩ <;> cbv
 
 /-- Recursive spawning consumes dispatch depth rather than resetting the budget
@@ -159,7 +159,7 @@ for each new process. The child exceeding it ends the run. -/
 theorem recursive_spawn_exhausts :
     match (Erlang.erlang.«spawn/1» (Dispatcher.ofTable #[.effectful fun dispatcher _ _ =>
         Erlang.erlang.«spawn/1» dispatcher (.function 0 0 #[])] 3) (.function 0 0 #[])).run {} with
-    | (.error .exhausted, env) => env.pidCounter = 5
+    | (.error .exhausted, _) => True
     | _ => False := by cbv
 
 end LynxTest.Term.Dispatch

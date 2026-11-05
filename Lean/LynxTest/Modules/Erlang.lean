@@ -434,8 +434,7 @@ private def spawnCaller (dispatcher : Dispatcher) : Result := do
 
 theorem spawn_schedules_child_or_parent_first :
     let final : Environment := {
-      pidCounter := 2
-      currentProcess := { pdict := [(.atom "pid", .pid 1)] } }
+      pdict := [(.atom "pid", .pid 1)] }
     (spawnCaller (Dispatcher.ofTable functions 1)).run {} [.swap 2] =
       (.ok (.tuple #[.pid 2, .pid 1]), final) ∧
     (spawnCaller (Dispatcher.ofTable functions 1)).run {} [.current] =
@@ -454,7 +453,7 @@ private def nestedFunctions : Term.FunTable :=
   functions.push (.effectful fun dispatcher _ => nestedSpawnFun dispatcher)
 
 theorem completed_nested_processes_are_removed :
-    let final : Environment := { pidCounter := 3 }
+    let final : Environment := {}
     (nestedSpawnCaller (Dispatcher.ofTable nestedFunctions 2)).run
         {} [.swap 2, .swap 3] =
       (.ok (.pid 2), final) ∧
@@ -539,13 +538,13 @@ theorem process_dictionary_numeric_types_are_distinct :
       let integer ← «get/1» noFunctions (.integer 1)
       let float ← «get/1» noFunctions (.float floatOne)
       Result.ok (Term.tuple #[integer, float])) {} =
-      (.ok (Term.tuple #[.atom "integer", .atom "float"]), { currentProcess := { pdict :=
-            [(.float floatOne, .atom "float"), (.integer 1, .atom "integer")] } }) := by
+      (.ok (Term.tuple #[.atom "integer", .atom "float"]), { pdict :=
+            [(.float floatOne, .atom "float"), (.integer 1, .atom "integer")] }) := by
   rfl
 
 theorem process_dictionary_queries :
     let env : Environment := {
-      currentProcess := { pdict := [(.atom "a", .integer 1), (.atom "b", .integer 1)] } }
+      pdict := [(.atom "a", .integer 1), (.atom "b", .integer 1)] }
     («get/0» noFunctions) env = (.ok (.cons (.tuple #[.atom "a", .integer 1])
       (.cons (.tuple #[.atom "b", .integer 1]) .nil)), env) ∧
     («get_keys/0» noFunctions) env = (.ok (.cons (.atom "a") (.cons (.atom "b") .nil)), env) ∧

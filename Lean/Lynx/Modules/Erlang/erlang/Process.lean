@@ -90,13 +90,14 @@ are not modeled. Sending is a scheduler boundary, even to self or a dead PID. -/
   let env ← get
   let previous := (env.pdict.findSome? fun (stored, value) =>
     if Term.exactCompare key stored = .eq then some value else none).getD (.atom "undefined")
-  set (env.setPdict ((key, value) :: env.pdict.filter fun entry => Term.exactCompare key entry.1 != .eq))
+  set { env with pdict := (key, value) :: env.pdict.filter fun entry =>
+    Term.exactCompare key entry.1 != Ordering.eq }
   .ok previous
 
 /-- Return all process-dictionary bindings and clear the dictionary. -/
 @[expose] def «erase/0» (_ : Dispatcher) : Result := do
   let env ← get
-  set (env.setPdict [])
+  set { env with pdict := [] }
   .ok ((env.pdict.map fun (key, value) => Term.tuple #[key, value]).foldr Term.cons Term.nil)
 
 /-- Delete `key` and return its previous value. -/
@@ -104,7 +105,7 @@ are not modeled. Sending is a scheduler boundary, even to self or a dead PID. -/
   let env ← get
   let previous := (env.pdict.findSome? fun (stored, value) =>
     if Term.exactCompare key stored = .eq then some value else none).getD (.atom "undefined")
-  set (env.setPdict (env.pdict.filter fun entry => Term.exactCompare key entry.1 != .eq))
+  set { env with pdict := env.pdict.filter fun entry => Term.exactCompare key entry.1 != Ordering.eq }
   .ok previous
 
 end Erlang.erlang
