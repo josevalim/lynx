@@ -25,25 +25,27 @@ namespace Lynx.Concurrent
 
 open Lynx
 
-/-- The scheduler's record of a process that is not running. -/
+/-- The scheduler's record of a process that is not running. Each process
+allocates its own references and child PIDs, so allocation does not depend on
+how processes interleave. -/
 structure ProcessState where
   pdict : List (Term × Term) := []
   mailbox : List Term := []
+  /-- Number of references the process allocated. -/
+  refCounter : Nat := 0
+  /-- Number of processes the process spawned. -/
+  children : Nat := 0
 deriving Repr, Inhabited
 
 /-- The runtime shared by all processes of a run. -/
 structure State where
-  /-- Greatest reference identity allocated in this runtime. -/
-  refCounter : Nat := 0
-  /-- Greatest PID allocated so far. A spawn increments this before allocation. -/
-  pidCounter : PID := 1
   /-- Live processes. Terminated and unknown PIDs have no state. -/
   processes : PID → Option ProcessState := fun _ => none
 
 /-- Replace the record of one process. -/
 @[expose] def State.update (state : State) (processId : PID) (process : Option ProcessState) :
     State :=
-  { state with processes := fun candidate =>
+  { processes := fun candidate =>
       if candidate = processId then process else state.processes candidate }
 
 /-- The record of a process, empty when it is not live. -/
@@ -52,13 +54,13 @@ structure State where
 
 /-- What the process observes when it runs, including in receive guards. -/
 @[expose] def State.view (state : State) (processId : PID) : Environment :=
-  { currentPid := processId, refCounter := state.refCounter
-    pdict := (state.process processId).pdict }
+  let process := state.process processId
+  { currentPid := processId, refCounter := process.refCounter, pdict := process.pdict }
 
 /-- Keep what the process left in its environment. Its identity is not stored. -/
 @[expose] def State.store (state : State) (processId : PID) (env : Environment) : State :=
-  { state.update processId (some { state.process processId with pdict := env.pdict }) with
-    refCounter := env.refCounter }
+  state.update processId
+    (some { state.process processId with pdict := env.pdict, refCounter := env.refCounter })
 
 /-- Append a message to a live mailbox. Messages to other PIDs are discarded. -/
 @[expose] def State.deliver (state : State) (processId : PID) (message : Term) : State :=
@@ -68,9 +70,17 @@ structure State where
 
 /-- The runtime of a single process continuing from its environment. -/
 @[expose] def State.initial (env : Environment) : State :=
-  { refCounter := env.refCounter, pidCounter := env.currentPid
-    processes := fun candidate =>
-      if candidate = env.currentPid then some { pdict := env.pdict } else none }
+  { processes := fun candidate =>
+      if candidate = env.currentPid then
+        some { pdict := env.pdict, refCounter := env.refCounter }
+      else none }
+
+/-- Allocate the next child of a process, which starts with an empty record. -/
+@[expose] def State.spawn (state : State) (processId : PID) : PID × State :=
+  let process := state.process processId
+  let childPid := processId ++ [process.children + 1]
+  (childPid, (state.update processId (some { process with children := process.children + 1 })).update
+    childPid (some {}))
 
 /-- Select the oldest matching message, preserving all unmatched messages.
 Returns the message, the selector's bindings, and the remaining mailbox. -/
@@ -148,9 +158,8 @@ a positive-timeout receive without a match, one otherwise. -/
         [{ event := .internal processId, state := state.store processId updated
            tasks := [(processId, ⟨next, finish⟩)] }]
     | Result.schedule child next =>
-        let childPid := state.pidCounter + 1
-        [{ event := .spawn processId childPid
-           state := { state.update childPid (some {}) with pidCounter := childPid }
+        let (childPid, spawned) := state.spawn processId
+        [{ event := .spawn processId childPid, state := spawned
            tasks := [(processId, ⟨next childPid, finish⟩), (childPid, Task.child child)]
            boundary := true }]
     | .send destination message next =>

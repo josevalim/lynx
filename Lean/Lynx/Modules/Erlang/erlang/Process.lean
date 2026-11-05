@@ -12,29 +12,30 @@ namespace Erlang.erlang
 
 open Lynx
 
-/-- Allocate a reference unique within this runtime, independently of PIDs.
-Allocation preserves process state and does not introduce a scheduler boundary. -/
+/-- Allocate a reference unique within this runtime: the process's PID extended
+with its own allocation count. Allocation preserves process state and does not
+introduce a scheduler boundary. -/
 @[expose] def «make_ref/0» (_ : Dispatcher) : Result := do
   let env ← get
   let id := env.refCounter + 1
   set { env with refCounter := id }
-  .ok (.reference id)
+  .ok (.reference (env.currentPid ++ [id]))
 
 @[simp] theorem make_ref_apply (dispatcher : Dispatcher) (env : Environment) :
     «make_ref/0» dispatcher env =
-      (.ok (.reference (env.refCounter + 1)), { env with refCounter := env.refCounter + 1 }) := by
+      (.ok (.reference (env.currentPid ++ [env.refCounter + 1])), { env with refCounter := env.refCounter + 1 }) := by
   change (Result.get fun initial => Result.set
     { initial with refCounter := initial.refCounter + 1 }
-    (.ok (Term.reference (initial.refCounter + 1)))) env = _
+    (.ok (Term.reference (initial.currentPid ++ [initial.refCounter + 1])))) env = _
   simp
 
 @[simp] theorem make_ref_bind_apply (dispatcher : Dispatcher) (next : Term → Result α)
     (env : Environment) :
     («make_ref/0» dispatcher >>= next) env =
-      next (.reference (env.refCounter + 1)) { env with refCounter := env.refCounter + 1 } := by
+      next (.reference (env.currentPid ++ [env.refCounter + 1])) { env with refCounter := env.refCounter + 1 } := by
   change (Result.get fun initial => Result.set
     { initial with refCounter := initial.refCounter + 1 }
-    (next (.reference (initial.refCounter + 1)))) env = _
+    (next (.reference (initial.currentPid ++ [initial.refCounter + 1])))) env = _
   simp
 
 /-- Spawn a zero-arity function value. Its body executes in the child's process,

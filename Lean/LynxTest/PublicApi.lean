@@ -14,7 +14,7 @@ public import Lynx.Modules.Erlang.math
 private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) →
     Lynx.Term.Bitstring.Valid bytes lastBits → Lynx.Term :=
   fun bytes lastBits valid => Lynx.Term.bitstring bytes lastBits valid
-private def referenceConstructor : Nat → Lynx.Term := Lynx.Term.reference
+private def referenceConstructor : List Nat → Lynx.Term := Lynx.Term.reference
 private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatcher.ofTable #[] 0)
 
 -- Bit-field proof interfaces are available through ordinary public imports.
@@ -78,13 +78,13 @@ private theorem floatZeroEncoding (value : Lynx.Term.FiniteFloat) :
 
 -- Allocation equations remain usable through ordinary public imports.
 private theorem makeRefEquation (env : Lynx.Environment) :
-    makeRef env = (.ok (.reference (env.refCounter + 1)),
+    makeRef env = (.ok (.reference (env.currentPid ++ [env.refCounter + 1])),
       { env with refCounter := env.refCounter + 1 }) := by
   simp [makeRef]
 
 private theorem makeRefContinuationEquation (next : Lynx.Term → Lynx.Result α)
     (env : Lynx.Environment) :
-    (makeRef >>= next) env = next (.reference (env.refCounter + 1))
+    (makeRef >>= next) env = next (.reference (env.currentPid ++ [env.refCounter + 1]))
       { env with refCounter := env.refCounter + 1 } := by
   simp [makeRef]
 example : Nat → Nat → Array Lynx.Term → Lynx.Term := Lynx.Term.function
@@ -328,19 +328,20 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Event.spawn",
   "Lynx.Concurrent.Event.timeout",
   "Lynx.Concurrent.ProcessState",
+  "Lynx.Concurrent.ProcessState.children",
   "Lynx.Concurrent.ProcessState.mailbox",
   "Lynx.Concurrent.ProcessState.mk",
   "Lynx.Concurrent.ProcessState.pdict",
+  "Lynx.Concurrent.ProcessState.refCounter",
   "Lynx.Concurrent.Ready",
   "Lynx.Concurrent.Run",
   "Lynx.Concurrent.State",
   "Lynx.Concurrent.State.deliver",
   "Lynx.Concurrent.State.initial",
   "Lynx.Concurrent.State.mk",
-  "Lynx.Concurrent.State.pidCounter",
   "Lynx.Concurrent.State.process",
   "Lynx.Concurrent.State.processes",
-  "Lynx.Concurrent.State.refCounter",
+  "Lynx.Concurrent.State.spawn",
   "Lynx.Concurrent.State.store",
   "Lynx.Concurrent.State.update",
   "Lynx.Concurrent.State.view",

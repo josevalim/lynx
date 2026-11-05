@@ -10,16 +10,19 @@ public section
 
 namespace Lynx
 
-/-- Process identifiers are monotonically allocated natural numbers. -/
-abbrev PID := Nat
+/-- Process identifiers are paths from the process that started the run, which
+is `[]`. A process's `n`-th child extends its parent's path with `n`, so
+allocation does not depend on how processes interleave. -/
+abbrev PID := List Nat
 
 open _root_.Lynx.Term.Bitstring.Measure in
 inductive Term where
   | integer : Int → Term
   | float : _root_.Lynx.Term.FiniteFloat → Term
   | atom : String → Term
-  /-- Reference identity allocated from the runtime's global counter. -/
-  | reference : Nat → Term
+  /-- Reference identity: the allocating process's PID extended with its own
+  allocation count, unique across the run. -/
+  | reference : List Nat → Term
   /-- Program function index, source arity, and captured values.
   Comparison uses the index followed by the captured values. -/
   | function (id arity : Nat) (captures : Array Term) : Term
@@ -115,8 +118,8 @@ processes belong to the scheduler, so a process cannot change them, and
 replacing `currentPid` does not change which process is running. -/
 structure Environment where
   /-- PID of the process running the current computation. -/
-  currentPid : PID := 1
-  /-- Greatest reference identity allocated in this runtime. Shared by all processes. -/
+  currentPid : PID := []
+  /-- Number of references the process running the current computation allocated. -/
   refCounter : Nat := 0
   /-- Process dictionary of the process running the current computation. -/
   pdict : List (Term × Term) := []

@@ -567,7 +567,7 @@ namespace Lynx.Term
   rw [exactCompare_eq_step]
   rfl
 
-@[simp] theorem exactCompare_reference (a b : Nat) :
+@[simp] theorem exactCompare_reference (a b : List Nat) :
     exactCompare (.reference a) (.reference b) = Ord.compare a b := by
   rw [exactCompare_eq_step]
   rfl
@@ -637,11 +637,11 @@ theorem cons_exactCompare_eq (head tail a : Term) (equal : exactCompare (.cons h
   rw [Std.OrientedCmp.eq_swap (cmp := exactCompare), Ordering.swap_eq_eq]
   exact exactCompare_eq_integer a n
 
-@[simp] theorem exactCompare_eq_reference (a : Term) (id : Nat) :
+@[simp] theorem exactCompare_eq_reference (a : Term) (id : List Nat) :
     exactCompare a (.reference id) = .eq ↔ a = .reference id := by
   cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
 
-@[simp] theorem reference_exactCompare_eq (id : Nat) (a : Term) :
+@[simp] theorem reference_exactCompare_eq (id : List Nat) (a : Term) :
     exactCompare (.reference id) a = .eq ↔ a = .reference id := by
   rw [Std.OrientedCmp.eq_swap (cmp := exactCompare), Ordering.swap_eq_eq]
   exact exactCompare_eq_reference a id
@@ -667,7 +667,7 @@ end Lynx.Term
 
 namespace Lynx.Term
 
-@[simp] theorem compare_reference (a b : Nat) :
+@[simp] theorem compare_reference (a b : List Nat) :
     compare (.reference a) (.reference b) = Ord.compare a b := by
   rw [compare_eq_step]
   rfl

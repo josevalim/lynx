@@ -64,7 +64,7 @@ theorem pure_dispatch_without_depth :
 /-- An effectful entry consumes one level of depth, and does not return from pure callers. -/
 theorem effectful_call :
     ((Dispatcher.ofTable pureFunctions 1).call (.function 1 0 #[]) #[]).run {} =
-      (.ok (.pid 1), {}) ∧
+      (.ok (.pid []), {}) ∧
     ((Dispatcher.ofTable pureFunctions 0).call (.function 1 0 #[]) #[]).run {} =
       (.error .exhausted, {}) ∧
     (Dispatcher.ofTable pureFunctions 1).pure (.function 1 0 #[]) #[] = .error .exhausted := by
@@ -132,7 +132,7 @@ theorem dispatched_state :
 /-- Children receive the dispatcher without adding a scheduling boundary. -/
 theorem spawned_dispatch :
     (Result.schedule ((Dispatcher.ofTable
-        #[.effectful fun _ _ _ => .send 1 (.integer 7) (.ok .nil)] 1).call (.function 0 0 #[]) #[])
+        #[.effectful fun _ _ _ => .send [] (.integer 7) (.ok .nil)] 1).call (.function 0 0 #[]) #[])
       fun _ => .receive .infinity (fun _ value => some value) (fun value => .ok (value.getD .nil))).run {} =
       (.ok (.integer 7), {}) := by cbv
 
@@ -140,7 +140,7 @@ theorem spawned_dispatch :
 theorem pure_spawn_without_depth :
     (Erlang.erlang.«spawn/1» (Dispatcher.ofTable #[.pure fun _ _ => .ok (.integer 7)] 0)
       (.function 0 0 #[])).run {} =
-      (.ok (.pid 2), {}) := by cbv
+      (.ok (.pid [1]), {}) := by cbv
 
 /-- Values that are not zero-arity functions fail in the caller without allocating a
 child. A child calling a function value the table does not contain fails on its own,
@@ -149,9 +149,9 @@ theorem spawn_exception_boundaries :
     (Result.handle (Erlang.erlang.«spawn/1» (Dispatcher.ofTable failing 1) (.atom "not_a_fun"))
       (fun _ => .ok (.atom "caught"))).run {} = (.ok (.atom "caught"), {}) ∧
     (Result.handle (Erlang.erlang.«spawn/1» (Dispatcher.ofTable failing 1) (.function 9 0 #[]))
-      (fun _ => .ok (.atom "caught"))).run {} = (.ok (.pid 2), {}) ∧
+      (fun _ => .ok (.atom "caught"))).run {} = (.ok (.pid [1]), {}) ∧
     (Result.handle (Erlang.erlang.«spawn/1» (Dispatcher.ofTable failing 1) (.function 0 0 #[]))
-      (fun _ => .ok (.atom "caught"))).run {} = (.ok (.pid 2), {}) := by
+      (fun _ => .ok (.atom "caught"))).run {} = (.ok (.pid [1]), {}) := by
   refine ⟨?_, ?_, ?_⟩ <;> cbv
 
 /-- Recursive spawning consumes dispatch depth rather than resetting the budget
