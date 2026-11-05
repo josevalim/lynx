@@ -453,12 +453,12 @@ private def sends : Nat → Result
 
 open Lynx.Term.Runner Lynx.Concurrent in
 private theorem sends_execute (n : Nat) :
-    execute [] (State.initial {}) (.process [] (sends n) some) none [] .current [] = (.ok .nil, {}) := by
+    execute [] (State.initial {}) (.process [] (sends n) some) none false [] .current [] = (.ok .nil, {}) := by
   induction n with
   | zero => cbv
   | succ n ih =>
     rw [execute, choose]
-    change execute [] (State.initial {}) (.process [] (sends n) some) none [] .current [] = (.ok .nil, {})
+    change execute [] (State.initial {}) (.process [] (sends n) some) none false [] .current [] = (.ok .nil, {})
     exact ih
 
 /-- Any finite number of sends completes, with no fixed execution cutoff. -/
