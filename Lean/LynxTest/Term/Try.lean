@@ -73,7 +73,7 @@ theorem protected_effects_survive_failure :
       Result.ok (fun exception => do
         let value ← «get/1» noFunctions (.atom "key")
         pure (.tuple #[exception.classTerm, exception.reason, value]))) {} =
-      (.ok (.tuple #[.atom "throw", .atom "failure", .atom "protected"]), { currentProcess := { pdict := [(.atom "key", .atom "protected")] } }) := by cbv
+      (.ok (.tuple #[.atom "throw", .atom "failure", .atom "protected"]), { pdict := [(.atom "key", .atom "protected")] }) := by cbv
 
 private def cleanup (computation : Result) : Result :=
   Result.tryWith computation
@@ -86,9 +86,9 @@ private def cleanup (computation : Result) : Result :=
 
 theorem cleanup_runs_on_success_and_failure :
     Result.run (cleanup (.ok (.integer 7))) {} =
-      (.ok (.integer 7), { currentProcess := { pdict := [(.atom "cleanup", .atom "done")] } }) ∧
+      (.ok (.integer 7), { pdict := [(.atom "cleanup", .atom "done")] }) ∧
     Result.run (cleanup (.error (.throw (.atom "failure")))) {} =
-      (.error (.throw (.atom "failure")), { currentProcess := { pdict := [(.atom "cleanup", .atom "done")] } }) := by
+      (.error (.throw (.atom "failure")), { pdict := [(.atom "cleanup", .atom "done")] }) := by
   constructor <;> cbv
 
 theorem cleanup_failure_overrides_previous_outcome :
@@ -134,7 +134,7 @@ theorem resumed_receive_exception_is_caught :
       Result.receiveWith (.atom "infinity") (fun _ => some)
         (fun | some value => .error (.throw value) | none => .ok .nil))
       Result.ok (fun exception => .ok exception.reason)) {} =
-      (.ok (.integer 7), { pidCounter := 2 }) := by cbv
+      (.ok (.integer 7), {}) := by cbv
 
 end LynxTest.Term.Try
 

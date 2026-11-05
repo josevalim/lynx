@@ -92,11 +92,6 @@ namespace Exception
 
 end Exception
 
-structure ProcessState where
-  pdict : List (Term × Term) := []
-  mailbox : List Term := []
-deriving Repr, Inhabited
-
 /-- Scheduler decisions consumed after spawn, send, and successful receive.
 They are supplied to the runner, not stored in the environment processes observe.
 No remaining choice defaults to the current process when runnable. `swap pid`
@@ -115,37 +110,17 @@ deriving Repr
 
 instance : Inhabited ScheduleChoice := ⟨.current⟩
 
+/-- What a running process observes and may replace. Mailboxes and other
+processes belong to the scheduler, so a process cannot change them, and
+replacing `currentPid` does not change which process is running. -/
 structure Environment where
   /-- PID of the process running the current computation. -/
   currentPid : PID := 1
-  /-- Greatest PID allocated so far. A spawn increments this before allocation. -/
-  pidCounter : PID := 1
   /-- Greatest reference identity allocated in this runtime. Shared by all processes. -/
   refCounter : Nat := 0
-  /-- State of the process running the current computation. -/
-  currentProcess : ProcessState := {}
-  /-- Saved states of non-current processes, indexed by PID. -/
-  processes : List (PID × ProcessState) := []
+  /-- Process dictionary of the process running the current computation. -/
+  pdict : List (Term × Term) := []
 deriving Repr, Inhabited
-
-namespace Environment
-
-/-- Process dictionary belonging to the process running the current computation. -/
-def pdict (env : Environment) : List (Term × Term) := env.currentProcess.pdict
-
-/-- Replace the process dictionary belonging to the current process. -/
-def setPdict (env : Environment) (pdict : List (Term × Term)) : Environment :=
-  { currentPid := env.currentPid
-    pidCounter := env.pidCounter
-    refCounter := env.refCounter
-    currentProcess := { env.currentProcess with pdict }
-    processes := env.processes }
-
-@[simp] theorem pdict_setPdict (env : Environment) (pdict : List (Term × Term)) :
-    (env.setPdict pdict).pdict = pdict := by
-  rfl
-
-end Environment
 
 /-- How a run ended. The final environment is returned separately by the
 low-level runners, so laws and callers of `Lynx.sequential` compare outcomes alone. -/
