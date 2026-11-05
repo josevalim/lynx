@@ -37,24 +37,34 @@ private def step (table : FunTable) (inner : Option Dispatcher) : Dispatcher whe
   pure function arguments :=
     match lookup table function arguments with
     | .error exception => .error exception
-    | .ok (.pure body, captures) => body captures arguments
-    | .ok (.apply body, captures) =>
+    | .ok (.pure body _, captures) => body captures arguments
+    | .ok (.apply body _, captures) =>
       match inner with
       | some inner => body inner captures arguments
       | none => .error .exhausted
-    | .ok (.effectful _, _) => .error .exhausted
+    | .ok (.effectful _ _, _) => .error .exhausted
   call function arguments :=
     match lookup table function arguments with
     | .error exception => .error exception
-    | .ok (.pure body, captures) => Result.ofExcept (body captures arguments)
-    | .ok (.apply body, captures) =>
+    | .ok (.pure body _, captures) => Result.ofExcept (body captures arguments)
+    | .ok (.apply body _, captures) =>
       match inner with
       | some inner => Result.ofExcept (body inner captures arguments)
       | none => .error .exhausted
-    | .ok (.effectful body, captures) =>
+    | .ok (.effectful body _, captures) =>
       match inner with
       | some inner => body inner captures arguments
       | none => .error .exhausted
+  info function :=
+    match function with
+    | .function id _ _ =>
+      match table[id]? with
+      | some entry =>
+        match entry.info with
+        | some recorded => .ok recorded
+        | none => .error .exhausted
+      | none => .error .exhausted
+    | _ => .error (.error (.atom "badarg"))
 
 /-- Dispatch through an immutable program table. The depth bounds nested calls
 through entries that dispatch further, including in spawned children, but not
@@ -66,13 +76,15 @@ def ofTable (table : FunTable) : Nat → Dispatcher
 
 /-- A pure entry runs without consuming call depth. -/
 theorem pure_pure {table : FunTable} {depth id arity : Nat} {captures arguments : Array Term}
-    {body : Array Term → PureFun} (entry : table[id]? = some (.pure body))
+    {body : Array Term → PureFun} {info : Option Term}
+    (entry : table[id]? = some (.pure body info))
     (size : arguments.size = arity) :
     (ofTable table depth).pure (.function id arity captures) arguments = body captures arguments := by
   cases depth <;> simp [ofTable, step, lookup, entry, size]
 
 theorem call_pure {table : FunTable} {depth id arity : Nat} {captures arguments : Array Term}
-    {body : Array Term → PureFun} (entry : table[id]? = some (.pure body))
+    {body : Array Term → PureFun} {info : Option Term}
+    (entry : table[id]? = some (.pure body info))
     (size : arguments.size = arity) :
     (ofTable table depth).call (.function id arity captures) arguments =
       Result.ofExcept (body captures arguments) := by
@@ -80,21 +92,24 @@ theorem call_pure {table : FunTable} {depth id arity : Nat} {captures arguments 
 
 /-- An entry that dispatches further consumes one level of call depth. -/
 theorem pure_apply {table : FunTable} {depth id arity : Nat} {captures arguments : Array Term}
-    {body : Dispatcher → Array Term → PureFun} (entry : table[id]? = some (.apply body))
+    {body : Dispatcher → Array Term → PureFun} {info : Option Term}
+    (entry : table[id]? = some (.apply body info))
     (size : arguments.size = arity) :
     (ofTable table (depth + 1)).pure (.function id arity captures) arguments =
       body (ofTable table depth) captures arguments := by
   simp [ofTable, step, lookup, entry, size]
 
 theorem call_apply {table : FunTable} {depth id arity : Nat} {captures arguments : Array Term}
-    {body : Dispatcher → Array Term → PureFun} (entry : table[id]? = some (.apply body))
+    {body : Dispatcher → Array Term → PureFun} {info : Option Term}
+    (entry : table[id]? = some (.apply body info))
     (size : arguments.size = arity) :
     (ofTable table (depth + 1)).call (.function id arity captures) arguments =
       Result.ofExcept (body (ofTable table depth) captures arguments) := by
   simp [ofTable, step, lookup, entry, size]
 
 theorem call_effectful {table : FunTable} {depth id arity : Nat} {captures arguments : Array Term}
-    {body : Dispatcher → Array Term → Fun} (entry : table[id]? = some (.effectful body))
+    {body : Dispatcher → Array Term → Fun} {info : Option Term}
+    (entry : table[id]? = some (.effectful body info))
     (size : arguments.size = arity) :
     (ofTable table (depth + 1)).call (.function id arity captures) arguments =
       body (ofTable table depth) captures arguments := by
@@ -102,10 +117,18 @@ theorem call_effectful {table : FunTable} {depth id arity : Nat} {captures argum
 
 /-- Entries that dispatch further do not return once the call depth is exhausted. -/
 theorem pure_apply_zero {table : FunTable} {id arity : Nat} {captures arguments : Array Term}
-    {body : Dispatcher → Array Term → PureFun} (entry : table[id]? = some (.apply body))
+    {body : Dispatcher → Array Term → PureFun} {info : Option Term}
+    (entry : table[id]? = some (.apply body info))
     (size : arguments.size = arity) :
     (ofTable table 0).pure (.function id arity captures) arguments = .error .exhausted := by
   simp [ofTable, step, lookup, entry, size]
+
+/-- A function value reports the information its entry records. -/
+theorem info_entry {table : FunTable} {depth id arity : Nat} {captures : Array Term}
+    {entry : FunEntry} {info : Term} (found : table[id]? = some entry)
+    (recorded : entry.info = some info) :
+    (ofTable table depth).info (.function id arity captures) = .ok info := by
+  cases depth <;> simp [ofTable, step, found, recorded]
 
 end Lynx.Dispatcher
 

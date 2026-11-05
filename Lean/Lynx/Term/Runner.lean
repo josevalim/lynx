@@ -460,7 +460,7 @@ private theorem step_isSome_of_findReady {state : State} {accept : PID → Bool}
       | some reason =>
         simp only [signal, Option.isSome_some, ↓reduceIte, Option.some.injEq] at found
         subst found
-        simp [signal]
+        simp
       | none =>
       simp only [signal, Option.isSome_none, Bool.false_eq_true, ↓reduceIte] at found ⊢
       cases computation with
@@ -510,7 +510,7 @@ private theorem step_isSome_of_findTimeout {state : State} {accept : PID → Boo
       | receive timeout select next =>
         cases timeout <;> simp at found
         obtain ⟨selected, rfl⟩ := found
-        cases signal : (state.process processId).signal <;> simp [selected, signal]
+        cases signal : (state.process processId).signal <;> simp [selected]
       | _ => simp at found
 
 private theorem runnable_found {state : State} {current : PID} {pool : Pool α} {chosen : PID}

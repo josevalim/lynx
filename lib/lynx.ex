@@ -229,6 +229,9 @@ defmodule Lynx do
       compile time. `&Foo.bar/1`, `fun foo:bar/1`, and `Foo.bar(x)` are
       supported, while dynamic references and calls, such as `&mod.bar/1`,
       `mod.bar(x)`, and `apply(mod, fun, args)`, produce translation errors.
+      Spawning a named function, as in `spawn_link(Foo, :bar, [x])`, is
+      supported when the module and function are literals and the arguments
+      a literal list.
 
     * Laws cannot quantify over arbitrary functions, only over the functions
       the program defines. See "Anonymous functions" below.
