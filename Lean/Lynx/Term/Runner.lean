@@ -112,12 +112,11 @@ private theorem wf : WellFounded (@Progress α) := by
 
 private abbrev Finished (α : Type) := Option (Except Exception α × Environment)
 
-/-- The root's last environment, with the runtime's latest reference allocation. -/
+/-- The root's last environment. -/
 private def restore (root : PID) (finished : Finished α) (state : State) : Environment :=
-  let env := match finished with
-    | some (_, env) => env
-    | none => state.view root
-  { env with refCounter := state.refCounter }
+  match finished with
+  | some (_, env) => env
+  | none => state.view root
 
 private def findReady (state : State) (accept : PID → Bool) : Pool α → Option PID
   | .empty => none
@@ -223,13 +222,11 @@ private def step (pool : Pool α) (state : State) (chosen : PID) (expire : Bool)
           next := .process processId next finish
           decreases := .set, state := state.store processId updated }
       | Result.schedule child next =>
-          let childPid := state.pidCounter + 1
+          let (childPid, spawned) := state.spawn processId
           some {
             next := .parallel (.process processId (next childPid) finish)
               (.process childPid child (fun _ => none))
-            decreases := .schedule
-            state := { state.update childPid (some {}) with pidCounter := childPid }
-            boundary := true }
+            decreases := .schedule, state := spawned, boundary := true }
       | .send destination message next => some {
           next := .process processId next finish
           decreases := .send, state := state.deliver destination message

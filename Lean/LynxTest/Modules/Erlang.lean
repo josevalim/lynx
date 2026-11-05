@@ -434,11 +434,11 @@ private def spawnCaller (dispatcher : Dispatcher) : Result := do
 
 theorem spawn_schedules_child_or_parent_first :
     let final : Environment := {
-      pdict := [(.atom "pid", .pid 1)] }
-    (spawnCaller (Dispatcher.ofTable functions 1)).run {} [.swap 2] =
-      (.ok (.tuple #[.pid 2, .pid 1]), final) ∧
+      pdict := [(.atom "pid", .pid [])] }
+    (spawnCaller (Dispatcher.ofTable functions 1)).run {} [.swap [1]] =
+      (.ok (.tuple #[.pid [1], .pid []]), final) ∧
     (spawnCaller (Dispatcher.ofTable functions 1)).run {} [.current] =
-      (.ok (.tuple #[.pid 2, .pid 1]), final) := by
+      (.ok (.tuple #[.pid [1], .pid []]), final) := by
   cbv
 
 private def nestedSpawnFun (dispatcher : Dispatcher) (args : Array Term) : Result :=
@@ -455,11 +455,11 @@ private def nestedFunctions : Term.FunTable :=
 theorem completed_nested_processes_are_removed :
     let final : Environment := {}
     (nestedSpawnCaller (Dispatcher.ofTable nestedFunctions 2)).run
-        {} [.swap 2, .swap 3] =
-      (.ok (.pid 2), final) ∧
+        {} [.swap [1], .swap [1, 1]] =
+      (.ok (.pid [1]), final) ∧
     (nestedSpawnCaller (Dispatcher.ofTable nestedFunctions 2)).run
         {} [.current, .current] =
-      (.ok (.pid 2), final) := by
+      (.ok (.pid [1]), final) := by
   cbv
 
 theorem spawn_rejects_invalid_fun :
@@ -473,7 +473,7 @@ theorem spawn_rejects_invalid_fun :
 /-- A function value that names no table entry fails in the child, as calling it would. -/
 theorem spawn_unknown_fun_fails_in_child :
     Lynx.concurrent («spawn/1» (Dispatcher.ofTable functions 100) (.function 9 0 #[])) [] =
-      .ok (.pid 2) := by
+      .ok (.pid [1]) := by
   cbv
 
 /-- Process-dictionary operations make no dynamic calls. -/
@@ -710,7 +710,7 @@ theorem min_max_equal_returns_first :
     «max/2» (.integer 1) (.atom "a") = .ok (.atom "a") := by
   repeat' first | apply And.intro | (with_unfolding_all rfl)
 
-theorem local_node (pid reference : Nat) (input : Term) :
+theorem local_node (pid : PID) (reference : List Nat) (input : Term) :
     «node/1» (.pid pid) = «node/0» ∧
     «node/1» (.reference reference) = «node/0» ∧
     «node/1» .nil = .error (.error (.atom "badarg")) ∧

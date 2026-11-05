@@ -129,7 +129,7 @@ theorem blocking_is_not_caught :
 /-- The protected handler remains installed across a receive suspension. -/
 theorem resumed_receive_exception_is_caught :
     Result.run (Result.tryWith (do
-      let _ ← Result.schedule («send/2» noFunctions (.pid 1) (.integer 7))
+      let _ ← Result.schedule («send/2» noFunctions (.pid []) (.integer 7))
         (fun pid => .ok (Term.pid pid))
       Result.receiveWith (.atom "infinity") (fun _ => some)
         (fun | some value => .error (.throw value) | none => .ok .nil))
