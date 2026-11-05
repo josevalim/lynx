@@ -436,9 +436,9 @@ theorem spawn_schedules_child_or_parent_first :
     let final : Environment := {
       pidCounter := 2
       currentProcess := { pdict := [(.atom "pid", .pid 1)] } }
-    (spawnCaller (Dispatcher.ofTable functions 1)).run { schedule := [.swap 2] } =
+    (spawnCaller (Dispatcher.ofTable functions 1)).run {} [.swap 2] =
       (.ok (.tuple #[.pid 2, .pid 1]), final) ∧
-    (spawnCaller (Dispatcher.ofTable functions 1)).run { schedule := [.current] } =
+    (spawnCaller (Dispatcher.ofTable functions 1)).run {} [.current] =
       (.ok (.tuple #[.pid 2, .pid 1]), final) := by
   cbv
 
@@ -456,10 +456,10 @@ private def nestedFunctions : Term.FunTable :=
 theorem completed_nested_processes_are_removed :
     let final : Environment := { pidCounter := 3 }
     (nestedSpawnCaller (Dispatcher.ofTable nestedFunctions 2)).run
-        { schedule := [.swap 2, .swap 3] } =
+        {} [.swap 2, .swap 3] =
       (.ok (.pid 2), final) ∧
     (nestedSpawnCaller (Dispatcher.ofTable nestedFunctions 2)).run
-        { schedule := [.current, .current] } =
+        {} [.current, .current] =
       (.ok (.pid 2), final) := by
   cbv
 

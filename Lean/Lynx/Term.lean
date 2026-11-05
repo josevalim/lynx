@@ -27,7 +27,7 @@ a dynamic call exceeding its dispatcher's depth; it is not an Erlang exception.
 `deadlock` means the modeled process tree is stuck. -/
 public def concurrent (computation : Result α) (schedule : List ScheduleChoice := []) :
     Outcome α :=
-  (computation.run { schedule }).1
+  (computation.run {} schedule).1
 
 /-- Run a computation from a fresh runtime without scheduler choices.
 Computations that make no process requests never consult a schedule; use
@@ -46,6 +46,35 @@ namespace Lynx.Term
 end Lynx.Term
 
 namespace Lynx
+
+/-- Every schedule runs to a terminal configuration with the same outcome, so
+the trace of its events is available to state properties. -/
+public theorem concurrent_reaches (computation : Result α) (choices : List ScheduleChoice) :
+    ∃ events last, Concurrent.Run (.start {} computation) events last ∧
+      Concurrent.Terminal last (concurrent computation choices) :=
+  Result.run_reaches computation {} choices
+
+/-- A property of every terminal configuration satisfying an invariant holds for
+every schedule. -/
+public theorem concurrent_of_invariant (computation : Result α)
+    (invariant : Concurrent.Config α → Prop) {property : Outcome α → Prop}
+    (initial : invariant (.start {} computation))
+    (preserved : ∀ first event next, invariant first → Concurrent.Step first event next →
+      invariant next)
+    (terminal : ∀ config outcome, invariant config → Concurrent.Terminal config outcome →
+      property outcome)
+    (choices : List ScheduleChoice) : property (concurrent computation choices) := by
+  obtain ⟨_, last, run, final⟩ := concurrent_reaches computation choices
+  exact terminal last _ (run.invariant preserved initial) final
+
+/-- Exploring every run of a closed program establishes its outcome for every
+schedule. Prove `checked` by evaluation, with a depth bounding the steps of
+each run. -/
+public theorem concurrent_of_check (computation : Result α) (accept : Outcome α → Bool)
+    (depth : Nat) (checked : Concurrent.check accept depth (.start {} computation) = true)
+    (choices : List ScheduleChoice) : accept (concurrent computation choices) = true := by
+  obtain ⟨_, _, run, final⟩ := concurrent_reaches computation choices
+  exact Concurrent.check_sound checked run final
 
 @[simp] public theorem concurrent_ok (value : α) (choices : List ScheduleChoice) :
     concurrent (.ok value) choices = .ok value := by

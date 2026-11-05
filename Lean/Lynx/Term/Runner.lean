@@ -1,6 +1,7 @@
 module
 
 public import Lynx.Term.Dispatch
+public import Lynx.Concurrent
 
 /-! Finite local-process execution. Sends insert directly into the destination
 mailbox; message transit, remote processes, links, and monitors are not
@@ -15,44 +16,7 @@ that closed execution.
 
 namespace Lynx.Term.Runner
 
-open Lynx
-
-private def removeProcess (processId : PID) : List (PID × ProcessState) → List (PID × ProcessState)
-  | [] => []
-  | entry :: rest =>
-      if entry.1 = processId then removeProcess processId rest else entry :: removeProcess processId rest
-
-private def findProcess (processId : PID) : List (PID × ProcessState) → Option ProcessState
-  | [] => none
-  | entry :: rest =>
-      if entry.1 = processId then some entry.2 else findProcess processId rest
-
-/-- Restore the environment of a process before reading it, including in guards. -/
-private def activate (env : Environment) (processId : PID) : Environment :=
-  { env with currentPid := processId
-             currentProcess := (findProcess processId env.processes).getD {}
-             processes := removeProcess processId env.processes }
-
-/-- Select the oldest matching message, preserving all unmatched messages. -/
-private def selectMessage (select : Term → Option β) : List Term → Option (β × List Term)
-  | [] => none
-  | message :: rest =>
-      match select message with
-      | some value => some (value, rest)
-      | none => (selectMessage select rest).map fun (value, remaining) =>
-          (value, message :: remaining)
-
-private def save (env : Environment) : Environment :=
-  { env with processes :=
-      (env.currentPid, env.currentProcess) :: removeProcess env.currentPid env.processes }
-
-private def deliver (env : Environment) (processId : PID) (message : Term) : Environment :=
-  if processId = env.currentPid then
-    { env with currentProcess.mailbox := env.currentProcess.mailbox ++ [message] }
-  else
-    { env with processes := env.processes.map fun (savedPid, process) =>
-        (savedPid, if savedPid = processId then
-          { process with mailbox := process.mailbox ++ [message] } else process) }
+open Lynx Lynx.Concurrent
 
 /-- Preserve the process tree so advancing either branch has a structural
 termination argument. Completion callbacks distinguish the root from children. -/
@@ -187,33 +151,38 @@ private def findTimeout (env : Environment) (accept : PID → Bool) : Pool α �
         | _ => none
 
 /-- Consume one choice at each process-effect boundary. -/
-private def schedule (env : Environment) : Environment × ScheduleChoice :=
-  match env.schedule with
-  | [] => (env, .current)
-  | choice :: rest => ({ env with schedule := rest }, choice)
+private def schedule : List ScheduleChoice → ScheduleChoice × List ScheduleChoice
+  | [] => (.current, [])
+  | choice :: rest => (choice, rest)
+
+/-- The current process if it can run, otherwise the first runnable process. -/
+private def runnable (env : Environment) (pool : Pool α) : Option (PID × Bool) :=
+  ((findReady env (· == env.currentPid) pool).orElse fun _ =>
+    findReady env (fun _ => true) pool).map (·, false)
+
+/-- The process a choice selects, falling back to a runnable one. -/
+private def requested (env : Environment) (pool : Pool α) : ScheduleChoice → Option (PID × Bool)
+  | .current => findReady env (· == env.currentPid) pool |>.map (·, false)
+  | .swap processId => ((findReady env (· == processId) pool).map (·, false)).orElse fun _ =>
+      runnable env pool
+  | .timeout processId => ((findTimeout env (· == processId) pool).map (·, true)).orElse fun _ =>
+      runnable env pool
 
 /-- A blocked preferred process consumes another scheduling choice. Recursion
 is bounded by the supplied choices; each execution step still decreases the
 process tree. Without a choice, ordinary runnable processes precede expiry. -/
-private def choose (pool : Pool α) (env : Environment) (preferred : ScheduleChoice) :
-    Environment × Option (PID × Bool) :=
-  let runnable := ((findReady env (· == env.currentPid) pool).orElse fun _ =>
-    findReady env (fun _ => true) pool).map (·, false)
-  let requested := match preferred with
-    | .current => findReady env (· == env.currentPid) pool |>.map (·, false)
-    | .swap processId => ((findReady env (· == processId) pool).map (·, false)).orElse fun _ => runnable
-    | .timeout processId => ((findTimeout env (· == processId) pool).map (·, true)).orElse fun _ => runnable
-  match requested with
-  | some chosen => (env, some chosen)
+private def choose (pool : Pool α) (env : Environment) (preferred : ScheduleChoice)
+    (choices : List ScheduleChoice) : List ScheduleChoice × Option (PID × Bool) :=
+  match requested env pool preferred with
+  | some chosen => (choices, some chosen)
   | none =>
-      match _h : env.schedule with
-      | choice :: rest => choose pool { env with schedule := rest } choice
+      match choices with
+      | choice :: rest => choose pool env choice rest
       | [] =>
-          (env, runnable.orElse fun _ => (findTimeout env (fun _ => true) pool).map (·, true))
-termination_by env.schedule
-decreasing_by simp [_h]; omega
+          ([], (runnable env pool).orElse fun _ =>
+            (findTimeout env (fun _ => true) pool).map (·, true))
 
-private structure Transition (before : Pool α) where
+private structure Advance (before : Pool α) where
   next : Pool α
   decreases : Progress next before
   environment : Environment
@@ -223,7 +192,7 @@ private structure Transition (before : Pool α) where
 
 /-- Execute one structural step of the selected process. A blocked receive
 returns no step; unmatched messages and the continuation remain intact. -/
-private def step (pool : Pool α) (env : Environment) (chosen : PID) (expire : Bool) : Option (Transition pool) :=
+private def step (pool : Pool α) (env : Environment) (chosen : PID) (expire : Bool) : Option (Advance pool) :=
   match pool with
   | .empty => none
   | .parallel left right =>
@@ -269,7 +238,7 @@ private def step (pool : Pool α) (env : Environment) (chosen : PID) (expire : B
           boundary := true }
       | .receive timeout select next =>
           match selectMessage (select active) active.currentProcess.mailbox with
-          | some (value, remaining) => some {
+          | some (_, value, remaining) => some {
               next := .process processId (next (some value)) finish
               decreases := .receive
               environment := save { active with currentProcess.mailbox := remaining }
@@ -293,8 +262,9 @@ private def isEmpty : Pool α → Bool
 private instance : WellFoundedRelation (Pool α) := ⟨Progress, wf⟩
 
 private def execute (root : PID) (env : Environment) (pool : Pool α)
-    (finished : Finished α) (preferred : ScheduleChoice) : Outcome α × Environment :=
-  let (env, chosen) := choose pool env preferred
+    (finished : Finished α) (preferred : ScheduleChoice) (choices : List ScheduleChoice) :
+    Outcome α × Environment :=
+  let (choices, chosen) := choose pool env preferred choices
   match chosen.bind (fun (processId, expire) => step pool env processId expire) with
   | none =>
       let final := restore root finished env
@@ -306,23 +276,465 @@ private def execute (root : PID) (env : Environment) (pool : Pool α)
       if transition.exhausted then
         (.error .exhausted, restore root finished (save transition.environment)) else
       let finished := transition.finished.orElse fun _ => finished
-      let (scheduled, preferred) := if transition.boundary then
-          schedule transition.environment
-        else (transition.environment, ScheduleChoice.current)
-      execute root scheduled transition.next finished preferred
+      let (preferred, choices) := if transition.boundary then schedule choices
+        else (ScheduleChoice.current, choices)
+      execute root transition.environment transition.next finished preferred choices
 termination_by pool
 decreasing_by exact transition.decreases
 
 /-- Local computations execute structurally; concurrent execution decreases
 through the process tree, without an execution budget. -/
-def run (computation : Result α) (env : Environment) : Outcome α × Environment :=
+def run (computation : Result α) (env : Environment) (choices : List ScheduleChoice) :
+    Outcome α × Environment :=
   match computation with
   | .ok value => (.ok value, env)
   | .error exception => (.error exception, env)
-  | .get next => run (next env) env
-  | .set next continuation => run continuation next
+  | .get next => run (next env) env choices
+  | .set next continuation => run continuation next choices
   | Result.schedule _ _ | .send _ _ _ | .receive _ _ _ =>
       execute env.currentPid (save env) (.process env.currentPid computation some) none .current
+        choices
+
+/-! ### Soundness
+
+Each execution is a `Concurrent.Run`. The process tree flattens into the
+configuration's task list, and the scheduler only selects steps the
+transition system allows. -/
+
+private theorem orElse_eq_some {first : Option β} {second : Unit → Option β} {value : β} :
+    first.orElse second = some value ↔
+      first = some value ∨ first = none ∧ second () = some value := by
+  cases first <;> simp [Option.orElse]
+
+private theorem orElse_eq_none {first : Option β} {second : Unit → Option β} :
+    first.orElse second = none ↔ first = none ∧ second () = none := by
+  cases first <;> simp [Option.orElse]
+
+private theorem isSome_orElse {first : Option β} {second : Unit → Option β} :
+    (first.orElse second).isSome = (first.isSome || (second ()).isSome) := by
+  cases first <;> simp [Option.orElse]
+
+private def leaves : Pool α → List (PID × Concurrent.Task α)
+  | .empty => []
+  | .process processId computation finish => [(processId, ⟨computation, finish⟩)]
+  | .parallel left right => leaves left ++ leaves right
+
+private theorem isEmpty_iff (pool : Pool α) : isEmpty pool = true ↔ leaves pool = [] := by
+  induction pool <;> simp_all [isEmpty, leaves]
+
+private theorem findReady_accept {env : Environment} {accept : PID → Bool} {pool : Pool α}
+    {chosen : PID} (found : findReady env accept pool = some chosen) : accept chosen = true := by
+  induction pool with
+  | empty => simp [findReady] at found
+  | parallel left right ihl ihr =>
+    simp only [findReady, orElse_eq_some] at found
+    rcases found with found | ⟨_, found⟩
+    · exact ihl found
+    · exact ihr found
+  | process processId computation finish =>
+    simp only [findReady] at found
+    split at found
+    · simp at found
+    · rename_i accepted
+      have : chosen = processId := by
+        split at found
+        · split at found
+          · simp at found; exact found.symm
+          · split at found <;> simp_all
+        · simp at found; exact found.symm
+      simp_all
+
+private theorem findTimeout_accept {env : Environment} {accept : PID → Bool} {pool : Pool α}
+    {chosen : PID} (found : findTimeout env accept pool = some chosen) : accept chosen = true := by
+  induction pool with
+  | empty => simp [findTimeout] at found
+  | parallel left right ihl ihr =>
+    simp only [findTimeout, orElse_eq_some] at found
+    rcases found with found | ⟨_, found⟩
+    · exact ihl found
+    · exact ihr found
+  | process processId computation finish =>
+    simp only [findTimeout] at found
+    split at found
+    · simp at found
+    · rename_i accepted
+      have : chosen = processId := by
+        split at found
+        · split at found
+          · split at found <;> simp_all
+          · simp at found
+        · simp at found
+      simp_all
+
+/-- A process with a step that is not an expiry is found by `findReady`. -/
+private theorem findReady_isSome {env : Environment} {accept : PID → Bool} {pool : Pool α}
+    {processId : PID} {task : Concurrent.Task α} {transition : Concurrent.Transition α}
+    (mem : (processId, task) ∈ leaves pool) (possible : transition ∈ task.transitions env processId)
+    (unexpired : transition.expired = false) (accepted : accept processId = true) :
+    (findReady env accept pool).isSome := by
+  induction pool with
+  | empty => simp [leaves] at mem
+  | parallel left right ihl ihr =>
+    simp only [leaves, List.mem_append] at mem
+    simp only [findReady, isSome_orElse]
+    rcases mem with mem | mem
+    · simp [ihl mem]
+    · simp [ihr mem]
+  | process candidate computation finish =>
+    simp only [leaves, List.mem_singleton, Prod.mk.injEq] at mem
+    obtain ⟨rfl, rfl⟩ := mem
+    simp only [findReady, accepted, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+    cases computation with
+    | receive timeout select next =>
+      simp only [Task.transitions] at possible
+      split at possible
+      · rename_i selected
+        simp [activate] at selected
+        simp [activate, selected]
+      · rename_i selected
+        simp only [activate] at selected
+        simp only [activate, selected, Option.isSome_none, Bool.false_eq_true, ↓reduceIte]
+        cases timeout <;> simp_all
+    | _ => simp
+
+/-- A process with an expiry step is found by `findTimeout`. -/
+private theorem findTimeout_isSome {env : Environment} {accept : PID → Bool} {pool : Pool α}
+    {processId : PID} {task : Concurrent.Task α} {transition : Concurrent.Transition α}
+    (mem : (processId, task) ∈ leaves pool) (possible : transition ∈ task.transitions env processId)
+    (expired : transition.expired = true) (accepted : accept processId = true) :
+    (findTimeout env accept pool).isSome := by
+  induction pool with
+  | empty => simp [leaves] at mem
+  | parallel left right ihl ihr =>
+    simp only [leaves, List.mem_append] at mem
+    simp only [findTimeout, isSome_orElse]
+    rcases mem with mem | mem
+    · simp [ihl mem]
+    · simp [ihr mem]
+  | process candidate computation finish =>
+    simp only [leaves, List.mem_singleton, Prod.mk.injEq] at mem
+    obtain ⟨rfl, rfl⟩ := mem
+    simp only [findTimeout, accepted, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+    cases computation with
+    | receive timeout select next =>
+      simp only [Task.transitions] at possible
+      split at possible
+      · simp_all
+      · rename_i selected
+        simp only [activate] at selected
+        cases timeout <;> simp_all [activate]
+    | ok | get | set | schedule | send => simp_all [Task.transitions]
+    | error exception => cases exception <;> simp_all [Task.transitions]
+
+private theorem step_isSome_of_findReady {env : Environment} {accept : PID → Bool}
+    {pool : Pool α} {chosen : PID} (found : findReady env accept pool = some chosen) :
+    (step pool env chosen false).isSome := by
+  induction pool with
+  | empty => simp [findReady] at found
+  | parallel left right ihl ihr =>
+    simp only [findReady, orElse_eq_some] at found
+    simp only [step]
+    rcases found with found | ⟨_, found⟩
+    · have := ihl found
+      split <;> simp_all
+    · split
+      · simp
+      · simp [ihr found]
+  | process processId computation finish =>
+    simp only [findReady] at found
+    split at found
+    · simp at found
+    · simp only [step]
+      cases computation with
+      | receive timeout select next =>
+        simp only at found
+        split at found
+        · simp only [Option.some.injEq] at found
+          subst found
+          rename_i selected
+          simp only [bne_self_eq_false, Bool.false_eq_true, ↓reduceIte]
+          obtain ⟨_, selected⟩ := Option.isSome_iff_exists.mp selected
+          simp only [activate] at selected ⊢
+          simp [selected]
+        · rename_i selected
+          cases timeout <;> simp at found
+          subst found
+          simp only [bne_self_eq_false, Bool.false_eq_true, ↓reduceIte]
+          simp only [Bool.not_eq_true, Option.isSome_eq_false_iff, Option.isNone_iff_eq_none,
+            activate] at selected ⊢
+          simp [selected]
+      | error exception =>
+        simp only [Option.some.injEq] at found
+        subst found
+        cases exception <;> simp
+      | _ =>
+        simp only [Option.some.injEq] at found
+        subst found
+        simp
+
+private theorem step_isSome_of_findTimeout {env : Environment} {accept : PID → Bool}
+    {pool : Pool α} {chosen : PID} (found : findTimeout env accept pool = some chosen) :
+    (step pool env chosen true).isSome := by
+  induction pool with
+  | empty => simp [findTimeout] at found
+  | parallel left right ihl ihr =>
+    simp only [findTimeout, orElse_eq_some] at found
+    simp only [step]
+    rcases found with found | ⟨_, found⟩
+    · have := ihl found
+      split <;> simp_all
+    · split
+      · simp
+      · simp [ihr found]
+  | process processId computation finish =>
+    simp only [findTimeout] at found
+    split at found
+    · simp at found
+    · simp only [step]
+      cases computation with
+      | receive timeout select next =>
+        cases timeout <;> simp at found
+        obtain ⟨selected, rfl⟩ := found
+        simp only [activate] at selected ⊢
+        simp [selected]
+      | _ => simp at found
+
+private theorem runnable_found {env : Environment} {pool : Pool α} {chosen : PID} {expire : Bool}
+    (found : runnable env pool = some (chosen, expire)) : (step pool env chosen expire).isSome := by
+  simp only [runnable, Option.map_eq_some_iff, Prod.mk.injEq, orElse_eq_some] at found
+  obtain ⟨_, found, rfl, rfl⟩ := found
+  rcases found with found | ⟨_, found⟩ <;> exact step_isSome_of_findReady found
+
+private theorem requested_found {env : Environment} {pool : Pool α} {preferred : ScheduleChoice}
+    {chosen : PID} {expire : Bool} (found : requested env pool preferred = some (chosen, expire)) :
+    (step pool env chosen expire).isSome := by
+  cases preferred with
+  | current =>
+    simp only [requested, Option.map_eq_some_iff, Prod.mk.injEq] at found
+    obtain ⟨_, found, rfl, rfl⟩ := found
+    exact step_isSome_of_findReady found
+  | swap processId =>
+    simp only [requested, orElse_eq_some, Option.map_eq_some_iff, Prod.mk.injEq] at found
+    rcases found with ⟨_, found, rfl, rfl⟩ | ⟨_, found⟩
+    · exact step_isSome_of_findReady found
+    · exact runnable_found found
+  | timeout processId =>
+    simp only [requested, orElse_eq_some, Option.map_eq_some_iff, Prod.mk.injEq] at found
+    rcases found with ⟨_, found, rfl, rfl⟩ | ⟨_, found⟩
+    · exact step_isSome_of_findTimeout found
+    · exact runnable_found found
+
+/-- The scheduler only selects processes that can step. -/
+private theorem choose_isSome {pool : Pool α} {env : Environment} {preferred : ScheduleChoice}
+    {choices remaining : List ScheduleChoice} {chosen : PID} {expire : Bool}
+    (chose : choose pool env preferred choices = (remaining, some (chosen, expire))) :
+    (step pool env chosen expire).isSome := by
+  induction choices generalizing preferred with
+  | nil =>
+    unfold choose at chose
+    cases found : requested env pool preferred with
+    | some request =>
+      simp only [found, Prod.mk.injEq, Option.some.injEq] at chose
+      rw [chose.2] at found
+      exact requested_found found
+    | none =>
+      simp only [found, Prod.mk.injEq, orElse_eq_some, Option.map_eq_some_iff] at chose
+      rcases chose.2 with found | ⟨_, _, found, equal⟩
+      · exact runnable_found found
+      · obtain ⟨rfl, rfl⟩ := equal
+        exact step_isSome_of_findTimeout found
+  | cons choice rest ih =>
+    unfold choose at chose
+    cases found : requested env pool preferred with
+    | some request =>
+      simp only [found, Prod.mk.injEq, Option.some.injEq] at chose
+      rw [chose.2] at found
+      exact requested_found found
+    | none =>
+      simp only [found] at chose
+      exact ih chose
+
+/-- When nothing is chosen, no process has any step. -/
+private theorem choose_none {pool : Pool α} {env : Environment} {preferred : ScheduleChoice}
+    {choices remaining : List ScheduleChoice}
+    (chose : choose pool env preferred choices = (remaining, none)) :
+    ∀ processId task, (processId, task) ∈ leaves pool → task.transitions env processId = [] := by
+  induction choices generalizing preferred with
+  | nil =>
+    unfold choose at chose
+    cases found : requested env pool preferred with
+    | some request => simp [found] at chose
+    | none =>
+      simp only [found, Prod.mk.injEq, orElse_eq_none, Option.map_eq_none_iff, runnable] at chose
+      obtain ⟨_, ⟨_, ready⟩, timeout⟩ := chose
+      intro processId task mem
+      apply List.eq_nil_iff_forall_not_mem.mpr
+      intro transition possible
+      cases expired : transition.expired
+      · have := findReady_isSome (accept := fun _ => true) mem possible expired rfl
+        simp_all
+      · have := findTimeout_isSome (accept := fun _ => true) mem possible expired rfl
+        simp_all
+  | cons choice rest ih =>
+    unfold choose at chose
+    cases found : requested env pool preferred with
+    | some request => simp [found] at chose
+    | none =>
+      simp only [found] at chose
+      exact ih chose
+
+/-- A ready current process keeps running after an environment access or exit. -/
+private theorem choose_current {pool : Pool α} {env : Environment}
+    {choices remaining : List ScheduleChoice} {chosen : PID} {expire : Bool}
+    (chose : choose pool env .current choices = (remaining, some (chosen, expire)))
+    (ready : Concurrent.Ready env (leaves pool) env.currentPid) :
+    chosen = env.currentPid ∧ expire = false := by
+  obtain ⟨task, mem, transition, possible, unexpired⟩ := ready
+  obtain ⟨current, found⟩ := Option.isSome_iff_exists.mp
+    (findReady_isSome (accept := (· == env.currentPid)) mem possible unexpired (by simp))
+  have accepted := findReady_accept found
+  unfold choose at chose
+  simp only [requested, found, Option.map_some, Prod.mk.injEq, Option.some.injEq] at chose
+  simp_all
+
+/-- A process step of the runner is a step of the transition system. -/
+private theorem step_sound {pool : Pool α} {env : Environment} {chosen : PID} {expire : Bool}
+    {advance : Advance pool} (stepped : step pool env chosen expire = some advance) :
+    ∃ before after task, leaves pool = before ++ (chosen, task) :: after ∧
+      ∃ transition ∈ task.transitions env chosen,
+        (expire = false → transition.expired = false) ∧
+        leaves advance.next = before ++ transition.tasks ++ after ∧
+        advance.environment = transition.environment ∧ advance.finished = transition.finished ∧
+        advance.boundary = transition.boundary ∧ advance.exhausted = transition.exhausted := by
+  induction pool with
+  | empty => simp [step] at stepped
+  | parallel left right ihl ihr =>
+    simp only [step] at stepped
+    split at stepped
+    · rename_i advance' found
+      simp only [Option.some.injEq] at stepped
+      subst stepped
+      obtain ⟨before, after, task, split, transition, possible, unexpired, tasks, rest⟩ := ihl found
+      exact ⟨before, after ++ leaves right, task, by simp [leaves, split], transition, possible,
+        unexpired, by simp [leaves, tasks], rest⟩
+    · simp only [Option.map_eq_some_iff] at stepped
+      obtain ⟨advance', found, rfl⟩ := stepped
+      obtain ⟨before, after, task, split, transition, possible, unexpired, tasks, rest⟩ := ihr found
+      exact ⟨leaves left ++ before, after, task, by simp [leaves, split], transition, possible,
+        unexpired, by simp [leaves, tasks], rest⟩
+  | process processId computation finish =>
+    simp only [step] at stepped
+    split at stepped
+    · simp at stepped
+    · rename_i same
+      simp only [bne_iff_ne, ne_eq, Decidable.not_not] at same
+      subst same
+      refine ⟨[], [], ⟨computation, finish⟩, rfl, ?_⟩
+      cases computation with
+      | receive timeout select next =>
+        simp only at stepped
+        split at stepped
+        · rename_i selected
+          simp only [Option.some.injEq] at stepped
+          subst stepped
+          simp [Task.transitions, selected, leaves]
+        · rename_i selected
+          cases timeout <;> cases expire <;> simp only [Option.map_eq_some_iff] at stepped <;>
+            simp at stepped <;> subst stepped <;> simp [Task.transitions, selected, leaves]
+      | error exception =>
+        cases exception <;> simp only [Option.some.injEq] at stepped <;> subst stepped <;>
+          simp [Task.transitions, leaves]
+      | _ =>
+        simp only [Option.some.injEq] at stepped
+        subst stepped
+        simp [Task.transitions, Task.child, leaves]
+
+private theorem execute_reaches (root : PID) (pool : Pool α) :
+    ∀ env finished preferred choices sticky, (sticky = true → preferred = .current) →
+      ∃ events last, Concurrent.Run (.running env (leaves pool) finished sticky) events last ∧
+        Concurrent.Terminal last (execute root env pool finished preferred choices).1 := by
+  induction pool using (wf (α := α)).induction with
+  | _ pool ih =>
+  intro env finished preferred choices sticky current
+  rw [execute]
+  generalize chose : choose pool env preferred choices = chosen
+  obtain ⟨remaining, chosen⟩ := chosen
+  simp only
+  split
+  · have blocked : ∀ processId task, (processId, task) ∈ leaves pool →
+        task.transitions env processId = [] := by
+      cases chosen with
+      | none => exact choose_none chose
+      | some chosen =>
+        have := choose_isSome chose
+        simp_all
+    refine ⟨[], _, .refl, ?_⟩
+    have deadlock (pending : isEmpty pool = false ∨ finished = none) :
+        Concurrent.Terminal (.running env (leaves pool) finished sticky) .deadlock :=
+      .deadlock blocked fun nil => by
+        rcases pending with pending | pending
+        · simp [← isEmpty_iff, pending] at nil
+        · exact pending
+    cases empty : isEmpty pool with
+    | false => rcases finished with _ | ⟨_ | _, _⟩ <;> exact deadlock (.inl empty)
+    | true =>
+      have nil := (isEmpty_iff pool).mp empty
+      rcases finished with _ | ⟨_ | _, _⟩
+      · exact deadlock (.inr rfl)
+      · rw [nil]; exact .raised
+      · rw [nil]; exact .returned
+  · rename_i advance stepped
+    cases chosen with
+    | none => simp at stepped
+    | some chosen =>
+    obtain ⟨processId, expire⟩ := chosen
+    simp only [Option.bind_some] at stepped
+    obtain ⟨before, after, task, split, transition, possible, unexpired, tasks, environment,
+      finishedEq, boundary, exhausted⟩ := step_sound stepped
+    have allowed : Concurrent.Allowed env (leaves pool) sticky processId transition := by
+      intro sticky ready
+      rw [current sticky] at chose
+      obtain ⟨rfl, rfl⟩ := choose_current chose ready
+      exact ⟨rfl, unexpired rfl⟩
+    split
+    · rename_i halted
+      exact ⟨[transition.event], _,
+        .step (.exhaust split possible allowed (exhausted ▸ halted)) .refl, .halted⟩
+    · rename_i returns
+      obtain ⟨events, last, run, terminal⟩ := ih advance.next advance.decreases
+        advance.environment (advance.finished.orElse fun _ => finished)
+        (if advance.boundary then schedule remaining else (ScheduleChoice.current, remaining)).1
+        (if advance.boundary then schedule remaining else (ScheduleChoice.current, remaining)).2
+        (!advance.boundary) (by intro sticky; simp_all)
+      refine ⟨transition.event :: events, last, ?_, terminal⟩
+      have step := Concurrent.Step.run (finished := finished) split possible allowed
+        (by simp_all)
+      rw [← tasks, ← environment, ← finishedEq, ← boundary] at step
+      exact .step step run
+
+private theorem enter_reaches (computation : Result α) (env : Environment)
+    (choices : List ScheduleChoice) (request : isRequest computation = true) :
+    ∃ events last, Concurrent.Run (.start env computation) events last ∧
+      Concurrent.Terminal last (execute env.currentPid (save env)
+        (.process env.currentPid computation some) none .current choices).1 := by
+  obtain ⟨events, last, steps, terminal⟩ := execute_reaches env.currentPid
+    (.process env.currentPid computation some) (save env) none .current choices true (fun _ => rfl)
+  exact ⟨_, last, .step (.enter request) steps, terminal⟩
+
+private theorem run_reaches (computation : Result α) (env : Environment)
+    (choices : List ScheduleChoice) :
+    ∃ events last, Concurrent.Run (.start env computation) events last ∧
+      Concurrent.Terminal last (run computation env choices).1 := by
+  induction computation generalizing env with
+  | ok => exact ⟨[], _, .refl, by rw [run]; exact .ok⟩
+  | error => exact ⟨[], _, .refl, by rw [run]; exact .error⟩
+  | get next ih =>
+    obtain ⟨events, last, steps, terminal⟩ := ih env env
+    exact ⟨_, last, .step .get steps, by rw [run]; exact terminal⟩
+  | set updated next ih =>
+    obtain ⟨events, last, steps, terminal⟩ := ih updated
+    exact ⟨_, last, .step .set steps, by rw [run]; exact terminal⟩
+  | schedule | send | receive => rw [run]; exact enter_reaches _ env choices rfl
 
 end Lynx.Term.Runner
 
@@ -330,50 +742,61 @@ public section
 
 namespace Lynx
 
-/-- Execute a computation in an existing environment. Use `Lynx.sequential` to start
-from a fresh runtime. The implementation is hidden; the application lemmas
-below describe its behavior. Function values are called through the
-`Dispatcher` the computation received, so running needs no program table. -/
-def Result.run (computation : Result α) (env : Environment) : Outcome α × Environment :=
-  Term.Runner.run computation env
+/-- Execute a computation in an existing environment, consuming the supplied
+scheduler choices. Use `Lynx.sequential` to start from a fresh runtime. The
+implementation is hidden; the application lemmas below describe its behavior,
+and `Lynx.Result.run_reaches` relates it to `Lynx.Concurrent.Step`. Function
+values are called through the `Dispatcher` the computation received, so running
+needs no program table. -/
+def Result.run (computation : Result α) (env : Environment)
+    (choices : List ScheduleChoice := []) : Outcome α × Environment :=
+  Term.Runner.run computation env choices
 
 instance : CoeFun (Result α) fun _ => Environment → Outcome α × Environment :=
-  ⟨Result.run⟩
+  ⟨fun computation env => computation.run env⟩
 
 namespace Result
 
-@[simp] theorem ok_apply (value : α) (env : Environment) :
-    (Result.ok value : Result α) env = (.ok value, env) := by
-  change Term.Runner.run (.ok value) env = _
+@[simp] theorem ok_apply (value : α) (env : Environment) (choices : List ScheduleChoice) :
+    (Result.ok value : Result α).run env choices = (.ok value, env) := by
+  change Term.Runner.run (.ok value) env choices = _
   rw [Term.Runner.run]
 
-@[simp] theorem error_apply (exception : Exception) (env : Environment) :
-    (Result.error exception : Result α) env = (.error exception, env) := by
-  change Term.Runner.run (.error exception) env = _
+@[simp] theorem error_apply (exception : Exception) (env : Environment)
+    (choices : List ScheduleChoice) :
+    (Result.error exception : Result α).run env choices = (.error exception, env) := by
+  change Term.Runner.run (.error exception) env choices = _
   rw [Term.Runner.run]
 
 @[simp] theorem get_continuation_apply (continuation : Environment → Result α)
-    (env : Environment) :
-    (Result.get continuation) env = continuation env env := by
-  change Term.Runner.run (.get continuation) env = _
+    (env : Environment) (choices : List ScheduleChoice) :
+    (Result.get continuation).run env choices = (continuation env).run env choices := by
+  change Term.Runner.run (.get continuation) env choices = _
   rw [Term.Runner.run]
   rfl
 
 @[simp] theorem set_continuation_apply (next : Environment) (continuation : Result α)
-    (env : Environment) :
-    (Result.set next continuation) env = continuation next := by
-  change Term.Runner.run (.set next continuation) env = _
+    (env : Environment) (choices : List ScheduleChoice) :
+    (Result.set next continuation).run env choices = continuation.run next choices := by
+  change Term.Runner.run (.set next continuation) env choices = _
   rw [Term.Runner.run]
   rfl
 
+/-- Every execution, under any scheduler choices, is a run of the transition
+system ending in a terminal configuration with the same outcome. -/
+theorem run_reaches (computation : Result α) (env : Environment) (choices : List ScheduleChoice) :
+    ∃ events last, Concurrent.Run (.start env computation) events last ∧
+      Concurrent.Terminal last (computation.run env choices).1 :=
+  Term.Runner.run_reaches computation env choices
+
 @[simp] theorem IsPure.ok_iff (computation : Result α) (pure : IsPure computation)
-    (env final : Environment) (value : α) :
-    computation env = (.ok value, final) ↔ computation = .ok value ∧ env = final := by
+    (env final : Environment) (choices : List ScheduleChoice) (value : α) :
+    computation.run env choices = (.ok value, final) ↔ computation = .ok value ∧ env = final := by
   cases computation <;> simp_all
 
 @[simp] theorem IsPure.error_iff (computation : Result α) (pure : IsPure computation)
-    (env final : Environment) (exception : Exception) :
-    computation env = (.error exception, final) ↔
+    (env final : Environment) (choices : List ScheduleChoice) (exception : Exception) :
+    computation.run env choices = (.error exception, final) ↔
       computation = .error exception ∧ env = final := by
   cases computation <;> simp_all
 

@@ -97,9 +97,9 @@ private def referenceExchange : Result := do
 
 /-- All processes share reference allocation; it does not consume PID identities. -/
 theorem references_are_unique_across_processes :
-    Result.run referenceExchange { schedule := [.swap 2] } =
+    Result.run referenceExchange {} [.swap 2] =
       (.ok (.tuple #[.reference 1, .reference 3, .reference 2]), { pidCounter := 2, refCounter := 3 }) ∧
-    Result.run referenceExchange { schedule := [.current] } =
+    Result.run referenceExchange {} [.current] =
       (.ok (.tuple #[.reference 1, .reference 2, .reference 3]), { pidCounter := 2, refCounter := 3 }) := by cbv
 
 /-- Sending returns its argument and appends behind existing messages. -/
@@ -153,7 +153,7 @@ theorem zero_timeout_preserves_unmatched :
     (.ok (.atom "timeout"), { currentProcess := { mailbox := [.integer 1] } }) := by cbv
 
 theorem infinity_never_expires :
-    (receiveTimed (.atom "infinity")) { schedule := [.timeout 1] } = (.deadlock, {}) := by cbv
+    Result.run (receiveTimed (.atom "infinity")) {} [.timeout 1] = (.deadlock, {}) := by cbv
 
 /-- Timeout validation precedes scanning, even with a queued match. -/
 theorem timeout_validation_precedes_scan :
@@ -186,13 +186,12 @@ theorem timeout_can_expire_child :
       let _ ← Result.schedule (do
         let value ← receiveTimed (.integer 10)
         «send/2» noFunctions (.pid 1) value) (fun processId => .ok (Term.pid processId))
-      receiveAny) { schedule := [.current, .timeout 2] } = (.ok (.atom "timeout"), { pidCounter := 2 }) := by cbv
+      receiveAny) {} [.current, .timeout 2] = (.ok (.atom "timeout"), { pidCounter := 2 }) := by cbv
 
 /-- A timeout choice cannot discard a matching message already in the queue. -/
 theorem queued_match_precedes_timeout_choice :
-    (receiveTimed (.integer 10)) {
-      currentProcess := { mailbox := [.atom "wanted"] }
-      schedule := [.timeout 1] } = (.ok (.atom "wanted"), {}) := by cbv
+    Result.run (receiveTimed (.integer 10)) {
+      currentProcess := { mailbox := [.atom "wanted"] } } [.timeout 1] = (.ok (.atom "wanted"), {}) := by cbv
 
 /-- Timeout exceptions and bodies remain covered by the receiving caller's handler. -/
 theorem timeout_handler_scope :
@@ -218,7 +217,7 @@ theorem guard_reads_waiting_child_identity :
         let value ← receiveSelf
         «send/2» noFunctions (.pid 1) value) (fun pid => .ok (Term.pid pid))
       let _ ← «send/2» noFunctions child child
-      receiveAny) { schedule := [.swap 2] } = (.ok (.pid 2), { pidCounter := 2 }) := by cbv
+      receiveAny) {} [.swap 2] = (.ok (.pid 2), { pidCounter := 2 }) := by cbv
 
 private def receiveFalse : Result :=
   Result.receiveWith (.integer 0) (fun env message =>
@@ -263,8 +262,8 @@ private def handshake : Result := do
 
 /-- Either process can block first, and both resume with their own state. -/
 theorem blocked_processes_resume :
-    Result.run handshake { schedule := [.swap 2] } = (.ok (.atom "done"), { pidCounter := 2 }) ∧
-    Result.run handshake { schedule := [.current] } = (.ok (.atom "done"), { pidCounter := 2 }) := by
+    Result.run handshake {} [.swap 2] = (.ok (.atom "done"), { pidCounter := 2 }) ∧
+    Result.run handshake {} [.current] = (.ok (.atom "done"), { pidCounter := 2 }) := by
   cbv
 
 private def interleavedSends : Result := do
@@ -332,7 +331,7 @@ theorem receive_body_exception_is_caught :
 theorem terminated_child_is_not_revived :
     Result.run (do
       let child ← Result.schedule (.ok .nil) (fun pid => .ok (Term.pid pid))
-      «send/2» noFunctions child (.atom "ignored")) { schedule := [.swap 2] } =
+      «send/2» noFunctions child (.atom "ignored")) {} [.swap 2] =
       (.ok (.atom "ignored"), { pidCounter := 2 }) := by cbv
 
 /-- Root termination also closes its mailbox while the remaining children finish. -/
@@ -343,7 +342,7 @@ theorem terminated_root_discards_late_messages :
 /-- Child exceptions do not become exceptions in the unlinked parent. -/
 theorem child_exception_is_isolated :
     Result.run (Result.schedule (.error (.error (.atom "failure")))
-      (fun _ => .ok (Term.atom "done"))) { schedule := [.swap 2] } =
+      (fun _ => .ok (Term.atom "done"))) {} [.swap 2] =
       (.ok (.atom "done"), { pidCounter := 2 }) := by cbv
 
 private def isolatedDictionaries : Result := do
@@ -379,8 +378,39 @@ theorem successful_receive_is_a_scheduling_boundary :
 
 /-- Selecting a blocked process falls back without discarding its continuation. -/
 theorem waiting_schedule_choice_falls_back :
-    Result.run handshake { schedule := [.swap 2, .swap 1] } =
+    Result.run handshake {} [.swap 2, .swap 1] =
       (.ok (.atom "done"), { pidCounter := 2 }) := by cbv
+
+/-! Exploring every interleaving proves outcomes for all scheduler choices,
+not only for the schedules listed above. -/
+
+theorem handshake_every_schedule (choices : List ScheduleChoice) :
+    Lynx.concurrent handshake choices = .ok (.atom "done") := by
+  have checked := concurrent_of_check handshake
+    (fun | .ok (.atom "done") => true | _ => false) 32 (by cbv) choices
+  split at checked
+  · assumption
+  · contradiction
+
+/-- Both delivery orders are possible, and no other outcome is. -/
+theorem two_senders_every_schedule (choices : List ScheduleChoice) :
+    Lynx.concurrent twoSenders choices = .ok (.tuple #[.atom "left", .atom "right"]) ∨
+    Lynx.concurrent twoSenders choices = .ok (.tuple #[.atom "right", .atom "left"]) := by
+  have checked := concurrent_of_check twoSenders
+    (fun
+      | .ok (.tuple ⟨[.atom "left", .atom "right"]⟩) => true
+      | .ok (.tuple ⟨[.atom "right", .atom "left"]⟩) => true
+      | _ => false) 32 (by cbv) choices
+  split at checked
+  · exact .inl ‹_›
+  · exact .inr ‹_›
+  · contradiction
+
+/-- Exploration reaches both delivery orders, so a single order is not provable. -/
+theorem two_senders_check_rejects_one_order :
+    Concurrent.check (fun
+      | .ok (.tuple ⟨[.atom "left", .atom "right"]⟩) => true
+      | _ => false) 32 (.start {} twoSenders) = false := by cbv
 
 /-- A deadlocked computation cannot have a successful return. -/
 theorem deadlock_cannot_accept (computation : Result) (env final : Environment)
@@ -394,14 +424,14 @@ private def sends : Nat → Result
   | 0 => .ok .nil
   | n + 1 => .send 99 .nil (sends n)
 
-open Lynx.Term.Runner in
+open Lynx.Term.Runner Lynx.Concurrent in
 private theorem sends_execute (n : Nat) :
-    execute 1 (save {}) (.process 1 (sends n) some) none .current = (.ok .nil, {}) := by
+    execute 1 (save {}) (.process 1 (sends n) some) none .current [] = (.ok .nil, {}) := by
   induction n with
   | zero => cbv
   | succ n ih =>
     rw [execute, choose]
-    change execute 1 (save {}) (.process 1 (sends n) some) none .current = (.ok .nil, {})
+    change execute 1 (save {}) (.process 1 (sends n) some) none .current [] = (.ok .nil, {})
     exact ih
 
 /-- Any finite number of sends completes, with no fixed execution cutoff. -/
@@ -415,6 +445,7 @@ end LynxTest.Modules.Process
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Modules.Process
 
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Term.Runner
+run_cmd LynxTest.ProofAudit.checkModule `Lynx.Concurrent
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Term.DataTypes
 
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.erlang.Exceptions

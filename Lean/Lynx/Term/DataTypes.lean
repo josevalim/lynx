@@ -97,6 +97,13 @@ structure ProcessState where
   mailbox : List Term := []
 deriving Repr, Inhabited
 
+/-- Scheduler decisions consumed after spawn, send, and successful receive.
+They are supplied to the runner, not stored in the environment processes observe.
+No remaining choice defaults to the current process when runnable. `swap pid`
+prefers the named process; blocked or finished processes yield automatically.
+Positive receive durations are abstract: timeout choices express expiry
+order, without measuring or waiting for elapsed time. Blocking also consumes
+choices; when no process can run, a finite receive expires automatically. -/
 inductive ScheduleChoice where
   | current
   /-- Prefer this runnable process; unavailable choices fall back to the current/first runnable process. -/
@@ -119,13 +126,6 @@ structure Environment where
   currentProcess : ProcessState := {}
   /-- Saved states of non-current processes, indexed by PID. -/
   processes : List (PID × ProcessState) := []
-  /-- Scheduler decisions consumed after spawn, send, and successful receive.
-  Empty defaults to the current process when runnable. `swap pid` prefers
-  the named process; blocked or finished processes yield automatically.
-  Positive receive durations are abstract: timeout choices express expiry
-  order, without measuring or waiting for elapsed time. Blocking also consumes
-  choices; when no process can run, a finite receive expires automatically. -/
-  schedule : List ScheduleChoice := []
 deriving Repr, Inhabited
 
 namespace Environment
@@ -139,8 +139,7 @@ def setPdict (env : Environment) (pdict : List (Term × Term)) : Environment :=
     pidCounter := env.pidCounter
     refCounter := env.refCounter
     currentProcess := { env.currentProcess with pdict }
-    processes := env.processes
-    schedule := env.schedule }
+    processes := env.processes }
 
 @[simp] theorem pdict_setPdict (env : Environment) (pdict : List (Term × Term)) :
     (env.setPdict pdict).pdict = pdict := by

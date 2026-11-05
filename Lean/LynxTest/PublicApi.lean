@@ -115,6 +115,21 @@ example : Lynx.Term → (Lynx.Environment → Lynx.Term → Option β) →
     (Option β → Lynx.Result α) → Lynx.Result α :=
   Lynx.Result.receiveWith
 example : Lynx.PID → Lynx.ScheduleChoice := Lynx.ScheduleChoice.timeout
+example : Lynx.Result → Lynx.Environment → List Lynx.ScheduleChoice →
+    Lynx.Outcome Lynx.Term × Lynx.Environment :=
+  fun computation env choices => computation.run env choices
+
+-- Every schedule is a run of the transition system, available through ordinary imports.
+example (computation : Lynx.Result) (choices : List Lynx.ScheduleChoice) :
+    ∃ events last, Lynx.Concurrent.Run (.start {} computation) events last ∧
+      Lynx.Concurrent.Terminal last (Lynx.concurrent computation choices) :=
+  Lynx.concurrent_reaches computation choices
+
+example (computation : Lynx.Result) (accept : Lynx.Outcome Lynx.Term → Bool) (depth : Nat)
+    (checked : Lynx.Concurrent.check accept depth (.start {} computation) = true)
+    (choices : List Lynx.ScheduleChoice) :
+    accept (Lynx.concurrent computation choices) = true :=
+  Lynx.concurrent_of_check computation accept depth checked choices
 
 example : List Lynx.Term → Lynx.Term → List Lynx.Term := Lynx.Term.getMapKeys
 
@@ -298,6 +313,53 @@ private def expectedDeclarations : Array String := #[
   "Erlang.maps.«update/3»",
   "Erlang.math.«ceil/1»",
   "Erlang.math.«floor/1»",
+  "Lynx.Concurrent.Allowed",
+  "Lynx.Concurrent.Config",
+  "Lynx.Concurrent.Config.halted",
+  "Lynx.Concurrent.Config.outcome",
+  "Lynx.Concurrent.Config.running",
+  "Lynx.Concurrent.Config.start",
+  "Lynx.Concurrent.Config.successors",
+  "Lynx.Concurrent.Event",
+  "Lynx.Concurrent.Event.exit",
+  "Lynx.Concurrent.Event.internal",
+  "Lynx.Concurrent.Event.receive",
+  "Lynx.Concurrent.Event.send",
+  "Lynx.Concurrent.Event.spawn",
+  "Lynx.Concurrent.Event.timeout",
+  "Lynx.Concurrent.Ready",
+  "Lynx.Concurrent.Run",
+  "Lynx.Concurrent.Step",
+  "Lynx.Concurrent.Task",
+  "Lynx.Concurrent.Task.child",
+  "Lynx.Concurrent.Task.computation",
+  "Lynx.Concurrent.Task.finish",
+  "Lynx.Concurrent.Task.mk",
+  "Lynx.Concurrent.Task.root",
+  "Lynx.Concurrent.Task.transitions",
+  "Lynx.Concurrent.Task.β",
+  "Lynx.Concurrent.Terminal",
+  "Lynx.Concurrent.Transition",
+  "Lynx.Concurrent.Transition.apply",
+  "Lynx.Concurrent.Transition.boundary",
+  "Lynx.Concurrent.Transition.environment",
+  "Lynx.Concurrent.Transition.event",
+  "Lynx.Concurrent.Transition.exhausted",
+  "Lynx.Concurrent.Transition.expired",
+  "Lynx.Concurrent.Transition.finished",
+  "Lynx.Concurrent.Transition.mk",
+  "Lynx.Concurrent.Transition.tasks",
+  "Lynx.Concurrent.activate",
+  "Lynx.Concurrent.check",
+  "Lynx.Concurrent.deliver",
+  "Lynx.Concurrent.findProcess",
+  "Lynx.Concurrent.instReprEvent",
+  "Lynx.Concurrent.isReady",
+  "Lynx.Concurrent.isRequest",
+  "Lynx.Concurrent.removeProcess",
+  "Lynx.Concurrent.save",
+  "Lynx.Concurrent.selectMessage",
+  "Lynx.Concurrent.splits",
   "Lynx.Dispatch",
   "Lynx.Dispatch.dispatch",
   "Lynx.Dispatch.mk",
@@ -314,7 +376,6 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Environment.pidCounter",
   "Lynx.Environment.processes",
   "Lynx.Environment.refCounter",
-  "Lynx.Environment.schedule",
   "Lynx.Environment.setPdict",
   "Lynx.Except.andAlso",
   "Lynx.Except.bindWith",
