@@ -15,7 +15,19 @@ defmodule Lynx.Translation do
   # them, and are otherwise pure.
   @runtime_purity %{
     {:erlang, :spawn, 1} => {:concurrent, false},
+    {:erlang, :spawn_link, 1} => {:concurrent, false},
+    {:erlang, :spawn_monitor, 1} => {:concurrent, false},
     {:erlang, :send, 2} => {:concurrent, false},
+    {:erlang, :monitor, 2} => {:concurrent, false},
+    {:erlang, :monitor, 3} => {:concurrent, false},
+    {:erlang, :demonitor, 1} => {:concurrent, false},
+    {:erlang, :demonitor, 2} => {:concurrent, false},
+    {:erlang, :link, 1} => {:concurrent, false},
+    {:erlang, :unlink, 1} => {:concurrent, false},
+    {:erlang, :exit, 2} => {:concurrent, false},
+    {:erlang, :process_flag, 2} => {:concurrent, false},
+    {:erlang, :is_process_alive, 1} => {:concurrent, false},
+    {:erlang, :process_info, 2} => {:concurrent, false},
     {:erlang, :apply, 2} => {:pure, true},
     {:maps, :fold, 3} => {:pure, true}
   }

@@ -27,15 +27,18 @@ private inductive Pool (α : Type) where
 /-- Each step replaces a computation by its continuations, possibly in either
 parallel branch. This relation ignores scheduler and mailbox contents. -/
 private inductive Progress : Pool α → Pool α → Prop where
-  | ok : Progress .empty (.process processId (.ok value) finish)
-  | error : Progress .empty (.process processId (.error exception) finish)
+  /-- A process ends, by returning, raising, or acting on an exit signal. -/
+  | exit : Progress .empty (.process processId computation finish)
   | get : Progress (.process processId (next env) finish) (.process processId (.get next) finish)
   | set : Progress (.process processId next finish) (.process processId (.set env next) finish)
   | send : Progress (.process processId next finish) (.process processId (.send dest message next) finish)
   | receive : Progress (.process processId (next reply) finish)
       (.process processId (.receive timeout select next) finish)
   | schedule : Progress (.parallel (.process processId (next childPid) finish)
-      (.process childPid child (fun _ => none))) (.process processId (Result.schedule child next) finish)
+      (.process childPid child (fun _ => none)))
+      (.process processId (Result.schedule options child next) finish)
+  | request : Progress (.process processId (next reply) finish)
+      (.process processId (.request query next) finish)
   | left : Progress a' a → Progress (.parallel a' b) (.parallel a b)
   | right : Progress b' b → Progress (.parallel a b') (.parallel a b)
 
@@ -60,13 +63,7 @@ private theorem accProcess {β : Type} (computation : Result β) :
     ∀ (processId : PID) (finish : Except Exception β → Option (Except Exception α)),
       Acc Progress (.process processId computation finish) := by
   induction computation with
-  | ok value =>
-    intro processId finish
-    constructor
-    intro p h
-    cases h
-    exact accEmpty
-  | error exception =>
+  | ok | error =>
     intro processId finish
     constructor
     intro p h
@@ -77,30 +74,43 @@ private theorem accProcess {β : Type} (computation : Result β) :
     constructor
     intro p h
     cases h with
+    | exit => exact accEmpty
     | get => apply ih
   | set env next ih =>
     intro processId finish
     constructor
     intro p h
     cases h
-    apply ih
+    · exact accEmpty
+    · apply ih
   | send dest message next ih =>
     intro processId finish
     constructor
     intro p h
     cases h
-    apply ih
+    · exact accEmpty
+    · apply ih
   | receive timeout select next ih =>
     intro processId finish
     constructor
     intro p h
-    cases h <;> apply ih
-  | schedule child next childIH nextIH =>
+    cases h
+    · exact accEmpty
+    · apply ih
+  | schedule options child next childIH nextIH =>
     intro processId finish
     constructor
     intro p h
     cases h with
+    | exit => exact accEmpty
     | schedule => exact accParallel _ _ (nextIH _ _ _) (childIH _ _)
+  | request query next ih =>
+    intro processId finish
+    constructor
+    intro p h
+    cases h
+    · exact accEmpty
+    · apply ih
 
 private theorem wf : WellFounded (@Progress α) := by
   constructor
@@ -123,6 +133,7 @@ private def findReady (state : State) (accept : PID → Bool) : Pool α → Opti
   | .parallel left right => (findReady state accept left).orElse fun _ => findReady state accept right
   | .process processId computation _ =>
       if !accept processId then none else
+      if (state.process processId).signal.isSome then some processId else
         match computation with
         | .receive timeout select _ =>
             if (selectMessage (select (state.view processId)) (state.process processId).mailbox).isSome
@@ -206,24 +217,30 @@ private def step (pool : Pool α) (state : State) (chosen : PID) (expire : Bool)
   | .process processId computation finish =>
       if processId != chosen then none else
       let view := state.view processId
+      match (state.process processId).signal with
+      | some reason => some {
+          next := .empty, decreases := .exit, state := state.terminate processId reason
+          finished := (finish (.error (.exit reason))).map (·, view) }
+      | none =>
       match computation with
       -- A process that does not return ends the whole run.
       | .error .exhausted => some {
-          next := .empty, decreases := .error, state := state.update processId none
+          next := .empty, decreases := .exit, state := state.update processId none
           exhausted := true }
       | .ok value => some {
-          next := .empty, decreases := .ok, state := state.update processId none
+          next := .empty, decreases := .exit, state := state.terminate processId (.atom "normal")
           finished := (finish (.ok value)).map (·, view) }
       | .error exception => some {
-          next := .empty, decreases := .error, state := state.update processId none
+          next := .empty, decreases := .exit
+          state := state.terminate processId (exitReason exception)
           finished := (finish (.error exception)).map (·, view) }
       | .get next => some {
           next := .process processId (next view) finish, decreases := .get, state }
       | .set updated next => some {
           next := .process processId next finish
           decreases := .set, state := state.store processId updated }
-      | Result.schedule child next =>
-          let (childPid, spawned) := state.spawn processId
+      | Result.schedule options child next =>
+          let (childPid, spawned) := state.spawnWith processId options
           some {
             next := .parallel (.process processId (next childPid) finish)
               (.process childPid child (fun _ => none))
@@ -249,6 +266,11 @@ private def step (pool : Pool α) (state : State) (chosen : PID) (expire : Bool)
                 next := .process processId (next reply) finish
                 decreases := .receive, state
                 boundary := true }
+      | .request query next =>
+          let (reply, answered) := state.request processId query
+          some {
+            next := .process processId (next reply) finish
+            decreases := .request, state := answered, boundary := true }
 
 private def isEmpty : Pool α → Bool
   | .empty => true
@@ -296,7 +318,7 @@ def run (computation : Result α) (env : Environment) (choices : List ScheduleCh
   | .error exception => (.error exception, env)
   | .get next => run (next env) env choices
   | .set next continuation => run continuation next choices
-  | Result.schedule _ _ | .send _ _ _ | .receive _ _ _ =>
+  | Result.schedule _ _ _ | .send _ _ _ | .receive _ _ _ | .request _ _ =>
       execute env.currentPid (State.initial env) (.process env.currentPid computation some) none
         false env.currentPid .current choices
 
@@ -343,11 +365,14 @@ private theorem findReady_accept {state : State} {accept : PID → Bool} {pool :
     · rename_i accepted
       have : chosen = processId := by
         split at found
-        · split at found
-          · simp at found; exact found.symm
-          · split at found <;> simp_all
         · simp at found; exact found.symm
-      simp_all
+        · split at found
+          · split at found
+            · simp at found; exact found.symm
+            · split at found <;> simp at found <;> exact found.symm
+          · simp at found; exact found.symm
+      subst this
+      simpa using accepted
 
 /-- A process with a step that is not an expiry is found by `findReady`. -/
 private theorem findReady_isSome {state : State} {accept : PID → Bool} {pool : Pool α}
@@ -367,9 +392,13 @@ private theorem findReady_isSome {state : State} {accept : PID → Bool} {pool :
     simp only [leaves, List.mem_singleton, Prod.mk.injEq] at mem
     obtain ⟨rfl, rfl⟩ := mem
     simp only [findReady, accepted, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+    cases signal : (state.process processId).signal with
+    | some reason => simp
+    | none =>
+    simp only [Option.isSome_none, Bool.false_eq_true, ↓reduceIte]
     cases computation with
     | receive timeout select next =>
-      simp only [Task.transitions] at possible
+      simp only [Task.transitions, signal] at possible
       split at possible
       · rename_i selected
         simp [selected]
@@ -396,13 +425,16 @@ private theorem findTimeout_isSome {state : State} {accept : PID → Bool} {pool
     simp only [leaves, List.mem_singleton, Prod.mk.injEq] at mem
     obtain ⟨rfl, rfl⟩ := mem
     simp only [findTimeout, accepted, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+    cases signal : (state.process processId).signal with
+    | some reason => simp_all [Task.transitions]
+    | none =>
     cases computation with
     | receive timeout select next =>
-      simp only [Task.transitions] at possible
+      simp only [Task.transitions, signal] at possible
       split at possible
       · simp_all
       · cases timeout <;> simp_all
-    | ok | get | set | schedule | send => simp_all [Task.transitions]
+    | ok | get | set | schedule | send | request => simp_all [Task.transitions]
     | error exception => cases exception <;> simp_all [Task.transitions]
 
 private theorem step_isSome_of_findReady {state : State} {accept : PID → Bool}
@@ -424,6 +456,13 @@ private theorem step_isSome_of_findReady {state : State} {accept : PID → Bool}
     split at found
     · simp at found
     · simp only [step]
+      cases signal : (state.process processId).signal with
+      | some reason =>
+        simp only [signal, Option.isSome_some, ↓reduceIte, Option.some.injEq] at found
+        subst found
+        simp [signal]
+      | none =>
+      simp only [signal, Option.isSome_none, Bool.false_eq_true, ↓reduceIte] at found ⊢
       cases computation with
       | receive timeout select next =>
         simp only at found
@@ -471,7 +510,7 @@ private theorem step_isSome_of_findTimeout {state : State} {accept : PID → Boo
       | receive timeout select next =>
         cases timeout <;> simp at found
         obtain ⟨selected, rfl⟩ := found
-        simp [selected]
+        cases signal : (state.process processId).signal <;> simp [selected, signal]
       | _ => simp at found
 
 private theorem runnable_found {state : State} {current : PID} {pool : Pool α} {chosen : PID}
@@ -594,6 +633,13 @@ private theorem step_sound {pool : Pool α} {state : State} {chosen : PID} {expi
       simp only [bne_iff_ne, ne_eq, Decidable.not_not] at same
       subst same
       refine ⟨[], [], ⟨computation, finish⟩, rfl, ?_⟩
+      cases signal : (state.process processId).signal with
+      | some reason =>
+        simp only [signal, Option.some.injEq] at stepped
+        subst stepped
+        simp [Task.transitions, signal, leaves]
+      | none =>
+      simp only [signal] at stepped
       cases computation with
       | receive timeout select next =>
         simp only at stepped
@@ -601,17 +647,17 @@ private theorem step_sound {pool : Pool α} {state : State} {chosen : PID} {expi
         · rename_i selected
           simp only [Option.some.injEq] at stepped
           subst stepped
-          simp [Task.transitions, selected, leaves]
+          simp [Task.transitions, signal, selected, leaves]
         · rename_i selected
           cases timeout <;> cases expire <;> simp only [Option.map_eq_some_iff] at stepped <;>
-            simp at stepped <;> subst stepped <;> simp [Task.transitions, selected, leaves]
+            simp at stepped <;> subst stepped <;> simp [Task.transitions, signal, selected, leaves]
       | error exception =>
         cases exception <;> simp only [Option.some.injEq] at stepped <;> subst stepped <;>
-          simp [Task.transitions, leaves]
+          simp [Task.transitions, signal, leaves]
       | _ =>
         simp only [Option.some.injEq] at stepped
         subst stepped
-        simp [Task.transitions, Task.child, leaves]
+        simp [Task.transitions, Task.child, signal, leaves]
 
 private theorem stop_terminal {root : PID} {state : State} {pool : Pool α} {finished : Finished α}
     {exhausted : Bool}
@@ -698,7 +744,7 @@ private theorem run_reaches (computation : Result α) (env : Environment)
   | set updated next ih =>
     obtain ⟨events, last, steps, terminal⟩ := ih updated
     exact ⟨_, last, .step .set steps, by rw [run]; exact terminal⟩
-  | schedule | send | receive => rw [run]; exact enter_reaches _ env choices rfl
+  | schedule | send | receive | request => rw [run]; exact enter_reaches _ env choices rfl
 
 end Lynx.Term.Runner
 

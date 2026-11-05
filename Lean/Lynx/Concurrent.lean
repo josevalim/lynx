@@ -35,6 +35,19 @@ structure ProcessState where
   refCounter : Nat := 0
   /-- Number of processes the process spawned. -/
   children : Nat := 0
+  /-- Processes linked to this one. -/
+  links : List PID := []
+  /-- Monitors on this process: each reference and the process that watches. -/
+  monitors : List (List Nat × PID) := []
+  /-- Monitors this process holds: each reference and the process it watches. -/
+  monitoring : List (List Nat × PID) := []
+  /-- Monitor references that are also destinations for this process. -/
+  aliases : List (List Nat) := []
+  /-- Whether exit signals arrive as messages. -/
+  trapExit : Bool := false
+  /-- The reason of an exit signal the process has yet to act on. The process
+  exits with it at its next step, as signals arrive asynchronously. -/
+  signal : Option Term := none
 deriving Repr, Inhabited
 
 /-- The runtime shared by all processes of a run. -/
@@ -68,6 +81,134 @@ structure State where
   | some process => state.update processId (some { process with mailbox := process.mailbox ++ [message] })
   | none => state
 
+/-- Change the record of a live process. -/
+@[expose] def State.modify (state : State) (processId : PID)
+    (change : ProcessState → ProcessState) : State :=
+  match state.processes processId with
+  | some process => state.update processId (some (change process))
+  | none => state
+
+/-- The reason a process exits with when it raises. Stack traces are not recorded. -/
+@[expose] def exitReason : Exception → Term
+  | .error reason => .tuple #[reason, .nil]
+  | .throw value => .tuple #[.tuple #[.atom "nocatch", value], .nil]
+  | .exit reason => reason
+  | .exhausted => .atom "exhausted"
+
+/-- Whether an exit reason is `normal`, which links ignore. -/
+@[expose] def isNormal : Term → Bool
+  | .atom "normal" => true
+  | _ => false
+
+/-- Whether a message is the `DOWN` message of a monitor. -/
+@[expose] def isDown (reference : List Nat) : Term → Bool
+  | .tuple ⟨[.atom "DOWN", .reference found, _, _, _]⟩ => found == reference
+  | _ => false
+
+/-- Record a pending exit reason, unless one is already pending. -/
+@[expose] def State.kill (state : State) (processId : PID) (reason : Term) : State :=
+  state.modify processId fun process =>
+    { process with signal := process.signal.orElse fun _ => some reason }
+
+/-- Deliver an exit signal from a process. A process that traps exits receives
+it as an `EXIT` message, unless it cannot be trapped. Otherwise the process
+exits, ignoring the reason `normal`. -/
+@[expose] def State.signal (state : State) (target sender : PID) (reason : Term)
+    (untrappable : Bool) : State :=
+  if untrappable then state.kill target (.atom "killed")
+  else if (state.process target).trapExit then
+    state.deliver target (.tuple #[.atom "EXIT", .pid sender, reason])
+  else if isNormal reason then state
+  else state.kill target reason
+
+/-- A process exits: each linked process receives an exit signal, and each
+monitoring process a `DOWN` message, which ends its monitor and alias. -/
+@[expose] def State.terminate (state : State) (processId : PID) (reason : Term) : State :=
+  let process := state.process processId
+  let state := state.update processId none
+  let state := process.links.foldl (fun state linked =>
+    (state.modify linked fun other => { other with links := other.links.erase processId }).signal
+      linked processId reason false) state
+  process.monitors.foldl (fun state (reference, watcher) =>
+    (state.deliver watcher (.tuple #[.atom "DOWN", .reference reference, .atom "process",
+      .pid processId, reason])).modify watcher fun other =>
+        { other with monitoring := other.monitoring.filter (·.1 != reference)
+                     aliases := other.aliases.erase reference }) state
+
+/-- Add an element unless the list already has it. -/
+@[expose] def insertOnce [BEq γ] (item : γ) (items : List γ) : List γ :=
+  if items.contains item then items else items ++ [item]
+
+/-- Start a monitor from a process, allocating its reference. Monitoring a
+process that does not exist delivers its `DOWN` message at once. -/
+@[expose] def State.monitor (state : State) (processId target : PID) (alias : Bool) :
+    List Nat × State :=
+  let reference := processId ++ [(state.process processId).refCounter + 1]
+  let state := state.modify processId fun process =>
+    { process with refCounter := process.refCounter + 1 }
+  match state.processes target with
+  | some _ =>
+      let state := state.modify target fun watched =>
+        { watched with monitors := watched.monitors ++ [(reference, processId)] }
+      (reference, state.modify processId fun process =>
+        { process with monitoring := process.monitoring ++ [(reference, target)]
+                       aliases := if alias then process.aliases ++ [reference] else process.aliases })
+  | none =>
+      (reference, state.deliver processId (.tuple #[.atom "DOWN", .reference reference,
+        .atom "process", .pid target, .atom "noproc"]))
+
+/-- Answer a request from a process. -/
+@[expose] def State.request (state : State) (processId : PID) : Request → Term × State
+  | .monitor target alias =>
+      let (reference, state) := state.monitor processId target alias
+      (.reference reference, state)
+  | .demonitor reference flush =>
+      let process := state.process processId
+      let state := process.monitoring.foldl (fun state (found, target) =>
+        if found == reference then
+          state.modify target fun watched =>
+            { watched with monitors := watched.monitors.filter (·.1 != reference) }
+        else state) state
+      (.atom (if process.monitoring.any (·.1 == reference) then "true" else "false"),
+        state.modify processId fun process =>
+        { process with
+            monitoring := process.monitoring.filter (·.1 != reference)
+            aliases := process.aliases.erase reference
+            mailbox := if flush then process.mailbox.filter (!isDown reference ·)
+              else process.mailbox })
+  | .link target =>
+      if target = processId then (.atom "true", state) else
+      match state.processes target with
+      | some _ =>
+          (.atom "true", (state.modify processId fun process =>
+            { process with links := insertOnce target process.links }).modify target fun other =>
+              { other with links := insertOnce processId other.links })
+      | none =>
+          if (state.process processId).trapExit then
+            (.atom "true", state.deliver processId
+              (.tuple #[.atom "EXIT", .pid target, .atom "noproc"]))
+          else (.atom "noproc", state)
+  | .unlink target =>
+      (.atom "true", (state.modify processId fun process =>
+        { process with links := process.links.erase target }).modify target fun other =>
+          { other with links := other.links.erase processId })
+  | .exit target reason =>
+      -- A process that sends itself `normal` exits, unless it traps exits.
+      if target = processId && isNormal reason && !(state.process processId).trapExit then
+        (.atom "true", state.kill processId reason)
+      else
+        (.atom "true", state.signal target processId reason
+          (match reason with | .atom "kill" => true | _ => false))
+  | .trapExit enabled =>
+      (.atom (if (state.process processId).trapExit then "true" else "false"),
+        state.modify processId fun process => { process with trapExit := enabled })
+  | .alive target =>
+      (.atom (if (state.processes target).isSome then "true" else "false"), state)
+  | .sendAlias alias message =>
+      let owner := alias.dropLast
+      if (state.process owner).aliases.contains alias then (message, state.deliver owner message)
+      else (message, state)
+
 /-- The runtime of a single process continuing from its environment. -/
 @[expose] def State.initial (env : Environment) : State :=
   { processes := fun candidate =>
@@ -81,6 +222,18 @@ structure State where
   let childPid := processId ++ [process.children + 1]
   (childPid, (state.update processId (some { process with children := process.children + 1 })).update
     childPid (some {}))
+
+/-- Spawn a child, linking or monitoring it in the same step. -/
+@[expose] def State.spawnWith (state : State) (processId : PID) (options : SpawnOptions) :
+    PID × State :=
+  let (child, state) := state.spawn processId
+  let state := if options.link then
+      (state.modify processId fun process =>
+        { process with links := insertOnce child process.links }).modify child fun other =>
+          { other with links := [processId] }
+    else state
+  let state := if options.monitor then (state.monitor processId child false).2 else state
+  (child, state)
 
 /-- Select the oldest matching message, preserving all unmatched messages.
 Returns the message, the selector's bindings, and the remaining mailbox. -/
@@ -117,8 +270,11 @@ inductive Event where
   | receive (receiver : PID) (message : Term) : Event
   /-- A receive with a zero or positive timeout resumes without a message. -/
   | timeout : PID → Event
-  /-- The process returns, raises, or does not return. -/
-  | exit : PID → Event
+  /-- The process returns, raises, receives an exit signal, or does not
+  return, with its exit reason. -/
+  | exit (processId : PID) (reason : Term) : Event
+  /-- The scheduler answers a request about other processes. -/
+  | request (processId : PID) (query : Request) (reply : Term) : Event
 deriving Repr
 
 /-- One possible step of one process, and the processes that replace it. -/
@@ -140,15 +296,23 @@ a positive-timeout receive without a match, one otherwise. -/
 @[expose] def Task.transitions (state : State) (processId : PID) : Task α → List (Transition α)
   | ⟨computation, finish⟩ =>
     let view := state.view processId
+    let process := state.process processId
+    match process.signal with
+    | some reason =>
+        [{ event := .exit processId reason, state := state.terminate processId reason, tasks := []
+           finished := (finish (.error (.exit reason))).map (·, view) }]
+    | none =>
     match computation with
     | .error .exhausted =>
-        [{ event := .exit processId, state := state.update processId none, tasks := []
-           exhausted := true }]
+        [{ event := .exit processId (.atom "exhausted"), state := state.update processId none
+           tasks := [], exhausted := true }]
     | .ok value =>
-        [{ event := .exit processId, state := state.update processId none, tasks := []
+        [{ event := .exit processId (.atom "normal")
+           state := state.terminate processId (.atom "normal"), tasks := []
            finished := (finish (.ok value)).map (·, view) }]
     | .error exception =>
-        [{ event := .exit processId, state := state.update processId none, tasks := []
+        [{ event := .exit processId (exitReason exception)
+           state := state.terminate processId (exitReason exception), tasks := []
            finished := (finish (.error exception)).map (·, view) }]
     | .get next =>
         [{ event := .internal processId, state
@@ -156,24 +320,20 @@ a positive-timeout receive without a match, one otherwise. -/
     | .set updated next =>
         [{ event := .internal processId, state := state.store processId updated
            tasks := [(processId, ⟨next, finish⟩)] }]
-    | Result.schedule child next =>
-        let (childPid, spawned) := state.spawn processId
+    | Result.schedule options child next =>
+        let (childPid, spawned) := state.spawnWith processId options
         [{ event := .spawn processId childPid, state := spawned
-           tasks := [(processId, ⟨next childPid, finish⟩), (childPid, Task.child child)]
-           }]
+           tasks := [(processId, ⟨next childPid, finish⟩), (childPid, Task.child child)] }]
     | .send destination message next =>
         [{ event := .send processId destination message
            state := state.deliver destination message
-           tasks := [(processId, ⟨next, finish⟩)]
-           }]
+           tasks := [(processId, ⟨next, finish⟩)] }]
     | .receive timeout select next =>
-        let process := state.process processId
         match selectMessage (select view) process.mailbox with
         | some (message, value, remaining) =>
             [{ event := .receive processId message
                state := state.update processId (some { process with mailbox := remaining })
-               tasks := [(processId, ⟨next (some value), finish⟩)]
-               }]
+               tasks := [(processId, ⟨next (some value), finish⟩)] }]
         | none =>
             let timedOut : Transition α := {
               event := .timeout processId, state
@@ -182,10 +342,14 @@ a positive-timeout receive without a match, one otherwise. -/
             | .infinity => []
             | .immediate => [timedOut]
             | .finite => [{ timedOut with expired := true }]
+    | .request query next =>
+        let (reply, answered) := state.request processId query
+        [{ event := .request processId query reply, state := answered
+           tasks := [(processId, ⟨next reply, finish⟩)] }]
 
 /-- Whether a computation starts with a process request, which hands it to the scheduler. -/
 @[expose] def isRequest : Result α → Bool
-  | Result.schedule .. | .send .. | .receive .. => true
+  | Result.schedule .. | .send .. | .receive .. | .request .. => true
   | _ => false
 
 /-- A state of a run. -/

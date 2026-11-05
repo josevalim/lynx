@@ -131,7 +131,7 @@ theorem dispatched_state :
 
 /-- Children receive the dispatcher without adding a scheduling boundary. -/
 theorem spawned_dispatch :
-    (Result.schedule ((Dispatcher.ofTable
+    (Result.schedule {} ((Dispatcher.ofTable
         #[.effectful fun _ _ _ => .send [] (.integer 7) (.ok .nil)] 1).call (.function 0 0 #[]) #[])
       fun _ => .receive .infinity (fun _ value => some value) (fun value => .ok (value.getD .nil))).run {} =
       (.ok (.integer 7), {}) := by cbv

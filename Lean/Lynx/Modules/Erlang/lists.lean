@@ -21,4 +21,24 @@ improper tail or a non-list raises `badarg`. -/
     if Term.exactCompare element head = .eq then .ok Term.true else «member/2» element tail
   | _, _ => .error (.error (.atom "badarg"))
 
+/-- The first tuple whose element at a position compares equal to a key, or
+`false`. Elements that are not tuples, or are shorter, are skipped. -/
+@[expose] def «keyfind/3» (key position : Term) : Term → Except Exception Term
+  | .nil => match position with
+    | .integer index => if index ≥ 1 then .ok Term.false else .error (.error (.atom "badarg"))
+    | _ => .error (.error (.atom "badarg"))
+  | .cons head tail =>
+    match position with
+    | .integer index =>
+      if index < 1 then .error (.error (.atom "badarg")) else
+      match head with
+      | .tuple elements =>
+        match elements[index.toNat - 1]? with
+        | some element =>
+          if Term.compare element key = .eq then .ok head else «keyfind/3» key position tail
+        | none => «keyfind/3» key position tail
+      | _ => «keyfind/3» key position tail
+    | _ => .error (.error (.atom "badarg"))
+  | _ => .error (.error (.atom "badarg"))
+
 end Erlang.lists
