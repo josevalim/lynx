@@ -280,12 +280,43 @@ defmodule Lynx do
 
   ### Proving concurrent laws
 
-  A concurrent law must hold under every schedule. When the processes take the
-  same steps for every input, the proof can evaluate every run of the program
-  and check its outcome. `Lynx.Concurrent.check` explores the runs of a
-  program, up to a depth bounding the steps along each run, and
-  `Lynx.concurrent_of_check` turns its result into the law. For example, for a
-  law over an integer `x` that is only carried by messages and arithmetic:
+  A concurrent law must hold under every schedule. `Lynx.Concurrent` describes
+  every interleaving of a program's processes: a `Lynx.Concurrent.Step`
+  advances one process, and a `Lynx.Concurrent.Run` records consecutive steps.
+  Every schedule is such a run (`Lynx.concurrent_reaches`), so a law is proven
+  in one of three ways:
+
+    * Programs without races are proven from a single run, since all runs end
+      alike. Two steps race when both deliver to the same process, when one
+      delivers to a process whose receive the other times out, or when one
+      delivers to the process the other spawns. Links, monitors, exit signals,
+      and other requests to the scheduler count as races whenever another
+      process can step. `Lynx.Result.Talks` rules races out when each process
+      only sends to itself, its ancestors, or its own children, each receiver
+      has a single sender, no receive has a timeout, and no process links,
+      monitors, or makes requests; `Lynx.Concurrent.Config.RaceFree.of_talks`
+      turns it into race freedom. `Lynx.concurrent_eq_advance` then evaluates
+      the outcome of every schedule with `Lynx.Concurrent.Config.advance`,
+      which takes the first available step, and `Config.advance_add` splits the
+      run into phases that proofs can take by induction. See
+      `examples/concurrency/server.exs`, which proves a law for every list.
+
+    * Programs whose processes take the same steps for every input are proven
+      by evaluating every run, as described below. See
+      `examples/concurrency/workers.exs`, where two workers race.
+
+    * Other programs are proven with an invariant preserved by every step,
+      through `Lynx.concurrent_of_invariant`.
+
+  PIDs are paths from the process that runs the law, which is `[]`: a process's
+  n-th child extends its PID with `n`, so `[1]` is its first child. References
+  extend the allocating process's PID with its own count. Allocation therefore
+  does not depend on the schedule, while both remain opaque to the program.
+
+  `Lynx.Concurrent.check` explores the runs of a program, up to a depth
+  bounding the steps along each run, and `Lynx.concurrent_of_check` turns its
+  result into the law. For example, for a law over an integer `x` that is only
+  carried by messages and arithmetic:
 
       obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
         cases x <;> simp_all [«law:requires/1», Erlang.erlang.«is_integer/1»]
@@ -323,7 +354,7 @@ defmodule Lynx do
       reaches the same outcomes, as `Lynx.Concurrent.check_sound` proves.
 
   See `examples/elixir/task.exs` for laws about `Task.async/1` and
-  `Task.await/2`.
+  `Task.await/2`, which link and monitor, so they are proven this way.
 
   ## Taking it to the next level
 
