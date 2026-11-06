@@ -472,7 +472,9 @@ end LynxTest.Modules.Process
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Modules.Process
 
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Term.Runner
-run_cmd LynxTest.ProofAudit.checkModule `Lynx.Concurrent
+run_cmd do
+  LynxTest.ProofAudit.checkModule `Lynx.Concurrent
+  LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Reduction
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Term.DataTypes
 
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.erlang.Exceptions
