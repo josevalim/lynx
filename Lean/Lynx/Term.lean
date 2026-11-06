@@ -10,6 +10,7 @@ public import Lynx.Term.Induction
 public import Lynx.Term.Order
 public import Lynx.Term.Eval
 public import Lynx.Concurrent.Reduction
+public import Lynx.Concurrent.Confluence
 
 namespace Lynx
 
@@ -77,6 +78,29 @@ public theorem concurrent_of_check (computation : Result α) (accept : Outcome �
     (choices : List ScheduleChoice) : accept (concurrent computation choices) = true := by
   obtain ⟨_, _, run, final⟩ := concurrent_reaches computation choices
   exact Concurrent.check_sound checked run final
+
+/-- Without races, one run to a terminal configuration determines the outcome of
+every schedule: steps of different processes commute, so all runs end alike. -/
+public theorem concurrent_eq_of_raceFree (computation : Result α)
+    (raceFree : (Concurrent.Config.start {} computation).RaceFree)
+    {events : List Concurrent.Event} {last : Concurrent.Config α} {outcome : Outcome α}
+    (run : Concurrent.Run (.start {} computation) events last)
+    (terminal : Concurrent.Terminal last outcome) (choices : List ScheduleChoice) :
+    concurrent computation choices = outcome := by
+  obtain ⟨_, _, run', terminal'⟩ := concurrent_reaches computation choices
+  exact raceFree.outcome_eq run terminal run' terminal'
+
+/-- Without races, taking the first available steps until none remain evaluates
+the outcome of every schedule. -/
+public theorem concurrent_eq_advance (computation : Result α)
+    (raceFree : (Concurrent.Config.start {} computation).RaceFree) (steps : Nat)
+    (stuck : ((Concurrent.Config.start {} computation).advance steps).successors.isEmpty)
+    (choices : List ScheduleChoice) :
+    concurrent computation choices =
+      ((Concurrent.Config.start {} computation).advance steps).outcome := by
+  obtain ⟨_, run⟩ := Concurrent.Config.run_advance steps (.start {} computation)
+  exact concurrent_eq_of_raceFree computation raceFree run
+    (Concurrent.Config.terminal_of_successors_eq_nil (List.isEmpty_iff.mp stuck)) choices
 
 @[simp] public theorem concurrent_ok (value : α) (choices : List ScheduleChoice) :
     concurrent (.ok value) choices = .ok value := by

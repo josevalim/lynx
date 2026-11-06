@@ -500,6 +500,98 @@ theorem Terminal.successors_eq_nil {config : Config α} {outcome : Outcome α}
     simp [blocked processId task (by rw [eq_of_mem_splits mem]; simp)]
   | _ => simp [Config.successors, splits, isRequest]
 
+theorem Step.of_mem_successors {first next : Config α} {event : Event}
+    (mem : (event, next) ∈ first.successors) : Step first event next := by
+  cases first with
+  | start env computation =>
+    cases computation <;> simp only [Config.successors, isRequest, List.mem_singleton,
+      Prod.mk.injEq, Bool.false_eq_true, ↓reduceIte, List.not_mem_nil] at mem
+    all_goals first
+      | (obtain ⟨rfl, rfl⟩ := mem; first | exact .get | exact .set | exact .enter rfl)
+      | (simp at mem)
+  | running state tasks finished exhausted =>
+    simp only [Config.successors, List.mem_flatMap, List.mem_map, Prod.exists, Prod.mk.injEq] at mem
+    obtain ⟨before, processId, task, after, split, transition, possible, rfl, rfl⟩ := mem
+    exact .run (eq_of_mem_splits split) possible
+
+/-! ### Deterministic evaluation
+
+`Config.advance` repeatedly takes the first step of the first process that can
+take one. Its runs are ordinary runs, so for programs whose outcome does not
+depend on the schedule it evaluates that outcome. -/
+
+/-- Take the first available step, at most `steps` times. -/
+@[expose] def Config.advance : Nat → Config α → Config α
+  | 0, config => config
+  | steps + 1, config =>
+      match config.successors with
+      | [] => config
+      | (_, next) :: _ => advance steps next
+
+@[simp] theorem Config.advance_zero (config : Config α) : config.advance 0 = config := rfl
+
+/-- Configurations without successors stay put, so advancing composes. -/
+theorem Config.advance_add (first second : Nat) (config : Config α) :
+    config.advance (first + second) = (config.advance first).advance second := by
+  induction first generalizing config with
+  | zero => simp
+  | succ first ih =>
+    rw [Nat.add_right_comm, Config.advance, Config.advance]
+    split
+    · rename_i stuck
+      clear ih
+      induction second with
+      | zero => rfl
+      | succ second ih => simp [Config.advance, stuck]
+    · exact ih _
+
+theorem Config.advance_succ {config next : Config α} {event : Event}
+    {rest : List (Event × Config α)} (steps : Nat)
+    (first : config.successors = (event, next) :: rest) :
+    config.advance (steps + 1) = next.advance steps := by
+  simp [Config.advance, first]
+
+theorem Config.run_advance (steps : Nat) (config : Config α) :
+    ∃ events, Run config events (config.advance steps) := by
+  induction steps generalizing config with
+  | zero => exact ⟨[], .refl⟩
+  | succ steps ih =>
+    simp only [Config.advance]
+    split
+    · exact ⟨[], .refl⟩
+    · rename_i event next rest found
+      have mem : (event, next) ∈ config.successors := by simp [found]
+      obtain ⟨events, run⟩ := ih next
+      exact ⟨event :: events, .step (Step.of_mem_successors mem) run⟩
+
+/-- A configuration without successors is terminal. -/
+theorem Config.terminal_of_successors_eq_nil {config : Config α}
+    (stuck : config.successors = []) : Terminal config config.outcome := by
+  cases config with
+  | start env computation =>
+    cases computation with
+    | ok => exact .ok
+    | error => exact .error
+    | _ => simp [Config.successors, isRequest] at stuck
+  | running state tasks finished exhausted =>
+    have blocked : ∀ processId task, (processId, task) ∈ tasks →
+        task.transitions state processId = [] := by
+      intro processId task mem
+      obtain ⟨before, after, rfl⟩ := List.append_of_mem mem
+      simp only [Config.successors, List.flatMap_eq_nil_iff, List.map_eq_nil_iff,
+        Prod.forall] at stuck
+      exact stuck _ _ _ _ mem_splits
+    cases exhausted with
+    | true => exact .exhausted blocked
+    | false =>
+      cases tasks with
+      | cons => exact .deadlock blocked (by simp)
+      | nil =>
+        rcases finished with _ | ⟨_ | _, _⟩
+        · exact .deadlock blocked (fun _ => rfl)
+        · exact .raised
+        · exact .returned
+
 /-- Whether a process is about to read its environment, without a pending exit
 signal. Steps of other processes cannot change what it reads, and it changes
 nothing they observe, so it can step before them. -/

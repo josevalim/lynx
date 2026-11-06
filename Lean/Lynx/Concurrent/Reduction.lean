@@ -29,17 +29,40 @@ private theorem Unchanged.trans {first second third : ProcessState}
   ⟨right.1.trans left.1, right.2.1.trans left.2.1, right.2.2.1.trans left.2.2.1,
     fun pending => right.2.2.2 (left.2.2.2 pending)⟩
 
-/-- A state change keeps a process's record. -/
+/-- A state change keeps a process's record, and whether the process is live. -/
 private def Keeps (processId : PID) (before after : State) : Prop :=
-  Unchanged (before.process processId) (after.process processId)
+  Option.Rel Unchanged (before.processes processId) (after.processes processId)
 
-private theorem Keeps.refl (processId : PID) (state : State) : Keeps processId state state :=
-  Unchanged.refl _
+private theorem Keeps.refl (processId : PID) (state : State) : Keeps processId state state := by
+  unfold Keeps
+  cases state.processes processId
+  · exact .none
+  · exact .some (Unchanged.refl _)
 
 private theorem Keeps.trans {processId : PID} {first second third : State}
     (left : Keeps processId first second) (right : Keeps processId second third) :
-    Keeps processId first third :=
-  Unchanged.trans left right
+    Keeps processId first third := by
+  unfold Keeps at *
+  generalize first.processes processId = a at left
+  generalize second.processes processId = b at left right
+  generalize third.processes processId = c at right
+  cases left with
+  | none => exact right
+  | some unchanged =>
+    cases right with
+    | some unchanged' => exact .some (unchanged.trans unchanged')
+
+/-- What the record of a kept process keeps. -/
+private theorem Keeps.process {processId : PID} {before after : State}
+    (kept : Keeps processId before after) :
+    Unchanged (before.process processId) (after.process processId) := by
+  unfold Keeps at kept
+  unfold State.process
+  generalize before.processes processId = a at kept
+  generalize after.processes processId = b at kept
+  cases kept with
+  | none => exact Unchanged.refl _
+  | some unchanged => exact unchanged
 
 private theorem State.process_update {state : State} {processId other : PID}
     {process : Option ProcessState} :
@@ -51,8 +74,8 @@ private theorem State.process_update {state : State} {processId other : PID}
 private theorem keeps_update_ne {state : State} {processId other : PID}
     {process : Option ProcessState} (ne : processId ≠ other) :
     Keeps processId state (state.update other process) := by
-  simp only [Keeps, State.process_update, ne, ite_false]
-  exact Unchanged.refl _
+  simp only [Keeps, State.update, ne, ite_false]
+  exact Keeps.refl processId state
 
 private theorem keeps_modify {state : State} {processId other : PID}
     {change : ProcessState → ProcessState}
@@ -63,12 +86,10 @@ private theorem keeps_modify {state : State} {processId other : PID}
   · rename_i process found
     by_cases equal : processId = other
     · subst equal
-      simp only [Keeps, State.process_update, ite_true, Option.getD_some]
-      have : state.process processId = process := by simp [State.process, found]
-      rw [this]
+      simp only [Keeps, State.update, ite_true, found]
       rcases kept with ne | kept
       · exact absurd rfl ne
-      · exact kept process
+      · exact .some (kept process)
     · exact keeps_update_ne equal
   · exact Keeps.refl _ _
 
@@ -79,10 +100,8 @@ private theorem keeps_deliver {state : State} {processId other : PID} {message :
   · rename_i process found
     by_cases equal : processId = other
     · subst equal
-      simp only [Keeps, State.process_update, ite_true, Option.getD_some]
-      have : state.process processId = process := by simp [State.process, found]
-      rw [this]
-      exact ⟨rfl, rfl, rfl, id⟩
+      simp only [Keeps, State.update, ite_true, found]
+      exact .some ⟨rfl, rfl, rfl, id⟩
     · exact keeps_update_ne equal
   · exact Keeps.refl _ _
 
@@ -109,7 +128,7 @@ private theorem keeps_foldl {processId : PID} {items : List γ} {step : State �
   | nil => exact Keeps.refl _ _
   | cons item rest ih => exact (each state item).trans (ih _)
 
-/-! Each lemma below extended a kept record through one more operation, so
+/-! Each lemma below extends a kept record through one more operation, so
 compound operations unfold into a chain of them. -/
 
 private theorem Keeps.update {state before : State} {processId other : PID}
@@ -194,26 +213,35 @@ private theorem keeps_spawnWith {state : State} {processId other : PID} {options
 
 /-! ### Children of the stepping process -/
 
-/-- A state change keeps the number of children a process spawned. -/
+/-- A state change keeps the number of children a process spawned, and keeps it
+live. -/
 private def KeepsChildren (processId : PID) (before after : State) : Prop :=
-  (after.process processId).children = (before.process processId).children
+  (after.process processId).children = (before.process processId).children ∧
+    ((before.processes processId).isSome → (after.processes processId).isSome)
 
 private theorem KeepsChildren.refl (processId : PID) (state : State) :
-    KeepsChildren processId state state := rfl
+    KeepsChildren processId state state := ⟨rfl, id⟩
+
+private theorem KeepsChildren.trans {processId : PID} {first second third : State}
+    (left : KeepsChildren processId first second) (right : KeepsChildren processId second third) :
+    KeepsChildren processId first third :=
+  ⟨right.1.trans left.1, fun live => right.2 (left.2 live)⟩
 
 private theorem KeepsChildren.update {state before : State} {processId other : PID}
     {process : Option ProcessState}
-    (same : processId ≠ other ∨ (process.getD {}).children = (before.process other).children)
+    (same : processId ≠ other ∨
+      ((process.getD {}).children = (before.process other).children ∧ process.isSome))
     (kept : KeepsChildren processId state before) :
     KeepsChildren processId state (before.update other process) := by
   unfold KeepsChildren at *
   rw [State.process_update]
+  simp only [State.update]
   split
   · rename_i equal
     subst equal
-    rcases same with ne | same
+    rcases same with ne | ⟨same, live⟩
     · exact absurd rfl ne
-    · rw [same, kept]
+    · exact ⟨by rw [same, kept.1], fun _ => live⟩
   · exact kept
 
 private theorem KeepsChildren.modify {state before : State} {processId other : PID}
@@ -302,24 +330,31 @@ private theorem keepsChildren_request {state : State} {processId other : PID} {q
 private theorem spawnWith_children {state : State} {processId : PID} {options : SpawnOptions} :
     (state.spawnWith processId options).1 = processId ++ [(state.process processId).children + 1] ∧
       ((state.spawnWith processId options).2.process processId).children =
-        (state.process processId).children + 1 := by
-  refine ⟨rfl, ?_⟩
+        (state.process processId).children + 1 ∧
+      ((state.spawnWith processId options).2.processes processId).isSome ∧
+      ((state.spawnWith processId options).2.processes (state.spawnWith processId options).1).isSome := by
+  have fresh : processId ≠ processId ++ [(state.process processId).children + 1] := by
+    intro equal
+    have := congrArg List.length equal
+    simp at this
   have spawned : ((state.spawn processId).2.process processId).children =
       (state.process processId).children + 1 := by
     simp only [State.spawn, State.process_update]
-    have : processId ≠ processId ++ [(state.process processId).children + 1] := by
-      intro equal
-      have := congrArg List.length equal
-      simp at this
-    simp [this]
-  have kept : KeepsChildren processId (state.spawn processId).2
+    simp [fresh]
+  have kept : ∀ other, KeepsChildren other (state.spawn processId).2
       (state.spawnWith processId options).2 := by
+    intro other
     simp only [State.spawnWith]
     split
     · apply KeepsChildren.monitor
       children_chain
     · children_chain
-  exact kept.trans spawned
+  refine ⟨rfl, (kept processId).1.trans spawned, (kept processId).2 ?_, (kept _).2 ?_⟩
+  · simp [State.spawn, State.update, fresh]
+  · simp [State.spawn, State.update, State.spawnWith]
+
+/-- A process whose result does not reach the run's outcome. -/
+private def Task.Quiet (task : Task α) : Prop := ∀ result, task.finish result = none
 
 /-- How a step of a process changes the shared state and the processes. -/
 private theorem transition_frame {state : State} {processId : PID} {task : Task α}
@@ -329,72 +364,100 @@ private theorem transition_frame {state : State} {processId : PID} {task : Task 
       Keeps other state transition.state) ∧
     (transition.tasks = [] ∨
       (∃ next, transition.tasks = [(processId, next)] ∧
-        KeepsChildren processId state transition.state) ∨
+        KeepsChildren processId state transition.state ∧ (task.Quiet → next.Quiet)) ∨
       ∃ next child spawned, transition.tasks = [(processId, next), (child, spawned)] ∧
         transition.event = .spawn processId child ∧
         child = processId ++ [(state.process processId).children + 1] ∧
-        (transition.state.process processId).children = (state.process processId).children + 1) := by
+        (transition.state.process processId).children = (state.process processId).children + 1 ∧
+        (transition.state.processes processId).isSome ∧
+        (transition.state.processes child).isSome ∧
+        (task.Quiet → next.Quiet) ∧ spawned.Quiet) ∧
+    (task.Quiet → transition.finished = none) := by
   obtain ⟨computation, finish⟩ := task
+  have quietMap : ∀ (result : Except Exception _) (view : Environment),
+      Task.Quiet (⟨computation, finish⟩ : Task α) →
+        (finish result).map (·, view) = none := by
+    intro result view quiet
+    have : finish result = none := quiet result
+    simp [this]
   rcases signal : (state.process processId).signal with _ | reason
   · cases computation with
     | ok value =>
       simp only [Task.transitions, signal, List.mem_singleton] at possible
       subst possible
-      exact ⟨fun other ne _ => keeps_terminate ne, .inl rfl⟩
+      exact ⟨fun other ne _ => keeps_terminate ne, .inl rfl, quietMap _ _⟩
     | error exception =>
       cases exception <;> simp only [Task.transitions, signal, List.mem_singleton] at possible <;>
         subst possible <;>
         first
-        | exact ⟨fun other ne _ => keeps_terminate ne, .inl rfl⟩
-        | exact ⟨fun other ne _ => keeps_update_ne ne, .inl rfl⟩
+        | exact ⟨fun other ne _ => keeps_terminate ne, .inl rfl, quietMap _ _⟩
+        | exact ⟨fun other ne _ => keeps_update_ne ne, .inl rfl, fun _ => rfl⟩
     | get next =>
       simp only [Task.transitions, signal, List.mem_singleton] at possible
       subst possible
-      exact ⟨fun _ _ _ => Keeps.refl _ _, .inr (.inl ⟨_, rfl, KeepsChildren.refl _ _⟩)⟩
+      exact ⟨fun _ _ _ => Keeps.refl _ _, .inr (.inl ⟨_, rfl, KeepsChildren.refl _ _, id⟩),
+        fun _ => rfl⟩
     | set updated next =>
       simp only [Task.transitions, signal, List.mem_singleton] at possible
       subst possible
-      refine ⟨fun other ne _ => keeps_update_ne ne, .inr (.inl ⟨_, rfl, ?_⟩)⟩
-      exact KeepsChildren.update (.inr rfl) (KeepsChildren.refl _ _)
+      refine ⟨fun other ne _ => keeps_update_ne ne, .inr (.inl ⟨_, rfl, ?_, id⟩), fun _ => rfl⟩
+      exact KeepsChildren.update (.inr ⟨rfl, rfl⟩) (KeepsChildren.refl _ _)
     | schedule options child next =>
       simp only [Task.transitions, signal, List.mem_singleton] at possible
       subst possible
-      obtain ⟨childPid, children⟩ := spawnWith_children (state := state) (processId := processId)
-        (options := options)
-      refine ⟨fun other ne fresh => keeps_spawnWith ne (fresh _ rfl), .inr (.inr ?_)⟩
-      exact ⟨_, _, _, rfl, rfl, childPid, children⟩
+      obtain ⟨childPid, children, parentLive, childLive⟩ :=
+        spawnWith_children (state := state) (processId := processId) (options := options)
+      refine ⟨fun other ne fresh => keeps_spawnWith ne (fresh _ rfl), .inr (.inr ?_), fun _ => rfl⟩
+      exact ⟨_, _, _, rfl, rfl, childPid, children, parentLive, childLive, id, fun _ => rfl⟩
     | send destination message next =>
       simp only [Task.transitions, signal, List.mem_singleton] at possible
       subst possible
-      exact ⟨fun _ _ _ => keeps_deliver, .inr (.inl ⟨_, rfl, (KeepsChildren.refl _ _).deliver⟩)⟩
+      exact ⟨fun _ _ _ => keeps_deliver,
+        .inr (.inl ⟨_, rfl, (KeepsChildren.refl _ _).deliver, id⟩), fun _ => rfl⟩
     | receive timeout select next =>
       simp only [Task.transitions, signal] at possible
       split at possible
       · simp only [List.mem_singleton] at possible
         subst possible
-        refine ⟨fun other ne _ => keeps_update_ne ne, .inr (.inl ⟨_, rfl, ?_⟩)⟩
-        exact KeepsChildren.update (.inr rfl) (KeepsChildren.refl _ _)
+        refine ⟨fun other ne _ => keeps_update_ne ne, .inr (.inl ⟨_, rfl, ?_, id⟩), fun _ => rfl⟩
+        exact KeepsChildren.update (.inr ⟨rfl, rfl⟩) (KeepsChildren.refl _ _)
       · split at possible <;> simp only [List.mem_singleton, List.not_mem_nil] at possible <;>
           subst possible <;>
-          exact ⟨fun _ _ _ => Keeps.refl _ _, .inr (.inl ⟨_, rfl, KeepsChildren.refl _ _⟩)⟩
+          exact ⟨fun _ _ _ => Keeps.refl _ _,
+            .inr (.inl ⟨_, rfl, KeepsChildren.refl _ _, id⟩), fun _ => rfl⟩
     | request query next =>
       simp only [Task.transitions, signal, List.mem_singleton] at possible
       subst possible
-      exact ⟨fun other ne _ => keeps_request ne, .inr (.inl ⟨_, rfl, keepsChildren_request⟩)⟩
+      exact ⟨fun other ne _ => keeps_request ne,
+        .inr (.inl ⟨_, rfl, keepsChildren_request, id⟩), fun _ => rfl⟩
   · simp only [Task.transitions, signal, List.mem_singleton] at possible
     subst possible
-    exact ⟨fun other ne _ => keeps_terminate ne, .inl rfl⟩
+    exact ⟨fun other ne _ => keeps_terminate ne, .inl rfl, quietMap _ _⟩
 
 /-! ### Well-formed configurations -/
 
 /-- Facts every reachable configuration satisfies: processes have distinct PIDs,
-and each process has spawned every child PID that another process extended. -/
+each process has spawned every child PID that another process extends, every
+process is live, and at most one reports the run's result. -/
 private def Wellformed : Config α → Prop
   | .start .. => True
   | .running state tasks _ _ =>
       tasks.Pairwise (fun first second => first.1 ≠ second.1) ∧
-      ∀ parent ∈ tasks, ∀ descendant ∈ tasks, ∀ index rest,
-        descendant.1 = parent.1 ++ index :: rest → index ≤ (state.process parent.1).children
+      (∀ parent ∈ tasks, ∀ descendant ∈ tasks, ∀ index rest,
+        descendant.1 = parent.1 ++ index :: rest → index ≤ (state.process parent.1).children) ∧
+      (∀ entry ∈ tasks, (state.processes entry.1).isSome) ∧
+      tasks.Pairwise (fun first second => first.2.Quiet ∨ second.2.Quiet)
+
+/-- A kept process stays live. -/
+private theorem Keeps.live {processId : PID} {before after : State}
+    (kept : Keeps processId before after) (live : (before.processes processId).isSome) :
+    (after.processes processId).isSome := by
+  unfold Keeps at kept
+  generalize before.processes processId = a at kept live
+  generalize after.processes processId = b at kept
+  cases kept with
+  | none => exact live
+  | some => rfl
 
 private theorem ne_append_cons (processId : PID) (index : Nat) (rest : List Nat) :
     processId ≠ processId ++ index :: rest := by
@@ -402,7 +465,7 @@ private theorem ne_append_cons (processId : PID) (index : Nat) (rest : List Nat)
   have := congrArg List.length equal
   simp at this
 
-/-- A spawned PID either extended its parent or ends below it. -/
+/-- A spawned PID either extends its parent or ends below it. -/
 private theorem append_eq_spawned {parent processId : PID} {index last : Nat} {rest : List Nat}
     (equal : parent ++ index :: rest = processId ++ [last]) :
     (parent = processId ∧ index = last ∧ rest = []) ∨
@@ -449,8 +512,9 @@ private theorem transition_tasks {state : State} {processId : PID} {task : Task 
     ∀ child, transition.event = .spawn processId child →
       child = processId ++ [(state.process processId).children + 1] ∧
       (transition.state.process processId).children = (state.process processId).children + 1 := by
-  obtain ⟨-, shape⟩ := transition_frame possible
-  rcases shape with empty | ⟨next, single, kept⟩ | ⟨next, child, spawned, pair, event, childPid, children⟩
+  obtain ⟨-, shape, -⟩ := transition_frame possible
+  rcases shape with empty | ⟨next, single, kept, -⟩ |
+    ⟨next, child, spawned, pair, event, childPid, children, -⟩
   · refine ⟨by simp [empty], by simp [empty], .inr empty, fun child spawn => ?_⟩
     -- Exits are not spawns.
     obtain ⟨computation, finish⟩ := task
@@ -459,7 +523,7 @@ private theorem transition_tasks {state : State} {processId : PID} {task : Task 
     · simp only [List.mem_singleton] at possible; subst possible; cases spawn
     · split at possible <;> (try split at possible) <;> (try split at possible) <;>
         simp_all
-  · refine ⟨by simp [single], by simp [single], .inl (Nat.le_of_eq kept.symm), fun child spawn => ?_⟩
+  · refine ⟨by simp [single], by simp [single], .inl (Nat.le_of_eq kept.1.symm), fun child spawn => ?_⟩
     obtain ⟨computation, finish⟩ := task
     simp only [Task.transitions] at possible
     split at possible
@@ -485,8 +549,8 @@ private theorem wellformed_apply {state : State} {before after : List (PID × Ta
     (wellformed : Wellformed (.running state (before ++ (processId, task) :: after) finished exhausted))
     (possible : transition ∈ task.transitions state processId) :
     Wellformed (transition.apply before after finished exhausted) := by
-  obtain ⟨distinct, fresh⟩ := wellformed
-  obtain ⟨frame, -⟩ := transition_frame possible
+  obtain ⟨distinct, fresh, live, quiet⟩ := wellformed
+  obtain ⟨frame, shape, -⟩ := transition_frame possible
   obtain ⟨inner, entries, grows, spawned⟩ := transition_tasks possible
   have self : (processId, task) ∈ before ++ (processId, task) :: after := by simp
   have old : ∀ entry, entry ∈ before ∨ entry ∈ after →
@@ -514,9 +578,59 @@ private theorem wellformed_apply {state : State} {before after : List (PID × Ta
       (transition.state.process entry.1).children = (state.process entry.1).children := by
     intro entry mem
     exact (frame entry.1 (others entry mem) fun child spawn =>
-      child_new child spawn entry (old entry mem)).2.2.1
+      child_new child spawn entry (old entry mem)).process.2.2.1
   simp only [Transition.apply, Wellformed]
-  refine ⟨pairwise_replace distinct inner ?_ ?_, ?_⟩
+  refine ⟨pairwise_replace distinct inner ?_ ?_, ?_, ?live, ?quiet⟩
+  case live =>
+    -- Every process stays live.
+    intro entry mem
+    simp only [List.mem_append] at mem
+    have selfLive := live (processId, task) self
+    rcases mem with (mem | mem) | mem
+    · exact (frame entry.1 (others entry (.inl mem)) fun child spawn =>
+        child_new child spawn entry (old entry (.inl mem))).live (live entry (old entry (.inl mem)))
+    · rcases shape with empty | ⟨next, single, kept, -⟩ |
+        ⟨next, child, spawned', pair, -, -, -, parentLive, childLive, -⟩
+      · simp [empty] at mem
+      · rw [single, List.mem_singleton] at mem
+        subst mem
+        exact kept.2 selfLive
+      · rw [pair] at mem
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at mem
+        rcases mem with rfl | rfl
+        · exact parentLive
+        · exact childLive
+    · exact (frame entry.1 (others entry (.inr mem)) fun child spawn =>
+        child_new child spawn entry (old entry (.inr mem))).live (live entry (old entry (.inr mem)))
+  case quiet =>
+    -- At most one process reports the result.
+    have addedQuiet : ∀ added ∈ transition.tasks, task.Quiet → added.2.Quiet := by
+      intro added mem quietTask
+      rcases shape with empty | ⟨next, single, -, nextQuiet⟩ |
+        ⟨next, child, spawned', pair, -, -, -, -, -, nextQuiet, spawnedQuiet⟩
+      · simp [empty] at mem
+      · rw [single, List.mem_singleton] at mem
+        subst mem
+        exact nextQuiet quietTask
+      · rw [pair] at mem
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at mem
+        rcases mem with rfl | rfl
+        · exact nextQuiet quietTask
+        · exact spawnedQuiet
+    refine pairwise_replace quiet ?_ ?_ ?_
+    · rcases shape with empty | ⟨next, single, -, -⟩ |
+        ⟨next, child, spawned', pair, -, -, -, -, -, -, spawnedQuiet⟩
+      · simp [empty]
+      · simp [single]
+      · simp [pair, spawnedQuiet]
+    · intro item mem either added addedMem
+      rcases either with itemQuiet | taskQuiet
+      · exact .inl itemQuiet
+      · exact .inr (addedQuiet added addedMem taskQuiet)
+    · intro item mem either added addedMem
+      rcases either with taskQuiet | itemQuiet
+      · exact .inl (addedQuiet added addedMem taskQuiet)
+      · exact .inr itemQuiet
   · intro item mem _ added addedMem
     rcases entries added addedMem with equal | ⟨child, spawn, equal⟩
     · rw [equal]; exact others item (.inl mem)
@@ -593,7 +707,7 @@ private theorem Step.wellformed {first next : Config α} {event : Event}
   cases step with
   | get | set => trivial
   | enter =>
-    refine ⟨by simp, ?_⟩
+    refine ⟨by simp, ?_, by simp [State.initial], by simp⟩
     simp only [List.mem_singleton]
     rintro _ rfl _ rfl index rest extended
     exact absurd extended (ne_append_cons _ _ _)
@@ -673,13 +787,13 @@ private theorem other_step {state : State} {before after before' after' : List (
           after = middle ++ (other, task') :: after') ∨
         (∃ middle, before = before' ++ (other, task') :: middle ∧
           after' = middle ++ (processId, task) :: after)) := by
-  obtain ⟨distinct, fresh⟩ := wellformed
+  obtain ⟨distinct, fresh, -, -⟩ := wellformed
   have order := split_order split
   rcases order with ⟨same, -, -⟩ | later | earlier
   · exact absurd same ne
   all_goals refine ⟨?_, by first | exact .inl later | exact .inr earlier⟩
   all_goals
-    obtain ⟨frame, -⟩ := transition_frame possible
+    obtain ⟨frame, -, -⟩ := transition_frame possible
     obtain ⟨-, -, -, spawned⟩ := transition_tasks possible
     have otherMem : (other, task') ∈ before ++ (processId, task) :: after := by
       rw [split]; simp
@@ -755,7 +869,8 @@ private theorem twins_run {processId : PID} {first last : Config α} {events : L
         exact ⟨_, .step (Step.run rfl possible) rest⟩
       · -- Another process steps the same way from both.
         obtain ⟨kept, order⟩ := other_step wellformed split' same possible
-        have pending' : (transition.state.process processId).signal.isSome := kept.2.2.2 pending
+        have pending' : (transition.state.process processId).signal.isSome :=
+          kept.process.2.2.2 pending
         have wellformed' := Step.wellformed (.run split' possible) wellformed
         rcases order with ⟨middle, rfl, rfl⟩ | ⟨middle, rfl, rfl⟩
         · obtain ⟨events', run'⟩ := ih terminal wellformed'
@@ -827,7 +942,7 @@ private theorem read_first {first last : Config α} {events : List Event} {outco
             refine ⟨transition.event :: events', .step (Step.run (before := before ++ (processId, ⟨read (state.view processId),
               finish⟩) :: middle) (after := after') (by simp) possible) ?_⟩
             have view : transition.state.view processId = state.view processId := by
-              simp only [State.view, kept.1, kept.2.1]
+              simp only [State.view, kept.process.1, kept.process.2.1]
             simpa [Transition.apply, view] using run'
           · obtain ⟨events', run'⟩ := ih terminal (state := transition.state)
               (tasks := before' ++ transition.tasks ++ middle ++
@@ -840,7 +955,7 @@ private theorem read_first {first last : Config α} {events : List Event} {outco
             refine ⟨transition.event :: events', .step (Step.run (before := before') (after := middle ++
               (processId, ⟨read (state.view processId), finish⟩) :: after) (by simp) possible) ?_⟩
             have view : transition.state.view processId = state.view processId := by
-              simp only [State.view, kept.1, kept.2.1]
+              simp only [State.view, kept.process.1, kept.process.2.1]
             simpa [Transition.apply, view] using run'
         | some reason =>
           -- The process now exits, whether or not it read first.
