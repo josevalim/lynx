@@ -2,8 +2,9 @@
 #
 # Task.async/1 and Task.await/2 compute in a linked process and reply through
 # a monitor alias. Awaiting without a timeout returns the task's result under
-# every schedule. The input is an arbitrary integer, but the processes take the
-# same steps for every value, so the proof evaluates every interleaving.
+# every schedule, and awaiting with one either returns it or times out. The
+# input is an arbitrary integer, but the processes take the same steps for
+# every value, so the proofs evaluate every interleaving.
 ExUnit.start()
 
 defmodule TaskProofsTest do
@@ -15,7 +16,17 @@ defmodule TaskProofsTest do
     Task.await(task, :infinity)
   end
 
-  laws "Task" do
+  def double_or_timeout(x) do
+    task = Task.async(fn -> x * 2 end)
+
+    try do
+      Task.await(task, 100)
+    catch
+      :exit, {:timeout, _} -> :timeout
+    end
+  end
+
+  laws "Task", options: [maxHeartbeats: 2_000_000] do
     # Task.Supervised runs the task with apply(:erlang, :apply, [fun, []]).
     dynamic &:erlang.apply/2
 
@@ -40,6 +51,24 @@ defmodule TaskProofsTest do
         (Lynx.apply «double_in_task_doubles:ensures/1» Erlang.program.fun_table (.integer n))
         (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
         (by cbv; simp [Rat.lt_irrefl]) schedule
+      split at checked
+      · assumption
+      · contradiction
+      """
+
+    law double_or_timeout_doubles(x),
+      requires: is_integer(x),
+      expects: double_or_timeout(x) in [x * 2, :timeout],
+      proof: ~LEAN"""
+      obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
+        cases x <;> simp_all [«double_or_timeout_doubles:requires/1», Erlang.erlang.«is_integer/1»]
+      -- The timeout may expire before or after the reply arrives. When the
+      -- reply wins, the owner compares n * 2 with itself while the task is
+      -- still running, so evaluation resumes after simp decides it.
+      have checked := Lynx.concurrent_of_check
+        (Lynx.apply «double_or_timeout_doubles:ensures/1» Erlang.program.fun_table (.integer n))
+        (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
+        (by cbv; repeat (simp only [Int.lt_irrefl, ite_false, ite_true]; cbv)) schedule
       split at checked
       · assumption
       · contradiction
