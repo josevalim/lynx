@@ -26,7 +26,7 @@ defmodule TaskProofsTest do
     end
   end
 
-  laws "Task", options: [maxHeartbeats: 2_000_000] do
+  laws "Task" do
     # Task.Supervised runs the task with apply(:erlang, :apply, [fun, []]).
     dynamic &:erlang.apply/2
 

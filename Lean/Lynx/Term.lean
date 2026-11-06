@@ -9,6 +9,7 @@ public import Lynx.Term.Runner
 public import Lynx.Term.Induction
 public import Lynx.Term.Order
 public import Lynx.Term.Eval
+public import Lynx.Concurrent.Reduction
 
 namespace Lynx
 

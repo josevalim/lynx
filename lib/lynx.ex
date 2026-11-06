@@ -75,15 +75,19 @@ defmodule Lynx do
       also proves that the computation returns.
 
     * `apply` — pure, except that it invokes anonymous functions, when every
-      function in the program's table is pure or `apply`. It also returns
-      `Except`, and receives a `Lynx.Dispatcher`, which calls anonymous
-      functions through the program's function table.
+      function in the program's table is pure or `apply`. Calls by name, such as
+      `apply(mod, fun, args)` or `mod.fun(x)`, and `:erlang.fun_info_mfa/1` are
+      at this level too. It also returns `Except`, and receives a
+      `Lynx.Dispatcher`, which calls anonymous functions through the program's
+      function table.
 
     * `sequential` — runs in a single process, but uses the process dictionary,
       references, or `self()`. Invoking anonymous functions is sequential when
       any function in the program's table is.
 
-    * `concurrent` — may spawn processes, send messages, or receive them.
+    * `concurrent` — may spawn processes, send messages, or receive them, or
+      act on other processes through links, monitors, and exit signals, such
+      as `Process.monitor/1`, `Process.exit/2`, or `Process.alive?/1`.
       Invoking anonymous functions is concurrent when any function in the
       program's table is.
 
@@ -209,13 +213,6 @@ defmodule Lynx do
       nodes are not modeled. Sending messages supports local PIDs and aliases;
       registered names and remote destinations are not modeled.
 
-    * Links, monitors, aliases created by `monitor/3` with `{alias, demonitor}`,
-      and exit signals are modeled between local processes. A process acts on
-      an exit signal at its next step, as signals arrive asynchronously. Other
-      alias modes, monitor tags, process flags other than `trap_exit`, and
-      `process_info/2` items other than `registered_name` are not modeled and
-      do not return. Timers are not modeled.
-
     * Receive timeouts do not measure wall-clock time. Positive timeouts expire
       according to the modeled scheduler's choices, or when no process can run.
 
@@ -230,10 +227,9 @@ defmodule Lynx do
       are translated directly. Dynamic references and calls, such as
       `&mod.bar/1`, `mod.bar(x)`, and `apply(mod, fun, args)`, only reach the
       functions the program captures by name and those declared with
-      `Lynx.Case.dynamic/1`. Calls to other functions do not return.
-      Spawning a named function, as in `spawn_link(Foo, :bar, [x])`, is
-      supported when the module and function are literals and the arguments
-      a literal list.
+      `Lynx.Case.dynamic/1`. Spawning a named function, as in
+      `spawn_link(Foo, :bar, [x])`, is supported when the module and function
+      are literals and the arguments a literal list.
 
     * Laws cannot quantify over arbitrary functions, only over the functions
       the program defines. See "Anonymous functions" below.
@@ -269,8 +265,7 @@ defmodule Lynx do
 
     * Invoking a function value has the purity of the most impure function in
       the table. A single function that uses the process dictionary makes every
-      invocation sequential, so laws that call function parameters are then
-      stated through `Lynx.sequential`, even when the functions they call are pure.
+      invocation sequential.
 
     * `requires:` is an Erlang expression, so it cannot assume a property of a
       function for every input. Check the property against the data the law
@@ -282,6 +277,55 @@ defmodule Lynx do
       consumes one level for the invocations it makes. Exceeding the depth
       raises `Lynx.Exception.exhausted`, so laws about deeply nested invocations
       cannot be proven.
+
+  ### Proving concurrent laws
+
+  A concurrent law must hold under every schedule. When the processes take the
+  same steps for every input, the proof can evaluate every run of the program
+  and check its outcome. `Lynx.Concurrent.check` explores the runs of a
+  program, up to a depth bounding the steps along each run, and
+  `Lynx.concurrent_of_check` turns its result into the law. For example, for a
+  law over an integer `x` that is only carried by messages and arithmetic:
+
+      obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
+        cases x <;> simp_all [«law:requires/1», Erlang.erlang.«is_integer/1»]
+      have checked := Lynx.concurrent_of_check
+        (Lynx.apply «law:ensures/1» Erlang.program.fun_table (.integer n))
+        (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
+        (by cbv; simp [Rat.lt_irrefl]) schedule
+      split at checked
+      · assumption
+      · contradiction
+
+  The predicate accepts the outcomes the law allows, and `cbv` evaluates the
+  check. The final comparison of `n * 2` with itself depends on `n`, which
+  `simp` decides (`==` compares numbers as rationals, hence `Rat.lt_irrefl`).
+  A few things to keep in mind:
+
+    * Reduce the input to the shape the program needs, as `obtain` does above,
+      so evaluation can select the program's branches. Evaluation covers every
+      `n` at once only when no branch the processes take depends on its value.
+
+    * A depth that is too small makes the check `false` rather than failing
+      the evaluation, so the proof does not close. Increase it until every run
+      ends within it.
+
+    * Evaluation stops at comparisons it cannot decide, such as `n * 2 == n * 2`
+      for a symbolic `n`, and does not explore the runs after them. Decide them
+      with `simp` and resume, repeating until every run is evaluated:
+      `cbv; repeat (simp only [Int.lt_irrefl, ite_false, ite_true]; cbv)`
+      (`===` and `in` compare integers exactly, hence `Int.lt_irrefl`).
+
+    * Receive timeouts with a positive duration may expire at any step, so a
+      law about `Task.await/2` with a timeout must allow both outcomes. When a
+      process is about to read its environment, such as its PID or process
+      dictionary, the check follows only that read first: every other order
+      reaches the same outcomes, as `Lynx.Concurrent.check_sound` proves.
+
+  See `examples/elixir/task.exs` for laws about `Task.async/1` and
+  `Task.await/2`.
+
+  ## Taking it to the next level
 
   ### Profiling proofs
 
@@ -310,7 +354,7 @@ defmodule Lynx do
   goals, and the definitions and simp lemmas behind the work. Locations refer
   to the translated sources, where proofs appear verbatim as written in your laws.
 
-  ## Independent kernel checks
+  ### Independent kernel checks
 
   Lean's kernel checks every proof as Lynx verifies it. Lean also bundles
   independent checkers, which can check the same declarations again from an
