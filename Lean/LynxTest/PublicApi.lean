@@ -407,7 +407,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.instInhabitedProcessState",
   "Lynx.Concurrent.instReprEvent",
   "Lynx.Concurrent.instReprProcessState",
-  "Lynx.Concurrent.isDown",
+  "Lynx.Concurrent.isMonitorMessage",
   "Lynx.Concurrent.isNormal",
   "Lynx.Concurrent.isRequest",
   "Lynx.Concurrent.selectMessage",

@@ -135,8 +135,9 @@ also receives messages for the caller until the monitor ends. -/
   | .reference id => .request (.demonitor id false) fun _ => .ok (.atom "true")
   | _ => .error (.error (.atom "badarg"))
 
-/-- End a monitor and its alias. `flush` removes its `DOWN` message from the
-mailbox, and `info` returns whether the monitor was still active. -/
+/-- End a monitor and its alias. When the monitor was no longer active, `flush`
+removes the oldest `{_, Reference, _, _, _}` message from the mailbox, usually
+its `DOWN` message. `info` returns whether the monitor was still active. -/
 @[expose] def «demonitor/2» (_ : Dispatcher) (reference options : Term) : Result :=
   match reference, (Term.properList? options).bind Term.demonitorOptions with
   | .reference id, some (flush, info) =>

@@ -78,6 +78,30 @@ theorem demonitor_flushes_down :
       let _ ← «demonitor/2» dispatcher reference (.cons (.atom "flush") .nil)
       poll) = .ok (.atom "timeout") := by cbv
 
+/-- Flushing removes only the oldest message shaped like a `DOWN` message,
+which is not necessarily the `DOWN` message itself. -/
+theorem demonitor_flushes_oldest_monitor_message :
+    Lynx.sequential (do
+      let reference ← «monitor/2» dispatcher (.atom "process") (.pid [99])
+      let self ← «self/0» dispatcher
+      let _ ← «send/2» dispatcher self (.tuple #[.atom "other", reference, .nil, .nil, .nil])
+      let _ ← «demonitor/2» dispatcher reference (.cons (.atom "flush") .nil)
+      poll) = .ok (.tuple #[.atom "other", .reference [1], .nil, .nil, .nil]) := by cbv
+
+/-- An active monitor has not delivered its `DOWN` message, so flushing it
+leaves the mailbox alone, even messages of the same shape. -/
+theorem demonitor_active_does_not_flush :
+    Concurrent.check (only (.ok (.tuple #[.atom "other", .reference [1], .nil, .nil, .nil])))
+      32 (.start {} (do
+        let child ← «spawn/1» dispatcher waits
+        let reference ← «monitor/2» dispatcher (.atom "process") child
+        let self ← «self/0» dispatcher
+        let _ ← «send/2» dispatcher self (.tuple #[.atom "other", reference, .nil, .nil, .nil])
+        let _ ← «demonitor/2» dispatcher reference (.cons (.atom "flush") .nil)
+        let message ← poll
+        let _ ← «send/2» dispatcher child (.atom "stop")
+        pure message)) = true := by cbv
+
 /-- A linked process that raises takes its linked parent down with its reason. -/
 theorem linked_crash_kills_parent :
     Concurrent.check (only (.error (.exit (.tuple #[.atom "boom", .nil])))) 32 (.start {} (do
