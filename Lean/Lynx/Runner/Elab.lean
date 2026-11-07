@@ -3,6 +3,7 @@ module
 public meta import Lean
 public import Lynx.Term.Bitstring.Matching
 public import Lynx.Term.Except
+public import Lynx.Concurrent.Trace
 
 /-! Elaborators and simplification procedures for translated programs and their proofs.
 
@@ -122,3 +123,44 @@ macro_rules | `(tactic| decreasing_trivial) => `(tactic| (lynx_extraction_facts;
 end Termination
 
 end Lynx.Term.Bitstring
+
+namespace Lynx.Concurrent
+
+section Counterexample
+open Lean Meta Elab Tactic
+
+/-- Fail with a schedule that `Lynx.Concurrent.check` rejects, when there is one,
+and otherwise leave the goal unchanged for a tactic such as `cbv` to prove. The
+goal must be `Lynx.Concurrent.check accept depth config = true` for a closed
+program returning a term. The search runs the program in Lean's interpreter,
+which finds a failing schedule much faster than the kernel evaluates `check`. It
+is only a diagnostic: the kernel never relies on it. -/
+syntax (name := counterexampleTactic) "lynx_counterexample" : tactic
+
+@[tactic counterexampleTactic] public meta def evalCounterexample : Tactic := fun _ => do
+  let goal ← instantiateMVars (← getMainTarget)
+  let expected := "lynx_counterexample expects a goal `Lynx.Concurrent.check accept depth config = true`"
+  let some (_, check, _) := goal.eq? | throwError expected
+  let_expr Lynx.Concurrent.check result accept depth config := check | throwError expected
+  unless ← isDefEq result (mkConst ``Lynx.Term) do
+    throwError "lynx_counterexample expects a program returning a term, not {result}"
+  let fvars := (collectFVars {} check).fvarIds
+  unless fvars.isEmpty do
+    let names ← fvars.mapM (·.getUserName)
+    throwError "lynx_counterexample runs closed programs, but this one depends on {names.toList}"
+  if check.hasMVar then
+    throwError "lynx_counterexample runs closed programs, but this one has metavariables"
+  let name ← mkAuxDeclName `_lynx_counterexample
+  let report := mkApp3 (mkConst ``Lynx.Concurrent.report) accept depth config
+  let found ← withoutModifyingEnv do
+    addAndCompile (.defnDecl {
+      name, levelParams := [], type := ← mkAppM ``Option #[mkConst ``String], value := report
+      hints := .opaque, safety := .safe })
+    -- The program is ordinary code, imported for evaluation by the runner.
+    try unsafe evalConst (Option String) name (checkMeta := false)
+    catch error => throwError "lynx_counterexample could not run the program: {error.toMessageData}"
+  if let some message := found then throwError message
+
+end Counterexample
+
+end Lynx.Concurrent

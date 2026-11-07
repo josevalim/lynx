@@ -2040,6 +2040,9 @@ private def renderFile (file : DecodedFile) (env : Lean.Environment) : IO String
     -- Exposed definitions and public law types mention imported operations.
     let importPrefix := if file.reexportImports then "public import " else "import "
     let imports := file.imports.toList.map (importPrefix ++ ·)
+    -- Laws also import their dependencies for evaluation, see `lawImports`.
+    let imports := if file.theorems.isEmpty then imports else
+      imports ++ file.imports.toList.map ("meta import " ++ ·)
     -- The runner elaborates every file with its elaborators and simplification procedures.
     let runtime := ["public import Lynx", "import Lynx.Runner.Elab"]
     return "module\n\n" ++ String.intercalate "\n" (runtime ++ imports) ++
@@ -2098,6 +2101,19 @@ private def checkRendered (file : DecodedFile) (source : String) (env : Lean.Env
     if let some (expected, actual) := syntaxDifference expected.raw actual then
       return some s!"rendered source parses differently: expected\n{expected}\nbut got\n{actual}"
   return none
+
+/-- Whether an input file states laws. -/
+private def hasLaws (entry : Json) : Except String Bool := do
+  let contents ← arr entry "contents"
+  contents.anyM fun content => return (← str content "kind") == "theorem"
+
+/-- Laws also import their translated dependencies for evaluation, which loads
+their compiled code, so `lynx_counterexample` can run the program in the
+interpreter. The runtime is compiled into the runner. -/
+private def lawImports (imports : Array Import) : Array Import :=
+  imports.filterMap fun imported =>
+    if runtimeImports.any (·.module == imported.module) then none
+    else some { module := imported.module, isExported := false, isMeta := true }
 
 private def cachedArtifacts (directory : System.FilePath) : ImportArtifacts :=
   let path := directory / "module.olean"
@@ -2314,6 +2330,8 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
             s!"import '{name}' must precede this file and verify successfully")
         unless imports.any (·.module == moduleName) do
           imports := imports.push { module := moduleName, isExported := reexport }
+      if ← IO.ofExcept (hasLaws entry) then
+        imports := imports ++ lawImports imports
       -- A prelude declares its own imports in its header.
       for declared in ← preludeImports entry do
         unless imports.any (·.module == declared.module) do

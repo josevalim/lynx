@@ -4,6 +4,8 @@ public import Lynx
 import Lynx.Runner.Elab
 public import Erlang.higher_order
 public import Erlang.program
+meta import Erlang.higher_order
+meta import Erlang.program
 
 @[expose] public section
 

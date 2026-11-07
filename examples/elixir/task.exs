@@ -107,11 +107,12 @@ defmodule TaskProofsTest do
     law ignore_drains_reply,
       expects: ignore_leaves_no_reply(),
       proof: ~LEAN"""
-      -- Evaluating every interleaving takes more than cbv's default steps.
+      -- lynx_counterexample reports a failing schedule quickly, before cbv
+      -- evaluates every interleaving, which takes more than its default steps.
       have checked := Lynx.concurrent_of_check
         (Lynx.apply «ignore_drains_reply:ensures/0» Erlang.program.fun_table)
         (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
-        (by set_option cbv.maxSteps 1000000 in cbv) schedule
+        (by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv) schedule
       split at checked
       · assumption
       · contradiction

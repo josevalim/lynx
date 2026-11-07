@@ -628,4 +628,32 @@ a process reads its environment are followed once, see `Config.reduced`. -/
       | [] => accept config.outcome
       | successors => successors.all fun (_, next) => check accept depth next
 
+/-- How a run that `check` rejects fails. -/
+inductive Failure (α : Type) where
+  /-- The run ends in an outcome that is not accepted. -/
+  | rejected : Outcome α → Failure α
+  /-- The run takes more steps than the depth allows. -/
+  | unfinished : Failure α
+
+/-- The first run that `check` rejects, as the events of its steps and how it
+fails. Evaluating it is a fast way to find why a check fails. -/
+@[expose] def counterexample (accept : Outcome α → Bool) :
+    Nat → Config α → Option (List Event × Failure α)
+  | 0, _ => some ([], .unfinished)
+  | depth + 1, config =>
+      match config.reduced with
+      | [] => if accept config.outcome then none else some ([], .rejected config.outcome)
+      | successors => successors.findSome? fun (event, next) =>
+          (counterexample accept depth next).map fun (events, failure) => (event :: events, failure)
+
+theorem check_eq_true_iff (accept : Outcome α → Bool) (depth : Nat) (config : Config α) :
+    check accept depth config = true ↔ counterexample accept depth config = none := by
+  induction depth generalizing config with
+  | zero => simp [check, counterexample]
+  | succ depth ih =>
+    simp only [check, counterexample]
+    split
+    · split <;> simp_all
+    · simp only [List.all_eq_true, List.findSome?_eq_none_iff, Option.map_eq_none_iff, ih]
+
 end Lynx.Concurrent
