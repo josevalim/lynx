@@ -158,8 +158,9 @@ inductive Request where
   /-- Monitor a process, replying with the monitor's reference. An alias also
   makes the reference a destination for the requester until the monitor ends. -/
   | monitor (target : PID) (alias : Bool)
-  /-- End a monitor, removing its `DOWN` message from the mailbox when flushing.
-  Replies whether the monitor was active. -/
+  /-- End a monitor. Flushing an inactive monitor removes the oldest
+  `{_, Reference, _, _, _}` message from the mailbox. Replies whether the
+  monitor was active. -/
   | demonitor (reference : List Nat) (flush : Bool)
   /-- Link to a process. Replies `true`, or `noproc` when the process does not
   exist and the requester does not trap exits. -/

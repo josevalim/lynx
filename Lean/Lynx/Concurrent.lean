@@ -100,9 +100,10 @@ structure State where
   | .atom "normal" => true
   | _ => false
 
-/-- Whether a message is the `DOWN` message of a monitor. -/
-@[expose] def isDown (reference : List Nat) : Term → Bool
-  | .tuple ⟨[.atom "DOWN", .reference found, _, _, _]⟩ => found == reference
+/-- Whether a message has the shape `{_, Reference, _, _, _}` of a monitor's
+`DOWN` message, which flushing a monitor removes. -/
+@[expose] def isMonitorMessage (reference : List Nat) : Term → Bool
+  | .tuple ⟨[_, .reference found, _, _, _]⟩ => found == reference
   | _ => false
 
 /-- Record a pending exit reason, unless one is already pending. -/
@@ -163,18 +164,21 @@ process that does not exist delivers its `DOWN` message at once. -/
       let (reference, state) := state.monitor processId target alias
       (.reference reference, state)
   | .demonitor reference flush =>
+      -- An active monitor has not delivered its `DOWN` message, so only an
+      -- inactive one flushes, removing the oldest message of its shape, as OTP does.
       let process := state.process processId
+      let active := process.monitoring.any (·.1 == reference)
       let state := process.monitoring.foldl (fun state (found, target) =>
         if found == reference then
           state.modify target fun watched =>
             { watched with monitors := watched.monitors.filter (·.1 != reference) }
         else state) state
-      (.atom (if process.monitoring.any (·.1 == reference) then "true" else "false"),
+      (.atom (if active then "true" else "false"),
         state.modify processId fun process =>
         { process with
             monitoring := process.monitoring.filter (·.1 != reference)
             aliases := process.aliases.erase reference
-            mailbox := if flush then process.mailbox.filter (!isDown reference ·)
+            mailbox := if flush && !active then process.mailbox.eraseP (isMonitorMessage reference)
               else process.mailbox })
   | .link target =>
       if target = processId then (.atom "true", state) else
