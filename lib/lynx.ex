@@ -353,8 +353,18 @@ defmodule Lynx do
       dictionary, the check follows only that read first: every other order
       reaches the same outcomes, as `Lynx.Concurrent.check_sound` proves.
 
-  See `examples/elixir/task.exs` for laws about `Task.async/1` and
-  `Task.await/2`, which link and monitor, so they are proven this way.
+  When a check of a closed program fails, such as a law without parameters,
+  `lynx_counterexample` explains why. Run it before evaluating the check, as in
+  `(by lynx_counterexample; cbv)`: it runs the program in Lean's interpreter,
+  which is much faster than the kernel, and fails with a schedule the check
+  rejects, one step per line, or with one that takes more steps than the
+  depth. Otherwise it leaves the goal for `cbv`. It proves nothing itself.
+  Traces show the first process as `<0>` and its first child as `<0.1>`, and
+  references as their allocating process followed by a count, as in `#Ref<0.1>`.
+
+  See `examples/elixir/task.exs` for laws about `Task.async/1`,
+  `Task.await/2`, and `Task.ignore/1`, which link and monitor, so they are
+  proven this way.
 
   ## Taking it to the next level
 

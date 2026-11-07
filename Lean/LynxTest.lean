@@ -17,4 +17,5 @@ import LynxTest.Modules.Math
 import LynxTest.Modules.Conversions
 import LynxTest.Modules.Process
 import LynxTest.Modules.Signals
+import LynxTest.Counterexample
 import LynxTest.Purity

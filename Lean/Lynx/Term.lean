@@ -11,6 +11,7 @@ public import Lynx.Term.Order
 public import Lynx.Term.Eval
 public import Lynx.Concurrent.Reduction
 public import Lynx.Concurrent.Confluence
+public import Lynx.Concurrent.Trace
 
 namespace Lynx
 
