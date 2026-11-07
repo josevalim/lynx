@@ -626,6 +626,62 @@ defmodule Lynx.CoreToLeanjTest do
            } = functions[{:entry, 1}].translation
   end
 
+  test "translates receive clauses whose unused bodies the compiler dropped" do
+    loop = :cerl.c_fname(:receive_loop, 0)
+    available = :cerl.c_var(:available)
+    message = :cerl.c_var(:message)
+    expired = :cerl.c_var(:expired)
+    remove = :cerl.c_primop(:cerl.c_atom(:remove_message), [])
+    next = :cerl.c_seq(:cerl.c_primop(:cerl.c_atom(:recv_next), []), :cerl.c_apply(loop, []))
+
+    scan =
+      :cerl.c_case(message, [
+        :cerl.c_clause([:cerl.c_tuple([:cerl.c_atom(:stop)])], remove),
+        :cerl.c_clause([:cerl.c_var(:other)], next)
+      ])
+
+    wait =
+      :cerl.c_let(
+        [expired],
+        :cerl.c_primop(:cerl.c_atom(:recv_wait_timeout), [:cerl.c_atom(:infinity)]),
+        :cerl.c_case(expired, [
+          :cerl.c_clause([:cerl.c_atom(true)], :cerl.c_atom(:ok)),
+          :cerl.c_clause([:cerl.c_atom(false)], :cerl.c_apply(loop, []))
+        ])
+      )
+
+    peek =
+      :cerl.c_let(
+        [available, message],
+        :cerl.c_primop(:cerl.c_atom(:recv_peek_message), []),
+        :cerl.c_case(available, [
+          :cerl.c_clause([:cerl.c_atom(true)], scan),
+          :cerl.c_clause([:cerl.c_atom(false)], wait)
+        ])
+      )
+
+    receive = :cerl.c_letrec([{loop, :cerl.c_fun([], peek)}], :cerl.c_apply(loop, []))
+    body = :cerl.c_seq(receive, :cerl.c_atom(:done))
+
+    assert {:ok, functions, []} = translate(definitions([definition(:entry, body)]))
+
+    assert %{
+             "body" => %{
+               "kind" => "bind",
+               "computation" => %{
+                 "kind" => "receive",
+                 "cases" => [
+                   %{
+                     "pattern" => %{"kind" => "tuple"},
+                     "body" => %{"kind" => "return", "values" => [%{"kind" => "atom"}]}
+                   }
+                 ]
+               },
+               "body" => %{"kind" => "return", "values" => [%{"value" => "done"}]}
+             }
+           } = functions[{:entry, 1}].translation
+  end
+
   test "translates Core values into separate match expressions and patterns" do
     body =
       :cerl.c_case(:cerl.c_values([:cerl.c_var(0), :cerl.c_nil()]), [

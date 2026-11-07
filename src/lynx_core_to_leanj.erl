@@ -1046,20 +1046,32 @@ receive_wait(_, _, Core) -> unsupported(Core).
 receive_clauses(#c_case{arg = #c_var{name = Message}, clauses = Clauses},
                 #c_var{name = Message}, Loop, Core) ->
     receive_scan_clauses(Clauses, Loop, Core);
-receive_clauses(#c_seq{arg = #c_primop{name = #c_literal{val = remove_message}, args = []},
-                       body = Body}, Message, _, _) ->
-    [#c_clause{pats = [Message], guard = #c_literal{val = true}, body = Body}];
-receive_clauses(_, _, _, Core) -> unsupported(Core).
+receive_clauses(Received, Message, _, Core) ->
+    case received_body(Received) of
+        {ok, Body} -> [#c_clause{pats = [Message], guard = #c_literal{val = true}, body = Body}];
+        error -> unsupported(Core)
+    end.
 
 receive_scan_clauses([#c_clause{pats = [#c_var{}], guard = #c_literal{val = true},
         body = #c_seq{arg = #c_primop{name = #c_literal{val = recv_next}, args = []},
         body = #c_apply{op = #c_var{name = Loop}, args = []}}}], Loop, _) -> [];
-receive_scan_clauses([#c_clause{body = #c_seq{
-        arg = #c_primop{name = #c_literal{val = remove_message}, args = []}, body = Body}} = Clause | Rest],
-        Loop, Core) ->
-    [Clause#c_clause{body = Body} | receive_scan_clauses(Rest, Loop, Core)];
+receive_scan_clauses([#c_clause{body = Received} = Clause | Rest], Loop, Core) ->
+    case received_body(Received) of
+        {ok, Body} -> [Clause#c_clause{body = Body} | receive_scan_clauses(Rest, Loop, Core)];
+        error -> unsupported(Core)
+    end;
 receive_scan_clauses([], _, _) -> [];
 receive_scan_clauses(_, _, Core) -> unsupported(Core).
+
+%% A matched clause removes its message before its body. When the receive's
+%% value is unused, the compiler drops the body, so any value stands in for it.
+received_body(#c_seq{arg = #c_primop{name = #c_literal{val = remove_message}, args = []},
+                     body = Body}) ->
+    {ok, Body};
+received_body(#c_primop{name = #c_literal{val = remove_message}, args = []}) ->
+    {ok, #c_literal{val = ok}};
+received_body(_) ->
+    error.
 
 receive_clause(#c_clause{anno = Anno, pats = [Pattern], guard = Guard, body = Body}, State0) ->
     {Pat, State1} = pattern(Pattern, State0),
