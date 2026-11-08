@@ -99,7 +99,7 @@
   "get_keys/0": {"pure": false},
   "get/1": {"pure": false},
   "get/0": {"pure": false},
-  "fun_info_mfa/1": {"pure": false},
+  "fun_info_mfa/1": {"pure": true},
   "floor/1": {"pure": true},
   "float_to_binary/2": {"pure": true},
   "float/1": {"pure": true},

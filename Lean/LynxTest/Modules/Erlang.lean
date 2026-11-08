@@ -70,8 +70,17 @@ private def rememberSelfFun (dispatcher : Dispatcher) (args : Array Term) : Resu
   | [] => rememberSelf dispatcher
   | _ => .error (.error (.atom "unexpected_arguments"))
 
-private def functions : Term.FunTable := #[.effectful fun _ _ => identityFun,
-  .effectful fun _ _ => firstFun, .effectful fun dispatcher _ => rememberSelfFun dispatcher]
+/-- A function of the test module. -/
+private def define (name : String) (arity : Nat) (entry : Term.FunEntry) : Term.FunDef :=
+  { module := "test", name, arity, entry }
+
+/-- A function value of the test module. -/
+private def fn (name : String) (arity : Nat) (captures : Array Term := #[]) : Term :=
+  .function "test" name arity captures
+
+private def functions : Term.FunTable := [define "identity" 1 <| .effectful fun _ _ => identityFun,
+  define "first" 2 <| .effectful fun _ _ => firstFun,
+  define "remember" 0 <| .effectful fun dispatcher _ => rememberSelfFun dispatcher]
 
 private def floatOne : Term.FiniteFloat :=
   ⟨false, 1023, 0⟩
@@ -338,42 +347,42 @@ private def applyWith (table : Term.FunTable) (function arguments : Term) : Resu
   «apply/2» (Dispatcher.ofTable table 1) function arguments
 
 theorem dynamic_apply_2 :
-    applyWith functions (.function 0 1 #[]) (.cons (.integer 7) .nil) = .ok (.integer 7) ∧
-    applyWith functions (.function 1 2 #[])
+    applyWith functions (fn "identity" 1) (.cons (.integer 7) .nil) = .ok (.integer 7) ∧
+    applyWith functions (fn "first" 2)
       (.cons (.atom "left") (.cons (.atom "right") .nil)) = .ok (.atom "left") ∧
-    applyWith functions (.function 0 1 #[]) (.cons (.integer 7) (.atom "improper")) =
+    applyWith functions (fn "identity" 1) (.cons (.integer 7) (.atom "improper")) =
       .error (.error (.atom "badarg")) := by
   repeat' apply And.intro
   all_goals first | exact rfl | (cbv <;> rfl)
 
 /-- Native argument arrays preserve both the dispatch result and error payloads. -/
 theorem dynamic_apply_array :
-    (Dispatcher.ofTable functions 1).call (.function 0 1 #[]) #[.integer 7] =
+    (Dispatcher.ofTable functions 1).call (fn "identity" 1) #[.integer 7] =
       .ok (.integer 7) ∧
     (Dispatcher.ofTable functions 1).call (.atom "not_a_fun") #[] =
       .error (.error (.tuple #[.atom "badfun", .atom "not_a_fun"])) ∧
-    (Dispatcher.ofTable functions 1).call (.function 0 0 #[]) #[.integer 7, .atom "last"] =
-      .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 0 #[],
+    (Dispatcher.ofTable functions 1).call (fn "identity" 0) #[.integer 7, .atom "last"] =
+      .error (.error (.tuple #[.atom "badarity", .tuple #[fn "identity" 0,
         .cons (.integer 7) (.cons (.atom "last") .nil)]])) ∧
-    («apply/2» (Dispatcher.ofTable functions 1) (.function 0 0 #[])
+    («apply/2» (Dispatcher.ofTable functions 1) (fn "identity" 0)
         (.cons (.integer 7) (.atom "improper")) : Result) =
       .error (.error (.atom "badarg")) := by
   repeat' apply And.intro
   all_goals cbv
 
-private def closureFunctions : Term.FunTable := #[
-  .effectful fun _ captures args =>
+private def closureFunctions : Term.FunTable := [
+  define "add" 1 <| .effectful fun _ captures args =>
     match captures.toList, args.toList with
     | [captured], [argument] => Result.ofExcept («+/2» captured argument)
     | _, _ => .error (.error (.atom "badarg"))
 ]
 
 theorem dynamic_apply_captures :
-    applyWith closureFunctions (.function 0 1 #[.integer 10]) (.cons (.integer 7) .nil) =
+    applyWith closureFunctions (fn "add" 1 #[.integer 10]) (.cons (.integer 7) .nil) =
       .ok (.integer 17) ∧
-    applyWith closureFunctions (.function 0 1 #[.integer 20]) (.cons (.integer 7) .nil) =
+    applyWith closureFunctions (fn "add" 1 #[.integer 20]) (.cons (.integer 7) .nil) =
       .ok (.integer 27) ∧
-    applyWith closureFunctions (.function 0 1 #[]) (.cons (.integer 7) .nil) =
+    applyWith closureFunctions (fn "add" 1) (.cons (.integer 7) .nil) =
       .error (.error (.atom "badarg")) := by
   repeat' apply And.intro
   all_goals first | exact rfl | (cbv <;> rfl)
@@ -381,10 +390,10 @@ theorem dynamic_apply_captures :
 theorem dynamic_apply_2_errors :
     applyWith functions (.atom "not_a_fun") .nil =
         .error (.error (.tuple #[.atom "badfun", .atom "not_a_fun"])) ∧
-    applyWith functions (.function 9 0 #[]) .nil =
-        .error (.error (.tuple #[.atom "badfun", .function 9 0 #[]])) ∧
-    applyWith functions (.function 0 1 #[]) .nil =
-        .error (.error (.tuple #[.atom "badarity", .tuple #[.function 0 1 #[], .nil]])) := by
+    applyWith functions (fn "missing" 0) .nil =
+        .error (.error (.tuple #[.atom "badfun", fn "missing" 0])) ∧
+    applyWith functions (fn "identity" 1) .nil =
+        .error (.error (.tuple #[.atom "badarity", .tuple #[fn "identity" 1, .nil]])) := by
   repeat' apply And.intro
   all_goals first | exact rfl | (cbv <;> rfl)
 
@@ -425,7 +434,7 @@ theorem reflexive_operators (a : Term) :
 
 /-- Callers remain in direct style even when the helper they invoke spawns. -/
 private def spawnFromHelper (dispatcher : Dispatcher) : Result :=
-  «spawn/1» dispatcher (.function 2 0 #[])
+  «spawn/1» dispatcher (fn "remember" 0)
 
 private def spawnCaller (dispatcher : Dispatcher) : Result := do
   let childPid ← spawnFromHelper dispatcher
@@ -443,14 +452,14 @@ theorem spawn_schedules_child_or_parent_first :
 
 private def nestedSpawnFun (dispatcher : Dispatcher) (args : Array Term) : Result :=
   match args.toList with
-  | [] => «spawn/1» dispatcher (.function 2 0 #[])
+  | [] => «spawn/1» dispatcher (fn "remember" 0)
   | _ => .error (.error (.atom "unexpected_arguments"))
 
 private def nestedSpawnCaller (dispatcher : Dispatcher) : Result :=
-  «spawn/1» dispatcher (.function 3 0 #[])
+  «spawn/1» dispatcher (fn "nested" 0)
 
 private def nestedFunctions : Term.FunTable :=
-  functions.push (.effectful fun dispatcher _ => nestedSpawnFun dispatcher)
+  functions ++ [define "nested" 0 <| .effectful fun dispatcher _ => nestedSpawnFun dispatcher]
 
 theorem completed_nested_processes_are_removed :
     let final : Environment := {}
@@ -465,19 +474,19 @@ theorem completed_nested_processes_are_removed :
 theorem spawn_rejects_invalid_fun :
     Lynx.concurrent («spawn/1» (Dispatcher.ofTable functions 100) (.atom "not_a_fun")) [] =
       .error (.error (.atom "badarg")) ∧
-    Lynx.concurrent («spawn/1» (Dispatcher.ofTable functions 100) (.function 0 1 #[])) [] =
+    Lynx.concurrent («spawn/1» (Dispatcher.ofTable functions 100) (fn "identity" 1)) [] =
       .error (.error (.atom "badarg")) := by
   repeat' apply And.intro
   all_goals cbv
 
 /-- A function value that names no table entry fails in the child, as calling it would. -/
 theorem spawn_unknown_fun_fails_in_child :
-    Lynx.concurrent («spawn/1» (Dispatcher.ofTable functions 100) (.function 9 0 #[])) [] =
+    Lynx.concurrent («spawn/1» (Dispatcher.ofTable functions 100) (fn "missing" 0)) [] =
       .ok (.pid [1]) := by
   cbv
 
 /-- Process-dictionary operations make no dynamic calls. -/
-private def noFunctions : Dispatcher := Dispatcher.ofTable #[] 0
+private def noFunctions : Dispatcher := Dispatcher.ofTable [] 0
 
 theorem tuple_equality :
     «==/2» (.tuple #[]) (.tuple #[]) = .ok Term.true ∧
@@ -578,8 +587,8 @@ theorem list_guards_invalid :
     «length/1» (.cons (.integer 1) (.atom "tail")) = .error (.error (.atom "badarg")) := by
   simp [«hd/1», «tl/1», «length/1»]
 
-theorem «is_function/2_arity» (id arity : Nat) (captures : Array Term) :
-    «is_function/2» (.function id arity captures) (.integer arity) = .ok Term.true := by
+theorem «is_function/2_arity» (module name : String) (arity : Nat) (captures : Array Term) :
+    «is_function/2» (.function module name arity captures) (.integer arity) = .ok Term.true := by
   simp [«is_function/2»]
 
 theorem «is_function/2_invalid_arity» (input : Term) :
@@ -588,7 +597,7 @@ theorem «is_function/2_invalid_arity» (input : Term) :
   simp [«is_function/2»]
 
 theorem «is_function/2_mismatch» :
-    «is_function/2» (.function 0 2 #[]) (.integer 1) = .ok Term.false ∧
+    «is_function/2» (fn "first" 2) (.integer 1) = .ok Term.false ∧
     «is_function/2» (.atom "not_fun") (.integer 999) = .ok Term.false := by
   repeat' first | apply And.intro | (with_unfolding_all rfl)
 

@@ -43,7 +43,7 @@ Iterators fold over their remaining bindings. -/
   let fold (pairs : List (Term × Term)) :=
     pairs.foldlM (fun acc entry => Dispatch.dispatch dispatcher function #[entry.1, entry.2, acc]) init
   match function with
-  | .function _ 3 _ =>
+  | .function _ _ 3 _ =>
     match input with
     | .map entries => fold (Term.mapEntries entries)
     | .atom "none" => pure init
@@ -118,14 +118,14 @@ keeping the other bindings of either map. The order of the calls is unspecified.
 @[expose] def «merge_with/3» {m : Type → Type u} [Monad m] [MonadExceptOf Exception m] [Dispatch m]
     (dispatcher : Dispatcher) (combiner left right : Term) : m Term :=
   match combiner, left, right with
-  | .function _ 3 _, .map l, .map r => do
+  | .function _ _ 3 _, .map l, .map r => do
     let combined ← (Term.mapEntries r).mapM fun entry =>
       match Term.mapLookup l entry.1 with
       | some value => (entry.1, ·) <$> Dispatch.dispatch dispatcher combiner #[entry.1, value, entry.2]
       | none => pure entry
     pure (.map (combined ++ l))
-  | .function _ 3 _, .map _, _ => throw (.error (.tuple #[.atom "badmap", right]))
-  | .function _ 3 _, _, _ => throw (.error (.tuple #[.atom "badmap", left]))
+  | .function _ _ 3 _, .map _, _ => throw (.error (.tuple #[.atom "badmap", right]))
+  | .function _ _ 3 _, _, _ => throw (.error (.tuple #[.atom "badmap", left]))
   | _, _, _ => throw (.error (.atom "badarg"))
 
 /-- Combine the values of keys in both maps with `Combiner(Key, Value1, Value2)`,
@@ -133,7 +133,7 @@ dropping keys in only one of them. The order of the calls is unspecified. -/
 @[expose] def «intersect_with/3» {m : Type → Type u} [Monad m] [MonadExceptOf Exception m] [Dispatch m]
     (dispatcher : Dispatcher) (combiner left right : Term) : m Term :=
   match combiner, left, right with
-  | .function _ 3 _, .map l, .map r => do
+  | .function _ _ 3 _, .map l, .map r => do
     let combined ← (Term.mapEntries l).mapM fun entry =>
       match Term.mapLookup r entry.1 with
       | some value =>
@@ -141,8 +141,8 @@ dropping keys in only one of them. The order of the calls is unspecified. -/
           Dispatch.dispatch dispatcher combiner #[entry.1, entry.2, value]
       | none => pure none
     pure (.map combined.reduceOption)
-  | .function _ 3 _, .map _, _ => throw (.error (.tuple #[.atom "badmap", right]))
-  | .function _ 3 _, _, _ => throw (.error (.tuple #[.atom "badmap", left]))
+  | .function _ _ 3 _, .map _, _ => throw (.error (.tuple #[.atom "badmap", right]))
+  | .function _ _ 3 _, _, _ => throw (.error (.tuple #[.atom "badmap", left]))
   | _, _, _ => throw (.error (.atom "badarg"))
 
 /-- Keep the bindings for which `Pred(Key, Value)` returns `true`. Maps and the
@@ -157,7 +157,7 @@ iterators of `iterator/1` are filtered in the order `to_list/1` returns them. -/
       | other => throw (.error (.tuple #[.atom "case_clause", other]))
     pure (.map kept.reduceOption)
   match predicate with
-  | .function _ 2 _ =>
+  | .function _ _ 2 _ =>
     match input with
     | .map entries => keep (Term.mapEntries entries)
     | .atom "none" => pure (.map [])
@@ -310,11 +310,11 @@ private theorem lookup_reduceOption (es : List (Term × Term))
 
 /-- When the combiner returns `g Key Value1 Value2`, merged keys take the combined
 value, and other keys keep their value in either map. -/
-theorem merge_with_lookup (dispatcher : Dispatcher) (id : Nat) (captures : Array Term)
+theorem merge_with_lookup (dispatcher : Dispatcher) (module name : String) (captures : Array Term)
     (l r : List (Term × Term)) (g : Term → Term → Term → Term)
     (calls : ∀ entry ∈ Term.mapEntries r, ∀ value, Term.mapLookup l entry.1 = some value →
-      dispatcher.pure (.function id 3 captures) #[entry.1, value, entry.2] = .ok (g entry.1 value entry.2)) :
-    ∃ out, («merge_with/3» dispatcher (.function id 3 captures) (.map l) (.map r) :
+      dispatcher.pure (.function module name 3 captures) #[entry.1, value, entry.2] = .ok (g entry.1 value entry.2)) :
+    ∃ out, («merge_with/3» dispatcher (.function module name 3 captures) (.map l) (.map r) :
         Except Exception Term) = .ok (.map out) ∧
       ∀ q, Term.mapLookup out q =
         match (Term.mapEntries r).find? (fun e => decide (Term.exactCompare q e.1 = .eq)) with
@@ -323,7 +323,7 @@ theorem merge_with_lookup (dispatcher : Dispatcher) (id : Nat) (captures : Array
   let H : Term × Term → Term := fun e =>
     match Term.mapLookup l e.1 with | some v => g e.1 v e.2 | none => e.2
   have run := mapM_ok (fun entry => match Term.mapLookup l entry.1 with
-      | some value => (entry.1, ·) <$> dispatcher.pure (.function id 3 captures) #[entry.1, value, entry.2]
+      | some value => (entry.1, ·) <$> dispatcher.pure (.function module name 3 captures) #[entry.1, value, entry.2]
       | none => pure entry) (fun e => (e.1, H e)) (Term.mapEntries r) (by
     intro e me
     cases hl : Term.mapLookup l e.1 with
@@ -336,11 +336,11 @@ theorem merge_with_lookup (dispatcher : Dispatcher) (id : Nat) (captures : Array
 
 /-- When the combiner returns `g Key Value1 Value2`, shared keys take the combined
 value, and keys in only one map are dropped. -/
-theorem intersect_with_lookup (dispatcher : Dispatcher) (id : Nat) (captures : Array Term)
+theorem intersect_with_lookup (dispatcher : Dispatcher) (module name : String) (captures : Array Term)
     (l r : List (Term × Term)) (g : Term → Term → Term → Term)
     (calls : ∀ entry ∈ Term.mapEntries l, ∀ value, Term.mapLookup r entry.1 = some value →
-      dispatcher.pure (.function id 3 captures) #[entry.1, entry.2, value] = .ok (g entry.1 entry.2 value)) :
-    ∃ out, («intersect_with/3» dispatcher (.function id 3 captures) (.map l) (.map r) :
+      dispatcher.pure (.function module name 3 captures) #[entry.1, entry.2, value] = .ok (g entry.1 entry.2 value)) :
+    ∃ out, («intersect_with/3» dispatcher (.function module name 3 captures) (.map l) (.map r) :
         Except Exception Term) = .ok (.map out) ∧
       ∀ q, Term.mapLookup out q =
         match (Term.mapEntries l).find? (fun e => decide (Term.exactCompare q e.1 = .eq)) with
@@ -349,7 +349,7 @@ theorem intersect_with_lookup (dispatcher : Dispatcher) (id : Nat) (captures : A
   let F : Term × Term → Option Term := fun e => (Term.mapLookup r e.1).map (g e.1 e.2)
   have run := mapM_ok (fun entry => match Term.mapLookup r entry.1 with
       | some value => (fun result => some (entry.1, result)) <$>
-          dispatcher.pure (.function id 3 captures) #[entry.1, entry.2, value]
+          dispatcher.pure (.function module name 3 captures) #[entry.1, entry.2, value]
       | none => pure none) (fun e => (F e).map fun v => (e.1, v)) (Term.mapEntries l) (by
     intro e me
     cases hr : Term.mapLookup r e.1 with
@@ -361,12 +361,12 @@ theorem intersect_with_lookup (dispatcher : Dispatcher) (id : Nat) (captures : A
   rfl
 
 /-- When the predicate decides each binding by `keep`, the bindings it keeps remain. -/
-theorem filter_lookup (dispatcher : Dispatcher) (id : Nat) (captures : Array Term)
+theorem filter_lookup (dispatcher : Dispatcher) (module name : String) (captures : Array Term)
     (entries : List (Term × Term)) (keep : Term × Term → Bool)
     (calls : ∀ entry ∈ Term.mapEntries entries,
-      dispatcher.pure (.function id 2 captures) #[entry.1, entry.2] =
+      dispatcher.pure (.function module name 2 captures) #[entry.1, entry.2] =
         .ok (if keep entry then Term.true else Term.false)) :
-    ∃ out, («filter/2» dispatcher (.function id 2 captures) (.map entries) :
+    ∃ out, («filter/2» dispatcher (.function module name 2 captures) (.map entries) :
         Except Exception Term) = .ok (.map out) ∧
       ∀ q, Term.mapLookup out q =
         match (Term.mapEntries entries).find? (fun e => decide (Term.exactCompare q e.1 = .eq)) with

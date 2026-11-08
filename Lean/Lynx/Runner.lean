@@ -77,7 +77,8 @@ Original source files are not read.
 Definitions may carry a termination_suffix object with Lean source, file, indentation,
 and span. It is parsed as the declaration's termination clause before elaboration;
 suffix diagnostics retain the supplied origin, even when it differs from the module file.
-Function tables carry entry metadata: body, captures, args, purity, and span.
+Function values carry the module, name, and arity the compiler gave their function.
+Function tables carry entry metadata: module, name, body, captures, args, purity, and span.
 The decoder builds typed callables, which receive the dispatcher unless they are pure.
 Each entry also generates checked application equations through
 `Lynx.Dispatcher.ofTable`. Pure entries preserve the call depth; other entries run
@@ -693,7 +694,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       pure (Unhygienic.run `($ctor _))
     | "bitstring" => pure (Unhygienic.run `($ctor _ _ _))
     | "binary" => pure (Unhygienic.run `($ctor _ 0 _))
-    | "function" => pure (Unhygienic.run `($ctor _ _ _))
+    | "function" => pure (Unhygienic.run `($ctor _ _ _ _))
     | _ => throw "unsupported type refinement"
   | "wildcard" => do
     fields j ["kind", "span"]
@@ -934,12 +935,13 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let ctor := mkIdent ``Lynx.Term.cons
     pure (Unhygienic.run `($ctor $head $tail))
   | "function" => do
-    fields j ["kind", "id", "arity", "captures", "span"]
-    let id : TSyntax `term := ⟨Syntax.mkNumLit (toString (← (← field j "id").getNat?))⟩
+    fields j ["kind", "module", "name", "arity", "captures", "span"]
+    let module := Syntax.mkStrLit (← str j "module")
+    let name := Syntax.mkStrLit (← str j "name")
     let arity : TSyntax `term := ⟨Syntax.mkNumLit (toString (← (← field j "arity").getNat?))⟩
     let captures ← (← arr j "captures").mapM (term map info pattern)
     let ctor := mkIdent ``Lynx.Term.function
-    pure (Unhygienic.run `($ctor $id $arity #[$captures,*]))
+    pure (Unhygienic.run `($ctor $module $name $arity #[$captures,*]))
   | "tuple" => do
     fields j ["kind", "elements", "span"]
     let elements ← (← arr j "elements").mapM (term map info pattern)
@@ -1447,15 +1449,16 @@ private structure TableEntry where
   body : TSyntax `term
   adapter : TSyntax `term
   level : String
-  /-- The compiler's `{Module, Name, Arity}` for the function, when known. -/
-  info : Option (TSyntax `term) := none
+  /-- The module and name the compiler gave the function. -/
+  module : String
+  name : String
 
 /-- Decode a table entry. Entries that are not pure receive their dispatcher as
 the adapter's first parameter; `dispatcher` instead substitutes a given one into
 the body, for stating its application equations. -/
 private def tableEntry (map : FileMap) (info : Span) (entry : Json)
     (dispatcher : TSyntax `term := ⟨dispatcherId.raw⟩) : DecodeM TableEntry := do
-  fields entry ["body", "captures", "args", "purity", "dispatches", "span", "info"]
+  fields entry ["module", "name", "body", "captures", "args", "purity", "dispatches", "span"]
   let entryInfo ← span map entry info
   let captureIds ← (← arr entry "captures").mapM (param map entryInfo)
   let argumentIds ← (← arr entry "args").mapM (param map entryInfo)
@@ -1477,19 +1480,9 @@ private def tableEntry (map : FileMap) (info : Span) (entry : Json)
       | _, _ => $error ($exceptionError ($atom "badarg")))
   let adapter := if level == "pure" then adapter
     else Unhygienic.run `(fun $dispatcherId:ident => $adapter)
-  let functionInfo ← match field entry "info" with
-    | .error _ => pure none
-    | .ok value => do
-      fields value ["module", "name", "arity"]
-      let module := Syntax.mkStrLit (← str value "module")
-      let name := Syntax.mkStrLit (← str value "name")
-      let arity := Syntax.mkNumLit (toString (← (← field value "arity").getNat?))
-      let tuple := mkIdent ``Lynx.Term.tuple
-      let atom := mkIdent ``Lynx.Term.atom
-      let integer := mkIdent ``Lynx.Term.integer
-      pure (some (Unhygienic.run `(some ($tuple #[$atom $module, $atom $name, $integer $arity]))))
   return { captures := captureIds, arguments := argumentIds, body
-           adapter := withSpan entryInfo.info adapter, level, info := functionInfo }
+           adapter := withSpan entryInfo.info adapter, level,
+           module := ← str entry "module", name := ← str entry "name" }
 
 private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
     DecodeM (TSyntax `command) := do
@@ -1500,16 +1493,18 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
     fields j ["kind", "name", "entries", "span"]
     let name ← identifier (← str j "name")
     unless name.getId.getPrefix == .anonymous do throw "table name must be unqualified"
+    let funDef := mkIdent ``Lynx.Term.FunDef.mk
     let entries ← (← arr j "entries").mapM fun entry => do
       let entry ← tableEntry map info entry
       let ctor := mkIdent (match entry.level with
         | "pure" => ``Lynx.Term.FunEntry.pure
         | "apply" => ``Lynx.Term.FunEntry.apply
         | _ => ``Lynx.Term.FunEntry.effectful)
-      match entry.info with
-      | some info => pure (Unhygienic.run `($ctor $(entry.adapter) $info))
-      | none => pure (Unhygienic.run `($ctor $(entry.adapter)))
-    let body := Unhygienic.run `(#[$entries,*])
+      let module := Syntax.mkStrLit entry.module
+      let name := Syntax.mkStrLit entry.name
+      let arity := Syntax.mkNumLit (toString entry.arguments.size)
+      pure (Unhygienic.run `($funDef $module $name $arity ($ctor $(entry.adapter))))
+    let body := Unhygienic.run `([$entries,*])
     let tableType := mkIdent ``Lynx.Term.FunTable
     pure (Unhygienic.run `(def $name : $tableType := $body))
   | "mutual" => do
@@ -1534,7 +1529,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
     let termType := mkIdent ``Lynx.Term
     let binders := params.map fun p => Unhygienic.run `(bracketedBinder| ($p : $termType))
     let table ← match field j "table" with
-      | .error _ => pure (Unhygienic.run `(#[]))
+      | .error _ => pure (Unhygienic.run `([]))
       | .ok value => pure (⟨(← identifier (← value.getStr?)).raw⟩ : TSyntax `term)
     -- Helpers that are not pure call function values through the program table.
     let apply := mkIdent ``Lynx.apply
@@ -1657,7 +1652,8 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
   let depth := mkIdent `depth
   -- Implicit arguments are named, so the lookup proofs elaborate against them.
   let tableArg := mkIdent `table
-  let idArg := mkIdent `id
+  let moduleArg := mkIdent `module
+  let nameArg := mkIdent `name
   let arityArg := mkIdent `arity
   let capturesArg := mkIdent `captures
   let argumentsArg := mkIdent `arguments
@@ -1671,18 +1667,21 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
       Unhygienic.run `(bracketedBinder| ($id : $termType))
     let captures := entry.captures.map fun id => (⟨id.raw⟩ : TSyntax `term)
     let arguments := entry.arguments.map fun id => (⟨id.raw⟩ : TSyntax `term)
-    let id : TSyntax `term := ⟨Syntax.mkNumLit (toString index)⟩
+    let module := Syntax.mkStrLit entry.module
+    let functionName := Syntax.mkStrLit entry.name
     let arity : TSyntax `term := ⟨Syntax.mkNumLit (toString arguments.size)⟩
     let body := entry.body
-    let callee : TSyntax `term := Unhygienic.run `($function $id $arity #[$captures,*])
+    let callee : TSyntax `term := Unhygienic.run `($function $module $functionName $arity #[$captures,*])
     let dispatcher : TSyntax `term := Unhygienic.run `(($ofTable $table $outer))
     let lemma (suffix : String) (call : Ident) (rhs : TSyntax `term) (reduce : Name) :=
-      let name := mkIdent (Name.mkSimple s!"{table.getId.getString!}_{suffix}_{index}")
+      -- Equations are named after the function, such as `«maps:get/2».pure`.
+      let name := mkIdent (.str (.mkSimple s!"{entry.module}:{entry.name}/{arguments.size}") suffix)
       let reduce := mkIdent reduce
       withSpan info.info (Unhygienic.run `(@[simp] theorem $name ($depth:ident : $natType)
         $binders:bracketedBinder* :
         $call $dispatcher $callee #[$arguments,*] = $rhs :=
-        $reduce ($tableArg := $table) ($depth:ident := $depth:ident) ($idArg := $id)
+        $reduce ($tableArg := $table) ($depth:ident := $depth:ident) ($moduleArg := $module)
+          ($nameArg := $functionName)
           ($arityArg := $arity) ($capturesArg := #[$captures,*])
           ($argumentsArg := #[$arguments,*]) (by rfl) (by rfl)))
     match level with

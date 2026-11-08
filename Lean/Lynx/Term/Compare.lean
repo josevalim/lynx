@@ -189,11 +189,12 @@ so evaluation can compare terms. -/
   | .reference a, .reference b => Ord.compare a b
   | .reference _, _ => .lt
   | _, .reference _ => .gt
-  | .function id arity captures, .function otherId otherArity otherCaptures =>
-    (Ord.compare id otherId).then ((Ord.compare arity otherArity).then
-      (List.compareLex exactCmp captures.toList otherCaptures.toList))
-  | .function _ _ _, _ => .lt
-  | _, .function _ _ _ => .gt
+  | .function module name arity captures, .function otherModule otherName otherArity otherCaptures =>
+    (Ord.compare module otherModule).then ((Ord.compare name otherName).then
+      ((Ord.compare arity otherArity).then
+        (List.compareLex exactCmp captures.toList otherCaptures.toList)))
+  | .function _ _ _ _, _ => .lt
+  | _, .function _ _ _ _ => .gt
   | .pid a, .pid b => Ord.compare a b
   | .pid _, _ => .lt
   | _, .pid _ => .gt
@@ -237,8 +238,8 @@ private theorem tuple_child {n : Nat} {xs : Array Term} (h : sizeOf (Term.tuple 
   simp only [Term.tuple.sizeOf_spec] at h
   omega
 
-private theorem function_child {n id arity : Nat} {xs : Array Term}
-    (h : sizeOf (Term.function id arity xs) ≤ n) (x : Term) (hx : x ∈ xs.toList) :
+private theorem function_child {n arity : Nat} {module name : String} {xs : Array Term}
+    (h : sizeOf (Term.function module name arity xs) ≤ n) (x : Term) (hx : x ∈ xs.toList) :
     sizeOf x < n := by
   have := Array.sizeOf_lt_of_mem (by simpa using hx : x ∈ xs)
   simp only [Term.function.sizeOf_spec] at h
@@ -268,12 +269,13 @@ private def boundedStep (exact : Bool) (n : Nat) (cmp exactCmp : Child n → Chi
   | .reference a, .reference b => Ord.compare a b
   | .reference _, _ => .lt
   | _, .reference _ => .gt
-  | .function id arity captures, .function otherId otherArity otherCaptures =>
-    (Ord.compare id otherId).then ((Ord.compare arity otherArity).then
-      (List.compareLex exactCmp (boundedList n captures.toList (function_child ha))
-        (boundedList n otherCaptures.toList (function_child hb))))
-  | .function _ _ _, _ => .lt
-  | _, .function _ _ _ => .gt
+  | .function module name arity captures, .function otherModule otherName otherArity otherCaptures =>
+    (Ord.compare module otherModule).then ((Ord.compare name otherName).then
+      ((Ord.compare arity otherArity).then
+        (List.compareLex exactCmp (boundedList n captures.toList (function_child ha))
+          (boundedList n otherCaptures.toList (function_child hb)))))
+  | .function _ _ _ _, _ => .lt
+  | _, .function _ _ _ _ => .gt
   | .pid a, .pid b => Ord.compare a b
   | .pid _, _ => .lt
   | _, .pid _ => .gt
@@ -351,7 +353,7 @@ private def rank : Term → Nat
   | .integer _ | .float _ => 0
   | .atom _ => 1
   | .reference _ => 2
-  | .function _ _ _ => 3
+  | .function _ _ _ _ => 3
   | .pid _ => 4
   | .tuple _ => 5
   | .map _ => 6
@@ -380,7 +382,9 @@ private instance (exact : Bool) (cmp exactCmp : Term → Term → Ordering)
         | (congr 1 <;> exact Std.OrientedCmp.eq_swap)
         | (congr 1 <;> first
             | exact Std.OrientedCmp.eq_swap
-            | (congr 1 <;> exact Std.OrientedCmp.eq_swap))
+            | (congr 1 <;> first
+                | exact Std.OrientedCmp.eq_swap
+                | (congr 1 <;> exact Std.OrientedCmp.eq_swap)))
     · rw [compareStep_of_rank_ne rab, compareStep_of_rank_ne (Ne.symm rab)]
       exact Std.OrientedCmp.eq_swap
   isLE_trans := by
@@ -394,20 +398,24 @@ private instance (exact : Bool) (cmp exactCmp : Term → Term → Ordering)
         all_goals try contradiction
         all_goals try trivial
         all_goals try exact Std.TransCmp.isLE_trans ab bc
-        case function.function.function.false aid arity ac bid barity bcaps cid carity cc =>
+        case function.function.function.false am an arity ac bm bn barity bcaps cm cn carity cc =>
           exact Std.TransCmp.isLE_trans
             (cmp := compareLex (compareOn Ord.compare Prod.fst)
-              (compareLex (compareOn Ord.compare fun p : Nat × Nat × List Term => p.2.1)
-                (compareOn (List.compareLex exactCmp) fun p : Nat × Nat × List Term => p.2.2)))
-            (a := (aid, arity, ac.toList)) (b := (bid, barity, bcaps.toList))
-            (c := (cid, carity, cc.toList)) ab bc
-        case function.function.function.true aid arity ac bid barity bcaps cid carity cc =>
+              (compareLex (compareOn Ord.compare fun p : String × String × Nat × List Term => p.2.1)
+                (compareLex (compareOn Ord.compare fun p : String × String × Nat × List Term => p.2.2.1)
+                  (compareOn (List.compareLex exactCmp) fun p : String × String × Nat × List Term =>
+                    p.2.2.2))))
+            (a := (am, an, arity, ac.toList)) (b := (bm, bn, barity, bcaps.toList))
+            (c := (cm, cn, carity, cc.toList)) ab bc
+        case function.function.function.true am an arity ac bm bn barity bcaps cm cn carity cc =>
           exact Std.TransCmp.isLE_trans
             (cmp := compareLex (compareOn Ord.compare Prod.fst)
-              (compareLex (compareOn Ord.compare fun p : Nat × Nat × List Term => p.2.1)
-                (compareOn (List.compareLex exactCmp) fun p : Nat × Nat × List Term => p.2.2)))
-            (a := (aid, arity, ac.toList)) (b := (bid, barity, bcaps.toList))
-            (c := (cid, carity, cc.toList)) ab bc
+              (compareLex (compareOn Ord.compare fun p : String × String × Nat × List Term => p.2.1)
+                (compareLex (compareOn Ord.compare fun p : String × String × Nat × List Term => p.2.2.1)
+                  (compareOn (List.compareLex exactCmp) fun p : String × String × Nat × List Term =>
+                    p.2.2.2))))
+            (a := (am, an, arity, ac.toList)) (b := (bm, bn, barity, bcaps.toList))
+            (c := (cm, cn, carity, cc.toList)) ab bc
         case tuple.tuple.tuple.false a b c =>
           exact Std.TransCmp.isLE_trans
             (cmp := compareLex (compareOn Ord.compare Array.size) (compareOn (List.compareLex cmp) Array.toList)) ab bc
@@ -680,10 +688,10 @@ theorem cons_exactCompare_eq (head tail a : Term) (equal : exactCompare (.cons h
   rw [Std.OrientedCmp.eq_swap (cmp := exactCompare), Ordering.swap_eq_eq]
   exact exactCompare_eq_float a n
 
-@[simp] theorem exactCompare_eq_closed_function (a : Term) (id arity : Nat) :
-    exactCompare a (.function id arity #[]) = .eq ↔ a = .function id arity #[] := by
+@[simp] theorem exactCompare_eq_closed_function (a : Term) (module name : String) (arity : Nat) :
+    exactCompare a (.function module name arity #[]) = .eq ↔ a = .function module name arity #[] := by
   cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
-  rintro rfl rfl
+  rintro rfl rfl rfl
   rename_i captures
   rcases captures with ⟨_ | _⟩ <;> simp [List.compareLex]
 

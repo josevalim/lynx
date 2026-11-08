@@ -62,7 +62,7 @@ private partial def showTerm : Term → String
   | .float value => showFloat value
   | .atom name => showAtom name
   | .reference reference => showReference reference
-  | .function id arity _ => s!"#Fun<{id}/{arity}>"
+  | .function module name arity _ => s!"#Fun<{module}.{name}.{arity}>"
   | .pid pid => showPid pid
   | .tuple elements => "{" ++ ", ".intercalate (elements.toList.map showTerm) ++ "}"
   | .map pairs =>

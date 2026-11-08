@@ -37,8 +37,9 @@ private theorem floatOne_toRat : floatOne.toRat = 1 := by
   .atom "", .atom "a", .atom "aa", .atom "b", .atom "é", .atom "λ", .atom "😀",
   .reference [], .reference [0], .reference [1], .reference [1, 0],
   .reference [1000000000000000000000000000000],
-  .function 0 1 #[], .function 0 1 #[.integer 10],
-  .function 0 1 #[.integer 20], .function 1 0 #[],
+  .function "a" "f" 1 #[], .function "a" "f" 1 #[.integer 10],
+  .function "a" "f" 1 #[.integer 20], .function "a" "f" 2 #[], .function "a" "g" 0 #[],
+  .function "b" "a" 0 #[],
   .pid [], .pid [0], .pid [1], .pid [1, 0], .pid [1000000000000000000000000000000],
   .tuple #[],
   .tuple #[.integer (-1)], .tuple #[.integer 0], .tuple #[.atom "a"],
@@ -77,11 +78,11 @@ public theorem ordered_terms :
       Term.compare a b = .lt ∧ Term.compare b a = .gt) := by decide
 
 theorem closure_captures_comparison :
-    Term.compare (.function 0 1 #[.integer 10]) (.function 0 1 #[.integer 20]) = .lt ∧
-    Term.compare (.function 0 1 #[.integer 20]) (.function 0 1 #[.integer 10]) = .gt ∧
-    Term.exactCompare (.function 0 1 #[.integer 10]) (.function 0 1 #[.integer 20]) ≠ .eq ∧
-    Term.exactCompare (.function 0 1 #[.integer 10]) (.function 0 1 #[.integer 10]) = .eq ∧
-    Term.compare (.function 0 1 #[.integer 20]) (.function 1 1 #[.integer 10]) = .lt := by
+    Term.compare (.function "a" "f" 1 #[.integer 10]) (.function "a" "f" 1 #[.integer 20]) = .lt ∧
+    Term.compare (.function "a" "f" 1 #[.integer 20]) (.function "a" "f" 1 #[.integer 10]) = .gt ∧
+    Term.exactCompare (.function "a" "f" 1 #[.integer 10]) (.function "a" "f" 1 #[.integer 20]) ≠ .eq ∧
+    Term.exactCompare (.function "a" "f" 1 #[.integer 10]) (.function "a" "f" 1 #[.integer 10]) = .eq ∧
+    Term.compare (.function "a" "f" 1 #[.integer 20]) (.function "a" "g" 1 #[.integer 10]) = .lt := by
   decide
 
 theorem numeric_and_exact_comparison :

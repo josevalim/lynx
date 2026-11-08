@@ -18,18 +18,18 @@ private def poll : Result :=
     | none => .ok (.atom "timeout")
 
 /-- A child that sends `hello` to the PID it captured. -/
-private def functions : Term.FunTable := #[
-  .effectful (fun dispatcher captures _ =>
-    match captures.toList with
-    | [parent] => «send/2» dispatcher parent (.atom "hello")
-    | _ => .error .exhausted) none]
+private def functions : Term.FunTable := [
+  { module := "test", name := "greet", arity := 0, entry := .effectful fun dispatcher captures _ =>
+      match captures.toList with
+      | [parent] => «send/2» dispatcher parent (.atom "hello")
+      | _ => .error .exhausted }]
 
 private def dispatcher : Dispatcher := Dispatcher.ofTable functions 1
 
 /-- The parent polls for the child's message, which may not have arrived yet. -/
 private def race : Result := do
   let self ← «self/0» dispatcher
-  let _ ← «spawn/1» dispatcher (.function 0 0 #[self])
+  let _ ← «spawn/1» dispatcher (.function "test" "greet" 0 #[self])
   poll
 
 private def hello : Outcome Term → Bool
