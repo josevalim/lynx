@@ -196,6 +196,10 @@ def «*/2» : Term → Term → Except Exception Term
 @[simp↓, cbv_eval] theorem «*/2_integers» (left right : Int) :
     «*/2» (.integer left) (.integer right) = .ok (.integer (left * right)) := by rfl
 
+private theorem «*/2_integer_float_eq» (n : Int) (value : Term.FiniteFloat) :
+    «*/2» (.integer n) (.float value) = floatResult (Term.FiniteFloat.ofInt n >>= (·.mul value)) := by
+  simp only [«*/2»]
+
 /-- An integer that converts to a float times a float below one in magnitude, that
 is, with a biased exponent below 1023, is a float. -/
 theorem «*/2_integer_float» (n : Int) (converted value : Term.FiniteFloat)
@@ -203,8 +207,13 @@ theorem «*/2_integer_float» (n : Int) (converted value : Term.FiniteFloat)
     ∃ product, «*/2» (.integer n) (.float value) = .ok (.float product) := by
   have finite := Term.FiniteFloat.mul_isSome converted value small
   cases multiplied : converted.mul value with
-  | none => simp [multiplied] at finite
-  | some product => exact ⟨product, by simp [«*/2», exact, multiplied, floatResult]⟩
+  | none => rw [multiplied] at finite; cases finite
+  | some product =>
+    -- Rewriting, rather than reducing the bind, keeps external checkers from
+    -- unfolding the float multiplication.
+    refine ⟨product, ?_⟩
+    rw [«*/2_integer_float_eq», exact, Option.bind_eq_bind, Option.bind_some, multiplied]
+    rfl
 
 /-- Erlang remainder uses division truncated toward zero, including negative operands. -/
 @[expose] def «rem/2» : Term → Term → Except Exception Term
