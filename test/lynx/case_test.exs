@@ -86,7 +86,7 @@ defmodule Lynx.CaseTest do
 
     assert output =~ "laws unsupported"
     assert output =~ "CompileError"
-    assert output =~ "cannot locate BEAM for :erlang"
+    assert output =~ "unsupported built-in function :erlang.nif_error/1"
   end
 
   test "verifies termination suffixes within their laws group" do
