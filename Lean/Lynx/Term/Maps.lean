@@ -67,4 +67,20 @@ theorem getMapKeys_arity (keys : List Term) (input : Term)
     simp only [Option.getD_some]
     exact mapM_length lookup keys values found
 
+/-- Proper lists decode to their elements. -/
+@[simp] theorem properList?_list (elements : List Term) : properList? (list elements) = some elements := by
+  induction elements <;> simp_all [properList?]
+
+/-- Lists of pairs decode to their pairs. -/
+@[simp] theorem pairList?_list (pairs : List (Term × Term)) :
+    pairList? (list (pairs.map fun pair => .tuple #[pair.1, pair.2])) = some pairs := by
+  induction pairs <;> simp_all [pairList?]
+
+/-- Matching a single key looks it up. -/
+theorem getMapKeys_single (key : Term) (entries : List (Term × Term)) :
+    getMapKeys [key] (.map entries) = (mapLookup entries key).toList := by
+  simp only [getMapKeys, mapLookup]
+  cases found : entries.find? (fun entry => decide (exactCompare key entry.1 = .eq)) <;>
+    simp [found]
+
 end Lynx.Term

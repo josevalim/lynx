@@ -1090,6 +1090,48 @@ theorem mem_of_mem_mapEntries {entries : List (Term × Term)} {entry : Term × T
     have found := mapLookup_mapEntries [] entry.1
     simp [enumerated, mapLookup] at found
 
+/-- A map has a key when one of its keys is exactly equal to it. -/
+theorem mapLookup_isSome (entries : List (Term × Term)) (key : Term) :
+    (mapLookup entries key).isSome ↔ ∃ entry ∈ entries, exactCompare key entry.1 = .eq := by
+  simp [mapLookup, List.find?_isSome]
+
+/-- Exactly equal keys look up the same binding. -/
+theorem mapLookup_congr {a b : Term} (equal : exactCompare a b = .eq) (entries : List (Term × Term)) :
+    mapLookup entries a = mapLookup entries b := by
+  have symm := Std.OrientedCmp.eq_symm equal
+  have same : (fun entry : Term × Term => decide (exactCompare a entry.1 = .eq)) =
+      fun entry => decide (exactCompare b entry.1 = .eq) := by
+    funext entry
+    simp only [decide_eq_decide]
+    exact ⟨fun h => Std.TransCmp.eq_trans symm h, fun h => Std.TransCmp.eq_trans equal h⟩
+  simp only [mapLookup, same]
+
+/-- Removing a key's bindings leaves the bindings of other keys. -/
+theorem mapLookup_filter (entries : List (Term × Term)) (key query : Term) :
+    mapLookup (entries.filter fun entry => exactCompare key entry.1 != .eq) query =
+      if exactCompare query key = .eq then none else mapLookup entries query := by
+  induction entries with
+  | nil => simp [mapLookup]
+  | cons entry rest ih =>
+    by_cases same : exactCompare query key = .eq
+    · simp only [same, ite_true] at ih ⊢
+      by_cases hit : exactCompare key entry.1 = .eq
+      · simp [hit, ih]
+      · have miss : exactCompare query entry.1 ≠ .eq := fun h =>
+          hit (Std.TransCmp.eq_trans (Std.OrientedCmp.eq_symm same) h)
+        simp [hit, mapLookup, miss] at ih ⊢
+        exact ih
+    · simp only [same, ite_false] at ih ⊢
+      by_cases hit : exactCompare key entry.1 = .eq
+      · have miss : exactCompare query entry.1 ≠ .eq := fun h =>
+          same (Std.TransCmp.eq_trans h (Std.OrientedCmp.eq_symm hit))
+        simp [hit, mapLookup, miss] at ih ⊢
+        exact ih
+      · by_cases found : exactCompare query entry.1 = .eq
+        · simp [hit, mapLookup, found]
+        · simp [hit, mapLookup, found] at ih ⊢
+          exact ih
+
 /-- Whether a term is exactly equal to one of the candidates, as a Boolean atom.
 Guards test membership in sets of literals as chains of `=:=` comparisons. -/
 @[expose] def isMember (value : Term) : List Term → Term
