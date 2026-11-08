@@ -18,6 +18,12 @@ theorem membership :
   refine ⟨?_, ?_, ?_⟩ <;> simp [set, a, b, Erlang.sets.«is_element/2», Erlang.sets.«union/2»,
     Erlang.sets.elements?, Term.mapLookup]
 
+/-- Sizes count shadowed elements once. -/
+theorem size :
+    Erlang.sets.«size/1» (set [.integer 1, .integer 2, .integer 1]) = .ok (.integer 2) := by
+  simp [set, Erlang.sets.«size/1», List.eraseDupsBy, List.eraseDupsBy.loop]
+  rfl
+
 /-- Sets are created as version 2 sets, whatever version the options ask for. -/
 theorem creation :
     Erlang.sets.«new/1» (Term.list [.tuple #[.atom "version", .integer 1]]) = .ok (set []) ∧
@@ -25,7 +31,7 @@ theorem creation :
       .ok (set [a, b]) ∧
     Erlang.sets.«from_list/1» a = .error (.error (.atom "badarg")) := by
   refine ⟨rfl, ?_, rfl⟩
-  simp only [Erlang.sets.«from_list/2», Erlang.sets.«from_list/1», Term.properList?_list]; rfl
+  simp only [Erlang.sets.«from_list/2», Erlang.sets.«from_list/1»]; rfl
 
 /-- Version 1 sets and maps holding other values are not modeled. -/
 theorem unmodeled :

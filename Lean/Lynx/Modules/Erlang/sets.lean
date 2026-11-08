@@ -37,6 +37,13 @@ open Lynx
   | .map entries => .ok (if (Term.mapLookup entries element).isSome then Term.true else Term.false)
   | _ => .error .exhausted
 
+/-- The number of distinct keys, as `map_size/1` counts them. -/
+@[expose] def «size/1» (set : Term) : Except Exception Term :=
+  match set with
+  | .map entries => .ok (.integer
+      ((entries.map Prod.fst).eraseDupsBy (fun a b => Term.exactCompare a b == .eq)).length)
+  | _ => .error .exhausted
+
 @[expose] def «union/2» (left right : Term) : Except Exception Term :=
   match elements? left, elements? right with
   | some l, some r => .ok (.map (r ++ l))
@@ -81,10 +88,10 @@ private theorem lookup_filter (es : List (Term × Term))
         exact (List.pairwise_cons.mp distinct).1 p mp
           (Std.TransCmp.eq_trans (Std.OrientedCmp.eq_symm same) (of_decide_eq_true hit))
       rw [absent] at tail
-      cases hk : keep e <;> simp_all [Term.mapLookup, List.filter_cons]
+      cases hk : keep e <;> simp_all [Term.mapLookup]
       intro a b m _
       exact absent a b m
-    · cases hk : keep e <;> simp_all [Term.mapLookup, List.filter_cons]
+    · cases hk : keep e <;> simp_all [Term.mapLookup]
 
 private theorem member_filter (entries : List (Term × Term)) (keep : Term → Bool)
     (congr : ∀ a b, Term.exactCompare a b = .eq → keep a = keep b) (query : Term) :
@@ -149,7 +156,7 @@ theorem from_list_elements (elements : List Term) :
       intro entry member
       rw [values entry member]
     simp only [elements?]
-    exact if_pos all
+    exact ite_eq_left all
   · rw [Term.mapLookup_isSome]
     simp only [List.mem_map]
     constructor
@@ -157,5 +164,27 @@ theorem from_list_elements (elements : List Term) :
       exact ⟨x, member, same⟩
     · rintro ⟨x, member, same⟩
       exact ⟨(x, .nil), ⟨x, member, rfl⟩, same⟩
+
+private theorem loop_length (r : Term → Term → Bool) (as bs : List Term) :
+    bs.length ≤ (List.eraseDupsBy.loop r as bs).length := by
+  induction as generalizing bs with
+  | nil => simp [List.eraseDupsBy.loop]
+  | cons a rest ih =>
+    simp only [List.eraseDupsBy.loop]
+    split
+    · exact ih bs
+    · exact Nat.le_trans (Nat.le_succ _) (ih (a :: bs))
+
+/-- Sets of size zero have no elements. -/
+theorem size_empty (entries : List (Term × Term)) (element : Term)
+    (empty : «size/1» (.map entries) = .ok (.integer 0)) : Term.mapLookup entries element = none := by
+  cases entries with
+  | nil => rfl
+  | cons entry rest =>
+    have := loop_length (fun a b => Term.exactCompare a b == .eq) (rest.map Prod.fst) [entry.1]
+    simp only [«size/1», List.map_cons, List.eraseDupsBy, List.eraseDupsBy.loop, List.any_nil,
+      Except.ok.injEq, Term.integer.injEq] at empty
+    simp at this
+    omega
 
 end Erlang.sets
