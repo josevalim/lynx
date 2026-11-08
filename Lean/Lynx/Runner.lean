@@ -1098,10 +1098,12 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let exceptionClass := mkIdent ``Lynx.Exception.classTerm
     let reason := mkIdent ``Lynx.Exception.reason
     let tryWith ← contextual ``Lynx.Except.tryWith ``Lynx.Result.tryWith
+    -- `have` keeps the class and reason out of the local context as `let`
+    -- values, so `partial_fixpoint` can split handler matches on them.
     pure (Unhygienic.run `($tryWith $computation (fun $binder:term => $body)
       (fun $exception:ident =>
-        let $classVar := $exceptionClass $exception:ident
-        let $reasonVar := $reason $exception:ident
+        have $classVar := $exceptionClass $exception:ident
+        have $reasonVar := $reason $exception:ident
         $handler)))
   | "stacktrace" => do
     fields j ["kind", "exception", "span"]
