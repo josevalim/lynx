@@ -689,6 +689,7 @@ defmodule Lynx.Translation do
           else: translation
       end
 
+    defs = share_partial_fixpoint(defs)
     [first | _] = defs
     span = first["span"]
 
@@ -701,6 +702,28 @@ defmodule Lynx.Translation do
           %{"kind" => "mutual", "span" => span, "defs" => defs},
           {purity, dispatches}
         )
+    end
+  end
+
+  # Lean requires every member of a mutual group to be a partial fixpoint once
+  # one is, so a partial_fixpoint suffix extends to members without a suffix.
+  defp share_partial_fixpoint(defs) do
+    partial =
+      Enum.find_value(defs, fn
+        %{"termination_suffix" => %{"source" => source} = suffix} ->
+          if String.trim(source) == "partial_fixpoint", do: suffix
+
+        _ ->
+          nil
+      end)
+
+    if partial do
+      Enum.map(defs, fn
+        %{"kind" => "def"} = definition -> Map.put_new(definition, "termination_suffix", partial)
+        other -> other
+      end)
+    else
+      defs
     end
   end
 
