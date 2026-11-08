@@ -222,6 +222,13 @@ defmodule Lynx do
       other enumerations visit each key once, but proofs cannot rely on any
       particular order.
 
+    * Erlang's `sets` are only modeled as version 2 sets, which are maps from
+      their elements to `[]`. `sets:new/0,1` and `sets:from_list/1,2` always
+      create version 2 sets, ignoring any version given in their options.
+      `union/2`, `intersection/2`, `subtract/2`, `is_subset/2`, and
+      `is_element/2` operate on those maps directly, and do not return for
+      version 1 sets or maps holding other values.
+
     * Function references and calls that name their module and function at
       compile time, such as `&Foo.bar/1`, `fun foo:bar/1`, and `Foo.bar(x)`,
       are translated directly. Dynamic references and calls, such as

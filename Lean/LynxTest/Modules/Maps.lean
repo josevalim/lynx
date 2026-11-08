@@ -174,6 +174,25 @@ theorem nonempty_map_equality (key value : Term) :
     Erlang.erlang.«==/2» (.map [(key, value)]) (.atom "term") = .ok Term.false := by
   simp [Erlang.erlang.«==/2», Term.false]
 
+private def combiner : Term := .function 0 3 #[]
+
+private def mergeWith : Term → Term → Term → Except Exception Term :=
+  Erlang.maps.«merge_with/3» (Dispatcher.ofTable #[] 0)
+
+private def intersectWith : Term → Term → Term → Except Exception Term :=
+  Erlang.maps.«intersect_with/3» (Dispatcher.ofTable #[] 0)
+
+/-- Merging with an empty map calls no combiner, and arguments are checked
+as on the BEAM: the combiner first, then each map. -/
+theorem combine_inputs :
+    mergeWith combiner (.map [(a, one)]) (Term.map []) = .ok (.map [(a, one)]) ∧
+    intersectWith combiner (.map [(a, one)]) (Term.map []) = .ok (Term.map []) ∧
+    mergeWith one (Term.map []) (Term.map []) = .error (.error (.atom "badarg")) ∧
+    mergeWith combiner one (Term.map []) = .error (.error (.tuple #[.atom "badmap", one])) ∧
+    intersectWith combiner (Term.map []) one = .error (.error (.tuple #[.atom "badmap", one])) := by
+  refine ⟨?_, ?_, rfl, rfl, rfl⟩ <;> simp [mergeWith, intersectWith, Erlang.maps.«merge_with/3»,
+    Erlang.maps.«intersect_with/3», combiner, List.reduceOption, Term.mapLookup]
+
 end LynxTest.Modules.Maps
 
 run_cmd do
