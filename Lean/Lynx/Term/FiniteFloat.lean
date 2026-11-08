@@ -89,6 +89,22 @@ public def add (left right : FiniteFloat) : Option FiniteFloat :=
 public def mul (left right : FiniteFloat) : Option FiniteFloat :=
   ofModel (left.toModel * right.toModel)
 
+/-- Multiplying a float by one below one in magnitude, that is, with a biased
+exponent below 1023, never overflows. -/
+public theorem mul_isSome (left right : FiniteFloat) (small : right.exponent.val < 1023) :
+    (left.mul right).isSome := by
+  have bits (value : FiniteFloat) :
+      (UInt64.ofNat ((if value.negative then 2 ^ 63 else 0) + value.exponent.val * 2 ^ 52 +
+        value.fraction.val)).toNat / 2 ^ 52 % 2048 = value.exponent.val := by
+    have := value.exponent.isLt
+    have := value.fraction.isLt
+    simp only [UInt64.toNat_ofNat']
+    split <;> omega
+  have finite := Rounding.ofBits_mul_finite _ _
+    (by rw [bits]; exact left.exponent.isLt) (by rw [bits]; exact small)
+  simp only [mul, ofModel, toModel]
+  simp only [finite, ↓reduceDIte, Option.isSome_some]
+
 /-- IEEE binary64 subtraction, failing on any non-finite result. -/
 public def sub (left right : FiniteFloat) : Option FiniteFloat :=
   ofModel (left.toModel - right.toModel)
