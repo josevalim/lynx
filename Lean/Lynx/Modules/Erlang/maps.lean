@@ -37,20 +37,81 @@ open Lynx
   | input => .error (.error (.tuple #[.atom "badmap", input]))
 
 /-- Fold over the visible bindings in the order `to_list/1` returns them.
-Unordered iterators from `iterator/1` fold like their map. Ordered and partially
-traversed iterators are not modeled, so folding them does not return. -/
+Iterators fold over their remaining bindings. -/
 @[expose] def «fold/3» {m : Type → Type u} [Monad m] [MonadExceptOf Exception m] [Dispatch m]
     (dispatcher : Dispatcher) (function init input : Term) : m Term :=
+  let fold (pairs : List (Term × Term)) :=
+    pairs.foldlM (fun acc entry => Dispatch.dispatch dispatcher function #[entry.1, entry.2, acc]) init
   match function with
   | .function _ 3 _ =>
     match input with
-    | .map entries | .cons (.integer 0) (.map entries) =>
-      (Term.mapEntries entries).foldlM
-        (fun acc entry => Dispatch.dispatch dispatcher function #[entry.1, entry.2, acc]) init
+    | .map entries => fold (Term.mapEntries entries)
     | .atom "none" => pure init
-    | .cons _ (.map _) | .tuple ⟨[_, _, _]⟩ => throw .exhausted
-    | _ => throw (.error (.tuple #[.atom "badmap", input]))
+    | .tuple ⟨[key, value, rest]⟩ =>
+      match Term.pairList? rest with
+      | some pairs => fold ((key, value) :: pairs)
+      | none => throw (.error (.atom "badarg"))
+    | input =>
+      match Term.pairList? input with
+      | some pairs => fold pairs
+      | none => throw (.error (.tuple #[.atom "badmap", input]))
   | _ => throw (.error (.atom "badarg"))
+
+/-- An iterator over the visible bindings, as a list of `{Key, Value}` pairs in
+the order `to_list/1` returns them. The BEAM's iterator representation is opaque. -/
+@[expose] def «iterator/1» : Term → Except Exception Term
+  | .map entries => .ok (Term.list ((Term.mapEntries entries).map fun entry => .tuple #[entry.1, entry.2]))
+  | input => .error (.error (.tuple #[.atom "badmap", input]))
+
+/-- The next binding of an iterator as `{Key, Value, Next}`, or `none`. -/
+@[expose] def «next/1» : Term → Except Exception Term
+  | .cons (.tuple ⟨[key, value]⟩) rest => .ok (.tuple #[key, value, rest])
+  | .nil | .atom "none" => .ok (.atom "none")
+  | iterator@(.tuple ⟨[_, _, _]⟩) => .ok iterator
+  | _ => .error (.error (.atom "badarg"))
+
+@[expose] def «find/2» (key input : Term) : Except Exception Term :=
+  match input with
+  | .map entries =>
+    match Term.mapLookup entries key with
+    | some value => .ok (.tuple #[.atom "ok", value])
+    | none => .ok (.atom "error")
+  | _ => .error (.error (.tuple #[.atom "badmap", input]))
+
+@[expose] def «is_key/2» (key input : Term) : Except Exception Term :=
+  match input with
+  | .map entries => .ok (if (Term.mapLookup entries key).isSome then Term.true else Term.false)
+  | _ => .error (.error (.tuple #[.atom "badmap", input]))
+
+/-- The visible keys, in the order `to_list/1` returns them. -/
+@[expose] def «keys/1» : Term → Except Exception Term
+  | .map entries => .ok (Term.list ((Term.mapEntries entries).map Prod.fst))
+  | input => .error (.error (.tuple #[.atom "badmap", input]))
+
+/-- The visible values, in the order `to_list/1` returns them. -/
+@[expose] def «values/1» : Term → Except Exception Term
+  | .map entries => .ok (Term.list ((Term.mapEntries entries).map Prod.snd))
+  | input => .error (.error (.tuple #[.atom "badmap", input]))
+
+/-- Every binding of the key is removed, including shadowed ones. -/
+@[expose] def «remove/2» (key input : Term) : Except Exception Term :=
+  match input with
+  | .map entries => .ok (.map (entries.filter fun entry => Term.exactCompare key entry.1 != .eq))
+  | _ => .error (.error (.tuple #[.atom "badmap", input]))
+
+@[expose] def «take/2» (key input : Term) : Except Exception Term :=
+  match input with
+  | .map entries =>
+    match Term.mapLookup entries key with
+    | some value =>
+      .ok (.tuple #[value, .map (entries.filter fun entry => Term.exactCompare key entry.1 != .eq)])
+    | none => .ok (.atom "error")
+  | _ => .error (.error (.tuple #[.atom "badmap", input]))
+
+@[expose] def «from_keys/2» (keys value : Term) : Except Exception Term :=
+  match Term.properList? keys with
+  | some keys => .ok (.map (keys.map (·, value)))
+  | none => .error (.error (.atom "badarg"))
 
 /-- Later pairs take precedence, so they shadow earlier ones. -/
 @[expose] def «from_list/1» (list : Term) : Except Exception Term :=
