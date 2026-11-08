@@ -1062,6 +1062,23 @@ theorem mapEntries_distinct (entries : List (Term × Term)) :
     (mapEntries entries).Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq) :=
   (mapEnumeration entries).property.1
 
+/-- Enumerated bindings are found by their own key. -/
+theorem mapLookup_of_mem_mapEntries {entries : List (Term × Term)} {entry : Term × Term}
+    (member : entry ∈ mapEntries entries) : mapLookup entries entry.1 = some entry.2 := by
+  rw [← mapLookup_mapEntries]
+  have distinct := mapEntries_distinct entries
+  generalize mapEntries entries = es at member distinct
+  induction es with
+  | nil => simp at member
+  | cons r rest ih =>
+    rcases List.mem_cons.mp member with rfl | member
+    · simp [mapLookup]
+    · have apart := (List.pairwise_cons.mp distinct).1 entry member
+      have miss : exactCompare entry.1 r.1 ≠ .eq := fun same => apart (Std.OrientedCmp.eq_symm same)
+      have := ih member (List.pairwise_cons.mp distinct).2
+      simp only [mapLookup, List.find?_cons, miss, decide_false] at this ⊢
+      exact this
+
 /-- Enumerated bindings are bindings of the map. -/
 theorem mem_of_mem_mapEntries {entries : List (Term × Term)} {entry : Term × Term}
     (member : entry ∈ mapEntries entries) : entry ∈ entries :=

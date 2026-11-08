@@ -106,35 +106,83 @@ private theorem member_filter (entries : List (Term × Term)) (keep : Term → B
     have same : Term.exactCompare query e.1 = .eq := by simpa using List.find?_some found
     simp [congr _ _ same]
 
+/-- A map is a version 2 set when it holds [] for each of its keys. -/
+theorem elements_iff (entries : List (Term × Term)) :
+    elements? (.map entries) = some entries ↔
+      ∀ key value, Term.mapLookup entries key = some value → value = .nil := by
+  constructor
+  · intro set key value found
+    simp only [elements?] at set
+    split at set
+    · rename_i all
+      rw [← Term.mapLookup_mapEntries] at found
+      simp only [Term.mapLookup, Option.map_eq_some_iff] at found
+      obtain ⟨entry, hit, rfl⟩ := found
+      have := List.all_eq_true.mp all entry (List.mem_of_find?_eq_some hit)
+      cases h : entry.2 <;> simp_all
+    · cases set
+  · intro nil
+    simp only [elements?]
+    refine ite_eq_left (List.all_eq_true.mpr fun entry member => ?_)
+    simp [nil _ _ (Term.mapLookup_of_mem_mapEntries member)]
+
+private theorem eq_of_elements {set : Term} {entries : List (Term × Term)}
+    (found : elements? set = some entries) : set = .map entries := by
+  cases set <;> simp only [elements?, reduceCtorEq] at found
+  split at found <;> simp_all
+
+private theorem elements_nil (keys : List (Term × Term)) :
+    elements? (.map (keys.map fun entry => (entry.1, Term.nil))) =
+      some (keys.map fun entry => (entry.1, Term.nil)) := by
+  rw [elements_iff]
+  intro key value found
+  simp only [Term.mapLookup, Option.map_eq_some_iff] at found
+  obtain ⟨entry, hit, rfl⟩ := found
+  have := List.mem_of_find?_eq_some hit
+  simp only [List.mem_map] at this
+  obtain ⟨_, _, rfl⟩ := this
+  rfl
+
 /-- An element belongs to a union when it belongs to either set. -/
 theorem union_member (left right : Term) (l r : List (Term × Term))
-    (hl : elements? left = some l) (hr : elements? right = some r) (element : Term) :
-    ∃ entries, «union/2» left right = .ok (.map entries) ∧
-      (Term.mapLookup entries element).isSome =
+    (hl : elements? left = some l) (hr : elements? right = some r) :
+    ∃ entries, «union/2» left right = .ok (.map entries) ∧ elements? (.map entries) = some entries ∧
+      ∀ element, (Term.mapLookup entries element).isSome =
         ((Term.mapLookup l element).isSome || (Term.mapLookup r element).isSome) := by
-  refine ⟨r ++ l, by simp [«union/2», hl, hr], ?_⟩
-  simp only [Term.mapLookup, List.find?_append, Option.map_or]
-  cases (r.find? fun entry => decide (Term.exactCompare element entry.1 = .eq)) <;> simp [Bool.or_comm]
+  have setL := (elements_iff l).mp (eq_of_elements hl ▸ hl)
+  have setR := (elements_iff r).mp (eq_of_elements hr ▸ hr)
+  refine ⟨r ++ l, by simp [«union/2», hl, hr], (elements_iff _).mpr fun key value found => ?_,
+    fun element => ?_⟩
+  · simp only [Term.mapLookup, List.find?_append, Option.map_or] at found
+    cases hit : r.find? (fun entry => decide (Term.exactCompare key entry.1 = .eq)) with
+    | none => exact setL key value (by simpa [Term.mapLookup, hit] using found)
+    | some entry => exact setR key value (by simpa [Term.mapLookup, hit] using found)
+  · simp only [Term.mapLookup, List.find?_append, Option.map_or]
+    cases (r.find? fun entry => decide (Term.exactCompare element entry.1 = .eq)) <;> simp [Bool.or_comm]
 
 /-- An element belongs to an intersection when it belongs to both sets. -/
 theorem intersection_member (left right : Term) (l r : List (Term × Term))
-    (hl : elements? left = some l) (hr : elements? right = some r) (element : Term) :
+    (hl : elements? left = some l) (hr : elements? right = some r) :
     ∃ entries, «intersection/2» left right = .ok (.map entries) ∧
-      (Term.mapLookup entries element).isSome =
+      elements? (.map entries) = some entries ∧
+      ∀ element, (Term.mapLookup entries element).isSome =
         ((Term.mapLookup l element).isSome && (Term.mapLookup r element).isSome) := by
   refine ⟨((Term.mapEntries l).filter fun entry => (Term.mapLookup r entry.1).isSome).map
-    fun entry => (entry.1, .nil), by simp only [«intersection/2», hl, hr], ?_⟩
+    fun entry => (entry.1, .nil), by simp only [«intersection/2», hl, hr], elements_nil _,
+    fun element => ?_⟩
   exact member_filter l (fun key => (Term.mapLookup r key).isSome)
     (fun a b same => by rw [Term.mapLookup_congr same]) element
 
 /-- An element belongs to a difference when it belongs to the first set only. -/
 theorem subtract_member (left right : Term) (l r : List (Term × Term))
-    (hl : elements? left = some l) (hr : elements? right = some r) (element : Term) :
+    (hl : elements? left = some l) (hr : elements? right = some r) :
     ∃ entries, «subtract/2» left right = .ok (.map entries) ∧
-      (Term.mapLookup entries element).isSome =
+      elements? (.map entries) = some entries ∧
+      ∀ element, (Term.mapLookup entries element).isSome =
         ((Term.mapLookup l element).isSome && !(Term.mapLookup r element).isSome) := by
   refine ⟨((Term.mapEntries l).filter fun entry => !(Term.mapLookup r entry.1).isSome).map
-    fun entry => (entry.1, .nil), by simp only [«subtract/2», hl, hr], ?_⟩
+    fun entry => (entry.1, .nil), by simp only [«subtract/2», hl, hr], elements_nil _,
+    fun element => ?_⟩
   exact member_filter l (fun key => !(Term.mapLookup r key).isSome)
     (fun a b same => by rw [Term.mapLookup_congr same]) element
 
