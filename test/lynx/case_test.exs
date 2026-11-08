@@ -120,6 +120,35 @@ defmodule Lynx.CaseTest do
     end)
   end
 
+  test "partial fixpoints extend to their mutually recursive group" do
+    defmodule SharedPartialFixpoint do
+      use ExUnit.Case, register: false
+      use Lynx.Case
+
+      def ping(value) when is_integer(value), do: pong(value + 1)
+      def ping(_value), do: true
+
+      def pong(value), do: ping(value)
+
+      laws "shared partial fixpoint" do
+        termination_suffix &__MODULE__.ping/1, ~LEAN"partial_fixpoint"
+
+        law stops(value),
+          requires: is_atom(value),
+          expects: pong(value),
+          proof: ~LEAN"""
+          cases value <;> simp [«stops:requires/1», Erlang.erlang.«is_atom/1»] at requires
+          simp [«stops:ensures/1», «pong/1».eq_def, «ping/1».eq_def]
+          """
+      end
+    end
+
+    capture_io(fn ->
+      assert ExUnit.run([SharedPartialFixpoint]) ==
+               %{failures: 0, skipped: 0, total: 1, excluded: 0}
+    end)
+  end
+
   test "partial fixpoints recurse from exception handlers" do
     defmodule HandlerRecursion do
       use ExUnit.Case, register: false

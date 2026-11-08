@@ -120,6 +120,10 @@ defmodule Lynx.Case do
   the function diverges raise `Lynx.Exception.exhausted`.
   Raises if the target function is not translated by the group's laws.
 
+  Lean requires every function in a mutually recursive group to be a partial
+  fixpoint once one of them is, so `partial_fixpoint` also applies to the
+  members of the target's group without their own suffix.
+
   A function with `partial_fixpoint` also gets a `fixpoint_induct` principle,
   which proves properties of every successful return without a termination
   measure, as returns on divergent inputs never happen. For a pure function of
