@@ -209,6 +209,17 @@ defmodule Lynx.Translation do
          span_anno
        ) do
     location = fn -> source_location(span_anno, translation.modules[caller].file) end
+
+    # Preloaded modules have no BEAM to translate, so their functions must be built into Lean.
+    if not is_map_key(translation.modules, module) and :code.which(module) == :preloaded do
+      raise CompileError,
+            location.() ++
+              [
+                description:
+                  "unsupported built-in function #{Exception.format_mfa(module, function, arity)}"
+              ]
+    end
+
     {target, translation} = fetch_module!(translation, module, location)
     validate_function!(target, module, function, arity, location)
 

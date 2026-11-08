@@ -989,6 +989,23 @@ defmodule Lynx.TranslationTest do
       end
     end
 
+    test "names unsupported built-in functions" do
+      core =
+        cerl("""
+        -module(example).
+        -export([entry/1]).
+        entry(X) -> erlang:phash(X, 8).
+        """)
+
+      assert_raise CompileError,
+                   "example.erl:3: unsupported built-in function :erlang.phash/2",
+                   fn ->
+                     Translation.new()
+                     |> Translation.add({"example.erl", core})
+                     |> Translation.translate(:example, [{:entry, 1}])
+                   end
+    end
+
     test "raises on unsupported binary segments" do
       # No source syntax yields an unknown segment type, so rewrite the Core.
       unknown_type = fn node ->
