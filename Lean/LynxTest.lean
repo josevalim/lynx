@@ -15,6 +15,7 @@ import LynxTest.Modules.Binary
 import LynxTest.Modules.ErtsInternal
 import LynxTest.Modules.Math
 import LynxTest.Modules.Conversions
+import LynxTest.Modules.Hashing
 import LynxTest.Modules.Process
 import LynxTest.Modules.Signals
 import LynxTest.Counterexample
