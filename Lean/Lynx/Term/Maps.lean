@@ -12,6 +12,12 @@ namespace Lynx.Term
   | .cons (.tuple #[key, value]) tail => (pairList? tail).map ((key, value) :: ·)
   | _ => none
 
+/-- The elements of a proper list. -/
+@[expose] def properList? : Term → Option (List Term)
+  | .nil => some []
+  | .cons head tail => (properList? tail).map (head :: ·)
+  | _ => none
+
 /-- Collect map values in key order, including repeated keys. Return an empty
 Lean list if the input is not a map or any key is missing. The clause decoder
 uses this for nonempty key lists; empty map patterns match the map constructor. -/

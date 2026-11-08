@@ -10,12 +10,6 @@ which only spawning uses. -/
 
 namespace Lynx.Term
 
-/-- The elements of a proper list. -/
-@[expose] def properList? : Term → Option (List Term)
-  | .nil => some []
-  | .cons head tail => (properList? tail).map (head :: ·)
-  | _ => none
-
 /-- Whether monitor options create an alias. Aliases are only modeled with
 `demonitor`, and tags are not modeled; neither returns. -/
 @[expose] def monitorAlias : List Term → Except Exception Bool

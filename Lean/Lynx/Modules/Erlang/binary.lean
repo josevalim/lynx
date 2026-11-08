@@ -12,11 +12,6 @@ private def bytes? : Term → Option (List UInt8)
   | .bitstring bytes 0 _ => some bytes.data.toList
   | _ => none
 
-private def properList? : Term → Option (List Term)
-  | .nil => some []
-  | .cons head tail => (properList? tail).map (head :: ·)
-  | _ => none
-
 private def binary (bytes : List UInt8) : Term :=
   .bitstring ⟨bytes.toArray⟩ 0 (Term.Bitstring.valid_aligned _)
 
@@ -24,7 +19,7 @@ private def binary (bytes : List UInt8) : Term :=
 private def patterns? (pattern : Term) : Option (List (List UInt8)) :=
   match pattern with
   | .cons _ _ =>
-    (properList? pattern).bind fun elements =>
+    (Term.properList? pattern).bind fun elements =>
       elements.mapM fun element =>
         match bytes? element with
         | some (byte :: rest) => some (byte :: rest)
@@ -109,7 +104,7 @@ and all of them with `global`. `trim` removes trailing empty parts, and
 `trim_all` removes every empty part. A `{scope, Part}` restricts matches to
 `Part`, and a later scope replaces an earlier one. -/
 def «split/3» (subject pattern options : Term) : Except Exception Term :=
-  match bytes? subject, patterns? pattern, (properList? options).bind splitOptions? with
+  match bytes? subject, patterns? pattern, (Term.properList? options).bind splitOptions? with
   | some bytes, some patterns, some options =>
     let range := match options.scope with
       | none => some (0, bytes.length)
@@ -132,7 +127,7 @@ def «split/2» (subject pattern : Term) : Except Exception Term :=
 pattern at that position, or `nomatch`. A `{scope, Part}` restricts matches
 to `Part`, and a later scope replaces an earlier one. -/
 def «match/3» (subject pattern options : Term) : Except Exception Term :=
-  match bytes? subject, patterns? pattern, properList? options with
+  match bytes? subject, patterns? pattern, Term.properList? options with
   | some bytes, some patterns, some options =>
     let range := options.foldl (fun range option => range.bind fun _ =>
       match option with
@@ -263,7 +258,7 @@ theorem split_global_intercalate (c : UInt8) (separated : List (List UInt8))
     (List.intercalate [c] separated).length 0 nonempty absent ?_ (by simp)
   · have pattern : bytes? (.bitstring ⟨#[c]⟩ 0 (Term.Bitstring.valid_aligned _)) = some [c] :=
       bytes?_binary [c]
-    simp [«split/3», bytes?_binary, patterns?, pattern, properList?, splitOptions?, whole,
+    simp [«split/3», bytes?_binary, patterns?, pattern, Term.properList?, splitOptions?, whole,
       binary_eq]
   · exact length_le_intercalate c separated
 
@@ -278,7 +273,7 @@ theorem split_first (c : UInt8) (before after : List UInt8) (absent : c ∉ befo
   have pattern : bytes? (.bitstring ⟨#[c]⟩ 0 (Term.Bitstring.valid_aligned _)) = some [c] :=
     bytes?_binary [c]
   obtain ⟨fuel, size⟩ : ∃ fuel, (before ++ c :: after).length = fuel + 1 := ⟨_, by simp; rfl⟩
-  simp only [«split/2», «split/3», bytes?_binary, pattern, patterns?, properList?,
+  simp only [«split/2», «split/3», bytes?_binary, pattern, patterns?, Term.properList?,
     splitOptions?, Option.bind_some]
   generalize (before ++ c :: after).length = n at first size ⊢
   subst size
@@ -292,7 +287,7 @@ theorem split_absent (c : UInt8) (bytes : List UInt8) (absent : c ∉ bytes) :
   have pattern : bytes? (.bitstring ⟨#[c]⟩ 0 (Term.Bitstring.valid_aligned _)) = some [c] :=
     bytes?_binary [c]
   have none := find_none c 0 bytes.length bytes 0 absent
-  simp only [«split/2», «split/3», bytes?_binary, pattern, patterns?, properList?,
+  simp only [«split/2», «split/3», bytes?_binary, pattern, patterns?, Term.properList?,
     splitOptions?, Option.bind_some]
   generalize bytes.length = n at none ⊢
   cases n <;> simp [parts, none, binary_eq]
@@ -306,7 +301,7 @@ theorem match_first (c : UInt8) (before after : List UInt8) (absent : c ∉ befo
     (Nat.zero_le _) (by simp)
   have pattern : bytes? (.bitstring ⟨#[c]⟩ 0 (Term.Bitstring.valid_aligned _)) = some [c] :=
     bytes?_binary [c]
-  simp only [«match/2», «match/3», bytes?_binary, pattern, patterns?, properList?, List.foldl_nil]
+  simp only [«match/2», «match/3», bytes?_binary, pattern, patterns?, Term.properList?, List.foldl_nil]
   generalize (before ++ c :: after).length = n at first ⊢
   simp [first]
 
@@ -316,7 +311,7 @@ theorem match_absent (c : UInt8) (bytes : List UInt8) (absent : c ∉ bytes) :
         (.bitstring ⟨#[c]⟩ 0 (Term.Bitstring.valid_aligned _)) = .ok (.atom "nomatch") := by
   have pattern : bytes? (.bitstring ⟨#[c]⟩ 0 (Term.Bitstring.valid_aligned _)) = some [c] :=
     bytes?_binary [c]
-  simp [«match/2», «match/3», bytes?_binary, pattern, patterns?, properList?,
+  simp [«match/2», «match/3», bytes?_binary, pattern, patterns?, Term.properList?,
     find_none c 0 bytes.length bytes 0 absent]
 
 theorem last_binary (bytes : List UInt8) (nonempty : bytes ≠ []) :

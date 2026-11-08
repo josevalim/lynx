@@ -139,11 +139,23 @@ private def fold : Term → Term → Term → Except Exception Term :=
 
 theorem fold_inputs :
     fold folder one (Term.map []) = .ok one ∧
-    fold folder one (.cons (.integer 0) (Term.map [])) = .ok one ∧
+    fold folder one .nil = .ok one ∧
     fold folder one (.atom "none") = .ok one ∧
     fold folder one one = .error (.error (.tuple #[.atom "badmap", one])) ∧
     fold (.function 0 2 #[]) one (Term.map []) = .error (.error (.atom "badarg")) := by
-  refine ⟨?_, ?_, rfl, rfl, rfl⟩ <;> simp [fold, Erlang.maps.«fold/3», folder]
+  refine ⟨?_, rfl, rfl, rfl, rfl⟩
+  simp [fold, Erlang.maps.«fold/3», folder]
+
+/-- Iterators list the visible bindings as `to_list/1` does, and each step
+returns the remaining bindings. -/
+theorem iterator_steps (entries : List (Term × Term)) :
+    Erlang.maps.«iterator/1» (.map entries) = Erlang.maps.«to_list/1» (.map entries) ∧
+    Erlang.maps.«next/1» (Term.list [.tuple #[a, one], .tuple #[b, two]]) =
+      .ok (.tuple #[a, one, Term.list [.tuple #[b, two]]]) ∧
+    Erlang.maps.«next/1» .nil = .ok (.atom "none") ∧
+    Erlang.maps.«next/1» one = .error (.error (.atom "badarg")) ∧
+    Erlang.maps.«iterator/1» one = .error (.error (.tuple #[.atom "badmap", one])) :=
+  ⟨rfl, rfl, rfl, rfl, rfl⟩
 
 end LynxTest.Modules.Maps
 
