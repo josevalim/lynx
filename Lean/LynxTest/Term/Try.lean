@@ -63,7 +63,7 @@ theorem reraise_preserves_class (exception : Exception) (reason : Term)
 theorem stacktrace_is_empty (exception : Exception) : exception.stacktrace = .nil := rfl
 
 /-- These operations make no dynamic calls. -/
-private def noFunctions : Dispatcher := Dispatcher.ofTable #[] 0
+private def noFunctions : Dispatcher := Dispatcher.ofTable [] 0
 
 /-- State changes in the protected computation remain visible in its handler. -/
 theorem protected_effects_survive_failure :
@@ -99,11 +99,12 @@ theorem cleanup_failure_overrides_previous_outcome :
       (fun _ => Result.ofExcept («exit/1» (.atom "cleanup"))) (fun _ => Result.ofExcept («exit/1» (.atom "cleanup"))) =
       .error (.exit (.atom "cleanup")) := by constructor <;> rfl
 
-private def failingTable : Term.FunTable := #[
-  .effectful fun _ _ _ => Result.ofExcept («throw/1» (.atom "dispatched"))]
+private def failingTable : Term.FunTable := [
+  { module := "test", name := "fail", arity := 0, entry := .effectful fun _ _ _ =>
+      Result.ofExcept («throw/1» (.atom "dispatched")) }]
 
 private def call (depth : Nat) : Result :=
-  (Dispatcher.ofTable failingTable depth).call (.function 0 0 #[]) #[]
+  (Dispatcher.ofTable failingTable depth).call (.function "test" "fail" 0 #[]) #[]
 
 theorem dispatched_exception_is_caught :
     Lynx.concurrent (Result.tryWith (call 100)

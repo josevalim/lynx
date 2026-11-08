@@ -750,7 +750,7 @@ defmodule Lynx.TranslationTest do
     end
   end
 
-  test "generates a function table with stable IDs across modules and incremental roots" do
+  test "generates a function table named by functions across modules and incremental roots" do
     caller =
       cerl("""
       -module(caller).
@@ -775,25 +775,25 @@ defmodule Lynx.TranslationTest do
       |> Translation.add({"dependency.erl", dependency})
       |> Translation.translate(:caller, [{:entry, 1}])
 
+    # Anonymous functions take the name the compiler gave them.
     assert %{
-             {:caller, {:local, 1}} => %{id: 0, captures: []},
-             {:dependency, {:local, 1}} => %{id: 1, captures: []},
-             2 => %{
-               id: 2,
+             {:caller, :local, 1} => %{module: :caller, name: {:local, 1}, captures: []},
+             {:dependency, :local, 1} => %{module: :dependency, name: {:local, 1}, captures: []},
+             {:dependency, :"-entry/1-fun-0-", 1} => %{
                module: :dependency,
-               name: {:"$lynx_fun_2", 3},
+               name: {:"-entry/1-fun-0-", 3},
                arity: 1,
                captures: [_, _]
              },
-             3 => %{id: 3, module: :caller, name: {:"$lynx_fun_3", 3}, arity: 1, captures: [_, _]}
+             {:caller, :"-entry/1-fun-0-", 1} => %{
+               module: :caller,
+               name: {:"-entry/1-fun-0-", 3},
+               arity: 1,
+               captures: [_, _]
+             }
            } = translation.funs
 
     assert map_size(translation.funs) == 4
-
-    # Anonymous functions record the name the compiler gave them.
-    assert %{info: {:dependency, :"-entry/1-fun-0-", 1}} = translation.funs[2]
-    assert %{info: {:caller, :"-entry/1-fun-0-", 1}} = translation.funs[3]
-    refute Map.has_key?(translation.funs[{:caller, {:local, 1}}], :info)
 
     assert Translation.translate(translation, :caller, [{:entry, 1}]) == translation
 
@@ -801,21 +801,29 @@ defmodule Lynx.TranslationTest do
     assert map_size(updated.funs) == 5
     assert Map.take(updated.funs, Map.keys(translation.funs)) == translation.funs
 
-    assert %{id: 4, module: :caller, name: {:"$lynx_fun_4", 1}, arity: 0, captures: [_]} =
-             updated.funs[4]
+    assert %{module: :caller, name: {:"-extra/1-fun-0-", 1}, arity: 0, captures: [_]} =
+             updated.funs[{:caller, :"-extra/1-fun-0-", 0}]
 
     assert %{purity: :pure, local_calls: []} = updated.modules.caller.translations[{:extra, 1}]
-    assert %{purity: :sequential} = updated.modules.caller.translations[{:"$lynx_fun_4", 1}]
+
+    assert %{purity: :sequential} =
+             updated.modules.caller.translations[{:"-extra/1-fun-0-", 1}]
 
     assert %{purity: :pure, dispatches: true} =
-             updated.modules.dependency.translations[{:"$lynx_fun_2", 3}]
+             updated.modules.dependency.translations[{:"-entry/1-fun-0-", 3}]
 
     assert %{
              "body" => %{"kind" => "return", "values" => [function]}
            } =
              updated.modules.caller.translations[{:again, 0}].translation
 
-    assert %{"kind" => "function", "id" => 0, "arity" => 1, "captures" => []} = function
+    assert %{
+             "kind" => "function",
+             "module" => "caller",
+             "name" => "local",
+             "arity" => 1,
+             "captures" => []
+           } = function
 
     files = Translation.assemble(updated)
 
@@ -837,8 +845,14 @@ defmodule Lynx.TranslationTest do
              &match?(%{"kind" => "def", "name" => "extra", "purity" => "pure"}, &1)
            )
 
-    assert %{"info" => %{"module" => "caller", "name" => "-extra/1-fun-0-", "arity" => 0}} =
-             Enum.at(entries, 4)
+    # Entries are sorted by the names of their functions.
+    assert Enum.map(entries, &{&1["module"], &1["name"]}) == [
+             {"caller", "-entry/1-fun-0-"},
+             {"caller", "-extra/1-fun-0-"},
+             {"caller", "local"},
+             {"dependency", "-entry/1-fun-0-"},
+             {"dependency", "local"}
+           ]
 
     assert Enum.map(entries, fn %{
                                   "body" => %{
@@ -849,21 +863,21 @@ defmodule Lynx.TranslationTest do
                                 } ->
              {module, name}
            end) == [
+             {"Erlang.caller", "-entry/1-fun-0-"},
+             {"Erlang.caller", "-extra/1-fun-0-"},
              {"Erlang.caller", "local"},
-             {"Erlang.dependency", "local"},
-             {"Erlang.dependency", "$lynx_fun_2"},
-             {"Erlang.caller", "$lynx_fun_3"},
-             {"Erlang.caller", "$lynx_fun_4"}
+             {"Erlang.dependency", "-entry/1-fun-0-"},
+             {"Erlang.dependency", "local"}
            ]
 
     # Entries calling function values run at the program's dispatcher purity.
     assert Enum.map(entries, &{&1["purity"], Map.has_key?(&1, "dispatches")}) ==
              [
-               {"pure", false},
+               {"pure", true},
+               {"sequential", false},
                {"pure", false},
                {"pure", true},
-               {"pure", true},
-               {"sequential", false}
+               {"pure", false}
              ]
   end
 

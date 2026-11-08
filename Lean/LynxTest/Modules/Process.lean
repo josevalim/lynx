@@ -16,7 +16,7 @@ namespace LynxTest.Modules.Process
 open Lynx Erlang.erlang
 
 /-- These operations make no dynamic calls. -/
-private def noFunctions : Dispatcher := Dispatcher.ofTable #[] 0
+private def noFunctions : Dispatcher := Dispatcher.ofTable [] 0
 
 theorem error_reason (reason arguments : Term) :
     «error/2» reason arguments = .error (.error reason) := by rfl

@@ -16,36 +16,29 @@ open Term
 @[expose] def badarity (function : Term) (arguments : Array Term) : Exception :=
   .error (.tuple #[.atom "badarity", .tuple #[function, arguments.toList.foldr Term.cons Term.nil]])
 
+/-- The entry of the function named `Module:Name/Arity`. -/
+@[expose] def find (table : FunTable) (module name : String) (arity : Nat) : Option FunEntry :=
+  (table.find? fun def_ => def_.module == module && def_.name == name && def_.arity == arity).map
+    (·.entry)
+
 /-- The table entry a function value names and its captured values, once its
 arity matches the arguments. -/
 @[expose] def lookup (table : FunTable) (function : Term) (arguments : Array Term) :
     Except Exception (FunEntry × Array Term) :=
   match function with
-  | .function id arity captures =>
+  | .function module name arity captures =>
     if arguments.size = arity then
-      match table[id]? with
+      match find table module name arity with
       | some entry => .ok (entry, captures)
       | none => .error (badfun function)
     else .error (badarity function arguments)
   | _ => .error (badfun function)
 
-/-- The entry named `Module:Name/Arity` by its info, searching from entry `index`.
-Atoms are compared by name, so evaluation needs no term order. -/
-@[expose] def namedFrom (module name : String) (arity : Nat) :
-    Nat → List FunEntry → Option Term
-  | _, [] => none
-  | index, entry :: rest =>
-    match entry.info with
-    | some (.tuple ⟨[.atom entryModule, .atom entryName, .integer entryArity]⟩) =>
-      if entryModule = module ∧ entryName = name ∧ entryArity = arity then
-        some (.function index arity #[])
-      else namedFrom module name arity (index + 1) rest
-    | _ => namedFrom module name arity (index + 1) rest
-
 /-- The function value named `Module:Name/Arity`, when the program has one. -/
 @[expose] def named (table : FunTable) (module name : Term) (arity : Nat) : Option Term :=
   match module, name with
-  | .atom module, .atom name => namedFrom module name arity 0 table.toList
+  | .atom module, .atom name =>
+    if (find table module name arity).isSome then some (.function module name arity #[]) else none
   | _, _ => none
 
 /-- Dispatch one call. Entries that dispatch further receive `inner`, and do not
@@ -56,34 +49,24 @@ calls of other programs effectful, so they do not return there either. -/
   pure function arguments :=
     match lookup table function arguments with
     | .error exception => .error exception
-    | .ok (.pure body _, captures) => body captures arguments
-    | .ok (.apply body _, captures) =>
+    | .ok (.pure body, captures) => body captures arguments
+    | .ok (.apply body, captures) =>
       match inner with
       | some inner => body inner captures arguments
       | none => .error .exhausted
-    | .ok (.effectful _ _, _) => .error .exhausted
+    | .ok (.effectful _, _) => .error .exhausted
   call function arguments :=
     match lookup table function arguments with
     | .error exception => .error exception
-    | .ok (.pure body _, captures) => Result.ofExcept (body captures arguments)
-    | .ok (.apply body _, captures) =>
+    | .ok (.pure body, captures) => Result.ofExcept (body captures arguments)
+    | .ok (.apply body, captures) =>
       match inner with
       | some inner => Result.ofExcept (body inner captures arguments)
       | none => .error .exhausted
-    | .ok (.effectful body _, captures) =>
+    | .ok (.effectful body, captures) =>
       match inner with
       | some inner => body inner captures arguments
       | none => .error .exhausted
-  info function :=
-    match function with
-    | .function id _ _ =>
-      match table[id]? with
-      | some entry =>
-        match entry.info with
-        | some recorded => .ok recorded
-        | none => .error .exhausted
-      | none => .error .exhausted
-    | _ => .error (.error (.atom "badarg"))
   resolve := named table
 
 /-- Dispatch through an immutable program table. The depth bounds nested calls
@@ -96,60 +79,53 @@ evaluated. -/
   | depth + 1 => step table (some (ofTable table depth))
 
 /-- A pure entry runs without consuming call depth. -/
-theorem pure_pure {table : FunTable} {depth id arity : Nat} {captures arguments : Array Term}
-    {body : Array Term → PureFun} {info : Option Term}
-    (entry : table[id]? = some (.pure body info))
+theorem pure_pure {table : FunTable} {depth arity : Nat} {module name : String} {captures arguments : Array Term}
+    {body : Array Term → PureFun}
+    (entry : find table module name arity = some (.pure body))
     (size : arguments.size = arity) :
-    (ofTable table depth).pure (.function id arity captures) arguments = body captures arguments := by
+    (ofTable table depth).pure (.function module name arity captures) arguments = body captures arguments := by
   cases depth <;> simp [ofTable, step, lookup, entry, size]
 
-theorem call_pure {table : FunTable} {depth id arity : Nat} {captures arguments : Array Term}
-    {body : Array Term → PureFun} {info : Option Term}
-    (entry : table[id]? = some (.pure body info))
+theorem call_pure {table : FunTable} {depth arity : Nat} {module name : String} {captures arguments : Array Term}
+    {body : Array Term → PureFun}
+    (entry : find table module name arity = some (.pure body))
     (size : arguments.size = arity) :
-    (ofTable table depth).call (.function id arity captures) arguments =
+    (ofTable table depth).call (.function module name arity captures) arguments =
       Result.ofExcept (body captures arguments) := by
   cases depth <;> simp [ofTable, step, lookup, entry, size]
 
 /-- An entry that dispatches further consumes one level of call depth. -/
-theorem pure_apply {table : FunTable} {depth id arity : Nat} {captures arguments : Array Term}
-    {body : Dispatcher → Array Term → PureFun} {info : Option Term}
-    (entry : table[id]? = some (.apply body info))
+theorem pure_apply {table : FunTable} {depth arity : Nat} {module name : String} {captures arguments : Array Term}
+    {body : Dispatcher → Array Term → PureFun}
+    (entry : find table module name arity = some (.apply body))
     (size : arguments.size = arity) :
-    (ofTable table (depth + 1)).pure (.function id arity captures) arguments =
+    (ofTable table (depth + 1)).pure (.function module name arity captures) arguments =
       body (ofTable table depth) captures arguments := by
   simp [ofTable, step, lookup, entry, size]
 
-theorem call_apply {table : FunTable} {depth id arity : Nat} {captures arguments : Array Term}
-    {body : Dispatcher → Array Term → PureFun} {info : Option Term}
-    (entry : table[id]? = some (.apply body info))
+theorem call_apply {table : FunTable} {depth arity : Nat} {module name : String} {captures arguments : Array Term}
+    {body : Dispatcher → Array Term → PureFun}
+    (entry : find table module name arity = some (.apply body))
     (size : arguments.size = arity) :
-    (ofTable table (depth + 1)).call (.function id arity captures) arguments =
+    (ofTable table (depth + 1)).call (.function module name arity captures) arguments =
       Result.ofExcept (body (ofTable table depth) captures arguments) := by
   simp [ofTable, step, lookup, entry, size]
 
-theorem call_effectful {table : FunTable} {depth id arity : Nat} {captures arguments : Array Term}
-    {body : Dispatcher → Array Term → Fun} {info : Option Term}
-    (entry : table[id]? = some (.effectful body info))
+theorem call_effectful {table : FunTable} {depth arity : Nat} {module name : String} {captures arguments : Array Term}
+    {body : Dispatcher → Array Term → Fun}
+    (entry : find table module name arity = some (.effectful body))
     (size : arguments.size = arity) :
-    (ofTable table (depth + 1)).call (.function id arity captures) arguments =
+    (ofTable table (depth + 1)).call (.function module name arity captures) arguments =
       body (ofTable table depth) captures arguments := by
   simp [ofTable, step, lookup, entry, size]
 
 /-- Entries that dispatch further do not return once the call depth is exhausted. -/
-theorem pure_apply_zero {table : FunTable} {id arity : Nat} {captures arguments : Array Term}
-    {body : Dispatcher → Array Term → PureFun} {info : Option Term}
-    (entry : table[id]? = some (.apply body info))
+theorem pure_apply_zero {table : FunTable} {arity : Nat} {module name : String} {captures arguments : Array Term}
+    {body : Dispatcher → Array Term → PureFun}
+    (entry : find table module name arity = some (.apply body))
     (size : arguments.size = arity) :
-    (ofTable table 0).pure (.function id arity captures) arguments = .error .exhausted := by
+    (ofTable table 0).pure (.function module name arity captures) arguments = .error .exhausted := by
   simp [ofTable, step, lookup, entry, size]
-
-/-- A function value reports the information its entry records. -/
-theorem info_entry {table : FunTable} {depth id arity : Nat} {captures : Array Term}
-    {entry : FunEntry} {info : Term} (found : table[id]? = some entry)
-    (recorded : entry.info = some info) :
-    (ofTable table depth).info (.function id arity captures) = .ok info := by
-  cases depth <;> simp [ofTable, step, found, recorded]
 
 end Lynx.Dispatcher
 

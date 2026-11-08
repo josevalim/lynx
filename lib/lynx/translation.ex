@@ -33,7 +33,6 @@ defmodule Lynx.Translation do
     {:erlang, :apply, 2} => {:pure, true},
     {:erlang, :apply, 3} => {:pure, true},
     {:erlang, :make_fun, 3} => {:pure, true},
-    {:erlang, :fun_info_mfa, 1} => {:pure, true},
     {:maps, :filter, 2} => {:pure, true},
     {:maps, :fold, 3} => {:pure, true},
     {:maps, :intersect_with, 3} => {:pure, true},

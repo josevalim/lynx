@@ -23,9 +23,9 @@ inductive Term where
   /-- Reference identity: the allocating process's PID extended with its own
   allocation count, unique across the run. -/
   | reference : List Nat → Term
-  /-- Program function index, source arity, and captured values.
-  Comparison uses the index followed by the captured values. -/
-  | function (id arity : Nat) (captures : Array Term) : Term
+  /-- The module, name, and arity the compiler gave a function, and its captured
+  values. Comparison orders them in turn. -/
+  | function (module name : String) (arity : Nat) (captures : Array Term) : Term
   | pid : PID → Term
   | tuple : Array Term → Term
   | map : List (Term × Term) → Term
@@ -618,9 +618,6 @@ public structure Dispatcher where
   pure : Term → Array Term → Except Exception Term
   /-- Call from a computation returning `Result`. -/
   call : Term → Array Term → Result Term
-  /-- The `{Module, Name, Arity}` the compiler gave a function value. Values
-  without one do not return, and other terms raise `badarg`. -/
-  info : Term → Except Exception Term := fun _ => .error .exhausted
   /-- The function value named `Module:Name/Arity`, when the program has one. -/
   resolve : Term → Term → Nat → Option Term := fun _ _ _ => none
 
@@ -630,21 +627,23 @@ namespace Lynx.Term
 
 /-- Purity is enforced by the callable's return type, rather than a boolean.
 Entries that dispatch further receive the dispatcher for the remaining call depth.
-Each entry may record the `{Module, Name, Arity}` the compiler gave its function,
-which calls by name use to find it. -/
-public inductive FunEntry where
-  | pure (body : Array Term → PureFun) (info : Option Term := none)
-  /-- Pure apart from calling function values. -/
-  | apply (body : Dispatcher → Array Term → PureFun) (info : Option Term := none)
-  | effectful (body : Dispatcher → Array Term → Fun) (info : Option Term := none)
-
-/-- The `{Module, Name, Arity}` the compiler gave an entry's function, if known. -/
-@[expose] public def FunEntry.info : FunEntry → Option Term
-  | .pure _ info | .apply _ info | .effectful _ info => info
-
-/-- Program-local function implementations indexed by `Term.function` IDs.
 Each entry receives the captured values before the invocation arguments. -/
-public abbrev FunTable := Array FunEntry
+public inductive FunEntry where
+  | pure (body : Array Term → PureFun)
+  /-- Pure apart from calling function values. -/
+  | apply (body : Dispatcher → Array Term → PureFun)
+  | effectful (body : Dispatcher → Array Term → Fun)
+
+/-- A function of the program, named by the module, name, and arity the
+compiler gave it, which function values name. -/
+public structure FunDef where
+  module : String
+  name : String
+  arity : Nat
+  entry : FunEntry
+
+/-- The program's functions, sorted by their names. -/
+public abbrev FunTable := List FunDef
 
 end Lynx.Term
 

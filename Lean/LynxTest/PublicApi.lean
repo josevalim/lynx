@@ -16,7 +16,7 @@ private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) �
     Lynx.Term.Bitstring.Valid bytes lastBits → Lynx.Term :=
   fun bytes lastBits valid => Lynx.Term.bitstring bytes lastBits valid
 private def referenceConstructor : List Nat → Lynx.Term := Lynx.Term.reference
-private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatcher.ofTable #[] 0)
+private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatcher.ofTable [] 0)
 
 -- Bit-field proof interfaces are available through ordinary public imports.
 private theorem decodeBigEndian (value width : Nat) :
@@ -88,14 +88,14 @@ private theorem makeRefContinuationEquation (next : Lynx.Term → Lynx.Result α
     (makeRef >>= next) env = next (.reference (env.currentPid ++ [env.refCounter + 1]))
       { env with refCounter := env.refCounter + 1 } := by
   simp [makeRef]
-example : Nat → Nat → Array Lynx.Term → Lynx.Term := Lynx.Term.function
+example : String → String → Nat → Array Lynx.Term → Lynx.Term := Lynx.Term.function
 example (entry : Lynx.Dispatcher → Array Lynx.Term → Array Lynx.Term → Lynx.Result) :
-    Lynx.Term.FunTable := #[.effectful entry]
+    Lynx.Term.FunTable := [{ module := "m", name := "f", arity := 0, entry := .effectful entry }]
 example (entry : Lynx.Dispatcher → Array Lynx.Term → Array Lynx.Term →
     Except Lynx.Exception Lynx.Term) :
-    Lynx.Term.FunTable := #[.apply entry]
+    Lynx.Term.FunTable := [{ module := "m", name := "f", arity := 0, entry := .apply entry }]
 example (entry : Array Lynx.Term → Array Lynx.Term → Except Lynx.Exception Lynx.Term) :
-    Lynx.Term.FunTable := #[.pure entry]
+    Lynx.Term.FunTable := [{ module := "m", name := "f", arity := 0, entry := .pure entry }]
 
 example : Lynx.Term.FunTable → Nat → Lynx.Dispatcher := Lynx.Dispatcher.ofTable
 example : Lynx.Dispatcher → Lynx.Term → Array Lynx.Term → Except Lynx.Exception Lynx.Term :=
@@ -153,26 +153,26 @@ example (computation : Lynx.Result α) (pure : Lynx.Result.IsPure computation) :
   simp
 
 -- Table entries apply through the dispatcher, consuming depth unless pure.
-example (table : Lynx.Term.FunTable) (depth id arity : Nat)
+example (table : Lynx.Term.FunTable) (depth arity : Nat) (module name : String)
     (captures arguments : Array Lynx.Term) (body : Array Lynx.Term → Lynx.Term.PureFun)
-    (entry : table[id]? = some (.pure body)) (size : arguments.size = arity) :
-    (Lynx.Dispatcher.ofTable table depth).pure (.function id arity captures) arguments =
+    (entry : Lynx.Dispatcher.find table module name arity = some (.pure body)) (size : arguments.size = arity) :
+    (Lynx.Dispatcher.ofTable table depth).pure (.function module name arity captures) arguments =
       body captures arguments :=
   Lynx.Dispatcher.pure_pure entry size
 
-example (table : Lynx.Term.FunTable) (depth id arity : Nat)
+example (table : Lynx.Term.FunTable) (depth arity : Nat) (module name : String)
     (captures arguments : Array Lynx.Term)
     (body : Lynx.Dispatcher → Array Lynx.Term → Lynx.Term.PureFun)
-    (entry : table[id]? = some (.apply body)) (size : arguments.size = arity) :
-    (Lynx.Dispatcher.ofTable table (depth + 1)).pure (.function id arity captures) arguments =
+    (entry : Lynx.Dispatcher.find table module name arity = some (.apply body)) (size : arguments.size = arity) :
+    (Lynx.Dispatcher.ofTable table (depth + 1)).pure (.function module name arity captures) arguments =
       body (Lynx.Dispatcher.ofTable table depth) captures arguments :=
   Lynx.Dispatcher.pure_apply entry size
 
-example (table : Lynx.Term.FunTable) (depth id arity : Nat)
+example (table : Lynx.Term.FunTable) (depth arity : Nat) (module name : String)
     (captures arguments : Array Lynx.Term)
     (body : Lynx.Dispatcher → Array Lynx.Term → Lynx.Term.Fun)
-    (entry : table[id]? = some (.effectful body)) (size : arguments.size = arity) :
-    (Lynx.Dispatcher.ofTable table (depth + 1)).call (.function id arity captures) arguments =
+    (entry : Lynx.Dispatcher.find table module name arity = some (.effectful body)) (size : arguments.size = arity) :
+    (Lynx.Dispatcher.ofTable table (depth + 1)).call (.function module name arity captures) arguments =
       body (Lynx.Dispatcher.ofTable table depth) captures arguments :=
   Lynx.Dispatcher.call_effectful entry size
 
@@ -450,11 +450,10 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Dispatcher.badarity",
   "Lynx.Dispatcher.badfun",
   "Lynx.Dispatcher.call",
-  "Lynx.Dispatcher.info",
+  "Lynx.Dispatcher.find",
   "Lynx.Dispatcher.lookup",
   "Lynx.Dispatcher.mk",
   "Lynx.Dispatcher.named",
-  "Lynx.Dispatcher.namedFrom",
   "Lynx.Dispatcher.ofTable",
   "Lynx.Dispatcher.pure",
   "Lynx.Dispatcher.resolve",
@@ -598,10 +597,15 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.FiniteFloat.toRat",
   "Lynx.Term.FiniteFloat.widen",
   "Lynx.Term.Fun",
+  "Lynx.Term.FunDef",
+  "Lynx.Term.FunDef.arity",
+  "Lynx.Term.FunDef.entry",
+  "Lynx.Term.FunDef.mk",
+  "Lynx.Term.FunDef.module",
+  "Lynx.Term.FunDef.name",
   "Lynx.Term.FunEntry",
   "Lynx.Term.FunEntry.apply",
   "Lynx.Term.FunEntry.effectful",
-  "Lynx.Term.FunEntry.info",
   "Lynx.Term.FunEntry.pure",
   "Lynx.Term.FunTable",
   "Lynx.Term.PureFun",

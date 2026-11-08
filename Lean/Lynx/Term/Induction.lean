@@ -12,8 +12,8 @@ stored map binding. Map hypotheses concern raw entries, including shadowed ones.
     (float : ∀ n, motive (.float n))
     (atom : ∀ s, motive (.atom s))
     (reference : ∀ id, motive (.reference id))
-    (function : ∀ id arity captures, (∀ x ∈ captures, motive x) →
-      motive (.function id arity captures))
+    (function : ∀ module name arity captures, (∀ x ∈ captures, motive x) →
+      motive (.function module name arity captures))
     (pid : ∀ pid, motive (.pid pid))
     (tuple : ∀ xs, (∀ x ∈ xs, motive x) → motive (.tuple xs))
     (map : ∀ entries, (∀ k v, (k, v) ∈ entries → motive k ∧ motive v) →

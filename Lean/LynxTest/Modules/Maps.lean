@@ -132,17 +132,17 @@ theorem to_list_pairs (entries : List (Term × Term)) :
     Erlang.maps.«to_list/1» one = .error (.error (.tuple #[.atom "badmap", one])) :=
   ⟨rfl, by simp [Erlang.maps.«to_list/1»], rfl⟩
 
-private def folder : Term := .function 0 3 #[]
+private def folder : Term := .function "test" "fold" 3 #[]
 
 private def fold : Term → Term → Term → Except Exception Term :=
-  Erlang.maps.«fold/3» (Dispatcher.ofTable #[] 0)
+  Erlang.maps.«fold/3» (Dispatcher.ofTable [] 0)
 
 theorem fold_inputs :
     fold folder one (Term.map []) = .ok one ∧
     fold folder one .nil = .ok one ∧
     fold folder one (.atom "none") = .ok one ∧
     fold folder one one = .error (.error (.tuple #[.atom "badmap", one])) ∧
-    fold (.function 0 2 #[]) one (Term.map []) = .error (.error (.atom "badarg")) := by
+    fold (.function "test" "fold" 2 #[]) one (Term.map []) = .error (.error (.atom "badarg")) := by
   refine ⟨?_, rfl, rfl, rfl, rfl⟩
   simp [fold, Erlang.maps.«fold/3», folder]
 
@@ -174,13 +174,13 @@ theorem nonempty_map_equality (key value : Term) :
     Erlang.erlang.«==/2» (.map [(key, value)]) (.atom "term") = .ok Term.false := by
   simp [Erlang.erlang.«==/2», Term.false]
 
-private def combiner : Term := .function 0 3 #[]
+private def combiner : Term := .function "test" "fold" 3 #[]
 
 private def mergeWith : Term → Term → Term → Except Exception Term :=
-  Erlang.maps.«merge_with/3» (Dispatcher.ofTable #[] 0)
+  Erlang.maps.«merge_with/3» (Dispatcher.ofTable [] 0)
 
 private def intersectWith : Term → Term → Term → Except Exception Term :=
-  Erlang.maps.«intersect_with/3» (Dispatcher.ofTable #[] 0)
+  Erlang.maps.«intersect_with/3» (Dispatcher.ofTable [] 0)
 
 /-- Merging with an empty map calls no combiner, and arguments are checked
 as on the BEAM: the combiner first, then each map. -/

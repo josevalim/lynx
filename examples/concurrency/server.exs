@@ -162,7 +162,7 @@ defmodule ServerProofsTest do
             Erlang.erlang.«self/0», Erlang.erlang.«spawn/1», bind_assoc, Result.ok_bind,
             Result.pure_eq_ok, Result.schedule_bind]
           refine .get fun env self => .schedule ?_ ?_
-          · rw [Erlang.program.fun_table_call_0, self]
+          · rw [Erlang.program.«Elixir.ServerProofsTest:-double_all/1-fun-0-/0».call, self]
             exact serve_talks _ _
           · refine request_talks _ _ _ fun _ => collect_talks _ _ _ fun doubled => ?_
             cases «double/1» xs <;>
@@ -321,7 +321,7 @@ defmodule ServerProofsTest do
               Config.advance, Config.successors, splits, Task.transitions, isRequest, State.spawnWith,
               State.spawn,
               State.initial, State.process, State.update, Task.root,
-              Erlang.program.fun_table_call_0, «$lynx_fun_0/2», Transition.apply]
+              Erlang.program.«Elixir.ServerProofsTest:-double_all/1-fun-0-/0».call, «-double_all/1-fun-0-/2», Transition.apply]
             rfl
           all_goals simp
         obtain ⟨state, rootFound, serverFound, started⟩ := start

@@ -59,7 +59,7 @@ def «reference/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
 
 def «function/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   match _0 with
-  | vX@(Lynx.Term.function _ _ _) => pure vX
+  | vX@(Lynx.Term.function _ _ _ _) => pure vX
   | _2 => pure (Lynx.Term.atom "no")
 
 def «conjunction/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=

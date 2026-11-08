@@ -62,7 +62,7 @@ open Lynx
   .ok (match input with | .reference _ => Term.true | _ => Term.false)
 
 @[expose] def «is_function/1» (input : Term) : Except Exception Term :=
-  .ok (match input with | .function _ _ _ => Term.true | _ => Term.false)
+  .ok (match input with | .function _ _ _ _ => Term.true | _ => Term.false)
 
 @[expose] def «is_number/1» (input : Term) : Except Exception Term :=
   .ok (match input with | .integer _ | .float _ => Term.true | _ => Term.false)
@@ -330,7 +330,7 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
   | .integer n =>
     if n < 0 then throw (.error (.atom "badarg"))
     else .ok (match input with
-      | .function _ a _ => if (a : Int) = n then Term.true else Term.false
+      | .function _ _ a _ => if (a : Int) = n then Term.true else Term.false
       | _ => Term.false)
   | _ => throw (.error (.atom "badarg"))
 

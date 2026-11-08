@@ -134,15 +134,27 @@ defmodule Lynx.CoreToLeanjTest do
                     "values" => [
                       %{
                         "elements" => [
-                          %{"kind" => "function", "id" => id, "arity" => 2, "captures" => []},
-                          %{"kind" => "function", "id" => id, "arity" => 2, "captures" => []}
+                          %{
+                            "kind" => "function",
+                            "module" => "erlang",
+                            "name" => "=<",
+                            "arity" => 2,
+                            "captures" => []
+                          },
+                          %{
+                            "kind" => "function",
+                            "module" => "erlang",
+                            "name" => "=<",
+                            "arity" => 2,
+                            "captures" => []
+                          }
                         ]
                       }
                     ]
                   }
                 }
               },
-              {:"$lynx_fun_0", 2} => %{
+              {:"erlang:=<", 2} => %{
                 purity: :pure,
                 translation: %{
                   "params" => [%{"name" => 0}, %{"name" => 1}],
@@ -157,7 +169,7 @@ defmodule Lynx.CoreToLeanjTest do
             }, [{:erlang, :"=<", 2, []}]} = translate(definitions([definition(:entry, body)]))
   end
 
-  test "spawning a literal function with arguments spawns a closure over them" do
+  test "spawning a literal function with arguments spawns an anonymous closure over them" do
     args = :cerl.c_cons(:cerl.c_var(0), :cerl.c_cons(:cerl.c_atom(:ok), :cerl.c_nil()))
 
     body =
@@ -176,12 +188,18 @@ defmodule Lynx.CoreToLeanjTest do
                     "module" => "Erlang.erlang",
                     "name" => "spawn_link",
                     "args" => [
-                      %{"kind" => "function", "arity" => 0, "captures" => [%{"name" => 0}]}
+                      %{
+                        "kind" => "function",
+                        "module" => "example",
+                        "name" => "-entry/1-anonymous-0-",
+                        "arity" => 0,
+                        "captures" => [%{"name" => 0}]
+                      }
                     ]
                   }
                 }
               },
-              {:"$lynx_fun_0", 1} => %{
+              {:"-entry/1-anonymous-0-", 1} => %{
                 translation: %{
                   "params" => [%{"name" => 0}],
                   "body" => %{
@@ -271,7 +289,14 @@ defmodule Lynx.CoreToLeanjTest do
 
     body =
       :cerl.c_letrec(
-        [{loop, :cerl.c_fun([input], :cerl.c_tuple([captured, input, loop]))}],
+        [
+          {loop,
+           :cerl.ann_c_fun(
+             [{:id, {0, 0, :"-entry/1-fun-0-"}}],
+             [input],
+             :cerl.c_tuple([captured, input, loop])
+           )}
+        ],
         :cerl.c_case(call, [:cerl.c_clause([:cerl.c_var(:ignored)], loop)])
       )
 
@@ -287,7 +312,8 @@ defmodule Lynx.CoreToLeanjTest do
                             "values" => [
                               %{
                                 "kind" => "function",
-                                "id" => id,
+                                "module" => "example",
+                                "name" => "-entry/1-fun-0-",
                                 "arity" => 1,
                                 "captures" => [%{"name" => 0}]
                               }
@@ -308,14 +334,18 @@ defmodule Lynx.CoreToLeanjTest do
                         "elements" => [
                           %{"name" => 0},
                           %{"name" => "input"},
-                          %{"kind" => "function", "id" => self_id, "captures" => [%{"name" => 0}]}
+                          %{
+                            "kind" => "function",
+                            "name" => "-entry/1-fun-0-",
+                            "captures" => [%{"name" => 0}]
+                          }
                         ]
                       }
                     ]
                   }
                 }
               },
-              {:"$lynx_fun_0", 2} => %{
+              {:"-entry/1-fun-0-", 2} => %{
                 translation: %{
                   "params" => [%{"name" => 0}, %{"name" => %{"generated" => 1}}],
                   "body" => %{
@@ -326,8 +356,6 @@ defmodule Lynx.CoreToLeanjTest do
                 }
               }
             }, [{:external, :entry, 1, []}]} = translate(definitions([definition(:entry, body)]))
-
-    assert id == self_id
   end
 
   test "resolves native segment endianness on the translating platform" do
@@ -1584,8 +1612,9 @@ defmodule Lynx.CoreToLeanjTest do
              )
 
     assert %{
-             {:external, :other, :target, 2} => %{
-               info: {:other, :target, 2},
+             {:other, :target, 2} => %{
+               module: :example,
+               name: {:"other:target", 2},
                captures: []
              }
            } = funs

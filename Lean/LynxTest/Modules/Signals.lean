@@ -31,16 +31,17 @@ private def poll : Result :=
     | none => .ok (.atom "timeout")
 
 /-- Spawned processes: one returns, one raises, and one waits for a message. -/
-private def functions : Term.FunTable := #[
-  .effectful fun _ _ _ => .ok .nil,
-  .effectful fun _ _ _ => .error (.error (.atom "boom")),
-  .effectful fun _ _ _ => receiveAny]
+private def functions : Term.FunTable := [
+  { module := "test", name := "raises", arity := 0, entry := .effectful fun _ _ _ =>
+      .error (.error (.atom "boom")) },
+  { module := "test", name := "returns", arity := 0, entry := .effectful fun _ _ _ => .ok .nil },
+  { module := "test", name := "waits", arity := 0, entry := .effectful fun _ _ _ => receiveAny }]
 
 private def dispatcher : Dispatcher := Dispatcher.ofTable functions 1
 
-private def returns : Term := .function 0 0 #[]
-private def raises : Term := .function 1 0 #[]
-private def waits : Term := .function 2 0 #[]
+private def returns : Term := .function "test" "returns" 0 #[]
+private def raises : Term := .function "test" "raises" 0 #[]
+private def waits : Term := .function "test" "waits" 0 #[]
 
 /-- Accept exactly one outcome, for proofs over every schedule. -/
 private def only (expected : Outcome Term) (actual : Outcome Term) : Bool :=

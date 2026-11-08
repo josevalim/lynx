@@ -248,11 +248,20 @@ defmodule Lynx do
 
   Lynx collects every anonymous function and function reference in the
   translated program, including those in dependencies, into a single table,
-  `Erlang.program.fun_table`. A function value is a `Lynx.Term.function` holding
-  an index into that table, its arity, and its captured values. Invoking it calls
-  the table entry with the captured values followed by the arguments. Indexes
-  outside the table raise `badfun`, and calls with the wrong number of arguments
-  raise `badarity`, as per Erlang semantics.
+  `Erlang.program.fun_table`, sorted by name. A function value is a
+  `Lynx.Term.function` holding the module, name, and arity the compiler gave its
+  function, such as `"-make/1-fun-0-"` for an anonymous function, and its
+  captured values. Invoking it calls the table entry of that name with the
+  captured values followed by the arguments. Names outside the table raise
+  `badfun`, and calls with the wrong number of arguments raise `badarity`, as per
+  Erlang semantics.
+
+  Anonymous functions are translated to definitions named after the compiler's
+  name and the number of captures and arguments, such as `«-make/1-fun-0-/2»`,
+  and captures of other modules' functions to wrappers such as
+  `«lists:reverse/1»`. Each table entry has equations named after its function,
+  such as `Erlang.program.«example:-make/1-fun-0-/1».pure` and `.call`, which
+  state what calling it returns.
 
   This has several consequences for laws:
 

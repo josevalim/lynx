@@ -45,12 +45,12 @@ values the program creates, and does not return for others. -/
     | none => throw .exhausted
   | _, _, _ => throw (.error (.atom "badarg"))
 
-/-- The `{Module, Name, Arity}` the compiler gave a function value. It returns
-`Except` or `Result`, like `apply/2`, as it receives the dispatcher. -/
-@[expose] def «fun_info_mfa/1» {m : Type → Type u} [Monad m] [MonadExceptOf Exception m]
-    (dispatcher : Dispatcher) (function : Term) : m Term :=
-  match dispatcher.info function with
-  | .ok info => pure info
-  | .error exception => throw exception
+/-- The `{Module, Name, Arity}` the compiler gave a function value, which the value
+carries. -/
+@[expose] def «fun_info_mfa/1» (function : Term) : Except Exception Term :=
+  match function with
+  | .function module name arity _ =>
+    .ok (.tuple #[.atom module, .atom name, .integer arity])
+  | _ => .error (.error (.atom "badarg"))
 
 end Erlang.erlang
