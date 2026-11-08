@@ -157,6 +157,23 @@ theorem iterator_steps (entries : List (Term × Term)) :
     Erlang.maps.«iterator/1» one = .error (.error (.tuple #[.atom "badmap", one])) :=
   ⟨rfl, rfl, rfl, rfl, rfl⟩
 
+/-- A single binding is enumerated as itself, so its iteration is determined. -/
+theorem singleton_iteration (key value : Term) :
+    (Erlang.maps.«iterator/1» (.map [(key, value)]) >>= Erlang.maps.«next/1») =
+      .ok (.tuple #[key, value, .nil]) := by
+  simp [Erlang.maps.«iterator/1», Erlang.maps.«next/1»]
+
+/-- Pair lists simplify, so maps built from literal pairs reduce. -/
+theorem from_literal_pairs (key value : Term) :
+    Erlang.maps.«from_list/1» (Term.list [.tuple #[key, value]]) = .ok (.map [(key, value)]) := by
+  simp [Erlang.maps.«from_list/1», Term.pairList?]
+
+/-- Maps with bindings differ from the empty map and from atoms. -/
+theorem nonempty_map_equality (key value : Term) :
+    Erlang.erlang.«==/2» (.map [(key, value)]) (Term.map []) = .ok Term.false ∧
+    Erlang.erlang.«==/2» (.map [(key, value)]) (.atom "term") = .ok Term.false := by
+  simp [Erlang.erlang.«==/2», Term.false]
+
 end LynxTest.Modules.Maps
 
 run_cmd do

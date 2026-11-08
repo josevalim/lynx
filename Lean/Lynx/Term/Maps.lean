@@ -9,7 +9,7 @@ namespace Lynx.Term
 /-- The pairs of a proper list of 2-tuples, as accepted by `maps:from_list/1`. -/
 @[expose] def pairList? : Term → Option (List (Term × Term))
   | .nil => some []
-  | .cons (.tuple #[key, value]) tail => (pairList? tail).map ((key, value) :: ·)
+  | .cons (.tuple ⟨[key, value]⟩) tail => (pairList? tail).map ((key, value) :: ·)
   | _ => none
 
 /-- The elements of a proper list. -/
