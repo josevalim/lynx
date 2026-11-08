@@ -943,6 +943,15 @@ theorem round_below_one (s : Sign) (m₁ m₂ k : Nat) (e₁ : Int) (hm₁ : 0 <
   · rename_i nonzero
     exact Or.inr ⟨_, _, Nat.pos_of_ne_zero nonzero, rfl, exponent⟩
 
+theorem exponent_not_top (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047) :
+    unpackExponent (spec := .binary64) b ≠ -1#_ := by
+  obtain ⟨fm, fe, fs⟩ := fields b
+  intro h
+  have := congrArg BitVec.toNat h
+  simp only [fe] at this
+  simp at this
+  omega
+
 /-- Finite bit patterns unpack to zero or a 53-bit mantissa with a bounded exponent. -/
 theorem unpack_bounds (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047) :
     (∃ s, UnpackedFloat.unpack .binary64 b = .zero s) ∨
@@ -951,12 +960,7 @@ theorem unpack_bounds (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047) 
   obtain ⟨fm, fe, -⟩ := fields b
   have bias : Format.binary64.exponentBias = 1023 := by decide
   simp only [UnpackedFloat.unpack]
-  have notTop : unpackExponent (spec := .binary64) b ≠ -1#_ := by
-    intro h
-    have := congrArg BitVec.toNat h
-    simp only [fe] at this
-    simp at this
-    omega
+  have notTop := exponent_not_top b finite
   rw [ite_eq_right_iff.mpr (fun h => absurd h notTop)]
   split
   · rename_i zero
@@ -996,20 +1000,70 @@ theorem sign_toNat (b : BitVec 64) :
   | 0#1 => rfl
   | 1#1 => rfl
 
-/-- Finite bit patterns survive unpacking and packing. -/
-theorem pack_unpack (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047) :
+/-- A 64-bit pattern is the sum of its sign, exponent, and mantissa fields. The proof
+avoids omega, whose certificates for these divisions exceed external checkers' fuel. -/
+theorem fields_sum (x : Nat) (lt : x < 2 ^ 64) :
+    x / 2 ^ 63 % 2 * 2 ^ 63 + x / 2 ^ 52 % 2 ^ 11 * 2 ^ 52 + x % 2 ^ 52 = x := by
+  have high : x / 2 ^ 63 % 2 = x / 2 ^ 52 / 2 ^ 11 := by
+    rw [Nat.div_div_eq_div_mul, ← Nat.pow_add]
+    exact Nat.mod_eq_of_lt ((Nat.div_lt_iff_lt_mul (by decide)).mpr lt)
+  have low := Nat.div_add_mod x (2 ^ 52)
+  have middle := Nat.div_add_mod (x / 2 ^ 52) (2 ^ 11)
+  rw [high]
+  generalize x / 2 ^ 52 / 2 ^ 11 = h at middle ⊢
+  generalize x / 2 ^ 52 % 2 ^ 11 = e at middle ⊢
+  generalize x % 2 ^ 52 = r at low ⊢
+  generalize x / 2 ^ 52 = q at low middle ⊢
+  rw [← low, ← middle, show (2 : Nat) ^ 63 = 2 ^ 52 * 2 ^ 11 from Nat.pow_add 2 52 11]
+  -- Keep the powers opaque, so checking the rewrites never multiplies them out.
+  generalize (2 : Nat) ^ 52 = P
+  generalize (2 : Nat) ^ 11 = Q
+  rw [Nat.mul_add, Nat.mul_comm h, Nat.mul_assoc, Nat.mul_comm e]
+
+theorem normal_fields (b : BitVec 64) :
+    b.toNat / 2 ^ 63 % 2 * 2 ^ 63 +
+        (BitVec.ofNat 11 (((unpackExponent (spec := .binary64) b).toNat : Int) -
+          ((Format.binary64.exponentBias : Nat) + (52 : Nat)) +
+          (Format.binary64.exponentBias : Nat) + (52 : Nat)).toNat).toNat * 2 ^ 52 +
+      (BitVec.ofNat 52 (1#1 ++ unpackMantissa (spec := .binary64) b).toNat).toNat = b.toNat := by
+  obtain ⟨fm, fe, -⟩ := fields b
+  have append : (1#1 ++ unpackMantissa (spec := .binary64) b).toNat =
+      2 ^ 52 + (unpackMantissa (spec := .binary64) b).toNat := by
+    rw [BitVec.toNat_append, ← Nat.shiftLeft_add_eq_or_of_lt (unpackMantissa (spec := .binary64) b).isLt]
+    simp [Nat.shiftLeft_eq]
+  simp only [BitVec.toNat_ofNat, append, fm, fe, Int.add_assoc, Int.sub_add_cancel, Int.toNat_natCast,
+    Nat.mod_mod, Nat.add_mod_left]
+  exact fields_sum b.toNat b.isLt
+
+theorem zero_fields (b : BitVec 64) (ez : b.toNat / 2 ^ 52 % 2 ^ 11 = (0#11).toNat)
+    (mz : b.toNat % 2 ^ 52 = (0#52).toNat) :
+    b.toNat / 2 ^ 63 % 2 * 2 ^ 63 + BitVec.toNat (0 : BitVec 11) * 2 ^ 52 +
+      BitVec.toNat (0 : BitVec 52) = b.toNat := by
+  have sum := fields_sum b.toNat b.isLt
+  rw [ez, mz] at sum
+  exact sum
+
+theorem subnormal_fields (b : BitVec 64) (ez : b.toNat / 2 ^ 52 % 2 ^ 11 = (0#11).toNat) :
+    b.toNat / 2 ^ 63 % 2 * 2 ^ 63 + (0#11).toNat * 2 ^ 52 +
+      (BitVec.ofNat 52 (unpackMantissa (spec := .binary64) b).toNat).toNat = b.toNat := by
+  obtain ⟨fm, -, -⟩ := fields b
+  have sum := fields_sum b.toNat b.isLt
+  rw [ez] at sum
+  have mantissa : (BitVec.ofNat 52 (unpackMantissa (spec := .binary64) b).toNat).toNat =
+      b.toNat % 2 ^ 52 := by
+    rw [BitVec.toNat_ofNat, fm, Nat.mod_mod]
+  rw [mantissa]
+  exact sum
+
+theorem pack_unpack_subnormal (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047)
+    (exponent : unpackExponent (spec := .binary64) b = 0#11) :
     UnpackedFloat.pack .binary64 (UnpackedFloat.unpack .binary64 b) = b := by
   apply BitVec.eq_of_toNat_eq
   obtain ⟨fm, fe, fs⟩ := fields b
   have sign := sign_toNat b
   have lt := b.isLt
   have bias : Format.binary64.exponentBias = 1023 := by decide
-  have notTop : unpackExponent (spec := .binary64) b ≠ -1#_ := by
-    intro h
-    have := congrArg BitVec.toNat h
-    simp only [fe] at this
-    simp at this
-    omega
+  have notTop := exponent_not_top b finite
   simp only [UnpackedFloat.unpack]
   rw [ite_eq_right_iff.mpr (fun h => absurd h notTop)]
   split
@@ -1021,8 +1075,7 @@ theorem pack_unpack (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047) :
       have mz := congrArg BitVec.toNat mz
       simp only [fm] at mz
       simp only [UnpackedFloat.pack, packedZero, toNat_packComponents, sign]
-      simp at ez mz ⊢
-      omega
+      exact zero_fields b ez mz
     · rename_i nz
       have mlt := (unpackMantissa (spec := .binary64) b).isLt
       have mpos : (unpackMantissa (spec := .binary64) b).toNat ≠ 0 :=
@@ -1032,8 +1085,22 @@ theorem pack_unpack (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047) :
       rw [ite_eq_right_iff.mpr (fun h => absurd h (by simp at ez; simp [bias, fe]; omega)),
         ite_eq_right_iff.mpr (fun h => absurd h (by simp only [Format.mantissaBits]; omega)),
         toNat_packComponents, sign]
-      simp [fm] at ez ⊢
-      omega
+      exact subnormal_fields b ez
+  · exact absurd exponent ‹_›
+
+theorem pack_unpack_normal (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047)
+    (exponent : unpackExponent (spec := .binary64) b ≠ 0#11) :
+    UnpackedFloat.pack .binary64 (UnpackedFloat.unpack .binary64 b) = b := by
+  apply BitVec.eq_of_toNat_eq
+  obtain ⟨fm, fe, fs⟩ := fields b
+  have sign := sign_toNat b
+  have lt := b.isLt
+  have bias : Format.binary64.exponentBias = 1023 := by decide
+  have notTop := exponent_not_top b finite
+  simp only [UnpackedFloat.unpack]
+  rw [ite_eq_right_iff.mpr (fun h => absurd h notTop)]
+  split
+  · exact absurd ‹_› exponent
   · rename_i nonzero
     have ne := fun h => nonzero (BitVec.eq_of_toNat_eq (by simpa using h))
     simp only [fe] at ne
@@ -1053,8 +1120,25 @@ theorem pack_unpack (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047) :
     rw [ite_eq_right_iff.mpr (fun h => absurd h (by simp [bias, fe]; omega)),
       ite_eq_left_iff.mpr (fun h => absurd (by simp only [Format.mantissaBits, log]) h),
       toNat_packComponents, sign]
-    simp [fm, fe, bias, append] at ne ⊢
-    omega
+    exact normal_fields b
+
+/-- Finite bit patterns survive unpacking and packing. -/
+theorem pack_unpack (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047) :
+    UnpackedFloat.pack .binary64 (UnpackedFloat.unpack .binary64 b) = b := by
+  by_cases exponent : unpackExponent (spec := .binary64) b = 0#11
+  · exact pack_unpack_subnormal b finite exponent
+  · exact pack_unpack_normal b finite exponent
+
+/-- The exponent field of a 64-bit pattern assembled from its fields. -/
+theorem exponent_field (S E R : Nat) (he : E < 2 ^ 11) (hr : R < 2 ^ 52) :
+    (S * 2 ^ 63 + E * 2 ^ 52 + R) / 2 ^ 52 % 2048 = E := by
+  rw [show (2048 : Nat) = 2 ^ 11 from rfl, show (2 : Nat) ^ 63 = 2 ^ 11 * 2 ^ 52 from Nat.pow_add 2 11 52]
+  have positive : 0 < 2 ^ 52 := Nat.two_pow_pos 52
+  -- Keep the powers opaque, so checking the rewrites never multiplies them out.
+  generalize (2 : Nat) ^ 52 = P at hr positive ⊢
+  generalize (2 : Nat) ^ 11 = Q at he ⊢
+  rw [← Nat.mul_assoc, ← Nat.add_mul, Nat.add_comm _ R, Nat.add_mul_div_right _ _ positive,
+    Nat.div_eq_of_lt hr, Nat.zero_add, Nat.mul_comm S Q, Nat.mul_add_mod, Nat.mod_eq_of_lt he]
 
 /-- Zero and values with a bounded exponent pack to finite bit patterns. -/
 theorem pack_finite (u : UnpackedFloat)
@@ -1063,19 +1147,16 @@ theorem pack_finite (u : UnpackedFloat)
   have bias : Format.binary64.exponentBias = 1023 := by decide
   rcases bounded with ⟨s, rfl⟩ | ⟨s, m, fe, h, rfl, small⟩
   · simp only [UnpackedFloat.pack, packedZero, toNat_packComponents]
-    have := (s.toBitVec).isLt
-    simp at this ⊢
-    omega
+    rw [exponent_field _ _ _ (BitVec.isLt _) (BitVec.isLt _)]
+    decide
   · simp only [UnpackedFloat.pack]
     rw [ite_eq_right_iff.mpr (fun h => absurd h (by simp [bias]; omega))]
-    have := (s.toBitVec).isLt
     split
-    · rw [toNat_packComponents]
-      simp [bias] at this ⊢
+    · rw [toNat_packComponents, exponent_field _ _ _ (BitVec.isLt _) (BitVec.isLt _)]
+      simp [bias]
       omega
-    · rw [toNat_packComponents]
-      simp at this ⊢
-      omega
+    · rw [toNat_packComponents, exponent_field _ _ _ (BitVec.isLt _) (BitVec.isLt _)]
+      decide
 
 /-- Products of a finite value and a value below one in magnitude, that is, with
 an exponent field below 1023, are finite. -/
