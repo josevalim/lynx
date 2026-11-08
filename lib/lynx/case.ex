@@ -41,6 +41,7 @@ defmodule Lynx.Case do
           law: 2,
           laws: 2,
           laws: 3,
+          postlude: 1,
           termination_suffix: 2,
           termination_suffix: 3,
           cutoff: 1,
@@ -234,6 +235,52 @@ defmodule Lynx.Case do
   def __prelude__(_module, _source),
     do: raise(ArgumentError, "prelude expects a Lynx.Lean value")
 
+  @doc ~S'''
+  Adds Lean declarations about translated definitions to this laws group.
+
+      postlude ~LEAN"""
+      namespace MyTest
+
+      theorem double_integer (n : Int) : «double/1» (.integer n) = .ok (.integer (n + n)) := by
+        simp [«double/1»]
+
+      end MyTest
+      """
+
+  Blocks are joined in order into one Lean module, which imports every module
+  translated for the group, including the prelude, and which the laws import.
+  Unlike preludes, postludes may refer to translated definitions, so they can
+  share lemmas about the translated code between the proofs of several laws.
+  Lynx writes the module header, so blocks contain only declarations, which are
+  public and expose their bodies. Namespaces are chosen by the source: the
+  test module's namespace, such as `MyTest` above, makes declarations available
+  to law proofs without qualification.
+
+  Postludes do not translate anything themselves: the laws must reach every
+  definition they mention. They do not leak into other groups, and their source
+  participates in verification cache keys. Proofs retain kernel checking and
+  axiom audits.
+  '''
+  defmacro postlude(source) do
+    quote do
+      Lynx.Case.__postlude__(__MODULE__, unquote(source))
+    end
+  end
+
+  @doc false
+  def __postlude__(module, %Lynx.Lean{} = source) do
+    case Module.get_attribute(module, :lynx_postludes) do
+      nil ->
+        raise ArgumentError, "postlude must be defined inside a laws group"
+
+      postludes ->
+        Module.put_attribute(module, :lynx_postludes, [source | postludes])
+    end
+  end
+
+  def __postlude__(_module, _source),
+    do: raise(ArgumentError, "postlude expects a Lynx.Lean value")
+
   @doc """
   Leaves a function untranslated in this laws group.
 
@@ -392,6 +439,7 @@ defmodule Lynx.Case do
     Module.put_attribute(module, :lynx_cutoffs, MapSet.new())
     Module.put_attribute(module, :lynx_dynamic, MapSet.new())
     Module.put_attribute(module, :lynx_preludes, [])
+    Module.put_attribute(module, :lynx_postludes, [])
 
     try do
       fun.()
@@ -407,7 +455,8 @@ defmodule Lynx.Case do
         termination_suffixes: Module.get_attribute(module, :lynx_termination_suffixes),
         cutoffs: Module.get_attribute(module, :lynx_cutoffs),
         dynamic: Module.get_attribute(module, :lynx_dynamic),
-        preludes: Enum.reverse(Module.get_attribute(module, :lynx_preludes))
+        preludes: Enum.reverse(Module.get_attribute(module, :lynx_preludes)),
+        postludes: Enum.reverse(Module.get_attribute(module, :lynx_postludes))
       ]
 
       {name, group_laws, translation, options}
@@ -417,6 +466,7 @@ defmodule Lynx.Case do
       Module.delete_attribute(module, :lynx_cutoffs)
       Module.delete_attribute(module, :lynx_dynamic)
       Module.delete_attribute(module, :lynx_preludes)
+      Module.delete_attribute(module, :lynx_postludes)
     end
   end
 

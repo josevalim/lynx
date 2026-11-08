@@ -126,6 +126,9 @@ defmodule Lynx.Laws do
   Pass `preludes: [source, ...]` to load `Lynx.Lean` declaration blocks before
   translated definitions and proofs, as with `Lynx.Case.prelude/1`.
 
+  Pass `postludes: [source, ...]` to load `Lynx.Lean` declaration blocks after
+  translated definitions and before proofs, as with `Lynx.Case.postlude/1`.
+
   Pass `options: [name: value]` to set Lean options, such as `maxHeartbeats` or
   `maxRecDepth`, at the top of every translated module. Names are passed to
   Lean as given. Proofs remain kernel-checked.

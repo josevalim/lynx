@@ -254,6 +254,54 @@ defmodule Lynx.CaseTest do
     assert output =~ "proof for law unavailable() failed"
   end
 
+  test "postludes share lemmas about translated code and remain group scoped" do
+    defmodule Postludes do
+      use ExUnit.Case, register: false
+      use Lynx.Case
+
+      def double(value) when is_integer(value), do: value + value
+
+      laws "shared" do
+        postlude(~LEAN"""
+        namespace Elixir.Lynx.CaseTest.Postludes
+
+        theorem double_integer (n : Int) : «double/1» (.integer n) = .ok (.integer (n + n)) := by
+          simp [«double/1»]
+        """)
+
+        postlude(~LEAN"""
+        theorem double_zero : «double/1» (.integer 0) = .ok (.integer 0) := by
+          simpa using double_integer 0
+
+        end Elixir.Lynx.CaseTest.Postludes
+        """)
+
+        law doubles_zero,
+          expects: double(0) == 0,
+          proof: ~LEAN"simp [«doubles_zero:ensures/0», double_zero, Erlang.erlang.«==/2»]"
+
+        law doubles_one,
+          expects: double(1) == 2,
+          proof: ~LEAN"simp [«doubles_one:ensures/0», double_integer, Erlang.erlang.«==/2»]"
+      end
+
+      laws "without postlude" do
+        law unavailable,
+          expects: double(0) == 0,
+          proof: ~LEAN"simp [«unavailable:ensures/0», double_zero, Erlang.erlang.«==/2»]"
+      end
+    end
+
+    output =
+      capture_io(fn ->
+        assert ExUnit.run([Postludes]) == %{failures: 1, skipped: 0, total: 2, excluded: 0}
+      end)
+
+    refute output =~ "laws shared ("
+    assert output =~ "laws without postlude"
+    assert output =~ "Unknown identifier `double_zero`"
+  end
+
   test "reports multiple failed laws as separate assertions" do
     defmodule LawFailure do
       use ExUnit.Case, register: false

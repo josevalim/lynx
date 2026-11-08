@@ -59,6 +59,52 @@ defmodule Lynx.TranslationTest do
     assert Enum.all?(assemble.(source, cache: false), &(not Map.has_key?(&1, "cache_key")))
   end
 
+  test "postludes follow translated modules and depend on their cache keys" do
+    source = %Lynx.Lean{
+      source: "theorem identity_nil : «identity/1» .nil = .ok .nil := rfl\n",
+      file: "proofs.exs",
+      span: {10, 7},
+      indentation: 4
+    }
+
+    assemble = fn body ->
+      Translation.new(postludes: [source])
+      |> Translation.add(
+        {"example.erl", cerl("-module(example).\n-export([identity/1]).\n" <> body)}
+      )
+      |> Translation.translate(:example, [{:identity, 1}])
+      |> Translation.assemble()
+    end
+
+    assert [
+             %{"module" => "Erlang.example", "cache_key" => module_key},
+             %{
+               "module" => "Erlang.postlude",
+               "imports" => ["Erlang.example"],
+               "contents" => [],
+               "cache_key" => postlude_key,
+               "preludes" => [
+                 %{"file" => "proofs.exs", "span" => [1], "indentation" => 0, "source" => header},
+                 %{
+                   "file" => "proofs.exs",
+                   "span" => [10, 7],
+                   "indentation" => 4,
+                   "source" => body
+                 }
+               ]
+             }
+           ] = assemble.("identity(X) -> X.\n")
+
+    assert header =~ "module"
+    assert body == source.source
+
+    assert [%{"cache_key" => changed_module_key}, %{"cache_key" => changed_postlude_key}] =
+             assemble.("identity(X) -> {X}.\n")
+
+    assert changed_module_key != module_key
+    assert changed_postlude_key != postlude_key
+  end
+
   test "clusters cycles separately and emits dependencies before callers" do
     core =
       cerl("""

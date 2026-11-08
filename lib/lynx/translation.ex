@@ -2,6 +2,7 @@ defmodule Lynx.Translation do
   @moduledoc false
 
   defstruct preludes: [],
+            postludes: [],
             termination_suffixes: %{},
             cutoffs: MapSet.new(),
             dynamic: [],
@@ -61,6 +62,7 @@ defmodule Lynx.Translation do
   def new(opts \\ []) do
     %__MODULE__{
       preludes: Keyword.get(opts, :preludes, []),
+      postludes: Keyword.get(opts, :postludes, []),
       termination_suffixes: Keyword.get(opts, :termination_suffixes, %{}),
       cutoffs: MapSet.new(Keyword.get(opts, :cutoffs, [])),
       dynamic: Enum.to_list(Keyword.get(opts, :dynamic, []))
@@ -355,6 +357,7 @@ defmodule Lynx.Translation do
         %__MODULE__{
           modules: modules,
           preludes: preludes,
+          postludes: postludes,
           termination_suffixes: suffixes,
           funs: funs,
           external_calls: external_calls,
@@ -476,6 +479,15 @@ defmodule Lynx.Translation do
           {[program], keys}
         end
 
+      # The postlude follows every translated module and the program.
+      {postlude, keys} =
+        assemble_postludes(
+          postludes,
+          support_imports ++ Enum.map(files ++ program, & &1["module"]),
+          keys,
+          cache
+        )
+
       # Laws follow the program, so their statements may reference its table.
       # Their namespace nests below the module's, so proofs keep resolving
       # unqualified names as before.
@@ -493,7 +505,10 @@ defmodule Lynx.Translation do
               file = %{
                 "module" => module_name <> ".laws",
                 "file" => module.file,
-                "imports" => support_imports ++ [module_name | Enum.map(program, & &1["module"])],
+                "imports" =>
+                  support_imports ++
+                    Enum.map(postlude, & &1["module"]) ++
+                    [module_name | Enum.map(program, & &1["module"])],
                 "contents" => contents
               }
 
@@ -511,7 +526,7 @@ defmodule Lynx.Translation do
           end
         end)
 
-      support ++ files ++ program ++ laws
+      support ++ files ++ program ++ postlude ++ laws
     after
       :digraph.delete(graph)
     end
@@ -520,21 +535,7 @@ defmodule Lynx.Translation do
   defp assemble_preludes([], _cache), do: {[], %{}, []}
 
   defp assemble_preludes(preludes, cache) do
-    declarations =
-      for source <- preludes do
-        %Lynx.Lean{} = source
-
-        %{
-          "source" => source.source,
-          "file" => source.file,
-          "span" =>
-            case source.span do
-              {line, column} -> [line, column]
-              line -> [line]
-            end,
-          "indentation" => source.indentation
-        }
-      end
+    declarations = Enum.map(preludes, &lean_block/1)
 
     name = "Erlang.prelude"
 
@@ -552,6 +553,48 @@ defmodule Lynx.Translation do
       )
 
     {[file], keys, [name]}
+  end
+
+  defp assemble_postludes([], _imports, keys, _cache), do: {[], keys}
+
+  # Postludes are written like preludes, after a generated module header.
+  defp assemble_postludes(postludes, imports, keys, cache) do
+    [first | _] = declarations = Enum.map(postludes, &lean_block/1)
+
+    header = %{
+      "source" => "module\n\n@[expose] public section\n",
+      "file" => first["file"],
+      "span" => [1],
+      "indentation" => 0
+    }
+
+    {file, keys} =
+      cache_file(
+        %{
+          "module" => "Erlang.postlude",
+          "file" => first["file"],
+          "imports" => imports,
+          "contents" => [],
+          "preludes" => [header | declarations]
+        },
+        keys,
+        cache
+      )
+
+    {[file], keys}
+  end
+
+  defp lean_block(%Lynx.Lean{} = source) do
+    %{
+      "source" => source.source,
+      "file" => source.file,
+      "span" =>
+        case source.span do
+          {line, column} -> [line, column]
+          line -> [line]
+        end,
+      "indentation" => source.indentation
+    }
   end
 
   defp cache_file(file, keys, false), do: {file, keys}
