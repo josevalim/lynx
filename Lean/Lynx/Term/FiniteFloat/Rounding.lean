@@ -985,7 +985,7 @@ theorem unpack_bounds (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047) 
     · omega
     · omega
     · left
-      simp [bias, Format.mantissaBitsWithoutImplicit, fe]
+      simp [bias, fe]
 
 theorem sign_toNat (b : BitVec 64) :
     (Sign.ofBitVec (unpackSign (spec := .binary64) b)).toBitVec.toNat = b.toNat / 2 ^ 63 % 2 := by

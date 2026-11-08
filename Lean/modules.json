@@ -1,6 +1,7 @@
 {"sets":
  {"union/2": {"pure": true},
   "subtract/2": {"pure": true},
+  "size/1": {"pure": true},
   "new/1": {"pure": true},
   "new/0": {"pure": true},
   "is_subset/2": {"pure": true},

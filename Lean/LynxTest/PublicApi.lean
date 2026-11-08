@@ -353,6 +353,7 @@ private def expectedDeclarations : Array String := #[
   "Erlang.sets.«is_subset/2»",
   "Erlang.sets.«new/0»",
   "Erlang.sets.«new/1»",
+  "Erlang.sets.«size/1»",
   "Erlang.sets.«subtract/2»",
   "Erlang.sets.«union/2»",
   "Lynx.Concurrent.Config",
