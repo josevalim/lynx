@@ -34,6 +34,8 @@
   "put/2": {"pure": false},
   "process_info/2": {"pure": false},
   "process_flag/2": {"pure": false},
+  "phash2/2": {"pure": true},
+  "phash2/1": {"pure": true},
   "or/2": {"pure": true},
   "not/1": {"pure": true},
   "node/1": {"pure": true},

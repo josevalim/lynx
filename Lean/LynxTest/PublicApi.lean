@@ -296,6 +296,8 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«node/1»",
   "Erlang.erlang.«not/1»",
   "Erlang.erlang.«or/2»",
+  "Erlang.erlang.«phash2/1»",
+  "Erlang.erlang.«phash2/2»",
   "Erlang.erlang.«process_flag/2»",
   "Erlang.erlang.«process_info/2»",
   "Erlang.erlang.«put/2»",
