@@ -54,15 +54,15 @@ defmodule STTBitmapProofsTest do
     termination_suffix &List.duplicate/3, ~LEAN"partial_fixpoint"
 
     # Recursive types are unfolded on demand, so descr's recursion is partial.
-    termination_suffix &Descr.unfold/1, ~LEAN"partial_fixpoint"
-    termination_suffix &Descr.empty_seen?/2, ~LEAN"partial_fixpoint"
+    termination_suffix &Descr.unfold/1, ~LEAN"partial_fixpoint", recur: true
+    termination_suffix &Descr.empty_seen?/2, ~LEAN"partial_fixpoint", recur: true
     termination_suffix &Descr.empty_difference_subtype?/3, ~LEAN"partial_fixpoint"
     termination_suffix &Descr.iterator_empty_difference_subtype?/3, ~LEAN"partial_fixpoint"
     termination_suffix &Descr.fun_line_empty?/3, ~LEAN"partial_fixpoint"
     termination_suffix &Descr.fields_merge_with_defaults/5, ~LEAN"partial_fixpoint"
-    termination_suffix &Descr.bdd_union/2, ~LEAN"partial_fixpoint"
-    termination_suffix &Descr.bdd_difference/2, ~LEAN"partial_fixpoint"
-    termination_suffix &Descr.bdd_intersection/2, ~LEAN"partial_fixpoint"
+    termination_suffix &Descr.bdd_union/2, ~LEAN"partial_fixpoint", recur: true
+    termination_suffix &Descr.bdd_difference/2, ~LEAN"partial_fixpoint", recur: true
+    termination_suffix &Descr.bdd_intersection/2, ~LEAN"partial_fixpoint", recur: true
 
     # Map iteration recurses on the iterator that maps:next/1 returns.
     termination_suffix &Descr.iterator_merge/3, ~LEAN"partial_fixpoint"

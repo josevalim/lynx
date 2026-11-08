@@ -111,6 +111,9 @@ defmodule Lynx.Laws do
   a `Lynx.Lean` termination suffix to a translated function. The suffix does not
   change the function's purity (see the purity model in `Lynx`). Targets must be
   translated by the laws being verified; annotations do not add translation roots.
+  A value of `{lean_source, recur: true}` also attaches the suffix to the functions
+  mutually recursive with the target that have no suffix of their own, as with
+  `Lynx.Case.termination_suffix/3`.
 
   Pass `cutoffs: [{module, function, arity}]` to leave selected functions
   untranslated. Calls to these functions raise `Lynx.Exception.exhausted`, which
