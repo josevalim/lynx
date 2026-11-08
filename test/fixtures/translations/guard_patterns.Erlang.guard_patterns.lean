@@ -153,8 +153,8 @@ def «disjunction/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exception 
               Erlang.erlang.«and/2» (Lynx.Term.atom "true") _6)
             (fun vTry => pure vTry)
             (fun lynxException =>
-              let vT := Lynx.Exception.classTerm lynxException
-              let vR := Lynx.Exception.reason lynxException
+              have vT := Lynx.Exception.classTerm lynxException
+              have vR := Lynx.Exception.reason lynxException
               pure (Lynx.Term.atom "false")))
           (fun _ => pure vX) lynxMatchNext
       | _0, _1 => lynxMatchNext ())

@@ -119,8 +119,8 @@ def «map_computed/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exception
           Lynx.Except.tryWith (Erlang.erlang.«+/2» _0 (Lynx.Term.integer 1))
               (fun _7 => pure (Lynx.Term.atom "true", _7))
               (fun _8 =>
-                let _10 := Lynx.Exception.classTerm _8
-                let _9 := Lynx.Exception.reason _8
+                have _10 := Lynx.Exception.classTerm _8
+                have _9 := Lynx.Exception.reason _8
                 pure (Lynx.Term.atom "false", Lynx.Term.atom "false"))
         (fun {lynxValue : Type}
                 (lynxBody :

@@ -101,8 +101,8 @@ def «guarded/1» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) : Lynx.Resul
                         Lynx.Result.ofExcept (Erlang.erlang.«==/2» _1 (Lynx.Term.integer 1)))
                       (fun vTry => pure vTry)
                       (fun lynxException =>
-                        let vT := Lynx.Exception.classTerm lynxException
-                        let vR := Lynx.Exception.reason lynxException
+                        have vT := Lynx.Exception.classTerm lynxException
+                        have vR := Lynx.Exception.reason lynxException
                         pure (Lynx.Term.atom "false"))
                 Lynx.Result.ofExcept (Erlang.erlang.«and/2» _6 _7))
               _lynxReceiveEnv (by simp (config := { maxDischargeDepth := 64 }))) with
@@ -133,8 +133,8 @@ def «self_guard/0» (lynxDispatch : Lynx.Dispatcher) : Lynx.Result Lynx.Term :=
                   Lynx.Result.ofExcept (Erlang.erlang.«=:=/2» vPid _0))
                 (fun vTry => pure vTry)
                 (fun lynxException =>
-                  let vT := Lynx.Exception.classTerm lynxException
-                  let vR := Lynx.Exception.reason lynxException
+                  have vT := Lynx.Exception.classTerm lynxException
+                  have vR := Lynx.Exception.reason lynxException
                   pure (Lynx.Term.atom "false")))
               _lynxReceiveEnv (by simp (config := { maxDischargeDepth := 64 }))) with
           | Except.ok (Lynx.Term.atom "true") => Option.some vX

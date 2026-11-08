@@ -120,6 +120,34 @@ defmodule Lynx.CaseTest do
     end)
   end
 
+  test "partial fixpoints recurse from exception handlers" do
+    defmodule HandlerRecursion do
+      use ExUnit.Case, register: false
+      use Lynx.Case
+
+      def skip([head | tail]) do
+        if head == :skip, do: throw(:skip), else: head
+      catch
+        :skip -> skip(tail)
+      end
+
+      def skip([]), do: nil
+
+      laws "handler recursion" do
+        termination_suffix &__MODULE__.skip/1, ~LEAN"partial_fixpoint"
+
+        law empty,
+          expects: skip([]) == nil,
+          proof: ~LEAN"simp [«empty:ensures/0», «skip/1».eq_def, Erlang.erlang.«==/2»]"
+      end
+    end
+
+    capture_io(fn ->
+      assert ExUnit.run([HandlerRecursion]) ==
+               %{failures: 0, skipped: 0, total: 1, excluded: 0}
+    end)
+  end
+
   test "preludes are available to suffixes and remain group scoped" do
     defmodule Elaborators do
       use ExUnit.Case, register: false
