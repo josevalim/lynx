@@ -361,9 +361,16 @@ defmodule Lynx.Translation do
       ) do
     cache = Keyword.get(opts, :cache, true)
 
-    modules =
-      Enum.reduce(suffixes, modules, fn {{module, function, arity}, %Lynx.Lean{} = suffix},
-                                        modules ->
+    # Targets of `recur: true` suffixes share them with their recursive group.
+    {modules, recursive} =
+      Enum.reduce(suffixes, {modules, %{}}, fn {{module, function, arity}, suffix},
+                                               {modules, recursive} ->
+        {%Lynx.Lean{} = suffix, opts} =
+          case suffix do
+            {suffix, opts} -> {suffix, Keyword.validate!(opts, recur: false)}
+            suffix -> {suffix, [recur: false]}
+          end
+
         path = [module, :translations, {function, arity}, :translation]
 
         if get_in(modules, path ++ ["kind"]) != "def" do
@@ -391,7 +398,14 @@ defmodule Lynx.Translation do
           "indentation" => suffix.indentation
         }
 
-        update_in(modules, path, &Map.put(&1, "termination_suffix", json))
+        modules = update_in(modules, path, &Map.put(&1, "termination_suffix", json))
+
+        recursive =
+          if opts[:recur],
+            do: Map.update(recursive, module, [{function, arity}], &[{function, arity} | &1]),
+            else: recursive
+
+        {modules, recursive}
       end)
 
     dispatcher_purity = dispatcher_purity(modules, funs)
@@ -423,7 +437,7 @@ defmodule Lynx.Translation do
               |> Enum.sort()
               |> Enum.map(&:lynx_core_to_leanj.module_name/1)
               |> then(&(support_imports ++ &1)),
-            "contents" => assemble_module(module.translations)
+            "contents" => assemble_module(module.translations, Map.get(recursive, name, []))
           }
 
           dispatches? =
@@ -600,7 +614,7 @@ defmodule Lynx.Translation do
 
   defp join_purity(left, right), do: :lynx_core_to_leanj.join_purity(left, right)
 
-  defp assemble_module(functions) do
+  defp assemble_module(functions, recursive) do
     graph = :digraph.new()
 
     try do
@@ -619,6 +633,7 @@ defmodule Lynx.Translation do
 
       groups = topsort(components, &declaration_location(functions, &1))
       :digraph.delete(components)
+      functions = share_recursive_suffixes(functions, graph, recursive)
       for group <- groups, do: emit_group(group, functions)
     after
       :digraph.delete(graph)
@@ -689,7 +704,6 @@ defmodule Lynx.Translation do
           else: translation
       end
 
-    defs = share_partial_fixpoint(defs)
     [first | _] = defs
     span = first["span"]
 
@@ -705,25 +719,26 @@ defmodule Lynx.Translation do
     end
   end
 
-  # Lean requires every member of a mutual group to be a partial fixpoint once
-  # one is, so a partial_fixpoint suffix extends to members without a suffix.
-  defp share_partial_fixpoint(defs) do
-    partial =
-      Enum.find_value(defs, fn
-        %{"termination_suffix" => %{"source" => source} = suffix} ->
-          if String.trim(source) == "partial_fixpoint", do: suffix
+  # A suffix with `recur: true` extends to the members of its target's recursive
+  # group without their own suffix: the functions it reaches that also reach it.
+  defp share_recursive_suffixes(functions, graph, recursive) do
+    for target <- recursive, reduce: functions do
+      functions ->
+        suffix = functions[target].translation["termination_suffix"]
+        reached = MapSet.new(:digraph_utils.reachable([target], graph))
 
-        _ ->
-          nil
-      end)
+        for member <- :digraph_utils.reaching([target], graph),
+            member in reached,
+            reduce: functions do
+          functions ->
+            update_in(functions[member].translation, fn
+              %{"kind" => "def"} = definition ->
+                Map.put_new(definition, "termination_suffix", suffix)
 
-    if partial do
-      Enum.map(defs, fn
-        %{"kind" => "def"} = definition -> Map.put_new(definition, "termination_suffix", partial)
-        other -> other
-      end)
-    else
-      defs
+              other ->
+                other
+            end)
+        end
     end
   end
 

@@ -42,6 +42,7 @@ defmodule Lynx.Case do
           laws: 2,
           laws: 3,
           termination_suffix: 2,
+          termination_suffix: 3,
           cutoff: 1,
           dynamic: 1,
           prelude: 1
@@ -120,9 +121,12 @@ defmodule Lynx.Case do
   the function diverges raise `Lynx.Exception.exhausted`.
   Raises if the target function is not translated by the group's laws.
 
-  Lean requires every function in a mutually recursive group to be a partial
-  fixpoint once one of them is, so `partial_fixpoint` also applies to the
-  members of the target's group without their own suffix.
+  Pass `recur: true` to also attach the suffix to the functions mutually
+  recursive with the target that have no suffix of their own. Lean requires
+  every function in a mutually recursive group to be a partial fixpoint once
+  one of them is:
+
+      termination_suffix &Module.Types.Descr.unfold/1, ~LEAN"partial_fixpoint", recur: true
 
   A function with `partial_fixpoint` also gets a `fixpoint_induct` principle,
   which proves properties of every successful return without a termination
@@ -136,7 +140,7 @@ defmodule Lynx.Case do
       · intro f ih a b v returned
         ...
   """
-  defmacro termination_suffix(target, source) do
+  defmacro termination_suffix(target, source, opts \\ []) do
     mfa =
       case target do
         {:&, _, [{:/, _, [{{:., _, [module, name]}, _, []}, arity]}]}
@@ -153,12 +157,19 @@ defmodule Lynx.Case do
       end
 
     quote do
-      Lynx.Case.__termination_suffix__(__MODULE__, unquote(Macro.escape(mfa)), unquote(source))
+      Lynx.Case.__termination_suffix__(
+        __MODULE__,
+        unquote(Macro.escape(mfa)),
+        unquote(source),
+        unquote(opts)
+      )
     end
   end
 
   @doc false
-  def __termination_suffix__(module, {target, name, arity} = mfa, %Lynx.Lean{} = source) do
+  def __termination_suffix__(module, {target, name, arity} = mfa, %Lynx.Lean{} = source, opts) do
+    opts = Keyword.validate!(opts, recur: false)
+
     case Module.get_attribute(module, :lynx_termination_suffixes) do
       nil ->
         raise ArgumentError, "termination_suffix must be defined inside a laws group"
@@ -171,7 +182,11 @@ defmodule Lynx.Case do
               "duplicate termination_suffix for #{Exception.format_mfa(target, name, arity)}"
             )
 
-        Module.put_attribute(module, :lynx_termination_suffixes, Map.put(suffixes, mfa, source))
+        Module.put_attribute(
+          module,
+          :lynx_termination_suffixes,
+          Map.put(suffixes, mfa, {source, opts})
+        )
     end
   end
 

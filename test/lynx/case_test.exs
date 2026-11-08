@@ -120,8 +120,8 @@ defmodule Lynx.CaseTest do
     end)
   end
 
-  test "partial fixpoints extend to their mutually recursive group" do
-    defmodule SharedPartialFixpoint do
+  test "recursive suffixes extend to their mutually recursive group" do
+    defmodule RecursiveSuffix do
       use ExUnit.Case, register: false
       use Lynx.Case
 
@@ -131,7 +131,7 @@ defmodule Lynx.CaseTest do
       def pong(value), do: ping(value)
 
       laws "shared partial fixpoint" do
-        termination_suffix &__MODULE__.ping/1, ~LEAN"partial_fixpoint"
+        termination_suffix(&__MODULE__.ping/1, ~LEAN"partial_fixpoint", recur: true)
 
         law stops(value),
           requires: is_atom(value),
@@ -144,7 +144,7 @@ defmodule Lynx.CaseTest do
     end
 
     capture_io(fn ->
-      assert ExUnit.run([SharedPartialFixpoint]) ==
+      assert ExUnit.run([RecursiveSuffix]) ==
                %{failures: 0, skipped: 0, total: 1, excluded: 0}
     end)
   end
