@@ -627,6 +627,24 @@ theorem map_exactCompare_empty (entries : List (Term × Term))
     rw [view] at equal
     simp [Compare.compareMapViews, compareLex, Compare.compareOn] at equal
 
+/-- Only maps without bindings are equal to the empty map. -/
+@[simp] theorem compare_map_empty (entries : List (Term × Term)) :
+    compare (.map entries) (.map []) = .eq ↔ entries = [] := by
+  constructor
+  · intro equal
+    cases entries with
+    | nil => rfl
+    | cons e es =>
+      exfalso
+      rw [compare_eq_step] at equal
+      simp only [Compare.compareStep, Compare.mapView] at equal
+      have nonempty := mapViewInsert_ne_nil exactCompare e (Compare.mapView exactCompare es)
+      obtain ⟨p, ps, view⟩ := List.exists_cons_of_ne_nil nonempty
+      rw [view] at equal
+      simp [Compare.compareMapViews, compareLex, Compare.compareOn] at equal
+  · rintro rfl
+    exact compare_self _
+
 @[simp] theorem exactCompare_eq_nil (a : Term) : exactCompare a .nil = .eq ↔ a = .nil := by
   cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
 
@@ -703,6 +721,11 @@ theorem binary_compare_eq (a b : ByteArray) :
 @[simp] theorem nil_compare_eq (a : Term) : compare .nil a = .eq ↔ a = .nil := by
   rw [Std.OrientedCmp.eq_swap (cmp := compare), Ordering.swap_eq_eq]
   exact compare_eq_nil a
+
+/-- Only the same atom is equal to an atom. -/
+@[simp] theorem compare_eq_atom (a : Term) (name : String) :
+    compare a (.atom name) = .eq ↔ a = .atom name := by
+  cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
 
 @[simp] theorem compare_integers (a b : Int) :
     compare (.integer a) (.integer b) = Ord.compare a b := by
@@ -793,6 +816,14 @@ private theorem mem_mapViewInsert {xs : List (α × α)} {e p : α × α} (h : p
       · rcases ih h with h | h
         · exact Or.inl h
         · exact Or.inr (List.mem_cons_of_mem _ h)
+
+private theorem mem_mapView {xs : List (α × α)} {p : α × α} (h : p ∈ mapView cmp xs) : p ∈ xs := by
+  induction xs with
+  | nil => simp [mapView] at h
+  | cons e xs ih =>
+    rcases mem_mapViewInsert cmp h with h | h
+    · exact h ▸ List.mem_cons_self
+    · exact List.mem_cons_of_mem _ (ih h)
 
 variable [Std.TransCmp cmp]
 
@@ -1005,14 +1036,17 @@ theorem map_exactCompare_eq_of_lookup (a b : List (Term × Term))
 
 /-- The visible bindings of a map, each key once, in an unspecified order.
 Erlang does not specify map iteration order, so proofs may rely only on the
-distinct keys and lookups below. Execution enumerates the keys in ascending order. -/
+distinct keys, lookups, and bindings below. Execution enumerates the keys in
+ascending order. -/
 opaque mapEnumeration (entries : List (Term × Term)) :
     { enumerated : List (Term × Term) //
       enumerated.Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq) ∧
-      ∀ key, mapLookup enumerated key = mapLookup entries key } :=
+      (∀ key, mapLookup enumerated key = mapLookup entries key) ∧
+      ∀ entry ∈ enumerated, entry ∈ entries } :=
   ⟨Compare.mapView exactCompare entries,
     (Compare.mapView_sorted exactCompare entries).imp fun lt => by simp [lt],
-    Compare.mapViewLookup_view exactCompare entries⟩
+    Compare.mapViewLookup_view exactCompare entries,
+    fun _ => Compare.mem_mapView exactCompare⟩
 
 /-- The visible bindings of a map, in an unspecified order. -/
 def mapEntries (entries : List (Term × Term)) : List (Term × Term) :=
@@ -1021,12 +1055,32 @@ def mapEntries (entries : List (Term × Term)) : List (Term × Term) :=
 /-- Enumeration keeps the first binding of each key. -/
 @[simp] theorem mapLookup_mapEntries (entries : List (Term × Term)) (key : Term) :
     mapLookup (mapEntries entries) key = mapLookup entries key :=
-  (mapEnumeration entries).property.2 key
+  (mapEnumeration entries).property.2.1 key
 
 /-- Enumerated keys are distinct. -/
 theorem mapEntries_distinct (entries : List (Term × Term)) :
     (mapEntries entries).Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq) :=
   (mapEnumeration entries).property.1
+
+/-- Enumerated bindings are bindings of the map. -/
+theorem mem_of_mem_mapEntries {entries : List (Term × Term)} {entry : Term × Term}
+    (member : entry ∈ mapEntries entries) : entry ∈ entries :=
+  (mapEnumeration entries).property.2.2 entry member
+
+/-- A single binding enumerates as itself. -/
+@[simp] theorem mapEntries_singleton (key value : Term) :
+    mapEntries [(key, value)] = [(key, value)] := by
+  have found := mapLookup_mapEntries [(key, value)] key
+  have only : ∀ entry ∈ mapEntries [(key, value)], entry = (key, value) := fun entry member => by
+    simpa using mem_of_mem_mapEntries member
+  have distinct := mapEntries_distinct [(key, value)]
+  match enumerated : mapEntries [(key, value)], only, distinct with
+  | [], _, _ => simp [enumerated, mapLookup] at found
+  | [entry], only, _ => rw [only entry (by simp)]
+  | first :: second :: rest, only, distinct =>
+    have first_eq := only first (by simp)
+    have second_eq := only second (by simp)
+    simp [first_eq, second_eq] at distinct
 
 /-- The empty map enumerates no bindings. -/
 @[simp] theorem mapEntries_nil : mapEntries [] = [] := by
