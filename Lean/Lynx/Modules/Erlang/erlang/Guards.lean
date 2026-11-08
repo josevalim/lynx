@@ -196,6 +196,16 @@ def «*/2» : Term → Term → Except Exception Term
 @[simp↓, cbv_eval] theorem «*/2_integers» (left right : Int) :
     «*/2» (.integer left) (.integer right) = .ok (.integer (left * right)) := by rfl
 
+/-- An integer that converts to a float times a float below one in magnitude, that
+is, with a biased exponent below 1023, is a float. -/
+theorem «*/2_integer_float» (n : Int) (converted value : Term.FiniteFloat)
+    (exact : Term.FiniteFloat.ofInt n = some converted) (small : value.exponent.val < 1023) :
+    ∃ product, «*/2» (.integer n) (.float value) = .ok (.float product) := by
+  have finite := Term.FiniteFloat.mul_isSome converted value small
+  cases multiplied : converted.mul value with
+  | none => simp [multiplied] at finite
+  | some product => exact ⟨product, by simp [«*/2», exact, multiplied, floatResult]⟩
+
 /-- Erlang remainder uses division truncated toward zero, including negative operands. -/
 @[expose] def «rem/2» : Term → Term → Except Exception Term
   | .integer x, .integer y =>

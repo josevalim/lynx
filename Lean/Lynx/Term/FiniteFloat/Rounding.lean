@@ -849,4 +849,267 @@ public theorem toNat_ofScientific_zero (e : Int) : (Float.Model.ofScientific 0 e
   simp only [Float.Model.ofScientific, Float.Model.pack, UInt64.toNat_ofBitVec, ofScientific_zero]
   rfl
 
+/-! ### Finite products -/
+
+/-- The exponent after shifting a mantissa to its target exponent. -/
+theorem shift_exponent (m : Nat) (e : Int) (a : Accuracy) :
+    (shiftToTargetExponent .binary64 m e a).2 =
+      max e (max ((m.log2 : Int) + 1 + e - 53) (-1074)) := by
+  simp only [shiftToTargetExponent, shiftToExponent, Format.targetExponent, totalExponent]
+  have : Format.binary64.mantissaBits = 53 := rfl
+  have : Format.binary64.minExponent = -1074 := by decide
+  simp only [*]
+  omega
+
+/-- Shifting never grows the mantissa. -/
+theorem shift_mantissa_le (m : Nat) (e : Int) (a : Accuracy) :
+    (shiftToTargetExponent .binary64 m e a).1.mantissa ≤ m := by
+  simp only [shiftToTargetExponent, shiftToExponent]
+  rw [shift_mantissa, mantissa_ofMantissaAndAccuracy]
+  exact Nat.div_le_self _ _
+
+/-- Rounding adds at most one to the mantissa. -/
+theorem roundedMantissa_le (em : ExtendedMantissa) : em.roundedMantissa ≤ em.mantissa + 1 := by
+  obtain ⟨m, r, st⟩ := em
+  cases r <;> cases st <;>
+    simp [ExtendedMantissa.roundedMantissa, ExtendedMantissa.accuracy, Accuracy.roundToNearestEven] <;>
+    (try split) <;> omega
+
+/-- A product `m₁ * m₂ * 2 ^ (e₁ - k)` of a finite value `m₁ * 2 ^ e₁` and a value
+`m₂ * 2 ^ -k` below one rounds to zero or a finite value. -/
+theorem round_below_one (s : Sign) (m₁ m₂ k : Nat) (e₁ : Int) (hm₁ : 0 < m₁) (hm₂ : 0 < m₂)
+    (small₁ : m₁ < 2 ^ 53) (small₂ : m₂ < 2 ^ k) (top : e₁ ≤ 971) :
+    roundWithAccuracy .binary64 s (m₁ * m₂) (e₁ - k) .exact = .zero s ∨
+      ∃ fm fe h, roundWithAccuracy .binary64 s (m₁ * m₂) (e₁ - k) .exact = .finite s fm fe h ∧ fe ≤ 971 := by
+  have product : m₁ * m₂ < m₁ * 2 ^ k := Nat.mul_lt_mul_of_pos_left small₂ hm₁
+  have pos : 0 < m₁ * m₂ := Nat.mul_pos hm₁ hm₂
+  have below : m₁ * m₂ < 2 ^ (53 + k) := by
+    rw [Nat.pow_add]
+    exact Nat.lt_of_lt_of_le product (Nat.mul_le_mul_right _ (Nat.le_of_lt small₁))
+  have log : (m₁ * m₂).log2 < 53 + k := (Nat.log2_lt (by omega)).mpr below
+  rw [roundWithAccuracy_finish]
+  have first := shift_exponent (m₁ * m₂) (e₁ - k) .exact
+  have mantissa : (shiftToTargetExponent .binary64 (m₁ * m₂) (e₁ - k) .exact).1.mantissa =
+      m₁ * m₂ / 2 ^ ((shiftToTargetExponent .binary64 (m₁ * m₂) (e₁ - k) .exact).2 - (e₁ - k)).toNat := by
+    simp only [shiftToTargetExponent, shiftToExponent]
+    rw [shift_mantissa, mantissa_ofMantissaAndAccuracy]
+    congr 2
+    omega
+  generalize shiftToTargetExponent .binary64 (m₁ * m₂) (e₁ - k) .exact = p at first mantissa
+  obtain ⟨em, t⟩ := p
+  simp only at first mantissa
+  generalize shift : (t - (e₁ - k)).toNat = sh at mantissa
+  -- The shifted mantissa fits in 53 bits.
+  have fits : em.mantissa < 2 ^ 53 := by
+    rw [mantissa, Nat.div_lt_iff_lt_mul (Nat.two_pow_pos _), ← Nat.pow_add]
+    have := Nat.lt_log2_self (n := m₁ * m₂)
+    exact Nat.lt_of_lt_of_le this (Nat.pow_le_pow_right (by decide) (by omega))
+  have rounded := roundedMantissa_le em
+  have target : t ≤ 971 := by omega
+  -- A carry into a 54th bit only happens below the largest exponent.
+  have carry : 2 ^ 53 ≤ em.roundedMantissa → t ≤ 970 := by
+    intro big
+    have full : 2 ^ 53 - 1 ≤ em.mantissa := by omega
+    have scaled : (2 ^ 53 - 1) * 2 ^ sh ≤ m₁ * m₂ := by
+      have := Nat.div_mul_le_self (m₁ * m₂) (2 ^ sh)
+      rw [← mantissa] at this
+      exact Nat.le_trans (Nat.mul_le_mul_right _ full) this
+    by_cases at971 : t = 971
+    · exfalso
+      have big' : (2 ^ 53 - 1) * 2 ^ k ≤ (2 ^ 53 - 1) * 2 ^ sh :=
+        Nat.mul_le_mul_left _ (Nat.pow_le_pow_right (by decide) (by omega))
+      have : m₁ * 2 ^ k ≤ (2 ^ 53 - 1) * 2 ^ k := Nat.mul_le_mul_right _ (by omega)
+      omega
+    · omega
+  simp only [finish]
+  have second := shift_exponent em.roundedMantissa t .exact
+  generalize shiftToTargetExponent .binary64 em.roundedMantissa t .exact = q at second
+  obtain ⟨fem, fe⟩ := q
+  simp only at second ⊢
+  have logRounded : em.roundedMantissa.log2 ≤ 53 := by
+    rcases Nat.eq_zero_or_pos em.roundedMantissa with z | z
+    · simp [z]
+    · exact Nat.lt_succ_iff.mp ((Nat.log2_lt (by omega)).mpr (by omega))
+  have exponent : fe ≤ 971 := by
+    by_cases big : 2 ^ 53 ≤ em.roundedMantissa
+    · have := carry big; omega
+    · have : em.roundedMantissa.log2 < 53 := by
+        rcases Nat.eq_zero_or_pos em.roundedMantissa with z | z
+        · simp [z]
+        · exact (Nat.log2_lt (by omega)).mpr (by omega)
+      omega
+  split
+  · exact Or.inl rfl
+  · rename_i nonzero
+    exact Or.inr ⟨_, _, Nat.pos_of_ne_zero nonzero, rfl, exponent⟩
+
+/-- Finite bit patterns unpack to zero or a 53-bit mantissa with a bounded exponent. -/
+theorem unpack_bounds (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047) :
+    (∃ s, UnpackedFloat.unpack .binary64 b = .zero s) ∨
+      ∃ s m e h, UnpackedFloat.unpack .binary64 b = .finite s m e h ∧ m < 2 ^ 53 ∧
+        (e = ((b.toNat / 2 ^ 52 % 2048 : Nat) : Int) - 1075 ∨ (e = -1074 ∧ m < 2 ^ 52)) := by
+  obtain ⟨fm, fe, -⟩ := fields b
+  have bias : Format.binary64.exponentBias = 1023 := by decide
+  simp only [UnpackedFloat.unpack]
+  have notTop : unpackExponent (spec := .binary64) b ≠ -1#_ := by
+    intro h
+    have := congrArg BitVec.toNat h
+    simp only [fe] at this
+    simp at this
+    omega
+  rw [ite_eq_right_iff.mpr (fun h => absurd h notTop)]
+  split
+  · rename_i zero
+    split
+    · exact Or.inl ⟨_, rfl⟩
+    · rename_i nz
+      refine Or.inr ⟨_, _, _, ?_, rfl, ?_, ?_⟩
+      · exact Nat.pos_of_ne_zero fun h => nz (BitVec.eq_of_toNat_eq (by simpa using h))
+      · have := (unpackMantissa (spec := .binary64) b).isLt
+        simp only at this
+        omega
+      · have ez := congrArg BitVec.toNat zero
+        have mlt : (unpackMantissa (spec := .binary64) b).toNat < 2 ^ 52 :=
+          (unpackMantissa (spec := .binary64) b).isLt
+        simp only [fe] at ez
+        simp at ez
+        simp [bias]
+        omega
+  · rename_i nonzero
+    have append : (1#1 ++ unpackMantissa (spec := .binary64) b).toNat =
+        2 ^ 52 + (unpackMantissa (spec := .binary64) b).toNat := by
+      rw [BitVec.toNat_append, ← Nat.shiftLeft_add_eq_or_of_lt (unpackMantissa (spec := .binary64) b).isLt]
+      simp [Nat.shiftLeft_eq]
+    have := (unpackMantissa (spec := .binary64) b).isLt
+    refine Or.inr ⟨_, _, _, ?_, rfl, ?_, ?_⟩
+    · omega
+    · omega
+    · left
+      simp [bias, Format.mantissaBitsWithoutImplicit, fe]
+
+theorem sign_toNat (b : BitVec 64) :
+    (Sign.ofBitVec (unpackSign (spec := .binary64) b)).toBitVec.toNat = b.toNat / 2 ^ 63 % 2 := by
+  obtain ⟨-, -, fs⟩ := fields b
+  rw [← fs]
+  generalize unpackSign (spec := .binary64) b = v
+  match v with
+  | 0#1 => rfl
+  | 1#1 => rfl
+
+/-- Finite bit patterns survive unpacking and packing. -/
+theorem pack_unpack (b : BitVec 64) (finite : b.toNat / 2 ^ 52 % 2048 < 2047) :
+    UnpackedFloat.pack .binary64 (UnpackedFloat.unpack .binary64 b) = b := by
+  apply BitVec.eq_of_toNat_eq
+  obtain ⟨fm, fe, fs⟩ := fields b
+  have sign := sign_toNat b
+  have lt := b.isLt
+  have bias : Format.binary64.exponentBias = 1023 := by decide
+  have notTop : unpackExponent (spec := .binary64) b ≠ -1#_ := by
+    intro h
+    have := congrArg BitVec.toNat h
+    simp only [fe] at this
+    simp at this
+    omega
+  simp only [UnpackedFloat.unpack]
+  rw [ite_eq_right_iff.mpr (fun h => absurd h notTop)]
+  split
+  · rename_i zero
+    have ez := congrArg BitVec.toNat zero
+    simp only [fe] at ez
+    split
+    · rename_i mz
+      have mz := congrArg BitVec.toNat mz
+      simp only [fm] at mz
+      simp only [UnpackedFloat.pack, packedZero, toNat_packComponents, sign]
+      simp at ez mz ⊢
+      omega
+    · rename_i nz
+      have mlt := (unpackMantissa (spec := .binary64) b).isLt
+      have mpos : (unpackMantissa (spec := .binary64) b).toNat ≠ 0 :=
+        fun h => nz (BitVec.eq_of_toNat_eq (by simpa using h))
+      have log : (unpackMantissa (spec := .binary64) b).toNat.log2 < 52 := (Nat.log2_lt mpos).mpr mlt
+      simp only [UnpackedFloat.pack]
+      rw [ite_eq_right_iff.mpr (fun h => absurd h (by simp at ez; simp [bias, fe]; omega)),
+        ite_eq_right_iff.mpr (fun h => absurd h (by simp only [Format.mantissaBits]; omega)),
+        toNat_packComponents, sign]
+      simp [fm] at ez ⊢
+      omega
+  · rename_i nonzero
+    have ne := fun h => nonzero (BitVec.eq_of_toNat_eq (by simpa using h))
+    simp only [fe] at ne
+    have append : (1#1 ++ unpackMantissa (spec := .binary64) b).toNat =
+        2 ^ 52 + (unpackMantissa (spec := .binary64) b).toNat := by
+      rw [BitVec.toNat_append, ← Nat.shiftLeft_add_eq_or_of_lt (unpackMantissa (spec := .binary64) b).isLt]
+      simp [Nat.shiftLeft_eq]
+    have mlt := (unpackMantissa (spec := .binary64) b).isLt
+    have log : (1#1 ++ unpackMantissa (spec := .binary64) b).toNat.log2 = 52 := by
+      rw [append]
+      generalize (unpackMantissa (spec := .binary64) b).toNat = M at mlt ⊢
+      have mlt : M < 2 ^ 52 := mlt
+      have a := (Nat.le_log2 (n := 2 ^ 52 + M) (k := 52) (by omega)).mpr (by omega)
+      have c := (Nat.log2_lt (n := 2 ^ 52 + M) (k := 53) (by omega)).mpr (by omega)
+      omega
+    simp only [UnpackedFloat.pack]
+    rw [ite_eq_right_iff.mpr (fun h => absurd h (by simp [bias, fe]; omega)),
+      ite_eq_left_iff.mpr (fun h => absurd (by simp only [Format.mantissaBits, log]) h),
+      toNat_packComponents, sign]
+    simp [fm, fe, bias, append] at ne ⊢
+    omega
+
+/-- Zero and values with a bounded exponent pack to finite bit patterns. -/
+theorem pack_finite (u : UnpackedFloat)
+    (bounded : (∃ s, u = .zero s) ∨ ∃ s m fe h, u = .finite s m fe h ∧ fe ≤ 971) :
+    (UnpackedFloat.pack .binary64 u).toNat / 2 ^ 52 % 2048 < 2047 := by
+  have bias : Format.binary64.exponentBias = 1023 := by decide
+  rcases bounded with ⟨s, rfl⟩ | ⟨s, m, fe, h, rfl, small⟩
+  · simp only [UnpackedFloat.pack, packedZero, toNat_packComponents]
+    have := (s.toBitVec).isLt
+    simp at this ⊢
+    omega
+  · simp only [UnpackedFloat.pack]
+    rw [ite_eq_right_iff.mpr (fun h => absurd h (by simp [bias]; omega))]
+    have := (s.toBitVec).isLt
+    split
+    · rw [toNat_packComponents]
+      simp [bias] at this ⊢
+      omega
+    · rw [toNat_packComponents]
+      simp at this ⊢
+      omega
+
+/-- Products of a finite value and a value below one in magnitude, that is, with
+an exponent field below 1023, are finite. -/
+public theorem ofBits_mul_finite (u v : UInt64) (fu : u.toNat / 2 ^ 52 % 2048 < 2047)
+    (fv : v.toNat / 2 ^ 52 % 2048 < 1023) :
+    (Float.Model.ofBits u * Float.Model.ofBits v).toBits.toNat / 2 ^ 52 % 2048 < 2047 := by
+  have ru := pack_unpack u.toBitVec fu
+  have below : v.toNat / 2 ^ 52 % 2048 < 2047 := Nat.lt_of_lt_of_le fv (by decide)
+  have rv := pack_unpack v.toBitVec below
+  show (UInt64.ofBitVec (UnpackedFloat.pack .binary64 (UnpackedFloat.mul .binary64
+    (UnpackedFloat.unpack .binary64 (UInt64.ofBitVec (UnpackedFloat.pack .binary64
+      (UnpackedFloat.unpack .binary64 u.toBitVec))).toBitVec)
+    (UnpackedFloat.unpack .binary64 (UInt64.ofBitVec (UnpackedFloat.pack .binary64
+      (UnpackedFloat.unpack .binary64 v.toBitVec))).toBitVec)))).toNat / 2 ^ 52 % 2048 < 2047
+  simp only [ru, rv, UInt64.toNat_ofBitVec]
+  apply pack_finite
+  rcases unpack_bounds u.toBitVec fu with ⟨s₁, eq₁⟩ | ⟨s₁, m₁, e₁, h₁, eq₁, mb₁, eb₁⟩ <;>
+  rcases unpack_bounds v.toBitVec below with ⟨s₂, eq₂⟩ | ⟨s₂, m₂, e₂, h₂, eq₂, mb₂, eb₂⟩ <;>
+  rw [eq₁, eq₂] <;> simp only [UnpackedFloat.mul]
+  · exact Or.inl ⟨_, rfl⟩
+  · exact Or.inl ⟨_, rfl⟩
+  · exact Or.inl ⟨_, rfl⟩
+  · simp only [UInt64.toNat_toBitVec] at eb₁ eb₂
+    generalize u.toNat / 2 ^ 52 % 2048 = E₁ at fu eb₁
+    generalize v.toNat / 2 ^ 52 % 2048 = E₂ at fv eb₂
+    have top : e₁ ≤ 971 := by omega
+    have shift : e₁ + e₂ = e₁ - ((-e₂).toNat : Nat) := by omega
+    have below : m₂ < 2 ^ (-e₂).toNat := by
+      rcases eb₂ with eb₂ | ⟨eb₂, mb₂⟩
+      · exact Nat.lt_of_lt_of_le mb₂ (Nat.pow_le_pow_right (by decide) (by omega))
+      · exact Nat.lt_of_lt_of_le mb₂ (Nat.pow_le_pow_right (by decide) (by omega))
+    rw [shift]
+    rcases round_below_one (s₁ * s₂) m₁ m₂ _ e₁ h₁ h₂ mb₁ below top with zero | ⟨fm, fe, h, eq, le⟩
+    · exact Or.inl ⟨_, zero⟩
+    · exact Or.inr ⟨_, _, _, _, eq, le⟩
+
 end Lynx.Term.Rounding

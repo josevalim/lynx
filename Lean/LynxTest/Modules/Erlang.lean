@@ -746,6 +746,13 @@ theorem «size/1_complete_bytes» :
 
 end
 
+/-- Integers that convert to floats times floats below one are floats, such as the
+thresholds `sets:intersection/2` computes from set sizes. -/
+theorem integer_float_product :
+    ∃ product, Erlang.erlang.«*/2» (.integer 3) (.float ⟨false, 1022, 2251799813685248⟩) =
+      .ok (.float product) :=
+  Erlang.erlang.«*/2_integer_float» 3 ⟨false, 1024, 2251799813685248⟩ _ (by decide +kernel) (by decide)
+
 end LynxTest.Modules.Erlang
 
 run_cmd do
@@ -754,3 +761,4 @@ run_cmd do
   LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.erlang.Guards
   LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.erlang.Process
   LynxTest.ProofAudit.checkModule `Lynx.Term.FiniteFloat
+  LynxTest.ProofAudit.checkModule `Lynx.Term.FiniteFloat.Rounding
