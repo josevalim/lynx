@@ -9,6 +9,7 @@ public import Lynx.Modules.Erlang.lists
 public import Lynx.Modules.Erlang.maps
 public import Lynx.Modules.Erlang.erts_internal
 public import Lynx.Modules.Erlang.math
+public import Lynx.Modules.Erlang.sets
 
 -- Keep constructor and table adapter signatures part of the API check.
 private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) →
@@ -322,15 +323,18 @@ private def expectedDeclarations : Array String := #[
   "Erlang.lists.«keyfind/3»",
   "Erlang.lists.«member/2»",
   "Erlang.lists.«reverse/2»",
+  "Erlang.maps.«filter/2»",
   "Erlang.maps.«find/2»",
   "Erlang.maps.«fold/3»",
   "Erlang.maps.«from_keys/2»",
   "Erlang.maps.«from_list/1»",
   "Erlang.maps.«get/2»",
+  "Erlang.maps.«intersect_with/3»",
   "Erlang.maps.«is_key/2»",
   "Erlang.maps.«iterator/1»",
   "Erlang.maps.«keys/1»",
   "Erlang.maps.«merge/2»",
+  "Erlang.maps.«merge_with/3»",
   "Erlang.maps.«new/0»",
   "Erlang.maps.«next/1»",
   "Erlang.maps.«put/3»",
@@ -341,6 +345,16 @@ private def expectedDeclarations : Array String := #[
   "Erlang.maps.«values/1»",
   "Erlang.math.«ceil/1»",
   "Erlang.math.«floor/1»",
+  "Erlang.sets.elements?",
+  "Erlang.sets.«from_list/1»",
+  "Erlang.sets.«from_list/2»",
+  "Erlang.sets.«intersection/2»",
+  "Erlang.sets.«is_element/2»",
+  "Erlang.sets.«is_subset/2»",
+  "Erlang.sets.«new/0»",
+  "Erlang.sets.«new/1»",
+  "Erlang.sets.«subtract/2»",
+  "Erlang.sets.«union/2»",
   "Lynx.Concurrent.Config",
   "Lynx.Concurrent.Config.RaceFree",
   "Lynx.Concurrent.Config.Unraced",
