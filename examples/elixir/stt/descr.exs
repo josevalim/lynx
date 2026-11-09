@@ -4,7 +4,9 @@
 # the plain operations and for the optimized ones the type checker uses: a type does not
 # meet its negation, and a type united with its negation is the top type. De Morgan's law
 # holds for the plain operations: the negation of a union is the intersection of negations.
-# Checked against Elixir 1.21.0-dev (9f3dcabcb), Erlang/OTP 29.1.2.
+# The plain laws cover types whose lists, tuples, maps, and functions nest other types up
+# to three levels deep; the optimized laws cover flat element types.
+# Checked against Elixir 1.21.0-dev (7ac48bdc0), Erlang/OTP 29.1.2.
 # Source reference: ../elixir/lib/elixir/lib/module/types/descr.ex.
 # These proofs depend on implementation details; rerun after Elixir upgrades.
 ExUnit.start()
@@ -43,19 +45,24 @@ defmodule STTDescrProofsTest do
 
   # Types of bitmaps, atoms, functions, lists, tuples, and maps. Function types are
   # unions or negations of maps from arities to BDDs, whose literals are not inspected.
-  def negatable?(descr) when is_map(descr), do: negatable_fields?(:maps.to_list(descr))
-  def negatable?(_descr), do: false
+  # List elements and tails, tuple elements, map fields, and the arguments and returns
+  # of nested functions nest types of bitmaps, atoms, functions, lists, tuples, and
+  # maps, so types are at most three levels deep.
+  def negatable?(descr), do: negatable?(descr, 2)
 
-  defp negatable_fields?([field | fields]), do: negatable_field?(field) and negatable_fields?(fields)
-  defp negatable_fields?([]), do: true
+  # The same types, whose list, tuple, and map types nest at most `depth` levels.
+  def negatable?(descr, depth) when is_map(descr), do: negatable_fields?(:maps.to_list(descr), depth)
+  def negatable?(_descr, _depth), do: false
 
-  defp negatable_field?({:fun, {tag, arities}}) when tag in [:union, :negation],
+  defp negatable_fields?([field | fields], depth),
+    do: negatable_field?(field, depth) and negatable_fields?(fields, depth)
+
+  defp negatable_fields?([], _depth), do: true
+
+  defp negatable_field?({:fun, {tag, arities}}, _depth) when tag in [:union, :negation],
     do: is_map(arities) and arity_bdds?(:maps.to_list(arities))
 
-  defp negatable_field?({:list, bdd}), do: list_bdd?(bdd)
-  defp negatable_field?({:tuple, bdd}), do: tuple_bdd?(bdd)
-  defp negatable_field?({:map, bdd}), do: map_bdd?(bdd)
-  defp negatable_field?(field), do: valid_fields?([field])
+  defp negatable_field?(field, depth), do: nested_field?(field, depth)
 
   defp arity_bdds?([{_arity, bdd} | arities]), do: any_bdd?(bdd, :bottom) and arity_bdds?(arities)
   defp arity_bdds?([]), do: true
@@ -72,86 +79,131 @@ defmodule STTDescrProofsTest do
 
   defp any_bdd?(_bdd, _lower), do: false
 
-  # List types are all non-empty lists, or BDDs of other list literals ordered
-  # by Erlang's term order. Atoms precede the tuples of literals.
-  defp list_bdd?({key, :term, :term}), do: is_integer(key)
-  defp list_bdd?(bdd), do: ordered_bdd?(bdd, :bottom)
+  # Nested types: the top type, valid types, or types of bitmaps, atoms, functions,
+  # lists, tuples, and maps whose contents nest at most `depth - 1` levels.
+  defp nested?(:term, _depth), do: true
+  defp nested?(type, 0), do: valid?(type)
+  defp nested?(type, depth) when is_map(type), do: nested_fields?(:maps.to_list(type), depth - 1)
+  defp nested?(_type, _depth), do: false
 
-  defp ordered_bdd?(:bdd_top, _lower), do: true
-  defp ordered_bdd?(:bdd_bot, _lower), do: true
-  defp ordered_bdd?({_, _, _} = leaf, lower), do: list_literal?(leaf, lower)
+  defp nested_fields?([field | fields], depth),
+    do: nested_field?(field, depth) and nested_fields?(fields, depth)
 
-  defp ordered_bdd?({hash, lit, c, u, d}, lower),
+  defp nested_fields?([], _depth), do: true
+
+  defp nested_field?({:fun, {tag, arities}}, depth) when tag in [:union, :negation],
+    do: is_map(arities) and fun_arities?(:maps.to_list(arities), depth)
+
+  defp nested_field?({:list, bdd}, depth), do: list_bdd?(bdd, depth)
+  defp nested_field?({:tuple, bdd}, depth), do: tuple_bdd?(bdd, depth)
+  defp nested_field?({:map, bdd}, depth), do: map_bdd?(bdd, depth)
+  defp nested_field?(field, _depth), do: valid_fields?([field])
+
+  # Function types map arities to BDDs of function literals ordered by Erlang's
+  # term order, whose arguments, as many as their arity, and return types are
+  # nested types.
+  defp fun_arities?([{arity, bdd} | arities], depth),
+    do: is_integer(arity) and fun_bdd?(bdd, arity, :bottom, depth) and fun_arities?(arities, depth)
+
+  defp fun_arities?([], _depth), do: true
+
+  defp fun_bdd?(:bdd_top, _arity, _lower, _depth), do: true
+  defp fun_bdd?(:bdd_bot, _arity, _lower, _depth), do: true
+  defp fun_bdd?({_, _, _} = leaf, arity, lower, depth), do: fun_literal?(leaf, arity, lower, depth)
+
+  defp fun_bdd?({hash, lit, c, u, d}, arity, lower, depth),
     do:
-      is_integer(hash) and list_literal?(lit, lower) and ordered_bdd?(c, lit) and
-        ordered_bdd?(u, lit) and ordered_bdd?(d, lit)
+      is_integer(hash) and fun_literal?(lit, arity, lower, depth) and fun_bdd?(c, arity, lit, depth) and
+        fun_bdd?(u, arity, lit, depth) and fun_bdd?(d, arity, lit, depth)
 
-  defp ordered_bdd?(_bdd, _lower), do: false
+  defp fun_bdd?(_bdd, _arity, _lower, _depth), do: false
 
-  defp list_literal?({key, list, last} = lit, lower),
-    do: is_integer(key) and lit > lower and not (list == :term and last == :term)
+  defp fun_literal?({key, args, return} = lit, arity, lower, depth),
+    do:
+      is_integer(key) and lit > lower and elements?(args, depth) and length(args) == arity and
+        nested?(return, depth)
 
-  defp list_literal?(_lit, _lower), do: false
+  defp fun_literal?(_lit, _arity, _lower, _depth), do: false
+
+  # List types are all non-empty lists, or BDDs of other list literals ordered
+  # by Erlang's term order, whose element and tail types are nested types. Atoms
+  # precede the tuples of literals.
+  defp list_bdd?({key, :term, :term}, _depth), do: is_integer(key)
+  defp list_bdd?(bdd, depth), do: ordered_bdd?(bdd, :bottom, depth)
+
+  defp ordered_bdd?(:bdd_top, _lower, _depth), do: true
+  defp ordered_bdd?(:bdd_bot, _lower, _depth), do: true
+  defp ordered_bdd?({_, _, _} = leaf, lower, depth), do: list_literal?(leaf, lower, depth)
+
+  defp ordered_bdd?({hash, lit, c, u, d}, lower, depth),
+    do:
+      is_integer(hash) and list_literal?(lit, lower, depth) and ordered_bdd?(c, lit, depth) and
+        ordered_bdd?(u, lit, depth) and ordered_bdd?(d, lit, depth)
+
+  defp ordered_bdd?(_bdd, _lower, _depth), do: false
+
+  defp list_literal?({key, list, last} = lit, lower, depth),
+    do:
+      is_integer(key) and lit > lower and not (list == :term and last == :term) and
+        nested?(list, depth) and nested?(last, depth)
+
+  defp list_literal?(_lit, _lower, _depth), do: false
 
   # Tuple types are all tuples, or BDDs of other tuple literals ordered by
-  # Erlang's term order. Their elements are the top type or valid types of
-  # bitmaps and atoms.
-  defp tuple_bdd?({key, :open, []}), do: is_integer(key)
-  defp tuple_bdd?(bdd), do: ordered_tuple_bdd?(bdd, :bottom)
+  # Erlang's term order, whose elements are nested types.
+  defp tuple_bdd?({key, :open, []}, _depth), do: is_integer(key)
+  defp tuple_bdd?(bdd, depth), do: ordered_tuple_bdd?(bdd, :bottom, depth)
 
-  defp ordered_tuple_bdd?(:bdd_top, _lower), do: true
-  defp ordered_tuple_bdd?(:bdd_bot, _lower), do: true
-  defp ordered_tuple_bdd?({_, _, _} = leaf, lower), do: tuple_literal?(leaf, lower)
+  defp ordered_tuple_bdd?(:bdd_top, _lower, _depth), do: true
+  defp ordered_tuple_bdd?(:bdd_bot, _lower, _depth), do: true
+  defp ordered_tuple_bdd?({_, _, _} = leaf, lower, depth), do: tuple_literal?(leaf, lower, depth)
 
-  defp ordered_tuple_bdd?({hash, lit, c, u, d}, lower),
+  defp ordered_tuple_bdd?({hash, lit, c, u, d}, lower, depth),
     do:
-      is_integer(hash) and tuple_literal?(lit, lower) and ordered_tuple_bdd?(c, lit) and
-        ordered_tuple_bdd?(u, lit) and ordered_tuple_bdd?(d, lit)
+      is_integer(hash) and tuple_literal?(lit, lower, depth) and ordered_tuple_bdd?(c, lit, depth) and
+        ordered_tuple_bdd?(u, lit, depth) and ordered_tuple_bdd?(d, lit, depth)
 
-  defp ordered_tuple_bdd?(_bdd, _lower), do: false
+  defp ordered_tuple_bdd?(_bdd, _lower, _depth), do: false
 
-  defp tuple_literal?({key, tag, elements} = lit, lower) when tag in [:open, :closed],
-    do: is_integer(key) and lit > lower and not (tag == :open and elements == []) and elements?(elements)
+  defp tuple_literal?({key, tag, elements} = lit, lower, depth) when tag in [:open, :closed],
+    do:
+      is_integer(key) and lit > lower and not (tag == :open and elements == []) and
+        elements?(elements, depth)
 
-  defp tuple_literal?(_lit, _lower), do: false
+  defp tuple_literal?(_lit, _lower, _depth), do: false
 
-  defp elements?([element | elements]), do: element?(element) and elements?(elements)
-  defp elements?([]), do: true
-  defp elements?(_elements), do: false
-
-  defp element?(:term), do: true
-  defp element?(element), do: valid?(element)
+  defp elements?([element | elements], depth), do: nested?(element, depth) and elements?(elements, depth)
+  defp elements?([], _depth), do: true
+  defp elements?(_elements, _depth), do: false
 
   # Map types are all maps, or BDDs of other map literals ordered by Erlang's
-  # term order. Their literals are open or closed maps whose fields hold valid
-  # types of bitmaps and atoms, or the top type.
-  defp map_bdd?({key, :open, []}), do: is_integer(key)
-  defp map_bdd?(bdd), do: ordered_map_bdd?(bdd, :bottom)
+  # term order. Their literals are open or closed maps whose fields hold nested types.
+  defp map_bdd?({key, :open, []}, _depth), do: is_integer(key)
+  defp map_bdd?(bdd, depth), do: ordered_map_bdd?(bdd, :bottom, depth)
 
-  defp ordered_map_bdd?(:bdd_top, _lower), do: true
-  defp ordered_map_bdd?(:bdd_bot, _lower), do: true
-  defp ordered_map_bdd?({_, _, _} = leaf, lower), do: map_literal?(leaf, lower)
+  defp ordered_map_bdd?(:bdd_top, _lower, _depth), do: true
+  defp ordered_map_bdd?(:bdd_bot, _lower, _depth), do: true
+  defp ordered_map_bdd?({_, _, _} = leaf, lower, depth), do: map_literal?(leaf, lower, depth)
 
-  defp ordered_map_bdd?({hash, lit, c, u, d}, lower),
+  defp ordered_map_bdd?({hash, lit, c, u, d}, lower, depth),
     do:
-      is_integer(hash) and map_literal?(lit, lower) and ordered_map_bdd?(c, lit) and
-        ordered_map_bdd?(u, lit) and ordered_map_bdd?(d, lit)
+      is_integer(hash) and map_literal?(lit, lower, depth) and ordered_map_bdd?(c, lit, depth) and
+        ordered_map_bdd?(u, lit, depth) and ordered_map_bdd?(d, lit, depth)
 
-  defp ordered_map_bdd?(_bdd, _lower), do: false
+  defp ordered_map_bdd?(_bdd, _lower, _depth), do: false
 
-  defp map_literal?({key, tag, fields} = lit, lower) when tag in [:open, :closed],
-    do: is_integer(key) and lit > lower and not (tag == :open and fields == []) and map_fields?(fields)
+  defp map_literal?({key, tag, fields} = lit, lower, depth) when tag in [:open, :closed],
+    do:
+      is_integer(key) and lit > lower and not (tag == :open and fields == []) and
+        map_fields?(fields, depth)
 
-  defp map_literal?(_lit, _lower), do: false
+  defp map_literal?(_lit, _lower, _depth), do: false
 
-  defp map_fields?([{_key, {type, optional?}} | fields]),
-    do: is_boolean(optional?) and field_type?(type) and map_fields?(fields)
+  defp map_fields?([{_key, {type, optional?}} | fields], depth),
+    do: is_boolean(optional?) and nested?(type, depth) and map_fields?(fields, depth)
 
-  defp map_fields?([]), do: true
-  defp map_fields?(_fields), do: false
-
-  defp field_type?(:term), do: true
-  defp field_type?(type), do: valid?(type)
+  defp map_fields?([], _depth), do: true
+  defp map_fields?(_fields, _depth), do: false
 
   # Any type: the top type or a map of fields, whose dynamic part, if any,
   # is the top type or a map. The fields may hold anything.
@@ -169,9 +221,6 @@ defmodule STTDescrProofsTest do
     # Map literals with domain keys are not modeled.
     cutoff &Descr.map_domain_intersection/3
     cutoff &Descr.fields_merge_with_defaults/5
-    # Lists are empty without lines, so their line checks are cut off.
-    cutoff &Descr.list_line_empty?/4
-    cutoff &Descr.non_empty_list_literals_intersection/2
     # Tuples are only padded to longer sizes, which never raises.
     cutoff &ArgumentError.exception/1
 
@@ -200,6 +249,8 @@ defmodule STTDescrProofsTest do
     termination_suffix &Descr.empty_difference_subtype?/3, ~LEAN"partial_fixpoint", recur: true
     termination_suffix &Descr.iterator_empty_difference_subtype?/3, ~LEAN"partial_fixpoint", recur: true
     termination_suffix &Descr.fun_line_empty?/3, ~LEAN"partial_fixpoint", recur: true
+    # Nested types are finite, so their specification terminates.
+    termination_suffix &__MODULE__.nested?/2, ~LEAN"partial_fixpoint", recur: true
 
     # Valid types hold a non-empty bitmap and atom types of version 2 sets.
     postlude ~LEAN"""
@@ -553,13 +604,13 @@ defmodule STTDescrProofsTest do
               (.function "Elixir.Module.Types.Descr" "-dynamic_difference/3-fun-0-" 3
               #[fn]) #[entry.1, entry.2, acc] : Except Exception Term))
             (.map acc) = .ok (.map M) ∧
-          ∀ q, mapLookup M q =
+          (∀ q, mapLookup M q =
             match es.find? (fun e => decide (exactCompare q e.1 = .eq)) with
             | some e => (mapLookup acc e.1).bind fun v₁ =>
                 if kept (e.1, g e.1 v₁ e.2) then some (g e.1 v₁ e.2) else none
-            | none => mapLookup acc q := by
+            | none => mapLookup acc q) ∧ M = es.foldl (differenceStep g) acc := by
       induction es generalizing acc with
-      | nil => exact ⟨acc, rfl, fun q => rfl⟩
+      | nil => exact ⟨acc, rfl, fun q => rfl, rfl⟩
       | cons e rest ih =>
         have apart := List.pairwise_cons.mp distinct
         have step : (Dispatch.dispatch (Dispatcher.ofTable Erlang.program.fun_table (depth + 2))
@@ -568,11 +619,12 @@ defmodule STTDescrProofsTest do
             .ok (.map (differenceStep g acc e)) := by
           rw [dispatch_except, Erlang.program.«Elixir.Module.Types.Descr:-dynamic_difference/3-fun-0-/3».pure,
             difference_step depth fn g acc e.1 e.2 (calls e (List.mem_cons_self ..))]
-        obtain ⟨M, run, look⟩ := ih (differenceStep g acc e) apart.2 (by
+        obtain ⟨M, run, look, explicit⟩ := ih (differenceStep g acc e) apart.2 (by
           intro e' member v₁ found
           rw [step_other g acc e e'.1 (fun same => apart.1 e' member (Std.OrientedCmp.eq_symm same))] at found
           exact calls e' (List.mem_cons_of_mem _ member) v₁ found)
-        refine ⟨M, by simp only [List.foldlM_cons, step, Lynx.Except.ok_bind]; exact run, fun q => ?_⟩
+        refine ⟨M, by simp only [List.foldlM_cons, step, Lynx.Except.ok_bind]; exact run, fun q => ?_,
+          by rw [explicit]; rfl⟩
         rw [look q]
         by_cases same : exactCompare q e.1 = .eq
         · have absent : rest.find? (fun p => decide (exactCompare q p.1 = .eq)) = none := by
@@ -2832,7 +2884,99 @@ defmodule STTDescrProofsTest do
     postlude ~LEAN"""
     open BddProofs
 
-    /-- Element types of tuples: valid types of bitmaps and atoms. -/
+    /-! Call depth: computations whose result does not depend on it, once it is deep enough. -/
+
+    abbrev D (n : Nat) : Dispatcher := Dispatcher.ofTable Erlang.program.fun_table n
+
+    def boolAtom (o : Bool) : Term := .atom (if o then "true" else "false")
+
+    theorem mapM_ok {α β : Type} (f : α → Except Exception β) (h : α → β) :
+        ∀ xs : List α, (∀ x ∈ xs, f x = .ok (h x)) → xs.mapM f = .ok (xs.map h)
+      | [], _ => rfl
+      | x :: xs, all => by
+        simp [List.mapM_cons, all x (by simp), mapM_ok f h xs (fun y my => all y (by simp [my]))]
+
+    /-- The entries `maps:intersect_with/3` returns with a combiner returning `g`. -/
+    def interList (g : Term → Term → Term → Term) (l r : List (Term × Term)) : List (Term × Term) :=
+      ((mapEntries l).map fun e => ((mapLookup r e.1).map (g e.1 e.2)).map fun v => (e.1, v)).reduceOption
+
+    theorem intersect_with_eq (d : Dispatcher) (module name : String) (captures : Array Term)
+        (l r : List (Term × Term)) (g : Term → Term → Term → Term)
+        (calls : ∀ entry ∈ mapEntries l, ∀ value, mapLookup r entry.1 = some value →
+          d.pure (.function module name 3 captures) #[entry.1, entry.2, value] = .ok (g entry.1 entry.2 value)) :
+        (Erlang.maps.«intersect_with/3» d (.function module name 3 captures) (.map l) (.map r) :
+          Except Exception Term) = .ok (.map (interList g l r)) := by
+      simp only [Erlang.maps.«intersect_with/3», Dispatch.dispatch]
+      rw [mapM_ok _ (fun e => ((mapLookup r e.1).map (g e.1 e.2)).map fun v => (e.1, v)) _ ?all]
+      · rfl
+      · intro e me
+        cases hr : mapLookup r e.1 with
+        | none => simp [hr]
+        | some v => simp only [hr, calls e me v hr]; rfl
+
+    /-- The entries `maps:merge_with/3` returns with a combiner returning `g`. -/
+    def mergeList (g : Term → Term → Term → Term) (l r : List (Term × Term)) : List (Term × Term) :=
+      ((mapEntries r).map fun e => (e.1, match mapLookup l e.1 with | some v => g e.1 v e.2 | none => e.2)) ++ l
+
+    theorem merge_with_eq (d : Dispatcher) (module name : String) (captures : Array Term)
+        (l r : List (Term × Term)) (g : Term → Term → Term → Term)
+        (calls : ∀ entry ∈ mapEntries r, ∀ value, mapLookup l entry.1 = some value →
+          d.pure (.function module name 3 captures) #[entry.1, value, entry.2] = .ok (g entry.1 value entry.2)) :
+        (Erlang.maps.«merge_with/3» d (.function module name 3 captures) (.map l) (.map r) :
+          Except Exception Term) = .ok (.map (mergeList g l r)) := by
+      simp only [Erlang.maps.«merge_with/3», Dispatch.dispatch]
+      rw [mapM_ok _ (fun e => (e.1, match mapLookup l e.1 with | some v => g e.1 v e.2 | none => e.2)) _ ?all]
+      · rfl
+      · intro e me
+        cases hl : mapLookup l e.1 with
+        | none => simp [hl]
+        | some v => simp only [hl, calls e me v hl]; rfl
+
+    /-- The entries `maps:filter/2` keeps with a predicate deciding by `keep`. -/
+    def filterList (keep : Term × Term → Bool) (es : List (Term × Term)) : List (Term × Term) :=
+      ((mapEntries es).map fun e => (if keep e then some e.2 else none).map fun v => (e.1, v)).reduceOption
+
+    theorem filter_eq (d : Dispatcher) (module name : String) (captures : Array Term)
+        (es : List (Term × Term)) (keep : Term × Term → Bool)
+        (calls : ∀ entry ∈ mapEntries es, d.pure (.function module name 2 captures) #[entry.1, entry.2] =
+          .ok (if keep entry then Term.true else Term.false)) :
+        (Erlang.maps.«filter/2» d (.function module name 2 captures) (.map es) : Except Exception Term) =
+          .ok (.map (filterList keep es)) := by
+      simp only [Erlang.maps.«filter/2», Dispatch.dispatch]
+      rw [mapM_ok _ (fun e => (if keep e then some e.2 else none).map fun v => (e.1, v)) _ ?all]
+      · rfl
+      · intro e me
+        cases hk : keep e <;> simp [calls e me, hk, Term.true, Term.false]
+
+    /-- Element types `E` hold the top type, intersect into element types, and have their emptiness decided,
+    with the same results at every call depth from `K`. -/
+    structure ElemOk (E : Term → Prop) (K : Nat) : Prop where
+      term : E (.atom "term")
+      inter : ∀ {a b}, E a → E b → ∃ c, E c ∧ ∀ m, K ≤ m →
+        Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok c
+      empty : ∀ {a}, E a → ∀ S : List (Term × Term), ∃ b : Bool, ∀ m, K ≤ m →
+        Elixir.Module.Types.Descr.«empty_seen?/2» (D m) a (.map S) = .ok (boolAtom b)
+
+    /-- Element types that also subtract into element types. -/
+    structure ElemDiff (E : Term → Prop) (K : Nat) : Prop where
+      diff : ∀ {a b}, E a → E b → ∃ c, E c ∧ ∀ m, K ≤ m →
+        Elixir.Module.Types.Descr.«bare_difference/2» (D m) a b = .ok c
+
+    theorem ElemOk.mono {E : Term → Prop} {K K' : Nat} (ops : ElemOk E K) (le : K ≤ K') : ElemOk E K' := by
+      refine ⟨ops.term, fun ha hb => ?_, fun ha S => ?_⟩
+      · obtain ⟨c, hc, run⟩ := ops.inter ha hb
+        exact ⟨c, hc, fun m hm => run m (by omega)⟩
+      · obtain ⟨b, run⟩ := ops.empty ha S
+        exact ⟨b, fun m hm => run m (by omega)⟩
+
+    theorem ElemDiff.mono {E : Term → Prop} {K K' : Nat} (dops : ElemDiff E K) (le : K ≤ K') : ElemDiff E K' := by
+      refine ⟨fun ha hb => ?_⟩
+      obtain ⟨c, hc, run⟩ := dops.diff ha hb
+      exact ⟨c, hc, fun m hm => run m (by omega)⟩
+
+    theorem succ_of_le {K m : Nat} (h : K + 1 ≤ m) : ∃ m', m = m' + 1 ∧ K ≤ m' := ⟨m - 1, by omega, by omega⟩
+
+    /-- Flat element types: valid types of bitmaps and atoms. -/
     abbrev Elem (X : List (Term × Term)) : Prop := Valid X
 
     def ElemTerm (e : Term) : Prop := e = .atom "term" ∨ ∃ X, e = .map X ∧ Elem X
@@ -2855,26 +2999,66 @@ defmodule STTDescrProofsTest do
       · exact Or.inl ⟨rfl, valid.bitmap w h⟩
       · exact Or.inr ⟨rfl, valid.atom w h, fun S e => valid.atomUnion S (e ▸ h)⟩
 
+    /-- Intersections of static types whose common fields intersect the same way at every call depth. -/
+    theorem inter_uniform (K : Nat) (L R : List (Term × Term)) (sL : mapLookup L (.atom "dynamic") = Option.none)
+        (sR : mapLookup R (.atom "dynamic") = Option.none) (g : Term → Term → Term → Term)
+        (calls : ∀ q x y, mapLookup L q = some x → mapLookup R q = some y → ∀ m, K ≤ m →
+          Elixir.Module.Types.Descr.«bare_intersection/3» (D m) q x y = .ok (g q x y)) :
+        ∃ I out, (∀ m, K + 1 ≤ m → Elixir.Module.Types.Descr.«bare_intersection/2» (D m) (.map L) (.map R) =
+            .ok (.map out)) ∧
+          (∀ q, mapLookup I q = match (mapEntries L).find? (fun e => decide (exactCompare q e.1 = .eq)) with
+            | some e => (mapLookup R e.1).map (g e.1 e.2)
+            | none => none) ∧
+          ∀ q, mapLookup out q = match (mapEntries I).find? (fun e => decide (exactCompare q e.1 = .eq)) with
+            | some e => if kept e then some e.2 else none
+            | none => none := by
+      have callsI : ∀ n, K ≤ n → ∀ e ∈ mapEntries L, ∀ y, mapLookup R e.1 = some y →
+          (D (n + 1)).pure (.function "Elixir.Module.Types.Descr" "bare_intersection" 3 #[]) #[e.1, e.2, y] =
+            .ok (g e.1 e.2 y) := fun n hn e member y hy => by
+        rw [Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/3».pure]
+        exact calls e.1 e.2 y (mapLookup_of_mem_mapEntries member) hy n hn
+      obtain ⟨I, runI, lookI⟩ := Erlang.maps.intersect_with_lookup (D (K + 1)) "Elixir.Module.Types.Descr"
+        "bare_intersection" #[] L R g (callsI K (Nat.le_refl _))
+      have eqI : I = interList g L R := by
+        have := runI.symm.trans (intersect_with_eq _ _ _ _ L R g (callsI K (Nat.le_refl _)))
+        simpa using this
+      subst eqI
+      have callsO : ∀ n, ∀ e ∈ mapEntries (interList g L R),
+          (D (n + 1)).pure (.function "Elixir.Module.Types.Descr" "-symmetrical_intersection/3-fun-0-" 2 #[])
+            #[e.1, e.2] = .ok (if kept e then Term.true else Term.false) := fun n e _ => by
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-symmetrical_intersection/3-fun-0-/2».pure, keep_field]
+      obtain ⟨out, runO, lookO⟩ := Erlang.maps.filter_lookup (D (K + 1)) "Elixir.Module.Types.Descr"
+        "-symmetrical_intersection/3-fun-0-" #[] (interList g L R) kept (callsO K)
+      have eqO : out = filterList kept (interList g L R) := by
+        have := runO.symm.trans (filter_eq _ _ _ _ _ kept (callsO K))
+        simpa using this
+      subst eqO
+      refine ⟨interList g L R, filterList kept (interList g L R), fun m hm => ?_, lookI, lookO⟩
+      obtain ⟨n, rfl, hn⟩ := succ_of_le hm
+      unfold Elixir.Module.Types.Descr.«bare_intersection/2»
+      simp [getMapKeys_single, sL, sR]
+      unfold Elixir.Module.Types.Descr.«symmetrical_intersection/3»
+      simp [intersect_with_eq _ _ _ _ L R g (callsI n hn), filter_eq _ _ _ _ _ kept (callsO n)]
+
     /-- Element types intersect into element types with fewer fields. -/
-    theorem elem_inter_map (depth : Nat) (L R : List (Term × Term)) (vL : Elem L) (vR : Elem R) :
-        ∃ out, Elixir.Module.Types.Descr.«bare_intersection/2»
-            (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) (.map L) (.map R) = .ok (.map out) ∧
+    theorem elem_inter_map (L R : List (Term × Term)) (vL : Elem L) (vR : Elem R) :
+        ∃ out, (∀ m, 0 + 1 ≤ m → Elixir.Module.Types.Descr.«bare_intersection/2» (D m) (.map L) (.map R) =
+            .ok (.map out)) ∧
           Elem out ∧ ∀ q w, mapLookup out q = some w → ∃ x, mapLookup L q = some x := by
       let g : Term → Term → Term → Term := fun k₀ v₁ v₂ =>
-        match Elixir.Module.Types.Descr.«bare_intersection/3» (Dispatcher.ofTable Erlang.program.fun_table depth)
-          k₀ v₁ v₂ with
+        match Elixir.Module.Types.Descr.«bare_intersection/3» (D 0) k₀ v₁ v₂ with
         | .ok w => w
         | .error _ => .nil
       have common : ∀ q x y, mapLookup L q = some x → mapLookup R q = some y →
-          Elixir.Module.Types.Descr.«bare_intersection/3» (Dispatcher.ofTable Erlang.program.fun_table depth)
-            q x y = .ok (g q x y) ∧ (kept (q, g q x y) = Bool.true → ElemField q (g q x y)) := by
+          (∀ m, 0 ≤ m → Elixir.Module.Types.Descr.«bare_intersection/3» (D m) q x y = .ok (g q x y)) ∧
+            (kept (q, g q x y) = Bool.true → ElemField q (g q x y)) := by
         intro q x y hx hy
         rcases vL.field hx with ⟨rfl, b₁, rfl, -, le₁⟩ | ⟨rfl, ax, -⟩
         · obtain ⟨b₂, rfl, -, -⟩ := vR.bitmap y hy
-          have run : Elixir.Module.Types.Descr.«bare_intersection/3» (Dispatcher.ofTable Erlang.program.fun_table depth)
-              (.atom "bitmap") (.integer b₁) (.integer b₂) = .ok (.integer ↑(b₁ &&& b₂)) := by
+          have run : ∀ d, Elixir.Module.Types.Descr.«bare_intersection/3» d
+              (.atom "bitmap") (.integer b₁) (.integer b₂) = .ok (.integer ↑(b₁ &&& b₂)) := fun d => by
             simp [Elixir.Module.Types.Descr.«bare_intersection/3», bandI]
-          refine ⟨by simp only [g, run], fun k => ?_⟩
+          refine ⟨fun m _ => by simp only [g, run], fun k => ?_⟩
           simp only [g, run] at k ⊢
           have le : b₁ &&& b₂ ≤ b₁ := Nat.and_le_left
           refine Or.inl ⟨rfl, _, rfl, ?_, by omega⟩
@@ -2884,25 +3068,16 @@ defmodule STTDescrProofsTest do
         · obtain ⟨p₁, S₁, rfl, set₁⟩ := ax
           obtain ⟨p₂, S₂, rfl, set₂⟩ := vR.atom y hy
           rcases atom_intersection p₁ S₁ p₂ S₂ set₁ set₂ with ⟨p, E, hE, setE, -, nonempty, -⟩ | ⟨hE, -⟩
-          · exact ⟨by simp only [g, Elixir.Module.Types.Descr.«bare_intersection/3», hE], fun _ => by
+          · exact ⟨fun m _ => by simp only [g, Elixir.Module.Types.Descr.«bare_intersection/3», hE], fun _ => by
               simp only [g, Elixir.Module.Types.Descr.«bare_intersection/3», hE]
               refine Or.inr ⟨rfl, ⟨p, E, rfl, setE⟩, fun S e => ?_⟩
               cases p
               · simp at e
               · simp at e; subst e; exact nonempty rfl⟩
-          · exact ⟨by simp only [g, Elixir.Module.Types.Descr.«bare_intersection/3», hE], fun k => by
+          · exact ⟨fun m _ => by simp only [g, Elixir.Module.Types.Descr.«bare_intersection/3», hE], fun k => by
               simp [g, Elixir.Module.Types.Descr.«bare_intersection/3», hE, kept] at k⟩
-      obtain ⟨I, runI, lookI⟩ := Erlang.maps.intersect_with_lookup
-        (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) "Elixir.Module.Types.Descr"
-        "bare_intersection" #[] L R g (by
-          intro e member y hy
-          rw [Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/3».pure,
-            (common e.1 e.2 y (mapLookup_of_mem_mapEntries member) hy).1])
-      obtain ⟨out, runO, lookO⟩ := Erlang.maps.filter_lookup
-        (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) "Elixir.Module.Types.Descr"
-        "-symmetrical_intersection/3-fun-0-" #[] I kept (by
-          intro e _
-          rw [Erlang.program.«Elixir.Module.Types.Descr:-symmetrical_intersection/3-fun-0-/2».pure, keep_field])
+      obtain ⟨I, out, run, lookI, lookO⟩ := inter_uniform 0 L R vL.static vR.static g
+        fun q x y hx hy => (common q x y hx hy).1
       have field : ∀ q w, mapLookup out q = some w → ElemField q w ∧ ∃ x, mapLookup L q = some x := by
         intro q w hw
         rw [lookO q] at hw
@@ -2934,12 +3109,7 @@ defmodule STTDescrProofsTest do
               · exact Or.inl ⟨rfl, s⟩
               · exact Or.inr ⟨rfl, s⟩
             · simp [k] at hw
-      refine ⟨out, ?_, ⟨fun q some => ?_, fun w h => ?_, fun w h => ?_, fun S h => ?_⟩, fun q w h => (field q w h).2⟩
-      · have absent : mapLookup R (.atom "dynamic") = Option.none := vR.static
-        unfold Elixir.Module.Types.Descr.«bare_intersection/2»
-        simp [getMapKeys_single, vL.static, absent]
-        unfold Elixir.Module.Types.Descr.«symmetrical_intersection/3»
-        simp [runI, runO]
+      refine ⟨out, run, ⟨fun q some => ?_, fun w h => ?_, fun w h => ?_, fun S h => ?_⟩, fun q w h => (field q w h).2⟩
       · obtain ⟨w, h⟩ := Option.isSome_iff_exists.mp some
         rcases (field q w h).1 with ⟨k, -⟩ | ⟨k, -⟩ <;> simp [k]
       · rcases (field _ w h).1 with ⟨k, s⟩ | ⟨k, -⟩
@@ -2952,21 +3122,20 @@ defmodule STTDescrProofsTest do
         · simp at k
         · exact s S rfl
 
-    theorem elem_inter (depth : Nat) {a b : Term} (ha : ElemTerm a) (hb : ElemTerm b) :
-        ∃ e, Elixir.Module.Types.Descr.«bare_intersection/2»
-          (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) a b = .ok e ∧ ElemTerm e := by
+    theorem elem_inter {a b : Term} (ha : ElemTerm a) (hb : ElemTerm b) :
+        ∃ e, ElemTerm e ∧ ∀ m, 1 ≤ m → Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok e := by
       rcases ha with rfl | ⟨L, rfl, vL⟩
-      · exact ⟨b, by unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl, hb⟩
+      · exact ⟨b, hb, fun _ _ => by unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl⟩
       rcases hb with rfl | ⟨R, rfl, vR⟩
-      · exact ⟨.map L, by unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl, Or.inr ⟨L, rfl, vL⟩⟩
-      obtain ⟨out, run, vo, -⟩ := elem_inter_map depth L R vL vR
-      exact ⟨.map out, run, Or.inr ⟨out, rfl, vo⟩⟩
+      · exact ⟨.map L, Or.inr ⟨L, rfl, vL⟩, fun _ _ => by unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl⟩
+      obtain ⟨out, run, vo, -⟩ := elem_inter_map L R vL vR
+      exact ⟨.map out, Or.inr ⟨out, rfl, vo⟩, run⟩
 
     /-- Lists of element types. -/
-    def AllElem (xs : Term) : Prop := ∃ l : List Term, xs = Term.list l ∧ ∀ e ∈ l, ElemTerm e
+    def AllElem (E : Term → Prop) (xs : Term) : Prop := ∃ l : List Term, xs = Term.list l ∧ ∀ e ∈ l, E e
 
-    theorem reverse_elems (l : List Term) (hl : ∀ e ∈ l, ElemTerm e) :
-        ∀ tail, AllElem tail → ∃ r, Erlang.lists.«reverse/2» (Term.list l) tail = .ok r ∧ AllElem r := by
+    theorem reverse_elems (l : List Term) (hl : ∀ e ∈ l, E e) :
+        ∀ tail, AllElem E tail → ∃ r, Erlang.lists.«reverse/2» (Term.list l) tail = .ok r ∧ AllElem E r := by
       induction l with
       | nil => intro tail ht; exact ⟨tail, by simp [Term.list, Erlang.lists.«reverse/2»], ht⟩
       | cons h t ih =>
@@ -2978,35 +3147,36 @@ defmodule STTDescrProofsTest do
             · exact hlt e me⟩
         exact ⟨r, by simpa [Term.list, Erlang.lists.«reverse/2»] using run, hr⟩
 
-    theorem zip_elems (depth : Nat) (l₁ : List Term) (h₁ : ∀ e ∈ l₁, ElemTerm e) :
-        ∀ (l₂ : List Term), (∀ e ∈ l₂, ElemTerm e) → ∀ acc, AllElem acc →
-        ∃ r, Elixir.Module.Types.Descr.«zip_intersection/4» (Dispatcher.ofTable Erlang.program.fun_table (depth + 2))
+    theorem zip_elems (ops : ElemOk E K) (l₁ : List Term) (h₁ : ∀ e ∈ l₁, E e) :
+        ∀ (l₂ : List Term), (∀ e ∈ l₂, E e) → ∀ acc, AllElem E acc →
+        ∃ r, AllElem E r ∧ ∀ m, K + 1 ≤ m → Elixir.Module.Types.Descr.«zip_intersection/4» (D m)
           (Term.list l₁) (Term.list l₂) acc (.function "Elixir.Module.Types.Descr" "bare_intersection" 2 #[]) =
-            .ok r ∧ AllElem r := by
+            .ok r := by
       induction l₁ with
       | nil =>
         rintro l₂ h₂ acc ⟨la, rfl, hla⟩
         obtain ⟨r, run, hr⟩ := reverse_elems la hla (Term.list l₂) ⟨l₂, rfl, h₂⟩
-        exact ⟨r, by unfold Elixir.Module.Types.Descr.«zip_intersection/4»; exact run, hr⟩
+        exact ⟨r, hr, fun _ _ => by unfold Elixir.Module.Types.Descr.«zip_intersection/4»; exact run⟩
       | cons x xs ih =>
         rintro l₂ h₂ acc ⟨la, rfl, hla⟩
         cases l₂ with
         | nil =>
           obtain ⟨r, run, hr⟩ := reverse_elems la hla (Term.list (x :: xs)) ⟨_, rfl, h₁⟩
-          exact ⟨r, by unfold Elixir.Module.Types.Descr.«zip_intersection/4»; exact run, hr⟩
+          exact ⟨r, hr, fun _ _ => by unfold Elixir.Module.Types.Descr.«zip_intersection/4»; exact run⟩
         | cons y ys =>
-          obtain ⟨e, run, he⟩ := elem_inter depth (h₁ x List.mem_cons_self) (h₂ y List.mem_cons_self)
-          obtain ⟨r, runr, hr⟩ := ih (fun e me => h₁ e (List.mem_cons_of_mem _ me)) ys
+          obtain ⟨e, he, run⟩ := ops.inter (h₁ x List.mem_cons_self) (h₂ y List.mem_cons_self)
+          obtain ⟨r, hr, runr⟩ := ih (fun e me => h₁ e (List.mem_cons_of_mem _ me)) ys
             (fun e me => h₂ e (List.mem_cons_of_mem _ me)) (Term.list (e :: la))
             ⟨e :: la, rfl, fun e' me => by
               rcases List.mem_cons.mp me with rfl | me
               · exact he
               · exact hla e' me⟩
-          refine ⟨r, ?_, hr⟩
+          refine ⟨r, hr, fun m hm => ?_⟩
+          obtain ⟨n, rfl, hn⟩ := succ_of_le hm
           unfold Elixir.Module.Types.Descr.«zip_intersection/4»
-          simp only [Term.list, Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/2».pure, run,
+          simp only [Term.list, Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/2».pure, run n hn,
             Lynx.Except.ok_bind]
-          exact runr
+          exact runr _ hm
 
     theorem length_list (l : List Term) : Erlang.erlang.«length/1» (Term.list l) = .ok (.integer l.length) := by
       induction l with
@@ -3014,14 +3184,14 @@ defmodule STTDescrProofsTest do
       | cons h t ih => simp [Term.list, Erlang.erlang.«length/1»] at ih ⊢; simp [ih]
 
     /-- Lines of tuples: a tag and element types. -/
-    def TuplePos (p : Term) : Prop :=
+    def TuplePos (E : Term → Prop) (p : Term) : Prop :=
       ∃ (tag : String) (l : List Term), p = .tuple #[.atom tag, Term.list l] ∧ (tag = "open" ∨ tag = "closed") ∧
-        ∀ e ∈ l, ElemTerm e
+        ∀ e ∈ l, E e
 
     /-- Tuple literals: a key, a tag, and element types. -/
-    def TupleLit (t : Term) : Prop :=
+    def TupleLit (E : Term → Prop) (t : Term) : Prop :=
       ∃ (k : Int) (tag : String) (l : List Term), t = .tuple #[.integer k, .atom tag, Term.list l] ∧
-        (tag = "open" ∨ tag = "closed") ∧ ∀ e ∈ l, ElemTerm e
+        (tag = "open" ∨ tag = "closed") ∧ ∀ e ∈ l, E e
 
     theorem sizes_ok (t₁ t₂ : String) (h₁ : t₁ = "open" ∨ t₁ = "closed") (h₂ : t₂ = "open" ∨ t₂ = "closed")
         (n₁ n₂ : Int) : ∃ v, Elixir.Module.Types.Descr.«tuple_sizes_strategy/4» (.atom t₁) (.integer n₁) (.atom t₂)
@@ -3031,23 +3201,32 @@ defmodule STTDescrProofsTest do
         simp [Lynx.Except.guard, Erlang.erlang.«/=/2», Erlang.erlang.«==/2»]
       all_goals (repeat (first | exact ⟨_, rfl⟩ | split))
 
-    theorem line_ok (depth : Nat) {p t : Term} (hp : TuplePos p) (ht : TupleLit t) :
-        Elixir.Module.Types.Descr.«tuple_line_intersection/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + 2))
-            p t = .ok (.atom "empty") ∨
-          ∃ p', Elixir.Module.Types.Descr.«tuple_line_intersection/2»
-            (Dispatcher.ofTable Erlang.program.fun_table (depth + 2)) p t = .ok p' ∧ TuplePos p' := by
+    theorem line_ok (ops : ElemOk E K) {p t : Term} (hp : TuplePos E p) (ht : TupleLit E t) :
+        (∀ m, K + 1 ≤ m → Elixir.Module.Types.Descr.«tuple_line_intersection/2» (D m) p t = .ok (.atom "empty")) ∨
+          ∃ p', TuplePos E p' ∧
+            ∀ m, K + 1 ≤ m → Elixir.Module.Types.Descr.«tuple_line_intersection/2» (D m) p t = .ok p' := by
       obtain ⟨t₁, l₁, rfl, g₁, e₁⟩ := hp
       obtain ⟨k, t₂, l₂, rfl, g₂, e₂⟩ := ht
       obtain ⟨v, strategy⟩ := sizes_ok t₁ t₂ g₁ g₂ l₁.length l₂.length
-      obtain ⟨r, zip, ⟨lr, rfl, hr⟩⟩ := zip_elems depth l₁ e₁ l₂ e₂ .nil ⟨[], rfl, by simp⟩
-      unfold Elixir.Module.Types.Descr.«tuple_line_intersection/2»
-      simp only [length_list, Lynx.Except.ok_bind, strategy]
-      split
-      · exact Or.inl rfl
+      obtain ⟨r, ⟨lr, rfl, hr⟩, zip⟩ := zip_elems ops l₁ e₁ l₂ e₂ .nil ⟨[], rfl, by simp⟩
+      by_cases dis : v = .atom "disjoint"
+      · subst dis
+        left
+        intro m _
+        unfold Elixir.Module.Types.Descr.«tuple_line_intersection/2»
+        simp only [length_list, Lynx.Except.ok_bind, strategy]
+        rfl
       · right
-        rcases g₁ with rfl | rfl <;> rcases g₂ with rfl | rfl <;>
-          simp [Erlang.erlang.«==/2», Lynx.Except.andAlso, zip] <;>
-          exact ⟨_, lr, rfl, by simp, hr⟩
+        have run : ∀ tag, tag = (if t₁ = "open" ∧ t₂ = "open" then "open" else "closed") → ∀ m, K + 1 ≤ m →
+            Elixir.Module.Types.Descr.«tuple_line_intersection/2» (D m) (.tuple #[.atom t₁, Term.list l₁])
+              (.tuple #[.integer k, .atom t₂, Term.list l₂]) = .ok (.tuple #[.atom tag, Term.list lr]) := by
+          intro tag htag m hm
+          unfold Elixir.Module.Types.Descr.«tuple_line_intersection/2»
+          simp only [length_list, Lynx.Except.ok_bind, strategy]
+          subst htag
+          rcases g₁ with rfl | rfl <;> rcases g₂ with rfl | rfl <;>
+            simp [Erlang.erlang.«==/2», Lynx.Except.andAlso, zip m hm]
+        exact ⟨_, ⟨_, lr, rfl, by split <;> simp, hr⟩, run _ rfl⟩
 
     /-- The branches of an unsatisfiable node are unsatisfiable. -/
     theorem unsat_children {ok : Term → Prop} {h : Int} {lit c u d : Term}
@@ -3070,15 +3249,14 @@ defmodule STTDescrProofsTest do
       exact ⟨fun ρ r => (parts ρ r).1, fun ρ r => (parts ρ r).2.1, fun ρ r => (parts ρ r).2.2⟩
 
     /-- Unsatisfiable tuple BDDs have no line, whatever the elements of their literals. -/
-    theorem tuple_bdd_empty_unsat (depth : Nat) {ok : Term → Prop} {r : Term} (wr : Bdd ok r)
-        (lits : ∀ t, ok t → TupleLit t) (unsat : Unsat r) :
-        ∀ pos negs seen, TuplePos pos →
-          Elixir.Module.Types.Descr.«tuple_bdd_empty?/4» (Dispatcher.ofTable Erlang.program.fun_table (depth + 2))
-            pos negs r seen = .ok (.atom "true") := by
+    theorem tuple_bdd_empty_unsat (ops : ElemOk E K) {m : Nat} (hm : K + 1 ≤ m) {ok : Term → Prop} {r : Term}
+        (wr : Bdd ok r) (lits : ∀ t, ok t → TupleLit E t) (unsat : Unsat r) :
+        ∀ pos negs seen, TuplePos E pos →
+          Elixir.Module.Types.Descr.«tuple_bdd_empty?/4» (D m) pos negs r seen = .ok (.atom "true") := by
       revert lits unsat
-      refine Bdd.induction (P := fun ok r => (∀ t, ok t → TupleLit t) → Unsat r → ∀ pos negs seen, TuplePos pos →
-          Elixir.Module.Types.Descr.«tuple_bdd_empty?/4» (Dispatcher.ofTable Erlang.program.fun_table (depth + 2))
-            pos negs r seen = .ok (.atom "true")) ?_ ?_ ?_ ?_ ok r wr
+      refine Bdd.induction (P := fun ok r => (∀ t, ok t → TupleLit E t) → Unsat r → ∀ pos negs seen, TuplePos E pos →
+          Elixir.Module.Types.Descr.«tuple_bdd_empty?/4» (D m) pos negs r seen = .ok (.atom "true"))
+        ?_ ?_ ?_ ?_ ok r wr
       · intro _ _ unsat; have := unsat _ (resp_const Bool.true); simp at this
       · intro _ _ _ pos negs seen _
         unfold Elixir.Module.Types.Descr.«tuple_bdd_empty?/4»
@@ -3086,16 +3264,16 @@ defmodule STTDescrProofsTest do
       · intro _ k x y _ _ unsat; have := unsat _ (resp_const Bool.true); simp at this
       · intro ok h lit c u d _ okl hc hu hd ic iu id lits unsat pos negs seen hp
         obtain ⟨uc, uu, ud⟩ := unsat_children hc hu hd unsat
-        have lits' : ∀ t, Above ok lit t → TupleLit t := fun t ht => lits t ht.1
+        have lits' : ∀ t, Above ok lit t → TupleLit E t := fun t ht => lits t ht.1
         have dTrue := id lits' ud pos (.cons lit negs) seen hp
         have uTrue := iu lits' uu pos negs seen hp
         unfold Elixir.Module.Types.Descr.«tuple_bdd_empty?/4»
         simp only [dTrue, uTrue, Lynx.Except.andAlso_eq_true, Lynx.Except.andAlso]
-        rcases line_ok depth hp (lits lit okl) with line | ⟨p', line, hp'⟩
-        · simp [line]
+        rcases line_ok ops hp (lits lit okl) with line | ⟨p', hp', line⟩
+        · simp [line m hm]
         · have cTrue := ic lits' uc p' negs seen hp'
           obtain ⟨tg, l, rfl, -, -⟩ := hp'
-          simp [line, cTrue]
+          simp [line m hm, cTrue]
 
     /-! Reading the tuple specification. -/
 
@@ -3131,33 +3309,31 @@ defmodule STTDescrProofsTest do
             (ih d _ (by simp at size; omega) hd).mono lift⟩
         · simp [Term.true] at h
 
-    theorem element_spec {e : Term} (h : «element?/1» e = .ok Term.true) : ElemTerm e := by
-      unfold «element?/1» at h
-      split at h
-      · exact Or.inl rfl
-      · obtain ⟨X, rfl, valid⟩ := valid_map e h
-        exact Or.inr ⟨X, rfl, valid⟩
+    /-- Element types that `nested?/2` accepts at a depth. -/
+    abbrev NestedOk (E : Term → Prop) (depth : Term) : Prop := ∀ e, «nested?/2» e depth = .ok Term.true → E e
 
-    theorem elements_spec : ∀ {xs : Term}, «elements?/1» xs = .ok Term.true → AllElem xs
+    theorem elements_spec (hE : NestedOk E depth) : ∀ {xs : Term}, «elements?/2» xs depth = .ok Term.true → AllElem E xs
       | .nil, _ => ⟨[], rfl, by simp⟩
       | .cons x xs, h => by
-        simp only [«elements?/1», Term.true, Lynx.Except.andAlso_eq_true] at h
-        obtain ⟨l, rfl, hl⟩ := elements_spec h.2
+        unfold «elements?/2» at h
+        simp only [Term.true, Lynx.Except.andAlso_eq_true] at h
+        obtain ⟨l, rfl, hl⟩ := elements_spec hE h.2
         exact ⟨x :: l, rfl, fun e me => by
           rcases List.mem_cons.mp me with rfl | me
-          · exact element_spec h.1
+          · exact hE _ h.1
           · exact hl e me⟩
       | .atom _, h | .integer _, h | .float _, h | .reference _, h | .function _ _ _ _, h | .pid _, h
-      | .tuple _, h | .map _, h | .bitstring _ _ _, h => by simp [«elements?/1», Term.true] at h
+      | .tuple _, h | .map _, h | .bitstring _ _ _, h => by unfold «elements?/2» at h; simp [Term.true] at h
 
     /-- The top tuple literal `{_, open, []}`, which tuple operations treat as the top type. -/
     def IsTop (t : Term) : Prop := ∃ k : Term, t = .tuple #[k, .atom "open", .nil]
 
-    def TupleOk (t : Term) : Prop := TupleLit t ∧ ¬IsTop t
+    def TupleOk (E : Term → Prop) (t : Term) : Prop := TupleLit E t ∧ ¬IsTop t
 
-    theorem tuple_literal_spec {lit lower : Term} (h : «tuple_literal?/2» lit lower = .ok Term.true) :
-        IsLeaf lit ∧ Term.compare lower lit = .lt ∧ TupleOk lit := by
-      unfold «tuple_literal?/2» at h
+    theorem tuple_literal_spec (hE : NestedOk E depth) {lit lower : Term}
+        (h : «tuple_literal?/3» lit lower depth = .ok Term.true) :
+        IsLeaf lit ∧ Term.compare lower lit = .lt ∧ TupleOk E lit := by
+      unfold «tuple_literal?/3» at h
       simp only at h
       split at h
       · rename_i key tag elements
@@ -3180,13 +3356,13 @@ defmodule STTDescrProofsTest do
               · subst en
                 simp [Erlang.erlang.«>/2», gt, Erlang.erlang.«==/2», Erlang.erlang.«/=/2»] at h
               · simp [Erlang.erlang.«>/2», gt, Erlang.erlang.«==/2», Erlang.erlang.«/=/2», en] at h
-                obtain ⟨l, rfl, hl⟩ := elements_spec h
+                obtain ⟨l, rfl, hl⟩ := elements_spec hE h
                 refine ⟨⟨k, _, _, rfl⟩, lt, ⟨k, "open", l, rfl, Or.inl rfl, hl⟩, ?_⟩
                 rintro ⟨_, e⟩
                 simp at e
                 exact en e.2
             · simp [Erlang.erlang.«>/2», gt, Erlang.erlang.«==/2»] at h
-              obtain ⟨l, rfl, hl⟩ := elements_spec h
+              obtain ⟨l, rfl, hl⟩ := elements_spec hE h
               refine ⟨⟨k, _, _, rfl⟩, lt, ⟨k, "closed", l, rfl, Or.inr rfl, hl⟩, ?_⟩
               rintro ⟨_, e⟩
               simp at e
@@ -3194,30 +3370,30 @@ defmodule STTDescrProofsTest do
         · simp [Term.true] at h
       · simp [Term.true] at h
 
-    theorem ordered_tuple_spec : ∀ (n : Nat) (b lower : Term), sizeOf b ≤ n →
-        «ordered_tuple_bdd?/2» b lower = .ok Term.true → Bdd (fun t => Term.compare lower t = .lt ∧ TupleOk t) b := by
+    theorem ordered_tuple_spec (hE : NestedOk E depth) : ∀ (n : Nat) (b lower : Term), sizeOf b ≤ n →
+        «ordered_tuple_bdd?/3» b lower depth = .ok Term.true → Bdd (fun t => Term.compare lower t = .lt ∧ TupleOk E t) b := by
       intro n
       induction n with
       | zero => intro b _ size; cases b <;> simp at size <;> omega
       | succ n ih =>
         intro b lower size h
-        unfold «ordered_tuple_bdd?/2» at h
+        unfold «ordered_tuple_bdd?/3» at h
         split at h
         · exact Bdd.top
         · exact Bdd.bot
-        · obtain ⟨⟨k, x, y, e⟩, lt, okl⟩ := tuple_literal_spec h
+        · obtain ⟨⟨k, x, y, e⟩, lt, okl⟩ := tuple_literal_spec hE h
           simp at e
           obtain ⟨rfl, rfl, rfl⟩ := e
           exact Bdd.leaf_iff.mpr ⟨lt, okl⟩
         · rename_i hash lit c u d
           simp only [Term.true, Lynx.Except.andAlso_eq_true] at h
           obtain ⟨⟨⟨⟨int, hl⟩, hc⟩, hu⟩, hd⟩ := h
-          obtain ⟨⟨k, x, y, rfl⟩, lt, okl⟩ := tuple_literal_spec hl
+          obtain ⟨⟨k, x, y, rfl⟩, lt, okl⟩ := tuple_literal_spec hE hl
           cases hash <;> simp [Erlang.erlang.«is_integer/1», Term.true] at int
           rename_i h'
           obtain ⟨sc, su, sd⟩ := sizeOf_children (.integer h') (.tuple #[.integer k, x, y]) c u d
-          have lift : ∀ t, (Term.compare (.tuple #[.integer k, x, y]) t = .lt ∧ TupleOk t) →
-              Above (fun t => Term.compare lower t = .lt ∧ TupleOk t) (.tuple #[.integer k, x, y]) t :=
+          have lift : ∀ t, (Term.compare (.tuple #[.integer k, x, y]) t = .lt ∧ TupleOk E t) →
+              Above (fun t => Term.compare lower t = .lt ∧ TupleOk E t) (.tuple #[.integer k, x, y]) t :=
             fun t ht => ⟨⟨Std.TransCmp.lt_trans lt ht.1, ht.2⟩, ht.1⟩
           exact Bdd.node_iff.mpr ⟨⟨k, x, y, rfl⟩, ⟨lt, okl⟩,
             (ih c _ (by simp at size; omega) hc).mono lift, (ih u _ (by simp at size; omega) hu).mono lift,
@@ -3225,16 +3401,17 @@ defmodule STTDescrProofsTest do
         · simp [Term.true] at h
 
     /-- Tuple types are the top tuple literal or ordered BDDs of other tuple literals. -/
-    abbrev TupleField (w : Term) : Prop :=
-      (∃ k : Int, w = .tuple #[.integer k, .atom "open", .nil]) ∨ Bdd TupleOk w
+    abbrev TupleField (E : Term → Prop) (w : Term) : Prop :=
+      (∃ k : Int, w = .tuple #[.integer k, .atom "open", .nil]) ∨ Bdd (TupleOk E) w
 
-    theorem tuple_bdd_spec {w : Term} (h : «tuple_bdd?/1» w = .ok Term.true) : TupleField w := by
-      unfold «tuple_bdd?/1» at h
+    theorem tuple_bdd_spec (hE : NestedOk E depth) {w : Term} (h : «tuple_bdd?/2» w depth = .ok Term.true) :
+        TupleField E w := by
+      unfold «tuple_bdd?/2» at h
       split at h
       · rename_i key
         cases key <;> simp [Erlang.erlang.«is_integer/1», Term.true] at h
         exact Or.inl ⟨_, rfl⟩
-      · exact Or.inr ((ordered_tuple_spec _ w _ (Nat.le_refl _) h).mono fun _ h => h.2)
+      · exact Or.inr ((ordered_tuple_spec hE _ w _ (Nat.le_refl _) h).mono fun _ h => h.2)
 
     /-! Differences of two leaves. -/
 
@@ -3328,23 +3505,22 @@ defmodule STTDescrProofsTest do
 
     /-! The empty tuple and its negation. -/
 
-    def EmptyTuple (r : Term) : Prop :=
-      ∀ n S, Elixir.Module.Types.Descr.«tuple_empty?/2» (Dispatcher.ofTable Erlang.program.fun_table (n + 2)) r
-        (.map S) = .ok (.atom "true")
+    def EmptyTuple (K : Nat) (r : Term) : Prop :=
+      ∀ m S, K + 1 ≤ m → Elixir.Module.Types.Descr.«tuple_empty?/2» (D m) r (.map S) = .ok (.atom "true")
 
-    theorem tuple_empty_of {r : Term} (run : ∀ n S, Elixir.Module.Types.Descr.«tuple_bdd_empty?/4»
-        (Dispatcher.ofTable Erlang.program.fun_table (n + 2)) (.tuple #[.atom "open", .nil]) .nil r (.map S) =
-          .ok (.atom "true")) : EmptyTuple r := by
-      intro n S
+    theorem tuple_empty_of {K : Nat} {r : Term} (run : ∀ m S, K + 1 ≤ m → Elixir.Module.Types.Descr.«tuple_bdd_empty?/4»
+        (D m) (.tuple #[.atom "open", .nil]) .nil r (.map S) = .ok (.atom "true")) : EmptyTuple K r := by
+      intro n S hn
+      have run' := fun S' => run n S' hn
       unfold Elixir.Module.Types.Descr.«tuple_empty?/2»
       by_cases seen : S.any (fun e => Term.exactCompare (.cons (.atom "tuple") r) e.1 == .eq) = Bool.true
       · simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», seen, Term.true]
       · simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», seen, Term.true,
-          Term.false, Erlang.maps.«put/3», run]
+          Term.false, Erlang.maps.«put/3», run']
 
-    theorem tuple_empty_unsat {ok : Term → Prop} {r : Term} (wr : Bdd ok r) (lits : ∀ t, ok t → TupleLit t)
-        (unsat : Unsat r) : EmptyTuple r :=
-      tuple_empty_of fun n S => tuple_bdd_empty_unsat n wr lits unsat _ _ _ ⟨"open", [], rfl, Or.inl rfl, by simp⟩
+    theorem tuple_empty_unsat (ops : ElemOk E K) {ok : Term → Prop} {r : Term} (wr : Bdd ok r)
+        (lits : ∀ t, ok t → TupleLit E t) (unsat : Unsat r) : EmptyTuple K r :=
+      tuple_empty_of fun m S hm => tuple_bdd_empty_unsat ops hm wr lits unsat _ _ _ ⟨"open", [], rfl, Or.inl rfl, by simp⟩
 
     theorem inter_top_leaf (k x y : Term) :
         Elixir.Module.Types.Descr.«bdd_intersection/2» (.atom "bdd_top") (.tuple #[k, x, y]) = .ok (.tuple #[k, x, y]) := by
@@ -3398,9 +3574,9 @@ defmodule STTDescrProofsTest do
         unfold Elixir.Module.Types.Descr.«bdd_intersection/2»
         simp [Lynx.Except.guard, Erlang.erlang.«=:=/2», same, run, inter_leaf_top, inter_leaf_bot, node]
 
-    theorem empty_tuple_cancel (k key : Int) :
+    theorem empty_tuple_cancel (K : Nat) (k key : Int) :
         ∃ r, Elixir.Module.Types.Descr.«bdd_intersection/2» (.tuple #[.integer k, .atom "closed", .nil])
-          (.tuple #[.integer key, .atom "open", Term.list [.atom "term"]]) = .ok r ∧ EmptyTuple r := by
+          (.tuple #[.integer key, .atom "open", Term.list [.atom "term"]]) = .ok r ∧ EmptyTuple K r := by
       have same : ¬exactCompare (.tuple #[.integer key, .atom "open", Term.list [.atom "term"]])
           (.tuple #[.integer k, .atom "closed", .nil]) = .eq := by
         intro e
@@ -3413,24 +3589,25 @@ defmodule STTDescrProofsTest do
         rw [compare_tuple]
         simp [List.compareLex_cons_cons]
       obtain ⟨h, run | run⟩ := leaf_intersection ⟨k, _, _, rfl⟩ ⟨key, _, _, rfl⟩ same order
-      · refine ⟨_, run, tuple_empty_of fun n S => ?_⟩
+      · refine ⟨_, run, tuple_empty_of fun n S _ => ?_⟩
         simp [Elixir.Module.Types.Descr.«tuple_bdd_empty?/4», Elixir.Module.Types.Descr.«tuple_line_intersection/2»,
           Erlang.erlang.«length/1», Elixir.Module.Types.Descr.«tuple_sizes_strategy/4», Lynx.Except.guard,
           Erlang.erlang.«==/2», Erlang.erlang.«/=/2», Lynx.Except.andAlso, Elixir.Module.Types.Descr.«zip_intersection/4»,
           Erlang.lists.«reverse/2»]
-      · refine ⟨_, run, tuple_empty_of fun n S => ?_⟩
+      · refine ⟨_, run, tuple_empty_of fun n S _ => ?_⟩
         simp [Elixir.Module.Types.Descr.«tuple_bdd_empty?/4», Elixir.Module.Types.Descr.«tuple_line_intersection/2»,
           Erlang.erlang.«length/1», Elixir.Module.Types.Descr.«tuple_sizes_strategy/4», Lynx.Except.guard,
           Erlang.erlang.«==/2», Erlang.erlang.«/=/2», Lynx.Except.andAlso, Elixir.Module.Types.Descr.«zip_intersection/4»,
           Erlang.lists.«reverse/2»]
 
     /-- What survives of a tuple type and its negation is empty. -/
-    def TupleCancel (x nb : Term) : Prop :=
-      ∃ r, Elixir.Module.Types.Descr.«tuple_intersection/2» x nb = .ok r ∧ (kept (.atom "tuple", r) = Bool.true → EmptyTuple r)
+    def TupleCancel (K : Nat) (x nb : Term) : Prop :=
+      ∃ r, Elixir.Module.Types.Descr.«tuple_intersection/2» x nb = .ok r ∧
+        (kept (.atom "tuple", r) = Bool.true → EmptyTuple K r)
 
-    theorem TupleOk.lit {t : Term} (h : TupleOk t) : TupleLit t := h.1
+    theorem TupleOk.lit {t : Term} (h : TupleOk E t) : TupleLit E t := h.1
 
-    theorem tuple_top_lit : TupleLit (.tuple #[.integer 61102469, .atom "open", .nil]) :=
+    theorem tuple_top_lit : TupleLit E (.tuple #[.integer 61102469, .atom "open", .nil]) :=
       ⟨61102469, "open", [], rfl, Or.inl rfl, by simp⟩
 
     /-- Intersections of tuple BDDs that are not the top literal themselves. -/
@@ -3451,9 +3628,9 @@ defmodule STTDescrProofsTest do
       obtain ⟨rfl, rfl, rfl⟩ := h
       exact okNot _ (Bdd.leaf_iff.mp wx) ⟨_, rfl⟩
 
-    theorem tuple_cancel (x : Term) (field : TupleField x) :
+    theorem tuple_cancel (ops : ElemOk E K) (x : Term) (field : TupleField E x) :
         ∃ nb, Elixir.Module.Types.Descr.«tuple_difference/2» (.tuple #[.integer 61102469, .atom "open", .nil]) x = .ok nb ∧
-          (kept (.atom "tuple", nb) = Bool.true → TupleCancel x nb) := by
+          (kept (.atom "tuple", nb) = Bool.true → TupleCancel K x nb) := by
       rcases field with ⟨k, rfl⟩ | wx
       · exact ⟨.atom "bdd_bot", by simp [Elixir.Module.Types.Descr.«tuple_difference/2»], fun k => by simp [kept] at k⟩
       have notTop := not_top_of_ok wx fun t h => h.2
@@ -3478,7 +3655,7 @@ defmodule STTDescrProofsTest do
               Elixir.Module.Types.Descr.«bdd_leaf_key/2», Lynx.Except.guard, Erlang.erlang.«is_list/1»,
               Erlang.erlang.«length/1», Erlang.erlang.«bsl/2»]
             rfl
-          · obtain ⟨r, run, empty⟩ := empty_tuple_cancel k ((1 <<< 27) + hash)
+          · obtain ⟨r, run, empty⟩ := empty_tuple_cancel K k ((1 <<< 27) + hash)
             refine ⟨r, ?_, fun _ => empty⟩
             rw [tuple_intersection_bdd notTop (by intro k e; simp at e)]
             exact run
@@ -3502,9 +3679,10 @@ defmodule STTDescrProofsTest do
             · next _ _ e => exact (notSpecial _ e).elim
             · rename_i heq; simp only [Term.tuple.injEq] at heq; subst heq; exact run
             · next h₁ => exact (h₁ _ _ rfl rfl).elim
-          · have wl : Bdd TupleLit (.tuple #[.integer k, .atom tag, Term.list ls]) := wx.mono fun _ h => h.1
+          · have wl : Bdd (TupleLit E) (.tuple #[.integer k, .atom tag, Term.list ls]) := wx.mono fun _ h => h.1
             obtain ⟨r, rr, kr, sr⟩ := inter_ok wl (wnb.mono fun _ h => h.1)
-            refine ⟨r, ?_, fun _ => tuple_empty_unsat (kr _ wl (wnb.mono fun _ h => h.1)) (fun _ h => h) fun ρ resp => ?_⟩
+            refine ⟨r, ?_, fun _ => tuple_empty_unsat ops (kr _ wl (wnb.mono fun _ h => h.1)) (fun _ h => h)
+              fun ρ resp => ?_⟩
             · rw [tuple_intersection_bdd notTop (not_top_of_ok wnb fun t h => h.2)]
               exact rr
             · rw [sr ρ resp, sem ρ resp]
@@ -3514,9 +3692,10 @@ defmodule STTDescrProofsTest do
         refine ⟨nb, ?_, fun _ => ?_⟩
         · unfold Elixir.Module.Types.Descr.«tuple_difference/2»
           simp [run]
-        · have wl : Bdd TupleLit (.tuple #[.integer h, lit, c, u, d]) := wx.mono fun _ h => h.1
+        · have wl : Bdd (TupleLit E) (.tuple #[.integer h, lit, c, u, d]) := wx.mono fun _ h => h.1
           obtain ⟨r, rr, kr, sr⟩ := inter_ok wl (wnb.mono fun _ h => h.1)
-          refine ⟨r, ?_, fun _ => tuple_empty_unsat (kr _ wl (wnb.mono fun _ h => h.1)) (fun _ h => h) fun ρ resp => ?_⟩
+          refine ⟨r, ?_, fun _ => tuple_empty_unsat ops (kr _ wl (wnb.mono fun _ h => h.1)) (fun _ h => h)
+            fun ρ resp => ?_⟩
           · rw [tuple_intersection_bdd notTop (not_top_of_ok wnb fun t h => h.2)]
             exact rr
           · rw [sr ρ resp, sem ρ resp]
@@ -3530,39 +3709,26 @@ defmodule STTDescrProofsTest do
     postlude ~LEAN"""
     open BddProofs
 
-    /-- Field types of maps: the top type or types of bitmaps and atoms. -/
-    def Flat (X : List (Term × Term)) : Prop :=
-      Elem X ∧ ∀ q, (mapLookup X q).isSome → q = .atom "bitmap" ∨ q = .atom "atom"
+    def isNone : Term → Bool
+      | .map [] => Bool.true
+      | _ => Bool.false
 
-    def FlatTerm (t : Term) : Prop := t = .atom "term" ∨ ∃ X, t = .map X ∧ Flat X
+    theorem isNone_iff (e : Term) : isNone e = Bool.true ↔ e = .map [] := by
+      unfold isNone
+      split <;> simp_all
 
-    theorem flat_inter (depth : Nat) {a b : Term} (ha : FlatTerm a) (hb : FlatTerm b) :
-        ∃ e, Elixir.Module.Types.Descr.«bare_intersection/2»
-          (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) a b = .ok e ∧ FlatTerm e := by
-      rcases ha with rfl | ⟨L, rfl, vL⟩
-      · exact ⟨b, by unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl, hb⟩
-      rcases hb with rfl | ⟨R, rfl, vR⟩
-      · exact ⟨.map L, by unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl, Or.inr ⟨L, rfl, vL⟩⟩
-      obtain ⟨out, run, vo, fromL⟩ := elem_inter_map depth L R vL.1 vR.1
-      refine ⟨.map out, run, Or.inr ⟨out, rfl, vo, fun q some => ?_⟩⟩
-      obtain ⟨w, h⟩ := Option.isSome_iff_exists.mp some
-      obtain ⟨x, hx⟩ := fromL q w h
-      exact vL.2 q (by simp [hx])
-
-    /-- The emptiness of flat types is decided without recursion. -/
-    theorem flat_empty (d : Dispatcher) {t : Term} (ht : FlatTerm t) (S : List (Term × Term)) :
-        Elixir.Module.Types.Descr.«empty_seen?/2» d t (.map S) = .ok (.atom "true") ∨
-          Elixir.Module.Types.Descr.«empty_seen?/2» d t (.map S) = .ok (.atom "false") := by
-      rcases ht with rfl | ⟨X, rfl, flat⟩
-      · right
-        rw [Elixir.Module.Types.Descr.«empty_seen?/2».eq_def]
+    /-- The emptiness of flat element types is decided without recursion. -/
+    theorem flat_empty {t : Term} (ht : ElemTerm t) (S : List (Term × Term)) (d : Dispatcher) :
+        Elixir.Module.Types.Descr.«empty_seen?/2» d t (.map S) = .ok (boolAtom (isNone t)) := by
+      rcases ht with rfl | ⟨X, rfl, valid⟩
+      · rw [Elixir.Module.Types.Descr.«empty_seen?/2».eq_def]
         rfl
       have absent : ∀ name, name ≠ "bitmap" → name ≠ "atom" → mapLookup X (.atom name) = Option.none := by
         intro name nb na
         cases h : mapLookup X (.atom name) with
         | none => rfl
         | some w =>
-          rcases flat.2 (.atom name) (by rw [h]; rfl) with e | e
+          rcases valid.keys (.atom name) (by rw [h]; rfl) with e | e
           · cases e; exact absurd rfl nb
           · cases e; exact absurd rfl na
       have anyKey : ∀ name, (X.any fun e => exactCompare (.atom name) e.1 == .eq) =
@@ -3575,176 +3741,215 @@ defmodule STTDescrProofsTest do
         Erlang.erlang.«is_map_key/2», anyKey, absent "tuple" (by decide) (by decide), absent "map" (by decide) (by decide),
         absent "list" (by decide) (by decide), absent "fun" (by decide) (by decide), Term.true, Term.false]
       by_cases empty : X = []
-      · simp [empty]
+      · simp [empty, boolAtom, isNone]
+      have nn : isNone (.map X) = Bool.false := by cases X <;> simp_all [isNone]
+      rw [nn]
+      obtain ⟨e, rest, hX⟩ := List.exists_cons_of_ne_nil empty
+      have key : (mapLookup X e.1).isSome := (mapLookup_isSome _ _).mpr ⟨e, by simp [hX], exactCompare_self _⟩
       simp only [empty, if_false]
       cases ha : mapLookup X (.atom "atom") <;> cases hb : mapLookup X (.atom "bitmap") <;>
-        simp [Erlang.erlang.«not/1», Lynx.Except.andAlso]
+        simp [Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom, empty]
+      rcases valid.keys _ key with k | k <;> rw [k] at key <;> simp_all
 
     /-! Map literals. -/
 
-    /-- Results of literal intersections, which throw `:empty` when a required field is empty. -/
-    def Throws (e : Except Exception Term) (P : Term → Prop) : Prop :=
-      (∃ v, e = .ok v ∧ P v) ∨ e = .error (Exception.throw (.atom "empty"))
-
-    def boolAtom (o : Bool) : Term := .atom (if o then "true" else "false")
+    /-- Results of literal intersections at every call depth from `K`, which throw `:empty` when a required
+    field is empty. -/
+    def Throws (K : Nat) (e : Nat → Except Exception Term) (P : Term → Prop) : Prop :=
+      (∃ v, P v ∧ ∀ m, K ≤ m → e m = .ok v) ∨ ∀ m, K ≤ m → e m = .error (Exception.throw (.atom "empty"))
 
     /-- Map fields: a type and whether it is optional. -/
-    def FieldValue (v : Term) : Prop := ∃ (t : Term) (o : Bool), v = .tuple #[t, boolAtom o] ∧ FlatTerm t
+    def FieldValue (E : Term → Prop) (v : Term) : Prop :=
+      ∃ (t : Term) (o : Bool), v = .tuple #[t, boolAtom o] ∧ E t
 
     def bareIntersection : Term := .function "Elixir.Module.Types.Descr" "bare_intersection" 2 #[]
 
-    theorem merge_fun (n : Nat) (S : List (Term × Term)) (key v₁ v₂ : Term) (h₁ : FieldValue v₁)
-        (h₂ : FieldValue v₂) :
-        Throws (Elixir.Module.Types.Descr.«-map_literal_intersection/6-fun-0-/5»
-          (Dispatcher.ofTable Erlang.program.fun_table (n + 2)) bareIntersection (.map S) key v₁ v₂) FieldValue := by
+    theorem merge_fun (ops : ElemOk E K) (S : List (Term × Term)) (key v₁ v₂ : Term) (h₁ : FieldValue E v₁)
+        (h₂ : FieldValue E v₂) :
+        Throws (K + 1) (fun m => Elixir.Module.Types.Descr.«-map_literal_intersection/6-fun-0-/5» (D m)
+          bareIntersection (.map S) key v₁ v₂) (FieldValue E) := by
       obtain ⟨t₁, o₁, rfl, f₁⟩ := h₁
       obtain ⟨t₂, o₂, rfl, f₂⟩ := h₂
-      obtain ⟨e, run, fe⟩ := flat_inter n f₁ f₂
-      have dispatch : Lynx.Dispatcher.pure (Dispatcher.ofTable Erlang.program.fun_table (n + 2)) bareIntersection
-          #[t₁, t₂] = .ok e := by
-        rw [bareIntersection, Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/2».pure]; exact run
-      unfold Elixir.Module.Types.Descr.«-map_literal_intersection/6-fun-0-/5»
-      have result : ∀ o, FieldValue (.tuple #[e, boolAtom o]) := fun o => ⟨e, o, rfl, fe⟩
-      cases o₁ <;> cases o₂ <;> simp [boolAtom, Lynx.Except.andAlso, dispatch]
-      all_goals first
-        | exact Or.inl ⟨_, rfl, result Bool.true⟩
-        | exact Or.inl ⟨_, rfl, result Bool.false⟩
-        | (rcases flat_empty (Dispatcher.ofTable Erlang.program.fun_table (n + 2)) fe S with h | h <;>
-            simp [h, Throws, Lynx.Except.guard, Lynx.Except.tryWith, isMember] <;> exact ⟨e, Bool.false, rfl, fe⟩)
+      obtain ⟨e, fe, run⟩ := ops.inter f₁ f₂
+      obtain ⟨b, empty⟩ := ops.empty fe S
+      have dispatch : ∀ m, K + 1 ≤ m → Lynx.Dispatcher.pure (D m) bareIntersection #[t₁, t₂] = .ok e := by
+        intro m hm
+        obtain ⟨n, rfl, hn⟩ := succ_of_le hm
+        rw [bareIntersection, Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/2».pure]
+        exact run n hn
+      by_cases thrown : (o₁ && o₂) = Bool.false ∧ b = Bool.true
+      · obtain ⟨o, rfl⟩ := thrown
+        refine Or.inr fun m hm => ?_
+        unfold Elixir.Module.Types.Descr.«-map_literal_intersection/6-fun-0-/5»
+        cases o₁ <;> cases o₂ <;> simp at o <;>
+          simp [boolAtom, Lynx.Except.andAlso, dispatch m hm, empty m (by omega), Lynx.Except.guard,
+            Lynx.Except.tryWith, isMember]
+      · refine Or.inl ⟨_, ⟨e, o₁ && o₂, rfl, fe⟩, fun m hm => ?_⟩
+        unfold Elixir.Module.Types.Descr.«-map_literal_intersection/6-fun-0-/5»
+        cases o₁ <;> cases o₂ <;> cases b <;> simp at thrown <;>
+          simp [boolAtom, Lynx.Except.andAlso, dispatch m hm, empty m (by omega), Lynx.Except.guard,
+            Lynx.Except.tryWith, isMember]
 
     def fieldsTerm (l : List (Term × Term)) : Term := Term.list (l.map fun e => .tuple #[e.1, e.2])
 
-    def Fields (v : Term) : Prop := ∃ l : List (Term × Term), v = fieldsTerm l ∧ ∀ e ∈ l, FieldValue e.2
+    def Fields (E : Term → Prop) (v : Term) : Prop :=
+      ∃ l : List (Term × Term), v = fieldsTerm l ∧ ∀ e ∈ l, FieldValue E e.2
 
     def mergeFun (S : List (Term × Term)) : Term :=
       .function "Elixir.Module.Types.Descr" "-map_literal_intersection/6-fun-0-" 3 #[bareIntersection, .map S]
 
-    theorem Throws.cons {e : Except Exception Term} (h : Throws e Fields) (x : Term × Term)
-        (hx : FieldValue x.2) :
-        Throws (e >>= fun r => pure (Term.cons (.tuple #[x.1, x.2]) r)) Fields := by
-      rcases h with ⟨v, rfl, l, rfl, hl⟩ | rfl
-      · refine Or.inl ⟨_, rfl, x :: l, rfl, fun e me => ?_⟩
-        rcases List.mem_cons.mp me with rfl | me
-        · exact hx
-        · exact hl e me
-      · exact Or.inr rfl
+    theorem fields_cons {x : Term × Term} {l : List (Term × Term)} (hx : FieldValue E x.2)
+        (hl : ∀ e ∈ l, FieldValue E e.2) : ∀ e ∈ x :: l, FieldValue E e.2 := fun e me => by
+      rcases List.mem_cons.mp me with rfl | me
+      · exact hx
+      · exact hl e me
 
-    theorem merge_fields (n : Nat) (S : List (Term × Term)) : ∀ N (l₁ l₂ : List (Term × Term)),
-        l₁.length + l₂.length ≤ N → (∀ e ∈ l₁, FieldValue e.2) → (∀ e ∈ l₂, FieldValue e.2) →
-        Throws (Erlang.orddict.«merge/3» (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) (mergeFun S)
-          (fieldsTerm l₁) (fieldsTerm l₂)) Fields := by
+    theorem merge_fields (ops : ElemOk E K) (S : List (Term × Term)) : ∀ N (l₁ l₂ : List (Term × Term)),
+        l₁.length + l₂.length ≤ N → (∀ e ∈ l₁, FieldValue E e.2) → (∀ e ∈ l₂, FieldValue E e.2) →
+        Throws (K + 2) (fun m => Erlang.orddict.«merge/3» (D m) (mergeFun S) (fieldsTerm l₁) (fieldsTerm l₂))
+          (Fields E) := by
       intro N
       induction N with
       | zero =>
         intro l₁ l₂ size h₁ h₂
         have : l₁ = [] ∧ l₂ = [] := by constructor <;> (apply List.eq_nil_of_length_eq_zero; omega)
         obtain ⟨rfl, rfl⟩ := this
-        left
-        refine ⟨.nil, ?_, [], rfl, by simp⟩
+        refine Or.inl ⟨.nil, ⟨[], rfl, by simp⟩, fun m _ => ?_⟩
         unfold Erlang.orddict.«merge/3»
         simp [fieldsTerm, Lynx.Except.guard, mergeFun, Erlang.erlang.«is_function/2»]
       | succ N ih =>
         intro l₁ l₂ size h₁ h₂
         match l₁, l₂ with
         | [], l₂ =>
-          left
-          refine ⟨fieldsTerm l₂, ?_, l₂, rfl, h₂⟩
+          refine Or.inl ⟨fieldsTerm l₂, ⟨l₂, rfl, h₂⟩, fun m _ => ?_⟩
           unfold Erlang.orddict.«merge/3»
           cases l₂ <;> simp [fieldsTerm, Lynx.Except.guard, mergeFun, Erlang.erlang.«is_function/2»]
         | x :: xs, [] =>
-          left
-          refine ⟨fieldsTerm (x :: xs), ?_, x :: xs, rfl, h₁⟩
+          refine Or.inl ⟨fieldsTerm (x :: xs), ⟨x :: xs, rfl, h₁⟩, fun m _ => ?_⟩
           unfold Erlang.orddict.«merge/3»
           simp [fieldsTerm, Lynx.Except.guard, mergeFun, Erlang.erlang.«is_function/2»]
         | x :: xs, y :: ys =>
           have hx := h₁ x List.mem_cons_self
           have hy := h₂ y List.mem_cons_self
-          have hxs : ∀ e ∈ xs, FieldValue e.2 := fun e me => h₁ e (List.mem_cons_of_mem _ me)
-          have hys : ∀ e ∈ ys, FieldValue e.2 := fun e me => h₂ e (List.mem_cons_of_mem _ me)
+          have hxs : ∀ e ∈ xs, FieldValue E e.2 := fun e me => h₁ e (List.mem_cons_of_mem _ me)
+          have hys : ∀ e ∈ ys, FieldValue E e.2 := fun e me => h₂ e (List.mem_cons_of_mem _ me)
           simp only [List.length_cons] at size
           rcases cmp : Term.compare x.1 y.1
-          · have rest := ih xs (y :: ys) (by simp; omega) hxs h₂
-            have := rest.cons x hx
-            unfold Erlang.orddict.«merge/3»
-            simpa [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», cmp] using this
-          · have hv := merge_fun n S x.1 x.2 y.2 hx hy
-            have rest := ih xs ys (by omega) hxs hys
-            unfold Erlang.orddict.«merge/3»
-            simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, mergeFun,
-              Erlang.program.«Elixir.Module.Types.Descr:-map_literal_intersection/6-fun-0-/3».pure]
-            rcases hv with ⟨v, hv, fv⟩ | hv
-            · rw [hv]
-              simp only [Lynx.Except.ok_bind]
-              have := rest.cons (x.1, v) fv
-              simpa [fieldsTerm, mergeFun] using this
-            · rw [hv]
-              exact Or.inr rfl
-          · have rest := ih (x :: xs) ys (by simp; omega) h₁ hys
-            have := rest.cons y hy
-            unfold Erlang.orddict.«merge/3»
-            simpa [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp] using this
+          · rcases ih xs (y :: ys) (by simp; omega) hxs h₂ with ⟨v, ⟨l, rfl, hl⟩, run⟩ | run
+            · refine Or.inl ⟨fieldsTerm (x :: l), ⟨x :: l, rfl, fields_cons hx hl⟩, fun m hm => ?_⟩
+              have := run m hm
+              unfold Erlang.orddict.«merge/3»
+              simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», cmp] at this ⊢
+              simp [this]
+            · refine Or.inr fun m hm => ?_
+              have := run m hm
+              unfold Erlang.orddict.«merge/3»
+              simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», cmp] at this ⊢
+              simp [this]
+          · rcases merge_fun ops S x.1 x.2 y.2 hx hy with ⟨v, fv, hv⟩ | hv
+            · rcases ih xs ys (by omega) hxs hys with ⟨r, ⟨l, rfl, hl⟩, run⟩ | run
+              · refine Or.inl ⟨fieldsTerm ((x.1, v) :: l), ⟨(x.1, v) :: l, rfl, fields_cons fv hl⟩, fun m hm => ?_⟩
+                obtain ⟨n, rfl, hn⟩ := succ_of_le (show K + 1 + 1 ≤ m by omega)
+                have h1 := hv n hn
+                have h2 := run (n + 1) hm
+                unfold Erlang.orddict.«merge/3»
+                simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, mergeFun,
+                  Erlang.program.«Elixir.Module.Types.Descr:-map_literal_intersection/6-fun-0-/3».pure] at h2 ⊢
+                simp [h1, h2]
+              · refine Or.inr fun m hm => ?_
+                obtain ⟨n, rfl, hn⟩ := succ_of_le (show K + 1 + 1 ≤ m by omega)
+                have h1 := hv n hn
+                have h2 := run (n + 1) hm
+                unfold Erlang.orddict.«merge/3»
+                simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, mergeFun,
+                  Erlang.program.«Elixir.Module.Types.Descr:-map_literal_intersection/6-fun-0-/3».pure] at h2 ⊢
+                simp [h1, h2]
+            · refine Or.inr fun m hm => ?_
+              obtain ⟨n, rfl, hn⟩ := succ_of_le (show K + 1 + 1 ≤ m by omega)
+              have h1 := hv n hn
+              unfold Erlang.orddict.«merge/3»
+              simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, mergeFun,
+                Erlang.program.«Elixir.Module.Types.Descr:-map_literal_intersection/6-fun-0-/3».pure]
+              simp [h1]
+          · rcases ih (x :: xs) ys (by simp; omega) h₁ hys with ⟨v, ⟨l, rfl, hl⟩, run⟩ | run
+            · refine Or.inl ⟨fieldsTerm (y :: l), ⟨y :: l, rfl, fields_cons hy hl⟩, fun m hm => ?_⟩
+              have := run m hm
+              unfold Erlang.orddict.«merge/3»
+              simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp] at this ⊢
+              simp [this]
+            · refine Or.inr fun m hm => ?_
+              have := run m hm
+              unfold Erlang.orddict.«merge/3»
+              simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp] at this ⊢
+              simp [this]
 
-    theorem any_bool (d : Dispatcher) (f : Term) (l : List Term) (isFun : ∃ m nm caps, f = .function m nm 1 caps)
-        (hf : ∀ x ∈ l, ∃ b, d.pure f #[x] = .ok (boolAtom b)) :
-        ∃ b, Erlang.lists.«any/2» d f (Term.list l) = .ok (boolAtom b) := by
-      have tail : ∀ l : List Term, (∀ x ∈ l, ∃ b, d.pure f #[x] = .ok (boolAtom b)) →
-          ∃ b, Erlang.lists.«any_1/2» d f (Term.list l) = .ok (boolAtom b) := by
-        intro l
-        induction l with
-        | nil => intro _; exact ⟨Bool.false, by simp [Erlang.lists.«any_1/2», boolAtom]⟩
-        | cons x xs ih =>
-          intro hf
-          obtain ⟨b, hb⟩ := hf x List.mem_cons_self
-          obtain ⟨b', hb'⟩ := ih fun y my => hf y (List.mem_cons_of_mem _ my)
-          cases b
-          · exact ⟨b', by rw [Erlang.lists.«any_1/2».eq_def]; simp [hb, boolAtom, hb']⟩
-          · exact ⟨Bool.true, by rw [Erlang.lists.«any_1/2».eq_def]; simp [hb, boolAtom]⟩
-      obtain ⟨m, nm, caps, rfl⟩ := isFun
-      cases l with
-      | nil => exact ⟨Bool.false, by simp [Erlang.lists.«any/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», boolAtom]⟩
-      | cons x xs =>
-        obtain ⟨b, hb⟩ := hf x List.mem_cons_self
-        obtain ⟨b', hb'⟩ := tail xs fun y my => hf y (List.mem_cons_of_mem _ my)
-        cases b
-        · exact ⟨b', by simp [Erlang.lists.«any/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», hb, boolAtom, hb']⟩
-        · exact ⟨Bool.true, by simp [Erlang.lists.«any/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», hb, boolAtom]⟩
+    theorem any1_list (d : Dispatcher) (f : Term) (res : Term → Bool) :
+        ∀ l : List Term, (∀ x ∈ l, d.pure f #[x] = .ok (boolAtom (res x))) →
+          Erlang.lists.«any_1/2» d f (Term.list l) = .ok (boolAtom (l.any res)) := by
+      intro l
+      induction l with
+      | nil => intro _; simp [Erlang.lists.«any_1/2», Term.list, boolAtom]
+      | cons x xs ih =>
+        intro hf
+        rw [Erlang.lists.«any_1/2».eq_def]
+        have hx := hf x List.mem_cons_self
+        have tail := ih fun y m => hf y (List.mem_cons_of_mem _ m)
+        cases h : res x <;> simp [Term.list, hx, h, boolAtom, tail]
 
-    theorem all_bool (d : Dispatcher) (f : Term) (l : List Term) (isFun : ∃ m nm caps, f = .function m nm 1 caps)
-        (hf : ∀ x ∈ l, ∃ b, d.pure f #[x] = .ok (boolAtom b)) :
-        ∃ b, Erlang.lists.«all/2» d f (Term.list l) = .ok (boolAtom b) := by
-      have tail : ∀ l : List Term, (∀ x ∈ l, ∃ b, d.pure f #[x] = .ok (boolAtom b)) →
-          ∃ b, Erlang.lists.«all_1/2» d f (Term.list l) = .ok (boolAtom b) := by
-        intro l
-        induction l with
-        | nil => intro _; exact ⟨Bool.true, by simp [Erlang.lists.«all_1/2», boolAtom]⟩
-        | cons x xs ih =>
-          intro hf
-          obtain ⟨b, hb⟩ := hf x List.mem_cons_self
-          obtain ⟨b', hb'⟩ := ih fun y my => hf y (List.mem_cons_of_mem _ my)
-          cases b
-          · exact ⟨Bool.false, by rw [Erlang.lists.«all_1/2».eq_def]; simp [hb, boolAtom]⟩
-          · exact ⟨b', by rw [Erlang.lists.«all_1/2».eq_def]; simp [hb, boolAtom, hb']⟩
-      obtain ⟨m, nm, caps, rfl⟩ := isFun
+    theorem any_list (d : Dispatcher) (m nm : String) (caps : Array Term) (res : Term → Bool) (l : List Term)
+        (hf : ∀ x ∈ l, d.pure (.function m nm 1 caps) #[x] = .ok (boolAtom (res x))) :
+        Erlang.lists.«any/2» d (.function m nm 1 caps) (Term.list l) = .ok (boolAtom (l.any res)) := by
       cases l with
-      | nil => exact ⟨Bool.true, by simp [Erlang.lists.«all/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», boolAtom]⟩
+      | nil => simp [Erlang.lists.«any/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», Term.list, boolAtom]
       | cons x xs =>
-        obtain ⟨b, hb⟩ := hf x List.mem_cons_self
-        obtain ⟨b', hb'⟩ := tail xs fun y my => hf y (List.mem_cons_of_mem _ my)
-        cases b
-        · exact ⟨Bool.false, by simp [Erlang.lists.«all/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», hb, boolAtom]⟩
-        · exact ⟨b', by simp [Erlang.lists.«all/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», hb, boolAtom, hb']⟩
+        have hx := hf x List.mem_cons_self
+        have tail := any1_list d _ res xs fun y m => hf y (List.mem_cons_of_mem _ m)
+        cases h : res x <;>
+          simp [Erlang.lists.«any/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», Term.list, hx, h, boolAtom, tail]
+
+    theorem all1_list (d : Dispatcher) (f : Term) (res : Term → Bool) :
+        ∀ l : List Term, (∀ x ∈ l, d.pure f #[x] = .ok (boolAtom (res x))) →
+          Erlang.lists.«all_1/2» d f (Term.list l) = .ok (boolAtom (l.all res)) := by
+      intro l
+      induction l with
+      | nil => intro _; simp [Erlang.lists.«all_1/2», Term.list, boolAtom]
+      | cons x xs ih =>
+        intro hf
+        rw [Erlang.lists.«all_1/2».eq_def]
+        have hx := hf x List.mem_cons_self
+        have tail := ih fun y m => hf y (List.mem_cons_of_mem _ m)
+        cases h : res x <;> simp [Term.list, hx, h, boolAtom, tail]
+
+    theorem all_list (d : Dispatcher) (m nm : String) (caps : Array Term) (res : Term → Bool) (l : List Term)
+        (hf : ∀ x ∈ l, d.pure (.function m nm 1 caps) #[x] = .ok (boolAtom (res x))) :
+        Erlang.lists.«all/2» d (.function m nm 1 caps) (Term.list l) = .ok (boolAtom (l.all res)) := by
+      cases l with
+      | nil => simp [Erlang.lists.«all/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», Term.list, boolAtom]
+      | cons x xs =>
+        have hx := hf x List.mem_cons_self
+        have tail := all1_list d _ res xs fun y m => hf y (List.mem_cons_of_mem _ m)
+        cases h : res x <;>
+          simp [Erlang.lists.«all/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», Term.list, hx, h, boolAtom, tail]
+
+    /-- The optional flag of a field entry. -/
+    def optFlag (x : Term) : Bool :=
+      match x with
+      | .tuple #[_, .tuple #[_, .atom "true"]] => Bool.true
+      | _ => Bool.false
+
+    theorem optFlag_entry (k t : Term) (o : Bool) : optFlag (.tuple #[k, .tuple #[t, boolAtom o]]) = o := by
+      cases o <;> rfl
 
     /-- Predicates on the optional flags of fields return Booleans. -/
-    theorem optional_bool (d : Dispatcher) (f : Term) (lam : Term → Except Exception Term)
+    theorem optional_list (d : Dispatcher) (f : Term) (lam : Term → Except Exception Term)
         (isF : ∀ x, d.pure f #[x] = lam x) (flag : Bool → Bool)
         (lamOk : ∀ k t o, lam (.tuple #[k, .tuple #[t, boolAtom o]]) = .ok (boolAtom (flag o)))
-        (l : List (Term × Term)) (hl : ∀ e ∈ l, FieldValue e.2) :
-        ∀ x ∈ l.map (fun e => Term.tuple #[e.1, e.2]), ∃ b, d.pure f #[x] = .ok (boolAtom b) := by
+        (l : List (Term × Term)) (hl : ∀ e ∈ l, FieldValue E e.2) :
+        ∀ x ∈ l.map (fun e => Term.tuple #[e.1, e.2]), d.pure f #[x] = .ok (boolAtom (flag (optFlag x))) := by
       intro x mx
       obtain ⟨e, me, rfl⟩ := List.mem_map.mp mx
       obtain ⟨t, o, ho, -⟩ := hl e me
-      rw [isF, ho, lamOk]
-      exact ⟨_, rfl⟩
+      rw [isF, ho, lamOk, optFlag_entry]
 
     theorem closed_fun₀ (k t : Term) (o : Bool) :
         Elixir.Module.Types.Descr.«-map_literal_intersection_closed/4-fun-0-/1» (.tuple #[k, .tuple #[t, boolAtom o]]) =
@@ -3758,41 +3963,45 @@ defmodule STTDescrProofsTest do
       cases o <;> simp [Elixir.Module.Types.Descr.«-map_literal_intersection_closed/4-fun-1-/1», boolAtom,
         Erlang.erlang.«not/1»]
 
-    theorem closed_fields (n : Nat) (S : List (Term × Term)) : ∀ N (l₁ l₂ : List (Term × Term)),
-        l₁.length + l₂.length ≤ N → (∀ e ∈ l₁, FieldValue e.2) → (∀ e ∈ l₂, FieldValue e.2) →
-        Throws (Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
-          (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) (fieldsTerm l₁) (fieldsTerm l₂) bareIntersection
-          (.map S)) Fields := by
-      have tails : ∀ (l₁ l₂ : List (Term × Term)), (∀ e ∈ l₁, FieldValue e.2) → (∀ e ∈ l₂, FieldValue e.2) →
-          ∃ b, Lynx.Except.orElse
-            (Erlang.lists.«any/2» (Dispatcher.ofTable Erlang.program.fun_table (n + 3))
+    theorem closed_fields (ops : ElemOk E K) (S : List (Term × Term)) : ∀ N (l₁ l₂ : List (Term × Term)),
+        l₁.length + l₂.length ≤ N → (∀ e ∈ l₁, FieldValue E e.2) → (∀ e ∈ l₂, FieldValue E e.2) →
+        Throws (K + 1) (fun m => Elixir.Module.Types.Descr.«map_literal_intersection_closed/4» (D m)
+          (fieldsTerm l₁) (fieldsTerm l₂) bareIntersection (.map S)) (Fields E) := by
+      have tails : ∀ (l₁ l₂ : List (Term × Term)), (∀ e ∈ l₁, FieldValue E e.2) → (∀ e ∈ l₂, FieldValue E e.2) →
+          ∃ b, ∀ m, Lynx.Except.orElse
+            (Erlang.lists.«any/2» (D m)
               (.function "Elixir.Module.Types.Descr" "-map_literal_intersection_closed/4-fun-0-" 1 #[]) (fieldsTerm l₁))
-            (Erlang.lists.«any/2» (Dispatcher.ofTable Erlang.program.fun_table (n + 3))
+            (Erlang.lists.«any/2» (D m)
               (.function "Elixir.Module.Types.Descr" "-map_literal_intersection_closed/4-fun-1-" 1 #[]) (fieldsTerm l₂))
             Bool.true = .ok (boolAtom b) := by
         intro l₁ l₂ h₁ h₂
-        obtain ⟨b₁, r₁⟩ := any_bool _ _ _ ⟨_, _, _, rfl⟩ (optional_bool _ _ _
-          (Erlang.program.«Elixir.Module.Types.Descr:-map_literal_intersection_closed/4-fun-0-/1».pure (n + 3)) _
+        refine ⟨(l₁.map fun e => Term.tuple #[e.1, e.2]).any (fun x => !optFlag x) ||
+          (l₂.map fun e => Term.tuple #[e.1, e.2]).any (fun x => !optFlag x), fun m => ?_⟩
+        have r₁ := any_list (D m) _ _ _ (fun x => !optFlag x) _ (optional_list (D m) _ _
+          (Erlang.program.«Elixir.Module.Types.Descr:-map_literal_intersection_closed/4-fun-0-/1».pure m) (fun o => !o)
           closed_fun₀ l₁ h₁)
-        obtain ⟨b₂, r₂⟩ := any_bool _ _ _ ⟨_, _, _, rfl⟩ (optional_bool _ _ _
-          (Erlang.program.«Elixir.Module.Types.Descr:-map_literal_intersection_closed/4-fun-1-/1».pure (n + 3)) _
+        have r₂ := any_list (D m) _ _ _ (fun x => !optFlag x) _ (optional_list (D m) _ _
+          (Erlang.program.«Elixir.Module.Types.Descr:-map_literal_intersection_closed/4-fun-1-/1».pure m) (fun o => !o)
           closed_fun₁ l₂ h₂)
         simp only [fieldsTerm] at r₁ r₂ ⊢
-        cases b₁ <;> cases b₂ <;> simp [r₁, r₂, boolAtom, Lynx.Except.orElse]
-      have tailCase : ∀ (l₁ l₂ : List (Term × Term)), (∀ e ∈ l₁, FieldValue e.2) → (∀ e ∈ l₂, FieldValue e.2) →
+        rw [r₁, r₂]
+        cases (l₁.map fun e => Term.tuple #[e.1, e.2]).any (fun x => !optFlag x) <;>
+          simp [boolAtom, Lynx.Except.orElse] <;> rfl
+      have tailCase : ∀ (l₁ l₂ : List (Term × Term)), (∀ e ∈ l₁, FieldValue E e.2) → (∀ e ∈ l₂, FieldValue E e.2) →
           (l₁ = [] ∨ l₂ = []) →
-          Throws (Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
-            (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) (fieldsTerm l₁) (fieldsTerm l₂) bareIntersection
-            (.map S)) Fields := by
+          Throws (K + 1) (fun m => Elixir.Module.Types.Descr.«map_literal_intersection_closed/4» (D m)
+            (fieldsTerm l₁) (fieldsTerm l₂) bareIntersection (.map S)) (Fields E) := by
         intro l₁ l₂ h₁ h₂ empty
         obtain ⟨b, hb⟩ := tails l₁ l₂ h₁ h₂
         cases b
-        · refine Or.inl ⟨.nil, ?_, [], rfl, by simp⟩
+        · refine Or.inl ⟨.nil, ⟨[], rfl, by simp⟩, fun m _ => ?_⟩
+          have hb := hb m
           unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
           rcases empty with rfl | rfl
           · cases l₂ <;> simp [fieldsTerm] at hb ⊢ <;> simp [hb, boolAtom, Lynx.Except.guard, isMember]
           · cases l₁ <;> simp [fieldsTerm] at hb ⊢ <;> simp [hb, boolAtom, Lynx.Except.guard, isMember]
-        · refine Or.inr ?_
+        · refine Or.inr fun m _ => ?_
+          have hb := hb m
           unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
           rcases empty with rfl | rfl
           · cases l₂ <;> simp [fieldsTerm] at hb ⊢ <;> simp [hb, boolAtom, Lynx.Except.guard, isMember]
@@ -3810,68 +4019,101 @@ defmodule STTDescrProofsTest do
         | (k₁, v₁) :: xs, (k₂, v₂) :: ys =>
           obtain ⟨t₁, o₁, rfl, f₁⟩ := h₁ _ List.mem_cons_self
           obtain ⟨t₂, o₂, rfl, f₂⟩ := h₂ _ List.mem_cons_self
-          have hxs : ∀ e ∈ xs, FieldValue e.2 := fun e me => h₁ e (List.mem_cons_of_mem _ me)
-          have hys : ∀ e ∈ ys, FieldValue e.2 := fun e me => h₂ e (List.mem_cons_of_mem _ me)
+          have hxs : ∀ e ∈ xs, FieldValue E e.2 := fun e me => h₁ e (List.mem_cons_of_mem _ me)
+          have hys : ∀ e ∈ ys, FieldValue E e.2 := fun e me => h₂ e (List.mem_cons_of_mem _ me)
           simp only [List.length_cons] at size
           rcases cmp : Term.compare k₁ k₂
           · cases o₁
-            · refine Or.inr ?_
+            · refine Or.inr fun m _ => ?_
               unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
               simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», cmp, boolAtom, isMember]
-            · have rest := ih xs ((k₂, _) :: ys) (by simp; omega) hxs h₂
-              unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
-              simpa [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», cmp, boolAtom, isMember] using rest
-          · obtain ⟨e, run, fe⟩ := flat_inter (n + 1) f₁ f₂
-            have dispatch : Lynx.Dispatcher.pure (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) bareIntersection
-                #[t₁, t₂] = .ok e := by
-              rw [bareIntersection, Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/2».pure]; exact run
-            have rest := ih xs ys (by omega) hxs hys
-            have value : FieldValue (.tuple #[e, boolAtom (o₁ && o₂)]) := ⟨e, _, rfl, fe⟩
-            have cons := rest.cons (k₁, .tuple #[e, boolAtom (o₁ && o₂)]) value
+            · rcases ih xs ((k₂, _) :: ys) (by simp; omega) hxs h₂ with ⟨v, hv, run⟩ | run
+              · refine Or.inl ⟨v, hv, fun m hm => ?_⟩
+                have := run m hm
+                unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
+                simpa [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», cmp, boolAtom, isMember] using this
+              · refine Or.inr fun m hm => ?_
+                have := run m hm
+                unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
+                simpa [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», cmp, boolAtom, isMember] using this
+          · obtain ⟨e, fe, run⟩ := ops.inter f₁ f₂
+            obtain ⟨b, empty⟩ := ops.empty fe S
+            have dispatch : ∀ m, K + 1 ≤ m → Lynx.Dispatcher.pure (D m) bareIntersection #[t₁, t₂] = .ok e := by
+              intro m hm
+              obtain ⟨n, rfl, hn⟩ := succ_of_le hm
+              rw [bareIntersection, Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/2».pure]
+              exact run n hn
+            have value : FieldValue E (.tuple #[e, boolAtom (o₁ && o₂)]) := ⟨e, _, rfl, fe⟩
             have notLt : ¬(Term.compare k₁ k₂).isLT = Bool.true := by simp [cmp]
             have notGt : ¬(Term.compare k₁ k₂).isGT = Bool.true := by simp [cmp]
-            rcases flat_empty (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) fe S with empty | empty <;>
-              cases o₁ <;> cases o₂ <;>
-              unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4» <;>
-              simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom, isMember,
-                Lynx.Except.andAlso, dispatch, empty] at cons ⊢ <;>
-              first | exact cons | exact Or.inr rfl
+            by_cases thrown : (o₁ && o₂) = Bool.false ∧ b = Bool.true
+            · obtain ⟨o, rfl⟩ := thrown
+              refine Or.inr fun m hm => ?_
+              unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
+              cases o₁ <;> cases o₂ <;> simp at o <;>
+                simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom,
+                  isMember, Lynx.Except.andAlso, dispatch m hm, empty m (by omega)]
+            · rcases ih xs ys (by omega) hxs hys with ⟨r, ⟨l, rfl, hl⟩, rest⟩ | rest
+              · refine Or.inl ⟨fieldsTerm ((k₁, .tuple #[e, boolAtom (o₁ && o₂)]) :: l),
+                  ⟨_, rfl, fields_cons value hl⟩, fun m hm => ?_⟩
+                have r := rest m hm
+                unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
+                simp only [fieldsTerm] at r
+                cases o₁ <;> cases o₂ <;> cases b <;> simp at thrown <;>
+                  simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom,
+                    isMember, Lynx.Except.andAlso, dispatch m hm, empty m (by omega), r]
+              · refine Or.inr fun m hm => ?_
+                have r := rest m hm
+                unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
+                simp only [fieldsTerm] at r
+                cases o₁ <;> cases o₂ <;> cases b <;> simp at thrown <;>
+                  simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom,
+                    isMember, Lynx.Except.andAlso, dispatch m hm, empty m (by omega), r]
           · have cmp' : Term.compare k₂ k₁ = .lt := Std.OrientedCmp.lt_of_gt cmp
             cases o₂
-            · refine Or.inr ?_
+            · refine Or.inr fun m _ => ?_
               unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
               simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom, isMember]
-            · have rest := ih ((k₁, _) :: xs) ys (by simp; omega) h₁ hys
-              unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
-              simpa [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom, isMember]
-                using rest
+            · rcases ih ((k₁, _) :: xs) ys (by simp; omega) h₁ hys with ⟨v, hv, run⟩ | run
+              · refine Or.inl ⟨v, hv, fun m hm => ?_⟩
+                have := run m hm
+                unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
+                simpa [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom,
+                  isMember] using this
+              · refine Or.inr fun m hm => ?_
+                have := run m hm
+                unfold Elixir.Module.Types.Descr.«map_literal_intersection_closed/4»
+                simpa [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom,
+                  isMember] using this
 
     theorem open_closed_fun (k t : Term) (o : Bool) :
         Elixir.Module.Types.Descr.«-map_literal_intersection_open_closed/4-fun-0-/1» (.tuple #[k, .tuple #[t, boolAtom o]]) =
           .ok (boolAtom o) := by
       simp [Elixir.Module.Types.Descr.«-map_literal_intersection_open_closed/4-fun-0-/1»]
 
-    theorem open_closed_fields (n : Nat) (S : List (Term × Term)) : ∀ N (l₁ l₂ : List (Term × Term)),
-        l₁.length + l₂.length ≤ N → (∀ e ∈ l₁, FieldValue e.2) → (∀ e ∈ l₂, FieldValue e.2) →
-        Throws (Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
-          (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) (fieldsTerm l₁) (fieldsTerm l₂) bareIntersection
-          (.map S)) Fields := by
-      have tailCase : ∀ (l₁ l₂ : List (Term × Term)), (∀ e ∈ l₁, FieldValue e.2) → (∀ e ∈ l₂, FieldValue e.2) →
+    theorem open_closed_fields (ops : ElemOk E K) (S : List (Term × Term)) : ∀ N (l₁ l₂ : List (Term × Term)),
+        l₁.length + l₂.length ≤ N → (∀ e ∈ l₁, FieldValue E e.2) → (∀ e ∈ l₂, FieldValue E e.2) →
+        Throws (K + 1) (fun m => Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4» (D m)
+          (fieldsTerm l₁) (fieldsTerm l₂) bareIntersection (.map S)) (Fields E) := by
+      have tailCase : ∀ (l₁ l₂ : List (Term × Term)), (∀ e ∈ l₁, FieldValue E e.2) → (∀ e ∈ l₂, FieldValue E e.2) →
           (l₁ = [] ∨ l₂ = []) →
-          Throws (Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
-            (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) (fieldsTerm l₁) (fieldsTerm l₂) bareIntersection
-            (.map S)) Fields := by
+          Throws (K + 1) (fun m => Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4» (D m)
+            (fieldsTerm l₁) (fieldsTerm l₂) bareIntersection (.map S)) (Fields E) := by
         intro l₁ l₂ h₁ h₂ empty
-        obtain ⟨b, hb⟩ := all_bool _ _ _ ⟨_, _, _, rfl⟩ (optional_bool _ _ _
-          (Erlang.program.«Elixir.Module.Types.Descr:-map_literal_intersection_open_closed/4-fun-0-/1».pure (n + 3)) _
-          open_closed_fun l₁ h₁)
-        cases b
-        · refine Or.inr ?_
+        have hb := fun m => all_list (D m) _ _ _ (fun x => optFlag x) _ (optional_list (D m) _ _
+          (Erlang.program.«Elixir.Module.Types.Descr:-map_literal_intersection_open_closed/4-fun-0-/1».pure m)
+          (fun o => o) open_closed_fun l₁ h₁)
+        cases b : (l₁.map fun e => Term.tuple #[e.1, e.2]).all (fun x => optFlag x)
+        · refine Or.inr fun m _ => ?_
+          have hb := hb m
+          rw [b] at hb
           unfold Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
           rcases empty with rfl | rfl
           · cases l₂ <;> simp [fieldsTerm] at hb ⊢ <;> simp [hb, boolAtom, Lynx.Except.guard, isMember]
           · cases l₁ <;> simp [fieldsTerm] at hb ⊢ <;> simp [hb, boolAtom, Lynx.Except.guard, isMember]
-        · refine Or.inl ⟨fieldsTerm l₂, ?_, l₂, rfl, h₂⟩
+        · refine Or.inl ⟨fieldsTerm l₂, ⟨l₂, rfl, h₂⟩, fun m _ => ?_⟩
+          have hb := hb m
+          rw [b] at hb
           unfold Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
           rcases empty with rfl | rfl
           · cases l₂ <;> simp [fieldsTerm] at hb ⊢ <;> simp [hb, boolAtom, Lynx.Except.guard, isMember]
@@ -3889,93 +4131,133 @@ defmodule STTDescrProofsTest do
         | (k₁, v₁) :: xs, (k₂, v₂) :: ys =>
           obtain ⟨t₁, o₁, rfl, f₁⟩ := h₁ _ List.mem_cons_self
           obtain ⟨t₂, o₂, rfl, f₂⟩ := h₂ _ List.mem_cons_self
-          have hxs : ∀ e ∈ xs, FieldValue e.2 := fun e me => h₁ e (List.mem_cons_of_mem _ me)
-          have hys : ∀ e ∈ ys, FieldValue e.2 := fun e me => h₂ e (List.mem_cons_of_mem _ me)
+          have hxs : ∀ e ∈ xs, FieldValue E e.2 := fun e me => h₁ e (List.mem_cons_of_mem _ me)
+          have hys : ∀ e ∈ ys, FieldValue E e.2 := fun e me => h₂ e (List.mem_cons_of_mem _ me)
           simp only [List.length_cons] at size
           rcases cmp : Term.compare k₁ k₂
           · cases o₁
-            · refine Or.inr ?_
+            · refine Or.inr fun m _ => ?_
               unfold Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
               simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», cmp, boolAtom, isMember]
-            · have rest := ih xs ((k₂, _) :: ys) (by simp; omega) hxs h₂
+            · rcases ih xs ((k₂, _) :: ys) (by simp; omega) hxs h₂ with ⟨v, hv, run⟩ | run
+              · refine Or.inl ⟨v, hv, fun m hm => ?_⟩
+                have := run m hm
+                unfold Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
+                simpa [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», cmp, boolAtom, isMember] using this
+              · refine Or.inr fun m hm => ?_
+                have := run m hm
+                unfold Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
+                simpa [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», cmp, boolAtom, isMember] using this
+          · obtain ⟨e, fe, run⟩ := ops.inter f₁ f₂
+            obtain ⟨b, empty⟩ := ops.empty fe S
+            have dispatch : ∀ m, K + 1 ≤ m → Lynx.Dispatcher.pure (D m) bareIntersection #[t₁, t₂] = .ok e := by
+              intro m hm
+              obtain ⟨n, rfl, hn⟩ := succ_of_le hm
+              rw [bareIntersection, Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/2».pure]
+              exact run n hn
+            have value : FieldValue E (.tuple #[e, boolAtom (o₁ && o₂)]) := ⟨e, _, rfl, fe⟩
+            by_cases thrown : (o₁ && o₂) = Bool.false ∧ b = Bool.true
+            · obtain ⟨o, rfl⟩ := thrown
+              refine Or.inr fun m hm => ?_
               unfold Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
-              simpa [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», cmp, boolAtom, isMember] using rest
-          · obtain ⟨e, run, fe⟩ := flat_inter (n + 1) f₁ f₂
-            have dispatch : Lynx.Dispatcher.pure (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) bareIntersection
-                #[t₁, t₂] = .ok e := by
-              rw [bareIntersection, Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/2».pure]; exact run
-            have rest := ih xs ys (by omega) hxs hys
-            have value : FieldValue (.tuple #[e, boolAtom (o₁ && o₂)]) := ⟨e, _, rfl, fe⟩
-            have cons := rest.cons (k₁, .tuple #[e, boolAtom (o₁ && o₂)]) value
-            rcases flat_empty (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) fe S with empty | empty <;>
-              cases o₁ <;> cases o₂ <;>
-              unfold Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4» <;>
-              simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom, isMember,
-                Lynx.Except.andAlso, dispatch, empty] at cons ⊢ <;>
-              first | exact cons | exact Or.inr rfl
-          · have rest := ih ((k₁, _) :: xs) ys (by simp; omega) h₁ hys
-            have := rest.cons (k₂, _) (h₂ _ List.mem_cons_self)
-            unfold Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
-            simpa [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp] using this
+              cases o₁ <;> cases o₂ <;> simp at o <;>
+                simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom,
+                  isMember, Lynx.Except.andAlso, dispatch m hm, empty m (by omega)]
+            · rcases ih xs ys (by omega) hxs hys with ⟨r, ⟨l, rfl, hl⟩, rest⟩ | rest
+              · refine Or.inl ⟨fieldsTerm ((k₁, .tuple #[e, boolAtom (o₁ && o₂)]) :: l),
+                  ⟨_, rfl, fields_cons value hl⟩, fun m hm => ?_⟩
+                have r := rest m hm
+                unfold Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
+                simp only [fieldsTerm] at r
+                cases o₁ <;> cases o₂ <;> cases b <;> simp at thrown <;>
+                  simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom,
+                    isMember, Lynx.Except.andAlso, dispatch m hm, empty m (by omega), r]
+              · refine Or.inr fun m hm => ?_
+                have r := rest m hm
+                unfold Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
+                simp only [fieldsTerm] at r
+                cases o₁ <;> cases o₂ <;> cases b <;> simp at thrown <;>
+                  simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom,
+                    isMember, Lynx.Except.andAlso, dispatch m hm, empty m (by omega), r]
+          · rcases ih ((k₁, _) :: xs) ys (by simp; omega) h₁ hys with ⟨v, ⟨l, rfl, hl⟩, run⟩ | run
+            · refine Or.inl ⟨fieldsTerm ((k₂, _) :: l), ⟨_, rfl, fields_cons (h₂ _ List.mem_cons_self) hl⟩,
+                fun m hm => ?_⟩
+              have := run m hm
+              unfold Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
+              simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp] at this ⊢
+              simp [this]
+            · refine Or.inr fun m hm => ?_
+              have := run m hm
+              unfold Elixir.Module.Types.Descr.«map_literal_intersection_open_closed/4»
+              simp [fieldsTerm, Lynx.Except.guard, Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp] at this ⊢
+              simp [this]
 
     /-- Lines of maps: a tag and fields. -/
-    def MapPos (p : Term) : Prop :=
+    def MapPos (E : Term → Prop) (p : Term) : Prop :=
       ∃ (tag : String) (l : List (Term × Term)), p = .tuple #[.atom tag, fieldsTerm l] ∧
-        (tag = "open" ∨ tag = "closed") ∧ ∀ e ∈ l, FieldValue e.2
+        (tag = "open" ∨ tag = "closed") ∧ ∀ e ∈ l, FieldValue E e.2
 
     /-- Map literals: a key, a tag, and fields. -/
-    def MapLit (t : Term) : Prop :=
+    def MapLit (E : Term → Prop) (t : Term) : Prop :=
       ∃ (k : Int) (tag : String) (l : List (Term × Term)), t = .tuple #[.integer k, .atom tag, fieldsTerm l] ∧
-        (tag = "open" ∨ tag = "closed") ∧ ∀ e ∈ l, FieldValue e.2
+        (tag = "open" ∨ tag = "closed") ∧ ∀ e ∈ l, FieldValue E e.2
 
-    theorem Throws.wrap {e : Except Exception Term} (h : Throws e Fields) (tag : String)
+    theorem Throws.wrap {K : Nat} {e : Nat → Except Exception Term} (h : Throws K e (Fields E)) (tag : String)
         (htag : tag = "open" ∨ tag = "closed") :
-        Throws (e >>= fun r => pure (Term.tuple #[.atom tag, r])) MapPos := by
-      rcases h with ⟨v, rfl, l, rfl, hl⟩ | rfl
-      · exact Or.inl ⟨_, rfl, tag, l, rfl, htag, hl⟩
-      · exact Or.inr rfl
+        Throws K (fun m => e m >>= fun r => pure (Term.tuple #[.atom tag, r])) (MapPos E) := by
+      rcases h with ⟨v, ⟨l, rfl, hl⟩, run⟩ | run
+      · exact Or.inl ⟨_, ⟨tag, l, rfl, htag, hl⟩, fun m hm => by simp [run m hm]⟩
+      · exact Or.inr fun m hm => by simp [run m hm]
 
-    theorem literal_ok (n : Nat) (S : List (Term × Term)) (t₁ t₂ : String) (g₁ : t₁ = "open" ∨ t₁ = "closed")
-        (g₂ : t₂ = "open" ∨ t₂ = "closed") (l₁ l₂ : List (Term × Term)) (h₁ : ∀ e ∈ l₁, FieldValue e.2)
-        (h₂ : ∀ e ∈ l₂, FieldValue e.2) :
-        Throws (Elixir.Module.Types.Descr.«map_literal_intersection/6» (Dispatcher.ofTable Erlang.program.fun_table (n + 3))
-          (.atom t₁) (fieldsTerm l₁) (.atom t₂) (fieldsTerm l₂) bareIntersection (.map S)) MapPos := by
+    theorem Throws.mono {K K' : Nat} {e : Nat → Except Exception Term} {P : Term → Prop} (h : Throws K e P)
+        (le : K ≤ K') : Throws K' e P := by
+      rcases h with ⟨v, hv, run⟩ | run
+      · exact Or.inl ⟨v, hv, fun m hm => run m (by omega)⟩
+      · exact Or.inr fun m hm => run m (by omega)
+
+    theorem literal_ok (ops : ElemOk E K) (S : List (Term × Term)) (t₁ t₂ : String) (g₁ : t₁ = "open" ∨ t₁ = "closed")
+        (g₂ : t₂ = "open" ∨ t₂ = "closed") (l₁ l₂ : List (Term × Term)) (h₁ : ∀ e ∈ l₁, FieldValue E e.2)
+        (h₂ : ∀ e ∈ l₂, FieldValue E e.2) :
+        Throws (K + 2) (fun m => Elixir.Module.Types.Descr.«map_literal_intersection/6» (D m)
+          (.atom t₁) (fieldsTerm l₁) (.atom t₂) (fieldsTerm l₂) bareIntersection (.map S)) (MapPos E) := by
       have size := Nat.le_refl (l₁.length + l₂.length)
       have size' : l₂.length + l₁.length ≤ l₁.length + l₂.length := by omega
       rcases g₁ with rfl | rfl <;> rcases g₂ with rfl | rfl <;> unfold Elixir.Module.Types.Descr.«map_literal_intersection/6»
-      · have := (merge_fields n S _ l₁ l₂ size h₁ h₂).wrap "open" (Or.inl rfl)
+      · have := (merge_fields ops S _ l₁ l₂ size h₁ h₂).wrap "open" (Or.inl rfl)
         simpa [mergeFun] using this
-      · simpa using (open_closed_fields n S _ l₁ l₂ size h₁ h₂).wrap "closed" (Or.inr rfl)
-      · simpa using (open_closed_fields n S _ l₂ l₁ size' h₂ h₁).wrap "closed" (Or.inr rfl)
-      · simpa using (closed_fields n S _ l₁ l₂ size h₁ h₂).wrap "closed" (Or.inr rfl)
+      · simpa using ((open_closed_fields ops S _ l₁ l₂ size h₁ h₂).wrap "closed" (Or.inr rfl)).mono (by omega)
+      · simpa using ((open_closed_fields ops S _ l₂ l₁ size' h₂ h₁).wrap "closed" (Or.inr rfl)).mono (by omega)
+      · simpa using ((closed_fields ops S _ l₁ l₂ size h₁ h₂).wrap "closed" (Or.inr rfl)).mono (by omega)
 
-    theorem map_line_ok (n : Nat) (S : List (Term × Term)) {p t : Term} (hp : MapPos p) (ht : MapLit t) :
-        Elixir.Module.Types.Descr.«map_line_intersection/3» (Dispatcher.ofTable Erlang.program.fun_table (n + 3))
-            p t (.map S) = .ok (.atom "empty") ∨
-          ∃ p', Elixir.Module.Types.Descr.«map_line_intersection/3»
-            (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) p t (.map S) = .ok p' ∧ MapPos p' := by
+    theorem map_line_ok (ops : ElemOk E K) (S : List (Term × Term)) {p t : Term} (hp : MapPos E p) (ht : MapLit E t) :
+        (∀ m, K + 2 ≤ m → Elixir.Module.Types.Descr.«map_line_intersection/3» (D m) p t (.map S) =
+            .ok (.atom "empty")) ∨
+          ∃ p', MapPos E p' ∧ ∀ m, K + 2 ≤ m →
+            Elixir.Module.Types.Descr.«map_line_intersection/3» (D m) p t (.map S) = .ok p' := by
       obtain ⟨t₁, l₁, rfl, g₁, h₁⟩ := hp
       obtain ⟨k, t₂, l₂, rfl, g₂, h₂⟩ := ht
-      rcases literal_ok n S t₁ t₂ g₁ g₂ l₁ l₂ h₁ h₂ with ⟨v, run, hv⟩ | run
+      rcases literal_ok ops S t₁ t₂ g₁ g₂ l₁ l₂ h₁ h₂ with ⟨v, hv, run⟩ | run
       · right
-        refine ⟨v, ?_, hv⟩
+        refine ⟨v, hv, fun m hm => ?_⟩
+        have run := run m hm
         unfold Elixir.Module.Types.Descr.«map_line_intersection/3»
         simp [Lynx.Except.tryWith, bareIntersection] at run ⊢
         simp [run]
       · left
+        intro m hm
+        have run := run m hm
         unfold Elixir.Module.Types.Descr.«map_line_intersection/3»
         simp [Lynx.Except.tryWith, bareIntersection] at run ⊢
         simp [run, Lynx.Exception.classTerm, Lynx.Exception.reason]
 
-    theorem map_bdd_empty_unsat (n : Nat) {ok : Term → Prop} {r : Term} (wr : Bdd ok r)
-        (lits : ∀ t, ok t → MapLit t) (unsat : Unsat r) :
-        ∀ pos negs S, MapPos pos →
-          Elixir.Module.Types.Descr.«map_bdd_empty?/4» (Dispatcher.ofTable Erlang.program.fun_table (n + 3))
-            pos negs r (.map S) = .ok (.atom "true") := by
+    theorem map_bdd_empty_unsat (ops : ElemOk E K) {m : Nat} (hm : K + 2 ≤ m) {ok : Term → Prop} {r : Term}
+        (wr : Bdd ok r) (lits : ∀ t, ok t → MapLit E t) (unsat : Unsat r) :
+        ∀ pos negs S, MapPos E pos →
+          Elixir.Module.Types.Descr.«map_bdd_empty?/4» (D m) pos negs r (.map S) = .ok (.atom "true") := by
       revert lits unsat
-      refine Bdd.induction (P := fun ok r => (∀ t, ok t → MapLit t) → Unsat r → ∀ pos negs S, MapPos pos →
-          Elixir.Module.Types.Descr.«map_bdd_empty?/4» (Dispatcher.ofTable Erlang.program.fun_table (n + 3))
-            pos negs r (.map S) = .ok (.atom "true")) ?_ ?_ ?_ ?_ ok r wr
+      refine Bdd.induction (P := fun ok r => (∀ t, ok t → MapLit E t) → Unsat r → ∀ pos negs S, MapPos E pos →
+          Elixir.Module.Types.Descr.«map_bdd_empty?/4» (D m) pos negs r (.map S) = .ok (.atom "true"))
+        ?_ ?_ ?_ ?_ ok r wr
       · intro _ _ unsat; have := unsat _ (resp_const Bool.true); simp at this
       · intro _ _ _ pos negs S _
         unfold Elixir.Module.Types.Descr.«map_bdd_empty?/4»
@@ -3983,25 +4265,24 @@ defmodule STTDescrProofsTest do
       · intro _ k x y _ _ unsat; have := unsat _ (resp_const Bool.true); simp at this
       · intro ok h lit c u d _ okl hc hu hd ic iu id lits unsat pos negs S hp
         obtain ⟨uc, uu, ud⟩ := unsat_children hc hu hd unsat
-        have lits' : ∀ t, Above ok lit t → MapLit t := fun t ht => lits t ht.1
+        have lits' : ∀ t, Above ok lit t → MapLit E t := fun t ht => lits t ht.1
         have dTrue := id lits' ud pos (.cons lit negs) S hp
         have uTrue := iu lits' uu pos negs S hp
         unfold Elixir.Module.Types.Descr.«map_bdd_empty?/4»
         simp only [dTrue, uTrue, Lynx.Except.andAlso]
-        rcases map_line_ok n S hp (lits lit okl) with line | ⟨p', line, hp'⟩
-        · simp [line]
+        rcases map_line_ok ops S hp (lits lit okl) with line | ⟨p', hp', line⟩
+        · simp [line m hm]
         · have cTrue := ic lits' uc p' negs S hp'
           obtain ⟨tg, l, rfl, -, -⟩ := hp'
-          simp [line, cTrue]
+          simp [line m hm, cTrue]
 
-    def EmptyMap (r : Term) : Prop :=
-      ∀ n S, Elixir.Module.Types.Descr.«map_empty?/2» (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) r
-        (.map S) = .ok (.atom "true")
+    def EmptyMap (K : Nat) (r : Term) : Prop :=
+      ∀ m S, K + 2 ≤ m → Elixir.Module.Types.Descr.«map_empty?/2» (D m) r (.map S) = .ok (.atom "true")
 
-    theorem map_empty_unsat {ok : Term → Prop} {r : Term} (wr : Bdd ok r) (lits : ∀ t, ok t → MapLit t)
-        (unsat : Unsat r) : EmptyMap r := by
-      intro n S
-      have run := fun S' => map_bdd_empty_unsat n wr lits unsat (.tuple #[.atom "open", .nil]) .nil S'
+    theorem map_empty_unsat (ops : ElemOk E K) {ok : Term → Prop} {r : Term} (wr : Bdd ok r)
+        (lits : ∀ t, ok t → MapLit E t) (unsat : Unsat r) : EmptyMap K r := by
+      intro m S hm
+      have run := fun S' => map_bdd_empty_unsat ops hm wr lits unsat (.tuple #[.atom "open", .nil]) .nil S'
         ⟨"open", [], rfl, Or.inl rfl, by simp⟩
       unfold Elixir.Module.Types.Descr.«map_empty?/2»
       by_cases seen : S.any (fun e => Term.exactCompare (.cons (.atom "map") r) e.1 == .eq) = Bool.true
@@ -4009,40 +4290,17 @@ defmodule STTDescrProofsTest do
       · simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», seen, Term.true,
           Term.false, Erlang.maps.«put/3», run]
 
-    theorem Valid.flat {X : List (Term × Term)} (valid : Valid X) : Flat X := by
-      exact ⟨valid, valid.keys⟩
-
-    /-- Field types of map literals in the specification: the top type or valid types. -/
-    def FieldType (t : Term) : Prop := t = .atom "term" ∨ ∃ X, t = .map X ∧ Valid X
-
-    def FieldValueV (v : Term) : Prop := ∃ (t : Term) (o : Bool), v = .tuple #[t, boolAtom o] ∧ FieldType t
-
-    /-- Map literals of the specification. -/
-    def MapLitV (t : Term) : Prop :=
-      ∃ (k : Int) (tag : String) (l : List (Term × Term)), t = .tuple #[.integer k, .atom tag, fieldsTerm l] ∧
-        (tag = "open" ∨ tag = "closed") ∧ ∀ e ∈ l, FieldValueV e.2
-
-    theorem FieldType.flat {t : Term} (h : FieldType t) : FlatTerm t := by
-      rcases h with rfl | ⟨X, rfl, valid⟩
-      · exact Or.inl rfl
-      · exact Or.inr ⟨X, rfl, valid.flat⟩
-
-    theorem MapLitV.lit {t : Term} (h : MapLitV t) : MapLit t := by
-      obtain ⟨k, tag, l, rfl, tags, fields⟩ := h
-      refine ⟨k, tag, l, rfl, tags, fun e me => ?_⟩
-      obtain ⟨ty, o, he, ft⟩ := fields e me
-      exact ⟨ty, o, he, ft.flat⟩
-
-    def MapOk (t : Term) : Prop := MapLitV t ∧ ¬IsTop t
+    def MapOk (E : Term → Prop) (t : Term) : Prop := MapLit E t ∧ ¬IsTop t
 
     /-- Map types are the top map literal or ordered BDDs of other map literals. -/
-    abbrev MapField (w : Term) : Prop :=
-      (∃ k : Int, w = .tuple #[.integer k, .atom "open", .nil]) ∨ Bdd MapOk w
+    abbrev MapField (E : Term → Prop) (w : Term) : Prop :=
+      (∃ k : Int, w = .tuple #[.integer k, .atom "open", .nil]) ∨ Bdd (MapOk E) w
 
-    def MapCancel (x nb : Term) : Prop :=
-      ∃ r, Elixir.Module.Types.Descr.«map_intersection/2» x nb = .ok r ∧ (kept (.atom "map", r) = Bool.true → EmptyMap r)
+    def MapCancel (K : Nat) (x nb : Term) : Prop :=
+      ∃ r, Elixir.Module.Types.Descr.«map_intersection/2» x nb = .ok r ∧
+        (kept (.atom "map", r) = Bool.true → EmptyMap K r)
 
-    theorem map_top_lit : MapLit (.tuple #[.integer 61102469, .atom "open", .nil]) :=
+    theorem map_top_lit : MapLit E (.tuple #[.integer 61102469, .atom "open", .nil]) :=
       ⟨61102469, "open", [], rfl, Or.inl rfl, by simp⟩
 
     theorem map_intersection_bdd {x y : Term} (hx : ∀ k, x ≠ .tuple #[k, .atom "open", .nil])
@@ -4054,9 +4312,9 @@ defmodule STTDescrProofsTest do
       · exact (hy _ rfl).elim
       · rfl
 
-    theorem map_cancel (x : Term) (field : MapField x) :
+    theorem map_cancel (ops : ElemOk E K) (x : Term) (field : MapField E x) :
         ∃ nb, Elixir.Module.Types.Descr.«map_difference/2» (.tuple #[.integer 61102469, .atom "open", .nil]) x = .ok nb ∧
-          (kept (.atom "map", nb) = Bool.true → MapCancel x nb) := by
+          (kept (.atom "map", nb) = Bool.true → MapCancel K x nb) := by
       rcases field with ⟨k, rfl⟩ | wx
       · exact ⟨.atom "bdd_bot", by simp [Elixir.Module.Types.Descr.«map_difference/2»], fun k => by simp [kept] at k⟩
       have notTop := not_top_of_ok wx fun t h => h.2
@@ -4077,9 +4335,10 @@ defmodule STTDescrProofsTest do
           · next _ _ e => exact (notTop _ e).elim
           · rename_i heq; simp only [Term.tuple.injEq] at heq; subst heq; exact run
           · next h₁ => exact (h₁ _ _ rfl rfl).elim
-        · have wl : Bdd MapLit (.tuple #[.integer k, tg, l]) := wx.mono fun _ h => h.1.lit
-          obtain ⟨r, rr, kr, sr⟩ := inter_ok wl (wnb.mono fun _ h => h.1.lit)
-          refine ⟨r, ?_, fun _ => map_empty_unsat (kr _ wl (wnb.mono fun _ h => h.1.lit)) (fun _ h => h) fun ρ resp => ?_⟩
+        · have wl : Bdd (MapLit E) (.tuple #[.integer k, tg, l]) := wx.mono fun _ h => h.1
+          obtain ⟨r, rr, kr, sr⟩ := inter_ok wl (wnb.mono fun _ h => h.1)
+          refine ⟨r, ?_, fun _ => map_empty_unsat ops (kr _ wl (wnb.mono fun _ h => h.1)) (fun _ h => h)
+            fun ρ resp => ?_⟩
           · rw [map_intersection_bdd notTop (not_top_of_ok wnb fun t h => h.2)]
             exact rr
           · rw [sr ρ resp, sem ρ resp]
@@ -4089,9 +4348,10 @@ defmodule STTDescrProofsTest do
         refine ⟨nb, ?_, fun _ => ?_⟩
         · unfold Elixir.Module.Types.Descr.«map_difference/2»
           simp [run]
-        · have wl : Bdd MapLit (.tuple #[.integer h, lit, c, u, d]) := wx.mono fun _ h => h.1.lit
-          obtain ⟨r, rr, kr, sr⟩ := inter_ok wl (wnb.mono fun _ h => h.1.lit)
-          refine ⟨r, ?_, fun _ => map_empty_unsat (kr _ wl (wnb.mono fun _ h => h.1.lit)) (fun _ h => h) fun ρ resp => ?_⟩
+        · have wl : Bdd (MapLit E) (.tuple #[.integer h, lit, c, u, d]) := wx.mono fun _ h => h.1
+          obtain ⟨r, rr, kr, sr⟩ := inter_ok wl (wnb.mono fun _ h => h.1)
+          refine ⟨r, ?_, fun _ => map_empty_unsat ops (kr _ wl (wnb.mono fun _ h => h.1)) (fun _ h => h)
+            fun ρ resp => ?_⟩
           · rw [map_intersection_bdd notTop (not_top_of_ok wnb fun t h => h.2)]
             exact rr
           · rw [sr ρ resp, sem ρ resp]
@@ -4099,21 +4359,14 @@ defmodule STTDescrProofsTest do
 
     /-! Reading the map specification. -/
 
-    theorem field_type_spec {t : Term} (h : «field_type?/1» t = .ok Term.true) : FieldType t := by
-      unfold «field_type?/1» at h
-      split at h
-      · exact Or.inl rfl
-      · obtain ⟨X, rfl, valid⟩ := valid_map _ h
-        exact Or.inr ⟨X, rfl, valid⟩
-
-    theorem map_fields_spec (fs : Term) (h : «map_fields?/1» fs = .ok Term.true) :
-        ∃ l : List (Term × Term), fs = fieldsTerm l ∧ ∀ e ∈ l, FieldValueV e.2 := by
-      unfold «map_fields?/1» at h
+    theorem map_fields_spec (hE : NestedOk E depth) (fs : Term) (h : «map_fields?/2» fs depth = .ok Term.true) :
+        ∃ l : List (Term × Term), fs = fieldsTerm l ∧ ∀ e ∈ l, FieldValue E e.2 := by
+      unfold «map_fields?/2» at h
       split at h
       · rename_i k t o rest
         simp only [Term.true, Lynx.Except.andAlso_eq_true] at h
         obtain ⟨⟨hb, ht⟩, hr⟩ := h
-        obtain ⟨l, rfl, hl⟩ := map_fields_spec rest hr
+        obtain ⟨l, rfl, hl⟩ := map_fields_spec hE rest hr
         have ob : ∃ b, o = boolAtom b := by
           cases o <;> simp [Erlang.erlang.«is_boolean/1»] at hb
           rename_i name
@@ -4125,16 +4378,17 @@ defmodule STTDescrProofsTest do
         obtain ⟨b, rfl⟩ := ob
         refine ⟨(k, .tuple #[t, boolAtom b]) :: l, rfl, fun e me => ?_⟩
         rcases List.mem_cons.mp me with rfl | me
-        · exact ⟨t, b, rfl, field_type_spec ht⟩
+        · exact ⟨t, b, rfl, hE _ ht⟩
         · exact hl e me
       · exact ⟨[], rfl, by simp⟩
       · simp [Term.true] at h
     termination_by sizeOf fs
     decreasing_by all_goals (simp_wf; subst_vars; simp; omega)
 
-    theorem map_literal_spec {lit lower : Term} (h : «map_literal?/2» lit lower = .ok Term.true) :
-        IsLeaf lit ∧ Term.compare lower lit = .lt ∧ MapOk lit := by
-      unfold «map_literal?/2» at h
+    theorem map_literal_spec (hE : NestedOk E depth) {lit lower : Term}
+        (h : «map_literal?/3» lit lower depth = .ok Term.true) :
+        IsLeaf lit ∧ Term.compare lower lit = .lt ∧ MapOk E lit := by
+      unfold «map_literal?/3» at h
       simp only at h
       split at h
       · rename_i key tag fields
@@ -4157,13 +4411,13 @@ defmodule STTDescrProofsTest do
               · subst en
                 simp [Erlang.erlang.«>/2», gt, Erlang.erlang.«==/2», Erlang.erlang.«/=/2»] at h
               · simp [Erlang.erlang.«>/2», gt, Erlang.erlang.«==/2», Erlang.erlang.«/=/2», en] at h
-                obtain ⟨l, rfl, hl⟩ := map_fields_spec _ h
+                obtain ⟨l, rfl, hl⟩ := map_fields_spec hE _ h
                 refine ⟨⟨k, _, _, rfl⟩, lt, ⟨k, "open", l, rfl, Or.inl rfl, hl⟩, ?_⟩
                 rintro ⟨_, e⟩
                 simp at e
                 exact en e.2
             · simp [Erlang.erlang.«>/2», gt, Erlang.erlang.«==/2»] at h
-              obtain ⟨l, rfl, hl⟩ := map_fields_spec _ h
+              obtain ⟨l, rfl, hl⟩ := map_fields_spec hE _ h
               refine ⟨⟨k, _, _, rfl⟩, lt, ⟨k, "closed", l, rfl, Or.inr rfl, hl⟩, ?_⟩
               rintro ⟨_, e⟩
               simp at e
@@ -4171,43 +4425,44 @@ defmodule STTDescrProofsTest do
         · simp [Term.true] at h
       · simp [Term.true] at h
 
-    theorem ordered_map_spec : ∀ (n : Nat) (b lower : Term), sizeOf b ≤ n →
-        «ordered_map_bdd?/2» b lower = .ok Term.true → Bdd (fun t => Term.compare lower t = .lt ∧ MapOk t) b := by
+    theorem ordered_map_spec (hE : NestedOk E depth) : ∀ (n : Nat) (b lower : Term), sizeOf b ≤ n →
+        «ordered_map_bdd?/3» b lower depth = .ok Term.true → Bdd (fun t => Term.compare lower t = .lt ∧ MapOk E t) b := by
       intro n
       induction n with
       | zero => intro b _ size; cases b <;> simp at size <;> omega
       | succ n ih =>
         intro b lower size h
-        unfold «ordered_map_bdd?/2» at h
+        unfold «ordered_map_bdd?/3» at h
         split at h
         · exact Bdd.top
         · exact Bdd.bot
-        · obtain ⟨⟨k, x, y, e⟩, lt, okl⟩ := map_literal_spec h
+        · obtain ⟨⟨k, x, y, e⟩, lt, okl⟩ := map_literal_spec hE h
           simp at e
           obtain ⟨rfl, rfl, rfl⟩ := e
           exact Bdd.leaf_iff.mpr ⟨lt, okl⟩
         · rename_i hash lit c u d
           simp only [Term.true, Lynx.Except.andAlso_eq_true] at h
           obtain ⟨⟨⟨⟨int, hl⟩, hc⟩, hu⟩, hd⟩ := h
-          obtain ⟨⟨k, x, y, rfl⟩, lt, okl⟩ := map_literal_spec hl
+          obtain ⟨⟨k, x, y, rfl⟩, lt, okl⟩ := map_literal_spec hE hl
           cases hash <;> simp [Erlang.erlang.«is_integer/1», Term.true] at int
           rename_i h'
           obtain ⟨sc, su, sd⟩ := sizeOf_children (.integer h') (.tuple #[.integer k, x, y]) c u d
-          have lift : ∀ t, (Term.compare (.tuple #[.integer k, x, y]) t = .lt ∧ MapOk t) →
-              Above (fun t => Term.compare lower t = .lt ∧ MapOk t) (.tuple #[.integer k, x, y]) t :=
+          have lift : ∀ t, (Term.compare (.tuple #[.integer k, x, y]) t = .lt ∧ MapOk E t) →
+              Above (fun t => Term.compare lower t = .lt ∧ MapOk E t) (.tuple #[.integer k, x, y]) t :=
             fun t ht => ⟨⟨Std.TransCmp.lt_trans lt ht.1, ht.2⟩, ht.1⟩
           exact Bdd.node_iff.mpr ⟨⟨k, x, y, rfl⟩, ⟨lt, okl⟩,
             (ih c _ (by simp at size; omega) hc).mono lift, (ih u _ (by simp at size; omega) hu).mono lift,
             (ih d _ (by simp at size; omega) hd).mono lift⟩
         · simp [Term.true] at h
 
-    theorem map_bdd_spec {w : Term} (h : «map_bdd?/1» w = .ok Term.true) : MapField w := by
-      unfold «map_bdd?/1» at h
+    theorem map_bdd_spec (hE : NestedOk E depth) {w : Term} (h : «map_bdd?/2» w depth = .ok Term.true) :
+        MapField E w := by
+      unfold «map_bdd?/2» at h
       split at h
       · rename_i key
         cases key <;> simp [Erlang.erlang.«is_integer/1», Term.true] at h
         exact Or.inl ⟨_, rfl⟩
-      · exact Or.inr ((ordered_map_spec _ w _ (Nat.le_refl _) h).mono fun _ h => h.2)
+      · exact Or.inr ((ordered_map_spec hE _ w _ (Nat.le_refl _) h).mono fun _ h => h.2)
     """
 
     # List types are the top list literal or ordered BDDs of other list literals,
@@ -4219,44 +4474,67 @@ defmodule STTDescrProofsTest do
     /-- List literals other than the top literal `{_, term, term}`, which list operations treat as the top type. -/
     def ListOk (t : Term) : Prop := ¬∃ k : Term, t = .tuple #[k, .atom "term", .atom "term"]
 
-    theorem list_literal_spec {lit lower : Term} (h : «list_literal?/2» lit lower = .ok Term.true) :
-        IsLeaf lit ∧ Term.compare lower lit = .lt ∧ ListOk lit := by
-      unfold «list_literal?/2» at h
+    /-- List literals whose element and tail types are `E`. -/
+    def ListLit (E : Term → Prop) (t : Term) : Prop :=
+      ListOk t ∧ ∃ (k : Int) (a b : Term), t = .tuple #[.integer k, a, b] ∧ E a ∧ E b
+
+    theorem bind_true {e : Except Exception Term} {f : Term → Except Exception Term}
+        (h : (e >>= f) = .ok (.atom "true")) : ∃ v, e = .ok v ∧ f v = .ok (.atom "true") := by
+      cases e with
+      | error x => simp [bind, Except.bind] at h
+      | ok v => exact ⟨v, rfl, by simpa [bind, Except.bind] using h⟩
+
+    theorem list_literal_spec (hE : NestedOk E depth) {lit lower : Term}
+        (h : «list_literal?/3» lit lower depth = .ok Term.true) :
+        IsLeaf lit ∧ Term.compare lower lit = .lt ∧ ListLit E lit := by
+      unfold «list_literal?/3» at h
       split at h
       · rename_i key list last
-        cases key <;> simp [Lynx.Except.andAlso_eq_true, Erlang.erlang.«is_integer/1», Erlang.erlang.«>/2»] at h
+        obtain ⟨v, hA, hrest⟩ := bind_true h
+        obtain ⟨hm, hlast⟩ := (Lynx.Except.andAlso_eq_true _ _ _).mp hrest
+        have hv : v = .atom "true" := by
+          split at hm
+          · simp at hm
+          · rfl
+          · simp at hm
+        subst hv
+        simp only at hm
+        obtain ⟨⟨hint, hgt⟩, hnt⟩ := (Lynx.Except.andAlso_eq_true _ _ _).mp hA |>.imp_left
+          (Lynx.Except.andAlso_eq_true _ _ _).mp
+        cases key <;> simp [Erlang.erlang.«is_integer/1»] at hint
         rename_i k
-        refine ⟨⟨k, list, last, rfl⟩, Std.OrientedCmp.lt_of_gt h.1, ?_⟩
+        simp [Erlang.erlang.«>/2»] at hgt
+        refine ⟨⟨k, list, last, rfl⟩, Std.OrientedCmp.lt_of_gt hgt, ?_, k, list, last, rfl, hE _ hm, hE _ hlast⟩
         rintro ⟨_, e⟩
         simp at e
         obtain ⟨-, rfl, rfl⟩ := e
-        simp [Erlang.erlang.«==/2», Erlang.erlang.«/=/2»] at h
+        simp [Erlang.erlang.«==/2», Erlang.erlang.«/=/2»] at hnt
       · simp [Term.true] at h
 
-    theorem ordered_spec : ∀ (n : Nat) (b lower : Term), sizeOf b ≤ n → «ordered_bdd?/2» b lower = .ok Term.true →
-        Bdd (fun t => Term.compare lower t = .lt ∧ ListOk t) b := by
+    theorem ordered_spec (hE : NestedOk E depth) : ∀ (n : Nat) (b lower : Term), sizeOf b ≤ n →
+        «ordered_bdd?/3» b lower depth = .ok Term.true → Bdd (fun t => Term.compare lower t = .lt ∧ ListLit E t) b := by
       intro n
       induction n with
       | zero => intro b _ size; cases b <;> simp at size <;> omega
       | succ n ih =>
         intro b lower size h
-        unfold «ordered_bdd?/2» at h
+        unfold «ordered_bdd?/3» at h
         split at h
         · exact Bdd.top
         · exact Bdd.bot
-        · obtain ⟨⟨k, x, y, e⟩, lt, okl⟩ := list_literal_spec h
+        · obtain ⟨⟨k, x, y, e⟩, lt, okl⟩ := list_literal_spec hE h
           simp at e
           obtain ⟨rfl, rfl, rfl⟩ := e
           exact Bdd.leaf_iff.mpr ⟨lt, okl⟩
         · rename_i hash lit c u d
           simp only [Term.true, Lynx.Except.andAlso_eq_true] at h
           obtain ⟨⟨⟨⟨int, hl⟩, hc⟩, hu⟩, hd⟩ := h
-          obtain ⟨⟨k, x, y, rfl⟩, lt, okl⟩ := list_literal_spec hl
+          obtain ⟨⟨k, x, y, rfl⟩, lt, okl⟩ := list_literal_spec hE hl
           cases hash <;> simp [Erlang.erlang.«is_integer/1», Term.true] at int
           rename_i h'
           obtain ⟨sc, su, sd⟩ := sizeOf_children (.integer h') (.tuple #[.integer k, x, y]) c u d
-          have lift : ∀ t, (Term.compare (.tuple #[.integer k, x, y]) t = .lt ∧ ListOk t) →
-              Above (fun t => Term.compare lower t = .lt ∧ ListOk t) (.tuple #[.integer k, x, y]) t :=
+          have lift : ∀ t, (Term.compare (.tuple #[.integer k, x, y]) t = .lt ∧ ListLit E t) →
+              Above (fun t => Term.compare lower t = .lt ∧ ListLit E t) (.tuple #[.integer k, x, y]) t :=
             fun t ht => ⟨⟨Std.TransCmp.lt_trans lt ht.1, ht.2⟩, ht.1⟩
           exact Bdd.node_iff.mpr ⟨⟨k, x, y, rfl⟩, ⟨lt, okl⟩,
             (ih c _ (by simp at size; omega) hc).mono lift, (ih u _ (by simp at size; omega) hu).mono lift,
@@ -4267,13 +4545,23 @@ defmodule STTDescrProofsTest do
     abbrev ListField (w : Term) : Prop :=
       (∃ k : Int, w = .tuple #[.integer k, .atom "term", .atom "term"]) ∨ Bdd ListOk w
 
-    theorem list_bdd_spec {w : Term} (h : «list_bdd?/1» w = .ok Term.true) : ListField w := by
-      unfold «list_bdd?/1» at h
+    /-- List types whose literals have element and tail types `E`. -/
+    abbrev LField (E : Term → Prop) (w : Term) : Prop :=
+      (∃ k : Int, w = .tuple #[.integer k, .atom "term", .atom "term"]) ∨ Bdd (ListLit E) w
+
+    theorem LField.list {w : Term} (h : LField E w) : ListField w := by
+      rcases h with top | b
+      · exact Or.inl top
+      · exact Or.inr (b.mono fun _ h => h.1)
+
+    theorem list_bdd_spec (hE : NestedOk E depth) {w : Term} (h : «list_bdd?/2» w depth = .ok Term.true) :
+        LField E w := by
+      unfold «list_bdd?/2» at h
       split at h
       · rename_i key
         cases key <;> simp [Erlang.erlang.«is_integer/1», Term.true] at h
         exact Or.inl ⟨_, rfl⟩
-      · exact Or.inr ((ordered_spec _ w _ (Nat.le_refl _) h).mono fun _ h => h.2)
+      · exact Or.inr ((ordered_spec hE _ w _ (Nat.le_refl _) h).mono fun _ h => h.2)
 
     /-- Function types map arities to BDDs. -/
     def ArityBdds (w : Term) : Prop :=
@@ -4298,8 +4586,102 @@ defmodule STTDescrProofsTest do
       obtain ⟨p, mp, -, rfl⟩ := lookup_found _ q v (by rw [mapLookup_mapEntries]; exact lookup)
       exact arity_bdds_spec _ valid p mp
 
-    /-- What `negatable?/1` checks of a type. -/
-    structure Negatable (X : List (Term × Term)) : Prop where
+    /-- Function literals `{key, args, return}` with `n` arguments, whose argument and return types are `E`. -/
+    def FunLit (E : Term → Prop) (n : Int) (t : Term) : Prop :=
+      ∃ (k : Int) (args : List Term) (ret : Term), t = .tuple #[.integer k, Term.list args, ret] ∧
+        (args.length : Int) = n ∧ (∀ a ∈ args, E a) ∧ E ret
+
+    /-- The literals of the BDD of arity `q`. -/
+    def FunArity (E : Term → Prop) (q t : Term) : Prop := ∃ n : Int, q = .integer n ∧ FunLit E n t
+
+    /-- Nested function types: unions or negations of maps from arities to BDDs of literals of that arity. -/
+    def FField (E : Term → Prop) (w : Term) : Prop :=
+      ∃ (pos : Bool) (R : List (Term × Term)), w = .tuple #[.atom (if pos then "union" else "negation"), .map R] ∧
+        ∀ q v, mapLookup R q = some v → Bdd (FunArity E q) v
+
+    theorem fun_literal_spec (hE : NestedOk E depth) {lit lower : Term} {n : Int}
+        (h : «fun_literal?/4» lit (.integer n) lower depth = .ok Term.true) :
+        IsLeaf lit ∧ Term.compare lower lit = .lt ∧ FunLit E n lit := by
+      unfold «fun_literal?/4» at h
+      split at h
+      · rename_i key args ret
+        obtain ⟨h₁, hret⟩ := (Lynx.Except.andAlso_eq_true _ _ _).mp h
+        obtain ⟨h₂, hlen⟩ := (Lynx.Except.andAlso_eq_true _ _ _).mp h₁
+        obtain ⟨h₃, hargs⟩ := (Lynx.Except.andAlso_eq_true _ _ _).mp h₂
+        obtain ⟨hint, hgt⟩ := (Lynx.Except.andAlso_eq_true _ _ _).mp h₃
+        cases key <;> simp [Erlang.erlang.«is_integer/1», Term.true] at hint
+        rename_i k
+        obtain ⟨l, rfl, hl⟩ := elements_spec hE hargs
+        simp [Erlang.erlang.«>/2»] at hgt
+        simp [length_list, Erlang.erlang.«==/2», Term.true] at hlen
+        exact ⟨⟨k, _, _, rfl⟩, Std.OrientedCmp.lt_of_gt hgt, k, l, ret, rfl, hlen, hl, hE _ hret⟩
+      · simp [Term.true] at h
+
+    theorem ordered_fun_spec (hE : NestedOk E depth) (n : Int) : ∀ (s : Nat) (b lower : Term), sizeOf b ≤ s →
+        «fun_bdd?/4» b (.integer n) lower depth = .ok Term.true →
+          Bdd (fun t => Term.compare lower t = .lt ∧ FunLit E n t) b := by
+      intro s
+      induction s with
+      | zero => intro b _ size; cases b <;> simp at size <;> omega
+      | succ s ih =>
+        intro b lower size h
+        unfold «fun_bdd?/4» at h
+        split at h
+        · exact Bdd.top
+        · exact Bdd.bot
+        · obtain ⟨⟨k, x, y, e⟩, lt, okl⟩ := fun_literal_spec hE h
+          simp at e
+          obtain ⟨rfl, rfl, rfl⟩ := e
+          exact Bdd.leaf_iff.mpr ⟨lt, okl⟩
+        · rename_i hash lit c u d
+          simp only [Term.true, Lynx.Except.andAlso_eq_true] at h
+          obtain ⟨⟨⟨⟨int, hl⟩, hc⟩, hu⟩, hd⟩ := h
+          obtain ⟨⟨k, x, y, rfl⟩, lt, okl⟩ := fun_literal_spec hE hl
+          cases hash <;> simp [Erlang.erlang.«is_integer/1», Term.true] at int
+          rename_i h'
+          obtain ⟨sc, su, sd⟩ := sizeOf_children (.integer h') (.tuple #[.integer k, x, y]) c u d
+          have lift : ∀ t, (Term.compare (.tuple #[.integer k, x, y]) t = .lt ∧ FunLit E n t) →
+              Above (fun t => Term.compare lower t = .lt ∧ FunLit E n t) (.tuple #[.integer k, x, y]) t :=
+            fun t ht => ⟨⟨Std.TransCmp.lt_trans lt ht.1, ht.2⟩, ht.1⟩
+          exact Bdd.node_iff.mpr ⟨⟨k, x, y, rfl⟩, ⟨lt, okl⟩,
+            (ih c _ (by simp at size; omega) hc).mono lift, (ih u _ (by simp at size; omega) hu).mono lift,
+            (ih d _ (by simp at size; omega) hd).mono lift⟩
+        · simp [Term.true] at h
+
+    theorem fun_arities_spec (hE : NestedOk E depth) (es : List (Term × Term))
+        (valid : «fun_arities?/2» (Term.list (es.map fun e => .tuple #[e.1, e.2])) depth = .ok Term.true) :
+        ∀ p ∈ es, Bdd (FunArity E p.1) p.2 := by
+      induction es with
+      | nil => simp
+      | cons e rest ih =>
+        simp only [List.map_cons, Term.list] at valid
+        unfold «fun_arities?/2» at valid
+        simp only [Term.true, Lynx.Except.andAlso_eq_true] at valid
+        obtain ⟨⟨int, bdd⟩, tail⟩ := valid
+        intro p member
+        rcases List.mem_cons.mp member with rfl | member
+        · obtain ⟨q, v⟩ := p
+          cases q <;> simp [Erlang.erlang.«is_integer/1»] at int
+          rename_i n
+          exact (ordered_fun_spec hE n _ v _ (Nat.le_refl _) bdd).mono fun t h => ⟨n, rfl, h.2⟩
+        · exact ih tail p member
+
+    theorem fun_arities_map (hE : NestedOk E depth) (R : List (Term × Term))
+        (valid : «fun_arities?/2» (Term.list ((mapEntries R).map fun e => .tuple #[e.1, e.2])) depth = .ok Term.true) :
+        ∀ q v, mapLookup R q = some v → Bdd (FunArity E q) v := by
+      intro q v lookup
+      obtain ⟨p, mp, qp, rfl⟩ := lookup_found _ q v (by rw [mapLookup_mapEntries]; exact lookup)
+      exact (fun_arities_spec hE _ valid p mp).mono fun t ⟨n, e, lit⟩ => ⟨n, by rw [e] at qp; exact (exactCompare_eq_integer _ _).mp qp, lit⟩
+
+    theorem FField.funField {w : Term} (h : FField E w) : FunField w ∧ ArityBdds w := by
+      obtain ⟨pos, R, rfl, bdds⟩ := h
+      refine ⟨⟨pos, R, rfl⟩, fun t R' e q v lookup => ?_⟩
+      simp at e
+      obtain ⟨-, rfl⟩ := e
+      exact (bdds q v lookup).mono fun _ _ => trivial
+
+    /-- What `negatable?/2` checks of a type, whose tuple elements and map fields are `E`. -/
+    structure Negatable (E : Term → Prop) (X : List (Term × Term)) : Prop where
       keys : ∀ q, (mapLookup X q).isSome →
         q = .atom "bitmap" ∨ q = .atom "atom" ∨ q = .atom "fun" ∨ q = .atom "list" ∨ q = .atom "tuple" ∨
           q = .atom "map"
@@ -4309,10 +4691,10 @@ defmodule STTDescrProofsTest do
       funs : ∀ w, mapLookup X (.atom "fun") = some w → FunField w
       arities : ∀ w, mapLookup X (.atom "fun") = some w → ArityBdds w
       lists : ∀ w, mapLookup X (.atom "list") = some w → ListField w
-      tuples : ∀ w, mapLookup X (.atom "tuple") = some w → TupleField w
-      maps : ∀ w, mapLookup X (.atom "map") = some w → MapField w
+      tuples : ∀ w, mapLookup X (.atom "tuple") = some w → TupleField E w
+      maps : ∀ w, mapLookup X (.atom "map") = some w → MapField E w
 
-    theorem Negatable.static {X : List (Term × Term)} (valid : Negatable X) :
+    theorem Negatable.static {X : List (Term × Term)} (valid : Negatable E X) :
         mapLookup X (.atom "dynamic") = Option.none := by
       cases h : mapLookup X (.atom "dynamic") with
       | none => rfl
@@ -4320,33 +4702,172 @@ defmodule STTDescrProofsTest do
         rcases valid.keys _ (by rw [h]; rfl) with bad | bad | bad | bad | bad | bad <;> simp only [Term.atom.injEq] at bad <;>
           exact absurd bad (by decide)
 
-    /-- Each field `negatable_fields?/1` accepts. -/
-    theorem negatable_fields_spec (es : List (Term × Term))
-        (valid : «negatable_fields?/1» (Term.list (es.map fun e => .tuple #[e.1, e.2])) = .ok Term.true) :
+    /-- What `nested?/2` checks of the fields of a nested type, whose tuple elements and map fields are `E`. -/
+    structure NestMap (E : Term → Prop) (X : List (Term × Term)) : Prop where
+      keys : ∀ q, (mapLookup X q).isSome → q = .atom "bitmap" ∨ q = .atom "atom" ∨ q = .atom "fun" ∨
+        q = .atom "list" ∨ q = .atom "tuple" ∨ q = .atom "map"
+      bitmap : ∀ w, mapLookup X (.atom "bitmap") = some w → ∃ b : Nat, w = .integer b ∧ 1 ≤ b ∧ b ≤ 255
+      atom : ∀ w, mapLookup X (.atom "atom") = some w → AtomField w
+      atomUnion : ∀ S, mapLookup X (.atom "atom") = some (.tuple #[.atom "union", .map S]) → S ≠ []
+      funs : ∀ w, mapLookup X (.atom "fun") = some w → FField E w
+      lists : ∀ w, mapLookup X (.atom "list") = some w → LField E w
+      tuples : ∀ w, mapLookup X (.atom "tuple") = some w → TupleField E w
+      maps : ∀ w, mapLookup X (.atom "map") = some w → MapField E w
+
+    def NestOf (E : Term → Prop) (t : Term) : Prop := t = .atom "term" ∨ ∃ X, t = .map X ∧ NestMap E X
+
+    /-- Nested types of a depth: flat element types at depth 0. -/
+    def Nest : Nat → Term → Prop
+      | 0 => ElemTerm
+      | d + 1 => NestOf (Nest d)
+
+    theorem NestMap.negatable {X : List (Term × Term)} (v : NestMap E X) : Negatable E X := by
+      exact ⟨v.keys, v.bitmap, v.atom, v.atomUnion, fun w h => (v.funs w h).funField.1,
+        fun w h => (v.funs w h).funField.2, fun w h => (v.lists w h).list, v.tuples, v.maps⟩
+
+    /-- Each field `nested_field?/2` accepts. -/
+    theorem nested_field_spec (hE : NestedOk E depth) (k w : Term)
+        (h : «nested_field?/2» (.tuple #[k, w]) depth = .ok Term.true) :
+        (k = .atom "bitmap" ∧ ∃ b : Nat, w = .integer b ∧ 1 ≤ b ∧ b ≤ 255) ∨
+          (k = .atom "atom" ∧ AtomField w ∧ ∀ S, w = .tuple #[.atom "union", .map S] → S ≠ []) ∨
+          (k = .atom "fun" ∧ FField E w) ∨ (k = .atom "list" ∧ LField E w) ∨ (k = .atom "tuple" ∧ TupleField E w) ∨
+          (k = .atom "map" ∧ MapField E w) := by
+      unfold «nested_field?/2» at h
+      simp only at h
+      split at h
+      · rename_i tag arities shape
+        simp at shape
+        obtain ⟨rfl, rfl⟩ := shape
+        simp only [Lynx.Except.guard, Lynx.Except.tryWith] at h
+        split at h
+        · rename_i member
+          refine Or.inr (Or.inr (Or.inl ⟨rfl, ?_⟩))
+          cases arities <;> simp [Erlang.erlang.«is_map/1», Lynx.Except.andAlso] at h
+          rename_i R
+          have bdds := fun_arities_map hE R (by simpa [Erlang.maps.«to_list/1»] using h)
+          by_cases u : tag = .atom "union"
+          · exact ⟨Bool.true, R, by simp [u], bdds⟩
+          · by_cases n : tag = .atom "negation"
+            · exact ⟨Bool.false, R, by simp [n], bdds⟩
+            · simp [isMember, u, n] at member
+        · exfalso
+          split at h
+          · simp_all
+          · simp_all
+          · simp_all
+          · rcases valid_fields [(.atom "fun", .tuple #[tag, arities])] (by simpa [Term.list] using h) _
+              List.mem_cons_self with h | h <;> simp at h
+      split at h
+      · rename_i bdd shape
+        simp at shape
+        obtain ⟨rfl, rfl⟩ := shape
+        exact Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, list_bdd_spec hE h⟩)))
+      · rename_i bdd shape
+        simp at shape
+        obtain ⟨rfl, rfl⟩ := shape
+        exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, tuple_bdd_spec hE h⟩))))
+      · rename_i bdd shape
+        simp at shape
+        obtain ⟨rfl, rfl⟩ := shape
+        exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨rfl, map_bdd_spec hE h⟩))))
+      · rcases valid_fields [(k, w)] (by simpa [Term.list] using h) (k, w) (by simp) with h | h
+        · exact Or.inl h
+        · exact Or.inr (Or.inl h)
+
+    theorem nested_fields_spec (hE : NestedOk E depth) (es : List (Term × Term))
+        (valid : «nested_fields?/2» (Term.list (es.map fun e => .tuple #[e.1, e.2])) depth = .ok Term.true) :
         ∀ p ∈ es, (p.1 = .atom "bitmap" ∧ ∃ b : Nat, p.2 = .integer b ∧ 1 ≤ b ∧ b ≤ 255) ∨
           (p.1 = .atom "atom" ∧ AtomField p.2 ∧ ∀ S, p.2 = .tuple #[.atom "union", .map S] → S ≠ []) ∨
-          (p.1 = .atom "fun" ∧ FunField p.2 ∧ ArityBdds p.2) ∨
-          (p.1 = .atom "list" ∧ ListField p.2) ∨ (p.1 = .atom "tuple" ∧ TupleField p.2) ∨
-          (p.1 = .atom "map" ∧ MapField p.2) := by
+          (p.1 = .atom "fun" ∧ FField E p.2) ∨ (p.1 = .atom "list" ∧ LField E p.2) ∨
+          (p.1 = .atom "tuple" ∧ TupleField E p.2) ∨ (p.1 = .atom "map" ∧ MapField E p.2) := by
       induction es with
       | nil => simp
       | cons e rest ih =>
         obtain ⟨k, w⟩ := e
-        simp only [List.map_cons, Term.list, «negatable_fields?/1», Term.true, Lynx.Except.andAlso_eq_true] at valid
+        unfold «nested_fields?/2» at valid
+        simp only [List.map_cons, Term.list, Term.true, Lynx.Except.andAlso_eq_true] at valid
+        intro p member
+        rcases List.mem_cons.mp member with rfl | member
+        · exact nested_field_spec hE k w valid.1
+        · exact ih valid.2 p member
+
+    theorem nest_map (hE : NestedOk E depth) (X : List (Term × Term))
+        (valid : «nested_fields?/2» (Term.list ((mapEntries X).map fun e => .tuple #[e.1, e.2])) depth =
+          .ok Term.true) : NestMap E X := by
+      have each := nested_fields_spec hE (mapEntries X) valid
+      have entry (q w : Term) (lookup : mapLookup X q = some w) :
+          ∃ p ∈ mapEntries X, exactCompare q p.1 = .eq ∧ p.2 = w :=
+        lookup_found _ q w (by rw [mapLookup_mapEntries]; exact lookup)
+      have key : ∀ {q : Term} {name : String}, exactCompare q (.atom name) = .eq → q = .atom name :=
+        fun e => (exactCompare_eq_atom _ _).mp e
+      refine ⟨fun q some => ?_, fun w lookup => ?_, fun w lookup => ?_, fun S lookup => ?atomU,
+        fun w lookup => ?_, fun w lookup => ?_, fun w lookup => ?_, fun w lookup => ?_⟩
+      case atomU =>
+        obtain ⟨p, mp, qp, e⟩ := entry _ _ lookup
+        rcases each p mp with ⟨k, f⟩ | ⟨k, f⟩ | ⟨k, f⟩ | ⟨k, f⟩ | ⟨k, f⟩ | ⟨k, f⟩ <;> rw [k] at qp <;>
+          first | exact f.2 S e | (simp at qp)
+      · obtain ⟨w, lookup⟩ := Option.isSome_iff_exists.mp some
+        obtain ⟨p, mp, qp, -⟩ := entry q w lookup
+        rcases each p mp with ⟨k, -⟩ | ⟨k, -⟩ | ⟨k, -⟩ | ⟨k, -⟩ | ⟨k, -⟩ | ⟨k, -⟩ <;> rw [k] at qp <;> simp [key qp]
+      all_goals
+        obtain ⟨p, mp, qp, rfl⟩ := entry _ w lookup
+        rcases each p mp with ⟨k, f⟩ | ⟨k, f⟩ | ⟨k, f⟩ | ⟨k, f⟩ | ⟨k, f⟩ | ⟨k, f⟩ <;> rw [k] at qp <;>
+          first | exact f | exact f.1 | exact f.2 | (simp at qp)
+
+    /-- `nested?/2` accepts nested types of its depth. -/
+    theorem nested_spec : ∀ (d : Nat), NestedOk (Nest d) (.integer d)
+      | 0, e, h => by
+        unfold «nested?/2» at h
+        split at h
+        · exact Or.inl rfl
+        · obtain ⟨X, rfl, valid⟩ := valid_map _ h
+          exact Or.inr ⟨X, rfl, valid⟩
+        · simp at *
+        · simp [Term.true] at h
+      | d + 1, e, h => by
+        unfold «nested?/2» at h
+        split at h
+        · exact Or.inl rfl
+        · exfalso; simp_all; omega
+        · rename_i X _
+          simp only [Erlang.maps.«to_list/1», Lynx.Except.ok_bind] at h
+          have sub : Erlang.erlang.«-/2» (.integer ↑(d + 1)) (.integer 1) = .ok (.integer ↑d) := by
+            rw [Erlang.erlang.«-/2_integers»]; congr 2; omega
+          rw [sub, Lynx.Except.ok_bind] at h
+          exact Or.inr ⟨X, rfl, nest_map (nested_spec d) X h⟩
+        · simp [Term.true] at h
+
+    /-- Each field `negatable_fields?/2` accepts. -/
+    theorem negatable_fields_spec (hE : NestedOk E depth) (es : List (Term × Term))
+        (valid : «negatable_fields?/2» (Term.list (es.map fun e => .tuple #[e.1, e.2])) depth = .ok Term.true) :
+        ∀ p ∈ es, (p.1 = .atom "bitmap" ∧ ∃ b : Nat, p.2 = .integer b ∧ 1 ≤ b ∧ b ≤ 255) ∨
+          (p.1 = .atom "atom" ∧ AtomField p.2 ∧ ∀ S, p.2 = .tuple #[.atom "union", .map S] → S ≠ []) ∨
+          (p.1 = .atom "fun" ∧ FunField p.2 ∧ ArityBdds p.2) ∨
+          (p.1 = .atom "list" ∧ ListField p.2) ∨ (p.1 = .atom "tuple" ∧ TupleField E p.2) ∨
+          (p.1 = .atom "map" ∧ MapField E p.2) := by
+      induction es with
+      | nil => simp
+      | cons e rest ih =>
+        obtain ⟨k, w⟩ := e
+        simp only [List.map_cons, Term.list, «negatable_fields?/2», Term.true, Lynx.Except.andAlso_eq_true] at valid
         have head : (k = .atom "bitmap" ∧ ∃ b : Nat, w = .integer b ∧ 1 ≤ b ∧ b ≤ 255) ∨
             (k = .atom "atom" ∧ AtomField w ∧ ∀ S, w = .tuple #[.atom "union", .map S] → S ≠ []) ∨
             (k = .atom "fun" ∧ FunField w ∧ ArityBdds w) ∨
-            (k = .atom "list" ∧ ListField w) ∨ (k = .atom "tuple" ∧ TupleField w) ∨ (k = .atom "map" ∧ MapField w) := by
+            (k = .atom "list" ∧ ListField w) ∨ (k = .atom "tuple" ∧ TupleField E w) ∨ (k = .atom "map" ∧ MapField E w) := by
           have field := valid.1
-          have fallback : «valid_fields?/1» (Term.list [.tuple #[k, w]]) = .ok Term.true →
+          have fallback : «nested_field?/2» (.tuple #[k, w]) depth = .ok Term.true →
               (k = .atom "bitmap" ∧ ∃ b : Nat, w = .integer b ∧ 1 ≤ b ∧ b ≤ 255) ∨
                 (k = .atom "atom" ∧ AtomField w ∧ ∀ S, w = .tuple #[.atom "union", .map S] → S ≠ []) ∨
                 (k = .atom "fun" ∧ FunField w ∧ ArityBdds w) ∨ (k = .atom "list" ∧ ListField w) ∨
-                (k = .atom "tuple" ∧ TupleField w) ∨ (k = .atom "map" ∧ MapField w) := fun h => by
-            rcases valid_fields [(k, w)] (by simpa [Term.list] using h) (k, w) (by simp) with h | h
+                (k = .atom "tuple" ∧ TupleField E w) ∨ (k = .atom "map" ∧ MapField E w) := fun h => by
+            rcases nested_field_spec hE k w h with h | h | h | h | h | h
             · exact Or.inl h
             · exact Or.inr (Or.inl h)
-          unfold «negatable_field?/1» at field
+            · exact Or.inr (Or.inr (Or.inl ⟨h.1, h.2.funField⟩))
+            · exact Or.inr (Or.inr (Or.inr (Or.inl ⟨h.1, h.2.list⟩)))
+            · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h))))
+            · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr h))))
+          unfold «negatable_field?/2» at field
           simp only at field
           split at field
           · rename_i tag arities shape
@@ -4369,31 +4890,18 @@ defmodule STTDescrProofsTest do
                 · exact ⟨⟨Bool.false, R, by simp [n]⟩, bdds⟩
                 · simp [isMember, u, n] at member
             · exact fallback (by simpa using field)
-          · split at field
-            · rename_i bdd shape
-              simp at shape
-              obtain ⟨rfl, rfl⟩ := shape
-              exact Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, list_bdd_spec field⟩)))
-            · rename_i bdd shape
-              simp at shape
-              obtain ⟨rfl, rfl⟩ := shape
-              exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, tuple_bdd_spec field⟩))))
-            · rename_i bdd shape
-              simp at shape
-              obtain ⟨rfl, rfl⟩ := shape
-              exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨rfl, map_bdd_spec field⟩))))
-            · exact fallback field
+          · exact fallback field
         intro p member
         rcases List.mem_cons.mp member with rfl | member
         · exact head
         · exact ih valid.2 p member
 
-    theorem negatable_map (descr : Term) (valid : «negatable?/1» descr = .ok Term.true) :
-        ∃ X, descr = .map X ∧ Negatable X := by
-      cases descr <;> simp [«negatable?/1», Term.true] at valid
+    theorem negatable_map (depth : Nat) (descr : Term) (valid : «negatable?/2» descr (.integer depth) = .ok Term.true) :
+        ∃ X, descr = .map X ∧ Negatable (Nest depth) X := by
+      cases descr <;> simp [«negatable?/2», Term.true] at valid
       rename_i X
       simp only [Erlang.maps.«to_list/1», Lynx.Except.ok_bind] at valid
-      have each := negatable_fields_spec (mapEntries X) valid
+      have each := negatable_fields_spec (nested_spec depth) (mapEntries X) valid
       have entry (q w : Term) (lookup : mapLookup X q = some w) :
           ∃ p ∈ mapEntries X, exactCompare q p.1 = .eq ∧ p.2 = w :=
         lookup_found _ q w (by rw [mapLookup_mapEntries]; exact lookup)
@@ -4450,20 +4958,20 @@ defmodule STTDescrProofsTest do
       · rfl
 
     /-- What remains of a list or tuple type and its negation. -/
-    def Gone (q w : Term) : Prop :=
-      (q = .atom "list" ∧ Bdd ListOk w ∧ Unsat w) ∨ (q = .atom "tuple" ∧ EmptyTuple w) ∨
-        (q = .atom "map" ∧ EmptyMap w)
+    def Gone (K : Nat) (q w : Term) : Prop :=
+      (q = .atom "list" ∧ Bdd ListOk w ∧ Unsat w) ∨ (q = .atom "tuple" ∧ EmptyTuple K w) ∨
+        (q = .atom "map" ∧ EmptyMap K w)
 
-    theorem Gone.congr {q k w : Term} (e : exactCompare q k = .eq) (gone : Gone k w) : Gone q w := by
+    theorem Gone.congr {K : Nat} {q k w : Term} (e : exactCompare q k = .eq) (gone : Gone K k w) : Gone K q w := by
       rcases gone with ⟨rfl, h⟩ | ⟨rfl, h⟩ | ⟨rfl, h⟩
       · exact Or.inl ⟨(exactCompare_eq_atom _ _).mp e, h⟩
       · exact Or.inr (Or.inl ⟨(exactCompare_eq_atom _ _).mp e, h⟩)
       · exact Or.inr (Or.inr ⟨(exactCompare_eq_atom _ _).mp e, h⟩)
 
     /-- Types holding only what remains of list and tuple types and their negations are empty. -/
-    theorem empty_gone (n : Nat) (I : List (Term × Term)) (only : ∀ q w, mapLookup I q = some w → Gone q w) :
-        Elixir.Module.Types.Descr.«empty?/1» (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) (.map I) =
-          .ok Term.true := by
+    theorem empty_gone {K m : Nat} (hm : K + 2 ≤ m) (I : List (Term × Term))
+        (only : ∀ q w, mapLookup I q = some w → Gone K q w) :
+        Elixir.Module.Types.Descr.«empty?/1» (D m) (.map I) = .ok Term.true := by
       have absent : ∀ name, name ≠ "list" → name ≠ "tuple" → name ≠ "map" →
           mapLookup I (.atom name) = Option.none := by
         intro name nl nt nm
@@ -4495,22 +5003,19 @@ defmodule STTDescrProofsTest do
       simp only [empty, if_false, anyKey]
       simp [Erlang.erlang.«not/1»]
       have tupleOk : ∀ r, mapLookup I (.atom "tuple") = some r →
-          Elixir.Module.Types.Descr.«tuple_empty?/2» (Dispatcher.ofTable Erlang.program.fun_table (n + 1 + 2)) r
-            (.map []) = .ok (.atom "true") := fun r h => by
+          Elixir.Module.Types.Descr.«tuple_empty?/2» (D m) r (.map []) = .ok (.atom "true") := fun r h => by
         rcases only _ r h with ⟨e, -⟩ | ⟨-, gone⟩ | ⟨e, -⟩
         · simp at e
-        · exact gone (n + 1) []
+        · exact gone m [] (by omega)
         · simp at e
       have mapOk : ∀ r, mapLookup I (.atom "map") = some r →
-          Elixir.Module.Types.Descr.«map_empty?/2» (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) r (.map []) =
-            .ok (.atom "true") := fun r h => by
+          Elixir.Module.Types.Descr.«map_empty?/2» (D m) r (.map []) = .ok (.atom "true") := fun r h => by
         rcases only _ r h with ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, gone⟩
         · simp at e
         · simp at e
-        · exact gone n []
+        · exact gone m [] hm
       have listOk : ∀ r, mapLookup I (.atom "list") = some r →
-          Elixir.Module.Types.Descr.«list_empty?/2» (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) r (.map []) =
-            .ok (.atom "true") := fun r h => by
+          Elixir.Module.Types.Descr.«list_empty?/2» (D m) r (.map []) = .ok (.atom "true") := fun r h => by
         rcases only _ r h with ⟨-, wr, unsat⟩ | ⟨e, -⟩ | ⟨e, -⟩
         · exact list_empty_unsat _ wr unsat []
         · simp at e
@@ -4536,10 +5041,10 @@ defmodule STTDescrProofsTest do
         (common : ∀ q x y, mapLookup L q = some x → mapLookup R q = some y →
           Lynx.Dispatcher.pure (Dispatcher.ofTable Erlang.program.fun_table (depth + 1))
             (.function "Elixir.Module.Types.Descr" name 3 captures) #[q, x, y] = .ok (g q x y) ∧
-          (kept (q, g q x y) = Bool.true → Gone q (g q x y))) :
+          (kept (q, g q x y) = Bool.true → Gone K q (g q x y))) :
         ∃ I, Elixir.Module.Types.Descr.«symmetrical_intersection/3» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1))
           (.map L) (.map R) (.function "Elixir.Module.Types.Descr" name 3 captures) = .ok (.map I) ∧
-          ∀ q w, mapLookup I q = some w → Gone q w := by
+          ∀ q w, mapLookup I q = some w → Gone K q w := by
       obtain ⟨I, runI, lookI⟩ := Erlang.maps.intersect_with_lookup
         (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) "Elixir.Module.Types.Descr"
         name captures L R g (fun e member y hy => (common e.1 e.2 y (mapLookup_of_mem_mapEntries member) hy).1)
@@ -4580,7 +5085,7 @@ defmodule STTDescrProofsTest do
     /-- Intersections keep at most an unsatisfiable list BDD when every common bitmap is
     disjoint, every common atom field holds no atom, function types cancel out, and list
     types are negations of each other. -/
-    theorem intersection_disjoint (depth : Nat) (L R : List (Term × Term)) (validL : Negatable L)
+    theorem intersection_disjoint (depth : Nat) (L R : List (Term × Term)) (validL : Negatable E L)
         (staticR : mapLookup R (.atom "dynamic") = Option.none)
         (bitmaps : ∀ (b₁ : Nat) w, mapLookup L (.atom "bitmap") = some (.integer b₁) →
           mapLookup R (.atom "bitmap") = some w → ∃ b₂ : Nat, w = .integer b₂ ∧ b₁ &&& b₂ = 0)
@@ -4597,12 +5102,12 @@ defmodule STTDescrProofsTest do
         (lists : ∀ x y, mapLookup L (.atom "list") = some x → mapLookup R (.atom "list") = some y →
           Bdd ListOk x ∧ Bdd ListOk y ∧ ∀ ρ, Resp ρ → eval ρ y = !eval ρ x)
         (tuples : ∀ x y, mapLookup L (.atom "tuple") = some x → mapLookup R (.atom "tuple") = some y →
-          TupleCancel x y)
+          TupleCancel K x y)
         (maps : ∀ x y, mapLookup L (.atom "map") = some x → mapLookup R (.atom "map") = some y →
-          MapCancel x y) :
+          MapCancel K x y) :
         ∃ I, Elixir.Module.Types.Descr.«bare_intersection/2»
           (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) (.map L) (.map R) = .ok (.map I) ∧
-          ∀ q w, mapLookup I q = some w → Gone q w := by
+          ∀ q w, mapLookup I q = some w → Gone K q w := by
       let g : Term → Term → Term → Term := fun k₀ v₁ v₂ =>
         match Elixir.Module.Types.Descr.«bare_intersection/3» (Dispatcher.ofTable Erlang.program.fun_table depth)
           k₀ v₁ v₂ with
@@ -4612,7 +5117,7 @@ defmodule STTDescrProofsTest do
       have common : ∀ q x y, mapLookup L q = some x → mapLookup R q = some y →
           Elixir.Module.Types.Descr.«bare_intersection/3» (Dispatcher.ofTable Erlang.program.fun_table depth)
             q x y = .ok (g q x y) ∧
-            (kept (q, g q x y) = Bool.true → Gone q (g q x y)) := by
+            (kept (q, g q x y) = Bool.true → Gone K q (g q x y)) := by
         intro q x y hx hy
         rcases validL.keys q (by simp [hx]) with rfl | rfl | rfl | rfl | rfl | rfl
         · obtain ⟨b₁, rfl, -⟩ := validL.bitmap x hx
@@ -4668,7 +5173,8 @@ defmodule STTDescrProofsTest do
         mapLookup T (.atom "dynamic") = Option.none :=
       ⟨_, rfl, by simp [mapLookup], by simp [mapLookup], by simp [mapLookup], by simp [mapLookup]⟩
 
-    theorem negation_fields (depth : Nat) (X : List (Term × Term)) (valid : Negatable X) (nonempty : X ≠ []) :
+    theorem negation_fields (ops : ElemOk E K) (depth : Nat) (X : List (Term × Term)) (valid : Negatable E X)
+        (nonempty : X ≠ []) :
         ∃ N, Elixir.Module.Types.Descr.«bare_negation/1»
             (Dispatcher.ofTable Erlang.program.fun_table (depth + 2)) (.map X) = .ok (.map N) ∧
           mapLookup N (.atom "dynamic") = Option.none ∧
@@ -4687,9 +5193,9 @@ defmodule STTDescrProofsTest do
           (∀ x y, mapLookup X (.atom "list") = some x → mapLookup N (.atom "list") = some y →
             Bdd ListOk x ∧ Bdd ListOk y ∧ ∀ ρ, Resp ρ → eval ρ y = !eval ρ x) ∧
           (∀ x y, mapLookup X (.atom "tuple") = some x → mapLookup N (.atom "tuple") = some y →
-            TupleCancel x y) ∧
+            TupleCancel K x y) ∧
           (∀ x y, mapLookup X (.atom "map") = some x → mapLookup N (.atom "map") = some y →
-            MapCancel x y) ∧
+            MapCancel K x y) ∧
           (∀ T, Elixir.Module.Types.Descr.«unfolded_term/0» = .ok (.map T) → ∀ name t,
             mapLookup T (.atom name) = some t →
             (mapLookup X (.atom name) = Option.none → mapLookup N (.atom name) = some t) ∧
@@ -4720,7 +5226,7 @@ defmodule STTDescrProofsTest do
         | .ok w => w
         | .error _ => .nil
       have noAtoms : Erlang.sets.elements? (.map []) = some [] := by simp [Erlang.sets.elements?]
-      obtain ⟨N, fold, lookN⟩ := difference_fold depth (.function "Elixir.Module.Types.Descr" "bare_difference" 3 #[])
+      obtain ⟨N, fold, lookN, -⟩ := difference_fold depth (.function "Elixir.Module.Types.Descr" "bare_difference" 3 #[])
         g (mapEntries X) T (mapEntries_distinct X) (by
         intro e member v₁ found
         have hy := mapLookup_of_mem_mapEntries member
@@ -4747,11 +5253,11 @@ defmodule STTDescrProofsTest do
             simp [g, Elixir.Module.Types.Descr.«bare_difference/3», run]
         · rw [termTuple] at found
           cases found
-          obtain ⟨y, run, -⟩ := tuple_cancel e.2 (valid.tuples e.2 hy)
+          obtain ⟨y, run, -⟩ := tuple_cancel ops e.2 (valid.tuples e.2 hy)
           simp [g, Elixir.Module.Types.Descr.«bare_difference/3», run]
         · rw [termMap] at found
           cases found
-          obtain ⟨y, run, -⟩ := map_cancel e.2 (valid.maps e.2 hy)
+          obtain ⟨y, run, -⟩ := map_cancel ops e.2 (valid.maps e.2 hy)
           simp [g, Elixir.Module.Types.Descr.«bare_difference/3», run])
       have run : Elixir.Module.Types.Descr.«bare_negation/1»
           (Dispatcher.ofTable Erlang.program.fun_table (depth + 2)) (.map X) = .ok (.map N) := by
@@ -4822,7 +5328,7 @@ defmodule STTDescrProofsTest do
           · cases hN
       · rw [lookN, find_atom, hX] at hN
         simp only [Option.map_some, termTuple, Option.bind_some] at hN
-        obtain ⟨w, run, cancel⟩ := tuple_cancel x (valid.tuples x hX)
+        obtain ⟨w, run, cancel⟩ := tuple_cancel ops x (valid.tuples x hX)
         have value : g (.atom "tuple") (.tuple #[.integer 61102469, .atom "open", .nil]) x = w := by
           simp [g, Elixir.Module.Types.Descr.«bare_difference/3», run]
         rw [value] at hN
@@ -4831,7 +5337,7 @@ defmodule STTDescrProofsTest do
         · cases hN
       · rw [lookN, find_atom, hX] at hN
         simp only [Option.map_some, termMap, Option.bind_some] at hN
-        obtain ⟨w, run, cancel⟩ := map_cancel x (valid.maps x hX)
+        obtain ⟨w, run, cancel⟩ := map_cancel ops x (valid.maps x hX)
         have value : g (.atom "map") (.tuple #[.integer 61102469, .atom "open", .nil]) x = w := by
           simp [g, Elixir.Module.Types.Descr.«bare_difference/3», run]
         rw [value] at hN
@@ -4879,7 +5385,7 @@ defmodule STTDescrProofsTest do
 
 
     /-- Negations of tuple types are the same as without optimizations. -/
-    theorem opt_tuple_difference_top (n : Nat) (x : Term) (field : TupleField x) :
+    theorem opt_tuple_difference_top (n : Nat) (x : Term) (field : TupleField E x) :
         Elixir.Module.Types.Descr.«opt_tuple_difference/2» (Dispatcher.ofTable Erlang.program.fun_table (n + 1))
           (.tuple #[.integer 61102469, .atom "open", .nil]) x =
           Elixir.Module.Types.Descr.«tuple_difference/2» (.tuple #[.integer 61102469, .atom "open", .nil]) x := by
@@ -4949,11 +5455,11 @@ defmodule STTDescrProofsTest do
       · rfl
 
     /-- Optimized intersections of tuple types with their negations. -/
-    theorem opt_tuple_cancel (d : Dispatcher) (x : Term) (field : TupleField x) :
+    theorem opt_tuple_cancel (ops : ElemOk E K) (d : Dispatcher) (x : Term) (field : TupleField E x) :
         ∃ nb, Elixir.Module.Types.Descr.«tuple_difference/2» (.tuple #[.integer 61102469, .atom "open", .nil]) x = .ok nb ∧
           (kept (.atom "tuple", nb) = Bool.true → ∃ r, Elixir.Module.Types.Descr.«opt_tuple_intersection/3» d x nb (.map []) =
-            .ok r ∧ (kept (.atom "tuple", r) = Bool.true → EmptyTuple r)) := by
-      obtain ⟨nb, run, cancel⟩ := tuple_cancel x field
+            .ok r ∧ (kept (.atom "tuple", r) = Bool.true → EmptyTuple K r)) := by
+      obtain ⟨nb, run, cancel⟩ := tuple_cancel ops x field
       refine ⟨nb, run, fun k => ?_⟩
       rcases field with ⟨k', rfl⟩ | wx
       · simp [Elixir.Module.Types.Descr.«tuple_difference/2»] at run
@@ -4999,7 +5505,7 @@ defmodule STTDescrProofsTest do
         · have open' : ¬(tag = "open" ∧ ls = []) := by
             rintro ⟨rfl, rfl⟩
             exact notTopX ⟨_, rfl⟩
-          have wL : Bdd TupleLit (.tuple #[.integer kx, .atom tag, Term.list ls]) :=
+          have wL : Bdd (TupleLit E) (.tuple #[.integer kx, .atom tag, Term.list ls]) :=
             Bdd.leaf_iff.mpr ⟨kx, tag, ls, rfl, tags, elems⟩
           obtain ⟨h₁, node⟩ := node_new (.tuple #[.integer kx, .atom tag, Term.list ls]) (.atom "bdd_bot")
             (.atom "bdd_bot") (.atom "bdd_top") ⟨kx, _, _, rfl⟩ (Bdd.bot (ok := fun _ => True))
@@ -5030,11 +5536,11 @@ defmodule STTDescrProofsTest do
               cases ls with
               | nil => exact (open' ⟨rfl, rfl⟩).elim
               | cons e₀ ls' => exact ⟨e₀, ls', rfl⟩
-            have wn : Bdd TupleLit (.tuple #[.integer h₁, .tuple #[.integer kx, .atom "open", Term.list (e₀ :: ls')],
+            have wn : Bdd (TupleLit E) (.tuple #[.integer h₁, .tuple #[.integer kx, .atom "open", Term.list (e₀ :: ls')],
                 .atom "bdd_bot", .atom "bdd_bot", .atom "bdd_top"]) :=
               Bdd.node_iff.mpr ⟨⟨kx, _, _, rfl⟩, Bdd.leaf_iff.mp wL, Bdd.bot, Bdd.bot, Bdd.top⟩
             obtain ⟨r, rr, kr, sr⟩ := inter_ok wn wL
-            refine ⟨r, ?_, fun _ => tuple_empty_unsat (kr _ wn wL) (fun _ h => h) fun ρ resp => ?_⟩
+            refine ⟨r, ?_, fun _ => tuple_empty_unsat ops (kr _ wn wL) (fun _ h => h) fun ρ resp => ?_⟩
             · unfold Elixir.Module.Types.Descr.«opt_tuple_intersection/3»
               simp only [Term.list] at rr ⊢
               simp [Elixir.Module.Types.Descr.«bdd_open_leaf_intersection/3», rr]
@@ -5055,7 +5561,7 @@ defmodule STTDescrProofsTest do
 
 
     /-- Optimized negations of types: their fields are what the plain negation computes, except for maps. -/
-    theorem opt_negation_fields (depth : Nat) (X : List (Term × Term)) (valid : Negatable X) (nonempty : X ≠ [])
+    theorem opt_negation_fields (ops : ElemOk E K) (depth : Nat) (X : List (Term × Term)) (valid : Negatable E X) (nonempty : X ≠ [])
         (seen : Term) (P : Term → Term → Prop)
         (maps : ∀ x, mapLookup X (.atom "map") = some x → ∃ y,
           Elixir.Module.Types.Descr.«opt_map_difference/3» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1))
@@ -5079,7 +5585,7 @@ defmodule STTDescrProofsTest do
             Bdd ListOk x ∧ Bdd ListOk y ∧ NoLeaf y ∧ ∀ ρ, Resp ρ → eval ρ y = !eval ρ x) ∧
           (∀ x y, mapLookup X (.atom "tuple") = some x → mapLookup N (.atom "tuple") = some y → ∀ d,
             ∃ r, Elixir.Module.Types.Descr.«opt_tuple_intersection/3» d x y (.map []) = .ok r ∧
-              (kept (.atom "tuple", r) = Bool.true → EmptyTuple r)) ∧
+              (kept (.atom "tuple", r) = Bool.true → EmptyTuple K r)) ∧
           (∀ x y, mapLookup X (.atom "map") = some x → mapLookup N (.atom "map") = some y → P x y) ∧
           (mapLookup X (.atom "tuple") = Option.none →
             mapLookup N (.atom "tuple") = some (.tuple #[.integer 61102469, .atom "open", .nil])) ∧
@@ -5113,7 +5619,7 @@ defmodule STTDescrProofsTest do
         | .ok w => w
         | .error _ => .nil
       have noAtoms : Erlang.sets.elements? (.map []) = some [] := by simp [Erlang.sets.elements?]
-      obtain ⟨N, fold, lookN⟩ := difference_fold (depth + 1)
+      obtain ⟨N, fold, lookN, -⟩ := difference_fold (depth + 1)
         (.function "Elixir.Module.Types.Descr" "-opt_difference/3-anonymous-0-" 3 #[seen])
         g (mapEntries X) T (mapEntries_distinct X) (by
         intro e member v₁ found
@@ -5142,7 +5648,7 @@ defmodule STTDescrProofsTest do
             simp [g, Elixir.Module.Types.Descr.«opt_difference/4», opt_list_difference_top, run]
         · rw [termTuple] at found
           cases found
-          obtain ⟨y, run, -⟩ := opt_tuple_cancel (Dispatcher.ofTable Erlang.program.fun_table 0) e.2 (valid.tuples e.2 hy)
+          obtain ⟨y, run, -⟩ := opt_tuple_cancel ops (Dispatcher.ofTable Erlang.program.fun_table 0) e.2 (valid.tuples e.2 hy)
           simp [g, Elixir.Module.Types.Descr.«opt_difference/4», opt_tuple_difference_top depth e.2 (valid.tuples e.2 hy), run]
         · rw [termMap] at found
           cases found
@@ -5230,7 +5736,7 @@ defmodule STTDescrProofsTest do
       · rw [lookN, find_atom, hX] at hN
         simp only [Option.map_some, termTuple, Option.bind_some] at hN
         intro d
-        obtain ⟨w, run, cancel⟩ := opt_tuple_cancel d x (valid.tuples x hX)
+        obtain ⟨w, run, cancel⟩ := opt_tuple_cancel ops d x (valid.tuples x hX)
         have value : g (.atom "tuple") (.tuple #[.integer 61102469, .atom "open", .nil]) x = w := by
           simp [g, Elixir.Module.Types.Descr.«opt_difference/4», opt_tuple_difference_top depth x (valid.tuples x hX), run]
         rw [value] at hN
@@ -5258,7 +5764,7 @@ defmodule STTDescrProofsTest do
           simp only [Option.map_some, hT, Option.bind_some, value]
 
     /-- Optimized intersections of types whose common fields cancel out. -/
-    theorem opt_intersection_disjoint (depth : Nat) (L R : List (Term × Term)) (seen : Term) (validL : Negatable L)
+    theorem opt_intersection_disjoint (depth : Nat) (L R : List (Term × Term)) (seen : Term) (validL : Negatable E L)
         (staticR : mapLookup R (.atom "dynamic") = Option.none)
         (bitmaps : ∀ (b₁ : Nat) w, mapLookup L (.atom "bitmap") = some (.integer b₁) →
           mapLookup R (.atom "bitmap") = some w → ∃ b₂ : Nat, w = .integer b₂ ∧ b₁ &&& b₂ = 0)
@@ -5276,13 +5782,13 @@ defmodule STTDescrProofsTest do
           Bdd ListOk x ∧ Bdd ListOk y ∧ NoLeaf y ∧ ∀ ρ, Resp ρ → eval ρ y = !eval ρ x)
         (tuples : ∀ x y, mapLookup L (.atom "tuple") = some x → mapLookup R (.atom "tuple") = some y →
           ∃ r, Elixir.Module.Types.Descr.«opt_tuple_intersection/3» (Dispatcher.ofTable Erlang.program.fun_table depth)
-            x y seen = .ok r ∧ (kept (.atom "tuple", r) = Bool.true → EmptyTuple r))
+            x y seen = .ok r ∧ (kept (.atom "tuple", r) = Bool.true → EmptyTuple K r))
         (maps : ∀ x y, mapLookup L (.atom "map") = some x → mapLookup R (.atom "map") = some y →
           ∃ r, Elixir.Module.Types.Descr.«opt_map_intersection/3» (Dispatcher.ofTable Erlang.program.fun_table depth)
-            x y seen = .ok r ∧ (kept (.atom "map", r) = Bool.true → EmptyMap r)) :
+            x y seen = .ok r ∧ (kept (.atom "map", r) = Bool.true → EmptyMap K r)) :
         ∃ I, Elixir.Module.Types.Descr.«opt_intersection/3»
           (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) (.map L) (.map R) seen = .ok (.map I) ∧
-          ∀ q w, mapLookup I q = some w → Gone q w := by
+          ∀ q w, mapLookup I q = some w → Gone K q w := by
       let g : Term → Term → Term → Term := fun k₀ v₁ v₂ =>
         match Elixir.Module.Types.Descr.«opt_intersection/4» (Dispatcher.ofTable Erlang.program.fun_table depth)
           k₀ v₁ v₂ seen with
@@ -5291,7 +5797,7 @@ defmodule STTDescrProofsTest do
       have common : ∀ q x y, mapLookup L q = some x → mapLookup R q = some y →
           Elixir.Module.Types.Descr.«opt_intersection/4» (Dispatcher.ofTable Erlang.program.fun_table depth)
             q x y seen = .ok (g q x y) ∧
-            (kept (q, g q x y) = Bool.true → Gone q (g q x y)) := by
+            (kept (q, g q x y) = Bool.true → Gone K q (g q x y)) := by
         intro q x y hx hy
         rcases validL.keys q (by simp [hx]) with rfl | rfl | rfl | rfl | rfl | rfl
         · obtain ⟨b₁, rfl, -⟩ := validL.bitmap x hx
@@ -5382,7 +5888,7 @@ defmodule STTDescrProofsTest do
         · cases e; exact absurd rfl nb
         · cases e; exact absurd rfl na
 
-    theorem Valid.negatable {V : List (Term × Term)} (valid : Valid V) : Negatable V := by
+    theorem Valid.negatable {V : List (Term × Term)} (valid : Valid V) : Negatable E V := by
       refine ⟨fun q h => ?_, valid.bitmap, valid.atom, valid.atomUnion, fun w h => ?_, fun w h => ?_, fun w h => ?_,
         fun w h => ?_, fun w h => ?_⟩
       · rcases valid.keys q h with rfl | rfl <;> simp
@@ -5393,7 +5899,7 @@ defmodule STTDescrProofsTest do
       · simp [valid.absent "map" (by decide) (by decide)] at h
 
     /-- Flat field types other than none: their optimized negation is not empty and does not meet them. -/
-    theorem field_negation (n : Nat) (V : List (Term × Term)) (valid : Valid V) (nonempty : V ≠ []) (seen : Term) :
+    theorem field_negation (ops : ElemOk E K) (n : Nat) (V : List (Term × Term)) (valid : Valid V) (nonempty : V ≠ []) (seen : Term) :
         ∃ D, Elixir.Module.Types.Descr.«opt_difference/3» (Dispatcher.ofTable Erlang.program.fun_table (n + 3))
             (.atom "term") (.map V) seen = .ok (.map D) ∧
           (∀ d, Elixir.Module.Types.Descr.«empty_seen?/2» d (.map D) (.map []) = .ok (.atom "false")) ∧
@@ -5402,16 +5908,16 @@ defmodule STTDescrProofsTest do
             ∀ k, Elixir.Module.Types.Descr.«empty_seen?/2» (Dispatcher.ofTable Erlang.program.fun_table (k + 3)) (.map I)
               (.map []) = .ok (.atom "true") := by
       have absent := valid.absent
-      obtain ⟨D, run, static, bitmaps, atoms, -, -, -, -, tuple, -⟩ := opt_negation_fields n V valid.negatable nonempty seen
+      obtain ⟨D, run, static, bitmaps, atoms, -, -, -, -, tuple, -⟩ := opt_negation_fields ops n V valid.negatable nonempty seen
         (fun _ _ => True) (fun x h => by simp [absent "map" (by decide) (by decide)] at h)
       refine ⟨D, run, fun d => empty_top_tuple d D static (tuple (absent "tuple" (by decide) (by decide))), fun m seen' => ?_⟩
-      obtain ⟨I, runI, only⟩ := opt_intersection_disjoint m V D seen' valid.negatable static bitmaps atoms
+      obtain ⟨I, runI, only⟩ := opt_intersection_disjoint (E := E) m V D seen' valid.negatable static bitmaps atoms
         (fun x y h => by simp [absent "fun" (by decide) (by decide)] at h)
         (fun x y h => by simp [absent "list" (by decide) (by decide)] at h)
         (fun x y h => by simp [absent "tuple" (by decide) (by decide)] at h)
         (fun x y h => by simp [absent "map" (by decide) (by decide)] at h)
       refine ⟨I, runI, fun k => ?_⟩
-      have := empty_gone k I only
+      have := empty_gone (K := 0) (m := k + 3) (by omega) I only
       simpa [Elixir.Module.Types.Descr.«empty?/1», Term.true] using this
 
     /-- Open map literals of one field whose types do not meet, and one of which is required, have no intersection. -/
@@ -5438,7 +5944,7 @@ defmodule STTDescrProofsTest do
     def OneKey (x : Term) : Prop := ∃ (k : Int) (key v : Term), x = .tuple #[.integer k, .atom "open", fieldsTerm [(key, v)]]
 
     /-- Optimized negations of map types other than open maps of one field are the plain ones. -/
-    theorem opt_map_difference_eq (n : Nat) (x : Term) (field : MapField x) (notOne : ¬OneKey x) :
+    theorem opt_map_difference_eq (n : Nat) (x : Term) (field : MapField E x) (notOne : ¬OneKey x) :
         Elixir.Module.Types.Descr.«opt_map_difference/3» (Dispatcher.ofTable Erlang.program.fun_table (n + 2))
           (.tuple #[.integer 61102469, .atom "open", .nil]) x (.map []) =
           Elixir.Module.Types.Descr.«map_difference/2» (.tuple #[.integer 61102469, .atom "open", .nil]) x := by
@@ -5514,7 +6020,7 @@ defmodule STTDescrProofsTest do
       rfl
 
     /-- The difference of the top type with a field type of the specification, which never meets it. -/
-    theorem one_key_field (n : Nat) (v S : Term) (fv : FieldType v) :
+    theorem one_key_field (ops : ElemOk E K) (n : Nat) (v S : Term) (fv : ElemTerm v) :
         ∃ D', Elixir.Module.Types.Descr.«opt_difference/3» (Dispatcher.ofTable Erlang.program.fun_table (n + 4))
             (.atom "term") v S = .ok D' ∧
           (Elixir.Module.Types.Descr.«empty?/1» (Dispatcher.ofTable Erlang.program.fun_table (n + 4)) D' =
@@ -5534,7 +6040,7 @@ defmodule STTDescrProofsTest do
       · subst nonempty
         exact ⟨.atom "term", difference_term_none _ S, Or.inr (by simp [Elixir.Module.Types.Descr.«empty?/1»]),
           fun m S' => ⟨.map [], by unfold Elixir.Module.Types.Descr.«opt_intersection/3»; rfl, noneEmpty _⟩⟩
-      · obtain ⟨D, run, nonemptyD, meet⟩ := field_negation (n + 1) V valid nonempty S
+      · obtain ⟨D, run, nonemptyD, meet⟩ := field_negation ops (n + 1) V valid nonempty S
         refine ⟨.map D, run, Or.inr (by simpa [Elixir.Module.Types.Descr.«empty?/1»] using nonemptyD _), fun m S' => ?_⟩
         obtain ⟨I, runI, emptyI⟩ := meet (m + 1) S'
         exact ⟨.map I, runI, emptyI m⟩
@@ -5553,15 +6059,15 @@ defmodule STTDescrProofsTest do
       · rfl
 
     /-- Optimized intersections of map types with their optimized negations. -/
-    theorem opt_map_cancel (n : Nat) (x : Term) (field : MapField x) :
+    theorem opt_map_cancel (ops : ElemOk ElemTerm K) (n : Nat) (x : Term) (field : MapField ElemTerm x) :
         ∃ nb, Elixir.Module.Types.Descr.«opt_map_difference/3» (Dispatcher.ofTable Erlang.program.fun_table (n + 5))
           (.tuple #[.integer 61102469, .atom "open", .nil]) x (.map []) = .ok nb ∧
           (kept (.atom "map", nb) = Bool.true → ∀ m, ∃ r, Elixir.Module.Types.Descr.«opt_map_intersection/3»
             (Dispatcher.ofTable Erlang.program.fun_table (m + 4)) x nb (.map []) = .ok r ∧
-            (kept (.atom "map", r) = Bool.true → EmptyMap r)) := by
+            (kept (.atom "map", r) = Bool.true → EmptyMap K r)) := by
       by_cases one : OneKey x
       · obtain ⟨k, key, w, rfl⟩ := one
-        have fw : FieldValueV w := by
+        have fw : FieldValue ElemTerm w := by
           rcases field with ⟨k', e⟩ | wx
           · simp [fieldsTerm, Term.list] at e
           · obtain ⟨⟨k', tag, l, e, -, fields⟩, -⟩ := Bdd.leaf_iff.mp wx
@@ -5571,7 +6077,7 @@ defmodule STTDescrProofsTest do
             obtain ⟨-, rfl⟩ := hl
             exact fields (key', w) (by simp)
         obtain ⟨v, o, rfl, fv⟩ := fw
-        obtain ⟨D', hD, empty, meet⟩ := one_key_field (n + 1) v
+        obtain ⟨D', hD, empty, meet⟩ := one_key_field ops (n + 1) v
           (.map [(.tuple #[.atom "map_difference", .tuple #[.integer 61102469, .atom "open", .nil],
             .tuple #[.integer k, .atom "open", fieldsTerm [(key, .tuple #[v, boolAtom o])]]], .atom "true")]) fv
         have hD5 : Elixir.Module.Types.Descr.«opt_difference/3» (Dispatcher.ofTable Erlang.program.fun_table (n + 5))
@@ -5622,7 +6128,7 @@ defmodule STTDescrProofsTest do
           simp [S₃, fieldsTerm, Term.list] at lit
           simp [lit]
           rfl
-      · obtain ⟨nb, run, cancel⟩ := map_cancel x field
+      · obtain ⟨nb, run, cancel⟩ := map_cancel ops x field
         refine ⟨nb, by rw [opt_map_difference_eq (n + 3) x field one]; exact run, fun k m => ?_⟩
         rcases field with ⟨k', rfl⟩ | wx
         · simp [Elixir.Module.Types.Descr.«map_difference/2»] at run
@@ -5643,8 +6149,8 @@ defmodule STTDescrProofsTest do
         · obtain ⟨⟨k', tag, ls, e, tags, fields⟩, notTopX⟩ := Bdd.leaf_iff.mp wx
           simp at e
           obtain ⟨rfl, rfl, rfl⟩ := e
-          have wL : Bdd MapLit (.tuple #[.integer kx, .atom tag, fieldsTerm ls]) :=
-            Bdd.leaf_iff.mpr (Bdd.leaf_iff.mp wx).1.lit
+          have wL : Bdd (MapLit ElemTerm) (.tuple #[.integer kx, .atom tag, fieldsTerm ls]) :=
+            Bdd.leaf_iff.mpr (Bdd.leaf_iff.mp wx).1
           obtain ⟨h₁, node⟩ := node_new (.tuple #[.integer kx, .atom tag, fieldsTerm ls]) (.atom "bdd_bot")
             (.atom "bdd_bot") (.atom "bdd_top") ⟨kx, _, _, rfl⟩ (Bdd.bot (ok := fun _ => True))
             (Bdd.bot (ok := fun _ => True)) (Bdd.top (ok := fun _ => True))
@@ -5666,11 +6172,11 @@ defmodule STTDescrProofsTest do
               cases ls with
               | nil => exact (notTopX ⟨_, rfl⟩).elim
               | cons e₀ ls' => exact ⟨e₀, ls', rfl⟩
-            have wn : Bdd MapLit (.tuple #[.integer h₁, .tuple #[.integer kx, .atom "open", fieldsTerm (e₀ :: ls')],
+            have wn : Bdd (MapLit ElemTerm) (.tuple #[.integer h₁, .tuple #[.integer kx, .atom "open", fieldsTerm (e₀ :: ls')],
                 .atom "bdd_bot", .atom "bdd_bot", .atom "bdd_top"]) :=
               Bdd.node_iff.mpr ⟨⟨kx, _, _, rfl⟩, Bdd.leaf_iff.mp wL, Bdd.bot, Bdd.bot, Bdd.top⟩
             obtain ⟨r, rr, kr, sr⟩ := inter_ok wn wL
-            refine ⟨r, ?_, fun _ => map_empty_unsat (kr _ wn wL) (fun _ h => h) fun ρ resp => ?_⟩
+            refine ⟨r, ?_, fun _ => map_empty_unsat ops (kr _ wn wL) (fun _ h => h) fun ρ resp => ?_⟩
             · unfold Elixir.Module.Types.Descr.«opt_map_intersection/3»
               simp only [fieldsTerm, List.map, Term.list] at rr ⊢
               simp [Elixir.Module.Types.Descr.«bdd_open_leaf_intersection/3», rr]
@@ -6192,8 +6698,8 @@ defmodule STTDescrProofsTest do
       · exact Or.inr (k e)
 
     /-- The difference of all tuples with a tautology of tuple literals is empty. -/
-    theorem tuple_taut (n : Nat) {u : Term} (wu : Bdd TupleOk u) (taut : ∀ ρ, Resp ρ → eval ρ u = Bool.true) :
-        CoveredVal (Dispatcher.ofTable Erlang.program.fun_table (n + 2)) (.atom "tuple")
+    theorem tuple_taut (ops : ElemOk E K) {m : Nat} (hm : K + 1 ≤ m) {u : Term} (wu : Bdd (TupleOk E) u) (taut : ∀ ρ, Resp ρ → eval ρ u = Bool.true) :
+        CoveredVal (D m) (.atom "tuple")
           (.tuple #[.integer 61102469, .atom "open", .nil]) u := by
       rcases wu.shape with rfl | rfl | ⟨k, x, y, rfl⟩ | ⟨h, lit, c, d, e, rfl⟩
       · refine ⟨.atom "bdd_bot", ?_, Or.inr (Or.inl rfl)⟩
@@ -6208,7 +6714,7 @@ defmodule STTDescrProofsTest do
           unfold Elixir.Module.Types.Descr.«tuple_difference/2»
           simp [run]
         · simp only [Elixir.Module.Types.Descr.«empty_key?/3»]
-          exact tuple_empty_unsat (keep _ wu) (fun _ h => h.1) (fun ρ resp => by rw [sem ρ resp, taut ρ resp]; rfl) n []
+          exact tuple_empty_unsat ops (keep _ wu) (fun _ h => h.1) (fun ρ resp => by rw [sem ρ resp, taut ρ resp]; rfl) m [] hm
 
     theorem tuple_union_bdd {x y : Term} (hx : ∀ k, x ≠ .tuple #[k, .atom "open", .nil])
         (hy : ∀ k, y ≠ .tuple #[k, .atom "open", .nil]) :
@@ -6226,10 +6732,10 @@ defmodule STTDescrProofsTest do
         Or.inr (Or.inl rfl)⟩
 
     /-- A tuple BDD that is neither bottom, top, nor `{}` has its negation as difference. -/
-    theorem tuple_key_neg (dn du : Dispatcher) (n : Nat) (x : Term) (wx : Bdd TupleOk x)
+    theorem tuple_key_neg (ops : ElemOk E K) (dn du : Dispatcher) {m : Nat} (hm : K + 1 ≤ m) (x : Term) (wx : Bdd (TupleOk E) x)
         (run : Elixir.Module.Types.Descr.«tuple_difference/2» (.tuple #[.integer 61102469, .atom "open", .nil]) x =
           Elixir.Module.Types.Descr.«bdd_negation/1» x) :
-        KeyOk dn du (Dispatcher.ofTable Erlang.program.fun_table (n + 2)) (.atom "tuple")
+        KeyOk dn du (D m) (.atom "tuple")
           (.tuple #[.integer 61102469, .atom "open", .nil]) x := by
       have notTop := not_top_of_ok wx fun t h => h.2
       obtain ⟨w, neg, keep, sem⟩ := neg_ok wx
@@ -6243,12 +6749,12 @@ defmodule STTDescrProofsTest do
         · exact Or.inr (Or.inl e)
       obtain ⟨u, runU, keepU, semU⟩ := union_ok wx ww
       have wu := keepU _ wx ww
-      refine ⟨u, ?_, tuple_taut n wu fun ρ resp => ?_⟩
+      refine ⟨u, ?_, tuple_taut ops hm wu fun ρ resp => ?_⟩
       · simp [Elixir.Module.Types.Descr.«bare_union/3», tuple_union_bdd notTop (not_top_of_ok ww fun t h => h.2), runU]
       · rw [semU ρ resp, sem ρ resp]; cases eval ρ x <;> rfl
 
-    theorem tuple_key (dn du : Dispatcher) (n : Nat) (x : Term) (field : TupleField x) :
-        KeyOk dn du (Dispatcher.ofTable Erlang.program.fun_table (n + 2)) (.atom "tuple")
+    theorem tuple_key (ops : ElemOk E K) (dn du : Dispatcher) {m : Nat} (hm : K + 1 ≤ m) (x : Term) (field : TupleField E x) :
+        KeyOk dn du (D m) (.atom "tuple")
           (.tuple #[.integer 61102469, .atom "open", .nil]) x := by
       rcases field with ⟨k, rfl⟩ | wx
       · have diff : ∀ d, Elixir.Module.Types.Descr.«bare_difference/3» d (.atom "tuple")
@@ -6336,7 +6842,7 @@ defmodule STTDescrProofsTest do
             apply special
             refine ⟨e.2.1, ?_⟩
             cases ls <;> simp_all [Term.list]
-          refine tuple_key_neg dn du n _ wx ?_
+          refine tuple_key_neg ops dn du hm _ wx ?_
           unfold Elixir.Module.Types.Descr.«tuple_difference/2»
           split
           · next _ _ e =>
@@ -6347,12 +6853,12 @@ defmodule STTDescrProofsTest do
           · next _ _ e => exact (notSpecial _ e).elim
           · rename_i heq; simp only [Term.tuple.injEq] at heq; subst heq; rfl
           · next h₁ => exact (h₁ _ _ rfl rfl).elim
-      · refine tuple_key_neg dn du n _ wx ?_
+      · refine tuple_key_neg ops dn du hm _ wx ?_
         unfold Elixir.Module.Types.Descr.«tuple_difference/2»
         simp
 
-    theorem map_taut (n : Nat) {u : Term} (wu : Bdd MapOk u) (taut : ∀ ρ, Resp ρ → eval ρ u = Bool.true) :
-        CoveredVal (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) (.atom "map")
+    theorem map_taut (ops : ElemOk E K) {m : Nat} (hm : K + 2 ≤ m) {u : Term} (wu : Bdd (MapOk E) u) (taut : ∀ ρ, Resp ρ → eval ρ u = Bool.true) :
+        CoveredVal (D m) (.atom "map")
           (.tuple #[.integer 61102469, .atom "open", .nil]) u := by
       rcases wu.shape with rfl | rfl | ⟨k, x, y, rfl⟩ | ⟨h, lit, c, d, e, rfl⟩
       · refine ⟨.atom "bdd_bot", ?_, Or.inr (Or.inl rfl)⟩
@@ -6367,7 +6873,7 @@ defmodule STTDescrProofsTest do
           unfold Elixir.Module.Types.Descr.«map_difference/2»
           simp [run]
         · simp only [Elixir.Module.Types.Descr.«empty_key?/3»]
-          exact map_empty_unsat (keep _ wu) (fun _ h => h.1.lit) (fun ρ resp => by rw [sem ρ resp, taut ρ resp]; rfl) n []
+          exact map_empty_unsat ops (keep _ wu) (fun _ h => h.1) (fun ρ resp => by rw [sem ρ resp, taut ρ resp]; rfl) m [] hm
 
     theorem map_union_bdd {x y : Term} (hx : ∀ k, x ≠ .tuple #[k, .atom "open", .nil])
         (hy : ∀ k, y ≠ .tuple #[k, .atom "open", .nil]) :
@@ -6384,8 +6890,8 @@ defmodule STTDescrProofsTest do
       ⟨.atom "bdd_bot", by simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«map_difference/2»],
         Or.inr (Or.inl rfl)⟩
 
-    theorem map_key (dn du : Dispatcher) (n : Nat) (x : Term) (field : MapField x) :
-        KeyOk dn du (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) (.atom "map")
+    theorem map_key (ops : ElemOk E K) (dn du : Dispatcher) {m : Nat} (hm : K + 2 ≤ m) (x : Term) (field : MapField E x) :
+        KeyOk dn du (D m) (.atom "map")
           (.tuple #[.integer 61102469, .atom "open", .nil]) x := by
       rcases field with ⟨k, rfl⟩ | wx
       · have diff : ∀ d, Elixir.Module.Types.Descr.«bare_difference/3» d (.atom "map")
@@ -6395,7 +6901,7 @@ defmodule STTDescrProofsTest do
         exact ⟨_, diff _, fun _ => ⟨_, diff _, Or.inr (Or.inl rfl)⟩, fun k => by simp [kept] at k⟩
       have notTop := not_top_of_ok wx fun t h => h.2
       have neg : (∃ h lit c u d, x = .tuple #[.integer h, lit, c, u, d]) ∨ (∃ k x₁ y₁, x = .tuple #[.integer k, x₁, y₁]) →
-          KeyOk dn du (Dispatcher.ofTable Erlang.program.fun_table (n + 3)) (.atom "map")
+          KeyOk dn du (D m) (.atom "map")
             (.tuple #[.integer 61102469, .atom "open", .nil]) x := by
         intro shape
         obtain ⟨w, neg, keep, sem⟩ := neg_ok wx
@@ -6418,7 +6924,7 @@ defmodule STTDescrProofsTest do
           · exact Or.inr (Or.inl e)
         obtain ⟨u, runU, keepU, semU⟩ := union_ok wx ww
         have wu := keepU _ wx ww
-        refine ⟨u, ?_, map_taut n wu fun ρ resp => ?_⟩
+        refine ⟨u, ?_, map_taut ops hm wu fun ρ resp => ?_⟩
         · simp [Elixir.Module.Types.Descr.«bare_union/3», map_union_bdd notTop (not_top_of_ok ww fun t h => h.2), runU]
         · rw [semU ρ resp, sem ρ resp]; cases eval ρ x <;> rfl
       rcases wx.shape with rfl | rfl | ⟨k, tg, l, rfl⟩ | ⟨h, lit, c, u, d, rfl⟩
@@ -6514,7 +7020,7 @@ defmodule STTDescrProofsTest do
       · simp at hT
 
     /-- Each field of the top type is covered by what a field type and its negation unite into. -/
-    theorem key_ok (X : List (Term × Term)) (valid : Negatable X) {T : List (Term × Term)}
+    theorem key_ok (ops : ElemOk E K) (hK : K ≤ 90) (X : List (Term × Term)) (valid : Negatable E X) {T : List (Term × Term)}
         (term : Elixir.Module.Types.Descr.«unfolded_term/0» = .ok (.map T)) {q t x : Term}
         (hT : mapLookup T q = some t) (hX : mapLookup X q = some x) :
         KeyOk (Dispatcher.ofTable Erlang.program.fun_table 98) (Dispatcher.ofTable Erlang.program.fun_table 99)
@@ -6526,8 +7032,8 @@ defmodule STTDescrProofsTest do
         exact atom_key _ _ _ p S set
       · exact fun_key 98 99 100 x (valid.funs x hX)
       · exact list_key _ _ _ _ x (valid.lists x hX)
-      · exact tuple_key _ _ 98 x (valid.tuples x hX)
-      · exact map_key _ _ 97 x (valid.maps x hX)
+      · exact tuple_key ops _ _ (by omega) x (valid.tuples x hX)
+      · exact map_key ops _ _ (by omega) x (valid.maps x hX)
 
     /-- Fields of the top type are covered by themselves. -/
     theorem key_absent {T : List (Term × Term)} (term : Elixir.Module.Types.Descr.«unfolded_term/0» = .ok (.map T))
@@ -6546,14 +7052,15 @@ defmodule STTDescrProofsTest do
       rcases term_keys term hT with ⟨rfl, -⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩ <;> exact ⟨_, rfl⟩
 
     /-- A type united with its negation covers the top type. -/
-    theorem union_negation_covers (X : List (Term × Term)) (valid : Negatable X) (nonempty : X ≠ []) :
+    theorem union_negation_covers (ops : ElemOk E K) (hK : K ≤ 90) (X : List (Term × Term)) (valid : Negatable E X)
+        (nonempty : X ≠ []) :
         ∃ N U, Elixir.Module.Types.Descr.«bare_negation/1» (Dispatcher.ofTable Erlang.program.fun_table 100) (.map X) =
             .ok (.map N) ∧
           Elixir.Module.Types.Descr.«bare_union/2» (Dispatcher.ofTable Erlang.program.fun_table 100) (.map X) (.map N) =
             .ok (.map U) ∧
           Elixir.Module.Types.Descr.«subtype?/2» (Dispatcher.ofTable Erlang.program.fun_table 100) (.atom "term")
             (.map U) = .ok (.atom "true") := by
-      obtain ⟨N, negation, staticN, -, -, -, -, -, -, lookups⟩ := negation_fields 98 X valid nonempty
+      obtain ⟨N, negation, staticN, -, -, -, -, -, -, lookups⟩ := negation_fields ops 98 X valid nonempty
       obtain ⟨T, term, -⟩ := unfolded_term_fields
       have inT : ∀ q x, mapLookup X q = some x → ∃ t, mapLookup T q = some t := by
         intro q x hX
@@ -6565,7 +7072,7 @@ defmodule STTDescrProofsTest do
         intro q x y hX hN
         obtain ⟨t, hT⟩ := inT q x hX
         obtain ⟨name, rfl⟩ := atom_key_of term hT
-        obtain ⟨w, run, -, keep⟩ := key_ok X valid term hT hX
+        obtain ⟨w, run, -, keep⟩ := key_ok ops hK X valid term hT hX
         have look := (lookups T term name t hT).2 x w hX run
         rw [hN] at look
         by_cases k : kept (.atom name, w) = Bool.true
@@ -6585,7 +7092,7 @@ defmodule STTDescrProofsTest do
         obtain ⟨w, run, empty⟩ := key_absent term hT
         exact ⟨e.2, w, (lookU name).2.1 _ hN hX, run, empty⟩
       | some x =>
-        obtain ⟨w, run, drop, keep⟩ := key_ok X valid term hT hX
+        obtain ⟨w, run, drop, keep⟩ := key_ok ops hK X valid term hT hX
         have look := (lookups T term name e.2 hT).2 x w hX run
         by_cases k : kept (.atom name, w) = Bool.true
         · obtain ⟨u, ru, w', rw', empty⟩ := keep k
@@ -6807,8 +7314,8 @@ defmodule STTDescrProofsTest do
       split at h <;> simp_all
 
     /-- The difference of two fields of basic types at the same key. -/
-    theorem diff_key (d : Dispatcher) (name : String) (x y : Term) (hx : FieldOk name x) (hy : FieldOk name y) :
-        ∃ r, Elixir.Module.Types.Descr.«bare_difference/3» d (.atom name) x y = .ok r ∧
+    theorem diff_key (name : String) (x y : Term) (hx : FieldOk name x) (hy : FieldOk name y) :
+        ∃ r, (∀ d, Elixir.Module.Types.Descr.«bare_difference/3» d (.atom name) x y = .ok r) ∧
           (kept (.atom name, r) = Bool.true → FieldOk name r) ∧
           (name = "bitmap" → ∃ a b : Nat, x = .integer a ∧ y = .integer b ∧ r = .integer ↑(a - (a &&& b))) ∧
           (name = "atom" → ∀ q, amemV (if kept (.atom name, r) then some r else Option.none) q =
@@ -6817,7 +7324,7 @@ defmodule STTDescrProofsTest do
       rcases hx with ⟨rfl, a, rfl, a₁, a₂⟩ | ⟨rfl, ⟨p₁, S₁, rfl, set₁⟩, -⟩ | ⟨n₁, n₂, tx⟩
       · rcases hy with ⟨-, b, rfl, -⟩ | ⟨e, -⟩ | ⟨e, -⟩
         · have le : a &&& b ≤ a := Nat.and_le_left
-          refine ⟨.integer ↑(a - (a &&& b)), ?_, fun k => ?_, fun _ => ⟨a, b, rfl, rfl, rfl⟩, by simp, by simp⟩
+          refine ⟨.integer ↑(a - (a &&& b)), fun d => ?_, fun k => ?_, fun _ => ⟨a, b, rfl, rfl, rfl⟩, by simp, by simp⟩
           · simp [Elixir.Module.Types.Descr.«bare_difference/3», Erlang.erlang.«band/2»]; omega
           · simp [kept] at k
             exact Or.inl ⟨rfl, _, rfl, by omega, by omega⟩
@@ -6828,10 +7335,11 @@ defmodule STTDescrProofsTest do
         · rcases atom_difference p₁ S₁ p₂ S₂ set₁ set₂ with ⟨p, E, hE, setE, -, ne, mE⟩ | ⟨hE, mE⟩
           · have keep : kept (.atom "atom", .tuple #[.atom (if p then "union" else "negation"), .map E]) = Bool.true := by
               simp [kept]
-            refine ⟨_, by simp [Elixir.Module.Types.Descr.«bare_difference/3», hE],
+            refine ⟨_, fun d => by simp [Elixir.Module.Types.Descr.«bare_difference/3», hE],
               fun _ => Or.inr (Or.inl ⟨rfl, ⟨p, E, rfl, setE⟩, atom_nonempty p E ne⟩), by simp, fun _ q => ?_, by simp⟩
             rw [keep]; simp only [ite_true, amemV_field, mE]
-          · refine ⟨.integer 0, by simp [Elixir.Module.Types.Descr.«bare_difference/3», hE], fun k => by simp [kept] at k,
+          · refine ⟨.integer 0, fun d => by simp [Elixir.Module.Types.Descr.«bare_difference/3», hE],
+              fun k => by simp [kept] at k,
               by simp, fun _ q => ?_, by simp⟩
             have := mE q
             simp only [kept, amemV_field] at this ⊢
@@ -6843,16 +7351,16 @@ defmodule STTDescrProofsTest do
         rw [tx] at ty; cases ty
         refine ?_
         rcases top_cases tx with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
-        · have keep : Elixir.Module.Types.Descr.«fun_repr_difference/2» d (.map []) (.map []) = .ok (.map []) := by
-            simp [Elixir.Module.Types.Descr.«fun_repr_difference/2», Erlang.maps.«fold/3»]
-          refine ⟨.integer 0, ?_, fun k => by simp [kept] at k, by simp, by simp, fun _ _ => by simp [kept]⟩
+        · have keep : ∀ d, Elixir.Module.Types.Descr.«fun_repr_difference/2» d (.map []) (.map []) = .ok (.map []) := by
+            intro d; simp [Elixir.Module.Types.Descr.«fun_repr_difference/2», Erlang.maps.«fold/3»]
+          refine ⟨.integer 0, fun d => ?_, fun k => by simp [kept] at k, by simp, by simp, fun _ _ => by simp [kept]⟩
           simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«fun_difference/2», keep,
             Erlang.erlang.«==/2», Erlang.erlang.«map_size/1», Lynx.Except.andAlso]
-        · refine ⟨.atom "bdd_bot", ?_, fun k => by simp [kept] at k, by simp, by simp, fun _ _ => by simp [kept]⟩
+        · refine ⟨.atom "bdd_bot", fun d => ?_, fun k => by simp [kept] at k, by simp, by simp, fun _ _ => by simp [kept]⟩
           simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«list_difference/2»]
-        · refine ⟨.atom "bdd_bot", ?_, fun k => by simp [kept] at k, by simp, by simp, fun _ _ => by simp [kept]⟩
+        · refine ⟨.atom "bdd_bot", fun d => ?_, fun k => by simp [kept] at k, by simp, by simp, fun _ _ => by simp [kept]⟩
           simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«tuple_difference/2»]
-        · refine ⟨.atom "bdd_bot", ?_, fun k => by simp [kept] at k, by simp, by simp, fun _ _ => by simp [kept]⟩
+        · refine ⟨.atom "bdd_bot", fun d => ?_, fun k => by simp [kept] at k, by simp, by simp, fun _ _ => by simp [kept]⟩
           simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«map_difference/2»]
 
     theorem Basic.static {M : List (Term × Term)} (basic : Basic M) : mapLookup M (.atom "dynamic") = Option.none := by
@@ -7003,13 +7511,13 @@ defmodule STTDescrProofsTest do
         match Elixir.Module.Types.Descr.«bare_difference/3» (Dispatcher.ofTable Erlang.program.fun_table depth) k₀ v₁ v₂ with
         | .ok w => w
         | .error _ => .nil
-      obtain ⟨C, fold, lookC⟩ := difference_fold depth (.function "Elixir.Module.Types.Descr" "bare_difference" 3 #[])
+      obtain ⟨C, fold, lookC, -⟩ := difference_fold depth (.function "Elixir.Module.Types.Descr" "bare_difference" 3 #[])
         g (mapEntries B) A (mapEntries_distinct B) (by
           intro e member v₁ found
           have hy := mapLookup_of_mem_mapEntries member
           obtain ⟨name, key⟩ := bA.atomKey found
           rw [key] at found hy ⊢
-          obtain ⟨r, run, -⟩ := diff_key (Dispatcher.ofTable Erlang.program.fun_table depth) name v₁ e.2
+          obtain ⟨r, run, -⟩ := diff_key name v₁ e.2
             (bA.field found) (bB.field hy)
           rw [Erlang.program.«Elixir.Module.Types.Descr:bare_difference/3».pure, run]
           simp [g, run])
@@ -7030,13 +7538,13 @@ defmodule STTDescrProofsTest do
           (Dispatcher.ofTable Erlang.program.fun_table depth) (.atom name) x y = .ok r → g (.atom name) x y = r := by
         intro name x y r h; simp [g, h]
       exact ⟨C, run, fold_basic A B C bA bB g lookC fun name x y hx hy => by
-        obtain ⟨r, run, rest⟩ := diff_key (Dispatcher.ofTable Erlang.program.fun_table depth) name x y
+        obtain ⟨r, run, rest⟩ := diff_key name x y
           (bA.field hx) (bB.field hy)
-        exact ⟨r, gval _ _ _ _ run, rest⟩⟩
+        exact ⟨r, gval _ _ _ _ (run _), rest⟩⟩
 
     /-- The intersection of two fields of basic types at the same key. -/
-    theorem inter_key (d : Dispatcher) (name : String) (x y : Term) (hx : FieldOk name x) (hy : FieldOk name y) :
-        ∃ r, Elixir.Module.Types.Descr.«bare_intersection/3» d (.atom name) x y = .ok r ∧
+    theorem inter_key (name : String) (x y : Term) (hx : FieldOk name x) (hy : FieldOk name y) :
+        ∃ r, (∀ d, Elixir.Module.Types.Descr.«bare_intersection/3» d (.atom name) x y = .ok r) ∧
           (kept (.atom name, r) = Bool.true → FieldOk name r) ∧
           (name = "bitmap" → ∃ a b : Nat, x = .integer a ∧ y = .integer b ∧ r = .integer ↑(a &&& b)) ∧
           (name = "atom" → ∀ q, amemV (if kept (.atom name, r) then some r else Option.none) q =
@@ -7045,7 +7553,7 @@ defmodule STTDescrProofsTest do
       rcases hx with ⟨rfl, a, rfl, a₁, a₂⟩ | ⟨rfl, ⟨p₁, S₁, rfl, set₁⟩, -⟩ | ⟨n₁, n₂, tx⟩
       · rcases hy with ⟨-, b, rfl, -⟩ | ⟨e, -⟩ | ⟨e, -⟩
         · have le : a &&& b ≤ a := Nat.and_le_left
-          refine ⟨.integer ↑(a &&& b), ?_, fun k => ?_, fun _ => ⟨a, b, rfl, rfl, rfl⟩, by simp, by simp⟩
+          refine ⟨.integer ↑(a &&& b), fun d => ?_, fun k => ?_, fun _ => ⟨a, b, rfl, rfl, rfl⟩, by simp, by simp⟩
           · simp [Elixir.Module.Types.Descr.«bare_intersection/3», Erlang.erlang.«band/2»]
           · simp [kept] at k
             exact Or.inl ⟨rfl, _, rfl, by omega, by omega⟩
@@ -7056,10 +7564,11 @@ defmodule STTDescrProofsTest do
         · rcases atom_intersection p₁ S₁ p₂ S₂ set₁ set₂ with ⟨p, E, hE, setE, -, ne, mE⟩ | ⟨hE, mE⟩
           · have keep : kept (.atom "atom", .tuple #[.atom (if p then "union" else "negation"), .map E]) = Bool.true := by
               simp [kept]
-            refine ⟨_, by simp [Elixir.Module.Types.Descr.«bare_intersection/3», hE],
+            refine ⟨_, fun d => by simp [Elixir.Module.Types.Descr.«bare_intersection/3», hE],
               fun _ => Or.inr (Or.inl ⟨rfl, ⟨p, E, rfl, setE⟩, atom_nonempty p E ne⟩), by simp, fun _ q => ?_, by simp⟩
             rw [keep]; simp only [ite_true, amemV_field, mE]
-          · refine ⟨.integer 0, by simp [Elixir.Module.Types.Descr.«bare_intersection/3», hE], fun k => by simp [kept] at k,
+          · refine ⟨.integer 0, fun d => by simp [Elixir.Module.Types.Descr.«bare_intersection/3», hE],
+              fun k => by simp [kept] at k,
               by simp, fun _ q => ?_, by simp⟩
             have := mE q
             simp only [kept, amemV_field] at this ⊢
@@ -7069,7 +7578,8 @@ defmodule STTDescrProofsTest do
         · exact absurd e n₁
         · exact absurd e n₂
         rw [tx] at ty; cases ty
-        refine ⟨x, ?_, fun _ => Or.inr (Or.inr ⟨n₁, n₂, tx⟩), fun e => absurd e n₁, fun e => absurd e n₂, fun _ _ => ?_⟩
+        refine ⟨x, fun d => ?_, fun _ => Or.inr (Or.inr ⟨n₁, n₂, tx⟩), fun e => absurd e n₁, fun e => absurd e n₂,
+          fun _ _ => ?_⟩
         · rcases top_cases tx with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
           · have union : Elixir.Module.Types.Descr.«fun_repr_union/2» d (.map []) (.map []) = .ok (.map []) := by
               simp [Elixir.Module.Types.Descr.«fun_repr_union/2», Elixir.Module.Types.Descr.«symmetrical_merge/3»,
@@ -7102,7 +7612,7 @@ defmodule STTDescrProofsTest do
           (Dispatcher.ofTable Erlang.program.fun_table depth) (.atom name) x y = .ok r → g (.atom name) x y = r := by
         intro name x y r h; simp [g, h]
       have ik := fun name x y (hx : mapLookup A (.atom name) = some x) (hy : mapLookup B (.atom name) = some y) =>
-        inter_key (Dispatcher.ofTable Erlang.program.fun_table depth) name x y (bA.field hx) (bB.field hy)
+        inter_key name x y (bA.field hx) (bB.field hy)
       obtain ⟨I, runI, lookI⟩ := Erlang.maps.intersect_with_lookup
         (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) "Elixir.Module.Types.Descr" "bare_intersection" #[] A B g (by
           intro e me y hy
@@ -7110,7 +7620,7 @@ defmodule STTDescrProofsTest do
           obtain ⟨name, key⟩ := bA.atomKey hx
           rw [key] at hx hy ⊢
           obtain ⟨r, run, -⟩ := ik name e.2 y hx hy
-          rw [Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/3».pure, run, gval _ _ _ _ run])
+          rw [Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/3».pure, run, gval _ _ _ _ (run _)])
       obtain ⟨C, runC, lookC⟩ := Erlang.maps.filter_lookup
         (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) "Elixir.Module.Types.Descr"
         "-symmetrical_intersection/3-fun-0-" #[] I kept (by
@@ -7147,7 +7657,7 @@ defmodule STTDescrProofsTest do
           try simp at h
         rename_i x y
         obtain ⟨r, run, ok, -⟩ := ik name x y hx hy
-        simp only [gval _ _ _ _ run] at h
+        simp only [gval _ _ _ _ (run _)] at h
         obtain ⟨k, rfl⟩ := h
         exact ok k
       · simp only [bits]
@@ -7166,7 +7676,7 @@ defmodule STTDescrProofsTest do
             have ea' : a' = a := by omega
             have eb' : b' = b := by omega
             rw [ea', eb'] at run
-            simp only [gval _ _ _ _ run]
+            simp only [gval _ _ _ _ (run _)]
             by_cases z : a &&& b = 0 <;> simp [kept, z]
       · simp only [amem]
         rw [look]
@@ -7178,7 +7688,7 @@ defmodule STTDescrProofsTest do
           | some y =>
             obtain ⟨r, run, -, -, am, -⟩ := ik "atom" _ _ hx hy
             have := am rfl q
-            simp only [gval _ _ _ _ run]
+            simp only [gval _ _ _ _ (run _)]
             rw [← this]
       · simp only [has]
         rw [look]
@@ -7189,7 +7699,7 @@ defmodule STTDescrProofsTest do
           | none => simp
           | some y =>
             obtain ⟨r, run, -, -, -, stay⟩ := ik name _ _ hx hy
-            simp [gval _ _ _ _ run, stay b a]
+            simp [gval _ _ _ _ (run _), stay b a]
 
     /-- Optimized unions of static types merge their fields, uniting those in both. -/
     theorem opt_union_lookup (depth : Nat) (L R : List (Term × Term)) (seen : Term)
@@ -7417,14 +7927,14 @@ defmodule STTDescrProofsTest do
         · subst a; simp [Elixir.Module.Types.Descr.«opt_difference/4», Elixir.Module.Types.Descr.«bare_difference/3»]
         · have h₁ := noTops name b a
           simp [has, hy] at h₁
-      obtain ⟨C, fold, lookC⟩ := difference_fold (depth + 1)
+      obtain ⟨C, fold, lookC, -⟩ := difference_fold (depth + 1)
         (.function "Elixir.Module.Types.Descr" "-opt_difference/3-anonymous-0-" 3 #[seen])
         g (mapEntries B) T (mapEntries_distinct B) (by
           intro e member v₁ found
           have hy := mapLookup_of_mem_mapEntries member
           obtain ⟨name, key⟩ := bT.atomKey found
           rw [key] at found hy ⊢
-          obtain ⟨r, run, -⟩ := diff_key (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) name v₁ e.2
+          obtain ⟨r, run, -⟩ := diff_key name v₁ e.2
             (bT.field found) (bB.field hy)
           rw [Erlang.program.«Elixir.Module.Types.Descr:-opt_difference/3-anonymous-0-/3».pure]
           simp only [Elixir.Module.Types.Descr.«-opt_difference/3-anonymous-0-/4»]
@@ -7438,7 +7948,7 @@ defmodule STTDescrProofsTest do
         simp [Erlang.erlang.«==/2», nonempty, term, Erlang.maps.«fold/3»]
         simpa using fold
       obtain ⟨bC, bitsC, amemC, hasC⟩ := fold_basic T B C bT bB g lookC fun name x y hx hy => by
-        obtain ⟨r, run, rest⟩ := diff_key (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) name x y
+        obtain ⟨r, run, rest⟩ := diff_key name x y
           (bT.field hx) (bB.field hy)
         exact ⟨r, by simp [g, same name _ _ hy, run], rest⟩
       refine ⟨C, run, bC, by rw [bitsC, bitsT], fun q => by rw [amemC, amemT]; rfl, fun name b a => ?_⟩
@@ -7474,7 +7984,7 @@ defmodule STTDescrProofsTest do
       cases hy : mapLookup B (.atom name) with
       | none => exact empty_key_field d (bA.field hx) ok
       | some y =>
-        obtain ⟨r, run, field, bm, am, gone⟩ := diff_key d name x y (bA.field hx) (bB.field hy)
+        obtain ⟨r, run, field, bm, am, gone⟩ := diff_key name x y (bA.field hx) (bB.field hy)
         have keep : kept (.atom name, r) = Bool.true := by
           rcases bA.field hx with ⟨rfl, a, rfl, a₁, -⟩ | ⟨rfl, -, q, hq⟩ | ⟨b, a, -⟩
           · obtain ⟨a', b', ea, eb, rfl⟩ := bm rfl
@@ -8319,12 +8829,12 @@ defmodule STTDescrProofsTest do
         simpa [fieldsTerm] using leaf
 
     /-- Optimized map types of a single open field against their optimized negations. -/
-    theorem opt_map_key_one (n j c : Nat) (x : Term) (field : MapField x) (one : OneKey x) :
+    theorem opt_map_key_one (n j c : Nat) (x : Term) (field : MapField ElemTerm x) (one : OneKey x) :
         OptKeyOk (Dispatcher.ofTable Erlang.program.fun_table (n + 5)) (Dispatcher.ofTable Erlang.program.fun_table (j + 1))
           (Dispatcher.ofTable Erlang.program.fun_table (c + 2)) (.map []) (.map []) (.atom "map")
           (.tuple #[.integer 61102469, .atom "open", .nil]) x := by
       obtain ⟨k, key, w, rfl⟩ := one
-      have fw : FieldValueV w := by
+      have fw : FieldValue ElemTerm w := by
         rcases field with ⟨k', e⟩ | wx
         · simp [fieldsTerm, Term.list] at e
         · obtain ⟨⟨k', tag, l, e, -, fields⟩, -⟩ := Bdd.leaf_iff.mp wx
@@ -8374,8 +8884,9 @@ defmodule STTDescrProofsTest do
       have : (Ord.compare (0 : Int) 1).isGE = Bool.false := by decide
       simp [this]
 
-    theorem opt_tuple_key (n m : Nat) (du : Dispatcher) (sD sU x : Term) (field : TupleField x) :
-        OptKeyOk (Dispatcher.ofTable Erlang.program.fun_table (n + 1)) du (Dispatcher.ofTable Erlang.program.fun_table (m + 2))
+    theorem opt_tuple_key (ops : ElemOk E K) (n : Nat) {m : Nat} (hm : K + 1 ≤ m) (du : Dispatcher) (sD sU x : Term)
+        (field : TupleField E x) :
+        OptKeyOk (Dispatcher.ofTable Erlang.program.fun_table (n + 1)) du (D m)
           sD sU (.atom "tuple") (.tuple #[.integer 61102469, .atom "open", .nil]) x := by
       have hd : Elixir.Module.Types.Descr.«opt_difference/4» (Dispatcher.ofTable Erlang.program.fun_table (n + 1))
           (.atom "tuple") (.tuple #[.integer 61102469, .atom "open", .nil]) x sD =
@@ -8383,7 +8894,7 @@ defmodule STTDescrProofsTest do
             (.atom "tuple") (.tuple #[.integer 61102469, .atom "open", .nil]) x := by
         simp [Elixir.Module.Types.Descr.«opt_difference/4», Elixir.Module.Types.Descr.«bare_difference/3»,
           opt_tuple_difference_top n x field]
-      have k := tuple_key (Dispatcher.ofTable Erlang.program.fun_table (n + 1)) du m x field
+      have k := tuple_key ops (Dispatcher.ofTable Erlang.program.fun_table (n + 1)) du hm x field
       have same : ∀ w, Elixir.Module.Types.Descr.«opt_tuple_union/2» du x w = Elixir.Module.Types.Descr.«tuple_union/2» x w →
           Elixir.Module.Types.Descr.«opt_union/4» du (.atom "tuple") x w sU =
             Elixir.Module.Types.Descr.«bare_union/3» du (.atom "tuple") x w := by
@@ -8449,7 +8960,7 @@ defmodule STTDescrProofsTest do
             · rename_i heq; simp only [Term.tuple.injEq] at heq; subst heq; exact neg
             · next h₁ => exact (h₁ _ _ rfl rfl).elim
           obtain ⟨u, runU, keepU, semU⟩ := union_ok ww wx
-          refine ⟨w, ?_, fun kw => by simp [kept, w] at kw, fun _ => ⟨u, ?_, tuple_taut m (keepU _ ww wx) fun ρ resp => ?_⟩⟩
+          refine ⟨w, ?_, fun kw => by simp [kept, w] at kw, fun _ => ⟨u, ?_, tuple_taut ops hm (keepU _ ww wx) fun ρ resp => ?_⟩⟩
           · simp [Elixir.Module.Types.Descr.«opt_difference/4», opt_tuple_difference_top n _ (Or.inr wx), run]
           · simp only [Elixir.Module.Types.Descr.«opt_union/4», w, opt_tuple_union_neg_leaf]
             rw [tuple_union_bdd (by intro k e; simp at e) notTop]
@@ -8474,8 +8985,9 @@ defmodule STTDescrProofsTest do
       · rfl
 
     /-- Map types other than open maps of one field unite with their optimized negations as plain ones. -/
-    theorem opt_map_key_plain (n m : Nat) (du : Dispatcher) (sU x : Term) (field : MapField x) (notOne : ¬OneKey x) :
-        OptKeyOk (Dispatcher.ofTable Erlang.program.fun_table (n + 2)) du (Dispatcher.ofTable Erlang.program.fun_table (m + 3))
+    theorem opt_map_key_plain (ops : ElemOk E K) (n : Nat) {m : Nat} (hm : K + 2 ≤ m) (du : Dispatcher) (sU x : Term)
+        (field : MapField E x) (notOne : ¬OneKey x) :
+        OptKeyOk (Dispatcher.ofTable Erlang.program.fun_table (n + 2)) du (D m)
           (.map []) sU (.atom "map") (.tuple #[.integer 61102469, .atom "open", .nil]) x := by
       have hd : Elixir.Module.Types.Descr.«opt_difference/4» (Dispatcher.ofTable Erlang.program.fun_table (n + 2))
           (.atom "map") (.tuple #[.integer 61102469, .atom "open", .nil]) x (.map []) =
@@ -8489,7 +9001,7 @@ defmodule STTDescrProofsTest do
         intro w h
         simp [Elixir.Module.Types.Descr.«opt_union/4», Elixir.Module.Types.Descr.«bare_union/3»,
           opt_map_union_fallback du x w sU h]
-      refine (map_key (Dispatcher.ofTable Erlang.program.fun_table (n + 2)) du m x field).opt hd fun w run kw => same w ?_
+      refine (map_key ops (Dispatcher.ofTable Erlang.program.fun_table (n + 2)) du hm x field).opt hd fun w run kw => same w ?_
       rcases field with ⟨k', rfl⟩ | wx
       · simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«map_difference/2»] at run
         subst run; simp [kept] at kw
@@ -8522,24 +9034,26 @@ defmodule STTDescrProofsTest do
           simp [Elixir.Module.Types.Descr.«opt_union/4», Elixir.Module.Types.Descr.«bare_union/3»]
 
     /-- Each field of the top type is covered by what an optimized type and its negation unite into. -/
-    theorem opt_key_ok (X : List (Term × Term)) (valid : Negatable X) {T : List (Term × Term)}
+    theorem opt_key_ok (ops : ElemOk ElemTerm K) (hK : K ≤ 90) (X : List (Term × Term)) (valid : Negatable ElemTerm X)
+        {T : List (Term × Term)}
         (term : Elixir.Module.Types.Descr.«unfolded_term/0» = .ok (.map T)) {q t x : Term}
         (hT : mapLookup T q = some t) (hX : mapLookup X q = some x) :
         OptKeyOk (Dispatcher.ofTable Erlang.program.fun_table 98) (Dispatcher.ofTable Erlang.program.fun_table 99)
           (Dispatcher.ofTable Erlang.program.fun_table 100) (.map []) (.map []) q t x := by
-      have k := key_ok X valid term hT hX
+      have k := key_ok ops hK X valid term hT hX
       rcases term_keys term hT with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
       · exact opt_key_simple k (Or.inl rfl)
       · exact opt_key_simple k (Or.inr (Or.inl rfl))
       · exact opt_key_simple k (Or.inr (Or.inr (Or.inl rfl)))
       · exact opt_key_simple k (Or.inr (Or.inr (Or.inr ⟨rfl, _, rfl⟩)))
-      · exact opt_tuple_key 97 98 _ _ _ x (valid.tuples x hX)
+      · exact opt_tuple_key ops 97 (by omega) _ _ _ x (valid.tuples x hX)
       · by_cases one : OneKey x
         · exact opt_map_key_one 93 98 98 x (valid.maps x hX) one
-        · exact opt_map_key_plain 96 97 _ _ x (valid.maps x hX) one
+        · exact opt_map_key_plain ops 96 (by omega) _ _ x (valid.maps x hX) one
 
     /-- An optimized type united with its optimized negation covers the top type. -/
-    theorem opt_union_negation_covers (X : List (Term × Term)) (valid : Negatable X) (nonempty : X ≠ []) :
+    theorem opt_union_negation_covers (ops : ElemOk ElemTerm K) (hK : K ≤ 90) (X : List (Term × Term))
+        (valid : Negatable ElemTerm X) (nonempty : X ≠ []) :
         ∃ N U, Elixir.Module.Types.Descr.«opt_negation/1» (Dispatcher.ofTable Erlang.program.fun_table 100) (.map X) =
             .ok (.map N) ∧
           Elixir.Module.Types.Descr.«opt_union/2» (Dispatcher.ofTable Erlang.program.fun_table 100) (.map X) (.map N) =
@@ -8552,9 +9066,9 @@ defmodule STTDescrProofsTest do
         simp only [Elixir.Module.Types.Descr.«unfolded_term/0»] at this
         cases this
         simp [mapLookup]
-      obtain ⟨N, negation, staticN, -, -, -, -, -, -, -, lookups⟩ := opt_negation_fields 97 X valid nonempty (.map [])
+      obtain ⟨N, negation, staticN, -, -, -, -, -, -, -, lookups⟩ := opt_negation_fields ops 97 X valid nonempty (.map [])
         (fun _ _ => True) (fun x hX => by
-          obtain ⟨w, run, -⟩ := opt_key_ok X valid term termMap hX
+          obtain ⟨w, run, -⟩ := opt_key_ok ops hK X valid term termMap hX
           exact ⟨w, by simpa [Elixir.Module.Types.Descr.«opt_difference/4»] using run, fun _ => trivial⟩)
       have inT : ∀ q x, mapLookup X q = some x → ∃ t, mapLookup T q = some t := by
         intro q x hX
@@ -8566,7 +9080,7 @@ defmodule STTDescrProofsTest do
         intro q x y hX hN
         obtain ⟨t, hT⟩ := inT q x hX
         obtain ⟨name, rfl⟩ := atom_key_of term hT
-        obtain ⟨w, run, -, keep⟩ := opt_key_ok X valid term hT hX
+        obtain ⟨w, run, -, keep⟩ := opt_key_ok ops hK X valid term hT hX
         have look := (lookups T term name t hT).2 x w hX run
         rw [hN] at look
         by_cases k : kept (.atom name, w) = Bool.true
@@ -8589,7 +9103,7 @@ defmodule STTDescrProofsTest do
         obtain ⟨w, run, empty⟩ := key_absent term hT
         exact ⟨e.2, w, (lookU name).2.1 _ hN hX, run, empty⟩
       | some x =>
-        obtain ⟨w, run, drop, keep⟩ := opt_key_ok X valid term hT hX
+        obtain ⟨w, run, drop, keep⟩ := opt_key_ok ops hK X valid term hT hX
         have look := (lookups T term name e.2 hT).2 x w hX run
         by_cases k : kept (.atom name, w) = Bool.true
         · obtain ⟨u, ru, w', rw', empty⟩ := keep k
@@ -8598,6 +9112,259 @@ defmodule STTDescrProofsTest do
         · simp only [k, Bool.false_eq_true, ite_false] at look
           obtain ⟨w', rw', empty⟩ := drop (by simpa using k)
           exact ⟨x, w', by rw [(lookU name).1 look, hX], rw', empty⟩
+
+    /-! Flat element types, with intersections, differences, and emptiness that do not depend on the call depth. -/
+
+    theorem inter_term_right (d : Dispatcher) (e : Term) :
+        Elixir.Module.Types.Descr.«bare_intersection/2» d e (.atom "term") = .ok e := by
+      unfold Elixir.Module.Types.Descr.«bare_intersection/2»
+      split <;> simp_all
+
+    theorem diff_term_right (d : Dispatcher) (e : Term) :
+        Elixir.Module.Types.Descr.«bare_difference/2» d e (.atom "term") = .ok (.map []) := by
+      unfold Elixir.Module.Types.Descr.«bare_difference/2»
+      rfl
+
+    /-- Element types of lines: the top type or basic types. -/
+    def LElem (e : Term) : Prop := e = .atom "term" ∨ ∃ M, e = .map M ∧ Basic M
+
+    theorem elem_lelem {e : Term} (h : ElemTerm e) : LElem e := by
+      rcases h with rfl | ⟨X, rfl, valid⟩
+      · exact Or.inl rfl
+      · exact Or.inr ⟨X, rfl, (Valid.basic valid).1⟩
+
+    theorem inter_basic_u (A B : List (Term × Term)) (bA : Basic A) (bB : Basic B) :
+        ∃ C, (∀ m, 0 + 1 ≤ m → Elixir.Module.Types.Descr.«bare_intersection/2» (D m) (.map A) (.map B) =
+          .ok (.map C)) ∧ Basic C := by
+      let g : Term → Term → Term → Term := fun k₀ v₁ v₂ =>
+        match Elixir.Module.Types.Descr.«bare_intersection/3» (D 0) k₀ v₁ v₂ with
+        | .ok w => w
+        | .error _ => .nil
+      have ik := fun name x y (hx : mapLookup A (.atom name) = some x) (hy : mapLookup B (.atom name) = some y) =>
+        inter_key name x y (bA.field hx) (bB.field hy)
+      have gval : ∀ name x y r, (∀ d, Elixir.Module.Types.Descr.«bare_intersection/3» d (.atom name) x y = .ok r) →
+          g (.atom name) x y = r := by
+        intro name x y r h; simp [g, h]
+      obtain ⟨I, C, run, lookI, lookC⟩ := inter_uniform 0 A B bA.static bB.static g (by
+        intro q x y hx hy m _
+        obtain ⟨name, key⟩ := bA.atomKey hx
+        subst key
+        obtain ⟨r, run, -⟩ := ik name x y hx hy
+        rw [run, gval _ _ _ _ run])
+      have look : ∀ name, mapLookup C (.atom name) =
+          match mapLookup A (.atom name), mapLookup B (.atom name) with
+          | some x, some y => if kept (.atom name, g (.atom name) x y) then some (g (.atom name) x y) else Option.none
+          | _, _ => Option.none := by
+        intro name
+        rw [lookC, find_atom, lookI, find_atom]
+        cases mapLookup A (.atom name) <;> cases hR : mapLookup B (.atom name) <;> simp [hR]
+      have keys : ∀ q, (mapLookup C q).isSome → (mapLookup A q).isSome := by
+        intro q some
+        rw [lookC] at some
+        split at some
+        · rename_i e hit
+          have hI := find_isSome I q hit
+          rw [lookI] at hI
+          split at hI
+          · rename_i e' hit'
+            exact find_isSome A q hit'
+          · simp at hI
+        · simp at some
+      refine ⟨C, run, basic_of (fun q h => bA.keys q (keys q h)) fun name w h => ?_⟩
+      rw [look] at h
+      cases hx : mapLookup A (.atom name) <;> cases hy : mapLookup B (.atom name) <;> rw [hx, hy] at h <;>
+        try simp at h
+      rename_i x y
+      obtain ⟨r, run, ok, -⟩ := ik name x y hx hy
+      simp only [gval _ _ _ _ run] at h
+      obtain ⟨k, rfl⟩ := h
+      exact ok k
+
+    theorem diff_basic_u (left : Term) (A B : List (Term × Term)) (bA : Basic A) (bB : Basic B)
+        (hleft : left = .map A ∨ (left = .atom "term" ∧ B ≠ [] ∧
+          Elixir.Module.Types.Descr.«unfolded_term/0» = .ok (.map A))) :
+        ∃ C, (∀ m, 2 ≤ m → Elixir.Module.Types.Descr.«bare_difference/2» (D m) left (.map B) = .ok (.map C)) ∧
+          Basic C := by
+      by_cases emptyB : B = []
+      · subst emptyB
+        rcases hleft with rfl | ⟨-, ne, -⟩
+        rotate_left
+        · exact absurd rfl ne
+        refine ⟨A, fun m _ => ?_, bA⟩
+        unfold Elixir.Module.Types.Descr.«bare_difference/2»
+        simp [Erlang.erlang.«==/2»]
+      let g : Term → Term → Term → Term := fun k₀ v₁ v₂ =>
+        match Elixir.Module.Types.Descr.«bare_difference/3» (D 0) k₀ v₁ v₂ with
+        | .ok w => w
+        | .error _ => .nil
+      have gval : ∀ name x y r, (∀ d, Elixir.Module.Types.Descr.«bare_difference/3» d (.atom name) x y = .ok r) →
+          g (.atom name) x y = r := by
+        intro name x y r h; simp [g, h]
+      have fold := fun depth => difference_fold depth (.function "Elixir.Module.Types.Descr" "bare_difference" 3 #[])
+        g (mapEntries B) A (mapEntries_distinct B) (by
+          intro e member v₁ found
+          have hy := mapLookup_of_mem_mapEntries member
+          obtain ⟨name, key⟩ := bA.atomKey found
+          rw [key] at found hy ⊢
+          obtain ⟨r, run, -⟩ := diff_key name v₁ e.2 (bA.field found) (bB.field hy)
+          rw [Erlang.program.«Elixir.Module.Types.Descr:bare_difference/3».pure, run, gval _ _ _ _ run])
+      obtain ⟨C, -, lookC, eqC⟩ := fold 0
+      refine ⟨C, fun m hm => ?_, (fold_basic A B C bA bB g lookC fun name x y hx hy => by
+        obtain ⟨r, run, rest⟩ := diff_key name x y (bA.field hx) (bB.field hy)
+        exact ⟨r, gval _ _ _ _ run, rest⟩).1⟩
+      obtain ⟨depth, rfl⟩ : ∃ depth, m = depth + 2 := ⟨m - 2, by omega⟩
+      obtain ⟨C', fold', -, eq'⟩ := fold depth
+      rw [eqC, ← eq']
+      rcases hleft with rfl | ⟨rfl, -, term⟩
+      · unfold Elixir.Module.Types.Descr.«bare_difference/2»
+        simp [Erlang.erlang.«==/2», unfold_map, static_map bA.static, static_map bB.static, emptyB]
+        unfold Elixir.Module.Types.Descr.«dynamic_difference/3»
+        simp [Erlang.erlang.«==/2», emptyB, unfold_map, Erlang.maps.«fold/3»]
+        simpa using fold'
+      · unfold Elixir.Module.Types.Descr.«bare_difference/2»
+        simp [Erlang.erlang.«==/2», unfold_map, static_map bB.static, emptyB]
+        unfold Elixir.Module.Types.Descr.«dynamic_difference/3»
+        simp [Erlang.erlang.«==/2», emptyB, unfold_map, Erlang.maps.«fold/3», term]
+        simpa using fold'
+
+    theorem tuple_top_bool (L : List (Term × Term)) : ∃ b, ∀ d,
+        Elixir.Module.Types.Descr.«tuple_empty?/2» d (.tuple #[.integer 61102469, .atom "open", .nil]) (.map L) =
+          .ok (boolAtom b) := by
+      by_cases seen : L.any (fun e => Term.exactCompare
+          (.cons (.atom "tuple") (.tuple #[.integer 61102469, .atom "open", .nil])) e.1 == .eq) = Bool.true
+      · refine ⟨Bool.true, fun d => ?_⟩
+        unfold Elixir.Module.Types.Descr.«tuple_empty?/2»
+        simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», seen, Term.true, boolAtom]
+      · have fresh : L.any (fun e => Term.exactCompare
+            (.cons (.atom "tuple") (.tuple #[.integer 61102469, .atom "open", .nil])) e.1 == .eq) = Bool.false := by
+          simpa using seen
+        refine ⟨Bool.false, fun d => ?_⟩
+        unfold Elixir.Module.Types.Descr.«tuple_empty?/2»
+        simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», fresh, Term.true,
+          Term.false, Erlang.maps.«put/3»]
+        simp [Elixir.Module.Types.Descr.«tuple_bdd_empty?/4», Elixir.Module.Types.Descr.«tuple_line_intersection/2»,
+          Erlang.erlang.«length/1», Elixir.Module.Types.Descr.«tuple_sizes_strategy/4», Lynx.Except.guard,
+          Erlang.erlang.«==/2», Erlang.erlang.«/=/2», Lynx.Except.andAlso, Elixir.Module.Types.Descr.«zip_intersection/4»,
+          Erlang.lists.«reverse/2», Elixir.Module.Types.Descr.«tuple_line_empty_seen?/4»,
+          Elixir.Module.Types.Descr.«tuple_line_elements_empty?/2», any_nil, Erlang.erlang.«>=/2», boolAtom]
+
+    theorem map_top_bool (L : List (Term × Term)) : ∃ b, ∀ d,
+        Elixir.Module.Types.Descr.«map_empty?/2» d (.tuple #[.integer 61102469, .atom "open", .nil]) (.map L) =
+          .ok (boolAtom b) := by
+      by_cases seen : L.any (fun e => Term.exactCompare
+          (.cons (.atom "map") (.tuple #[.integer 61102469, .atom "open", .nil])) e.1 == .eq) = Bool.true
+      · refine ⟨Bool.true, fun d => ?_⟩
+        unfold Elixir.Module.Types.Descr.«map_empty?/2»
+        simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», seen, Term.true, boolAtom]
+      · have fresh : L.any (fun e => Term.exactCompare
+            (.cons (.atom "map") (.tuple #[.integer 61102469, .atom "open", .nil])) e.1 == .eq) = Bool.false := by
+          simpa using seen
+        refine ⟨Bool.false, fun d => ?_⟩
+        unfold Elixir.Module.Types.Descr.«map_empty?/2»
+        simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», fresh, Term.true,
+          Term.false, Erlang.maps.«put/3»]
+        rw [Elixir.Module.Types.Descr.«map_bdd_empty?/4».eq_def]
+        have line := line_inter_open d 61102469 .nil
+        simp [line, Elixir.Module.Types.Descr.«init_map_line_empty?/4», any_nil]
+        rw [Elixir.Module.Types.Descr.«map_line_empty?/4».eq_def]
+        simp [boolAtom]
+
+    /-- The emptiness of basic types does not depend on the call depth. -/
+    theorem basic_empty_bool {M : List (Term × Term)} (basic : Basic M) (S : List (Term × Term)) :
+        ∃ b, ∀ d, Elixir.Module.Types.Descr.«empty_seen?/2» d (.map M) (.map S) = .ok (boolAtom b) := by
+      by_cases nonempty : M = []
+      · subst nonempty
+        exact ⟨Bool.true, fun d => by simpa [boolAtom] using empty_none_seen d (.map S)⟩
+      obtain ⟨tb, ht⟩ := tuple_top_bool S
+      obtain ⟨mb, hm⟩ := map_top_bool S
+      have static : mapLookup M (.atom "dynamic") = Option.none := basic.static
+      have top : ∀ name, name ≠ "bitmap" → name ≠ "atom" → ∀ w, mapLookup M (.atom name) = some w →
+          topValue name = some w := fun name n₁ n₂ w h => basic.top name w n₁ n₂ h
+      have tupleV := top "tuple" (by decide) (by decide)
+      have mapV := top "map" (by decide) (by decide)
+      have listV := top "list" (by decide) (by decide)
+      have funV := top "fun" (by decide) (by decide)
+      simp only [topValue] at tupleV mapV listV funV
+      refine ⟨!(mapLookup M (.atom "atom")).isSome && !(mapLookup M (.atom "bitmap")).isSome &&
+        (!(mapLookup M (.atom "tuple")).isSome || tb) && (!(mapLookup M (.atom "map")).isSome || mb) &&
+        !(mapLookup M (.atom "list")).isSome && !(mapLookup M (.atom "fun")).isSome, fun d => ?_⟩
+      have nL := list_top_nonempty d (.map S)
+      have nF := fun_top_nonempty d (.map S)
+      have tB := ht d
+      have mB := hm d
+      unfold Elixir.Module.Types.Descr.«empty_seen?/2»
+      simp [getMapKeys_single, static, Erlang.erlang.«==/2», nonempty]
+      cases ha : mapLookup M (.atom "atom") with
+      | some _ => simp [Erlang.erlang.«is_map_key/2», any_key, ha, Lynx.Except.andAlso, boolAtom]
+      | none =>
+      cases hb : mapLookup M (.atom "bitmap") with
+      | some _ => simp [Erlang.erlang.«is_map_key/2», any_key, ha, hb, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+      | none =>
+      cases htu : mapLookup M (.atom "tuple") <;> cases hma : mapLookup M (.atom "map") <;>
+        cases hl : mapLookup M (.atom "list") <;> cases hf : mapLookup M (.atom "fun") <;>
+        cases tb <;> cases mb <;>
+        simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+      all_goals
+        apply nonempty
+        apply nil_of_lookup_none
+        intro q
+        cases h : mapLookup M q with
+        | none => rfl
+        | some w =>
+          rcases basic.keys q (by rw [h]; rfl) with rfl | rfl | rfl | rfl | rfl | rfl <;> simp_all
+
+    /-- Flat element types of the specification. -/
+    theorem flatOk : ElemOk ElemTerm 1 :=
+      ⟨Or.inl rfl, fun ha hb => elem_inter ha hb, fun {a} ha S => ⟨isNone a, fun m _ => flat_empty ha S (D m)⟩⟩
+
+    theorem lelemOk : ElemOk LElem 2 := by
+      refine ⟨Or.inl rfl, fun {a b} ha hb => ?_, fun {a} ha S => ?_⟩
+      · rcases ha with rfl | ⟨A, rfl, bA⟩
+        · exact ⟨b, hb, fun _ _ => by unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl⟩
+        rcases hb with rfl | ⟨B, rfl, bB⟩
+        · exact ⟨_, Or.inr ⟨A, rfl, bA⟩, fun m _ => inter_term_right _ _⟩
+        obtain ⟨C, run, bC⟩ := inter_basic_u A B bA bB
+        exact ⟨_, Or.inr ⟨C, rfl, bC⟩, fun m hm => run m (by omega)⟩
+      · rcases ha with rfl | ⟨M, rfl, bM⟩
+        · exact ⟨Bool.false, fun m _ => by rw [Elixir.Module.Types.Descr.«empty_seen?/2».eq_def]; rfl⟩
+        · obtain ⟨b, run⟩ := basic_empty_bool bM S
+          exact ⟨b, fun m _ => run _⟩
+
+    theorem lelemDiff : ElemDiff LElem 2 := by
+      refine ⟨fun {a b} ha hb => ?_⟩
+      rcases hb with rfl | ⟨B, rfl, bB⟩
+      · exact ⟨_, Or.inr ⟨[], rfl, basic_nil⟩, fun m _ => diff_term_right _ _⟩
+      by_cases empty : B = []
+      · subst empty
+        refine ⟨a, ha, fun m _ => ?_⟩
+        unfold Elixir.Module.Types.Descr.«bare_difference/2»
+        rcases ha with rfl | ⟨A, rfl, -⟩ <;> simp [Erlang.erlang.«==/2»]
+      rcases ha with rfl | ⟨A, rfl, bA⟩
+      · obtain ⟨T, term, -⟩ := unfolded_term_fields
+        obtain ⟨C, run, bC⟩ := diff_basic_u (.atom "term") T B (term_basic term).1 bB (Or.inr ⟨rfl, empty, term⟩)
+        exact ⟨_, Or.inr ⟨C, rfl, bC⟩, run⟩
+      · obtain ⟨C, run, bC⟩ := diff_basic_u (.map A) A B bA bB (Or.inl rfl)
+        exact ⟨_, Or.inr ⟨C, rfl, bC⟩, run⟩
+
+    theorem TupleOk.mono {E E' : Term → Prop} (h : ∀ e, E e → E' e) {t : Term} (ok : TupleOk E t) : TupleOk E' t := by
+      obtain ⟨⟨k, tag, l, rfl, tags, el⟩, notTop⟩ := ok
+      exact ⟨⟨k, tag, l, rfl, tags, fun e me => h e (el e me)⟩, notTop⟩
+
+    theorem MapOk.mono {E E' : Term → Prop} (h : ∀ e, E e → E' e) {t : Term} (ok : MapOk E t) : MapOk E' t := by
+      obtain ⟨⟨k, tag, l, rfl, tags, fs⟩, notTop⟩ := ok
+      refine ⟨⟨k, tag, l, rfl, tags, fun e me => ?_⟩, notTop⟩
+      obtain ⟨t, o, ht, et⟩ := fs e me
+      exact ⟨t, o, ht, h t et⟩
+
+    theorem Negatable.mono {E E' : Term → Prop} (h : ∀ e, E e → E' e) {X : List (Term × Term)} (v : Negatable E X) :
+        Negatable E' X := by
+      refine ⟨v.keys, v.bitmap, v.atom, v.atomUnion, v.funs, v.arities, v.lists, fun w hw => ?_, fun w hw => ?_⟩
+      · rcases v.tuples w hw with top | b
+        · exact Or.inl top
+        · exact Or.inr (b.mono fun _ ok => ok.mono h)
+      · rcases v.maps w hw with top | b
+        · exact Or.inl top
+        · exact Or.inr (b.mono fun _ ok => ok.mono h)
 
     end Elixir.STTDescrProofsTest
     """
@@ -8611,8 +9378,6 @@ defmodule STTDescrProofsTest do
     postlude ~LEAN"""
     namespace Elixir.STTDescrProofsTest
     open Lynx Lynx.Term BddProofs
-
-    abbrev D (n : Nat) : Dispatcher := Dispatcher.ofTable Erlang.program.fun_table n
 
     /-- The general clause of `tuple_line_empty?/4`. -/
     theorem line_cons (d : Dispatcher) (tag : String) (l : List Term) (k : Int) (ntag : String) (nl rest : List Term)
@@ -8786,56 +9551,6 @@ defmodule STTDescrProofsTest do
       rw [Elixir.Module.Types.Descr.«tuple_line_empty?/4».eq_def]
       split <;> simp_all
 
-    /-! Elements of tuple lines: the top type or basic types. -/
-
-    def LElem (e : Term) : Prop := e = .atom "term" ∨ ∃ M, e = .map M ∧ Basic M
-
-    theorem elem_lelem {e : Term} (h : ElemTerm e) : LElem e := by
-      rcases h with rfl | ⟨X, rfl, valid⟩
-      · exact Or.inl rfl
-      · exact Or.inr ⟨X, rfl, (Valid.basic valid).1⟩
-
-    theorem lelem_full (d : Dispatcher) {e : Term} (h : LElem e) (full : e ≠ .map []) {S : Term} (ok : SeenOk S) :
-        Elixir.Module.Types.Descr.«empty_seen?/2» d e S = .ok (.atom "false") := by
-      rcases h with rfl | ⟨M, rfl, basic⟩
-      · rw [Elixir.Module.Types.Descr.«empty_seen?/2».eq_def]; rfl
-      · exact empty_basic d basic ok fun e => full (by rw [e])
-
-    theorem inter_term_right (d : Dispatcher) (e : Term) :
-        Elixir.Module.Types.Descr.«bare_intersection/2» d e (.atom "term") = .ok e := by
-      unfold Elixir.Module.Types.Descr.«bare_intersection/2»
-      split <;> simp_all
-
-    theorem diff_term_right (d : Dispatcher) (e : Term) :
-        Elixir.Module.Types.Descr.«bare_difference/2» d e (.atom "term") = .ok (.map []) := by
-      unfold Elixir.Module.Types.Descr.«bare_difference/2»
-      rfl
-
-    theorem lelem_inter (n : Nat) {a b : Term} (ha : LElem a) (hb : LElem b) :
-        ∃ c, Elixir.Module.Types.Descr.«bare_intersection/2» (D (n + 2)) a b = .ok c ∧ LElem c := by
-      rcases ha with rfl | ⟨A, rfl, bA⟩
-      · exact ⟨b, by unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl, hb⟩
-      rcases hb with rfl | ⟨B, rfl, bB⟩
-      · exact ⟨_, inter_term_right _ _, Or.inr ⟨A, rfl, bA⟩⟩
-      obtain ⟨C, run, bC, -⟩ := inter_basic (n + 1) A B bA bB
-      exact ⟨_, run, Or.inr ⟨C, rfl, bC⟩⟩
-
-    theorem lelem_diff (n : Nat) {a b : Term} (ha : LElem a) (hb : LElem b) :
-        ∃ c, Elixir.Module.Types.Descr.«bare_difference/2» (D (n + 2)) a b = .ok c ∧ LElem c := by
-      rcases hb with rfl | ⟨B, rfl, bB⟩
-      · exact ⟨_, diff_term_right _ _, Or.inr ⟨[], rfl, basic_nil⟩⟩
-      by_cases empty : B = []
-      · subst empty
-        refine ⟨a, ?_, ha⟩
-        unfold Elixir.Module.Types.Descr.«bare_difference/2»
-        rcases ha with rfl | ⟨A, rfl, -⟩ <;> simp [Erlang.erlang.«==/2»]
-      rcases ha with rfl | ⟨A, rfl, bA⟩
-      · obtain ⟨T, term, -⟩ := unfolded_term_fields
-        obtain ⟨C, run, bC, -⟩ := diff_basic n (.atom "term") T B (term_basic term).1 bB (Or.inr ⟨rfl, empty, term⟩)
-        exact ⟨_, run, Or.inr ⟨C, rfl, bC⟩⟩
-      · obtain ⟨C, run, bC, -⟩ := diff_basic n (.map A) A B bA bB (Or.inl rfl)
-        exact ⟨_, run, Or.inr ⟨C, rfl, bC⟩⟩
-
     /-! Tuple lines whose negations hold `{}` or `{term, ...}`. -/
 
     /-- The empty tuple literal `{}`. -/
@@ -8844,7 +9559,12 @@ defmodule STTDescrProofsTest do
     /-- The literal `{term, ...}` of tuples with at least one element. -/
     def IsH (t : Term) : Prop := ∃ k : Int, t = .tuple #[.integer k, .atom "open", Term.list [.atom "term"]]
 
-    def Full (e : Term) : Prop := LElem e ∧ e ≠ .map []
+    /-- Elements of lines that are not empty, at every call depth from `K`. -/
+    def Full (E : Term → Prop) (K : Nat) (S : List (Term × Term)) (e : Term) : Prop :=
+      E e ∧ ∀ m, K ≤ m → Elixir.Module.Types.Descr.«empty_seen?/2» (D m) e (.map S) = .ok (.atom "false")
+
+    theorem full_term (ops : ElemOk E K) (S : List (Term × Term)) : Full E K S (.atom "term") :=
+      ⟨ops.term, fun m _ => by rw [Elixir.Module.Types.Descr.«empty_seen?/2».eq_def]; rfl⟩
 
     theorem andAlso_true : Lynx.Except.andAlso (.ok (.atom "true")) (.ok (.atom "true")) Bool.true = .ok (.atom "true") := by
       simp [Lynx.Except.andAlso]
@@ -8852,7 +9572,7 @@ defmodule STTDescrProofsTest do
     theorem list_cons (x : Term) (xs : List Term) : Term.list (x :: xs) = .cons x (Term.list xs) := rfl
 
     /-- `{}` minus the negations, which hold `{}`, is empty. -/
-    theorem line_closed_empty (d : Dispatcher) (S : Term) : ∀ negs : List Term, (∀ t ∈ negs, TupleLit t) →
+    theorem line_closed_empty (d : Dispatcher) (S : Term) : ∀ negs : List Term, (∀ t ∈ negs, TupleLit E t) →
         (∃ t ∈ negs, IsE t) →
         Elixir.Module.Types.Descr.«tuple_line_empty?/4» d (.atom "closed") (Term.list []) (Term.list negs) S =
           .ok (.atom "true") := by
@@ -8882,68 +9602,69 @@ defmodule STTDescrProofsTest do
           · exact m
 
     /-- Checking each element of a line against a negated literal produces lines of full elements. -/
-    theorem elements_all (n : Nat) {S : Term} (seen : SeenOk S) (tag rest : Term)
-        (lineOk : ∀ l, l ≠ [] → (∀ e ∈ l, Full e) →
-          Elixir.Module.Types.Descr.«tuple_line_empty?/4» (D (n + 2)) tag (Term.list l) rest S = .ok (.atom "true")) :
-        ∀ nl : List Term, (∀ e ∈ nl, ElemTerm e) → ∀ acc l : List Term, (∀ e ∈ acc, Full e) → (∀ e ∈ l, Full e) →
-          Elixir.Module.Types.Descr.«tuple_elements_empty?/6» (D (n + 2)) (Term.list acc) tag (Term.list l)
-            (Term.list nl) rest S = .ok (.atom "true") := by
+    theorem elements_all (ops : ElemOk E K) (dops : ElemDiff E K) {m : Nat} (hm : K ≤ m) (S : List (Term × Term)) (tag rest : Term)
+        (lineOk : ∀ l, l ≠ [] → (∀ e ∈ l, Full E K S e) →
+          Elixir.Module.Types.Descr.«tuple_line_empty?/4» (D m) tag (Term.list l) rest (.map S) = .ok (.atom "true")) :
+        ∀ nl : List Term, (∀ e ∈ nl, E e) → ∀ acc l : List Term, (∀ e ∈ acc, Full E K S e) →
+          (∀ e ∈ l, Full E K S e) →
+          Elixir.Module.Types.Descr.«tuple_elements_empty?/6» (D m) (Term.list acc) tag (Term.list l)
+            (Term.list nl) rest (.map S) = .ok (.atom "true") := by
       intro nl
       induction nl with
       | nil => intro _ acc l _ _; exact elements_done _ _ _ _ _ _
       | cons nt nl ih =>
         intro hnl acc l hacc hl
         obtain ⟨ty, es, hshape, hty, hes⟩ : ∃ ty es, ((l = [] ∧ ty = .atom "term" ∧ es = []) ∨ l = ty :: es) ∧
-            Full ty ∧ ∀ e ∈ es, Full e := by
+            Full E K S ty ∧ ∀ e ∈ es, Full E K S e := by
           cases l with
-          | nil => exact ⟨_, _, Or.inl ⟨rfl, rfl, rfl⟩, ⟨Or.inl rfl, by simp⟩, by simp⟩
+          | nil => exact ⟨_, _, Or.inl ⟨rfl, rfl, rfl⟩, full_term ops S, by simp⟩
           | cons x xs => exact ⟨x, xs, Or.inr rfl, hl x List.mem_cons_self, fun e m => hl e (List.mem_cons_of_mem _ m)⟩
-        have hnt := elem_lelem (hnl nt List.mem_cons_self)
-        have hnl' : ∀ e ∈ nl, ElemTerm e := fun e m => hnl e (List.mem_cons_of_mem _ m)
-        obtain ⟨meet, hmeet, lmeet⟩ := lelem_inter n hty.1 hnt
-        have step := elements_step (D (n + 2)) acc tag l nt nl rest S ty es hshape meet hmeet
+        have hnt := hnl nt List.mem_cons_self
+        have hnl' : ∀ e ∈ nl, E e := fun e m => hnl e (List.mem_cons_of_mem _ m)
+        obtain ⟨meet, lmeet, hmeet⟩ := ops.inter hty.1 hnt
+        have step := elements_step (D m) acc tag l nt nl rest (.map S) ty es hshape meet (hmeet m hm)
         rw [list_cons]
-        have allRev : ∀ x, Full x → ∀ e ∈ acc.reverse ++ x :: es, Full e := by
+        have allRev : ∀ x, Full E K S x → ∀ e ∈ acc.reverse ++ x :: es, Full E K S e := by
           intro x hx e m
           simp only [List.mem_append, List.mem_reverse, List.mem_cons] at m
           rcases m with m | rfl | m
           · exact hacc e m
           · exact hx
           · exact hes e m
-        by_cases emptyMeet : meet = .map []
-        · subst emptyMeet
-          rw [step.1 (empty_none_seen _ _)]
-          exact lineOk _ (by simp) (allRev ty hty)
-        · have fullMeet := lelem_full (D (n + 2)) lmeet emptyMeet seen
-          obtain ⟨diff, hdiff, ldiff⟩ := lelem_diff n hty.1 hnt
-          by_cases emptyDiff : diff = .map []
-          · subst emptyDiff
-            rw [(step.2 _ fullMeet hdiff).1 (empty_none_seen _ _)]
+        obtain ⟨bm, em⟩ := ops.empty lmeet S
+        cases bm
+        · have fullMeet : Full E K S meet := ⟨lmeet, fun m' h' => by simpa [boolAtom] using em m' h'⟩
+          obtain ⟨diff, ldiff, hdiff⟩ := dops.diff hty.1 hnt
+          obtain ⟨bd, ed⟩ := ops.empty ldiff S
+          cases bd
+          · have fullDiff : Full E K S diff := ⟨ldiff, fun m' h' => by simpa [boolAtom] using ed m' h'⟩
+            rw [(step.2 _ (fullMeet.2 m hm) (hdiff m hm)).2 (fullDiff.2 m hm),
+              lineOk _ (by simp) (allRev diff fullDiff),
+              ih hnl' (meet :: acc) es (fun e m => by
+                rcases List.mem_cons.mp m with rfl | m
+                · exact fullMeet
+                · exact hacc e m) hes]
+            exact andAlso_true
+          · rw [(step.2 _ (fullMeet.2 m hm) (hdiff m hm)).1 (by simpa [boolAtom] using ed m hm)]
             exact ih hnl' (ty :: acc) es (fun e m => by
               rcases List.mem_cons.mp m with rfl | m
               · exact hty
               · exact hacc e m) hes
-          · rw [(step.2 _ fullMeet hdiff).2 (lelem_full (D (n + 2)) ldiff emptyDiff seen),
-              lineOk _ (by simp) (allRev diff ⟨ldiff, emptyDiff⟩),
-              ih hnl' (meet :: acc) es (fun e m => by
-                rcases List.mem_cons.mp m with rfl | m
-                · exact ⟨lmeet, emptyMeet⟩
-                · exact hacc e m) hes]
-            exact andAlso_true
+        · rw [step.1 (by simpa [boolAtom] using em m hm)]
+          exact lineOk _ (by simp) (allRev ty hty)
 
-    theorem full_term : Full (.atom "term") := ⟨Or.inl rfl, by simp⟩
-
-    theorem full_fill {l : List Term} (hl : ∀ e ∈ l, Full e) (k : Nat) :
-        ∀ e ∈ l ++ List.replicate k (.atom "term"), Full e := by
+    theorem full_fill (ops : ElemOk E K) (S : List (Term × Term)) {l : List Term} (hl : ∀ e ∈ l, Full E K S e)
+        (k : Nat) : ∀ e ∈ l ++ List.replicate k (.atom "term"), Full E K S e := by
       intro e m
       rcases List.mem_append.mp m with m | m
       · exact hl e m
-      · rw [List.eq_of_mem_replicate m]; exact full_term
+      · rw [List.eq_of_mem_replicate m]; exact full_term ops S
 
     /-- A line of at least one element minus negations that hold `{term, ...}` is empty. -/
-    theorem line_full (n : Nat) {S : Term} (seen : SeenOk S) : ∀ negs : List Term, (∀ t ∈ negs, TupleLit t) →
-        (∃ t ∈ negs, IsH t) → ∀ (tag : String) (l : List Term), l ≠ [] → (∀ e ∈ l, Full e) →
-        Elixir.Module.Types.Descr.«tuple_line_empty?/4» (D (n + 2)) (.atom tag) (Term.list l) (Term.list negs) S =
+    theorem line_full (ops : ElemOk E K) (dops : ElemDiff E K) {m : Nat} (hm : K ≤ m) (S : List (Term × Term)) : ∀ negs : List Term,
+        (∀ t ∈ negs, TupleLit E t) →
+        (∃ t ∈ negs, IsH t) → ∀ (tag : String) (l : List Term), l ≠ [] → (∀ e ∈ l, Full E K S e) →
+        Elixir.Module.Types.Descr.«tuple_line_empty?/4» (D m) (.atom tag) (Term.list l) (Term.list negs) (.map S) =
           .ok (.atom "true") := by
       intro negs
       induction negs with
@@ -8951,11 +9672,11 @@ defmodule STTDescrProofsTest do
       | cons N rest ih =>
         intro lits ⟨t, mt, ht⟩ tag l ne hl
         obtain ⟨k, tag', nl, rfl, -, hnl⟩ := lits N List.mem_cons_self
-        have lits' : ∀ t ∈ rest, TupleLit t := fun t m => lits t (List.mem_cons_of_mem _ m)
+        have lits' : ∀ t ∈ rest, TupleLit E t := fun t m => lits t (List.mem_cons_of_mem _ m)
         rw [list_cons]
         by_cases top : tag' = "open" ∧ nl = []
         · obtain ⟨rfl, rfl⟩ := top
-          exact line_top _ _ _ k _ S
+          exact line_top _ _ _ k _ (.map S)
         have pos : 0 < l.length := List.length_pos_iff.mpr ne
         by_cases isH : IsH (.tuple #[.integer k, .atom tag', Term.list nl])
         · obtain ⟨k', e⟩ := isH
@@ -8966,7 +9687,7 @@ defmodule STTDescrProofsTest do
             | nil => simp [Term.list] at hlist
             | cons x xs => cases xs <;> simp_all [Term.list]
           subst htag hnl
-          rw [line_cons _ tag l k "open" [.atom "term"] rest S top (by simp)]
+          rw [line_cons _ tag l k "open" [.atom "term"] rest (.map S) top (by simp)]
           have cond : ¬((tag = "closed" ∧ l.length < [Term.atom "term"].length) ∨
               ("open" = "closed" ∧ [Term.atom "term"].length < l.length)) := by
             rintro (⟨-, h⟩ | ⟨h, -⟩)
@@ -8975,13 +9696,13 @@ defmodule STTDescrProofsTest do
           rw [ite_eq_right_of_eq_false _ _ (eq_false cond)]
           obtain ⟨ty, es, rfl⟩ : ∃ ty es, l = ty :: es := by cases l <;> simp_all
           have hty := hl ty List.mem_cons_self
-          have step := elements_step (D (n + 2)) [] (.atom tag) (ty :: es) (.atom "term") [] (Term.list rest) S ty es
+          have step := elements_step (D m) [] (.atom tag) (ty :: es) (.atom "term") [] (Term.list rest) (.map S) ty es
             (Or.inr rfl) ty (inter_term_right _ _)
-          have step' := (step.2 _ (lelem_full _ hty.1 hty.2 seen) (diff_term_right _ _)).1 (empty_none_seen _ _)
-          have arity : Elixir.Module.Types.Descr.«tuple_empty_arity?/7» (D (n + 2)) (.integer (ty :: es).length)
-              (.integer [Term.atom "term"].length) (.atom tag) (Term.list (ty :: es)) (.atom "open") (Term.list rest) S =
+          have step' := (step.2 _ (hty.2 m hm) (diff_term_right _ _)).1 (empty_none_seen _ _)
+          have arity : Elixir.Module.Types.Descr.«tuple_empty_arity?/7» (D m) (.integer (ty :: es).length)
+              (.integer [Term.atom "term"].length) (.atom tag) (Term.list (ty :: es)) (.atom "open") (Term.list rest) (.map S) =
               .ok (.atom "true") := by
-            refine arity_true _ _ _ tag _ "open" _ S ?_
+            refine arity_true _ _ _ tag _ "open" _ (.map S) ?_
             by_cases c : tag = "closed"
             · exact Or.inl c
             · exact Or.inr ⟨sizes_all _ _ _ _ _ (fun i le lt => by simp at lt le; omega) _ (Nat.le_refl _), Or.inl rfl⟩
@@ -8995,48 +9716,49 @@ defmodule STTDescrProofsTest do
           have notLast : ¬(tag = "open" ∧ tag' = "closed" ∧ rest = []) := by
             rintro ⟨-, -, rfl⟩
             simp at hrest
-          rw [line_cons _ tag l k tag' nl rest S top notLast]
+          rw [line_cons _ tag l k tag' nl rest (.map S) top notLast]
           by_cases cond : (tag = "closed" ∧ l.length < nl.length) ∨ (tag' = "closed" ∧ nl.length < l.length)
           · rw [ite_eq_left_of_eq_true _ _ (eq_true cond)]
             exact ih lits' hrest tag l ne hl
           rw [ite_eq_right_of_eq_false _ _ (eq_false cond),
-            elements_all n seen (.atom tag) (Term.list rest) (fun l' ne' hl' => ih lits' hrest tag l' ne' hl') nl hnl [] l
+            elements_all ops dops hm S (.atom tag) (Term.list rest) (fun l' ne' hl' => ih lits' hrest tag l' ne' hl') nl hnl [] l
               (by simp) hl,
-            arity_true _ _ _ tag _ tag' _ S ?_]
+            arity_true _ _ _ tag _ tag' _ (.map S) ?_]
           · exact andAlso_true
           by_cases c : tag = "closed"
           · exact Or.inl c
-          refine Or.inr ⟨sizes_all _ _ _ _ _ (fun i _ _ => ih lits' hrest "closed" _ (by simp [ne]) (full_fill hl _)) _
+          refine Or.inr ⟨sizes_all _ _ _ _ _ (fun i _ _ => ih lits' hrest "closed" _ (by simp [ne]) (full_fill ops S hl _)) _
             (Nat.le_refl _), ?_⟩
           by_cases o : tag' = "open"
           · exact Or.inl o
           · have closed : tag' = "closed" := by
               rcases lits (.tuple #[.integer k, .atom tag', Term.list nl]) List.mem_cons_self with ⟨_, _, _, e, g, -⟩
               simp at e; obtain ⟨-, rfl, -⟩ := e; rcases g with g | g <;> simp_all
-            refine Or.inr ⟨by simp [closed] at cond; omega, ih lits' hrest "open" _ (by simp [ne]) (full_fill hl _)⟩
+            refine Or.inr ⟨by simp [closed] at cond; omega, ih lits' hrest "open" _ (by simp [ne]) (full_fill ops S hl _)⟩
 
     /-- Any line minus negations that hold both `{}` and `{term, ...}` is empty. -/
-    theorem line_both (n : Nat) {S : Term} (seen : SeenOk S) (negs : List Term) (lits : ∀ t ∈ negs, TupleLit t)
+    theorem line_both (ops : ElemOk E K) (dops : ElemDiff E K) {m : Nat} (hm : K ≤ m) (S : List (Term × Term)) (negs : List Term)
+        (lits : ∀ t ∈ negs, TupleLit E t)
         (hE : ∃ t ∈ negs, IsE t) (hH : ∃ t ∈ negs, IsH t) (tag : String) (htag : tag = "open" ∨ tag = "closed")
-        (l : List Term) (hl : ∀ e ∈ l, Full e) :
-        Elixir.Module.Types.Descr.«tuple_line_empty?/4» (D (n + 2)) (.atom tag) (Term.list l) (Term.list negs) S =
+        (l : List Term) (hl : ∀ e ∈ l, Full E K S e) :
+        Elixir.Module.Types.Descr.«tuple_line_empty?/4» (D m) (.atom tag) (Term.list l) (Term.list negs) (.map S) =
           .ok (.atom "true") := by
       by_cases ne : l ≠ []
-      · exact line_full n seen negs lits hH tag l ne hl
+      · exact line_full ops dops hm S negs lits hH tag l ne hl
       simp only [ne_eq, Decidable.not_not] at ne
       subst ne
       rcases htag with rfl | rfl
-      case inr => exact line_closed_empty _ S negs lits hE
+      case inr => exact line_closed_empty _ (.map S) negs lits hE
       obtain ⟨N, rest, rfl⟩ : ∃ N rest, negs = N :: rest := by
         cases negs with
         | nil => obtain ⟨t, m, _⟩ := hE; simp at m
         | cons N rest => exact ⟨N, rest, rfl⟩
       obtain ⟨k, tag', nl, rfl, htag', hnl⟩ := lits _ List.mem_cons_self
-      have lits' : ∀ t ∈ rest, TupleLit t := fun t m => lits t (List.mem_cons_of_mem _ m)
+      have lits' : ∀ t ∈ rest, TupleLit E t := fun t m => lits t (List.mem_cons_of_mem _ m)
       rw [list_cons]
       by_cases top : tag' = "open" ∧ nl = []
       · obtain ⟨rfl, rfl⟩ := top
-        exact line_top _ _ _ k _ S
+        exact line_top _ _ _ k _ (.map S)
       have notE : IsE (.tuple #[.integer k, .atom tag', Term.list nl]) → tag' = "closed" ∧ nl = [] := by
         rintro ⟨k', e⟩
         simp at e
@@ -9061,28 +9783,28 @@ defmodule STTDescrProofsTest do
         obtain ⟨t, m, ht⟩ := hH
         simp at m; subst m
         have := (notH ht).1; simp at this
-      rw [line_cons _ "open" [] k tag' nl rest S top notLast,
+      rw [line_cons _ "open" [] k tag' nl rest (.map S) top notLast,
         ite_eq_right_of_eq_false _ _ (eq_false (by simp))]
       have closedLines : (∃ t ∈ rest, IsE t) → (∃ t ∈ rest, IsH t) → ∀ i, ([] : List Term).length ≤ i → i < nl.length →
-          Elixir.Module.Types.Descr.«tuple_line_empty?/4» (D (n + 2)) (.atom "closed")
-            (Term.list (([] : List Term) ++ List.replicate (i - ([] : List Term).length) (.atom "term"))) (Term.list rest) S =
+          Elixir.Module.Types.Descr.«tuple_line_empty?/4» (D m) (.atom "closed")
+            (Term.list (([] : List Term) ++ List.replicate (i - ([] : List Term).length) (.atom "term"))) (Term.list rest) (.map S) =
               .ok (.atom "true") := by
         intro hE' hH' i _ _
         cases i with
-        | zero => exact line_closed_empty _ S rest lits' hE'
-        | succ i => exact line_full n seen rest lits' hH' "closed" _ (by simp) (full_fill (by simp) _)
+        | zero => exact line_closed_empty _ (.map S) rest lits' hE'
+        | succ i => exact line_full ops dops hm S rest lits' hH' "closed" _ (by simp) (full_fill ops S (by simp) _)
       by_cases isH : IsH (.tuple #[.integer k, .atom tag', Term.list nl])
       · obtain ⟨rfl, rfl⟩ := notH isH
         have hE' := inRest hE fun e => by have := (notE e).1; simp at this
-        have step := elements_step (D (n + 2)) [] (.atom "open") [] (.atom "term") [] (Term.list rest) S (.atom "term") []
+        have step := elements_step (D m) [] (.atom "open") [] (.atom "term") [] (Term.list rest) (.map S) (.atom "term") []
           (Or.inl ⟨rfl, rfl, rfl⟩) (.atom "term") (inter_term_right _ _)
-        have step' := (step.2 _ (lelem_full _ (Or.inl rfl) (by simp) seen) (diff_term_right _ _)).1 (empty_none_seen _ _)
-        have arity : Elixir.Module.Types.Descr.«tuple_empty_arity?/7» (D (n + 2)) (.integer ([] : List Term).length)
-            (.integer [Term.atom "term"].length) (.atom "open") (Term.list []) (.atom "open") (Term.list rest) S =
+        have step' := (step.2 _ ((full_term ops S).2 m hm) (diff_term_right _ _)).1 (empty_none_seen _ _)
+        have arity : Elixir.Module.Types.Descr.«tuple_empty_arity?/7» (D m) (.integer ([] : List Term).length)
+            (.integer [Term.atom "term"].length) (.atom "open") (Term.list []) (.atom "open") (Term.list rest) (.map S) =
             .ok (.atom "true") :=
-          arity_true _ _ _ _ _ _ _ S (Or.inr ⟨sizes_all _ _ _ _ _ (fun i _ lt => by
+          arity_true _ _ _ _ _ _ _ (.map S) (Or.inr ⟨sizes_all _ _ _ _ _ (fun i _ lt => by
             cases i with
-            | zero => exact line_closed_empty _ S rest lits' hE'
+            | zero => exact line_closed_empty _ (.map S) rest lits' hE'
             | succ i => simp at lt) _ (Nat.le_refl _), Or.inl rfl⟩)
         simp only [Term.list] at step' arity ⊢
         rw [step', elements_done, arity]
@@ -9090,29 +9812,30 @@ defmodule STTDescrProofsTest do
       have hH' := inRest hH isH
       by_cases isE : IsE (.tuple #[.integer k, .atom tag', Term.list nl])
       · obtain ⟨rfl, rfl⟩ := notE isE
-        have arity : Elixir.Module.Types.Descr.«tuple_empty_arity?/7» (D (n + 2)) (.integer ([] : List Term).length)
-            (.integer ([] : List Term).length) (.atom "open") (Term.list []) (.atom "closed") (Term.list rest) S =
+        have arity : Elixir.Module.Types.Descr.«tuple_empty_arity?/7» (D m) (.integer ([] : List Term).length)
+            (.integer ([] : List Term).length) (.atom "open") (Term.list []) (.atom "closed") (Term.list rest) (.map S) =
             .ok (.atom "true") :=
-          arity_true _ _ _ _ _ _ _ S (Or.inr ⟨sizes_all _ _ _ _ _ (fun i _ lt => by simp at lt) _ (Nat.le_refl _),
-            Or.inr ⟨by simp, line_full n seen rest lits' hH' "open" _ (by simp) (full_fill (by simp) _)⟩⟩)
+          arity_true _ _ _ _ _ _ _ (.map S) (Or.inr ⟨sizes_all _ _ _ _ _ (fun i _ lt => by simp at lt) _ (Nat.le_refl _),
+            Or.inr ⟨by simp, line_full ops dops hm S rest lits' hH' "open" _ (by simp) (full_fill ops S (by simp) _)⟩⟩)
         rw [elements_done, arity]
         exact andAlso_true
       have hE' := inRest hE isE
-      rw [elements_all n seen (.atom "open") (Term.list rest) (fun l' ne' hl' => line_full n seen rest lits' hH' "open" l' ne' hl')
+      rw [elements_all ops dops hm S (.atom "open") (Term.list rest) (fun l' ne' hl' => line_full ops dops hm S rest lits' hH' "open" l' ne' hl')
           nl hnl [] [] (by simp) (by simp),
-        arity_true _ _ _ _ _ _ _ S (Or.inr ⟨sizes_all _ _ _ _ _ (closedLines hE' hH') _ (Nat.le_refl _), ?_⟩)]
+        arity_true _ _ _ _ _ _ _ (.map S) (Or.inr ⟨sizes_all _ _ _ _ _ (closedLines hE' hH') _ (Nat.le_refl _), ?_⟩)]
       · exact andAlso_true
       by_cases o : tag' = "open"
       · exact Or.inl o
-      · exact Or.inr ⟨by simp, line_full n seen rest lits' hH' "open" _ (by simp) (full_fill (by simp) _)⟩
+      · exact Or.inr ⟨by simp, line_full ops dops hm S rest lits' hH' "open" _ (by simp) (full_fill ops S (by simp) _)⟩
 
     /-! Tuple BDDs that no realizable valuation satisfies are empty. -/
 
-    theorem zip_len (depth : Nat) (l₁ : List Term) (h₁ : ∀ e ∈ l₁, ElemTerm e) :
-        ∀ (l₂ : List Term), (∀ e ∈ l₂, ElemTerm e) → ∀ acc : List Term, (∀ e ∈ acc, ElemTerm e) →
-        ∃ r : List Term, Elixir.Module.Types.Descr.«zip_intersection/4» (D (depth + 2)) (Term.list l₁) (Term.list l₂)
+    theorem zip_len (ops : ElemOk E K) {m : Nat} (hm : K + 1 ≤ m) (l₁ : List Term) (h₁ : ∀ e ∈ l₁, E e) :
+        ∀ (l₂ : List Term), (∀ e ∈ l₂, E e) → ∀ acc : List Term, (∀ e ∈ acc, E e) →
+        ∃ r : List Term, Elixir.Module.Types.Descr.«zip_intersection/4» (D m) (Term.list l₁) (Term.list l₂)
             (Term.list acc) (.function "Elixir.Module.Types.Descr" "bare_intersection" 2 #[]) = .ok (Term.list r) ∧
-          r.length = acc.length + max l₁.length l₂.length ∧ ∀ e ∈ r, ElemTerm e := by
+          r.length = acc.length + max l₁.length l₂.length ∧ ∀ e ∈ r, E e := by
+      obtain ⟨n, rfl, hn⟩ := succ_of_le hm
       induction l₁ with
       | nil =>
         intro l₂ h₂ acc ha
@@ -9133,7 +9856,7 @@ defmodule STTDescrProofsTest do
             · exact ha e (List.mem_reverse.mp m)
             · exact h₁ e m
         | cons y ys =>
-          obtain ⟨e, run, he⟩ := elem_inter depth (h₁ x List.mem_cons_self) (h₂ y List.mem_cons_self)
+          obtain ⟨e, he, run⟩ := ops.inter (h₁ x List.mem_cons_self) (h₂ y List.mem_cons_self)
           obtain ⟨r, runr, len, hr⟩ := ih (fun e me => h₁ e (List.mem_cons_of_mem _ me)) ys
             (fun e me => h₂ e (List.mem_cons_of_mem _ me)) (e :: acc) (fun e' me => by
               rcases List.mem_cons.mp me with rfl | me
@@ -9141,7 +9864,7 @@ defmodule STTDescrProofsTest do
               · exact ha e' me)
           refine ⟨r, ?_, by simp at len ⊢; omega, hr⟩
           unfold Elixir.Module.Types.Descr.«zip_intersection/4»
-          simp [Term.list, run]
+          simp [Term.list, run n hn]
           exact runr
 
     def Disj (t₁ t₂ : String) (n₁ n₂ : Nat) : Prop :=
@@ -9170,15 +9893,16 @@ defmodule STTDescrProofsTest do
     /-- Lines known to hold only tuples with elements. -/
     def PosH (pos : Term) : Prop := ∃ tag x xs, pos = .tuple #[tag, .cons x xs]
 
-    theorem inter_facts (depth : Nat) {pos lit : Term} (hp : TuplePos pos) (hl : TupleOk lit) :
-        Elixir.Module.Types.Descr.«tuple_line_intersection/2» (D (depth + 2)) pos lit = .ok (.atom "empty") ∨
-          ∃ pos', Elixir.Module.Types.Descr.«tuple_line_intersection/2» (D (depth + 2)) pos lit = .ok pos' ∧
-            TuplePos pos' ∧ (PosE pos → PosE pos') ∧ (PosH pos → PosH pos') ∧ (IsE' lit → PosE pos') ∧
+    theorem inter_facts (ops : ElemOk E K) {m : Nat} (hm : K + 1 ≤ m) {pos lit : Term} (hp : TuplePos E pos)
+        (hl : TupleOk E lit) :
+        Elixir.Module.Types.Descr.«tuple_line_intersection/2» (D m) pos lit = .ok (.atom "empty") ∨
+          ∃ pos', Elixir.Module.Types.Descr.«tuple_line_intersection/2» (D m) pos lit = .ok pos' ∧
+            TuplePos E pos' ∧ (PosE pos → PosE pos') ∧ (PosH pos → PosH pos') ∧ (IsE' lit → PosE pos') ∧
             (Sized lit → PosH pos') := by
       obtain ⟨t₁, l₁, rfl, g₁, e₁⟩ := hp
       obtain ⟨⟨k, t₂, l₂, rfl, g₂, e₂⟩, -⟩ := hl
       obtain ⟨v, hv, disj⟩ := strategy_spec t₁ t₂ g₁ g₂ l₁.length l₂.length
-      obtain ⟨r, zip, len, hr⟩ := zip_len depth l₁ e₁ l₂ e₂ [] (by simp)
+      obtain ⟨r, zip, len, hr⟩ := zip_len ops hm l₁ e₁ l₂ e₂ [] (by simp)
       simp only [List.length_nil, Nat.zero_add] at len
       unfold Elixir.Module.Types.Descr.«tuple_line_intersection/2»
       simp only [length_list, Lynx.Except.ok_bind, hv]
@@ -9189,7 +9913,7 @@ defmodule STTDescrProofsTest do
       right
       have nv : v ≠ .atom "disjoint" := fun e => d (disj.mp e)
       let tag : String := if t₁ = "open" ∧ t₂ = "open" then "open" else "closed"
-      have hr' : ∀ e ∈ r, ElemTerm e := hr
+      have hr' : ∀ e ∈ r, E e := hr
       refine ⟨.tuple #[.atom tag, Term.list r], ?_, ⟨tag, r, rfl, by simp only [tag]; split <;> simp, hr'⟩, ?_⟩
       · split
         · exact absurd rfl nv
@@ -9326,72 +10050,45 @@ defmodule STTDescrProofsTest do
     def Allowed (pos : Term) (negs : List Term) (e : Bool) : Prop :=
       (e = Bool.true → (¬∃ t ∈ negs, IsE t) ∧ ¬PosH pos) ∧ (e = Bool.false → (¬∃ t ∈ negs, IsH t) ∧ ¬PosE pos)
 
-    def isNone : Term → Bool
-      | .map [] => Bool.true
-      | _ => Bool.false
-
-    theorem isNone_iff (e : Term) : isNone e = Bool.true ↔ e = .map [] := by
-      unfold isNone
-      split <;> simp_all
-
-    theorem any1_list (d : Dispatcher) (f : Term) (res : Term → Bool) :
-        ∀ l : List Term, (∀ x ∈ l, d.pure f #[x] = .ok (boolAtom (res x))) →
-          Erlang.lists.«any_1/2» d f (Term.list l) = .ok (boolAtom (l.any res)) := by
-      intro l
-      induction l with
-      | nil => intro _; simp [Erlang.lists.«any_1/2», Term.list, boolAtom]
-      | cons x xs ih =>
-        intro hf
-        rw [Erlang.lists.«any_1/2».eq_def]
-        have hx := hf x List.mem_cons_self
-        have tail := ih fun y m => hf y (List.mem_cons_of_mem _ m)
-        cases h : res x <;> simp [Term.list, hx, h, boolAtom, tail]
-
-    theorem any_list (d : Dispatcher) (m nm : String) (caps : Array Term) (res : Term → Bool) (l : List Term)
-        (hf : ∀ x ∈ l, d.pure (.function m nm 1 caps) #[x] = .ok (boolAtom (res x))) :
-        Erlang.lists.«any/2» d (.function m nm 1 caps) (Term.list l) = .ok (boolAtom (l.any res)) := by
-      cases l with
-      | nil => simp [Erlang.lists.«any/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», Term.list, boolAtom]
-      | cons x xs =>
-        have hx := hf x List.mem_cons_self
-        have tail := any1_list d _ res xs fun y m => hf y (List.mem_cons_of_mem _ m)
-        cases h : res x <;>
-          simp [Erlang.lists.«any/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», Term.list, hx, h, boolAtom, tail]
-
     /-- Lines check first whether some element is empty. -/
-    theorem elements_check (n : Nat) {S : Term} (seen : SeenOk S) (l : List Term) (hl : ∀ e ∈ l, ElemTerm e) :
-        Elixir.Module.Types.Descr.«tuple_line_elements_empty?/2» (D (n + 2)) (Term.list l) S =
-          .ok (boolAtom (l.any isNone)) := by
-      simp only [Elixir.Module.Types.Descr.«tuple_line_elements_empty?/2», Lynx.Except.ok_bind]
-      refine any_list _ _ _ _ isNone l fun x m => ?_
-      rw [Erlang.program.«Elixir.Module.Types.Descr:-tuple_line_elements_empty?/2-fun-0-/1».pure]
-      simp only [Elixir.Module.Types.Descr.«-tuple_line_elements_empty?/2-fun-0-/2»]
-      by_cases e : x = .map []
-      · subst e; simpa [isNone, boolAtom] using empty_none_seen _ S
-      · have : isNone x = Bool.false := by
-          cases h : isNone x
-          · rfl
-          · exact absurd ((isNone_iff x).mp h) e
-        rw [this, lelem_full _ (elem_lelem (hl x m)) e seen]
-        rfl
+    theorem elements_check (ops : ElemOk E K) (S : List (Term × Term)) (l : List Term) (hl : ∀ e ∈ l, E e) :
+        ∃ b, (∀ m, K + 1 ≤ m → Elixir.Module.Types.Descr.«tuple_line_elements_empty?/2» (D m) (Term.list l) (.map S) =
+          .ok (boolAtom b)) ∧ (b = Bool.false → ∀ e ∈ l, Full E K S e) := by
+      have each : ∀ e ∈ l, ∃ b, ∀ m', K ≤ m' →
+          Elixir.Module.Types.Descr.«empty_seen?/2» (D m') e (.map S) = .ok (boolAtom b) :=
+        fun e me => ops.empty (hl e me) S
+      classical
+      let res : Term → Bool := fun e => if h : e ∈ l then Classical.choose (each e h) else Bool.false
+      have hres : ∀ e ∈ l, ∀ m', K ≤ m' →
+          Elixir.Module.Types.Descr.«empty_seen?/2» (D m') e (.map S) = .ok (boolAtom (res e)) := by
+        intro e me m' h
+        simp only [res, dif_pos me]
+        exact Classical.choose_spec (each e me) m' h
+      refine ⟨l.any res, fun m hm => ?_, fun no e me => ⟨hl e me, fun m' h => ?_⟩⟩
+      · obtain ⟨n, rfl, hn⟩ := succ_of_le hm
+        simp only [Elixir.Module.Types.Descr.«tuple_line_elements_empty?/2», Lynx.Except.ok_bind]
+        refine any_list _ _ _ _ res l fun x mx => ?_
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-tuple_line_elements_empty?/2-fun-0-/1».pure]
+        simp only [Elixir.Module.Types.Descr.«-tuple_line_elements_empty?/2-fun-0-/2»]
+        exact hres x mx n hn
+      · have := List.any_eq_false.mp no e me
+        rw [hres e me m' h]
+        simp_all [boolAtom]
 
     /-- A line that no tuple can realize is empty. -/
-    theorem top_case (n : Nat) {S : Term} (seen : SeenOk S) {tag : String} {l : List Term}
-        (g : tag = "open" ∨ tag = "closed") (el : ∀ e ∈ l, ElemTerm e) {negs : List Term} (lits : ∀ t ∈ negs, TupleLit t)
-        (none : ∀ e, ¬Allowed (.tuple #[.atom tag, Term.list l]) negs e) :
-        Elixir.Module.Types.Descr.«tuple_line_empty_seen?/4» (D (n + 2)) (.atom tag) (Term.list l) (Term.list negs) S =
+    theorem top_case (ops : ElemOk E K) (dops : ElemDiff E K) {m : Nat} (hm : K + 1 ≤ m) (S : List (Term × Term)) {tag : String}
+        {l : List Term} (g : tag = "open" ∨ tag = "closed") (el : ∀ e ∈ l, E e) {negs : List Term}
+        (lits : ∀ t ∈ negs, TupleLit E t) (none : ∀ e, ¬Allowed (.tuple #[.atom tag, Term.list l]) negs e) :
+        Elixir.Module.Types.Descr.«tuple_line_empty_seen?/4» (D m) (.atom tag) (Term.list l) (Term.list negs) (.map S) =
           .ok (.atom "true") := by
+      obtain ⟨b, check, full⟩ := elements_check ops S l el
       rw [Elixir.Module.Types.Descr.«tuple_line_empty_seen?/4».eq_def]
-      simp only [elements_check n seen l el, Lynx.Except.ok_bind]
-      by_cases some : l.any isNone = Bool.true
-      · simp [some, boolAtom, Lynx.Except.guard, Erlang.erlang.«/=/2», Lynx.Except.andAlso]
-      have no : l.any isNone = Bool.false := by cases h : l.any isNone <;> simp_all
-      have full : ∀ e ∈ l, Full e := by
-        intro e m
-        refine ⟨elem_lelem (el e m), fun h => ?_⟩
-        have := List.any_eq_false.mp no e m
-        rw [h] at this
-        simp [isNone] at this
+      simp only [check m hm, Lynx.Except.ok_bind]
+      cases b
+      rotate_left
+      · simp [boolAtom, Lynx.Except.guard, Erlang.erlang.«/=/2», Lynx.Except.andAlso]
+      have full := full rfl
+      have hm' : K ≤ m := by omega
       have A : (∃ t ∈ negs, IsE t) ∨ PosH (.tuple #[.atom tag, Term.list l]) := by
         refine Classical.byContradiction fun h => none Bool.true ⟨fun _ => ⟨fun x => h (Or.inl x), fun x => h (Or.inr x)⟩,
           fun e => by simp at e⟩
@@ -9416,26 +10113,26 @@ defmodule STTDescrProofsTest do
         cases negs with
         | nil => exact absurd rfl nonempty
         | cons x xs => simp [Erlang.erlang.«==/2», Term.list, Term.false]
-      simp [no, boolAtom, Lynx.Except.guard, Erlang.erlang.«/=/2», Lynx.Except.andAlso, notNil]
+      simp [boolAtom, Lynx.Except.guard, Erlang.erlang.«/=/2», Lynx.Except.andAlso, notNil]
       rcases A with hE | pa <;> rcases B with hH | pb
-      · exact line_both n seen negs lits hE hH tag g l full
+      · exact line_both ops dops hm' S negs lits hE hH tag g l full
       · obtain ⟨rfl, rfl⟩ := posE pb
-        exact line_closed_empty _ S negs lits hE
-      · exact line_full n seen negs lits hH tag l (posH pa) full
+        exact line_closed_empty _ (.map S) negs lits hE
+      · exact line_full ops dops hm' S negs lits hH tag l (posH pa) full
       · exact absurd (posE pb).2 (posH pa)
 
     /-- No valuation that a tuple allowed by a line realizes satisfies the BDD. -/
     def RealUnsat (pos : Term) (negs : List Term) (r : Term) : Prop :=
       ∀ e, Allowed pos negs e → ∀ ρ, Resp ρ → Consistent ρ e → eval ρ r = Bool.false
 
-    theorem isE_int {t : Term} (lit : TupleLit t) (h : IsE' t) : IsE t := by
+    theorem isE_int {t : Term} (lit : TupleLit E t) (h : IsE' t) : IsE t := by
       obtain ⟨k, tag, l, rfl, -, -⟩ := lit
       obtain ⟨k', e⟩ := h
       simp at e
       obtain ⟨-, rfl, e⟩ := e
       exact ⟨k, by rw [e]⟩
 
-    theorem isH_int {t : Term} (lit : TupleLit t) (h : IsH' t) : IsH t := by
+    theorem isH_int {t : Term} (lit : TupleLit E t) (h : IsH' t) : IsH t := by
       obtain ⟨k, tag, l, rfl, -, -⟩ := lit
       obtain ⟨k', e⟩ := h
       simp at e
@@ -9465,18 +10162,19 @@ defmodule STTDescrProofsTest do
     theorem flip_self (ρ : Term → Bool) (lit : Term) (v : Bool) : flip ρ lit v lit = v := by
       simp [BddProofs.flip, Std.ReflCmp.compare_self]
 
-    theorem tuple_bdd_real (n : Nat) {S : Term} (seen : SeenOk S) {ok : Term → Prop} {r : Term} (wr : Bdd ok r) :
-        (∀ t, ok t → TupleOk t) → ∀ pos negs, TuplePos pos → (∀ t ∈ negs, TupleLit t) → RealUnsat pos negs r →
-          Elixir.Module.Types.Descr.«tuple_bdd_empty?/4» (D (n + 2)) pos (Term.list negs) r S = .ok (.atom "true") := by
-      refine Bdd.induction (P := fun ok r => (∀ t, ok t → TupleOk t) → ∀ pos negs, TuplePos pos →
-        (∀ t ∈ negs, TupleLit t) → RealUnsat pos negs r →
-        Elixir.Module.Types.Descr.«tuple_bdd_empty?/4» (D (n + 2)) pos (Term.list negs) r S = .ok (.atom "true"))
+    theorem tuple_bdd_real (ops : ElemOk E K) (dops : ElemDiff E K) {m : Nat} (hm : K + 1 ≤ m) (S : List (Term × Term)) {ok : Term → Prop}
+        {r : Term} (wr : Bdd ok r) :
+        (∀ t, ok t → TupleOk E t) → ∀ pos negs, TuplePos E pos → (∀ t ∈ negs, TupleLit E t) → RealUnsat pos negs r →
+          Elixir.Module.Types.Descr.«tuple_bdd_empty?/4» (D m) pos (Term.list negs) r (.map S) = .ok (.atom "true") := by
+      refine Bdd.induction (P := fun ok r => (∀ t, ok t → TupleOk E t) → ∀ pos negs, TuplePos E pos →
+        (∀ t ∈ negs, TupleLit E t) → RealUnsat pos negs r →
+        Elixir.Module.Types.Descr.«tuple_bdd_empty?/4» (D m) pos (Term.list negs) r (.map S) = .ok (.atom "true"))
         ?_ ?_ ?_ ?_ ok r wr
       · intro ok _ pos negs hp lits g
         obtain ⟨tag, l, rfl, gt, el⟩ := hp
         rw [Elixir.Module.Types.Descr.«tuple_bdd_empty?/4».eq_def]
         simp only
-        exact top_case n seen gt el lits fun e allowed => by
+        exact top_case ops dops hm S gt el lits fun e allowed => by
           have := g e allowed (realize e) (realize_resp e) (realize_consistent e)
           simp at this
       · intro ok _ pos negs _ _ _
@@ -9485,19 +10183,19 @@ defmodule STTDescrProofsTest do
       · intro ok k x y okl okLit pos negs hp lits g
         have hl := okLit _ okl
         rw [Elixir.Module.Types.Descr.«tuple_bdd_empty?/4».eq_def]
-        rcases inter_facts n hp hl with empty | ⟨pos', run, hp', fE, fH, lE, lS⟩
+        rcases inter_facts ops hm hp hl with empty | ⟨pos', run, hp', fE, fH, lE, lS⟩
         · simp [empty]
         obtain ⟨tag, l, rfl, gt, el⟩ := hp'
         simp [run]
-        refine top_case n seen gt el lits fun e allowed => ?_
+        refine top_case ops dops hm S gt el lits fun e allowed => ?_
         have c := flip_pos (realize_consistent e) ⟨fun he => (allowed.1 he).2, fun he => (allowed.2 he).2⟩ lE lS
         have := g e ⟨fun he => ⟨(allowed.1 he).1, fun p => (allowed.1 he).2 (fH p)⟩,
           fun he => ⟨(allowed.2 he).1, fun p => (allowed.2 he).2 (fE p)⟩⟩ _ ((realize_resp e).flip _ _) c
         simp [flip_self] at this
       · intro ok h lit c u d leaf okl hc hu hd ic iu idd okLit pos negs hp lits g
         have hl := okLit _ okl
-        have okLit' : ∀ t, Above ok lit t → TupleOk t := fun t ht => okLit t ht.1
-        have dPart : Elixir.Module.Types.Descr.«tuple_bdd_empty?/4» (D (n + 2)) pos (Term.list (lit :: negs)) d S =
+        have okLit' : ∀ t, Above ok lit t → TupleOk E t := fun t ht => okLit t ht.1
+        have dPart : Elixir.Module.Types.Descr.«tuple_bdd_empty?/4» (D m) pos (Term.list (lit :: negs)) d (.map S) =
             .ok (.atom "true") := by
           refine idd okLit' pos (lit :: negs) hp (fun t m => ?_) fun e allowed ρ resp cons => ?_
           · rcases List.mem_cons.mp m with rfl | m
@@ -9526,7 +10224,7 @@ defmodule STTDescrProofsTest do
         rw [list_cons] at dPart
         obtain ⟨tag, l, rfl, gt, el⟩ := hp
         rw [Elixir.Module.Types.Descr.«tuple_bdd_empty?/4».eq_def]
-        rcases inter_facts n ⟨tag, l, rfl, gt, el⟩ hl with empty | ⟨pos2, run, hp2, fE, fH, lE, lS⟩
+        rcases inter_facts ops hm ⟨tag, l, rfl, gt, el⟩ hl with empty | ⟨pos2, run, hp2, fE, fH, lE, lS⟩
         · simp [empty, dPart, uPart, Lynx.Except.andAlso]
         have cRes := ic okLit' pos2 negs hp2 lits fun e allowed ρ resp cons => by
           have c' := flip_pos cons ⟨fun he => (allowed.1 he).2, fun he => (allowed.2 he).2⟩ lE lS
@@ -9539,36 +10237,772 @@ defmodule STTDescrProofsTest do
         simp [run, dPart, uPart, Lynx.Except.andAlso, cRes]
 
     /-- Tuple BDDs that no realizable valuation satisfies are empty. -/
-    theorem tuple_empty_real (n : Nat) {ok : Term → Prop} (okLit : ∀ t, ok t → TupleOk t) {r : Term} (wr : Bdd ok r)
+    theorem tuple_empty_real (ops : ElemOk E K) (dops : ElemDiff E K) {m : Nat} (hm : K + 1 ≤ m) {ok : Term → Prop}
+        (okLit : ∀ t, ok t → TupleOk E t) {r : Term} (wr : Bdd ok r)
         (unsat : ∀ ρ, Resp ρ → Real ρ → eval ρ r = Bool.false) :
-        Elixir.Module.Types.Descr.«tuple_empty?/2» (D (n + 2)) r (.map []) = .ok (.atom "true") := by
-      have fresh : ∀ kind : String, exactCompare (.cons (.atom kind) (.tuple #[.integer 61102469, .atom "open", .nil]))
-          (.cons (.atom "tuple") r) ≠ .eq := by
-        intro kind e
-        rw [exactCompare_cons] at e
-        simp [Ordering.then] at e
-        split at e
-        · rename_i hk
-          obtain ⟨b₀, b₁, b₂, rfl, -, e₁, e₂⟩ := tuple3_exact e
-          rw [(exactCompare_eq_atom b₁ "open").mp (Std.OrientedCmp.eq_symm e₁)] at wr
-          have : b₂ = .nil := by
-            have := Std.OrientedCmp.eq_symm e₂
-            cases b₂ <;> rw [exactCompare_eq_step] at this <;> simp [Compare.compareStep] at this
-          subst this
-          rcases wr.shape with h | h | ⟨k, x, y, h⟩ | ⟨_, _, _, _, _, h⟩ <;> simp at h
-          obtain ⟨rfl, rfl, rfl⟩ := h
-          exact (okLit _ (Bdd.leaf_iff.mp wr)).2 ⟨_, rfl⟩
-        · rename_i ne
-          simp at e
-          subst e
-          exact ne (by simp)
-      have seen := seenOk_one (.cons (.atom "tuple") r) (.atom "true") fresh
-      have run := tuple_bdd_real n seen wr okLit (.tuple #[.atom "open", .nil]) [] ⟨"open", [], rfl, Or.inl rfl, by simp⟩
+        Elixir.Module.Types.Descr.«tuple_empty?/2» (D m) r (.map []) = .ok (.atom "true") := by
+      have run := tuple_bdd_real ops dops hm [(.cons (.atom "tuple") r, .atom "true")] wr okLit (.tuple #[.atom "open", .nil]) [] ⟨"open", [], rfl, Or.inl rfl, by simp⟩
         (by simp) fun e _ ρ resp cons => unsat ρ resp ⟨e, cons⟩
       unfold Elixir.Module.Types.Descr.«tuple_empty?/2»
       simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», Term.true, Term.false,
         Erlang.maps.«put/3»]
       simpa [Term.list] using run
+
+    /-! Tuple types of element types decide their emptiness, whatever their lines. -/
+
+    /-- Computations returning the same Boolean at every call depth from `K`. -/
+    def BoolAt (K : Nat) (f : Nat → Except Exception Term) : Prop :=
+      ∃ b : Bool, ∀ m, K ≤ m → f m = .ok (boolAtom b)
+
+    theorem BoolAt.mono {K K' : Nat} {f : Nat → Except Exception Term} (h : BoolAt K f) (le : K ≤ K') : BoolAt K' f :=
+      let ⟨b, hb⟩ := h
+      ⟨b, fun m hm => hb m (by omega)⟩
+
+    @[simp] theorem andAlso_bool (a b : Bool) :
+        Lynx.Except.andAlso (.ok (boolAtom a)) (.ok (boolAtom b)) Bool.true = .ok (boolAtom (a && b)) := by
+      cases a <;> cases b <;> simp [boolAtom, Lynx.Except.andAlso]
+
+    theorem BoolAt.andAlso {K : Nat} {f g : Nat → Except Exception Term} (hf : BoolAt K f) (hg : BoolAt K g) :
+        BoolAt K (fun m => Lynx.Except.andAlso (f m) (g m) Bool.true) := by
+      obtain ⟨a, ha⟩ := hf
+      obtain ⟨b, hb⟩ := hg
+      exact ⟨a && b, fun m hm => by dsimp only; rw [ha m hm, hb m hm, andAlso_bool]⟩
+
+    theorem line_nil (d : Dispatcher) (tag l S : Term) :
+        Elixir.Module.Types.Descr.«tuple_line_empty?/4» d tag l .nil S = .ok (.atom "false") := by
+      rw [Elixir.Module.Types.Descr.«tuple_line_empty?/4».eq_def]
+      split <;> simp_all
+
+    theorem line_last (d : Dispatcher) (l : Term) (k : Int) (nl S : Term) :
+        Elixir.Module.Types.Descr.«tuple_line_empty?/4» d (.atom "open") l
+          (.cons (.tuple #[.integer k, .atom "closed", nl]) .nil) S = .ok (.atom "false") := by
+      rw [Elixir.Module.Types.Descr.«tuple_line_empty?/4».eq_def]
+      split <;> simp_all
+
+    /-- Checking each element of a line against a negated literal returns a Boolean. -/
+    theorem elements_total (ops : ElemOk E K) (dops : ElemDiff E K) (S : List (Term × Term)) (tag rest : Term)
+        (lineOk : ∀ l, (∀ e ∈ l, Full E K S e) →
+          BoolAt K (fun m => Elixir.Module.Types.Descr.«tuple_line_empty?/4» (D m) tag (Term.list l) rest (.map S))) :
+        ∀ nl : List Term, (∀ e ∈ nl, E e) → ∀ acc l : List Term, (∀ e ∈ acc, Full E K S e) →
+          (∀ e ∈ l, Full E K S e) →
+          BoolAt K (fun m => Elixir.Module.Types.Descr.«tuple_elements_empty?/6» (D m) (Term.list acc) tag
+            (Term.list l) (Term.list nl) rest (.map S)) := by
+      intro nl
+      induction nl with
+      | nil =>
+        intro _ acc l _ _
+        exact ⟨Bool.true, fun m _ => by simpa [Term.list, boolAtom] using elements_done (D m) _ _ _ _ _⟩
+      | cons nt nl ih =>
+        intro hnl acc l hacc hl
+        obtain ⟨ty, es, hshape, hty, hes⟩ : ∃ ty es, ((l = [] ∧ ty = .atom "term" ∧ es = []) ∨ l = ty :: es) ∧
+            Full E K S ty ∧ ∀ e ∈ es, Full E K S e := by
+          cases l with
+          | nil => exact ⟨_, _, Or.inl ⟨rfl, rfl, rfl⟩, full_term ops S, by simp⟩
+          | cons x xs => exact ⟨x, xs, Or.inr rfl, hl x List.mem_cons_self, fun e m => hl e (List.mem_cons_of_mem _ m)⟩
+        have hnt := hnl nt List.mem_cons_self
+        have hnl' : ∀ e ∈ nl, E e := fun e m => hnl e (List.mem_cons_of_mem _ m)
+        obtain ⟨meet, lmeet, hmeet⟩ := ops.inter hty.1 hnt
+        have step := fun m (hm : K ≤ m) =>
+          elements_step (D m) acc tag l nt nl rest (.map S) ty es hshape meet (hmeet m hm)
+        have allRev : ∀ x, Full E K S x → ∀ e ∈ acc.reverse ++ x :: es, Full E K S e := by
+          intro x hx e m
+          simp only [List.mem_append, List.mem_reverse, List.mem_cons] at m
+          rcases m with m | rfl | m
+          · exact hacc e m
+          · exact hx
+          · exact hes e m
+        rw [list_cons]
+        obtain ⟨bm, em⟩ := ops.empty lmeet S
+        cases bm
+        · have fullMeet : Full E K S meet := ⟨lmeet, fun m' h' => by simpa [boolAtom] using em m' h'⟩
+          obtain ⟨diff, ldiff, hdiff⟩ := dops.diff hty.1 hnt
+          obtain ⟨bd, ed⟩ := ops.empty ldiff S
+          cases bd
+          · have fullDiff : Full E K S diff := ⟨ldiff, fun m' h' => by simpa [boolAtom] using ed m' h'⟩
+            obtain ⟨b, hb⟩ := (lineOk _ (allRev diff fullDiff)).andAlso
+              (ih hnl' (meet :: acc) es (fun e m => by
+                rcases List.mem_cons.mp m with rfl | m
+                · exact fullMeet
+                · exact hacc e m) hes)
+            exact ⟨b, fun m hm => by
+              dsimp only
+              rw [((step m hm).2 _ (fullMeet.2 m hm) (hdiff m hm)).2 (fullDiff.2 m hm)]
+              exact hb m hm⟩
+          · obtain ⟨b, hb⟩ := ih hnl' (ty :: acc) es (fun e m => by
+              rcases List.mem_cons.mp m with rfl | m
+              · exact hty
+              · exact hacc e m) hes
+            exact ⟨b, fun m hm => by
+              dsimp only
+              rw [((step m hm).2 _ (fullMeet.2 m hm) (hdiff m hm)).1 (by simpa [boolAtom] using ed m hm)]
+              exact hb m hm⟩
+        · obtain ⟨b, hb⟩ := lineOk _ (allRev ty hty)
+          exact ⟨b, fun m hm => by dsimp only; rw [(step m hm).1 (by simpa [boolAtom] using em m hm)]; exact hb m hm⟩
+
+    /-- `tuple_empty_sizes?/5` returns a Boolean when each closed line does. -/
+    theorem sizes_total (S : List (Term × Term)) (l : List Term) (m' : Nat) (rest : Term)
+        (lines : ∀ i, l.length ≤ i → i < m' → BoolAt K (fun m => Elixir.Module.Types.Descr.«tuple_line_empty?/4» (D m)
+          (.atom "closed") (Term.list (l ++ List.replicate (i - l.length) (.atom "term"))) rest (.map S))) :
+        ∀ i, l.length ≤ i → BoolAt K (fun m => Elixir.Module.Types.Descr.«tuple_empty_sizes?/5» (D m) (.integer i)
+          (.integer m') (Term.list l) rest (.map S)) := by
+      intro i le
+      induction h : m' - i generalizing i with
+      | zero =>
+        refine ⟨Bool.true, fun m _ => ?_⟩
+        dsimp only
+        rw [Elixir.Module.Types.Descr.«tuple_empty_sizes?/5».eq_def]
+        have : ¬(i : Int) < m' := by omega
+        simp [Lynx.Except.guard, Int.compare_eq_lt, this, boolAtom]
+      | succ k ih =>
+        have lt : (i : Int) < m' := by omega
+        obtain ⟨b₁, h₁⟩ := lines i le (by omega)
+        obtain ⟨b₂, h₂⟩ := ih (i + 1) (by omega) (by omega)
+        refine ⟨b₁ && b₂, fun m hm => ?_⟩
+        dsimp only
+        have next := h₂ m hm
+        simp only [Int.natCast_add, Int.natCast_one] at next
+        rw [Elixir.Module.Types.Descr.«tuple_empty_sizes?/5».eq_def]
+        simp [Lynx.Except.guard, Int.compare_eq_lt, lt, fill_list l i le, h₁ m hm, next]
+
+    /-- `tuple_empty_arity?/7` returns a Boolean when its sizes and larger open line do. -/
+    theorem arity_total (S : List (Term × Term)) (m' : Nat) (tag : String) (l : List Term) (ntag : String) (rest : Term)
+        (fits : ntag = "open" ∨ tag = "closed" ∨ l.length ≤ m')
+        (sizes : BoolAt K (fun m => Elixir.Module.Types.Descr.«tuple_empty_sizes?/5» (D m) (.integer l.length)
+          (.integer m') (Term.list l) rest (.map S)))
+        (big : l.length ≤ m' + 1 → BoolAt K (fun m => Elixir.Module.Types.Descr.«tuple_line_empty?/4» (D m)
+          (.atom "open") (Term.list (l ++ List.replicate (m' + 1 - l.length) (.atom "term"))) rest (.map S))) :
+        BoolAt K (fun m => Elixir.Module.Types.Descr.«tuple_empty_arity?/7» (D m) (.integer l.length) (.integer m')
+          (.atom tag) (Term.list l) (.atom ntag) rest (.map S)) := by
+      by_cases c : tag = "closed"
+      · refine ⟨Bool.true, fun m _ => ?_⟩
+        dsimp only
+        rw [Elixir.Module.Types.Descr.«tuple_empty_arity?/7».eq_def]
+        simp [Erlang.erlang.«==/2», Lynx.Except.orElse, c, boolAtom]
+      obtain ⟨bs, hs⟩ := sizes
+      by_cases o : ntag = "open"
+      · refine ⟨bs, fun m hm => ?_⟩
+        dsimp only
+        rw [Elixir.Module.Types.Descr.«tuple_empty_arity?/7».eq_def]
+        cases bs <;> simp [Erlang.erlang.«==/2», Lynx.Except.orElse, c, hs m hm, Lynx.Except.andAlso, o, boolAtom]
+      · have le : l.length ≤ m' + 1 := by
+          rcases fits with h | h | h
+          · exact absurd h o
+          · exact absurd h c
+          · omega
+        obtain ⟨bl, hl⟩ := big le
+        have fill := fill_list l (m' + 1) le
+        simp only [Int.natCast_add, Int.natCast_one] at fill
+        refine ⟨bs && bl, fun m hm => ?_⟩
+        dsimp only
+        rw [Elixir.Module.Types.Descr.«tuple_empty_arity?/7».eq_def]
+        cases bs <;> cases bl <;>
+          simp [Erlang.erlang.«==/2», Lynx.Except.orElse, c, hs m hm, Lynx.Except.andAlso, o, fill, hl m hm, boolAtom]
+
+    /-- A line of nonempty element types minus any negated literals returns a Boolean. -/
+    theorem line_total (ops : ElemOk E K) (dops : ElemDiff E K) (S : List (Term × Term)) :
+        ∀ negs : List Term, (∀ t ∈ negs, TupleLit E t) → ∀ (tag : String) (l : List Term), (∀ e ∈ l, Full E K S e) →
+          BoolAt K (fun m => Elixir.Module.Types.Descr.«tuple_line_empty?/4» (D m) (.atom tag) (Term.list l)
+            (Term.list negs) (.map S)) := by
+      intro negs
+      induction negs with
+      | nil =>
+        intro _ tag l _
+        exact ⟨Bool.false, fun m _ => by simpa [Term.list, boolAtom] using line_nil (D m) _ _ _⟩
+      | cons N rest ih =>
+        intro lits tag l hl
+        obtain ⟨k, tag', nl, rfl, -, hnl⟩ := lits N List.mem_cons_self
+        have lits' : ∀ t ∈ rest, TupleLit E t := fun t m => lits t (List.mem_cons_of_mem _ m)
+        have ih' := ih lits'
+        rw [list_cons]
+        by_cases top : tag' = "open" ∧ nl = []
+        · obtain ⟨rfl, rfl⟩ := top
+          exact ⟨Bool.true, fun m _ => by simpa [boolAtom] using line_top (D m) _ _ k _ _⟩
+        by_cases last : tag = "open" ∧ tag' = "closed" ∧ rest = []
+        · obtain ⟨rfl, rfl, rfl⟩ := last
+          exact ⟨Bool.false, fun m _ => by simpa [boolAtom, Term.list] using line_last (D m) _ k _ _⟩
+        have hcons := fun m => line_cons (D m) tag l k tag' nl rest (.map S) top last
+        by_cases cond : (tag = "closed" ∧ l.length < nl.length) ∨ (tag' = "closed" ∧ nl.length < l.length)
+        · obtain ⟨b, hb⟩ := ih' tag l hl
+          exact ⟨b, fun m hm => by dsimp only; rw [hcons m, ite_eq_left_of_eq_true _ _ (eq_true cond)]; exact hb m hm⟩
+        · have elems := elements_total ops dops S (.atom tag) (Term.list rest) (fun l' hl' => ih' tag l' hl') nl hnl
+            [] l (by simp) hl
+          have arity := arity_total S nl.length tag l tag' (Term.list rest)
+            (by
+              by_cases o : tag' = "open"
+              · exact Or.inl o
+              by_cases c : tag = "closed"
+              · exact Or.inr (Or.inl c)
+              · refine Or.inr (Or.inr ?_)
+                have closed : tag' = "closed" := by
+                  rcases lits _ List.mem_cons_self with ⟨_, _, _, e, g, -⟩
+                  simp at e; obtain ⟨-, rfl, -⟩ := e; rcases g with g | g <;> simp_all
+                simp only [closed, true_and, not_or] at cond
+                omega)
+            (sizes_total S l nl.length (Term.list rest)
+              (fun i _ _ => ih' "closed" _ (full_fill ops S hl _)) l.length (Nat.le_refl _))
+            (fun _ => ih' "open" _ (full_fill ops S hl _))
+          obtain ⟨b, hb⟩ := elems.andAlso arity
+          exact ⟨b, fun m hm => by dsimp only; rw [hcons m, ite_eq_right_of_eq_false _ _ (eq_false cond)]; exact hb m hm⟩
+
+    /-- Lines of element types return a Boolean, whether or not some element is empty. -/
+    theorem line_seen_total (ops : ElemOk E K) (dops : ElemDiff E K) (S : List (Term × Term)) {tag : String}
+        {l : List Term} (el : ∀ e ∈ l, E e) {negs : List Term} (lits : ∀ t ∈ negs, TupleLit E t) :
+        BoolAt (K + 1) (fun m => Elixir.Module.Types.Descr.«tuple_line_empty_seen?/4» (D m) (.atom tag) (Term.list l)
+          (Term.list negs) (.map S)) := by
+      obtain ⟨b, check, full⟩ := elements_check ops S l el
+      cases b
+      · cases negs with
+        | nil =>
+          refine ⟨Bool.false, fun m hm => ?_⟩
+          dsimp only
+          rw [Elixir.Module.Types.Descr.«tuple_line_empty_seen?/4».eq_def]
+          simp [check m hm, boolAtom, Lynx.Except.guard, Erlang.erlang.«/=/2», Lynx.Except.andAlso, Term.list,
+            Erlang.erlang.«==/2»]
+        | cons N rest =>
+          obtain ⟨b, hb⟩ := line_total ops dops S (N :: rest) lits tag l (full rfl)
+          refine ⟨b, fun m hm => ?_⟩
+          dsimp only
+          have notNil : Erlang.erlang.«==/2» (Term.list (N :: rest)) .nil = .ok (.atom "false") := by
+            simp [Erlang.erlang.«==/2», Term.list, Term.false]
+          rw [Elixir.Module.Types.Descr.«tuple_line_empty_seen?/4».eq_def]
+          simp [check m hm, boolAtom, Lynx.Except.guard, Erlang.erlang.«/=/2», Lynx.Except.andAlso, notNil]
+          simpa [boolAtom] using hb m (by omega)
+      · refine ⟨Bool.true, fun m hm => ?_⟩
+        dsimp only
+        rw [Elixir.Module.Types.Descr.«tuple_line_empty_seen?/4».eq_def]
+        simp [check m hm, boolAtom, Lynx.Except.guard, Erlang.erlang.«/=/2», Lynx.Except.andAlso]
+
+    /-- Tuple BDDs of element types return a Boolean along every path. -/
+    theorem tuple_bdd_total (ops : ElemOk E K) (dops : ElemDiff E K) (S : List (Term × Term)) {ok : Term → Prop}
+        {r : Term} (wr : Bdd ok r) :
+        (∀ t, ok t → TupleLit E t) → ∀ pos negs, TuplePos E pos → (∀ t ∈ negs, TupleLit E t) →
+          BoolAt (K + 1) (fun m => Elixir.Module.Types.Descr.«tuple_bdd_empty?/4» (D m) pos (Term.list negs) r
+            (.map S)) := by
+      refine Bdd.induction (P := fun ok r => (∀ t, ok t → TupleLit E t) → ∀ pos negs, TuplePos E pos →
+        (∀ t ∈ negs, TupleLit E t) →
+        BoolAt (K + 1) (fun m => Elixir.Module.Types.Descr.«tuple_bdd_empty?/4» (D m) pos (Term.list negs) r (.map S)))
+        ?_ ?_ ?_ ?_ ok r wr
+      · intro ok _ pos negs hp lits
+        obtain ⟨tag, l, rfl, -, el⟩ := hp
+        obtain ⟨b, hb⟩ := line_seen_total (tag := tag) ops dops S el lits
+        refine ⟨b, fun m hm => ?_⟩
+        dsimp only
+        rw [Elixir.Module.Types.Descr.«tuple_bdd_empty?/4».eq_def]
+        exact hb m hm
+      · intro ok _ pos negs _ _
+        refine ⟨Bool.true, fun m _ => ?_⟩
+        dsimp only
+        rw [Elixir.Module.Types.Descr.«tuple_bdd_empty?/4».eq_def]
+        split <;> simp_all [boolAtom]
+      · intro ok k x y okl okLit pos negs hp lits
+        rcases line_ok ops hp (okLit _ okl) with empty | ⟨pos', hp', run⟩
+        · refine ⟨Bool.true, fun m hm => ?_⟩
+          dsimp only
+          rw [Elixir.Module.Types.Descr.«tuple_bdd_empty?/4».eq_def]
+          simp [empty m hm, boolAtom]
+        · obtain ⟨tag, l, rfl, -, el⟩ := hp'
+          obtain ⟨b, hb⟩ := line_seen_total (tag := tag) ops dops S el lits
+          refine ⟨b, fun m hm => ?_⟩
+          dsimp only
+          rw [Elixir.Module.Types.Descr.«tuple_bdd_empty?/4».eq_def]
+          simp [run m hm]
+          exact hb m hm
+      · intro ok h lit c u d leaf okl hc hu hd ic iu idd okLit pos negs hp lits
+        have okLit' : ∀ t, Above ok lit t → TupleLit E t := fun t ht => okLit t ht.1
+        have hl := okLit _ okl
+        obtain ⟨bd, hbd⟩ := idd okLit' pos (lit :: negs) hp (fun t m => by
+          rcases List.mem_cons.mp m with rfl | m
+          · exact hl
+          · exact lits t m)
+        obtain ⟨bu, hbu⟩ := iu okLit' pos negs hp lits
+        rcases line_ok ops hp hl with empty | ⟨pos', hp', run⟩
+        · refine ⟨bd && bu, fun m hm => ?_⟩
+          dsimp only
+          have dPart := hbd m hm
+          rw [list_cons] at dPart
+          obtain ⟨tag, l, rfl, -⟩ := hp
+          rw [Elixir.Module.Types.Descr.«tuple_bdd_empty?/4».eq_def]
+          cases bd <;> cases bu <;> simp [empty m hm, dPart, hbu m hm, Lynx.Except.andAlso, boolAtom]
+        · obtain ⟨bc, hbc⟩ := ic okLit' pos' negs hp' lits
+          refine ⟨bd && bc && bu, fun m hm => ?_⟩
+          dsimp only
+          have dPart := hbd m hm
+          rw [list_cons] at dPart
+          obtain ⟨tag, l, rfl, -⟩ := hp
+          obtain ⟨tag2, l2, rfl, -⟩ := hp'
+          rw [Elixir.Module.Types.Descr.«tuple_bdd_empty?/4».eq_def]
+          cases bd <;> cases bc <;> cases bu <;>
+            simp [run m hm, dPart, hbu m hm, hbc m hm, Lynx.Except.andAlso, boolAtom]
+
+    /-- Tuple types of element types decide their emptiness at every call depth from `K + 1`. -/
+    theorem tuple_total (ops : ElemOk E K) (dops : ElemDiff E K) (S : List (Term × Term)) {w : Term}
+        (field : TupleField E w) :
+        BoolAt (K + 1) (fun m => Elixir.Module.Types.Descr.«tuple_empty?/2» (D m) w (.map S)) := by
+      have wl : Bdd (TupleLit E) w := by
+        rcases field with ⟨k, rfl⟩ | wx
+        · exact Bdd.leaf_iff.mpr ⟨k, "open", [], rfl, Or.inl rfl, by simp⟩
+        · exact wx.mono fun _ h => h.1
+      by_cases seen : S.any (fun e => Term.exactCompare (.cons (.atom "tuple") w) e.1 == .eq) = Bool.true
+      · refine ⟨Bool.true, fun m _ => ?_⟩
+        dsimp only
+        unfold Elixir.Module.Types.Descr.«tuple_empty?/2»
+        simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», seen, Term.true, boolAtom]
+      · have fresh : S.any (fun e => Term.exactCompare (.cons (.atom "tuple") w) e.1 == .eq) = Bool.false := by
+          simpa using seen
+        obtain ⟨S', put⟩ : ∃ S', Erlang.maps.«put/3» (.cons (.atom "tuple") w) (.atom "true") (.map S) =
+            .ok (.map S') := by
+          simp [Erlang.maps.«put/3»]
+        obtain ⟨b, hb⟩ := tuple_bdd_total ops dops S' wl (fun _ h => h) (.tuple #[.atom "open", .nil]) []
+          ⟨"open", [], rfl, Or.inl rfl, by simp⟩ (by simp)
+        refine ⟨b, fun m hm => ?_⟩
+        dsimp only
+        unfold Elixir.Module.Types.Descr.«tuple_empty?/2»
+        simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», fresh, Term.true,
+          Term.false, put]
+        simpa [Term.list] using hb m hm
+
+    /-! Map types of element types decide their emptiness, whatever their lines. -/
+
+    /-- Computations returning the same Boolean, or throwing `:closed`, at every call depth from `K`. -/
+    def MeetAt (K : Nat) (f : Nat → Except Exception Term) : Prop :=
+      (∃ b : Bool, ∀ m, K ≤ m → f m = .ok (boolAtom b)) ∨
+        ∀ m, K ≤ m → f m = .error (Exception.throw (.atom "closed"))
+
+    theorem fieldsTerm_cons (x : Term × Term) (l : List (Term × Term)) :
+        fieldsTerm (x :: l) = .cons (.tuple #[x.1, x.2]) (fieldsTerm l) := rfl
+
+    theorem reverse_fields (acc t : List (Term × Term)) :
+        Erlang.lists.«reverse/2» (fieldsTerm acc) (fieldsTerm t) = .ok (fieldsTerm (acc.reverse ++ t)) := by
+      have := reverse_list (acc.map fun e => .tuple #[e.1, e.2]) (t.map fun e => .tuple #[e.1, e.2])
+      simpa [fieldsTerm, List.map_reverse] using this
+
+    theorem fields_append {a b : List (Term × Term)} (ha : ∀ e ∈ a, FieldValue E e.2)
+        (hb : ∀ e ∈ b, FieldValue E e.2) : ∀ e ∈ a.reverse ++ b, FieldValue E e.2 := by
+      intro e m
+      rcases List.mem_append.mp m with m | m
+      · exact ha e (List.mem_reverse.mp m)
+      · exact hb e m
+
+    @[simp] theorem not_boolAtom (b : Bool) : Erlang.erlang.«not/1» (boolAtom b) = .ok (boolAtom !b) := by
+      cases b <;> rfl
+
+    /-- `field_empty_seen?/3` of an element type returns a Boolean. -/
+    theorem field_empty_total (ops : ElemOk E K) (S : List (Term × Term)) {t : Term} (ht : E t) (o : Bool) :
+        ∃ b, (∀ m, K ≤ m → Elixir.Module.Types.Descr.«field_empty_seen?/3» (D m) t (boolAtom o) (.map S) =
+          .ok (boolAtom b)) := by
+      cases o
+      · obtain ⟨b, hb⟩ := ops.empty ht S
+        exact ⟨b, fun m hm => by
+          rw [Elixir.Module.Types.Descr.«field_empty_seen?/3».eq_def]
+          simpa [boolAtom] using hb m hm⟩
+      · exact ⟨Bool.false, fun m _ => by
+          rw [Elixir.Module.Types.Descr.«field_empty_seen?/3».eq_def]
+          simp [boolAtom]⟩
+
+    theorem key_field (tag : String) (tags : tag = "open" ∨ tag = "closed") (hterm : E (.atom "term"))
+        (hnone : E (.map [])) :
+        ∃ v, Elixir.Module.Types.Descr.«map_key_tag_to_field/1» (.atom tag) = .ok v ∧ FieldValue E v := by
+      rcases tags with rfl | rfl
+      · exact ⟨_, rfl, .atom "term", Bool.true, rfl, hterm⟩
+      · exact ⟨_, rfl, .map [], Bool.true, rfl, hnone⟩
+
+    /-- One field of `map_line_meet_empty?/10`. -/
+    theorem meet_field_total (ops : ElemOk E K) (dops : ElemDiff E K) (S : List (Term × Term)) (tag neg_tag : Term)
+        (negs : Term) (key : Term) {f₁ f₂ : Term} (h₁ : FieldValue E f₁) (h₂ : FieldValue E f₂)
+        (t₁ t₂ : Term) (t₁' : List (Term × Term)) (ht₁ : t₁ = fieldsTerm t₁') (ft₁ : ∀ e ∈ t₁', FieldValue E e.2)
+        (acc : List (Term × Term)) (hacc : ∀ e ∈ acc, FieldValue E e.2)
+        (lineOk : ∀ l, (∀ e ∈ l, FieldValue E e.2) →
+          BoolAt K (fun m => Elixir.Module.Types.Descr.«map_line_empty?/4» (D m) tag (fieldsTerm l) negs (.map S)))
+        (rec : ∀ acc : List (Term × Term), (∀ e ∈ acc, FieldValue E e.2) →
+          MeetAt K (fun m => Elixir.Module.Types.Descr.«map_line_meet_empty?/7» (D m) t₁ t₂ tag neg_tag
+            (fieldsTerm acc) negs (.map S))) :
+        MeetAt K (fun m => Elixir.Module.Types.Descr.«map_line_meet_empty?/10» (D m) key f₁ f₂ t₁ t₂ tag neg_tag
+          (fieldsTerm acc) negs (.map S)) := by
+      subst ht₁
+      obtain ⟨ty, o₁, rfl, hty⟩ := h₁
+      obtain ⟨nt, o₂, rfl, hnt⟩ := h₂
+      obtain ⟨meet, lmeet, hmeet⟩ := ops.inter hty hnt
+      obtain ⟨bm, em⟩ := field_empty_total ops S lmeet (o₁ && o₂)
+      obtain ⟨diff, ldiff, hdiff⟩ := dops.diff hty hnt
+      obtain ⟨bd, ed⟩ := field_empty_total ops S ldiff (o₁ && !o₂)
+      have newAcc : ∀ e ∈ (key, .tuple #[meet, boolAtom (o₁ && o₂)]) :: acc, FieldValue E e.2 :=
+        fields_cons (x := (key, .tuple #[meet, boolAtom (o₁ && o₂)])) ⟨meet, _, rfl, lmeet⟩ hacc
+      have unfold10 : ∀ m, K ≤ m →
+          Elixir.Module.Types.Descr.«map_line_meet_empty?/10» (D m) key (.tuple #[ty, boolAtom o₁])
+            (.tuple #[nt, boolAtom o₂]) (fieldsTerm t₁') t₂ tag neg_tag (fieldsTerm acc) negs (.map S) =
+          if bm then Elixir.Module.Types.Descr.«map_line_empty?/4» (D m) tag
+            (fieldsTerm (acc.reverse ++ (key, .tuple #[ty, boolAtom o₁]) :: t₁')) negs (.map S)
+          else if bd then Elixir.Module.Types.Descr.«map_line_meet_empty?/7» (D m) (fieldsTerm t₁') t₂ tag neg_tag
+            (fieldsTerm ((key, .tuple #[meet, boolAtom (o₁ && o₂)]) :: acc)) negs (.map S)
+          else Lynx.Except.andAlso (Elixir.Module.Types.Descr.«map_line_empty?/4» (D m) tag
+              (fieldsTerm (acc.reverse ++ (key, .tuple #[diff, boolAtom (o₁ && !o₂)]) :: t₁')) negs (.map S))
+            (Elixir.Module.Types.Descr.«map_line_meet_empty?/7» (D m) (fieldsTerm t₁') t₂ tag neg_tag
+              (fieldsTerm ((key, .tuple #[meet, boolAtom (o₁ && o₂)]) :: acc)) negs (.map S)) Bool.true := by
+        intro m hm
+        have e₁ := em m hm
+        have e₂ := ed m hm
+        have i₁ := hmeet m hm
+        have d₁ := hdiff m hm
+        have revD := reverse_fields acc ((key, .tuple #[diff, boolAtom (o₁ && !o₂)]) :: t₁')
+        have revT := reverse_fields acc ((key, .tuple #[ty, boolAtom o₁]) :: t₁')
+        simp only [fieldsTerm_cons] at revD revT ⊢
+        rw [Elixir.Module.Types.Descr.«map_line_meet_empty?/10».eq_def]
+        cases o₁ <;> cases o₂ <;> cases bm <;> cases bd <;> simp [boolAtom] at e₁ e₂ revD revT ⊢ <;>
+          simp [e₁, e₂, i₁, d₁, revD, revT, Lynx.Except.guard, isMember, Erlang.erlang.«not/1»]
+      cases bm
+      · cases bd
+        · obtain ⟨bl, hl⟩ := lineOk _ (fields_append hacc
+            (fields_cons (x := (key, .tuple #[diff, boolAtom (o₁ && !o₂)])) ⟨diff, _, rfl, ldiff⟩ ft₁))
+          cases bl
+          · refine Or.inl ⟨Bool.false, fun m hm => ?_⟩
+            dsimp only
+            rw [unfold10 m hm]
+            simp only [Bool.false_eq_true, ite_false]
+            have hlm := hl m hm
+            dsimp only at hlm
+            rw [hlm]
+            simp [boolAtom, Lynx.Except.andAlso]
+          · rcases rec _ newAcc with ⟨br, hr⟩ | hr
+            · refine Or.inl ⟨br, fun m hm => ?_⟩
+              dsimp only
+              rw [unfold10 m hm]
+              simp only [Bool.false_eq_true, ite_false]
+              have hlm := hl m hm
+              have hrm := hr m hm
+              dsimp only at hlm hrm
+              rw [hlm, hrm]
+              simp [boolAtom, Lynx.Except.andAlso]
+            · refine Or.inr fun m hm => ?_
+              dsimp only
+              rw [unfold10 m hm]
+              simp only [Bool.false_eq_true, ite_false]
+              have hlm := hl m hm
+              have hrm := hr m hm
+              dsimp only at hlm hrm
+              rw [hlm, hrm]
+              simp [boolAtom, Lynx.Except.andAlso]
+        · rcases rec _ newAcc with ⟨br, hr⟩ | hr
+          · exact Or.inl ⟨br, fun m hm => by dsimp only; rw [unfold10 m hm]; simpa using hr m hm⟩
+          · exact Or.inr fun m hm => by dsimp only; rw [unfold10 m hm]; simpa using hr m hm
+      · obtain ⟨bl, hl⟩ := lineOk _ (fields_append hacc
+          (fields_cons (x := (key, .tuple #[ty, boolAtom o₁])) ⟨ty, o₁, rfl, hty⟩ ft₁))
+        exact Or.inl ⟨bl, fun m hm => by dsimp only; rw [unfold10 m hm]; simpa using hl m hm⟩
+
+    theorem MeetAt.of_eq {K : Nat} {f g : Nat → Except Exception Term} (h : ∀ m, K ≤ m → f m = g m)
+        (hg : MeetAt K g) : MeetAt K f := by
+      rcases hg with ⟨b, hb⟩ | hb
+      · exact Or.inl ⟨b, fun m hm => by rw [h m hm]; exact hb m hm⟩
+      · exact Or.inr fun m hm => by rw [h m hm]; exact hb m hm
+
+    theorem tag_field (tag : String) (tags : tag = "open" ∨ tag = "closed") :
+        Elixir.Module.Types.Descr.«map_key_tag_to_field/1» (.atom tag) =
+          .ok (.tuple #[if tag = "open" then .atom "term" else .map [], .atom "true"]) := by
+      rcases tags with rfl | rfl <;> rfl
+
+    theorem tag_field_value (tag : String) (tags : tag = "open" ∨ tag = "closed") (hterm : E (.atom "term"))
+        (hnone : E (.map [])) : FieldValue E (.tuple #[if tag = "open" then .atom "term" else .map [], .atom "true"]) := by
+      rcases tags with rfl | rfl
+      · exact ⟨.atom "term", Bool.true, rfl, hterm⟩
+      · exact ⟨.map [], Bool.true, rfl, hnone⟩
+
+    /-- `map_line_meet_empty?/7` returns a Boolean or throws `:closed`. -/
+    theorem meet_total (ops : ElemOk E K) (dops : ElemDiff E K) (hnone : E (.map [])) (S : List (Term × Term))
+        (tag neg_tag : String) (gt : tag = "open" ∨ tag = "closed") (gn : neg_tag = "open" ∨ neg_tag = "closed")
+        (negs : Term)
+        (lineOk : ∀ l, (∀ e ∈ l, FieldValue E e.2) →
+          BoolAt K (fun m => Elixir.Module.Types.Descr.«map_line_empty?/4» (D m) (.atom tag) (fieldsTerm l) negs
+            (.map S))) :
+        ∀ N (l₁ l₂ : List (Term × Term)), l₁.length + l₂.length ≤ N → (∀ e ∈ l₁, FieldValue E e.2) →
+          (∀ e ∈ l₂, FieldValue E e.2) → ∀ acc : List (Term × Term), (∀ e ∈ acc, FieldValue E e.2) →
+          MeetAt K (fun m => Elixir.Module.Types.Descr.«map_line_meet_empty?/7» (D m) (fieldsTerm l₁) (fieldsTerm l₂)
+            (.atom tag) (.atom neg_tag) (fieldsTerm acc) negs (.map S)) := by
+      intro N
+      induction N with
+      | zero =>
+        intro l₁ l₂ size h₁ h₂ acc hacc
+        have : l₁ = [] ∧ l₂ = [] := by constructor <;> (apply List.eq_nil_of_length_eq_zero; omega)
+        obtain ⟨rfl, rfl⟩ := this
+        refine Or.inl ⟨Bool.true, fun m _ => ?_⟩
+        dsimp only
+        rw [Elixir.Module.Types.Descr.«map_line_meet_empty?/7».eq_def]
+        simp [fieldsTerm, Term.list, boolAtom]
+      | succ N ih =>
+        intro l₁ l₂ size h₁ h₂ acc hacc
+        match l₁, l₂ with
+        | [], [] =>
+          refine Or.inl ⟨Bool.true, fun m _ => ?_⟩
+          dsimp only
+          rw [Elixir.Module.Types.Descr.«map_line_meet_empty?/7».eq_def]
+          simp [fieldsTerm, Term.list, boolAtom]
+        | (k₁, f₁) :: xs, [] =>
+          have hxs : ∀ e ∈ xs, FieldValue E e.2 := fun e me => h₁ e (List.mem_cons_of_mem _ me)
+          have r := meet_field_total ops dops S (.atom tag) (.atom neg_tag) negs k₁ (h₁ _ List.mem_cons_self)
+            (tag_field_value neg_tag gn ops.term hnone) (fieldsTerm xs) (fieldsTerm []) xs rfl hxs acc hacc lineOk
+            (fun acc hacc => ih xs [] (by simp at size ⊢; omega) hxs (by simp) acc hacc)
+          refine r.of_eq fun m _ => ?_
+          rw [Elixir.Module.Types.Descr.«map_line_meet_empty?/7».eq_def]
+          simp [fieldsTerm, Term.list, tag_field neg_tag gn]
+        | [], (k₂, f₂) :: ys =>
+          have hys : ∀ e ∈ ys, FieldValue E e.2 := fun e me => h₂ e (List.mem_cons_of_mem _ me)
+          have r := meet_field_total ops dops S (.atom tag) (.atom neg_tag) negs k₂
+            (tag_field_value tag gt ops.term hnone) (h₂ _ List.mem_cons_self) (fieldsTerm []) (fieldsTerm ys) []
+            rfl (by simp) acc hacc lineOk
+            (fun acc hacc => ih [] ys (by simp at size ⊢; omega) (by simp) hys acc hacc)
+          refine r.of_eq fun m _ => ?_
+          rw [Elixir.Module.Types.Descr.«map_line_meet_empty?/7».eq_def]
+          simp [fieldsTerm, Term.list, tag_field tag gt]
+        | (k₁, f₁) :: xs, (k₂, f₂) :: ys =>
+          have hxs : ∀ e ∈ xs, FieldValue E e.2 := fun e me => h₁ e (List.mem_cons_of_mem _ me)
+          have hys : ∀ e ∈ ys, FieldValue E e.2 := fun e me => h₂ e (List.mem_cons_of_mem _ me)
+          obtain ⟨t₁, o₁, rfl, ht₁⟩ := h₁ _ List.mem_cons_self
+          obtain ⟨t₂, o₂, rfl, ht₂⟩ := h₂ _ List.mem_cons_self
+          have fv₁ : FieldValue E (.tuple #[t₁, boolAtom o₁]) := ⟨t₁, o₁, rfl, ht₁⟩
+          have fv₂ : FieldValue E (.tuple #[t₂, boolAtom o₂]) := ⟨t₂, o₂, rfl, ht₂⟩
+          simp only [List.length_cons] at size
+          rcases cmp : Term.compare k₁ k₂
+          · rcases gn with rfl | rfl
+            · have r := ih xs ((k₂, .tuple #[t₂, boolAtom o₂]) :: ys) (by simp; omega) hxs h₂
+                ((k₁, .tuple #[t₁, boolAtom o₁]) :: acc) (fields_cons fv₁ hacc)
+              refine r.of_eq fun m _ => ?_
+              rw [Elixir.Module.Types.Descr.«map_line_meet_empty?/7».eq_def]
+              simp [fieldsTerm, Term.list, Lynx.Except.guard, Erlang.erlang.«==/2», Erlang.erlang.«</2», cmp]
+            · cases o₁
+              · refine Or.inr fun m _ => ?_
+                dsimp only
+                rw [Elixir.Module.Types.Descr.«map_line_meet_empty?/7».eq_def]
+                simp [fieldsTerm, Term.list, Lynx.Except.guard, Erlang.erlang.«==/2», Erlang.erlang.«</2», cmp, boolAtom, Lynx.Except.andAlso,
+                  Erlang.erlang.«not/1»]
+              · have r := meet_field_total ops dops S (.atom tag) (.atom "closed") negs k₁ fv₁
+                  (tag_field_value "closed" (Or.inr rfl) ops.term hnone) (fieldsTerm xs)
+                  (fieldsTerm ((k₂, .tuple #[t₂, boolAtom o₂]) :: ys)) xs rfl hxs acc hacc lineOk
+                  (fun acc hacc => ih xs _ (by simp; omega) hxs h₂ acc hacc)
+                refine r.of_eq fun m _ => ?_
+                rw [Elixir.Module.Types.Descr.«map_line_meet_empty?/7».eq_def]
+                simp [fieldsTerm, Term.list, Lynx.Except.guard, Erlang.erlang.«==/2», Erlang.erlang.«</2», cmp, boolAtom, Lynx.Except.andAlso,
+                  Erlang.erlang.«not/1», tag_field]
+          · have r := meet_field_total ops dops S (.atom tag) (.atom neg_tag) negs k₁ fv₁ fv₂ (fieldsTerm xs)
+              (fieldsTerm ys) xs rfl hxs acc hacc lineOk (fun acc hacc => ih xs ys (by omega) hxs hys acc hacc)
+            refine r.of_eq fun m _ => ?_
+            rw [Elixir.Module.Types.Descr.«map_line_meet_empty?/7».eq_def]
+            have notLt : ¬(Term.compare k₁ k₂).isLT = Bool.true := by simp [cmp]
+            have notGt : ¬(Term.compare k₁ k₂).isGT = Bool.true := by simp [cmp]
+            simp [fieldsTerm, Term.list, Lynx.Except.guard, Erlang.erlang.«==/2», Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp]
+          · rcases gt with rfl | rfl
+            · have r := meet_field_total ops dops S (.atom "open") (.atom neg_tag) negs k₂
+                (tag_field_value "open" (Or.inl rfl) ops.term hnone) fv₂
+                (fieldsTerm ((k₁, .tuple #[t₁, boolAtom o₁]) :: xs)) (fieldsTerm ys) _ rfl h₁ acc hacc lineOk
+                (fun acc hacc => ih _ ys (by simp; omega) h₁ hys acc hacc)
+              refine r.of_eq fun m _ => ?_
+              rw [Elixir.Module.Types.Descr.«map_line_meet_empty?/7».eq_def]
+              simp [fieldsTerm, Term.list, Lynx.Except.guard, Erlang.erlang.«==/2», Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom,
+                Lynx.Except.andAlso, Erlang.erlang.«not/1», tag_field]
+            · cases o₂
+              · refine Or.inr fun m _ => ?_
+                dsimp only
+                rw [Elixir.Module.Types.Descr.«map_line_meet_empty?/7».eq_def]
+                simp [fieldsTerm, Term.list, Lynx.Except.guard, Erlang.erlang.«==/2», Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom,
+                  Lynx.Except.andAlso, Erlang.erlang.«not/1»]
+              · have r := meet_field_total ops dops S (.atom "closed") (.atom neg_tag) negs k₂
+                  (tag_field_value "closed" (Or.inr rfl) ops.term hnone) fv₂
+                  (fieldsTerm ((k₁, .tuple #[t₁, boolAtom o₁]) :: xs)) (fieldsTerm ys) _ rfl h₁ acc hacc lineOk
+                  (fun acc hacc => ih _ ys (by simp; omega) h₁ hys acc hacc)
+                refine r.of_eq fun m _ => ?_
+                rw [Elixir.Module.Types.Descr.«map_line_meet_empty?/7».eq_def]
+                simp [fieldsTerm, Term.list, Lynx.Except.guard, Erlang.erlang.«==/2», Erlang.erlang.«</2», Erlang.erlang.«>/2», cmp, boolAtom,
+                  Lynx.Except.andAlso, Erlang.erlang.«not/1», tag_field]
+
+    /-- A map line of element types minus any negated literals returns a Boolean. -/
+    theorem map_line_total (ops : ElemOk E K) (dops : ElemDiff E K) (hnone : E (.map [])) (S : List (Term × Term)) :
+        ∀ negs : List Term, (∀ t ∈ negs, MapLit E t) → ∀ (tag : String), (tag = "open" ∨ tag = "closed") →
+          ∀ l : List (Term × Term), (∀ e ∈ l, FieldValue E e.2) →
+          BoolAt K (fun m => Elixir.Module.Types.Descr.«map_line_empty?/4» (D m) (.atom tag) (fieldsTerm l)
+            (Term.list negs) (.map S)) := by
+      intro negs
+      induction negs with
+      | nil =>
+        intro _ tag _ l _
+        refine ⟨Bool.false, fun m _ => ?_⟩
+        dsimp only
+        rw [Elixir.Module.Types.Descr.«map_line_empty?/4».eq_def]
+        simp [Term.list, boolAtom]
+      | cons N rest ih =>
+        intro lits tag gt l hl
+        obtain ⟨k, ntag, nl, rfl, gn, hnl⟩ := lits N List.mem_cons_self
+        have lits' : ∀ t ∈ rest, MapLit E t := fun t m => lits t (List.mem_cons_of_mem _ m)
+        have ih' := ih lits'
+        rw [list_cons]
+        by_cases top : ntag = "open" ∧ nl = []
+        · obtain ⟨rfl, rfl⟩ := top
+          refine ⟨Bool.true, fun m _ => ?_⟩
+          dsimp only
+          rw [Elixir.Module.Types.Descr.«map_line_empty?/4».eq_def]
+          simp [fieldsTerm, Term.list, boolAtom]
+        by_cases skip : tag = "open" ∧ ntag = "closed"
+        · obtain ⟨rfl, rfl⟩ := skip
+          obtain ⟨b, hb⟩ := ih' "open" (Or.inl rfl) l hl
+          refine ⟨b, fun m hm => ?_⟩
+          dsimp only
+          rw [Elixir.Module.Types.Descr.«map_line_empty?/4».eq_def]
+          simpa using hb m hm
+        have notTop : fieldsTerm nl ≠ .nil ∨ ntag ≠ "open" := by
+          by_cases o : ntag = "open"
+          · left
+            intro e
+            apply top
+            refine ⟨o, ?_⟩
+            cases nl <;> simp_all [fieldsTerm, Term.list]
+          · exact Or.inr o
+        obtain ⟨bk, hk⟩ := ih' tag gt l hl
+        have meet := meet_total ops dops hnone S tag ntag gt gn (Term.list rest) (ih' tag gt) _ l nl
+          (Nat.le_refl _) hl hnl [] (by simp)
+        rcases meet with ⟨b, hb⟩ | hb
+        · refine ⟨b, fun m hm => ?_⟩
+          have hbm := hb m hm
+          dsimp only at hbm ⊢
+          rw [Elixir.Module.Types.Descr.«map_line_empty?/4».eq_def]
+          rcases gt with rfl | rfl <;> rcases gn with rfl | rfl <;>
+            simp_all [Elixir.Module.Types.Descr.«map_check_domain_keys?/3», Lynx.Except.guard, isMember,
+              Erlang.erlang.«==/2», Lynx.Except.orElse, fieldsTerm, Term.list]
+        · refine ⟨bk, fun m hm => ?_⟩
+          have hbm := hb m hm
+          have hkm := hk m hm
+          dsimp only at hbm hkm ⊢
+          rw [Elixir.Module.Types.Descr.«map_line_empty?/4».eq_def]
+          rcases gt with rfl | rfl <;> rcases gn with rfl | rfl <;>
+            simp_all [Elixir.Module.Types.Descr.«map_check_domain_keys?/3», Lynx.Except.guard, isMember,
+              Erlang.erlang.«==/2», Lynx.Except.orElse, fieldsTerm, Term.list, Lynx.Except.tryWith,
+              Lynx.Exception.classTerm, Lynx.Exception.reason]
+
+    /-- `init_map_line_empty?/4` first checks whether some required field is empty. -/
+    theorem init_total (ops : ElemOk E K) (dops : ElemDiff E K) (hnone : E (.map [])) (S : List (Term × Term))
+        {tag : String} (gt : tag = "open" ∨ tag = "closed") {l : List (Term × Term)} (hl : ∀ e ∈ l, FieldValue E e.2)
+        {negs : List Term} (lits : ∀ t ∈ negs, MapLit E t) :
+        BoolAt (K + 1) (fun m => Elixir.Module.Types.Descr.«init_map_line_empty?/4» (D m) (.atom tag) (fieldsTerm l)
+          (Term.list negs) (.map S)) := by
+      have each : ∀ x ∈ l.map (fun e => Term.tuple #[e.1, e.2]), ∃ b, ∀ m', K ≤ m' →
+          Elixir.Module.Types.Descr.«-init_map_line_empty?/4-fun-0-/2» (D m') (.map S) x = .ok (boolAtom b) := by
+        intro x mx
+        obtain ⟨e, me, rfl⟩ := List.mem_map.mp mx
+        obtain ⟨t, o, ho, ht⟩ := hl e me
+        rw [ho]
+        cases o
+        · obtain ⟨b, hb⟩ := ops.empty ht S
+          exact ⟨b, fun m' h => by
+            simp only [Elixir.Module.Types.Descr.«-init_map_line_empty?/4-fun-0-/2», boolAtom]
+            simpa [boolAtom] using hb m' h⟩
+        · exact ⟨Bool.false, fun m' _ => by
+            simp [Elixir.Module.Types.Descr.«-init_map_line_empty?/4-fun-0-/2», boolAtom]⟩
+      classical
+      let res : Term → Bool := fun x =>
+        if h : x ∈ l.map (fun e => Term.tuple #[e.1, e.2]) then Classical.choose (each x h) else Bool.false
+      have hres : ∀ x ∈ l.map (fun e => Term.tuple #[e.1, e.2]), ∀ m', K ≤ m' →
+          Elixir.Module.Types.Descr.«-init_map_line_empty?/4-fun-0-/2» (D m') (.map S) x = .ok (boolAtom (res x)) := by
+        intro x mx m' h
+        simp only [res, dif_pos mx]
+        exact Classical.choose_spec (each x mx) m' h
+      obtain ⟨bl, hbl⟩ := map_line_total ops dops hnone S negs lits tag gt l hl
+      refine ⟨(l.map fun e => Term.tuple #[e.1, e.2]).any res || bl, fun m hm => ?_⟩
+      obtain ⟨n, rfl, hn⟩ := succ_of_le hm
+      have anyRun := any_list (D (n + 1)) _ _ _ res _ fun x mx => by
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-init_map_line_empty?/4-fun-0-/1».pure]
+        exact hres x mx n hn
+      have line := hbl (n + 1) (by omega)
+      dsimp only at line ⊢
+      rw [Elixir.Module.Types.Descr.«init_map_line_empty?/4».eq_def]
+      simp only [fieldsTerm] at anyRun line ⊢
+      simp only [pure_bind, anyRun]
+      cases (l.map fun e => Term.tuple #[e.1, e.2]).any res
+      · simpa [boolAtom, Lynx.Except.orElse] using line
+      · simp [boolAtom, Lynx.Except.orElse]
+
+    /-- Map BDDs of element types return a Boolean along every path. -/
+    theorem map_bdd_total (ops : ElemOk E K) (dops : ElemDiff E K) (hnone : E (.map [])) (S : List (Term × Term))
+        {ok : Term → Prop} {r : Term} (wr : Bdd ok r) :
+        (∀ t, ok t → MapLit E t) → ∀ pos negs, MapPos E pos → (∀ t ∈ negs, MapLit E t) →
+          BoolAt (K + 2) (fun m => Elixir.Module.Types.Descr.«map_bdd_empty?/4» (D m) pos (Term.list negs) r
+            (.map S)) := by
+      refine Bdd.induction (P := fun ok r => (∀ t, ok t → MapLit E t) → ∀ pos negs, MapPos E pos →
+        (∀ t ∈ negs, MapLit E t) →
+        BoolAt (K + 2) (fun m => Elixir.Module.Types.Descr.«map_bdd_empty?/4» (D m) pos (Term.list negs) r (.map S)))
+        ?_ ?_ ?_ ?_ ok r wr
+      · intro ok _ pos negs hp lits
+        obtain ⟨tag, l, rfl, gt, hl⟩ := hp
+        obtain ⟨b, hb⟩ := init_total ops dops hnone S gt hl lits
+        refine ⟨b, fun m hm => ?_⟩
+        dsimp only
+        rw [Elixir.Module.Types.Descr.«map_bdd_empty?/4».eq_def]
+        exact hb m (by omega)
+      · intro ok _ pos negs _ _
+        refine ⟨Bool.true, fun m _ => ?_⟩
+        dsimp only
+        rw [Elixir.Module.Types.Descr.«map_bdd_empty?/4».eq_def]
+        split <;> simp_all [boolAtom]
+      · intro ok k x y okl okLit pos negs hp lits
+        rcases map_line_ok ops S hp (okLit _ okl) with empty | ⟨pos', hp', run⟩
+        · refine ⟨Bool.true, fun m hm => ?_⟩
+          dsimp only
+          rw [Elixir.Module.Types.Descr.«map_bdd_empty?/4».eq_def]
+          simp [empty m hm, boolAtom]
+        · obtain ⟨tag, l, rfl, gt, hl⟩ := hp'
+          obtain ⟨b, hb⟩ := init_total ops dops hnone S gt hl lits
+          refine ⟨b, fun m hm => ?_⟩
+          dsimp only
+          rw [Elixir.Module.Types.Descr.«map_bdd_empty?/4».eq_def]
+          simp [run m hm]
+          exact hb m (by omega)
+      · intro ok h lit c u d leaf okl hc hu hd ic iu idd okLit pos negs hp lits
+        have okLit' : ∀ t, Above ok lit t → MapLit E t := fun t ht => okLit t ht.1
+        have hl := okLit _ okl
+        obtain ⟨bd, hbd⟩ := idd okLit' pos (lit :: negs) hp (fun t m => by
+          rcases List.mem_cons.mp m with rfl | m
+          · exact hl
+          · exact lits t m)
+        obtain ⟨bu, hbu⟩ := iu okLit' pos negs hp lits
+        rcases map_line_ok ops S hp hl with empty | ⟨pos', hp', run⟩
+        · refine ⟨bd && bu, fun m hm => ?_⟩
+          have dPart := hbd m hm
+          rw [list_cons] at dPart
+          obtain ⟨tag, l, rfl, -⟩ := hp
+          dsimp only
+          rw [Elixir.Module.Types.Descr.«map_bdd_empty?/4».eq_def]
+          cases bd <;> cases bu <;> simp [empty m hm, dPart, hbu m hm, Lynx.Except.andAlso, boolAtom]
+        · obtain ⟨bc, hbc⟩ := ic okLit' pos' negs hp' lits
+          refine ⟨bd && bc && bu, fun m hm => ?_⟩
+          have dPart := hbd m hm
+          rw [list_cons] at dPart
+          obtain ⟨tag, l, rfl, -⟩ := hp
+          obtain ⟨tag2, l2, rfl, -⟩ := hp'
+          dsimp only
+          rw [Elixir.Module.Types.Descr.«map_bdd_empty?/4».eq_def]
+          cases bd <;> cases bc <;> cases bu <;>
+            simp [run m hm, dPart, hbu m hm, hbc m hm, Lynx.Except.andAlso, boolAtom]
+
+    /-- Map types of element types decide their emptiness at every call depth from `K + 2`. -/
+    theorem map_total (ops : ElemOk E K) (dops : ElemDiff E K) (hnone : E (.map [])) (S : List (Term × Term))
+        {w : Term} (field : MapField E w) :
+        BoolAt (K + 2) (fun m => Elixir.Module.Types.Descr.«map_empty?/2» (D m) w (.map S)) := by
+      have wl : Bdd (MapLit E) w := by
+        rcases field with ⟨k, rfl⟩ | wx
+        · exact Bdd.leaf_iff.mpr ⟨k, "open", [], rfl, Or.inl rfl, by simp⟩
+        · exact wx.mono fun _ h => h.1
+      by_cases seen : S.any (fun e => Term.exactCompare (.cons (.atom "map") w) e.1 == .eq) = Bool.true
+      · refine ⟨Bool.true, fun m _ => ?_⟩
+        dsimp only
+        unfold Elixir.Module.Types.Descr.«map_empty?/2»
+        simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», seen, Term.true, boolAtom]
+      · have fresh : S.any (fun e => Term.exactCompare (.cons (.atom "map") w) e.1 == .eq) = Bool.false := by
+          simpa using seen
+        obtain ⟨S', put⟩ : ∃ S', Erlang.maps.«put/3» (.cons (.atom "map") w) (.atom "true") (.map S) =
+            .ok (.map S') := by
+          simp [Erlang.maps.«put/3»]
+        obtain ⟨b, hb⟩ := map_bdd_total ops dops hnone S' wl (fun _ h => h) (.tuple #[.atom "open", .nil]) []
+          ⟨"open", [], rfl, Or.inl rfl, by simp⟩ (by simp)
+        refine ⟨b, fun m hm => ?_⟩
+        dsimp only
+        unfold Elixir.Module.Types.Descr.«map_empty?/2»
+        simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», fresh, Term.true,
+          Term.false, put]
+        simpa [Term.list] using hb m hm
 
     /-! Subtyping, field by field. -/
 
@@ -9960,7 +11394,7 @@ defmodule STTDescrProofsTest do
     theorem neg_drop {a b : Bool} (sem : a = !b) (drop : a = Bool.false) : b = Bool.true := by
       subst drop; cases b <;> simp_all
 
-    theorem mapOk_not : ∀ t, MapOk t → ¬IsTop t := fun _ h => h.2
+    theorem mapOk_not : ∀ t, MapOk E t → ¬IsTop t := fun _ h => h.2
 
     theorem map_difference_neg {x : Term} (nt : ∀ k, x ≠ .tuple #[k, .atom "open", .nil]) (arr : Array Term)
         (hx : x = .tuple arr) {top : Int} :
@@ -9973,9 +11407,9 @@ defmodule STTDescrProofsTest do
       · next heq => rw [heq]
       · next h₁ h₂ => exact absurd rfl (h₂ _ _ rfl)
 
-    theorem map_neg_spec {x : Term} (fx : OField MapOk x) :
+    theorem map_neg_spec {x : Term} (fx : OField (MapOk E) x) :
         ∃ w, Elixir.Module.Types.Descr.«map_difference/2» (.tuple #[.integer 61102469, .atom "open", .nil]) x = .ok w ∧
-          (kept (.atom "map", w) = Bool.true → OField MapOk w ∧ ∀ ρ, Resp ρ → denO w ρ = !denO x ρ) ∧
+          (kept (.atom "map", w) = Bool.true → OField (MapOk E) w ∧ ∀ ρ, Resp ρ → denO w ρ = !denO x ρ) ∧
           (kept (.atom "map", w) = Bool.false → ∀ ρ, Resp ρ → denO x ρ = Bool.true) := by
       rcases fx with ⟨k, rfl⟩ | wx
       · exact ⟨.atom "bdd_bot", by unfold Elixir.Module.Types.Descr.«map_difference/2»; rfl, fun k => by simp [kept] at k,
@@ -10007,15 +11441,15 @@ defmodule STTDescrProofsTest do
       · exfalso; simp_all
       · rfl
 
-    theorem mapOk_lit : ∀ t, MapOk t → MapLit t := fun _ h => h.1.lit
+    theorem mapOk_lit : ∀ t, MapOk E t → MapLit E t := fun _ h => h.1
 
-    theorem map_sub_spec (n : Nat) {a : Term} (fa : OField MapOk a) (b : Option Term)
-        (fb : ∀ y, b = some y → OField MapOk y)
+    theorem map_sub_spec (ops : ElemOk E K) {m : Nat} (hm : K + 2 ≤ m) {a : Term} (fa : OField (MapOk E) a) (b : Option Term)
+        (fb : ∀ y, b = some y → OField (MapOk E) y)
         (incl : ∀ ρ, Resp ρ → denO a ρ = Bool.true → b.elim Bool.false (denO · ρ) = Bool.true) :
         (∀ y, b = some y → ∃ w, Elixir.Module.Types.Descr.«map_difference/2» a y = .ok w ∧
           (w = .integer 0 ∨ w = .atom "bdd_bot" ∨
-            Elixir.Module.Types.Descr.«map_empty?/2» (D (n + 3)) w (.map []) = .ok (.atom "true"))) ∧
-        (b = Option.none → Elixir.Module.Types.Descr.«map_empty?/2» (D (n + 3)) a (.map []) = .ok (.atom "true")) := by
+            Elixir.Module.Types.Descr.«map_empty?/2» (D m) w (.map []) = .ok (.atom "true"))) ∧
+        (b = Option.none → Elixir.Module.Types.Descr.«map_empty?/2» (D m) a (.map []) = .ok (.atom "true")) := by
       refine ⟨fun y hb => ?_, fun hb => ?_⟩
       · subst hb
         rcases fb y rfl with ⟨k', rfl⟩ | wy
@@ -10034,10 +11468,10 @@ defmodule STTDescrProofsTest do
           all_goals
             obtain ⟨w, run, keep, sem⟩ := neg_ok wy
             refine ⟨w, by rw [map_difference_neg ny _ rfl, run], Or.inr (Or.inr ?_)⟩
-            exact map_empty_unsat (keep _ wy) mapOk_lit (fun ρ resp => by rw [sem ρ resp, taut ρ resp]; rfl) n []
+            exact map_empty_unsat ops (keep _ wy) mapOk_lit (fun ρ resp => by rw [sem ρ resp, taut ρ resp]; rfl) m [] hm
         · obtain ⟨w, run, keep, sem⟩ := diff_ok wa wy
           refine ⟨w, by rw [map_difference_bdd (not_top_of_ok wa mapOk_not) ny, run], Or.inr (Or.inr ?_)⟩
-          refine map_empty_unsat (keep _ wa wy) mapOk_lit (fun ρ resp => ?_) n []
+          refine map_empty_unsat ops (keep _ wa wy) mapOk_lit (fun ρ resp => ?_) m [] hm
           rw [sem ρ resp]
           cases e : eval ρ a
           · rfl
@@ -10048,7 +11482,7 @@ defmodule STTDescrProofsTest do
         rcases fa with ⟨k, rfl⟩ | wa
         · have := incl _ (resp_const Bool.true) (denO_top _ _)
           simp [Option.elim] at this
-        · refine map_empty_unsat wa mapOk_lit (fun ρ resp => ?_) n []
+        · refine map_empty_unsat ops wa mapOk_lit (fun ρ resp => ?_) m [] hm
           cases e : eval ρ a
           · rfl
           · have := incl ρ resp (by rw [denO_bdd mapOk_not wa, e])
@@ -10077,7 +11511,7 @@ defmodule STTDescrProofsTest do
       · unfold Elixir.Module.Types.Descr.«tuple_intersection/2»
         split <;> simp_all
 
-    theorem tupleOk_not : ∀ t, TupleOk t → ¬IsTop t := fun _ h => h.2
+    theorem tupleOk_not : ∀ t, TupleOk E t → ¬IsTop t := fun _ h => h.2
 
     /-- The difference of the top tuple and `{}`: tuples with at least one element. -/
     theorem tuple_minus_empty (k : Int) : ∃ H : Int, Elixir.Module.Types.Descr.«tuple_difference/2»
@@ -10114,9 +11548,9 @@ defmodule STTDescrProofsTest do
       · exfalso; simp_all
       · rfl
 
-    theorem tuple_neg_spec {x : Term} (fx : OField TupleOk x) :
+    theorem tuple_neg_spec (hterm : E (.atom "term")) {x : Term} (fx : OField (TupleOk E) x) :
         ∃ w, Elixir.Module.Types.Descr.«tuple_difference/2» (.tuple #[.integer 61102469, .atom "open", .nil]) x = .ok w ∧
-          (kept (.atom "tuple", w) = Bool.true → OField TupleOk w ∧ ∀ ρ, Resp ρ → Real ρ → denO w ρ = !denO x ρ) ∧
+          (kept (.atom "tuple", w) = Bool.true → OField (TupleOk E) w ∧ ∀ ρ, Resp ρ → Real ρ → denO w ρ = !denO x ρ) ∧
           (kept (.atom "tuple", w) = Bool.false → ∀ ρ, Resp ρ → Real ρ → denO x ρ = Bool.true) := by
       rcases fx with ⟨k, rfl⟩ | wx
       · exact ⟨.atom "bdd_bot", by unfold Elixir.Module.Types.Descr.«tuple_difference/2»; rfl, fun k => by simp [kept] at k,
@@ -10135,8 +11569,9 @@ defmodule STTDescrProofsTest do
       · by_cases special : a = .atom "closed" ∧ b = .nil
         · obtain ⟨rfl, rfl⟩ := special
           obtain ⟨H, run⟩ := tuple_minus_empty k
-          have lit : TupleOk (.tuple #[.integer H, .atom "open", Term.list [.atom "term"]]) :=
-            ⟨⟨H, "open", [.atom "term"], rfl, Or.inl rfl, by simp [ElemTerm]⟩, fun ⟨_, e⟩ => by simp [Term.list] at e⟩
+          have lit : TupleOk E (.tuple #[.integer H, .atom "open", Term.list [.atom "term"]]) :=
+            ⟨⟨H, "open", [.atom "term"], rfl, Or.inl rfl, fun e me => by rw [List.mem_singleton.mp me]; exact hterm⟩,
+              fun ⟨_, e⟩ => by simp [Term.list] at e⟩
           refine ⟨_, run, fun _ => ⟨Or.inr (Bdd.leaf_iff.mpr lit), fun ρ _ ⟨e, c⟩ => ?_⟩, fun k => by simp [kept] at k⟩
           simp only [denO, isOpenTop, Term.list, eval_leaf, Bool.false_or]
           rw [c.2.1 _ ⟨_, rfl⟩, c.1 _ ⟨_, rfl⟩]
@@ -10155,13 +11590,14 @@ defmodule STTDescrProofsTest do
 
     theorem real_realize (e : Bool) : Real (realize e) := ⟨e, realize_consistent e⟩
 
-    theorem tuple_sub_spec (n : Nat) {a : Term} (fa : OField TupleOk a) (b : Option Term)
-        (fb : ∀ y, b = some y → OField TupleOk y)
+    theorem tuple_sub_spec (ops : ElemOk E K) (dops : ElemDiff E K) {m : Nat} (hm : K + 1 ≤ m) {a : Term} (fa : OField (TupleOk E) a)
+        (b : Option Term)
+        (fb : ∀ y, b = some y → OField (TupleOk E) y)
         (incl : ∀ ρ, Resp ρ → Real ρ → denO a ρ = Bool.true → b.elim Bool.false (denO · ρ) = Bool.true) :
         (∀ y, b = some y → ∃ w, Elixir.Module.Types.Descr.«tuple_difference/2» a y = .ok w ∧
           (w = .integer 0 ∨ w = .atom "bdd_bot" ∨
-            Elixir.Module.Types.Descr.«tuple_empty?/2» (D (n + 2)) w (.map []) = .ok (.atom "true"))) ∧
-        (b = Option.none → Elixir.Module.Types.Descr.«tuple_empty?/2» (D (n + 2)) a (.map []) = .ok (.atom "true")) := by
+            Elixir.Module.Types.Descr.«tuple_empty?/2» (D m) w (.map []) = .ok (.atom "true"))) ∧
+        (b = Option.none → Elixir.Module.Types.Descr.«tuple_empty?/2» (D m) a (.map []) = .ok (.atom "true")) := by
       have realF := realize_resp Bool.false
       have consF := realize_consistent Bool.false
       refine ⟨fun y hb => ?_, fun hb => ?_⟩
@@ -10194,18 +11630,18 @@ defmodule STTDescrProofsTest do
             have ne : ∀ k'', Term.tuple #[.integer k', x', z'] ≠ .tuple #[k'', .atom "closed", .nil] := by
               intro k'' e; simp at e; exact special ⟨e.2.1, e.2.2⟩
             obtain ⟨w, run, keep, sem⟩ := neg_ok wy
-            refine ⟨w, ?_, Or.inr (Or.inr (tuple_empty_real n (fun _ h => h) (keep _ wy) fun ρ resp real => ?_))⟩
+            refine ⟨w, ?_, Or.inr (Or.inr (tuple_empty_real ops dops hm (fun _ h => h) (keep _ wy) fun ρ resp real => ?_))⟩
             · rw [tuple_difference_neg ny ne _ rfl, run]
             · rw [sem ρ resp, taut ρ resp real]; rfl
           · obtain ⟨w, run, keep, sem⟩ := neg_ok wy
-            refine ⟨w, ?_, Or.inr (Or.inr (tuple_empty_real n (fun _ h => h) (keep _ wy) fun ρ resp real => ?_))⟩
+            refine ⟨w, ?_, Or.inr (Or.inr (tuple_empty_real ops dops hm (fun _ h => h) (keep _ wy) fun ρ resp real => ?_))⟩
             · rw [tuple_difference_neg ny (fun _ e => by simp at e) _ rfl, run]
             · rw [sem ρ resp, taut ρ resp real]; rfl
         · have na := not_top_of_ok wa tupleOk_not
           by_cases special : (∃ k e, a = .tuple #[k, .atom "open", e]) ∧ ∃ k, y = .tuple #[k, .atom "closed", .nil]
           · obtain ⟨⟨k, e, rfl⟩, ⟨k', hy⟩⟩ := special
             have := yE k' hy
-            obtain ⟨⟨k₀, tag, l, eq, -, -⟩, notTop⟩ : TupleOk (.tuple #[k, .atom "open", e]) := by
+            obtain ⟨⟨k₀, tag, l, eq, -, -⟩, notTop⟩ : TupleOk E (.tuple #[k, .atom "open", e]) := by
               rcases wa.shape with h | h | ⟨k₁, x₁, y₁, h⟩ | ⟨_, _, _, _, _, h⟩ <;> simp at h
               obtain ⟨rfl, rfl, rfl⟩ := h
               exact Bdd.leaf_iff.mp wa
@@ -10218,7 +11654,7 @@ defmodule STTDescrProofsTest do
             simp [r] at this
           obtain ⟨w, run, keep, sem⟩ := diff_ok wa wy
           refine ⟨w, by rw [tuple_difference_bdd na ny special, run],
-            Or.inr (Or.inr (tuple_empty_real n (fun _ h => h) (keep _ wa wy) fun ρ resp real => ?_))⟩
+            Or.inr (Or.inr (tuple_empty_real ops dops hm (fun _ h => h) (keep _ wa wy) fun ρ resp real => ?_))⟩
           rw [sem ρ resp]
           cases e : eval ρ a
           · rfl
@@ -10229,7 +11665,7 @@ defmodule STTDescrProofsTest do
         rcases fa with ⟨k, rfl⟩ | wa
         · have := incl _ realF (real_realize _) (denO_top _ _)
           simp [Option.elim] at this
-        · refine tuple_empty_real n (fun _ h => h) wa fun ρ resp real => ?_
+        · refine tuple_empty_real ops dops hm (fun _ h => h) wa fun ρ resp real => ?_
           cases e : eval ρ a
           · rfl
           · have := incl ρ resp real (by rw [denO_bdd tupleOk_not wa, e])
@@ -10425,24 +11861,25 @@ defmodule STTDescrProofsTest do
         ∃ M, es.foldlM (fun acc entry =>
             (Dispatch.dispatch (D n) (.function "Elixir.Module.Types.Descr" "-fun_repr_difference/2-fun-0-" 3 #[])
               #[entry.1, entry.2, acc] : Except Exception Term)) (.map acc) = .ok (.map M) ∧
-          ∀ q, mapLookup M q =
+          (∀ q, mapLookup M q =
             match es.find? (fun e => decide (exactCompare q e.1 = .eq)) with
             | some e => (mapLookup acc e.1).bind fun v₁ =>
                 if kept (e.1, g e.1 v₁ e.2) then some (g e.1 v₁ e.2) else none
-            | none => mapLookup acc q := by
+            | none => mapLookup acc q) ∧ M = es.foldl (differenceStep g) acc := by
       induction es generalizing acc with
-      | nil => exact ⟨acc, rfl, fun q => rfl⟩
+      | nil => exact ⟨acc, rfl, fun q => rfl, rfl⟩
       | cons e rest ih =>
         have apart := List.pairwise_cons.mp distinct
         have step : (Dispatch.dispatch (D n) (.function "Elixir.Module.Types.Descr" "-fun_repr_difference/2-fun-0-" 3 #[])
             #[e.1, e.2, .map acc] : Except Exception Term) = .ok (.map (differenceStep g acc e)) := by
           rw [dispatch_except, Erlang.program.«Elixir.Module.Types.Descr:-fun_repr_difference/2-fun-0-/3».pure,
             repr_diff_step g acc e.1 e.2 (calls e (List.mem_cons_self ..))]
-        obtain ⟨M, run, look⟩ := ih (differenceStep g acc e) apart.2 (by
+        obtain ⟨M, run, look, explicit⟩ := ih (differenceStep g acc e) apart.2 (by
           intro e' member v₁ found
           rw [step_other g acc e e'.1 (fun same => apart.1 e' member (Std.OrientedCmp.eq_symm same))] at found
           exact calls e' (List.mem_cons_of_mem _ member) v₁ found)
-        refine ⟨M, by simp only [List.foldlM_cons, step, Lynx.Except.ok_bind]; exact run, fun q => ?_⟩
+        refine ⟨M, by simp only [List.foldlM_cons, step, Lynx.Except.ok_bind]; exact run, fun q => ?_,
+          by rw [explicit]; rfl⟩
         rw [look q]
         by_cases same : exactCompare q e.1 = .eq
         · have absent : rest.find? (fun p => decide (exactCompare q p.1 = .eq)) = none := by
@@ -10462,15 +11899,19 @@ defmodule STTDescrProofsTest do
 
     def evalR (R : List (Term × Term)) (a : Term) (ρ : Term → Bool) : Bool := (mapLookup R a).elim Bool.false (eval ρ)
 
-    def AllBdd (R : List (Term × Term)) : Prop := ∀ q v, mapLookup R q = some v → Bdd (fun _ => True) v
+    /-- Maps whose values are BDDs, with literals of each key satisfying `P`. -/
+    def AllBddP (P : Term → Term → Prop) (R : List (Term × Term)) : Prop :=
+      ∀ q v, mapLookup R q = some v → Bdd (P q) v
 
-    theorem repr_union_sem (n : Nat) {R₁ R₂ : List (Term × Term)} (b₁ : AllBdd R₁) (b₂ : AllBdd R₂) :
-        ∃ M, Elixir.Module.Types.Descr.«fun_repr_union/2» (D (n + 1)) (.map R₁) (.map R₂) = .ok (.map M) ∧ AllBdd M ∧
+    abbrev AllBdd (R : List (Term × Term)) : Prop := AllBddP (fun _ _ => True) R
+
+    theorem repr_union_sem (n : Nat) {P : Term → Term → Prop} {R₁ R₂ : List (Term × Term)} (b₁ : AllBddP P R₁) (b₂ : AllBddP P R₂) :
+        ∃ M, Elixir.Module.Types.Descr.«fun_repr_union/2» (D (n + 1)) (.map R₁) (.map R₂) = .ok (.map M) ∧ AllBddP P M ∧
           ∀ a ρ, Resp ρ → evalR M a ρ = (evalR R₁ a ρ || evalR R₂ a ρ) := by
       let g : Term → Term → Term → Term := fun _ v₁ v₂ =>
         match Elixir.Module.Types.Descr.«bdd_union/2» v₁ v₂ with | .ok w => w | .error _ => .nil
-      have gspec : ∀ k v₁ v₂, Bdd (fun _ => True) v₁ → Bdd (fun _ => True) v₂ →
-          Elixir.Module.Types.Descr.«bdd_union/2» v₁ v₂ = .ok (g k v₁ v₂) ∧ Bdd (fun _ => True) (g k v₁ v₂) ∧
+      have gspec : ∀ k v₁ v₂, Bdd (P k) v₁ → Bdd (P k) v₂ →
+          Elixir.Module.Types.Descr.«bdd_union/2» v₁ v₂ = .ok (g k v₁ v₂) ∧ Bdd (P k) (g k v₁ v₂) ∧
             ∀ ρ, Resp ρ → eval ρ (g k v₁ v₂) = (eval ρ v₁ || eval ρ v₂) := by
         intro k v₁ v₂ w₁ w₂
         obtain ⟨r, run, keep, sem⟩ := union_ok w₁ w₂
@@ -10508,13 +11949,13 @@ defmodule STTDescrProofsTest do
         · simp [h₂]
         · simp [h₁]
 
-    theorem repr_inter_sem (n : Nat) {R₁ R₂ : List (Term × Term)} (b₁ : AllBdd R₁) (b₂ : AllBdd R₂) :
+    theorem repr_inter_sem (n : Nat) {P : Term → Term → Prop} {R₁ R₂ : List (Term × Term)} (b₁ : AllBddP P R₁) (b₂ : AllBddP P R₂) :
         ∃ M, Elixir.Module.Types.Descr.«fun_repr_intersection/2» (D (n + 1)) (.map R₁) (.map R₂) = .ok (.map M) ∧
-          AllBdd M ∧ ∀ a ρ, Resp ρ → evalR M a ρ = (evalR R₁ a ρ && evalR R₂ a ρ) := by
+          AllBddP P M ∧ ∀ a ρ, Resp ρ → evalR M a ρ = (evalR R₁ a ρ && evalR R₂ a ρ) := by
       let g : Term → Term → Term → Term := fun _ v₁ v₂ =>
         match Elixir.Module.Types.Descr.«bdd_intersection/2» v₁ v₂ with | .ok w => w | .error _ => .nil
-      have gspec : ∀ k v₁ v₂, Bdd (fun _ => True) v₁ → Bdd (fun _ => True) v₂ →
-          Elixir.Module.Types.Descr.«bdd_intersection/2» v₁ v₂ = .ok (g k v₁ v₂) ∧ Bdd (fun _ => True) (g k v₁ v₂) ∧
+      have gspec : ∀ k v₁ v₂, Bdd (P k) v₁ → Bdd (P k) v₂ →
+          Elixir.Module.Types.Descr.«bdd_intersection/2» v₁ v₂ = .ok (g k v₁ v₂) ∧ Bdd (P k) (g k v₁ v₂) ∧
             ∀ ρ, Resp ρ → eval ρ (g k v₁ v₂) = (eval ρ v₁ && eval ρ v₂) := by
         intro k v₁ v₂ w₁ w₂
         obtain ⟨r, run, keep, sem⟩ := inter_ok w₁ w₂
@@ -10575,24 +12016,24 @@ defmodule STTDescrProofsTest do
         · have sem := (gspec a _ _ (b₁ _ _ h₁) (b₂ _ _ h₂)).2.2 ρ resp
           by_cases k : kept (a, g a v₁ v₂) = Bool.true
           · simp [evalR, h₁, h₂, h₃, k, sem]
-          · have := drop_bdd (ok := fun _ => True) (gspec a _ _ (b₁ _ _ h₁) (b₂ _ _ h₂)).2.1 (by simpa using k) ρ
+          · have := drop_bdd (ok := P a) (gspec a _ _ (b₁ _ _ h₁) (b₂ _ _ h₂)).2.1 (by simpa using k) ρ
             simp [evalR, h₁, h₂, h₃, k, ← sem, this]
         · rcases h₁₂ with h | h <;> simp [evalR, h, h₃]
 
-    theorem repr_diff_sem (n : Nat) {R₁ R₂ : List (Term × Term)} (b₁ : AllBdd R₁) (b₂ : AllBdd R₂) :
+    theorem repr_diff_sem (n : Nat) {P : Term → Term → Prop} {R₁ R₂ : List (Term × Term)} (b₁ : AllBddP P R₁) (b₂ : AllBddP P R₂) :
         ∃ M, Elixir.Module.Types.Descr.«fun_repr_difference/2» (D n) (.map R₁) (.map R₂) = .ok (.map M) ∧
-          AllBdd M ∧ ∀ a ρ, Resp ρ → evalR M a ρ = (evalR R₁ a ρ && !evalR R₂ a ρ) := by
+          AllBddP P M ∧ ∀ a ρ, Resp ρ → evalR M a ρ = (evalR R₁ a ρ && !evalR R₂ a ρ) := by
       let g : Term → Term → Term → Term := fun _ v₁ v₂ =>
         match Elixir.Module.Types.Descr.«bdd_difference/2» v₁ v₂ with | .ok w => w | .error _ => .nil
-      have gspec : ∀ k v₁ v₂, Bdd (fun _ => True) v₁ → Bdd (fun _ => True) v₂ →
-          Elixir.Module.Types.Descr.«bdd_difference/2» v₁ v₂ = .ok (g k v₁ v₂) ∧ Bdd (fun _ => True) (g k v₁ v₂) ∧
+      have gspec : ∀ k v₁ v₂, Bdd (P k) v₁ → Bdd (P k) v₂ →
+          Elixir.Module.Types.Descr.«bdd_difference/2» v₁ v₂ = .ok (g k v₁ v₂) ∧ Bdd (P k) (g k v₁ v₂) ∧
             ∀ ρ, Resp ρ → eval ρ (g k v₁ v₂) = (eval ρ v₁ && !eval ρ v₂) := by
         intro k v₁ v₂ w₁ w₂
         obtain ⟨r, run, keep, sem⟩ := diff_ok w₁ w₂
         have : g k v₁ v₂ = r := by simp [g, run]
         rw [this]
         exact ⟨run, keep _ w₁ w₂, sem⟩
-      obtain ⟨M, run, look⟩ := repr_diff_fold n g (mapEntries R₂) R₁ (mapEntries_distinct R₂) (by
+      obtain ⟨M, run, look, -⟩ := repr_diff_fold n g (mapEntries R₂) R₁ (mapEntries_distinct R₂) (by
         intro e me v hv
         exact (gspec e.1 _ _ (b₁ _ _ hv) (b₂ _ _ (mapLookup_of_mem_mapEntries me))).1)
       have shape : ∀ a, (∃ v₁ v₂, mapLookup R₁ a = some v₁ ∧ mapLookup R₂ a = some v₂ ∧
@@ -10623,10 +12064,83 @@ defmodule STTDescrProofsTest do
         · have sem := (gspec a _ _ (b₁ _ _ h₁) (b₂ _ _ h₂)).2.2 ρ resp
           by_cases k : kept (a, g a v₁ v₂) = Bool.true
           · simp [evalR, h₁, h₂, h₃, k, sem]
-          · have := drop_bdd (ok := fun _ => True) (gspec a _ _ (b₁ _ _ h₁) (b₂ _ _ h₂)).2.1 (by simpa using k) ρ
+          · have := drop_bdd (ok := P a) (gspec a _ _ (b₁ _ _ h₁) (b₂ _ _ h₂)).2.1 (by simpa using k) ρ
             simp [evalR, h₁, h₂, h₃, k, ← sem, this]
         · simp [evalR, h₁, h₃]
         · simp [evalR, h₂, h₃]
+
+    /-- Unions of maps of BDDs do not depend on the call depth. -/
+    theorem repr_union_uniform {P : Term → Term → Prop} {R₁ R₂ : List (Term × Term)} (b₁ : AllBddP P R₁)
+        (b₂ : AllBddP P R₂) :
+        ∃ M, AllBddP P M ∧ ∀ n, Elixir.Module.Types.Descr.«fun_repr_union/2» (D (n + 1)) (.map R₁) (.map R₂) =
+          .ok (.map M) := by
+      obtain ⟨M, run, bM, -⟩ := repr_union_sem 0 b₁ b₂
+      let g : Term → Term → Term → Term := fun _ v₁ v₂ =>
+        match Elixir.Module.Types.Descr.«bdd_union/2» v₁ v₂ with | .ok w => w | .error _ => .nil
+      have each : ∀ n, Elixir.Module.Types.Descr.«fun_repr_union/2» (D (n + 1)) (.map R₁) (.map R₂) =
+          .ok (.map (mergeList g R₁ R₂)) := by
+        intro n
+        have mrun := merge_with_eq (D (n + 1)) "Elixir.Module.Types.Descr" "-fun_repr_union/2-fun-0-" #[] R₁ R₂ g (by
+          intro e me v hv
+          rw [Erlang.program.«Elixir.Module.Types.Descr:-fun_repr_union/2-fun-0-/3».pure]
+          simp only [Elixir.Module.Types.Descr.«-fun_repr_union/2-fun-0-/3»]
+          obtain ⟨r, ru, -⟩ := union_ok (b₁ _ _ hv) (b₂ _ _ (mapLookup_of_mem_mapEntries me))
+          simp [g, ru])
+        simp [Elixir.Module.Types.Descr.«fun_repr_union/2», Elixir.Module.Types.Descr.«symmetrical_merge/3», mrun]
+      have same := (each 0).symm.trans run
+      simp only [Except.ok.injEq, Term.map.injEq] at same
+      exact ⟨M, bM, fun n => by rw [each n, same]⟩
+
+    /-- Intersections of maps of BDDs do not depend on the call depth. -/
+    theorem repr_inter_uniform {P : Term → Term → Prop} {R₁ R₂ : List (Term × Term)} (b₁ : AllBddP P R₁)
+        (b₂ : AllBddP P R₂) :
+        ∃ M, AllBddP P M ∧ ∀ n, Elixir.Module.Types.Descr.«fun_repr_intersection/2» (D (n + 1)) (.map R₁) (.map R₂) =
+          .ok (.map M) := by
+      obtain ⟨M, run, bM, -⟩ := repr_inter_sem 0 b₁ b₂
+      let g : Term → Term → Term → Term := fun _ v₁ v₂ =>
+        match Elixir.Module.Types.Descr.«bdd_intersection/2» v₁ v₂ with | .ok w => w | .error _ => .nil
+      have each : ∀ n, Elixir.Module.Types.Descr.«fun_repr_intersection/2» (D (n + 1)) (.map R₁) (.map R₂) =
+          .ok (.map (filterList kept (interList g R₁ R₂))) := by
+        intro n
+        have irun := intersect_with_eq (D (n + 1)) "Elixir.Module.Types.Descr" "-fun_repr_intersection/2-fun-0-" #[]
+          R₁ R₂ g (by
+            intro e me v hv
+            rw [Erlang.program.«Elixir.Module.Types.Descr:-fun_repr_intersection/2-fun-0-/3».pure]
+            simp only [Elixir.Module.Types.Descr.«-fun_repr_intersection/2-fun-0-/3»]
+            obtain ⟨r, ru, -⟩ := inter_ok (b₁ _ _ (mapLookup_of_mem_mapEntries me)) (b₂ _ _ hv)
+            simp [g, ru])
+        have frun := filter_eq (D (n + 1)) "Elixir.Module.Types.Descr" "-symmetrical_intersection/3-fun-0-" #[]
+          (interList g R₁ R₂) kept (by
+            intro e _
+            rw [Erlang.program.«Elixir.Module.Types.Descr:-symmetrical_intersection/3-fun-0-/2».pure, keep_field])
+        simp [Elixir.Module.Types.Descr.«fun_repr_intersection/2»]
+        unfold Elixir.Module.Types.Descr.«symmetrical_intersection/3»
+        simp [irun, frun]
+      have same := (each 0).symm.trans run
+      simp only [Except.ok.injEq, Term.map.injEq] at same
+      exact ⟨M, bM, fun n => by rw [each n, same]⟩
+
+    /-- Differences of maps of BDDs do not depend on the call depth. -/
+    theorem repr_diff_uniform {P : Term → Term → Prop} {R₁ R₂ : List (Term × Term)} (b₁ : AllBddP P R₁)
+        (b₂ : AllBddP P R₂) :
+        ∃ M, AllBddP P M ∧ ∀ n, Elixir.Module.Types.Descr.«fun_repr_difference/2» (D n) (.map R₁) (.map R₂) =
+          .ok (.map M) := by
+      obtain ⟨M, run, bM, -⟩ := repr_diff_sem 0 b₁ b₂
+      let g : Term → Term → Term → Term := fun _ v₁ v₂ =>
+        match Elixir.Module.Types.Descr.«bdd_difference/2» v₁ v₂ with | .ok w => w | .error _ => .nil
+      have each : ∀ n, Elixir.Module.Types.Descr.«fun_repr_difference/2» (D n) (.map R₁) (.map R₂) =
+          .ok (.map ((mapEntries R₂).foldl (differenceStep g) R₁)) := by
+        intro n
+        obtain ⟨M', run', -, explicit⟩ := repr_diff_fold n g (mapEntries R₂) R₁ (mapEntries_distinct R₂) (by
+          intro e me v hv
+          obtain ⟨r, ru, -⟩ := diff_ok (b₁ _ _ hv) (b₂ _ _ (mapLookup_of_mem_mapEntries me))
+          simp [g, ru])
+        rw [← explicit]
+        simp only [Elixir.Module.Types.Descr.«fun_repr_difference/2», Erlang.maps.«fold/3»]
+        simpa using run'
+      have same := (each 0).symm.trans run
+      simp only [Except.ok.injEq, Term.map.injEq] at same
+      exact ⟨M, bM, fun n => by rw [each n, same]⟩
 
     def FunF (x : Term) : Prop :=
       ∃ (pos : Bool) (R : List (Term × Term)), x = .tuple #[.atom (if pos then "union" else "negation"), .map R] ∧ AllBdd R
@@ -10946,13 +12460,13 @@ defmodule STTDescrProofsTest do
 
     def names : List String := ["bitmap", "atom", "fun", "list", "tuple", "map"]
 
-    def FieldK (name : String) (x : Term) : Prop :=
+    def FieldK (E : Term → Prop) (name : String) (x : Term) : Prop :=
       (name = "bitmap" ∧ BitField x) ∨ (name = "atom" ∧ AtomF x) ∨ (name = "fun" ∧ FunF x) ∨
-        (name = "list" ∧ ListField x) ∨ (name = "tuple" ∧ OField TupleOk x) ∨ (name = "map" ∧ OField MapOk x)
+        (name = "list" ∧ ListField x) ∨ (name = "tuple" ∧ OField (TupleOk E) x) ∨ (name = "map" ∧ OField (MapOk E) x)
 
-    structure Sem (X : List (Term × Term)) : Prop where
+    structure Sem (E : Term → Prop) (X : List (Term × Term)) : Prop where
       keys : ∀ q, (mapLookup X q).isSome → ∃ name ∈ names, q = .atom name
-      fields : ∀ name x, mapLookup X (.atom name) = some x → FieldK name x
+      fields : ∀ name x, mapLookup X (.atom name) = some x → FieldK E name x
 
     def dn (name : String) (x : Option Term) (p : Point) : Bool :=
       match x with
@@ -10968,7 +12482,7 @@ defmodule STTDescrProofsTest do
       | none => Bool.false
       | some x => isListTop x
 
-    theorem Sem.static {X : List (Term × Term)} (s : Sem X) : mapLookup X (.atom "dynamic") = Option.none := by
+    theorem Sem.static {X : List (Term × Term)} (s : Sem E X) : mapLookup X (.atom "dynamic") = Option.none := by
       cases h : mapLookup X (.atom "dynamic") with
       | none => rfl
       | some w =>
@@ -10977,7 +12491,7 @@ defmodule STTDescrProofsTest do
         subst e
         simp [names] at m
 
-    theorem Sem.absent {X : List (Term × Term)} (s : Sem X) {q : Term} (h : ∀ name ∈ names, q ≠ .atom name) :
+    theorem Sem.absent {X : List (Term × Term)} (s : Sem E X) {q : Term} (h : ∀ name ∈ names, q ≠ .atom name) :
         mapLookup X q = Option.none := by
       cases e : mapLookup X q with
       | none => rfl
@@ -11058,8 +12572,8 @@ defmodule STTDescrProofsTest do
     theorem dn_map (x : Term) (p : Point) : dn "map" (some x) p = denO x p.2.2 := by simp [dn]
     theorem dn_none (name : String) (p : Point) : dn name Option.none p = Bool.false := rfl
 
-    theorem field_union (n : Nat) {name : String} {x y : Term} (fx : FieldK name x) (fy : FieldK name y) :
-        ∃ w, Elixir.Module.Types.Descr.«bare_union/3» (D (n + 1)) (.atom name) x y = .ok w ∧ FieldK name w ∧
+    theorem field_union (n : Nat) {name : String} {x y : Term} (fx : FieldK E name x) (fy : FieldK E name y) :
+        ∃ w, Elixir.Module.Types.Descr.«bare_union/3» (D (n + 1)) (.atom name) x y = .ok w ∧ FieldK E name w ∧
           (∀ p, PtOk name p → dn name (some w) p = (dn name (some x) p || dn name (some y) p)) ∧
           (name = "list" → isListTop w = (isListTop x || isListTop y)) := by
       rcases fx with ⟨rfl, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩ <;>
@@ -11091,9 +12605,9 @@ defmodule STTDescrProofsTest do
         (name = "tuple" ∧ t = .tuple #[.integer 61102469, .atom "open", .nil]) ∨
         (name = "map" ∧ t = .tuple #[.integer 61102469, .atom "open", .nil])
 
-    theorem field_neg (n : Nat) {name : String} {t x : Term} (ht : TopAt name t) (fx : FieldK name x) :
+    theorem field_neg (hterm : E (.atom "term")) (n : Nat) {name : String} {t x : Term} (ht : TopAt name t) (fx : FieldK E name x) :
         ∃ w, Elixir.Module.Types.Descr.«bare_difference/3» (D (n + 1)) (.atom name) t x = .ok w ∧
-          (kept (.atom name, w) = Bool.true → FieldK name w ∧
+          (kept (.atom name, w) = Bool.true → FieldK E name w ∧
             (∀ p, PtOk name p → dn name (some w) p = !dn name (some x) p) ∧ (name = "list" → isListTop w = Bool.false)) ∧
           (kept (.atom name, w) = Bool.false → ∀ p, PtOk name p → dn name (some x) p = Bool.true) := by
       rcases ht with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;>
@@ -11112,7 +12626,7 @@ defmodule STTDescrProofsTest do
         exact ⟨w, by simp [Elixir.Module.Types.Descr.«bare_difference/3», run], fun kw => ⟨Or.inr (Or.inr (Or.inr (Or.inl
           ⟨rfl, (k kw).1⟩))), fun p ok => by simp [dn_list, (k kw).2.2 _ ok.1], fun _ => (k kw).2.1⟩,
           fun kw p ok => by simp [dn_list, d kw _ ok.1]⟩
-      · obtain ⟨w, run, k, d⟩ := tuple_neg_spec fx
+      · obtain ⟨w, run, k, d⟩ := tuple_neg_spec hterm fx
         exact ⟨w, by simp [Elixir.Module.Types.Descr.«bare_difference/3», run], fun kw => ⟨Or.inr (Or.inr (Or.inr (Or.inr
           (Or.inl ⟨rfl, (k kw).1⟩)))), fun p ok => by simp [dn_tuple, (k kw).2 _ ok.1 (ok.2.2 rfl)], fun h => by simp at h⟩,
           fun kw p ok => by simp [dn_tuple, d kw _ ok.1 (ok.2.2 rfl)]⟩
@@ -11121,9 +12635,9 @@ defmodule STTDescrProofsTest do
           (Or.inr ⟨rfl, (k kw).1⟩)))), fun p ok => by simp [dn_map, (k kw).2 _ ok.1], fun h => by simp at h⟩,
           fun kw p ok => by simp [dn_map, d kw _ ok.1]⟩
 
-    theorem field_inter (n : Nat) {name : String} {x y : Term} (fx : FieldK name x) (fy : FieldK name y) :
+    theorem field_inter (n : Nat) {name : String} {x y : Term} (fx : FieldK E name x) (fy : FieldK E name y) :
         ∃ w, Elixir.Module.Types.Descr.«bare_intersection/3» (D (n + 1)) (.atom name) x y = .ok w ∧
-          (kept (.atom name, w) = Bool.true → FieldK name w ∧
+          (kept (.atom name, w) = Bool.true → FieldK E name w ∧
             (∀ p, PtOk name p → dn name (some w) p = (dn name (some x) p && dn name (some y) p)) ∧
             (name = "list" → isListTop w = (isListTop x && isListTop y))) ∧
           (kept (.atom name, w) = Bool.false → (∀ p, PtOk name p → (dn name (some x) p && dn name (some y) p) = Bool.false) ∧
@@ -11158,12 +12672,13 @@ defmodule STTDescrProofsTest do
     theorem dn_elim (name : String) (x : Option Term) (p : Point) :
         dn name x p = x.elim Bool.false (fun y => dn name (some y) p) := by cases x <;> rfl
 
-    theorem field_sub (n : Nat) {name : String} {a : Term} (fa : FieldK name a) (B : List (Term × Term))
-        (fb : ∀ y, mapLookup B (.atom name) = some y → FieldK name y)
+    theorem field_sub (ops : ElemOk E K) (dops : ElemDiff E K) {m : Nat} (hm : K + 3 ≤ m) {name : String} {a : Term} (fa : FieldK E name a) (B : List (Term × Term))
+        (fb : ∀ y, mapLookup B (.atom name) = some y → FieldK E name y)
         (incl : ∀ p, PtOk name p → dn name (some a) p = Bool.true → dn name (mapLookup B (.atom name)) p = Bool.true)
         (side : name = "list" → ∀ y, mapLookup B (.atom name) = some y → isListTop y = Bool.true → isListTop a = Bool.true) :
-        KeySub (D (n + 3)) B (.atom name) a := by
-      have kind : ∀ {P : Term → Prop}, (∀ y, FieldK name y → P y) → ∀ y, mapLookup B (.atom name) = some y → P y :=
+        KeySub (D m) B (.atom name) a := by
+      obtain ⟨n, rfl⟩ : ∃ n, m = n + 3 := ⟨m - 3, by omega⟩
+      have kind : ∀ {P : Term → Prop}, (∀ y, FieldK E name y → P y) → ∀ y, mapLookup B (.atom name) = some y → P y :=
         fun h y hy => h y (fb y hy)
       rcases fa with ⟨rfl, fa⟩ | ⟨rfl, fa⟩ | ⟨rfl, fa⟩ | ⟨rfl, fa⟩ | ⟨rfl, fa⟩ | ⟨rfl, fa⟩
       · have fb' : ∀ y, mapLookup B (.atom "bitmap") = some y → BitField y := kind fun y h => by
@@ -11209,9 +12724,9 @@ defmodule STTDescrProofsTest do
           obtain ⟨w, run, h⟩ := some y hb
           refine Or.inl ⟨y, w, hb, by simpa [Elixir.Module.Types.Descr.«bare_difference/3»] using run, ?_⟩
           simpa [Elixir.Module.Types.Descr.«empty_key?/3»] using h
-      · have fb' : ∀ y, mapLookup B (.atom "tuple") = some y → OField TupleOk y := kind fun y h => by
+      · have fb' : ∀ y, mapLookup B (.atom "tuple") = some y → OField (TupleOk E) y := kind fun y h => by
           rcases h with ⟨e, _⟩ | ⟨e, _⟩ | ⟨e, _⟩ | ⟨e, _⟩ | ⟨_, h⟩ | ⟨e, _⟩ <;> first | exact h | simp at e
-        obtain ⟨some, none⟩ := tuple_sub_spec (n + 1) fa _ fb' fun ρ resp real h => by
+        obtain ⟨some, none⟩ := tuple_sub_spec ops dops (m := n + 3) (by omega) fa _ fb' fun ρ resp real h => by
           have := incl (0, .nil, ρ) ⟨resp, fun e => by simp at e, fun _ => real⟩ (by simpa [dn_tuple])
           rw [dn_elim] at this
           simpa [dn_tuple] using this
@@ -11221,9 +12736,9 @@ defmodule STTDescrProofsTest do
           obtain ⟨w, run, h⟩ := some y hb
           refine Or.inl ⟨y, w, hb, by simpa [Elixir.Module.Types.Descr.«bare_difference/3»] using run, ?_⟩
           simpa [Elixir.Module.Types.Descr.«empty_key?/3»] using h
-      · have fb' : ∀ y, mapLookup B (.atom "map") = some y → OField MapOk y := kind fun y h => by
+      · have fb' : ∀ y, mapLookup B (.atom "map") = some y → OField (MapOk E) y := kind fun y h => by
           rcases h with ⟨e, _⟩ | ⟨e, _⟩ | ⟨e, _⟩ | ⟨e, _⟩ | ⟨e, _⟩ | ⟨_, h⟩ <;> first | exact h | simp at e
-        obtain ⟨some, none⟩ := map_sub_spec n fa _ fb' fun ρ resp h => by
+        obtain ⟨some, none⟩ := map_sub_spec ops (m := n + 3) (by omega) fa _ fb' fun ρ resp h => by
           have := incl (0, .nil, ρ) ⟨resp, fun e => by simp at e, fun e => by simp at e⟩ (by simpa [dn_map])
           rw [dn_elim] at this
           simpa [dn_map] using this
@@ -11236,24 +12751,24 @@ defmodule STTDescrProofsTest do
 
     /-- A type is a subtype of another when each field holds less, and the right type lacks the top list type
     unless the left type has it too. -/
-    theorem sem_sub (n : Nat) (A B : List (Term × Term)) (sA : Sem A) (sB : Sem B)
+    theorem sem_sub (ops : ElemOk E K) (dops : ElemDiff E K) {m : Nat} (hm : K + 3 ≤ m) (A B : List (Term × Term)) (sA : Sem E A) (sB : Sem E B)
         (incl : ∀ name ∈ names, ∀ p, PtOk name p → dn name (mapLookup A (.atom name)) p = Bool.true →
           dn name (mapLookup B (.atom name)) p = Bool.true)
         (side : topL (mapLookup B (.atom "list")) = Bool.true → topL (mapLookup A (.atom "list")) = Bool.true) :
-        Elixir.Module.Types.Descr.«subtype?/2» (D (n + 3)) (.map A) (.map B) = .ok (.atom "true") := by
+        Elixir.Module.Types.Descr.«subtype?/2» (D m) (.map A) (.map B) = .ok (.atom "true") := by
       refine subtype_keys _ A B sA.static sB.static fun e member => ?_
       have hA := mapLookup_of_mem_mapEntries member
       obtain ⟨name, m, hname⟩ := sA.keys e.1 (by simp [hA])
       rw [hname] at hA ⊢
       have fa := sA.fields name e.2 hA
-      refine field_sub n fa B (sB.fields name) (fun p ok h => incl name m p ok (by rw [hA]; exact h))
+      refine field_sub ops dops hm fa B (sB.fields name) (fun p ok h => incl name m p ok (by rw [hA]; exact h))
         fun hl y hy top => ?_
       subst hl
       have := side (by simp [topL, hy, top])
       simpa [topL, hA] using this
 
-    theorem sem_union (L R : List (Term × Term)) (sL : Sem L) (sR : Sem R) :
-        ∃ U, Elixir.Module.Types.Descr.«bare_union/2» (D 100) (.map L) (.map R) = .ok (.map U) ∧ Sem U ∧
+    theorem sem_union (L R : List (Term × Term)) (sL : Sem E L) (sR : Sem E R) :
+        ∃ U, Elixir.Module.Types.Descr.«bare_union/2» (D 100) (.map L) (.map R) = .ok (.map U) ∧ Sem E U ∧
           (∀ name, ∀ p, PtOk name p → dn name (mapLookup U (.atom name)) p =
             (dn name (mapLookup L (.atom name)) p || dn name (mapLookup R (.atom name)) p)) ∧
           topL (mapLookup U (.atom "list")) = (topL (mapLookup L (.atom "list")) || topL (mapLookup R (.atom "list"))) ∧
@@ -11273,7 +12788,7 @@ defmodule STTDescrProofsTest do
           (∃ y, mapLookup L (.atom name) = Option.none ∧ mapLookup R (.atom name) = some y ∧
             mapLookup U (.atom name) = some y) ∨
           (∃ x y w, mapLookup L (.atom name) = some x ∧ mapLookup R (.atom name) = some y ∧
-            mapLookup U (.atom name) = some w ∧ FieldK name w ∧
+            mapLookup U (.atom name) = some w ∧ FieldK E name w ∧
             (∀ p, PtOk name p → dn name (some w) p = (dn name (some x) p || dn name (some y) p)) ∧
             (name = "list" → isListTop w = (isListTop x || isListTop y))) := by
         intro name
@@ -11343,7 +12858,7 @@ defmodule STTDescrProofsTest do
       · exact ⟨_, by simp [mapLookup], Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨rfl, rfl⟩))))⟩
 
     theorem top_field {name : String} {t : Term} (ht : TopAt name t) :
-        FieldK name t ∧ (∀ p, PtOk name p → dn name (some t) p = Bool.true) ∧
+        FieldK E name t ∧ (∀ p, PtOk name p → dn name (some t) p = Bool.true) ∧
           (name = "list" → isListTop t = Bool.true) := by
       rcases ht with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
       · refine ⟨Or.inl ⟨rfl, 255, rfl, by decide, by decide⟩, fun p ok => ?_, fun h => by simp at h⟩
@@ -11361,8 +12876,8 @@ defmodule STTDescrProofsTest do
       · exact ⟨Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨rfl, Or.inl ⟨_, rfl⟩⟩)))), fun p _ => by simp [dn_map, denO_top],
           fun h => by simp at h⟩
 
-    theorem sem_neg (X : List (Term × Term)) (sX : Sem X) (nonempty : X ≠ []) :
-        ∃ N, Elixir.Module.Types.Descr.«bare_negation/1» (D 100) (.map X) = .ok (.map N) ∧ Sem N ∧
+    theorem sem_neg (hterm : E (.atom "term")) (X : List (Term × Term)) (sX : Sem E X) (nonempty : X ≠ []) :
+        ∃ N, Elixir.Module.Types.Descr.«bare_negation/1» (D 100) (.map X) = .ok (.map N) ∧ Sem E N ∧
           (∀ name ∈ names, ∀ p, PtOk name p → dn name (mapLookup N (.atom name)) p = !dn name (mapLookup X (.atom name)) p) ∧
           topL (mapLookup N (.atom "list")) = (mapLookup X (.atom "list")).isNone := by
       obtain ⟨T, term, -, -, -, termDynamic⟩ := unfolded_term_fields
@@ -11372,14 +12887,14 @@ defmodule STTDescrProofsTest do
         | .error _ => .nil
       have value : ∀ q x y w, Elixir.Module.Types.Descr.«bare_difference/3» (D 98) q x y = .ok w → g q x y = w := by
         intro q x y w run; simp [g, run]
-      obtain ⟨N, fold, lookN⟩ := difference_fold 98 (.function "Elixir.Module.Types.Descr" "bare_difference" 3 #[])
+      obtain ⟨N, fold, lookN, -⟩ := difference_fold 98 (.function "Elixir.Module.Types.Descr" "bare_difference" 3 #[])
         g (mapEntries X) T (mapEntries_distinct X) (by
           intro e member v₁ found
           have hy := mapLookup_of_mem_mapEntries member
           rw [Erlang.program.«Elixir.Module.Types.Descr:bare_difference/3».pure]
           obtain ⟨name, -, he, ht⟩ := term_top term found
           rw [he] at hy found ⊢
-          obtain ⟨w, run, -⟩ := field_neg 97 ht (sX.fields name e.2 hy)
+          obtain ⟨w, run, -⟩ := field_neg hterm 97 ht (sX.fields name e.2 hy)
           rw [run, value _ _ _ _ run])
       have run : Elixir.Module.Types.Descr.«bare_negation/1» (D 100) (.map X) = .ok (.map N) := by
         simp only [Elixir.Module.Types.Descr.«bare_negation/1»]
@@ -11401,7 +12916,7 @@ defmodule STTDescrProofsTest do
         cases hX : mapLookup X (.atom name) with
         | none => exact Or.inl ⟨rfl, hT⟩
         | some x =>
-          obtain ⟨w, run, -⟩ := field_neg 97 ht (sX.fields name x hX)
+          obtain ⟨w, run, -⟩ := field_neg hterm 97 ht (sX.fields name x hX)
           exact Or.inr ⟨x, w, rfl, run, by simp [hT, value _ _ _ _ run]⟩
       have keysN : ∀ q, (mapLookup N q).isSome → ∃ name ∈ names, q = .atom name := by
         intro q h
@@ -11426,8 +12941,8 @@ defmodule STTDescrProofsTest do
         simp only [Term.atom.injEq] at e
         subst e
         rcases at_name name m with ⟨t, ht, ⟨-, hN⟩ | ⟨x, w', hX, run', hN⟩⟩
-        · rw [hN] at hw; rw [← Option.some.inj hw]; exact (top_field ht).1
-        · obtain ⟨w'', run'', k, -⟩ := field_neg 97 ht (sX.fields name x hX)
+        · rw [hN] at hw; rw [← Option.some.inj hw]; exact (top_field (E := E) ht).1
+        · obtain ⟨w'', run'', k, -⟩ := field_neg hterm 97 ht (sX.fields name x hX)
           have e : w'' = w' := by rw [run''] at run'; exact Except.ok.inj run'
           subst e
           by_cases kw : kept (.atom name, w'') = Bool.true
@@ -11435,8 +12950,8 @@ defmodule STTDescrProofsTest do
             rw [hN] at hw; rw [← Option.some.inj hw]; exact (k kw).1
           · simp [kw] at hN; rw [hN] at hw; cases hw
       · rcases at_name name m with ⟨t, ht, ⟨hX, hN⟩ | ⟨x, w', hX, run', hN⟩⟩
-        · rw [hN, hX, (top_field ht).2.1 p ok]; rfl
-        · obtain ⟨w'', run'', k, d⟩ := field_neg 97 ht (sX.fields name x hX)
+        · rw [hN, hX, (top_field (E := E) ht).2.1 p ok]; rfl
+        · obtain ⟨w'', run'', k, d⟩ := field_neg hterm 97 ht (sX.fields name x hX)
           have e : w'' = w' := by rw [run''] at run'; exact Except.ok.inj run'
           subst e
           by_cases kw : kept (.atom name, w'') = Bool.true
@@ -11445,16 +12960,16 @@ defmodule STTDescrProofsTest do
           · simp only [kw, Bool.false_eq_true, ite_false] at hN
             rw [hN, hX, dn_none, d (by simpa using kw) p ok]; rfl
       · rcases at_name "list" (by simp [names]) with ⟨t, ht, ⟨hX, hN⟩ | ⟨x, w', hX, run', hN⟩⟩
-        · simp [hN, hX, topL, (top_field ht).2.2 rfl]
-        · obtain ⟨w'', run'', k, -⟩ := field_neg 97 ht (sX.fields "list" x hX)
+        · simp [hN, hX, topL, (top_field (E := E) ht).2.2 rfl]
+        · obtain ⟨w'', run'', k, -⟩ := field_neg hterm 97 ht (sX.fields "list" x hX)
           have e : w'' = w' := by rw [run''] at run'; exact Except.ok.inj run'
           subst e
           by_cases kw : kept (.atom "list", w'') = Bool.true
           · simp [kw, hN, hX, topL, (k kw).2.2 rfl]
           · simp [kw, hN, hX, topL]
 
-    theorem sem_inter (L R : List (Term × Term)) (sL : Sem L) (sR : Sem R) :
-        ∃ I, Elixir.Module.Types.Descr.«bare_intersection/2» (D 100) (.map L) (.map R) = .ok (.map I) ∧ Sem I ∧
+    theorem sem_inter (L R : List (Term × Term)) (sL : Sem E L) (sR : Sem E R) :
+        ∃ I, Elixir.Module.Types.Descr.«bare_intersection/2» (D 100) (.map L) (.map R) = .ok (.map I) ∧ Sem E I ∧
           (∀ name, ∀ p, PtOk name p → dn name (mapLookup I (.atom name)) p =
             (dn name (mapLookup L (.atom name)) p && dn name (mapLookup R (.atom name)) p)) ∧
           topL (mapLookup I (.atom "list")) = (topL (mapLookup L (.atom "list")) && topL (mapLookup R (.atom "list"))) := by
@@ -11467,7 +12982,7 @@ defmodule STTDescrProofsTest do
           mapLookup I (.atom name) = Option.none) ∨
           (∃ x y w, mapLookup L (.atom name) = some x ∧ mapLookup R (.atom name) = some y ∧
             mapLookup I (.atom name) = (if kept (.atom name, w) then some w else Option.none) ∧
-            (kept (.atom name, w) = Bool.true → FieldK name w ∧
+            (kept (.atom name, w) = Bool.true → FieldK E name w ∧
               (∀ p, PtOk name p → dn name (some w) p = (dn name (some x) p && dn name (some y) p)) ∧
               (name = "list" → isListTop w = (isListTop x && isListTop y))) ∧
             (kept (.atom name, w) = Bool.false →
@@ -11503,7 +13018,7 @@ defmodule STTDescrProofsTest do
           · simp [kw, hI, hL, hR, topL, (d (by simpa using kw)).2 rfl]
 
     /-- The negation of a union of two non-empty types holds what the intersection of their negations holds. -/
-    theorem de_morgan_sem (L R : List (Term × Term)) (sL : Sem L) (sR : Sem R) (nL : L ≠ []) (nR : R ≠ []) :
+    theorem de_morgan_sem (ops : ElemOk E K) (dops : ElemDiff E K) (hK : K ≤ 90) (L R : List (Term × Term)) (sL : Sem E L) (sR : Sem E R) (nL : L ≠ []) (nR : R ≠ []) :
         ∃ U A NL NR B, Elixir.Module.Types.Descr.«bare_union/2» (D 100) (.map L) (.map R) = .ok (.map U) ∧
           Elixir.Module.Types.Descr.«bare_negation/1» (D 100) (.map U) = .ok (.map A) ∧
           Elixir.Module.Types.Descr.«bare_negation/1» (D 100) (.map L) = .ok (.map NL) ∧
@@ -11512,9 +13027,9 @@ defmodule STTDescrProofsTest do
           Elixir.Module.Types.Descr.«subtype?/2» (D 100) (.map A) (.map B) = .ok (.atom "true") ∧
           Elixir.Module.Types.Descr.«subtype?/2» (D 100) (.map B) (.map A) = .ok (.atom "true") := by
       obtain ⟨U, runU, sU, dU, tU, neU, nU⟩ := sem_union L R sL sR
-      obtain ⟨A, runA, sA, dA, tA⟩ := sem_neg U sU (neU nL)
-      obtain ⟨NL, runNL, sNL, dNL, tNL⟩ := sem_neg L sL nL
-      obtain ⟨NR, runNR, sNR, dNR, tNR⟩ := sem_neg R sR nR
+      obtain ⟨A, runA, sA, dA, tA⟩ := sem_neg ops.term U sU (neU nL)
+      obtain ⟨NL, runNL, sNL, dNL, tNL⟩ := sem_neg ops.term L sL nL
+      obtain ⟨NR, runNR, sNR, dNR, tNR⟩ := sem_neg ops.term R sR nR
       obtain ⟨B, runB, sB, dB, tB⟩ := sem_inter NL NR sNL sNR
       have same : ∀ name ∈ names, ∀ p, PtOk name p →
           dn name (mapLookup A (.atom name)) p = dn name (mapLookup B (.atom name)) p := by
@@ -11523,14 +13038,2527 @@ defmodule STTDescrProofsTest do
         cases dn name (mapLookup L (.atom name)) p <;> cases dn name (mapLookup R (.atom name)) p <;> rfl
       have top : topL (mapLookup A (.atom "list")) = topL (mapLookup B (.atom "list")) := by
         rw [tA, tB, tNL, tNR, nU]
-      refine ⟨U, A, NL, NR, B, runU, runA, runNL, runNR, runB, sem_sub 97 A B sA sB (fun name m p ok h => ?_)
-        (fun h => by rw [top]; exact h), sem_sub 97 B A sB sA (fun name m p ok h => ?_) (fun h => by rw [← top]; exact h)⟩
+      refine ⟨U, A, NL, NR, B, runU, runA, runNL, runNR, runB, sem_sub ops dops (m := 100) (by omega) A B sA sB (fun name m p ok h => ?_)
+        (fun h => by rw [top]; exact h), sem_sub ops dops (m := 100) (by omega) B A sB sA (fun name m p ok h => ?_) (fun h => by rw [← top]; exact h)⟩
       · rw [← same name m p ok]; exact h
       · rw [same name m p ok]; exact h
 
+    /-! List types of element types decide their emptiness, whatever their lines. -/
+
+    /-- List literals whose element and tail types are `E`, including the top list literal. -/
+    def LLit (E : Term → Prop) (t : Term) : Prop :=
+      ∃ (k : Int) (a b : Term), t = .tuple #[.integer k, a, b] ∧ E a ∧ E b
+
+    theorem ListLit.llit {t : Term} (h : ListLit E t) : LLit E t := h.2
+
+    /-- Lines of BDDs: their positive and negative literals. -/
+    def LineOk (ok : Term → Prop) (line : Term) : Prop :=
+      ∃ pos negs : List Term, line = .tuple #[Term.list pos, Term.list negs] ∧ (∀ t ∈ pos, ok t) ∧ ∀ t ∈ negs, ok t
+
+    theorem dnf_lines {ok : Term → Prop} {r : Term} (wr : Bdd ok r) :
+        ∀ (P : Term → Prop), (∀ t, ok t → P t) → ∀ (acc pos negs : List Term), (∀ l ∈ acc, LineOk P l) →
+          (∀ t ∈ pos, P t) → (∀ t ∈ negs, P t) →
+          ∃ lines : List Term, Elixir.Module.Types.Descr.«bdd_to_dnf/4» (Term.list acc) (Term.list pos)
+            (Term.list negs) r = .ok (Term.list lines) ∧ ∀ l ∈ lines, LineOk P l := by
+      refine Bdd.induction (P := fun ok r => ∀ (P : Term → Prop), (∀ t, ok t → P t) → ∀ (acc pos negs : List Term),
+        (∀ l ∈ acc, LineOk P l) → (∀ t ∈ pos, P t) → (∀ t ∈ negs, P t) →
+        ∃ lines : List Term, Elixir.Module.Types.Descr.«bdd_to_dnf/4» (Term.list acc) (Term.list pos)
+          (Term.list negs) r = .ok (Term.list lines) ∧ ∀ l ∈ lines, LineOk P l) ?_ ?_ ?_ ?_ ok r wr
+      · intro ok P _ acc pos negs ha hp hn
+        refine ⟨.tuple #[Term.list pos, Term.list negs] :: acc, by
+          simp [Elixir.Module.Types.Descr.«bdd_to_dnf/4», Term.list], fun l m => ?_⟩
+        rcases List.mem_cons.mp m with rfl | m
+        · exact ⟨pos, negs, rfl, hp, hn⟩
+        · exact ha l m
+      · intro ok P _ acc pos negs ha _ _
+        exact ⟨acc, by simp [Elixir.Module.Types.Descr.«bdd_to_dnf/4»], ha⟩
+      · intro ok k x y okl P hP acc pos negs ha hp hn
+        refine ⟨.tuple #[Term.list (.tuple #[.integer k, x, y] :: pos), Term.list negs] :: acc, by
+          simp [Elixir.Module.Types.Descr.«bdd_to_dnf/4», Term.list], fun l m => ?_⟩
+        rcases List.mem_cons.mp m with rfl | m
+        · refine ⟨_, negs, rfl, fun t mt => ?_, hn⟩
+          rcases List.mem_cons.mp mt with rfl | mt
+          · exact hP _ okl
+          · exact hp t mt
+        · exact ha l m
+      · intro ok h lit c u d _ okl hc hu hd ic iu id P hP acc pos negs ha hp hn
+        have hP' : ∀ t, Above ok lit t → P t := fun t ht => hP t ht.1
+        obtain ⟨l₁, r₁, h₁⟩ := iu P hP' acc pos negs ha hp hn
+        obtain ⟨l₂, r₂, h₂⟩ := ic P hP' l₁ (lit :: pos) negs h₁ (fun t m => by
+          rcases List.mem_cons.mp m with rfl | m
+          · exact hP _ okl
+          · exact hp t m) hn
+        obtain ⟨l₃, r₃, h₃⟩ := id P hP' l₂ pos (lit :: negs) h₂ hp (fun t m => by
+          rcases List.mem_cons.mp m with rfl | m
+          · exact hP _ okl
+          · exact hn t m)
+        refine ⟨l₃, ?_, h₃⟩
+        simp only [Term.list] at r₁ r₂ r₃ ⊢
+        simp [Elixir.Module.Types.Descr.«bdd_to_dnf/4», r₁, r₂, r₃]
+
+    @[simp] theorem orElse_bool (a b : Bool) :
+        Lynx.Except.orElse (.ok (boolAtom a)) (.ok (boolAtom b)) Bool.true = .ok (boolAtom (a || b)) := by
+      cases a <;> cases b <;> simp [boolAtom, Lynx.Except.orElse]
+
+    def litsFun : Term := .function "Elixir.Module.Types.Descr" "-non_empty_list_literals_intersection/2-fun-0-" 2 #[]
+
+    theorem lits_fold (ops : ElemOk E K) : ∀ (l : List Term), (∀ t ∈ l, LLit E t) → ∀ a b, E a → E b →
+        ∃ a' b', E a' ∧ E b' ∧ ∀ m, K + 1 ≤ m →
+          Erlang.lists.«foldl_1/3» (D m) litsFun (.tuple #[a, b]) (Term.list l) = .ok (.tuple #[a', b']) := by
+      intro l
+      induction l with
+      | nil =>
+        intro _ a b ha hb
+        exact ⟨a, b, ha, hb, fun m _ => by simp [Term.list, Erlang.lists.«foldl_1/3»]⟩
+      | cons t rest ih =>
+        intro lits a b ha hb
+        obtain ⟨k, x, y, rfl, hx, hy⟩ := lits _ List.mem_cons_self
+        obtain ⟨a₁, ha₁, ra⟩ := ops.inter ha hx
+        obtain ⟨b₁, hb₁, rb⟩ := ops.inter hb hy
+        obtain ⟨a', b', ha', hb', run⟩ := ih (fun t m => lits t (List.mem_cons_of_mem _ m)) a₁ b₁ ha₁ hb₁
+        refine ⟨a', b', ha', hb', fun m hm => ?_⟩
+        obtain ⟨n, rfl, hn⟩ := succ_of_le hm
+        rw [Erlang.lists.«foldl_1/3».eq_def]
+        simp only [Term.list, litsFun, Erlang.program.«Elixir.Module.Types.Descr:-non_empty_list_literals_intersection/2-fun-0-/2».pure]
+        simp only [Elixir.Module.Types.Descr.«-non_empty_list_literals_intersection/2-fun-0-/2», ra n hn, rb n hn,
+          Lynx.Except.ok_bind, pure_bind]
+        exact run (n + 1) hm
+
+    /-- `non_empty_list_literals_intersection/2` intersects the positive literals of a line. -/
+    theorem literals_total (ops : ElemOk E K) (S : List (Term × Term)) (pos : List Term) (lits : ∀ t ∈ pos, LLit E t) :
+        (∀ m, K + 1 ≤ m → Elixir.Module.Types.Descr.«non_empty_list_literals_intersection/2» (D m) (Term.list pos)
+          (.map S) = .ok (.atom "empty")) ∨
+        ∃ a b, E a ∧ E b ∧ ∀ m, K + 1 ≤ m → Elixir.Module.Types.Descr.«non_empty_list_literals_intersection/2» (D m)
+          (Term.list pos) (.map S) = .ok (.tuple #[a, b]) := by
+      obtain ⟨a, b, ha, hb, fold⟩ := lits_fold ops pos lits _ _ ops.term ops.term
+      obtain ⟨ea, hea⟩ := ops.empty ha S
+      obtain ⟨eb, heb⟩ := ops.empty hb S
+      have foldEq : ∀ d, Erlang.lists.«foldl/3» d litsFun (.tuple #[.atom "term", .atom "term"]) (Term.list pos) =
+          Erlang.lists.«foldl_1/3» d litsFun (.tuple #[.atom "term", .atom "term"]) (Term.list pos) := by
+        intro d
+        cases pos with
+        | nil =>
+          rw [Erlang.lists.«foldl_1/3».eq_def]
+          simp [Term.list, Erlang.lists.«foldl/3», Lynx.Except.guard, Erlang.erlang.«is_function/2», litsFun]
+        | cons t rest =>
+          conv => rhs; rw [Erlang.lists.«foldl_1/3».eq_def]
+          simp [Term.list, Erlang.lists.«foldl/3», Lynx.Except.guard, Erlang.erlang.«is_function/2», litsFun]
+      have unfold : ∀ m, K + 1 ≤ m → Elixir.Module.Types.Descr.«non_empty_list_literals_intersection/2» (D m)
+          (Term.list pos) (.map S) = if ea || eb then .ok (.atom "empty") else .ok (.tuple #[a, b]) := by
+        intro m hm
+        have f := fold m hm
+        have e₁ := hea m (by omega)
+        have e₂ := heb m (by omega)
+        unfold Elixir.Module.Types.Descr.«non_empty_list_literals_intersection/2»
+        have f' : Erlang.lists.«foldl/3» (D m) (.function "Elixir.Module.Types.Descr"
+            "-non_empty_list_literals_intersection/2-fun-0-" 2 #[]) (.tuple #[.atom "term", .atom "term"])
+            (Term.list pos) = .ok (.tuple #[a, b]) := by rw [← litsFun, foldEq, f]
+        simp only [pure_bind, f', Lynx.Except.ok_bind, e₁, e₂, orElse_bool]
+        cases ea <;> cases eb <;> simp [boolAtom, Lynx.Except.guard, isMember]
+      by_cases e : (ea || eb) = Bool.true
+      · exact Or.inl fun m hm => by rw [unfold m hm, if_pos e]
+      · exact Or.inr ⟨a, b, ha, hb, fun m hm => by rw [unfold m hm, if_neg e]⟩
+
+    /-- Types whose list part `list_tail_unfold/1` removes stay element types. -/
+    def TailOk (E : Term → Prop) : Prop :=
+      ∀ e, E e → ∃ e', (∀ d, Elixir.Module.Types.Descr.«list_tail_unfold/1» d e = .ok e') ∧ E e'
+
+    /-- Negated list literals remove what they cover of the tail of a line. -/
+    theorem negs_total (ops : ElemOk E K) (dops : ElemDiff E K) (tail : TailOk E) (S : List (Term × Term))
+        {list : Term} (hlist : E list) :
+        ∀ negs : List Term, (∀ t ∈ negs, LLit E t) → ∀ last, E last →
+          BoolAt K (fun m => Elixir.Module.Types.Descr.«list_line_negs_empty?/4» (D m) (Term.list negs) list last
+            (.map S)) := by
+      intro negs
+      induction negs with
+      | nil =>
+        intro _ last _
+        exact ⟨Bool.false, fun m _ => by
+          dsimp only
+          rw [Elixir.Module.Types.Descr.«list_line_negs_empty?/4».eq_def]
+          simp [Term.list, boolAtom]⟩
+      | cons N rest ih =>
+        intro lits last hlast
+        obtain ⟨k, nt, nl, rfl, hnt, hnl⟩ := lits _ List.mem_cons_self
+        have ih' := ih fun t m => lits t (List.mem_cons_of_mem _ m)
+        obtain ⟨sd, hsd, rsd⟩ := dops.diff hlist hnt
+        obtain ⟨bs, hbs⟩ := ops.empty hsd S
+        cases bs
+        · obtain ⟨b, hb⟩ := ih' last hlast
+          refine ⟨b, fun m hm => ?_⟩
+          have h₁ := hb m hm
+          dsimp only at h₁ ⊢
+          rw [Elixir.Module.Types.Descr.«list_line_negs_empty?/4».eq_def]
+          simp [Term.list, Elixir.Module.Types.Descr.«subtype_seen?/3», rsd m hm, hbs m hm, boolAtom,
+            Lynx.Except.guard, isMember] at h₁ ⊢
+          exact h₁
+        · obtain ⟨t, ht, ht'⟩ := tail nl hnl
+          obtain ⟨dd, hdd, rdd⟩ := dops.diff hlast ht'
+          obtain ⟨be, hbe⟩ := ops.empty hdd S
+          obtain ⟨b, hb⟩ := ih' dd hdd
+          refine ⟨be || b, fun m hm => ?_⟩
+          have h₁ := hb m hm
+          have h₂ := hbe m hm
+          dsimp only at h₁ ⊢
+          rw [Elixir.Module.Types.Descr.«list_line_negs_empty?/4».eq_def]
+          simp only [Term.list] at h₁ ⊢
+          simp [Elixir.Module.Types.Descr.«subtype_seen?/3», rsd m hm, hbs m hm, boolAtom, Lynx.Except.guard, isMember,
+            ht, rdd m hm]
+          rw [h₂, h₁, orElse_bool]
+          cases be <;> cases b <;> rfl
+
+    theorem line_list_total (ops : ElemOk E K) (dops : ElemDiff E K) (tail : TailOk E) (S : List (Term × Term))
+        {list last : Term} (hlist : E list) (hlast : E last) {negs : List Term} (lits : ∀ t ∈ negs, LLit E t) :
+        BoolAt K (fun m => Elixir.Module.Types.Descr.«list_line_empty?/4» (D m) list last (Term.list negs) (.map S)) := by
+      obtain ⟨t, ht, ht'⟩ := tail last hlast
+      obtain ⟨b₁, h₁⟩ := ops.empty hlist S
+      obtain ⟨b₂, h₂⟩ := ops.empty ht' S
+      obtain ⟨b₃, h₃⟩ := negs_total ops dops tail S hlist negs lits t ht'
+      refine ⟨b₁ || b₂ || b₃, fun m hm => ?_⟩
+      have e₃ := h₃ m hm
+      dsimp only at e₃ ⊢
+      unfold Elixir.Module.Types.Descr.«list_line_empty?/4»
+      simp only [ht, Lynx.Except.ok_bind, h₁ m hm, h₂ m hm, e₃, orElse_bool]
+
+    /-- List types of element types decide their emptiness at every call depth from `K + 2`. -/
+    theorem list_total (ops : ElemOk E K) (dops : ElemDiff E K) (tail : TailOk E) (S : List (Term × Term)) {w : Term}
+        (wl : Bdd (LLit E) w) :
+        BoolAt (K + 2) (fun m => Elixir.Module.Types.Descr.«list_empty?/2» (D m) w (.map S)) := by
+      by_cases top : w = .tuple #[.integer 46675407, .atom "term", .atom "term"]
+      · subst top
+        exact ⟨Bool.false, fun m _ => by dsimp only; unfold Elixir.Module.Types.Descr.«list_empty?/2»; rfl⟩
+      by_cases seen : S.any (fun e => Term.exactCompare (.cons (.atom "list") w) e.1 == .eq) = Bool.true
+      · refine ⟨Bool.true, fun m _ => ?_⟩
+        dsimp only
+        unfold Elixir.Module.Types.Descr.«list_empty?/2»
+        split
+        · exact absurd rfl top
+        · simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», seen, Term.true,
+            boolAtom]
+      have fresh : S.any (fun e => Term.exactCompare (.cons (.atom "list") w) e.1 == .eq) = Bool.false := by
+        simpa using seen
+      obtain ⟨S', put⟩ : ∃ S', Erlang.maps.«put/3» (.cons (.atom "list") w) (.atom "true") (.map S) =
+          .ok (.map S') := by
+        simp [Erlang.maps.«put/3»]
+      obtain ⟨lines, dnf, hlines⟩ := dnf_lines wl (LLit E) (fun _ h => h) [] [] [] (by simp) (by simp) (by simp)
+      have each : ∀ x ∈ lines, ∃ b, ∀ m', K + 1 ≤ m' →
+          Elixir.Module.Types.Descr.«-list_empty?/2-fun-0-/2» (D m') (.map S') x = .ok (boolAtom b) := by
+        intro x mx
+        obtain ⟨pos, negs, rfl, hp, hn⟩ := hlines x mx
+        rcases literals_total ops S' pos hp with empty | ⟨a, b, ha, hb, run⟩
+        · exact ⟨Bool.true, fun m' h => by
+            simp [Elixir.Module.Types.Descr.«-list_empty?/2-fun-0-/2», empty m' h, boolAtom]⟩
+        · obtain ⟨bl, hbl⟩ := line_list_total ops dops tail S' ha hb hn
+          exact ⟨bl, fun m' h => by
+            have := hbl m' (by omega)
+            dsimp only at this
+            simp [Elixir.Module.Types.Descr.«-list_empty?/2-fun-0-/2», run m' h, this]⟩
+      classical
+      let res : Term → Bool := fun x => if h : x ∈ lines then Classical.choose (each x h) else Bool.false
+      have hres : ∀ x ∈ lines, ∀ m', K + 1 ≤ m' →
+          Elixir.Module.Types.Descr.«-list_empty?/2-fun-0-/2» (D m') (.map S') x = .ok (boolAtom (res x)) := by
+        intro x mx m' h
+        simp only [res, dif_pos mx]
+        exact Classical.choose_spec (each x mx) m' h
+      refine ⟨lines.all res, fun m hm => ?_⟩
+      obtain ⟨n, rfl, hn⟩ := succ_of_le (show K + 1 + 1 ≤ m by omega)
+      have all := all_list (D (n + 1)) _ _ _ res lines fun x mx => by
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-list_empty?/2-fun-0-/1».pure]
+        exact hres x mx n hn
+      dsimp only
+      unfold Elixir.Module.Types.Descr.«list_empty?/2»
+      split
+      · exact absurd rfl top
+      · simp only [Term.list] at dnf
+        simp [Elixir.Module.Types.Descr.«empty_bdd_seen_key/2», Erlang.erlang.«is_map_key/2», fresh, Term.true,
+          Term.false, put, Elixir.Module.Types.Descr.«bdd_to_dnf/1», dnf]
+        exact all
+
+    /-! Function types of element types decide their emptiness, whatever their lines. -/
+
+    @[simp] theorem boolAtom_true : boolAtom Bool.true = .atom "true" := rfl
+    @[simp] theorem boolAtom_false : boolAtom Bool.false = .atom "false" := rfl
+
+    theorem foldl1_uni (K : Nat) (f : Term) (Inv : Term → Prop) :
+        ∀ l : List Term, (∀ x ∈ l, ∀ a, Inv a → ∃ a', Inv a' ∧ ∀ m, K ≤ m → (D m).pure f #[x, a] = .ok a') →
+          ∀ acc, Inv acc → ∃ r, Inv r ∧ ∀ m, K ≤ m → Erlang.lists.«foldl_1/3» (D m) f acc (Term.list l) = .ok r := by
+      intro l
+      induction l with
+      | nil => exact fun _ acc h => ⟨acc, h, fun m _ => by simp [Term.list, Erlang.lists.«foldl_1/3»]⟩
+      | cons x xs ih =>
+        intro step acc hacc
+        obtain ⟨a', ha', run⟩ := step x List.mem_cons_self acc hacc
+        obtain ⟨r, hr, rest⟩ := ih (fun y my => step y (List.mem_cons_of_mem _ my)) a' ha'
+        refine ⟨r, hr, fun m hm => ?_⟩
+        rw [Erlang.lists.«foldl_1/3».eq_def]
+        simp only [Term.list, run m hm, Lynx.Except.ok_bind]
+        exact rest m hm
+
+    /-- Folds whose steps give the same results at every call depth from `K`. -/
+    theorem foldl_uni (K : Nat) (mo nm : String) (caps : Array Term) (Inv : Term → Prop) (l : List Term)
+        (step : ∀ x ∈ l, ∀ a, Inv a → ∃ a', Inv a' ∧ ∀ m, K ≤ m →
+          (D m).pure (.function mo nm 2 caps) #[x, a] = .ok a') (acc : Term) (hacc : Inv acc) :
+        ∃ r, Inv r ∧ ∀ m, K ≤ m →
+          Erlang.lists.«foldl/3» (D m) (.function mo nm 2 caps) acc (Term.list l) = .ok r := by
+      obtain ⟨r, hr, run⟩ := foldl1_uni K _ Inv l step acc hacc
+      refine ⟨r, hr, fun m hm => ?_⟩
+      have := run m hm
+      cases l with
+      | nil =>
+        have e : acc = r := by simpa [Term.list, Erlang.lists.«foldl_1/3», pure, Except.pure] using this
+        subst e
+        simp [Erlang.lists.«foldl/3», Lynx.Except.guard, Erlang.erlang.«is_function/2», Term.list]
+      | cons x xs =>
+        rw [Erlang.lists.«foldl_1/3».eq_def] at this
+        simpa [Erlang.lists.«foldl/3», Lynx.Except.guard, Erlang.erlang.«is_function/2», Term.list] using this
+
+    theorem any_uni (K : Nat) (mo nm : String) (caps : Array Term) (l : List Term)
+        (each : ∀ x ∈ l, BoolAt K (fun m => (D m).pure (.function mo nm 1 caps) #[x])) :
+        BoolAt K (fun m => Erlang.lists.«any/2» (D m) (.function mo nm 1 caps) (Term.list l)) := by
+      classical
+      let res : Term → Bool := fun x => if h : x ∈ l then Classical.choose (each x h) else Bool.false
+      refine ⟨l.any res, fun m hm => any_list (D m) mo nm caps res l fun x mx => ?_⟩
+      simp only [res, dif_pos mx]
+      exact Classical.choose_spec (each x mx) m hm
+
+    theorem all_uni (K : Nat) (mo nm : String) (caps : Array Term) (l : List Term)
+        (each : ∀ x ∈ l, BoolAt K (fun m => (D m).pure (.function mo nm 1 caps) #[x])) :
+        BoolAt K (fun m => Erlang.lists.«all/2» (D m) (.function mo nm 1 caps) (Term.list l)) := by
+      classical
+      let res : Term → Bool := fun x => if h : x ∈ l then Classical.choose (each x h) else Bool.false
+      refine ⟨l.all res, fun m hm => all_list (D m) mo nm caps res l fun x mx => ?_⟩
+      simp only [res, dif_pos mx]
+      exact Classical.choose_spec (each x mx) m hm
+
+    theorem map1_list (d : Dispatcher) (f : Term) (g : Term → Term) :
+        ∀ l : List Term, (∀ x ∈ l, d.pure f #[x] = .ok (g x)) →
+          Erlang.lists.«map_1/2» d f (Term.list l) = .ok (Term.list (l.map g)) := by
+      intro l
+      induction l with
+      | nil => intro _; simp [Erlang.lists.«map_1/2», Term.list]
+      | cons x xs ih =>
+        intro hf
+        rw [Erlang.lists.«map_1/2».eq_def]
+        simp [Term.list, hf x List.mem_cons_self, ih fun y m => hf y (List.mem_cons_of_mem _ m)]
+
+    theorem map_list (d : Dispatcher) (mo nm : String) (caps : Array Term) (g : Term → Term) (l : List Term)
+        (hf : ∀ x ∈ l, d.pure (.function mo nm 1 caps) #[x] = .ok (g x)) :
+        Erlang.lists.«map/2» d (.function mo nm 1 caps) (Term.list l) = .ok (Term.list (l.map g)) := by
+      cases l with
+      | nil => simp [Erlang.lists.«map/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», Term.list]
+      | cons x xs =>
+        have := map1_list d _ g xs fun y m => hf y (List.mem_cons_of_mem _ m)
+        simp [Erlang.lists.«map/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», Term.list,
+          hf x List.mem_cons_self, this]
+
+    theorem nth1_list (l : List Term) : ∀ (i : Nat), i < l.length →
+        Erlang.lists.«nth_1/2» (.integer (i + 1)) (Term.list l) = .ok (l[i]?.getD .nil) := by
+      induction l with
+      | nil => intro i h; simp at h
+      | cons x xs ih =>
+        intro i h
+        cases i with
+        | zero => simp [Term.list, Erlang.lists.«nth_1/2»]
+        | succ i =>
+          have rest := ih i (by have h' : i + 1 < xs.length + 1 := h; omega)
+          have sub : Erlang.erlang.«-/2» (.integer ((i + 1 + 1 : Nat) : Int)) (.integer 1) =
+              .ok (.integer ((i + 1 : Nat) : Int)) := by
+            rw [Erlang.erlang.«-/2_integers»]; congr 2; omega
+          rw [Erlang.lists.«nth_1/2».eq_def]
+          simp only [Term.list] at rest ⊢
+          split
+          · simp_all <;> omega
+          · simp_all [sub]
+          · simp_all
+
+    theorem nth_list (l : List Term) (i : Nat) (h : i < l.length) :
+        Erlang.lists.«nth/2» (.integer (i + 1)) (Term.list l) = .ok (l[i]?.getD .nil) := by
+      cases l with
+      | nil => simp at h
+      | cons x xs =>
+        cases i with
+        | zero => simp [Erlang.lists.«nth/2», Term.list]
+        | succ i =>
+          have := nth1_list (x :: xs) (i + 1) h
+          unfold Erlang.lists.«nth/2»
+          simp only [Term.list] at this ⊢
+          split
+          · simp_all <;> omega
+          · have gt : compare ((i : Int) + 1 + 1) 1 = .gt := Int.compare_eq_gt.mpr (by omega)
+            simp [Lynx.Except.guard, Erlang.erlang.«>/2», Erlang.erlang.«and/2», gt, Lynx.Except.tryWith]
+            simpa using this
+
+    theorem replace1_list (l : List Term) : ∀ (i : Nat) (v : Term), i < l.length →
+        Elixir.List.«do_replace_at/3» (Term.list l) (.integer i) v = .ok (Term.list (l.set i v)) := by
+      induction l with
+      | nil => intro i v h; simp at h
+      | cons x xs ih =>
+        intro i v h
+        cases i with
+        | zero => simp [Term.list, Elixir.List.«do_replace_at/3»]
+        | succ i =>
+          have rest := ih i v (by have h' : i + 1 < xs.length + 1 := h; omega)
+          have sub : Erlang.erlang.«-/2» (.integer ((i + 1 : Nat) : Int)) (.integer 1) = .ok (.integer (i : Int)) := by
+            rw [Erlang.erlang.«-/2_integers»]; congr 2; omega
+          rw [Elixir.List.«do_replace_at/3».eq_def]
+          simp only [Term.list] at rest ⊢
+          simp [sub, rest, Term.list]
+
+    theorem replace_list (l : List Term) (i : Nat) (v : Term) (h : i < l.length) :
+        Elixir.List.«replace_at/3» (Term.list l) (.integer i) v = .ok (Term.list (l.set i v)) := by
+      have := replace1_list l i v h
+      unfold Elixir.List.«replace_at/3»
+      cases l with
+      | nil => simp at h
+      | cons x xs =>
+        simp [Lynx.Except.guard, Erlang.erlang.«is_list/1», Erlang.erlang.«is_integer/1», Lynx.Except.andAlso,
+          Erlang.erlang.«</2», this, Term.list]
+        have nlt : compare (i : Int) 0 ≠ .lt := fun e => by have := Int.compare_eq_lt.mp e; omega
+        simp [nlt]
+
+    /-- Static types: the top type or maps without a dynamic part. -/
+    def Static (e : Term) : Prop := e = .atom "term" ∨ ∃ X, e = .map X ∧ mapLookup X (.atom "dynamic") = Option.none
+
+    theorem split_static {e : Term} (h : Static e) :
+        Elixir.Module.Types.Descr.«split_dynamic/1» e = .ok (.tuple #[e, e, .atom "false"]) := by
+      rcases h with rfl | ⟨X, rfl, sX⟩
+      · rfl
+      · unfold Elixir.Module.Types.Descr.«split_dynamic/1»
+        simp [getMapKeys_single, sX]
+
+    theorem descr_fields (l : List Term) (hl : ∀ e ∈ l, Static e) :
+        ∀ (acc dacc : List Term) (se : Bool), ∃ se' : Bool,
+          Elixir.Module.Types.Descr.«tuple_descr_fields/5» (Term.list l) (Term.list acc) (Term.list dacc)
+            (.atom "false") (boolAtom se) =
+          .ok (.tuple #[Term.list (l.reverse ++ acc), Term.list (l.reverse ++ dacc), .atom "false", boolAtom se']) := by
+      induction l with
+      | nil => intro acc dacc se; exact ⟨se, by simp [Term.list, Elixir.Module.Types.Descr.«tuple_descr_fields/5»]⟩
+      | cons x xs ih =>
+        intro acc dacc se
+        have hx := hl x List.mem_cons_self
+        obtain ⟨se', run⟩ := ih (fun e m => hl e (List.mem_cons_of_mem _ m)) (x :: acc) (x :: dacc)
+          (se || (x.compare (.map []) == .eq))
+        refine ⟨se', ?_⟩
+        have eq : Erlang.erlang.«==/2» x (.map []) = .ok (boolAtom (x.compare (.map []) == .eq)) := by
+          simp only [Erlang.erlang.«==/2»]; cases h : x.compare (.map []) <;> simp [boolAtom, h]
+        rw [Elixir.Module.Types.Descr.«tuple_descr_fields/5».eq_def]
+        simp only [Term.list] at run ⊢
+        cases se <;> cases hd : (x.compare (.map []) == .eq) <;>
+          simp_all [split_static hx, Lynx.Except.orElse, boolAtom, Term.list]
+
+    theorem bsl27 (x : Int) : Erlang.erlang.«bsl/2» (.integer x) (.integer 27) = .ok (.integer (x <<< (27 : Nat))) := rfl
+
+    theorem leaf_closed (l : List Term) : ∃ k : Int,
+        Elixir.Module.Types.Descr.«bdd_leaf_new/2» (.atom "closed") (Term.list l) =
+          .ok (.tuple #[.integer k, .atom "closed", Term.list l]) := by
+      obtain ⟨hash, hrun, -⟩ := Erlang.erlang.phash2_range (Term.list l)
+      have len := length_list l
+      obtain ⟨v, key⟩ : ∃ v : Int, Elixir.Module.Types.Descr.«bdd_leaf_key/2» (Term.list l) (.integer hash) =
+          .ok (.integer v) := by
+        unfold Elixir.Module.Types.Descr.«bdd_leaf_key/2»
+        cases l <;> simp only [Term.list] at len ⊢ <;>
+          simp [Lynx.Except.guard, Erlang.erlang.«is_list/1», len, Lynx.Except.tryWith, bsl27]
+      simp [Elixir.Module.Types.Descr.«bdd_leaf_new/2», hrun, key, Erlang.erlang.«-/2_integers»]
+
+    theorem reverse2_list (l : List Term) : ∀ acc : List Term,
+        Erlang.lists.«reverse/2» (Term.list l) (Term.list acc) = .ok (Term.list (l.reverse ++ acc)) := by
+      induction l with
+      | nil => intro acc; simp [Term.list, Erlang.lists.«reverse/2»]
+      | cons x xs ih => intro acc; simpa [Term.list, Erlang.lists.«reverse/2»] using ih (x :: acc)
+
+    theorem reverse1_list (l : List Term) : Erlang.lists.«reverse/1» (Term.list l) = .ok (Term.list l.reverse) := by
+      match l with
+      | [] => rfl
+      | [a] => rfl
+      | [a, b] => rfl
+      | a :: b :: c :: rest =>
+        have := reverse2_list (c :: rest) [b, a]
+        simp only [Term.list] at this ⊢
+        simp [Erlang.lists.«reverse/1», this, Term.list]
+
+    theorem leaf_fun (args : List Term) : ∃ k : Int,
+        Elixir.Module.Types.Descr.«bdd_leaf_new/2» (Term.list args) (.atom "term") =
+          .ok (.tuple #[.integer k, Term.list args, .atom "term"]) := by
+      obtain ⟨hash, hrun, -⟩ := Erlang.erlang.phash2_range (.cons (Term.list args) (.atom "term"))
+      unfold Elixir.Module.Types.Descr.«bdd_leaf_new/2»
+      cases args <;> simp [hrun, Elixir.Module.Types.Descr.«bdd_leaf_key/2», Lynx.Except.guard,
+        Erlang.erlang.«is_list/1», Term.list]
+
+    /-- The domain of arguments: the closed tuple of them. -/
+    theorem args_domain (l : List Term) (hl : ∀ e ∈ l, Static e) : ∃ k : Int,
+        Elixir.Module.Types.Descr.«args_to_domain/1» (Term.list l) =
+          .ok (.map [(.atom "tuple", .tuple #[.integer k, .atom "closed", Term.list l])]) := by
+      obtain ⟨se, run⟩ := descr_fields l hl [] [] Bool.false
+      obtain ⟨k, leaf⟩ := leaf_closed l
+      refine ⟨k, ?_⟩
+      have rev : Erlang.lists.«reverse/1» (Term.list l.reverse) = .ok (Term.list l) := by
+        simpa using reverse1_list l.reverse
+      simp only [Term.list, List.append_nil, boolAtom_false] at run
+      unfold Elixir.Module.Types.Descr.«args_to_domain/1»
+      cases l <;> simp_all [Lynx.Except.guard, Erlang.erlang.«is_list/1», Elixir.Module.Types.Descr.«tuple/1»,
+        Elixir.Module.Types.Descr.«tuple_descr/2», Elixir.Module.Types.Descr.«tuple_descr_static/2»,
+        Elixir.Module.Types.Descr.«tuple_new/2», Term.list, Lynx.Except.tryWith]
+
+    /-- Element types that also unite into element types, decide subtyping and disjointness, and are static,
+    with the same results at every call depth from `K`. -/
+    structure ElemFun (E : Term → Prop) (K : Nat) : Prop where
+      static : ∀ {a}, E a → Static a
+      union : ∀ {a b}, E a → E b → ∃ c, E c ∧ ∀ m, K ≤ m →
+        Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok c
+      sub : ∀ {a b}, E a → E b → BoolAt K (fun m => Elixir.Module.Types.Descr.«subtype?/2» (D m) a b)
+      disj : ∀ {a b}, E a → E b → BoolAt K (fun m => Elixir.Module.Types.Descr.«disjoint?/2» (D m) a b)
+
+    /-- Domains of function types: maps holding the domains of arguments `E`, closed under unions,
+    intersections, and differences, whose emptiness is decided, at every call depth from `K`. -/
+    structure DomOk (Dm E : Term → Prop) (K : Nat) : Prop where
+      dom : ∀ l : List Term, (∀ a ∈ l, E a) → ∃ t, Dm t ∧ Elixir.Module.Types.Descr.«args_to_domain/1» (Term.list l) = .ok t
+      none : Dm (.map [])
+      isMap : ∀ {a}, Dm a → ∃ X, a = .map X
+      union : ∀ {a b}, Dm a → Dm b → ∃ c, Dm c ∧ ∀ m, K ≤ m →
+        Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok c
+      inter : ∀ {a b}, Dm a → Dm b → ∃ c, Dm c ∧ ∀ m, K ≤ m →
+        Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok c
+      diff : ∀ {a b}, Dm a → Dm b → ∃ c, Dm c ∧ ∀ m, K ≤ m →
+        Elixir.Module.Types.Descr.«bare_difference/2» (D m) a b = .ok c
+      empty : ∀ {a}, Dm a → ∀ S : List (Term × Term), ∃ b : Bool, ∀ m, K ≤ m →
+        Elixir.Module.Types.Descr.«empty_seen?/2» (D m) a (.map S) = .ok (boolAtom b)
+
+    /-- Arguments of `phi/5`: pairs of a flag and an element type. -/
+    def PhiArgs (E : Term → Prop) (args : List Term) : Prop :=
+      ∀ a ∈ args, ∃ (b : Bool) (t : Term), a = .tuple #[boolAtom b, t] ∧ E t
+
+    /-- Caches of `phi/5`: maps to Booleans. -/
+    def PhiCache (C : List (Term × Term)) : Prop := ∀ q v, mapLookup C q = some v → ∃ b : Bool, v = boolAtom b
+
+    theorem PhiCache.put {C : List (Term × Term)} (hC : PhiCache C) (k : Term) (b : Bool) :
+        PhiCache ((k, boolAtom b) :: C) := by
+      intro q v h
+      by_cases e : exactCompare q k = .eq
+      · simp [mapLookup, List.find?_cons, e] at h
+        exact ⟨b, h.symm⟩
+      · exact hC q v (by simpa [mapLookup, List.find?_cons, e] using h)
+
+    theorem phi_nil (ops : ElemOk E K) (S : List (Term × Term)) (args : List Term) (hargs : PhiArgs E args)
+        (b : Bool) {t : Term} (ht : E t) (C : List (Term × Term)) (hC : PhiCache C) :
+        ∃ (r : Bool) (C' : List (Term × Term)), PhiCache C' ∧ ∀ m, K + 1 ≤ m →
+          Elixir.Module.Types.Descr.«phi/5» (D m) (Term.list args) (.tuple #[boolAtom b, t]) .nil (.map C) (.map S) =
+            .ok (.tuple #[boolAtom r, .map C']) := by
+      obtain ⟨ab, hab⟩ := any_uni (K + 1) "Elixir.Module.Types.Descr" "-phi/5-fun-0-" #[.map S] args (fun a ma => by
+        obtain ⟨b', t', rfl, ht'⟩ := hargs a ma
+        obtain ⟨e, he⟩ := ops.empty ht' S
+        refine ⟨b' && e, fun m hm => ?_⟩
+        obtain ⟨n, rfl, hn⟩ := succ_of_le hm
+        dsimp only
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-phi/5-fun-0-/1».pure]
+        simp only [Elixir.Module.Types.Descr.«-phi/5-fun-0-/2», he n hn]
+        cases b' <;> cases e <;> rfl)
+      obtain ⟨e, he⟩ := ops.empty ht S
+      refine ⟨ab || (b && e), _, hC.put (.tuple #[Term.list args, .tuple #[boolAtom b, t], .nil]) (ab || (b && e)),
+        fun m hm => ?_⟩
+      have h₁ := hab m hm
+      dsimp only at h₁
+      unfold Elixir.Module.Types.Descr.«phi/5»
+      simp only [h₁, he m (by omega), pure_bind]
+      cases ab <;> cases b <;> cases e <;> rfl
+
+    theorem PhiArgs.set {args : List Term} (h : PhiArgs E args) (i : Nat) (b : Bool) {t : Term} (ht : E t) :
+        PhiArgs E (args.set i (.tuple #[boolAtom b, t])) := by
+      intro a ma
+      rcases List.mem_or_eq_of_mem_set ma with ma | rfl
+      · exact h a ma
+      · exact ⟨b, t, rfl, ht⟩
+
+    /-- `phi_arguments/7` returns a Boolean and a cache of Booleans, at every call depth from `K + 1`,
+    when `phi/5` does for the remaining positive literals. -/
+    theorem phi_args_total (ops : ElemOk E K) (dops : ElemDiff E K) (n : Int) (S : List (Term × Term))
+        (rest : List Term)
+        (phi : ∀ args, PhiArgs E args → (args.length : Int) = n → ∀ (b : Bool) t, E t → ∀ C, PhiCache C →
+          ∃ (r : Bool) (C' : List (Term × Term)), PhiCache C' ∧ ∀ m, K + 1 ≤ m →
+            Elixir.Module.Types.Descr.«phi/5» (D m) (Term.list args) (.tuple #[boolAtom b, t]) (Term.list rest)
+              (.map C) (.map S) = .ok (.tuple #[boolAtom r, .map C'])) :
+        ∀ (types : List Term) (i : Nat) (args : List Term), PhiArgs E args → (args.length : Int) = n →
+          (∀ x ∈ types, E x) → i + types.length = args.length → ∀ (b : Bool) t, E t → ∀ C, PhiCache C →
+          ∃ (r : Bool) (C' : List (Term × Term)), PhiCache C' ∧ ∀ m, K + 1 ≤ m →
+            Elixir.Module.Types.Descr.«phi_arguments/7» (D m) (Term.list types) (.integer i) (Term.list args)
+              (.tuple #[boolAtom b, t]) (Term.list rest) (.map C) (.map S) = .ok (.tuple #[boolAtom r, .map C']) := by
+      intro types
+      induction types with
+      | nil =>
+        intro i args _ _ _ _ b t _ C hC
+        exact ⟨Bool.true, C, hC, fun m _ => by
+          unfold Elixir.Module.Types.Descr.«phi_arguments/7»; simp [Term.list, boolAtom]⟩
+      | cons ty tys ih =>
+        intro i args hargs hlen htys hi b t ht C hC
+        have hty := htys ty List.mem_cons_self
+        have htys' : ∀ x ∈ tys, E x := fun x m => htys x (List.mem_cons_of_mem _ m)
+        have lt : i < args.length := by simp at hi; omega
+        obtain ⟨b', a, ha, hEa⟩ := hargs _ (List.getElem_mem lt)
+        have nth : Erlang.lists.«nth/2» (.integer ((i : Int) + 1)) (Term.list args) = .ok (.tuple #[boolAtom b', a]) := by
+          have := nth_list args i lt
+          simp only [List.getElem?_eq_getElem lt, Option.getD_some, ha] at this
+          simpa using this
+        have plus : Erlang.erlang.«+/2» (.integer (i : Int)) (.integer 1) = .ok (.integer ((i : Int) + 1)) := by
+          simp
+        obtain ⟨d, hd, rd⟩ := dops.diff hEa hty
+        obtain ⟨ed, hed⟩ := ops.empty hd S
+        have next := fun C' hC' => ih (i + 1) args hargs hlen htys' (by simp at hi ⊢; omega) b t ht C' hC'
+        cases ed
+        · have set := replace_list args i (.tuple #[Term.atom "true", d]) lt
+          obtain ⟨r₁, C₁, hC₁, run₁⟩ := phi (args.set i (.tuple #[boolAtom Bool.true, d])) (hargs.set i Bool.true hd)
+            (by simpa using hlen) b t ht C hC
+          cases r₁
+          · refine ⟨Bool.false, C₁, hC₁, fun m hm => ?_⟩
+            have run₁' := run₁ m hm
+            unfold Elixir.Module.Types.Descr.«phi_arguments/7»
+            simp only [Term.list, boolAtom_true, boolAtom_false] at nth set run₁' ⊢
+            simp [plus, nth, rd m (by omega), hed m (by omega), Lynx.Except.guard, isMember, set, run₁']
+          · obtain ⟨r, C', hC', run⟩ := next C₁ hC₁
+            refine ⟨r, C', hC', fun m hm => ?_⟩
+            have run' := run m hm
+            have run₁' := run₁ m hm
+            unfold Elixir.Module.Types.Descr.«phi_arguments/7»
+            simp only [Term.list, boolAtom_true, boolAtom_false] at nth set run₁' run' ⊢
+            simp [plus, nth, rd m (by omega), hed m (by omega), Lynx.Except.guard, isMember, set, run₁']
+            simpa [plus] using run'
+        · obtain ⟨r, C', hC', run⟩ := next C hC
+          refine ⟨r, C', hC', fun m hm => ?_⟩
+          have run' := run m hm
+          unfold Elixir.Module.Types.Descr.«phi_arguments/7»
+          simp only [Term.list] at nth run' ⊢
+          simp [plus, nth, rd m (by omega), hed m (by omega), boolAtom_true, boolAtom_false, Lynx.Except.guard, isMember]
+          simpa [plus] using run'
+
+    /-- `phi/5` returns a Boolean and a cache of Booleans at every call depth from `K + 1`. -/
+    theorem phi_total (ops : ElemOk E K) (dops : ElemDiff E K) (n : Int) (S : List (Term × Term)) :
+        ∀ (pos : List Term), (∀ t ∈ pos, FunLit E n t) → ∀ args, PhiArgs E args → (args.length : Int) = n →
+          ∀ (b : Bool) t, E t → ∀ C, PhiCache C →
+          ∃ (r : Bool) (C' : List (Term × Term)), PhiCache C' ∧ ∀ m, K + 1 ≤ m →
+            Elixir.Module.Types.Descr.«phi/5» (D m) (Term.list args) (.tuple #[boolAtom b, t]) (Term.list pos)
+              (.map C) (.map S) = .ok (.tuple #[boolAtom r, .map C']) := by
+      intro pos
+      induction pos with
+      | nil => intro _ args hargs _ b t ht C hC; exact phi_nil ops S args hargs b ht C hC
+      | cons p rest ih =>
+        intro hpos args hargs hlen b ret hret C hC
+        obtain ⟨k, arguments, ret', rfl, alen, harguments, hret'⟩ := hpos p List.mem_cons_self
+        have ih' := ih fun t m => hpos t (List.mem_cons_of_mem _ m)
+        let key := Term.tuple #[Term.list args, .tuple #[boolAtom b, ret],
+          Term.list (.tuple #[.integer k, Term.list arguments, ret'] :: rest)]
+        cases hk : mapLookup C key with
+        | some v =>
+          obtain ⟨r, rfl⟩ := hC _ _ hk
+          refine ⟨r, C, hC, fun m _ => ?_⟩
+          unfold Elixir.Module.Types.Descr.«phi/5»
+          simp only [key, Term.list] at hk ⊢
+          simp only [getMapKeys_single, pure_bind, hk, Option.toList]
+          rfl
+        | none =>
+          obtain ⟨meet, hmeet, rmeet⟩ := ops.inter hret hret'
+          obtain ⟨em, hem⟩ := ops.empty hmeet S
+          have args0 := phi_args_total ops dops n S rest ih' arguments 0 args hargs hlen harguments
+            (by simp; omega) b ret hret
+          cases em
+          · obtain ⟨r₁, C₁, hC₁, run₁⟩ := ih' args hargs hlen Bool.true meet hmeet C hC
+            cases r₁
+            · refine ⟨Bool.false, _, hC₁.put key Bool.false, fun m hm => ?_⟩
+              have run₁' := run₁ m hm
+              unfold Elixir.Module.Types.Descr.«phi/5»
+              simp only [key, Term.list, boolAtom_true, boolAtom_false] at hk run₁' ⊢
+              simp only [getMapKeys_single, pure_bind, hk, Option.toList]
+              simp [ rmeet m (by omega), hem m (by omega), boolAtom_true, boolAtom_false, Lynx.Except.guard, isMember,
+                run₁', Erlang.maps.«put/3»]
+            · obtain ⟨r, C', hC', run⟩ := args0 C₁ hC₁
+              refine ⟨r, _, hC'.put key r, fun m hm => ?_⟩
+              have run₁' := run₁ m hm
+              have run' := run m hm
+              unfold Elixir.Module.Types.Descr.«phi/5»
+              simp only [key, Term.list, boolAtom_true, boolAtom_false, Int.natCast_zero] at hk run₁' run' ⊢
+              simp only [getMapKeys_single, pure_bind, hk, Option.toList]
+              simp [ rmeet m (by omega), hem m (by omega), boolAtom_true, boolAtom_false, Lynx.Except.guard, isMember,
+                run₁', run', Erlang.maps.«put/3»]
+          · obtain ⟨r, C', hC', run⟩ := args0 C hC
+            refine ⟨r, _, hC'.put key r, fun m hm => ?_⟩
+            have run' := run m hm
+            unfold Elixir.Module.Types.Descr.«phi/5»
+            simp only [key, Term.list, boolAtom_true, boolAtom_false, Int.natCast_zero] at hk run' ⊢
+            simp only [getMapKeys_single, pure_bind, hk, Option.toList]
+            simp [ rmeet m (by omega), hem m (by omega), boolAtom_true, boolAtom_false, Lynx.Except.guard, isMember,
+              run', Erlang.maps.«put/3»]
+
+    theorem aux_apply_total (ops : ElemOk E K) (fops : ElemFun E K) (dm : DomOk Dm E K) (n : Int) :
+        ∀ arrows : List Term, (∀ t ∈ arrows, FunLit E n t) → ∀ result input rets, E result → Dm input → E rets →
+          ∃ r, E r ∧ ∀ m, K ≤ m →
+            Elixir.Module.Types.Descr.«aux_apply/4» (D m) result input rets (Term.list arrows) = .ok r := by
+      intro arrows
+      induction arrows with
+      | nil =>
+        intro _ result input rets hres _ hrets
+        obtain ⟨sb, hsb⟩ := fops.sub hrets hres
+        obtain ⟨u, hu, ru⟩ := fops.union hres hrets
+        cases sb
+        · exact ⟨u, hu, fun m hm => by
+            have h := hsb m hm; dsimp only at h
+            unfold Elixir.Module.Types.Descr.«aux_apply/4»
+            simp [Term.list, h, Lynx.Except.guard, isMember, ru m hm]⟩
+        · exact ⟨result, hres, fun m hm => by
+            have h := hsb m hm; dsimp only at h
+            unfold Elixir.Module.Types.Descr.«aux_apply/4»
+            simp [Term.list, h, Lynx.Except.guard, isMember]⟩
+      | cons p rest ih =>
+        intro harrows result input rets hres hin hrets
+        obtain ⟨k, args, ret, rfl, -, hargs, hret⟩ := harrows p List.mem_cons_self
+        have ih' := ih fun t m => harrows t (List.mem_cons_of_mem _ m)
+        obtain ⟨dom, hdom, rdom⟩ := dm.dom args hargs
+        obtain ⟨sub, hsub, rsub⟩ := dm.diff hin hdom
+        obtain ⟨refine, hrefine, rrefine⟩ := ops.inter hrets hret
+        obtain ⟨X, rfl⟩ := dm.isMap hsub
+        obtain ⟨es, hes⟩ := dm.empty hsub []
+        cases es
+        · obtain ⟨r₁, hr₁, run₁⟩ := ih' result (.map X) rets hres hsub hrets
+          obtain ⟨r, hr, run⟩ := ih' r₁ input refine hr₁ hin hrefine
+          exact ⟨r, hr, fun m hm => by
+            unfold Elixir.Module.Types.Descr.«aux_apply/4»
+            simp [Term.list, rdom, rsub m hm, rrefine m hm, Elixir.Module.Types.Descr.«empty?/1», hes m hm,
+              Lynx.Except.guard, isMember]
+            simp [run₁ m hm, run m hm]⟩
+        · obtain ⟨r, hr, run⟩ := ih' result input refine hres hin hrefine
+          exact ⟨r, hr, fun m hm => by
+            unfold Elixir.Module.Types.Descr.«aux_apply/4»
+            simp [Term.list, rdom, rsub m hm, rrefine m hm, Elixir.Module.Types.Descr.«empty?/1», hes m hm,
+              Lynx.Except.guard, isMember]
+            simp [run m hm]⟩
+
+    theorem apply_static_total (ops : ElemOk E K) (fops : ElemFun E K) (dm : DomOk Dm E K) (hnone : E (.map []))
+        (n : Int) (args : List Term) (hargs : ∀ a ∈ args, E a) (pos : List Term) (hpos : ∀ t ∈ pos, FunLit E n t) :
+        ∃ r, E r ∧ ∀ m, K + 1 ≤ m →
+          Elixir.Module.Types.Descr.«fun_apply_static/2» (D m) (Term.list args) (Term.list [Term.list pos]) = .ok r := by
+      obtain ⟨dom, hdom, rdom⟩ := dm.dom args hargs
+      obtain ⟨r, hr, run⟩ := foldl_uni (K + 1) "Elixir.Module.Types.Descr" "-fun_apply_static/2-fun-0-" #[dom] E
+        [Term.list pos] (by
+          intro x mx a ha
+          rw [List.mem_singleton.mp mx]
+          obtain ⟨r, hr, run⟩ := aux_apply_total ops fops dm n pos hpos a dom (.atom "term") ha hdom ops.term
+          refine ⟨r, hr, fun m hm => ?_⟩
+          obtain ⟨m', rfl, hm'⟩ := succ_of_le hm
+          rw [Erlang.program.«Elixir.Module.Types.Descr:-fun_apply_static/2-fun-0-/2».pure]
+          exact run m' hm') (.map []) hnone
+      exact ⟨r, hr, fun m hm => by
+        unfold Elixir.Module.Types.Descr.«fun_apply_static/2»
+        simp [rdom, run m hm]⟩
+
+    theorem apply_disjoint_total (fops : ElemFun E K) (dm : DomOk Dm E K) (hnone : E (.map []))
+        (n : Int) (args : List Term) (hargs : ∀ a ∈ args, E a) (pos : List Term) (hpos : ∀ t ∈ pos, FunLit E n t) :
+        ∃ r, E r ∧ ∀ m, K + 1 ≤ m →
+          Elixir.Module.Types.Descr.«apply_disjoint/2» (D m) (Term.list args) (Term.list pos) = .ok r := by
+      obtain ⟨dom, hdom, rdom⟩ := dm.dom args hargs
+      obtain ⟨r, hr, run⟩ := foldl_uni (K + 1) "Elixir.Module.Types.Descr" "-apply_disjoint/2-fun-0-" #[dom] E
+        pos (by
+          intro x mx a ha
+          obtain ⟨k, args', ret', rfl, -, hargs', hret'⟩ := hpos x mx
+          obtain ⟨dom', hdom', rdom'⟩ := dm.dom args' hargs'
+          obtain ⟨i, hi, ri⟩ := dm.inter hdom' hdom
+          obtain ⟨X, rfl⟩ := dm.isMap hi
+          obtain ⟨e, he⟩ := dm.empty hi []
+          obtain ⟨u, hu, ru⟩ := fops.union ha hret'
+          cases e
+          · refine ⟨u, hu, fun m hm => ?_⟩
+            obtain ⟨m', rfl, hm'⟩ := succ_of_le hm
+            rw [Erlang.program.«Elixir.Module.Types.Descr:-apply_disjoint/2-fun-0-/2».pure]
+            simp [Elixir.Module.Types.Descr.«-apply_disjoint/2-fun-0-/3», rdom', ri m' hm',
+              Elixir.Module.Types.Descr.«empty?/1», he m' hm', Lynx.Except.guard, isMember, ru m' hm']
+          · refine ⟨a, ha, fun m hm => ?_⟩
+            obtain ⟨m', rfl, hm'⟩ := succ_of_le hm
+            rw [Erlang.program.«Elixir.Module.Types.Descr:-apply_disjoint/2-fun-0-/2».pure]
+            simp [Elixir.Module.Types.Descr.«-apply_disjoint/2-fun-0-/3», rdom', ri m' hm',
+              Elixir.Module.Types.Descr.«empty?/1», he m' hm', Lynx.Except.guard, isMember]) (.map []) hnone
+      exact ⟨r, hr, fun m hm => by
+        unfold Elixir.Module.Types.Descr.«apply_disjoint/2»
+        simp [rdom, run m hm]⟩
+
+    theorem disjoint_args_total (fops : ElemFun E K) :
+        ∀ (l₁ l₂ : List Term), (∀ a ∈ l₁, E a) → (∀ a ∈ l₂, E a) → l₁.length = l₂.length →
+          BoolAt K (fun m => Elixir.Module.Types.Descr.«disjoint_arguments?/2» (D m) (Term.list l₁) (Term.list l₂)) := by
+      intro l₁
+      induction l₁ with
+      | nil =>
+        intro l₂ _ _ len
+        cases l₂ with
+        | nil => exact ⟨Bool.false, fun m _ => by
+            dsimp only; unfold Elixir.Module.Types.Descr.«disjoint_arguments?/2»; simp [Term.list]⟩
+        | cons _ _ => simp at len
+      | cons a l₁ ih =>
+        intro l₂ h₁ h₂ len
+        cases l₂ with
+        | nil => simp at len
+        | cons b l₂ =>
+          obtain ⟨d, hd⟩ := fops.disj (h₁ a List.mem_cons_self) (h₂ b List.mem_cons_self)
+          obtain ⟨r, hr⟩ := ih l₂ (fun x m => h₁ x (List.mem_cons_of_mem _ m))
+            (fun x m => h₂ x (List.mem_cons_of_mem _ m)) (by simpa using len)
+          refine ⟨d || r, fun m hm => ?_⟩
+          have e₁ := hd m hm
+          have e₂ := hr m hm
+          dsimp only at e₁ e₂ ⊢
+          unfold Elixir.Module.Types.Descr.«disjoint_arguments?/2»
+          rw [e₁, e₂, orElse_bool]
+
+    theorem all_disjoint_total (fops : ElemFun E K) (n : Int) :
+        ∀ pos : List Term, (∀ t ∈ pos, FunLit E n t) →
+          BoolAt (K + 1) (fun m => Elixir.Module.Types.Descr.«all_disjoint_arguments?/1» (D m) (Term.list pos)) := by
+      intro pos
+      induction pos with
+      | nil => intro _; exact ⟨Bool.true, fun m _ => by
+          dsimp only; unfold Elixir.Module.Types.Descr.«all_disjoint_arguments?/1»; simp [Term.list]⟩
+      | cons p rest ih =>
+        intro hpos
+        obtain ⟨k, args, ret, rfl, alen, hargs, -⟩ := hpos p List.mem_cons_self
+        have hrest : ∀ t ∈ rest, FunLit E n t := fun t m => hpos t (List.mem_cons_of_mem _ m)
+        have each := all_uni (K + 1) "Elixir.Module.Types.Descr" "-all_disjoint_arguments?/1-fun-0-" #[Term.list args]
+          rest (fun q mq => by
+            obtain ⟨k', args', ret', rfl, alen', hargs', -⟩ := hrest q mq
+            obtain ⟨b, hb⟩ := disjoint_args_total fops args args' hargs hargs' (by omega)
+            refine ⟨b, fun m hm => ?_⟩
+            obtain ⟨m', rfl, hm'⟩ := succ_of_le hm
+            dsimp only
+            rw [Erlang.program.«Elixir.Module.Types.Descr:-all_disjoint_arguments?/1-fun-0-/1».pure]
+            simp only [Elixir.Module.Types.Descr.«-all_disjoint_arguments?/1-fun-0-/2»]
+            exact hb m' hm')
+        obtain ⟨b, hb⟩ := BoolAt.andAlso each (ih hrest)
+        refine ⟨b, fun m hm => ?_⟩
+        have h := hb m hm
+        dsimp only at h ⊢
+        unfold Elixir.Module.Types.Descr.«all_disjoint_arguments?/1»
+        simpa [Term.list] using h
+
+    theorem nonempty_args_total (ops : ElemOk E K) (S : List (Term × Term)) (args : List Term) (hargs : ∀ a ∈ args, E a)
+        (name : String) (lam : ∀ d a, (D (d + 1)).pure (.function "Elixir.Module.Types.Descr" name 1 #[.map S]) #[a] =
+          (do let e ← Elixir.Module.Types.Descr.«empty_seen?/2» (D d) a (.map S); Erlang.erlang.«not/1» e)) :
+        BoolAt (K + 1) (fun m => Erlang.lists.«all/2» (D m) (.function "Elixir.Module.Types.Descr" name 1 #[.map S])
+          (Term.list args)) :=
+      all_uni (K + 1) _ _ _ args fun a ma => by
+        obtain ⟨e, he⟩ := ops.empty (hargs a ma) S
+        refine ⟨!e, fun m hm => ?_⟩
+        obtain ⟨m', rfl, hm'⟩ := succ_of_le hm
+        dsimp only
+        rw [lam, he m' hm']
+        cases e <;> rfl
+
+    /-- `disjoint_non_empty_domains?/3` classifies the positive literals at every call depth from `K + 2`. -/
+    theorem domains_total (ops : ElemOk E K) (fops : ElemFun E K) (n : Int) (S : List (Term × Term))
+        (args : List Term) (hargs : ∀ a ∈ args, E a) (pos : List Term) (hpos : ∀ t ∈ pos, FunLit E n t) :
+        ∃ v, (v = .atom "nil" ∨ v = .atom "disjoint_non_empty" ∨ v = .atom "non_empty") ∧ ∀ m, K + 2 ≤ m →
+          Elixir.Module.Types.Descr.«disjoint_non_empty_domains?/3» (D m) (Term.list args) (Term.list pos) (.map S) =
+            .ok v := by
+      obtain ⟨a₁, h₁⟩ := nonempty_args_total ops S args hargs "-disjoint_non_empty_domains?/3-fun-0-" (fun d a => by
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-disjoint_non_empty_domains?/3-fun-0-/1».pure]; rfl)
+      obtain ⟨a₂, h₂⟩ := all_uni (K + 2) "Elixir.Module.Types.Descr" "-all_non_empty_arguments?/2-fun-1-" #[.map S] pos
+        (fun p mp => by
+          obtain ⟨k, args', ret', rfl, -, hargs', -⟩ := hpos p mp
+          obtain ⟨b, hb⟩ := nonempty_args_total ops S args' hargs' "-all_non_empty_arguments?/2-fun-0-" (fun d a => by
+            rw [Erlang.program.«Elixir.Module.Types.Descr:-all_non_empty_arguments?/2-fun-0-/1».pure]; rfl)
+          refine ⟨b, fun m hm => ?_⟩
+          obtain ⟨m', rfl, hm'⟩ := succ_of_le hm
+          dsimp only
+          rw [Erlang.program.«Elixir.Module.Types.Descr:-all_non_empty_arguments?/2-fun-1-/1».pure]
+          simp only [Elixir.Module.Types.Descr.«-all_non_empty_arguments?/2-fun-1-/2»]
+          exact hb m' (by omega))
+      obtain ⟨dj, hdj⟩ := all_disjoint_total fops n pos hpos
+      refine ⟨if a₁ && a₂ then (if dj then .atom "disjoint_non_empty" else .atom "non_empty") else .atom "nil",
+        by split <;> (try split) <;> simp, fun m hm => ?_⟩
+      have e₁ := h₁ m (by omega)
+      have e₂ := h₂ m hm
+      have e₃ := hdj m (by omega)
+      dsimp only at e₁ e₂ e₃
+      unfold Elixir.Module.Types.Descr.«disjoint_non_empty_domains?/3»
+      simp only [Elixir.Module.Types.Descr.«all_non_empty_arguments?/2», pure_bind, e₁, e₂, andAlso_bool]
+      cases a₁ <;> cases a₂ <;> cases dj <;>
+        simp [e₃, Lynx.Except.guard, Lynx.Except.andAlso, Erlang.erlang.«/=/2», boolAtom]
+
+    theorem negation_total (ops : ElemOk E K) (dops : ElemDiff E K) (fops : ElemFun E K) (hnone : E (.map []))
+        {ret : Term} (hret : E ret) :
+        ∃ neg, E neg ∧ ∀ m, K ≤ m → Elixir.Module.Types.Descr.«bare_negation/1» (D m) ret = .ok neg := by
+      rcases fops.static hret with rfl | ⟨X, rfl, -⟩
+      · exact ⟨.map [], hnone, fun m _ => by unfold Elixir.Module.Types.Descr.«bare_negation/1»; rfl⟩
+      · obtain ⟨c, hc, rc⟩ := dops.diff ops.term hret
+        exact ⟨c, hc, fun m hm => by unfold Elixir.Module.Types.Descr.«bare_negation/1»; exact rc m hm⟩
+
+    /-- `phi_starter/4` returns a Boolean at every call depth from `K + 2`. -/
+    theorem phi_starter_total (ops : ElemOk E K) (dops : ElemDiff E K) (fops : ElemFun E K) (dm : DomOk Dm E K)
+        (hnone : E (.map [])) (n : Int) (S : List (Term × Term)) (args : List Term) (hargs : ∀ a ∈ args, E a)
+        (len : (args.length : Int) = n) {ret : Term} (hret : E ret) (pos : List Term) (hpos : ∀ t ∈ pos, FunLit E n t) :
+        BoolAt (K + 2) (fun m => Elixir.Module.Types.Descr.«phi_starter/4» (D m) (Term.list args) ret (Term.list pos)
+          (.map S)) := by
+      obtain ⟨v, hv, rv⟩ := domains_total ops fops n S args hargs pos hpos
+      rcases hv with rfl | rfl | rfl
+      · obtain ⟨neg, hneg, rneg⟩ := negation_total ops dops fops hnone hret
+        have margs : ∀ m, Erlang.lists.«map/2» (D m) (.function "Elixir.Module.Types.Descr" "-phi_starter/4-fun-0-" 1 #[])
+            (Term.list args) = .ok (Term.list (args.map fun x => .tuple #[boolAtom Bool.false, x])) := fun m =>
+          map_list (D m) _ _ _ _ args fun x _ => by
+            rw [Erlang.program.«Elixir.Module.Types.Descr:-phi_starter/4-fun-0-/1».pure]; rfl
+        obtain ⟨r, C', -, run⟩ := phi_total ops dops n S pos hpos (args.map fun x => .tuple #[boolAtom Bool.false, x])
+          (fun a ma => by
+            obtain ⟨x, mx, rfl⟩ := List.mem_map.mp ma
+            exact ⟨Bool.false, x, rfl, hargs x mx⟩) (by simpa using len) Bool.false neg hneg [] (fun q v h => by
+            simp [mapLookup] at h)
+        refine ⟨r, fun m hm => ?_⟩
+        have e := run m (by omega)
+        simp only [boolAtom_false] at e margs
+        dsimp only
+        unfold Elixir.Module.Types.Descr.«phi_starter/4»
+        simp [rv m hm, margs, rneg m (by omega), e]
+      · obtain ⟨a, ha, ra⟩ := apply_disjoint_total fops dm hnone n args hargs pos hpos
+        obtain ⟨sb, hsb⟩ := fops.sub ha hret
+        refine ⟨sb, fun m hm => ?_⟩
+        have e := hsb m (by omega)
+        dsimp only at e ⊢
+        unfold Elixir.Module.Types.Descr.«phi_starter/4»
+        simp [rv m hm, ra m (by omega), e]
+      · obtain ⟨a, ha, ra⟩ := apply_static_total ops fops dm hnone n args hargs pos hpos
+        obtain ⟨sb, hsb⟩ := fops.sub ha hret
+        refine ⟨sb, fun m hm => ?_⟩
+        have e := hsb m (by omega)
+        dsimp only at e ⊢
+        unfold Elixir.Module.Types.Descr.«phi_starter/4»
+        simp [rv m hm, ra m (by omega), e]
+
+    theorem fetch_domain_total (dm : DomOk Dm E K) (n : Int) (pos : List Term) (hpos : ∀ t ∈ pos, FunLit E n t) :
+        ∃ fd, Dm fd ∧ ∀ m, K + 1 ≤ m → Elixir.Module.Types.Descr.«fetch_domain/1» (D m) (Term.list pos) = .ok fd := by
+      obtain ⟨fd, hfd, run⟩ := foldl_uni (K + 1) "Elixir.Module.Types.Descr" "-fetch_domain/1-fun-0-" #[] Dm pos (by
+        intro x mx a ha
+        obtain ⟨k, args, ret, rfl, -, hargs, -⟩ := hpos x mx
+        obtain ⟨dom, hdom, rdom⟩ := dm.dom args hargs
+        obtain ⟨u, hu, ru⟩ := dm.union ha hdom
+        refine ⟨u, hu, fun m hm => ?_⟩
+        obtain ⟨m', rfl, hm'⟩ := succ_of_le hm
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-fetch_domain/1-fun-0-/2».pure]
+        simp [Elixir.Module.Types.Descr.«-fetch_domain/1-fun-0-/2», rdom, ru m' hm']) (.map []) dm.none
+      exact ⟨fd, hfd, fun m hm => by unfold Elixir.Module.Types.Descr.«fetch_domain/1»; exact run m hm⟩
+
+    /-- Lines with positive literals: some negative literal covers them, at every call depth from `K + 3`. -/
+    theorem fun_line_pos (ops : ElemOk E K) (dops : ElemDiff E K) (fops : ElemFun E K) (dm : DomOk Dm E K)
+        (hnone : E (.map [])) (n : Int) (S : List (Term × Term)) (p : Term) (rest negs : List Term)
+        (hpos : ∀ t ∈ p :: rest, FunLit E n t) (hneg : ∀ t ∈ negs, FunLit E n t) :
+        BoolAt (K + 3) (fun m => Elixir.Module.Types.Descr.«fun_line_empty?/3» (D m) (Term.list (p :: rest))
+          (Term.list negs) (.map S)) := by
+      obtain ⟨fd, hfd, rfd⟩ := fetch_domain_total dm n (p :: rest) hpos
+      obtain ⟨b, hb⟩ := any_uni (K + 3) "Elixir.Module.Types.Descr" "-fun_line_empty?/3-fun-1-"
+        #[Term.list (p :: rest), .map S] negs (fun q mq => by
+          obtain ⟨k, nargs, nret, rfl, nlen, hnargs, hnret⟩ := hneg q mq
+          obtain ⟨dom, hdom, rdom⟩ := dm.dom nargs hnargs
+          obtain ⟨d, hd, rd⟩ := dm.diff hdom hfd
+          obtain ⟨e, he⟩ := dm.empty hd S
+          obtain ⟨ps, hps⟩ := phi_starter_total ops dops fops dm hnone n S nargs hnargs nlen hnret (p :: rest) hpos
+          refine ⟨e && ps, fun m hm => ?_⟩
+          obtain ⟨m', rfl, hm'⟩ := succ_of_le hm
+          have e₂ := hps m' (by omega)
+          dsimp only at e₂ ⊢
+          rw [Erlang.program.«Elixir.Module.Types.Descr:-fun_line_empty?/3-fun-1-/1».pure]
+          simp only [Elixir.Module.Types.Descr.«-fun_line_empty?/3-fun-1-/3», rdom, rfd m' (by omega),
+            Elixir.Module.Types.Descr.«subtype_seen?/3», rd m' (by omega), he m' (by omega), e₂, Lynx.Except.ok_bind,
+            andAlso_bool])
+      refine ⟨b, fun m hm => ?_⟩
+      have h := hb m hm
+      dsimp only at h ⊢
+      rw [Elixir.Module.Types.Descr.«fun_line_empty?/3».eq_def]
+      simpa [Term.list] using h
+
+    /-- Lines of function literals of element types decide their emptiness at every call depth from `K + 3`. -/
+    theorem fun_line_total (ops : ElemOk E K) (dops : ElemDiff E K) (fops : ElemFun E K) (dm : DomOk Dm E K)
+        (hnone : E (.map [])) (n : Int) (S : List (Term × Term)) (pos negs : List Term)
+        (hpos : ∀ t ∈ pos, FunLit E n t) (hneg : ∀ t ∈ negs, FunLit E n t) :
+        BoolAt (K + 3) (fun m => Elixir.Module.Types.Descr.«fun_line_empty?/3» (D m) (Term.list pos) (Term.list negs)
+          (.map S)) := by
+      cases pos with
+      | cons p rest => exact fun_line_pos ops dops fops dm hnone n S p rest negs hpos hneg
+      | nil =>
+        cases negs with
+        | nil => exact ⟨Bool.false, fun m _ => by
+            dsimp only; rw [Elixir.Module.Types.Descr.«fun_line_empty?/3».eq_def]; simp [Term.list]⟩
+        | cons q qs =>
+          obtain ⟨k, args, ret, rfl, len, -, -⟩ := hneg _ List.mem_cons_self
+          obtain ⟨kt, leaf⟩ := leaf_fun (args.map fun _ => .map [])
+          have margs : ∀ m, Erlang.lists.«map/2» (D m) (.function "Elixir.Module.Types.Descr" "-fun_line_empty?/3-fun-0-" 1 #[])
+              (Term.list args) = .ok (Term.list (args.map fun _ => .map [])) := fun m =>
+            map_list (D m) _ _ _ _ args fun x _ => by
+              rw [Erlang.program.«Elixir.Module.Types.Descr:-fun_line_empty?/3-fun-0-/1».pure]; rfl
+          obtain ⟨b, hb⟩ := fun_line_pos ops dops fops dm hnone n S
+            (.tuple #[.integer kt, Term.list (args.map fun _ => .map []), .atom "term"]) [] _
+            (fun t mt => by
+              rw [List.mem_singleton.mp mt]
+              exact ⟨kt, _, _, rfl, by simpa using len, fun a ma => by
+                obtain ⟨_, _, rfl⟩ := List.mem_map.mp ma; exact hnone, ops.term⟩) hneg
+          refine ⟨b, fun m hm => ?_⟩
+          have h := hb m hm
+          dsimp only at h ⊢
+          rw [Elixir.Module.Types.Descr.«fun_line_empty?/3».eq_def]
+          simp only [Term.list] at h ⊢
+          simp [margs, leaf, h]
+
+    /-- Function types of element types decide their emptiness at every call depth from `K + 5`. -/
+    theorem fun_total (ops : ElemOk E K) (dops : ElemDiff E K) (fops : ElemFun E K) (dm : DomOk Dm E K)
+        (hnone : E (.map [])) {w : Term} (fw : FField E w) (S : List (Term × Term)) :
+        BoolAt (K + 5) (fun m => Elixir.Module.Types.Descr.«fun_empty?/2» (D m) w (.map S)) := by
+      obtain ⟨p, R, rfl, bR⟩ := fw
+      cases p
+      · exact ⟨Bool.false, fun m _ => by dsimp only; unfold Elixir.Module.Types.Descr.«fun_empty?/2»; rfl⟩
+      obtain ⟨b, hb⟩ := all_uni (K + 5) "Elixir.Module.Types.Descr" "-fun_empty?/2-fun-1-" #[.map S]
+        ((mapEntries R).map fun e => .tuple #[e.1, e.2]) (fun x mx => by
+          obtain ⟨e, me, rfl⟩ := List.mem_map.mp mx
+          have wv := bR _ _ (mapLookup_of_mem_mapEntries me)
+          let n : Int := match e.1 with | .integer z => z | _ => 0
+          have conv : ∀ t, FunArity E e.1 t → FunLit E n t := by
+            rintro t ⟨z, hz, lit⟩
+            simp only [n, hz]
+            exact lit
+          by_cases seen : S.any (fun s => Term.exactCompare (.cons e.1 e.2) s.1 == .eq) = Bool.true
+          · refine ⟨Bool.true, fun m hm => ?_⟩
+            obtain ⟨m', rfl, -⟩ := succ_of_le (show 1 ≤ m by omega)
+            dsimp only
+            rw [Erlang.program.«Elixir.Module.Types.Descr:-fun_empty?/2-fun-1-/1».pure]
+            simp [Elixir.Module.Types.Descr.«-fun_empty?/2-fun-1-/2», Elixir.Module.Types.Descr.«empty_bdd_seen_key/2»,
+              Erlang.erlang.«is_map_key/2», seen, Term.true]
+          have fresh : S.any (fun s => Term.exactCompare (.cons e.1 e.2) s.1 == .eq) = Bool.false := by simpa using seen
+          obtain ⟨lines, dnf, hlines⟩ := dnf_lines wv (FunLit E n) conv [] [] [] (by simp) (by simp) (by simp)
+          obtain ⟨lb, hlb⟩ := all_uni (K + 4) "Elixir.Module.Types.Descr" "-fun_empty?/2-fun-0-"
+            #[.map ((.cons e.1 e.2, .atom "true") :: S)] lines (fun l ml => by
+              obtain ⟨pos, negs, rfl, hp, hn⟩ := hlines l ml
+              obtain ⟨b, hb⟩ := fun_line_total ops dops fops dm hnone n ((.cons e.1 e.2, .atom "true") :: S) pos negs hp hn
+              refine ⟨b, fun m hm => ?_⟩
+              obtain ⟨m', rfl, hm'⟩ := succ_of_le hm
+              have h := hb m' hm'
+              dsimp only at h ⊢
+              rw [Erlang.program.«Elixir.Module.Types.Descr:-fun_empty?/2-fun-0-/1».pure]
+              simpa [Elixir.Module.Types.Descr.«-fun_empty?/2-fun-0-/2»] using h)
+          refine ⟨lb, fun m hm => ?_⟩
+          obtain ⟨m', rfl, hm'⟩ := succ_of_le hm
+          have h := hlb m' hm'
+          dsimp only at h ⊢
+          simp only [Term.list] at dnf
+          rw [Erlang.program.«Elixir.Module.Types.Descr:-fun_empty?/2-fun-1-/1».pure]
+          simp [Elixir.Module.Types.Descr.«-fun_empty?/2-fun-1-/2», Elixir.Module.Types.Descr.«empty_bdd_seen_key/2»,
+            Erlang.erlang.«is_map_key/2», fresh, Term.true, Term.false, Erlang.maps.«put/3»,
+            Elixir.Module.Types.Descr.«bdd_to_dnf/1», dnf, h])
+      refine ⟨b, fun m hm => ?_⟩
+      have h := hb m hm
+      dsimp only at h ⊢
+      unfold Elixir.Module.Types.Descr.«fun_empty?/2»
+      simpa [Erlang.maps.«to_list/1»] using h
+
+    theorem member_kept (q r : Term) : isMember r [.integer 0, .atom "bdd_bot"] = boolAtom (!kept (q, r)) := by
+      by_cases z : exactCompare r (.integer 0) = .eq <;> by_cases b : exactCompare r (.atom "bdd_bot") = .eq <;>
+        simp [isMember, kept, z, b, boolAtom]
+
+    /-- Maps whose keys are among the six field names have at most six entries. -/
+    theorem entries_le_six {X : List (Term × Term)}
+        (keys : ∀ q, (mapLookup X q).isSome → q = .atom "bitmap" ∨ q = .atom "atom" ∨ q = .atom "fun" ∨
+          q = .atom "list" ∨ q = .atom "tuple" ∨ q = .atom "map") : (mapEntries X).length ≤ 6 := by
+      have nd : ((mapEntries X).map Prod.fst).Nodup :=
+        List.pairwise_map.mpr ((mapEntries_distinct X).imp fun h e => h (by rw [e]; exact exactCompare_self _))
+      have sub : (mapEntries X).map Prod.fst ⊆
+          [.atom "bitmap", .atom "atom", .atom "fun", .atom "list", .atom "tuple", .atom "map"] := by
+        intro q mq
+        obtain ⟨e, me, rfl⟩ := List.mem_map.mp mq
+        rcases keys e.1 (by rw [mapLookup_of_mem_mapEntries me]; rfl) with h | h | h | h | h | h <;> simp [h]
+      simpa using nd.length_le_of_subset sub
+
+    theorem next_cons (k v rest : Term) :
+        Erlang.maps.«next/1» (.cons (.tuple #[k, v]) rest) = .ok (.tuple #[k, v, rest]) := by
+      simp [Erlang.maps.«next/1»]
+
+    /-- Checking that each field of the left type is covered gives the same Boolean at every call depth from `K`. -/
+    theorem iterator_sub_uni (K : Nat) (B : List (Term × Term)) :
+        ∀ es : List (Term × Term),
+          (∀ e ∈ es, ∀ y, mapLookup B e.1 = some y → ∃ r, (∀ m, K ≤ m →
+            Elixir.Module.Types.Descr.«bare_difference/3» (D m) e.1 e.2 y = .ok r) ∧
+            (kept (e.1, r) = Bool.true →
+              BoolAt K (fun m => Elixir.Module.Types.Descr.«empty_key?/3» (D m) e.1 r (.map [])))) →
+          (∀ e ∈ es, mapLookup B e.1 = Option.none →
+            BoolAt K (fun m => Elixir.Module.Types.Descr.«empty_key?/3» (D m) e.1 e.2 (.map []))) →
+          BoolAt K (fun m => do
+            let it ← Erlang.maps.«next/1» (Term.list (es.map fun (e : Term × Term) => .tuple #[e.1, e.2]))
+            Elixir.Module.Types.Descr.«iterator_empty_difference_subtype?/3» (D m) it (.map B) (.map [])) := by
+      intro es
+      induction es with
+      | nil =>
+        intro _ _
+        exact ⟨Bool.true, fun m _ => by
+          dsimp only
+          simp [Term.list, Erlang.maps.«next/1»]
+          unfold Elixir.Module.Types.Descr.«iterator_empty_difference_subtype?/3»
+          rfl⟩
+      | cons e rest ih =>
+        intro both alone
+        obtain ⟨bt, ht⟩ := ih (fun e' m => both e' (List.mem_cons_of_mem _ m)) (fun e' m => alone e' (List.mem_cons_of_mem _ m))
+        obtain ⟨b₁, h₁⟩ : ∃ b₁ : Bool, ∀ m, K ≤ m → (do
+            let it ← Erlang.maps.«next/1» (Term.list ((e :: rest).map fun (e : Term × Term) => .tuple #[e.1, e.2]))
+            Elixir.Module.Types.Descr.«iterator_empty_difference_subtype?/3» (D m) it (.map B) (.map [])) =
+              Lynx.Except.andAlso (.ok (boolAtom b₁)) (do
+                let it ← Erlang.maps.«next/1» (Term.list (rest.map fun (e : Term × Term) => .tuple #[e.1, e.2]))
+                Elixir.Module.Types.Descr.«iterator_empty_difference_subtype?/3» (D m) it (.map B) (.map [])) true := by
+          cases hb : mapLookup B e.1 with
+          | none =>
+            obtain ⟨b₁, h₁⟩ := alone e List.mem_cons_self hb
+            refine ⟨b₁, fun m hm => ?_⟩
+            have e₁ := h₁ m hm
+            dsimp only at e₁
+            simp only [List.map, Term.list, next_cons, Lynx.Except.ok_bind]
+            rw [Elixir.Module.Types.Descr.«iterator_empty_difference_subtype?/3».eq_def]
+            simp [getMapKeys_single, hb, e₁]
+          | some y =>
+            obtain ⟨r, rr, kk⟩ := both e List.mem_cons_self y hb
+            by_cases k : kept (e.1, r) = Bool.true
+            · obtain ⟨eb, heb⟩ := kk k
+              have ⟨z, b0⟩ : exactCompare r (.integer 0) ≠ .eq ∧ exactCompare r (.atom "bdd_bot") ≠ .eq := by
+                simpa [kept] using k
+              refine ⟨eb, fun m hm => ?_⟩
+              have e₁ := heb m hm
+              dsimp only at e₁
+              simp only [List.map, Term.list, next_cons, Lynx.Except.ok_bind]
+              rw [Elixir.Module.Types.Descr.«iterator_empty_difference_subtype?/3».eq_def]
+              simp [getMapKeys_single, hb, rr m hm, z, b0, e₁, Lynx.Except.orElse]
+            · refine ⟨Bool.true, fun m hm => ?_⟩
+              simp only [List.map, Term.list, next_cons, Lynx.Except.ok_bind]
+              rw [Elixir.Module.Types.Descr.«iterator_empty_difference_subtype?/3».eq_def]
+              rcases dropped (by simpa using k) with h | h <;> rw [h] at rr <;>
+                simp [getMapKeys_single, hb, rr m hm, Lynx.Except.orElse]
+        refine ⟨b₁ && bt, fun m hm => ?_⟩
+        have e₂ := ht m hm
+        dsimp only at e₂ ⊢
+        rw [h₁ m hm, e₂, andAlso_bool]
+
+    /-- Static types decide subtyping, when each field of the left type does, at every call depth from `K`. -/
+    theorem subtype_maps (K : Nat) (A B : List (Term × Term)) (sA : mapLookup A (.atom "dynamic") = Option.none)
+        (sB : mapLookup B (.atom "dynamic") = Option.none)
+        (both : ∀ e ∈ mapEntries A, ∀ y, mapLookup B e.1 = some y → ∃ r, (∀ m, K ≤ m →
+            Elixir.Module.Types.Descr.«bare_difference/3» (D m) e.1 e.2 y = .ok r) ∧
+            (kept (e.1, r) = Bool.true →
+              BoolAt K (fun m => Elixir.Module.Types.Descr.«empty_key?/3» (D m) e.1 r (.map []))))
+        (alone : ∀ e ∈ mapEntries A, mapLookup B e.1 = Option.none →
+            BoolAt K (fun m => Elixir.Module.Types.Descr.«empty_key?/3» (D m) e.1 e.2 (.map []))) :
+        BoolAt K (fun m => Elixir.Module.Types.Descr.«subtype?/2» (D m) (.map A) (.map B)) := by
+      obtain ⟨b, hb⟩ := iterator_sub_uni K B (mapEntries A) both alone
+      by_cases same : exactCompare (.map B) (.map A) = .eq
+      · refine ⟨Bool.true, fun m _ => ?_⟩
+        dsimp only
+        unfold Elixir.Module.Types.Descr.«subtype?/2»
+        simp [unfold_map, Erlang.erlang.«is_map_key/2», getMapKeys_single, sA, sB, any_key, Lynx.Except.andAlso,
+          Erlang.erlang.«not/1», Lynx.Except.guard, Erlang.erlang.«/=/2»]
+        unfold Elixir.Module.Types.Descr.«subtype_static?/2»
+        simp [Lynx.Except.guard, Erlang.erlang.«=:=/2», same]
+      · refine ⟨b, fun m hm => ?_⟩
+        have walk := hb m hm
+        dsimp only at walk ⊢
+        unfold Elixir.Module.Types.Descr.«subtype?/2»
+        simp [unfold_map, Erlang.erlang.«is_map_key/2», getMapKeys_single, sA, sB, any_key, Lynx.Except.andAlso,
+          Erlang.erlang.«not/1», Lynx.Except.guard, Erlang.erlang.«/=/2»]
+        unfold Elixir.Module.Types.Descr.«subtype_static?/2»
+        simp [Lynx.Except.guard, Erlang.erlang.«=:=/2», same, Elixir.Module.Types.Descr.«empty_difference_subtype?/2»]
+        rw [Elixir.Module.Types.Descr.«empty_difference_subtype?/3».eq_def]
+        simp [getMapKeys_single, sA, sB, unfold_map, Erlang.maps.«iterator/1»]
+        exact walk
+
+    /-- Looking for a non-empty common field gives the same Boolean at every call depth from `K` plus
+    the number of fields walked. -/
+    theorem iterator_disj_uni (K : Nat) (B : List (Term × Term)) :
+        ∀ es : List (Term × Term),
+          (∀ e ∈ es, ∀ y, mapLookup B e.1 = some y → ∃ r, (∀ m, K ≤ m →
+            Elixir.Module.Types.Descr.«bare_intersection/3» (D m) e.1 e.2 y = .ok r) ∧
+            (kept (e.1, r) = Bool.true →
+              BoolAt K (fun m => Elixir.Module.Types.Descr.«empty_key?/3» (D m) e.1 r (.map [])))) →
+          BoolAt (K + es.length) (fun m => do
+            let it ← Erlang.maps.«next/1» (Term.list (es.map fun (e : Term × Term) => .tuple #[e.1, e.2]))
+            Elixir.Module.Types.Descr.«iterator_non_disjoint_intersection?/2» (D m) it (.map B)) := by
+      intro es
+      induction es with
+      | nil =>
+        intro _
+        exact ⟨Bool.false, fun m _ => by
+          dsimp only
+          simp [Term.list, Erlang.maps.«next/1»]
+          unfold Elixir.Module.Types.Descr.«iterator_non_disjoint_intersection?/2»
+          rfl⟩
+      | cons e rest ih =>
+        intro both
+        obtain ⟨bt, ht⟩ := ih (fun e' m => both e' (List.mem_cons_of_mem _ m))
+        have cont : ∀ m x, K + rest.length + 1 ≤ m → (D m).pure (.function "Elixir.Module.Types.Descr"
+            "-iterator_non_disjoint_intersection?/2-fun-0-" 1
+            #[Term.list (rest.map fun (e : Term × Term) => .tuple #[e.1, e.2]), .map B]) #[x] = .ok (boolAtom bt) := by
+          intro m x hm
+          obtain ⟨m', rfl, hm'⟩ := succ_of_le hm
+          have h := ht m' hm'
+          dsimp only at h
+          rw [Erlang.program.«Elixir.Module.Types.Descr:-iterator_non_disjoint_intersection?/2-fun-0-/1».pure]
+          simpa [Elixir.Module.Types.Descr.«-iterator_non_disjoint_intersection?/2-fun-0-/3»] using h
+        cases hb : mapLookup B e.1 with
+        | none =>
+          refine ⟨bt, fun m hm => ?_⟩
+          dsimp only
+          simp only [List.map, Term.list, next_cons, Lynx.Except.ok_bind]
+          rw [Elixir.Module.Types.Descr.«iterator_non_disjoint_intersection?/2».eq_def]
+          simp [getMapKeys_single, hb, cont m _ (by simp at hm; omega)]
+        | some y =>
+          obtain ⟨r, rr, kk⟩ := both e List.mem_cons_self y hb
+          by_cases k : kept (e.1, r) = Bool.true
+          · obtain ⟨eb, heb⟩ := kk k
+            have ⟨z, b0⟩ : exactCompare r (.integer 0) ≠ .eq ∧ exactCompare r (.atom "bdd_bot") ≠ .eq := by
+              simpa [kept] using k
+            refine ⟨!eb || bt, fun m hm => ?_⟩
+            have h := heb m (by simp at hm; omega)
+            dsimp only at h ⊢
+            simp only [List.map, Term.list, next_cons, Lynx.Except.ok_bind]
+            rw [Elixir.Module.Types.Descr.«iterator_non_disjoint_intersection?/2».eq_def]
+            cases eb <;> simp [getMapKeys_single, hb, rr m (by simp at hm; omega), z, b0, h,
+              Elixir.Module.Types.Descr.«empty_key?/2», Lynx.Except.guard, Lynx.Except.tryWith, Erlang.erlang.«=:=/2»,
+              cont m _ (by simp at hm; omega)]
+          · refine ⟨bt, fun m hm => ?_⟩
+            dsimp only
+            simp only [List.map, Term.list, next_cons, Lynx.Except.ok_bind]
+            rw [Elixir.Module.Types.Descr.«iterator_non_disjoint_intersection?/2».eq_def]
+            rcases dropped (by simpa using k) with h | h <;> rw [h] at rr <;>
+              simp [getMapKeys_single, hb, rr m (by simp at hm; omega), Lynx.Except.guard, Lynx.Except.tryWith,
+                Erlang.erlang.«=:=/2», cont m _ (by simp at hm; omega)]
+
+    theorem subtype_term_l {T : List (Term × Term)} (term : Elixir.Module.Types.Descr.«unfolded_term/0» = .ok (.map T))
+        (d : Dispatcher) (b : Term) :
+        Elixir.Module.Types.Descr.«subtype?/2» d (.atom "term") b = Elixir.Module.Types.Descr.«subtype?/2» d (.map T) b := by
+      unfold Elixir.Module.Types.Descr.«subtype?/2»
+      simp [term]
+
+    theorem subtype_term_r {T : List (Term × Term)} (term : Elixir.Module.Types.Descr.«unfolded_term/0» = .ok (.map T))
+        (d : Dispatcher) (a : Term) :
+        Elixir.Module.Types.Descr.«subtype?/2» d a (.atom "term") = Elixir.Module.Types.Descr.«subtype?/2» d a (.map T) := by
+      unfold Elixir.Module.Types.Descr.«subtype?/2»
+      simp [term]
+
+    /-- Static types decide subtyping when their fields subtract and decide emptiness. -/
+    theorem sub_fields (K : Nat) (F : String → Term → Prop) (A B : List (Term × Term))
+        (sA : mapLookup A (.atom "dynamic") = Option.none) (sB : mapLookup B (.atom "dynamic") = Option.none)
+        (kA : ∀ q, (mapLookup A q).isSome → ∃ name, q = .atom name)
+        (fA : ∀ name w, mapLookup A (.atom name) = some w → F name w)
+        (fB : ∀ name w, mapLookup B (.atom name) = some w → F name w)
+        (diff : ∀ name x y, F name x → F name y → ∃ r, (∀ m, K ≤ m →
+          Elixir.Module.Types.Descr.«bare_difference/3» (D m) (.atom name) x y = .ok r) ∧
+          (kept (.atom name, r) = Bool.true → F name r))
+        (empty : ∀ name x, F name x →
+          BoolAt K (fun m => Elixir.Module.Types.Descr.«empty_key?/3» (D m) (.atom name) x (.map []))) :
+        BoolAt K (fun m => Elixir.Module.Types.Descr.«subtype?/2» (D m) (.map A) (.map B)) := by
+      refine subtype_maps K A B sA sB (fun e me y hy => ?_) (fun e me _ => ?_)
+      · have hx := mapLookup_of_mem_mapEntries me
+        obtain ⟨name, key⟩ := kA e.1 (by rw [hx]; rfl)
+        rw [key] at hx hy ⊢
+        obtain ⟨r, rr, kr⟩ := diff name e.2 y (fA _ _ hx) (fB _ _ hy)
+        exact ⟨r, rr, fun k => empty name r (kr k)⟩
+      · have hx := mapLookup_of_mem_mapEntries me
+        obtain ⟨name, key⟩ := kA e.1 (by rw [hx]; rfl)
+        rw [key] at hx ⊢
+        exact empty name e.2 (fA _ _ hx)
+
+    /-- Static types decide disjointness when their fields intersect and decide emptiness, at every call depth
+    from `K + 6`, as each field walked costs a call. -/
+    theorem disj_fields (K : Nat) (F : String → Term → Prop) (A B : List (Term × Term))
+        (sA : mapLookup A (.atom "dynamic") = Option.none) (sB : mapLookup B (.atom "dynamic") = Option.none)
+        (kA : ∀ q, (mapLookup A q).isSome → q = .atom "bitmap" ∨ q = .atom "atom" ∨ q = .atom "fun" ∨
+          q = .atom "list" ∨ q = .atom "tuple" ∨ q = .atom "map")
+        (kB : ∀ q, (mapLookup B q).isSome → q = .atom "bitmap" ∨ q = .atom "atom" ∨ q = .atom "fun" ∨
+          q = .atom "list" ∨ q = .atom "tuple" ∨ q = .atom "map")
+        (fA : ∀ name w, mapLookup A (.atom name) = some w → F name w)
+        (fB : ∀ name w, mapLookup B (.atom name) = some w → F name w)
+        (inter : ∀ name x y, F name x → F name y → ∃ r, (∀ m, K ≤ m →
+          Elixir.Module.Types.Descr.«bare_intersection/3» (D m) (.atom name) x y = .ok r) ∧
+          (kept (.atom name, r) = Bool.true → F name r))
+        (empty : ∀ name x, F name x →
+          BoolAt K (fun m => Elixir.Module.Types.Descr.«empty_key?/3» (D m) (.atom name) x (.map []))) :
+        BoolAt (K + 6) (fun m => Elixir.Module.Types.Descr.«disjoint?/2» (D m) (.map A) (.map B)) := by
+      have name_of : ∀ (X : List (Term × Term)) q, (mapLookup X q).isSome →
+          (q = .atom "bitmap" ∨ q = .atom "atom" ∨ q = .atom "fun" ∨ q = .atom "list" ∨ q = .atom "tuple" ∨
+            q = .atom "map") → ∃ name, q = .atom name := by
+        intro X q _ h
+        rcases h with h | h | h | h | h | h <;> exact ⟨_, h⟩
+      have walk := fun (X Y : List (Term × Term)) (kX : ∀ q, (mapLookup X q).isSome → ∃ name, q = .atom name)
+          (fX : ∀ name w, mapLookup X (.atom name) = some w → F name w)
+          (fY : ∀ name w, mapLookup Y (.atom name) = some w → F name w) =>
+        iterator_disj_uni K Y (mapEntries X) (fun e me y hy => by
+          have hx := mapLookup_of_mem_mapEntries me
+          obtain ⟨name, key⟩ := kX e.1 (by rw [hx]; rfl)
+          rw [key] at hx hy ⊢
+          obtain ⟨r, rr, kr⟩ := inter name e.2 y (fX _ _ hx) (fY _ _ hy)
+          exact ⟨r, rr, fun k => empty name r (kr k)⟩)
+      obtain ⟨ba, ha⟩ := walk A B (fun q h => name_of A q h (kA q h)) fA fB
+      obtain ⟨bb, hb⟩ := walk B A (fun q h => name_of B q h (kB q h)) fB fA
+      have lA := entries_le_six kA
+      have lB := entries_le_six kB
+      obtain ⟨sa, hsa⟩ : ∃ sa : Int, Erlang.erlang.«map_size/1» (.map A) = .ok (.integer sa) :=
+        ⟨_, by simp [Erlang.erlang.«map_size/1»]; rfl⟩
+      obtain ⟨sb, hsb⟩ : ∃ sb : Int, Erlang.erlang.«map_size/1» (.map B) = .ok (.integer sb) :=
+        ⟨_, by simp [Erlang.erlang.«map_size/1»]; rfl⟩
+      refine ⟨if sa > sb then !bb else !ba, fun m hm => ?_⟩
+      have e₁ := ha m (by omega)
+      have e₂ := hb m (by omega)
+      dsimp only at e₁ e₂ ⊢
+      unfold Elixir.Module.Types.Descr.«disjoint?/2»
+      simp [getMapKeys_single, sA, sB]
+      unfold Elixir.Module.Types.Descr.«non_disjoint_intersection?/2»
+      by_cases g : sa > sb
+      · simp [hsa, hsb, g, Erlang.maps.«iterator/1», e₂]
+      · simp [hsa, hsb, g, Erlang.maps.«iterator/1», e₁]
+
+    /-- The fields of a union of static types, with common fields combined by `g`. -/
+    def unionList (g : Term → Term → Term → Term) (L R : List (Term × Term)) : List (Term × Term) :=
+      match L, R with
+      | [], _ => R
+      | _ :: _, [] => L
+      | _ :: _, _ :: _ => mergeList g L R
+
+    theorem union_explicit (K : Nat) (L R : List (Term × Term)) (sL : mapLookup L (.atom "dynamic") = Option.none)
+        (sR : mapLookup R (.atom "dynamic") = Option.none) (g : Term → Term → Term → Term)
+        (calls : ∀ q x y, mapLookup L q = some x → mapLookup R q = some y → ∀ m, K ≤ m →
+          Elixir.Module.Types.Descr.«bare_union/3» (D m) q x y = .ok (g q x y)) :
+        ∀ m, K + 1 ≤ m → Elixir.Module.Types.Descr.«bare_union/2» (D m) (.map L) (.map R) = .ok (.map (unionList g L R)) := by
+      intro m hm
+      obtain ⟨n, rfl, hn⟩ := succ_of_le hm
+      unfold Elixir.Module.Types.Descr.«bare_union/2»
+      simp [getMapKeys_single, Erlang.erlang.«==/2», sL, sR]
+      cases L with
+      | nil => simp [unionList]
+      | cons l ls =>
+        cases R with
+        | nil => simp [unionList]
+        | cons r rs =>
+          simp only [unionList]
+          unfold Elixir.Module.Types.Descr.«symmetrical_merge/3»
+          have run := merge_with_eq (D (n + 1)) "Elixir.Module.Types.Descr" "bare_union" #[] (l :: ls) (r :: rs) g (by
+            intro e me x hx
+            have hy := mapLookup_of_mem_mapEntries me
+            rw [Erlang.program.«Elixir.Module.Types.Descr:bare_union/3».pure]
+            exact calls e.1 x e.2 hx hy n hn)
+          simpa using run
+
+    /-- Unions of static types whose common fields unite the same way at every call depth. -/
+    theorem union_uniform (K : Nat) (L R : List (Term × Term)) (sL : mapLookup L (.atom "dynamic") = Option.none)
+        (sR : mapLookup R (.atom "dynamic") = Option.none) (keysR : ∀ q, (mapLookup R q).isSome → ∃ name, q = .atom name)
+        (g : Term → Term → Term → Term)
+        (calls : ∀ q x y, mapLookup L q = some x → mapLookup R q = some y → ∀ m, K ≤ m →
+          Elixir.Module.Types.Descr.«bare_union/3» (D m) q x y = .ok (g q x y)) :
+        ∃ U, (∀ m, K + 1 ≤ m → Elixir.Module.Types.Descr.«bare_union/2» (D m) (.map L) (.map R) = .ok (.map U)) ∧
+          ∀ q, (mapLookup R q = Option.none → mapLookup U q = mapLookup L q) ∧
+            (∀ y, mapLookup R q = some y → mapLookup L q = Option.none → mapLookup U q = some y) ∧
+            (∀ x y, mapLookup L q = some x → mapLookup R q = some y → mapLookup U q = some (g q x y)) := by
+      obtain ⟨U, run, look⟩ := union_any K L R sL sR keysR (fun q x y hx hy => ⟨_, calls q x y hx hy K (Nat.le_refl _)⟩)
+      have same := (union_explicit K L R sL sR g calls (K + 1) (Nat.le_refl _)).symm.trans run
+      simp only [Except.ok.injEq, Term.map.injEq] at same
+      refine ⟨U, fun m hm => by rw [union_explicit K L R sL sR g calls m hm, same], fun q =>
+        ⟨(look q).1, (look q).2.1, fun x y hx hy => (look q).2.2 x y _ hx hy (calls q x y hx hy K (Nat.le_refl _))⟩⟩
+
+    theorem union3_basic (name : String) (h : name = "bitmap" ∨ name = "atom") (d d' : Dispatcher) (x y : Term) :
+        Elixir.Module.Types.Descr.«bare_union/3» d (.atom name) x y =
+          Elixir.Module.Types.Descr.«bare_union/3» d' (.atom name) x y := by
+      rcases h with rfl | rfl <;> simp [Elixir.Module.Types.Descr.«bare_union/3»]
+
+    theorem fun_top_union (n : Nat) :
+        Elixir.Module.Types.Descr.«bare_union/3» (D (n + 1)) (.atom "fun") (.tuple #[.atom "negation", .map []])
+          (.tuple #[.atom "negation", .map []]) = .ok (.tuple #[.atom "negation", .map []]) := by
+      have irun := intersect_with_eq (D (n + 1)) "Elixir.Module.Types.Descr" "-fun_repr_intersection/2-fun-0-" #[]
+        [] [] (fun _ _ _ => .nil) (by intro e me; simp at me)
+      have frun := filter_eq (D (n + 1)) "Elixir.Module.Types.Descr" "-symmetrical_intersection/3-fun-0-" #[]
+        (interList (fun _ _ _ => .nil) [] []) kept (by
+          intro e _
+          rw [Erlang.program.«Elixir.Module.Types.Descr:-symmetrical_intersection/3-fun-0-/2».pure, keep_field])
+      have r0 : ([] : List (Option (Term × Term))).reduceOption = [] := rfl
+      simp only [interList, filterList, mapEntries_nil, List.map_nil, r0] at irun frun
+      simp [Elixir.Module.Types.Descr.«bare_union/3», Elixir.Module.Types.Descr.«fun_union/2»,
+        Elixir.Module.Types.Descr.«fun_repr_intersection/2»]
+      unfold Elixir.Module.Types.Descr.«symmetrical_intersection/3»
+      simp [irun, frun]
+
+    /-- Basic fields unite into basic fields. -/
+    theorem fieldok_union (name : String) {x y : Term} (hx : FieldOk name x) (hy : FieldOk name y) :
+        ∃ r, (∀ n, Elixir.Module.Types.Descr.«bare_union/3» (D (n + 1)) (.atom name) x y = .ok r) ∧ FieldOk name r := by
+      rcases hx with ⟨rfl, bx⟩ | ⟨rfl, ax⟩ | ⟨nb, na, tx⟩
+      · rcases hy with ⟨-, by'⟩ | ⟨e, -⟩ | ⟨e, -⟩
+        · obtain ⟨w, run, fw, -⟩ := bit_union (D 1) bx by'
+          exact ⟨w, fun n => by rw [union3_basic _ (Or.inl rfl) _ (D 1), run], Or.inl ⟨rfl, fw⟩⟩
+        · simp at e
+        · exact absurd rfl e
+      · rcases hy with ⟨e, -⟩ | ⟨-, ay⟩ | ⟨-, e, -⟩
+        · simp at e
+        · obtain ⟨w, run, fw, -⟩ := atom_union_spec (D 1) ax ay
+          exact ⟨w, fun n => by rw [union3_basic _ (Or.inr rfl) _ (D 1), run], Or.inr (Or.inl ⟨rfl, fw⟩)⟩
+        · exact absurd rfl e
+      · rcases hy with ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, -, ty⟩
+        · exact absurd e nb
+        · exact absurd e na
+        rw [tx] at ty
+        cases ty
+        refine ⟨x, fun n => ?_, Or.inr (Or.inr ⟨nb, na, tx⟩)⟩
+        by_cases f : name = "fun"
+        · subst f; simp [topValue] at tx; subst tx; exact fun_top_union n
+        by_cases l : name = "list"
+        · subst l; simp [topValue] at tx; subst tx
+          simp [Elixir.Module.Types.Descr.«bare_union/3»]; unfold Elixir.Module.Types.Descr.«list_union/2»; rfl
+        by_cases t : name = "tuple"
+        · subst t; simp [topValue] at tx; subst tx
+          simp [Elixir.Module.Types.Descr.«bare_union/3»]; unfold Elixir.Module.Types.Descr.«tuple_union/2»; rfl
+        by_cases m : name = "map"
+        · subst m; simp [topValue] at tx; subst tx
+          simp [Elixir.Module.Types.Descr.«bare_union/3»]; unfold Elixir.Module.Types.Descr.«map_union/2»; rfl
+        · simp [topValue, nb, na, f, l, t, m] at tx
+
+    /-- Basic fields are not empty. -/
+    theorem fieldok_empty (d : Dispatcher) (name : String) {x : Term} (hx : FieldOk name x) :
+        Elixir.Module.Types.Descr.«empty_key?/3» d (.atom name) x (.map []) = .ok (.atom "false") := by
+      rcases hx with ⟨rfl, -⟩ | ⟨rfl, -⟩ | ⟨nb, na, tx⟩
+      · rfl
+      · rfl
+      · by_cases f : name = "fun"
+        · subst f; simp [topValue] at tx; subst tx
+          simpa [Elixir.Module.Types.Descr.«empty_key?/3»] using fun_top_nonempty d (.map [])
+        by_cases l : name = "list"
+        · subst l; simp [topValue] at tx; subst tx
+          simpa [Elixir.Module.Types.Descr.«empty_key?/3»] using list_top_nonempty d (.map [])
+        by_cases t : name = "tuple"
+        · subst t; simp [topValue] at tx; subst tx
+          simpa [Elixir.Module.Types.Descr.«empty_key?/3»] using tuple_top_nonempty d seenOk_nil
+        by_cases m : name = "map"
+        · subst m; simp [topValue] at tx; subst tx
+          simpa [Elixir.Module.Types.Descr.«empty_key?/3»] using map_top_nonempty d seenOk_nil
+        · simp [topValue, nb, na, f, l, t, m] at tx
+
+    /-! Nested element types: types of basic bitmap and atom fields, whose function, list, tuple, and map
+    types hold types of a smaller nesting. -/
+
+    def NField (E : Term → Prop) (name : String) (w : Term) : Prop :=
+      (name ≠ "tuple" ∧ name ≠ "map" ∧ name ≠ "list" ∧ name ≠ "fun" ∧ FieldOk name w) ∨ (name = "fun" ∧ FField E w) ∨
+        (name = "tuple" ∧ OField (TupleOk E) w) ∨ (name = "map" ∧ OField (MapOk E) w) ∨ (name = "list" ∧ Bdd (LLit E) w)
+
+    structure NestFields (E : Term → Prop) (X : List (Term × Term)) : Prop where
+      keys : ∀ q, (mapLookup X q).isSome → q = .atom "bitmap" ∨ q = .atom "atom" ∨ q = .atom "fun" ∨
+        q = .atom "list" ∨ q = .atom "tuple" ∨ q = .atom "map"
+      fields : ∀ name w, mapLookup X (.atom name) = some w → NField E name w
+
+    def NestC (E : Term → Prop) (t : Term) : Prop := t = .atom "term" ∨ ∃ X, t = .map X ∧ NestFields E X
+
+    theorem NestFields.static {X : List (Term × Term)} (n : NestFields E X) :
+        mapLookup X (.atom "dynamic") = Option.none := by
+      cases h : mapLookup X (.atom "dynamic") with
+      | none => rfl
+      | some w => rcases n.keys _ (by rw [h]; rfl) with e | e | e | e | e | e <;> simp at e
+
+    theorem NestFields.atomKey {X : List (Term × Term)} (n : NestFields E X) {q w : Term} (h : mapLookup X q = some w) :
+        ∃ name, q = .atom name := by
+      rcases n.keys q (by rw [h]; rfl) with rfl | rfl | rfl | rfl | rfl | rfl <;> exact ⟨_, rfl⟩
+
+    theorem Basic.nest (hterm : E (.atom "term")) {M : List (Term × Term)} (basic : Basic M) : NestFields E M := by
+      refine ⟨basic.keys, fun name w h => ?_⟩
+      have f := basic.field h
+      by_cases t : name = "tuple"
+      · subst t
+        rcases f with ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, -, tv⟩
+        · simp at e
+        · simp at e
+        · simp [topValue] at tv; subst tv; exact Or.inr (Or.inr (Or.inl ⟨rfl, Or.inl ⟨_, rfl⟩⟩))
+      by_cases m : name = "map"
+      · subst m
+        rcases f with ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, -, tv⟩
+        · simp at e
+        · simp at e
+        · simp [topValue] at tv; subst tv; exact Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, Or.inl ⟨_, rfl⟩⟩)))
+      by_cases l : name = "list"
+      · subst l
+        rcases f with ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, -, tv⟩
+        · simp at e
+        · simp at e
+        · simp [topValue] at tv; subst tv
+          exact Or.inr (Or.inr (Or.inr (Or.inr ⟨rfl, Bdd.leaf_iff.mpr ⟨46675407, _, _, rfl, hterm, hterm⟩⟩)))
+      by_cases fn : name = "fun"
+      · subst fn
+        rcases f with ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, -, tv⟩
+        · simp at e
+        · simp at e
+        · simp [topValue] at tv; subst tv
+          exact Or.inr (Or.inl ⟨rfl, Bool.false, [], rfl, fun q v h => by simp [mapLookup] at h⟩)
+      exact Or.inl ⟨t, m, l, fn, f⟩
+
+    theorem tuple_inter_closure {x y : Term} (fx : OField (TupleOk E) x) (fy : OField (TupleOk E) y) :
+        ∃ w, Elixir.Module.Types.Descr.«tuple_intersection/2» x y = .ok w ∧
+          (kept (.atom "tuple", w) = Bool.true → OField (TupleOk E) w) := by
+      obtain ⟨w, run, k, -⟩ := open_inter_spec tupleOk_not _ tuple_inter_shape.1 tuple_inter_shape.2.1
+        tuple_inter_shape.2.2 (.atom "tuple") fx fy
+      exact ⟨w, run, fun kw => (k kw).1⟩
+
+    theorem map_inter_closure {x y : Term} (fx : OField (MapOk E) x) (fy : OField (MapOk E) y) :
+        ∃ w, Elixir.Module.Types.Descr.«map_intersection/2» x y = .ok w ∧
+          (kept (.atom "map", w) = Bool.true → OField (MapOk E) w) := by
+      obtain ⟨w, run, k, -⟩ := open_inter_spec mapOk_not _ map_inter_shape.1 map_inter_shape.2.1
+        map_inter_shape.2.2 (.atom "map") fx fy
+      exact ⟨w, run, fun kw => (k kw).1⟩
+
+    theorem leaf_new_term : ∃ h : Int,
+        Elixir.Module.Types.Descr.«bdd_leaf_new/2» (.atom "open") (Term.list [.atom "term"]) =
+          .ok (.tuple #[.integer h, .atom "open", Term.list [.atom "term"]]) := by
+      obtain ⟨hash, hrun, -⟩ := Erlang.erlang.phash2_range (.cons (.atom "open") (Term.list [.atom "term"]))
+      refine ⟨(1 <<< 27) + hash, ?_⟩
+      simp [Elixir.Module.Types.Descr.«bdd_leaf_new/2», hrun, Elixir.Module.Types.Descr.«bdd_leaf_key/2»,
+        Lynx.Except.guard, Erlang.erlang.«is_list/1», Erlang.erlang.«length/1», Erlang.erlang.«bsl/2»]
+      rfl
+
+    theorem tuple_diff_closure (hterm : E (.atom "term")) {x y : Term} (fx : OField (TupleOk E) x)
+        (fy : OField (TupleOk E) y) :
+        ∃ w, Elixir.Module.Types.Descr.«tuple_difference/2» x y = .ok w ∧
+          (kept (.atom "tuple", w) = Bool.true → OField (TupleOk E) w) := by
+      rcases fy with ⟨k, rfl⟩ | wy
+      · exact ⟨.atom "bdd_bot", by unfold Elixir.Module.Types.Descr.«tuple_difference/2»; rfl,
+          fun k => by simp [kept] at k⟩
+      have ny := not_top_of_ok wy tupleOk_not
+      by_cases special : ∃ k, y = .tuple #[k, .atom "closed", .nil]
+      · obtain ⟨k, rfl⟩ := special
+        rcases fx with ⟨kt, rfl⟩ | wx
+        · obtain ⟨h, run⟩ := leaf_new_term
+          refine ⟨_, by simp [Elixir.Module.Types.Descr.«tuple_difference/2», Erlang.erlang.«==/2», run], fun _ =>
+            Or.inr (Bdd.leaf_iff.mpr ⟨⟨h, "open", [.atom "term"], rfl, Or.inl rfl, fun e me => by
+              rw [List.mem_singleton.mp me]; exact hterm⟩, fun ⟨_, e⟩ => by simp [Term.list] at e⟩)⟩
+        · by_cases openLeaf : ∃ kx e, x = .tuple #[kx, .atom "open", e]
+          · obtain ⟨kx, e, rfl⟩ := openLeaf
+            have ne : e ≠ .nil := fun h => not_top_of_ok wx tupleOk_not _ (by rw [h])
+            refine ⟨_, ?_, fun _ => Or.inr wx⟩
+            unfold Elixir.Module.Types.Descr.«tuple_difference/2»
+            cases e <;> simp_all [Erlang.erlang.«==/2»]
+          · obtain ⟨w, run, keep, -⟩ := diff_ok wx wy
+            exact ⟨w, by rw [tuple_difference_bdd (not_top_of_ok wx tupleOk_not) ny (fun ⟨h, _⟩ => openLeaf h), run],
+              fun _ => Or.inr (keep _ wx wy)⟩
+      · rcases fx with ⟨kt, rfl⟩ | wx
+        · rcases wy.shape with rfl | rfl | ⟨k', a, b, rfl⟩ | ⟨h, lit, c, u, d, rfl⟩
+          · refine ⟨.atom "bdd_bot", ?_, fun k => by simp [kept] at k⟩
+            unfold Elixir.Module.Types.Descr.«tuple_difference/2»
+            simp [diff_leaf_top]
+          · refine ⟨_, ?_, fun _ => Or.inl ⟨kt, rfl⟩⟩
+            unfold Elixir.Module.Types.Descr.«tuple_difference/2»
+            simp [diff_leaf_bot]
+          · obtain ⟨w, run, keep, -⟩ := neg_ok wy
+            refine ⟨w, ?_, fun _ => Or.inr (keep _ wy)⟩
+            rw [tuple_difference_neg ny (fun k e => special ⟨k, e⟩) _ rfl, run]
+          · obtain ⟨w, run, keep, -⟩ := neg_ok wy
+            refine ⟨w, ?_, fun _ => Or.inr (keep _ wy)⟩
+            rw [tuple_difference_neg ny (fun k e => special ⟨k, e⟩) _ rfl, run]
+        · obtain ⟨w, run, keep, -⟩ := diff_ok wx wy
+          exact ⟨w, by rw [tuple_difference_bdd (not_top_of_ok wx tupleOk_not) ny (fun ⟨_, h⟩ => special h), run],
+            fun _ => Or.inr (keep _ wx wy)⟩
+
+    theorem map_diff_closure {x y : Term} (fx : OField (MapOk E) x) (fy : OField (MapOk E) y) :
+        ∃ w, Elixir.Module.Types.Descr.«map_difference/2» x y = .ok w ∧
+          (kept (.atom "map", w) = Bool.true → OField (MapOk E) w) := by
+      rcases fy with ⟨k, rfl⟩ | wy
+      · exact ⟨.atom "bdd_bot", by unfold Elixir.Module.Types.Descr.«map_difference/2»; rfl,
+          fun k => by simp [kept] at k⟩
+      have ny := not_top_of_ok wy mapOk_not
+      rcases fx with ⟨kt, rfl⟩ | wx
+      · rcases wy.shape with rfl | rfl | ⟨k', a, b, rfl⟩ | ⟨h, lit, c, u, d, rfl⟩
+        · refine ⟨.atom "bdd_bot", ?_, fun k => by simp [kept] at k⟩
+          unfold Elixir.Module.Types.Descr.«map_difference/2»
+          simp [diff_leaf_top]
+        · refine ⟨_, ?_, fun _ => Or.inl ⟨kt, rfl⟩⟩
+          unfold Elixir.Module.Types.Descr.«map_difference/2»
+          simp [diff_leaf_bot]
+        · obtain ⟨w, run, keep, -⟩ := neg_ok wy
+          exact ⟨w, by rw [map_difference_neg ny _ rfl, run], fun _ => Or.inr (keep _ wy)⟩
+        · obtain ⟨w, run, keep, -⟩ := neg_ok wy
+          exact ⟨w, by rw [map_difference_neg ny _ rfl, run], fun _ => Or.inr (keep _ wy)⟩
+      · obtain ⟨w, run, keep, -⟩ := diff_ok wx wy
+        exact ⟨w, by rw [map_difference_bdd (not_top_of_ok wx mapOk_not) ny, run], fun _ => Or.inr (keep _ wx wy)⟩
+
+    theorem list_inter_closure {x y : Term} (wx : Bdd (LLit E) x) (wy : Bdd (LLit E) y) :
+        ∃ w, Elixir.Module.Types.Descr.«list_intersection/2» x y = .ok w ∧ Bdd (LLit E) w := by
+      by_cases tx : ∃ k, x = .tuple #[k, .atom "term", .atom "term"]
+      · obtain ⟨k, rfl⟩ := tx
+        exact ⟨y, by unfold Elixir.Module.Types.Descr.«list_intersection/2»; rfl, wy⟩
+      by_cases ty : ∃ k, y = .tuple #[k, .atom "term", .atom "term"]
+      · obtain ⟨k, rfl⟩ := ty
+        refine ⟨x, ?_, wx⟩
+        unfold Elixir.Module.Types.Descr.«list_intersection/2»
+        split
+        · exact absurd ⟨_, rfl⟩ tx
+        · rfl
+        · exfalso; simp_all
+      obtain ⟨w, run, keep, -⟩ := inter_ok wx wy
+      refine ⟨w, ?_, keep _ wx wy⟩
+      unfold Elixir.Module.Types.Descr.«list_intersection/2»
+      split
+      · exact absurd ⟨_, rfl⟩ tx
+      · exact absurd ⟨_, rfl⟩ ty
+      · exact run
+
+    theorem list_diff_closure {x y : Term} (wx : Bdd (LLit E) x) (wy : Bdd (LLit E) y) :
+        ∃ w, Elixir.Module.Types.Descr.«list_difference/2» x y = .ok w ∧ Bdd (LLit E) w := by
+      by_cases tx : ∃ k, x = .tuple #[k, .atom "term", .atom "term"]
+      · obtain ⟨k, rfl⟩ := tx
+        by_cases ty : ∃ k, y = .tuple #[k, .atom "term", .atom "term"]
+        · obtain ⟨k', rfl⟩ := ty
+          exact ⟨.atom "bdd_bot", by unfold Elixir.Module.Types.Descr.«list_difference/2»; rfl, Bdd.bot⟩
+        obtain ⟨w, run, keep, -⟩ := neg_ok wy
+        refine ⟨w, ?_, keep _ wy⟩
+        unfold Elixir.Module.Types.Descr.«list_difference/2»
+        split
+        · exact absurd ⟨_, rfl⟩ ty
+        · exact run
+        · exfalso; simp_all
+      obtain ⟨w, run, keep, -⟩ := diff_ok wx wy
+      refine ⟨w, ?_, keep _ wx wy⟩
+      unfold Elixir.Module.Types.Descr.«list_difference/2»
+      split
+      · exact absurd ⟨_, rfl⟩ tx
+      · exact absurd ⟨_, rfl⟩ tx
+      · exact run
+
+    theorem map_size_ne {M : List (Term × Term)} (hM : M ≠ []) :
+        ∃ s : Nat, s ≠ 0 ∧ Erlang.erlang.«map_size/1» (.map M) = .ok (.integer s) := by
+      cases M with
+      | nil => exact absurd rfl hM
+      | cons e rest => exact size_cons e rest
+
+    /-- Function results whose unions have no arities become `0`. -/
+    theorem fun_result {pos : Bool} {M : List (Term × Term)} (bM : AllBddP (FunArity E) M)
+        (e : Nat → Except Exception Term)
+        (h₁ : pos = Bool.false → ∀ n, e n = .ok (.tuple #[.atom "negation", .map M]))
+        (h₂ : pos = Bool.true → M = [] → ∀ n, e n = .ok (.integer 0))
+        (h₃ : pos = Bool.true → M ≠ [] → ∀ n, e n = .ok (.tuple #[.atom "union", .map M])) :
+        ∃ r, (∀ n, e n = .ok r) ∧ (kept (.atom "fun", r) = Bool.true → FField E r) := by
+      cases pos
+      · exact ⟨_, h₁ rfl, fun _ => ⟨Bool.false, M, rfl, bM⟩⟩
+      · by_cases hM : M = []
+        · exact ⟨_, h₂ rfl hM, fun k => by simp [kept] at k⟩
+        · exact ⟨_, h₃ rfl hM, fun _ => ⟨Bool.true, M, rfl, bM⟩⟩
+
+    theorem ffield_inter {x y : Term} (fx : FField E x) (fy : FField E y) :
+        ∃ r, (∀ n, Elixir.Module.Types.Descr.«bare_intersection/3» (D (n + 1)) (.atom "fun") x y = .ok r) ∧
+          (kept (.atom "fun", r) = Bool.true → FField E r) := by
+      obtain ⟨p₁, R₁, rfl, b₁⟩ := fx
+      obtain ⟨p₂, R₂, rfl, b₂⟩ := fy
+      cases p₁ <;> cases p₂
+      · obtain ⟨M, bM, run⟩ := repr_union_uniform b₁ b₂
+        refine fun_result (pos := Bool.false) bM _ (fun _ n => ?_) (fun h => by cases h) (fun h => by cases h)
+        simp [Elixir.Module.Types.Descr.«bare_intersection/3», Elixir.Module.Types.Descr.«fun_intersection/2», run,
+          Erlang.erlang.«==/2», Lynx.Except.andAlso]
+      · obtain ⟨M, bM, run⟩ := repr_diff_uniform b₂ b₁
+        refine fun_result (pos := Bool.true) bM _ (fun h => by cases h) (fun _ hM n => ?_) (fun _ hM n => ?_)
+        · subst hM
+          simp [Elixir.Module.Types.Descr.«bare_intersection/3», Elixir.Module.Types.Descr.«fun_intersection/2», run,
+            Erlang.erlang.«==/2», Lynx.Except.andAlso, Erlang.erlang.«map_size/1»]
+        · obtain ⟨s, ne, sz⟩ := map_size_ne hM
+          have : (s : Int) ≠ 0 := by omega
+          simp [Elixir.Module.Types.Descr.«bare_intersection/3», Elixir.Module.Types.Descr.«fun_intersection/2», run,
+            Erlang.erlang.«==/2», Lynx.Except.andAlso, sz, this, ne]
+      · obtain ⟨M, bM, run⟩ := repr_diff_uniform b₁ b₂
+        refine fun_result (pos := Bool.true) bM _ (fun h => by cases h) (fun _ hM n => ?_) (fun _ hM n => ?_)
+        · subst hM
+          simp [Elixir.Module.Types.Descr.«bare_intersection/3», Elixir.Module.Types.Descr.«fun_intersection/2», run,
+            Erlang.erlang.«==/2», Lynx.Except.andAlso, Erlang.erlang.«map_size/1»]
+        · obtain ⟨s, ne, sz⟩ := map_size_ne hM
+          have : (s : Int) ≠ 0 := by omega
+          simp [Elixir.Module.Types.Descr.«bare_intersection/3», Elixir.Module.Types.Descr.«fun_intersection/2», run,
+            Erlang.erlang.«==/2», Lynx.Except.andAlso, sz, this, ne]
+      · obtain ⟨M, bM, run⟩ := repr_inter_uniform b₁ b₂
+        refine fun_result (pos := Bool.true) bM _ (fun h => by cases h) (fun _ hM n => ?_) (fun _ hM n => ?_)
+        · subst hM
+          simp [Elixir.Module.Types.Descr.«bare_intersection/3», Elixir.Module.Types.Descr.«fun_intersection/2», run,
+            Erlang.erlang.«==/2», Lynx.Except.andAlso, Erlang.erlang.«map_size/1»]
+        · obtain ⟨s, ne, sz⟩ := map_size_ne hM
+          have : (s : Int) ≠ 0 := by omega
+          simp [Elixir.Module.Types.Descr.«bare_intersection/3», Elixir.Module.Types.Descr.«fun_intersection/2», run,
+            Erlang.erlang.«==/2», Lynx.Except.andAlso, sz, this, ne]
+
+    theorem ffield_diff {x y : Term} (fx : FField E x) (fy : FField E y) :
+        ∃ r, (∀ n, Elixir.Module.Types.Descr.«bare_difference/3» (D (n + 1)) (.atom "fun") x y = .ok r) ∧
+          (kept (.atom "fun", r) = Bool.true → FField E r) := by
+      obtain ⟨p₁, R₁, rfl, b₁⟩ := fx
+      obtain ⟨p₂, R₂, rfl, b₂⟩ := fy
+      cases p₁ <;> cases p₂
+      · obtain ⟨M, bM, run⟩ := repr_diff_uniform b₂ b₁
+        refine fun_result (pos := Bool.true) bM _ (fun h => by cases h) (fun _ hM n => ?_) (fun _ hM n => ?_)
+        · subst hM
+          simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«fun_difference/2», run,
+            Erlang.erlang.«==/2», Lynx.Except.andAlso, Erlang.erlang.«map_size/1»]
+        · obtain ⟨s, ne, sz⟩ := map_size_ne hM
+          have : (s : Int) ≠ 0 := by omega
+          simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«fun_difference/2», run,
+            Erlang.erlang.«==/2», Lynx.Except.andAlso, sz, this, ne]
+      · obtain ⟨M, bM, run⟩ := repr_union_uniform b₁ b₂
+        refine fun_result (pos := Bool.false) bM _ (fun _ n => ?_) (fun h => by cases h) (fun h => by cases h)
+        simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«fun_difference/2», run,
+          Erlang.erlang.«==/2», Lynx.Except.andAlso]
+      · obtain ⟨M, bM, run⟩ := repr_inter_uniform b₁ b₂
+        refine fun_result (pos := Bool.true) bM _ (fun h => by cases h) (fun _ hM n => ?_) (fun _ hM n => ?_)
+        · subst hM
+          simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«fun_difference/2», run,
+            Erlang.erlang.«==/2», Lynx.Except.andAlso, Erlang.erlang.«map_size/1»]
+        · obtain ⟨s, ne, sz⟩ := map_size_ne hM
+          have : (s : Int) ≠ 0 := by omega
+          simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«fun_difference/2», run,
+            Erlang.erlang.«==/2», Lynx.Except.andAlso, sz, this, ne]
+      · obtain ⟨M, bM, run⟩ := repr_diff_uniform b₁ b₂
+        refine fun_result (pos := Bool.true) bM _ (fun h => by cases h) (fun _ hM n => ?_) (fun _ hM n => ?_)
+        · subst hM
+          simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«fun_difference/2», run,
+            Erlang.erlang.«==/2», Lynx.Except.andAlso, Erlang.erlang.«map_size/1»]
+        · obtain ⟨s, ne, sz⟩ := map_size_ne hM
+          have : (s : Int) ≠ 0 := by omega
+          simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«fun_difference/2», run,
+            Erlang.erlang.«==/2», Lynx.Except.andAlso, sz, this, ne]
+
+    theorem ffield_union {x y : Term} (fx : FField E x) (fy : FField E y) :
+        ∃ r, (∀ n, Elixir.Module.Types.Descr.«bare_union/3» (D (n + 1)) (.atom "fun") x y = .ok r) ∧ FField E r := by
+      obtain ⟨p₁, R₁, rfl, b₁⟩ := fx
+      obtain ⟨p₂, R₂, rfl, b₂⟩ := fy
+      cases p₁ <;> cases p₂
+      · obtain ⟨M, bM, run⟩ := repr_inter_uniform b₁ b₂
+        exact ⟨_, fun n => by simp [Elixir.Module.Types.Descr.«bare_union/3», Elixir.Module.Types.Descr.«fun_union/2», run],
+          Bool.false, M, rfl, bM⟩
+      · obtain ⟨M, bM, run⟩ := repr_diff_uniform b₁ b₂
+        exact ⟨_, fun n => by simp [Elixir.Module.Types.Descr.«bare_union/3», Elixir.Module.Types.Descr.«fun_union/2», run],
+          Bool.false, M, rfl, bM⟩
+      · obtain ⟨M, bM, run⟩ := repr_diff_uniform b₂ b₁
+        exact ⟨_, fun n => by simp [Elixir.Module.Types.Descr.«bare_union/3», Elixir.Module.Types.Descr.«fun_union/2», run],
+          Bool.false, M, rfl, bM⟩
+      · obtain ⟨M, bM, run⟩ := repr_union_uniform b₁ b₂
+        exact ⟨_, fun n => by simp [Elixir.Module.Types.Descr.«bare_union/3», Elixir.Module.Types.Descr.«fun_union/2», run],
+          Bool.true, M, rfl, bM⟩
+
+    theorem nfield_inter {name : String} {x y : Term} (hx : NField E name x) (hy : NField E name y) :
+        ∃ r, (∀ n, Elixir.Module.Types.Descr.«bare_intersection/3» (D (n + 1)) (.atom name) x y = .ok r) ∧
+          (kept (.atom name, r) = Bool.true → NField E name r) := by
+      rcases hx with ⟨nt, nm, nl, nf, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩
+      · rcases hy with ⟨-, -, -, -, fy⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩
+        · obtain ⟨r, run, ok, -⟩ := inter_key name x y fx fy
+          exact ⟨r, fun _ => run _, fun k => Or.inl ⟨nt, nm, nl, nf, ok k⟩⟩
+        · exact absurd rfl nf
+        · exact absurd rfl nt
+        · exact absurd rfl nm
+        · exact absurd rfl nl
+      · rcases hy with ⟨-, -, -, n, -⟩ | ⟨-, fy⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨e, -⟩
+        · exact absurd rfl n
+        · obtain ⟨r, run, k⟩ := ffield_inter fx fy
+          exact ⟨r, run, fun kw => Or.inr (Or.inl ⟨rfl, k kw⟩)⟩
+        all_goals simp at e
+      · rcases hy with ⟨n, -, -, -, -⟩ | ⟨e, -⟩ | ⟨-, fy⟩ | ⟨e, -⟩ | ⟨e, -⟩
+        · exact absurd rfl n
+        · simp at e
+        · obtain ⟨w, run, k⟩ := tuple_inter_closure fx fy
+          exact ⟨w, fun _ => by simp [Elixir.Module.Types.Descr.«bare_intersection/3», run],
+            fun kw => Or.inr (Or.inr (Or.inl ⟨rfl, k kw⟩))⟩
+        all_goals simp at e
+      · rcases hy with ⟨-, n, -, -, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, fy⟩ | ⟨e, -⟩
+        · exact absurd rfl n
+        · simp at e
+        · simp at e
+        · obtain ⟨w, run, k⟩ := map_inter_closure fx fy
+          exact ⟨w, fun _ => by simp [Elixir.Module.Types.Descr.«bare_intersection/3», run],
+            fun kw => Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, k kw⟩)))⟩
+        · simp at e
+      · rcases hy with ⟨-, -, n, -, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, fy⟩
+        · exact absurd rfl n
+        all_goals try simp at e
+        obtain ⟨w, run, k⟩ := list_inter_closure fx fy
+        exact ⟨w, fun _ => by simp [Elixir.Module.Types.Descr.«bare_intersection/3», run],
+          fun _ => Or.inr (Or.inr (Or.inr (Or.inr ⟨rfl, k⟩)))⟩
+
+    theorem nfield_diff (hterm : E (.atom "term")) {name : String} {x y : Term} (hx : NField E name x)
+        (hy : NField E name y) :
+        ∃ r, (∀ n, Elixir.Module.Types.Descr.«bare_difference/3» (D (n + 1)) (.atom name) x y = .ok r) ∧
+          (kept (.atom name, r) = Bool.true → NField E name r) := by
+      rcases hx with ⟨nt, nm, nl, nf, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩
+      · rcases hy with ⟨-, -, -, -, fy⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩
+        · obtain ⟨r, run, ok, -⟩ := diff_key name x y fx fy
+          exact ⟨r, fun _ => run _, fun k => Or.inl ⟨nt, nm, nl, nf, ok k⟩⟩
+        · exact absurd rfl nf
+        · exact absurd rfl nt
+        · exact absurd rfl nm
+        · exact absurd rfl nl
+      · rcases hy with ⟨-, -, -, n, -⟩ | ⟨-, fy⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨e, -⟩
+        · exact absurd rfl n
+        · obtain ⟨r, run, k⟩ := ffield_diff fx fy
+          exact ⟨r, run, fun kw => Or.inr (Or.inl ⟨rfl, k kw⟩)⟩
+        all_goals simp at e
+      · rcases hy with ⟨n, -, -, -, -⟩ | ⟨e, -⟩ | ⟨-, fy⟩ | ⟨e, -⟩ | ⟨e, -⟩
+        · exact absurd rfl n
+        · simp at e
+        · obtain ⟨w, run, k⟩ := tuple_diff_closure hterm fx fy
+          exact ⟨w, fun _ => by simp [Elixir.Module.Types.Descr.«bare_difference/3», run],
+            fun kw => Or.inr (Or.inr (Or.inl ⟨rfl, k kw⟩))⟩
+        all_goals simp at e
+      · rcases hy with ⟨-, n, -, -, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, fy⟩ | ⟨e, -⟩
+        · exact absurd rfl n
+        · simp at e
+        · simp at e
+        · obtain ⟨w, run, k⟩ := map_diff_closure fx fy
+          exact ⟨w, fun _ => by simp [Elixir.Module.Types.Descr.«bare_difference/3», run],
+            fun kw => Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, k kw⟩)))⟩
+        · simp at e
+      · rcases hy with ⟨-, -, n, -, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, fy⟩
+        · exact absurd rfl n
+        all_goals try simp at e
+        obtain ⟨w, run, k⟩ := list_diff_closure fx fy
+        exact ⟨w, fun _ => by simp [Elixir.Module.Types.Descr.«bare_difference/3», run],
+          fun _ => Or.inr (Or.inr (Or.inr (Or.inr ⟨rfl, k⟩)))⟩
+
+    theorem nest_inter (A B : List (Term × Term)) (nA : NestFields E A) (nB : NestFields E B) :
+        ∃ C, (∀ m, 1 + 1 ≤ m → Elixir.Module.Types.Descr.«bare_intersection/2» (D m) (.map A) (.map B) =
+          .ok (.map C)) ∧ NestFields E C ∧ ∀ q, (mapLookup C q).isSome → (mapLookup A q).isSome := by
+      let g : Term → Term → Term → Term := fun k₀ v₁ v₂ =>
+        match Elixir.Module.Types.Descr.«bare_intersection/3» (D 1) k₀ v₁ v₂ with
+        | .ok w => w
+        | .error _ => .nil
+      have ik := fun name x y (hx : mapLookup A (.atom name) = some x) (hy : mapLookup B (.atom name) = some y) =>
+        nfield_inter (nA.fields name x hx) (nB.fields name y hy)
+      have gval : ∀ name x y r, (∀ n, Elixir.Module.Types.Descr.«bare_intersection/3» (D (n + 1)) (.atom name) x y =
+          .ok r) → g (.atom name) x y = r := by
+        intro name x y r h; simp [g, h 0]
+      obtain ⟨I, C, run, lookI, lookC⟩ := inter_uniform 1 A B nA.static nB.static g (by
+        intro q x y hx hy m hm
+        obtain ⟨name, key⟩ := nA.atomKey hx
+        subst key
+        obtain ⟨r, run, -⟩ := ik name x y hx hy
+        obtain ⟨n, rfl⟩ : ∃ n, m = n + 1 := ⟨m - 1, by omega⟩
+        rw [run, gval _ _ _ _ run])
+      have look : ∀ name, mapLookup C (.atom name) =
+          match mapLookup A (.atom name), mapLookup B (.atom name) with
+          | some x, some y => if kept (.atom name, g (.atom name) x y) then some (g (.atom name) x y) else Option.none
+          | _, _ => Option.none := by
+        intro name
+        rw [lookC, find_atom, lookI, find_atom]
+        cases mapLookup A (.atom name) <;> cases hR : mapLookup B (.atom name) <;> simp [hR]
+      have keys : ∀ q, (mapLookup C q).isSome → (mapLookup A q).isSome := by
+        intro q some
+        rw [lookC] at some
+        split at some
+        · rename_i e hit
+          have hI := find_isSome I q hit
+          rw [lookI] at hI
+          split at hI
+          · rename_i e' hit'
+            exact find_isSome A q hit'
+          · simp at hI
+        · simp at some
+      refine ⟨C, run, ⟨fun q h => nA.keys q (keys q h), fun name w h => ?_⟩, keys⟩
+      rw [look] at h
+      cases hx : mapLookup A (.atom name) <;> cases hy : mapLookup B (.atom name) <;> rw [hx, hy] at h <;>
+        try simp at h
+      rename_i x y
+      obtain ⟨r, run, ok⟩ := ik name x y hx hy
+      simp only [gval _ _ _ _ run] at h
+      obtain ⟨k, rfl⟩ := h
+      exact ok k
+
+    theorem nest_diff_fold (hterm : E (.atom "term")) (left : Term) (A B : List (Term × Term)) (nA : NestFields E A)
+        (nB : NestFields E B)
+        (hleft : left = .map A ∨ (left = .atom "term" ∧ B ≠ [] ∧
+          Elixir.Module.Types.Descr.«unfolded_term/0» = .ok (.map A))) :
+        ∃ C, (∀ m, 3 ≤ m → Elixir.Module.Types.Descr.«bare_difference/2» (D m) left (.map B) = .ok (.map C)) ∧
+          NestFields E C ∧ ∀ q, (mapLookup C q).isSome → (mapLookup A q).isSome := by
+      by_cases emptyB : B = []
+      · subst emptyB
+        rcases hleft with rfl | ⟨-, ne, -⟩
+        rotate_left
+        · exact absurd rfl ne
+        refine ⟨A, fun m _ => ?_, nA, fun q h => h⟩
+        unfold Elixir.Module.Types.Descr.«bare_difference/2»
+        simp [Erlang.erlang.«==/2»]
+      let g : Term → Term → Term → Term := fun k₀ v₁ v₂ =>
+        match Elixir.Module.Types.Descr.«bare_difference/3» (D 1) k₀ v₁ v₂ with
+        | .ok w => w
+        | .error _ => .nil
+      have gval : ∀ name x y r, (∀ n, Elixir.Module.Types.Descr.«bare_difference/3» (D (n + 1)) (.atom name) x y =
+          .ok r) → g (.atom name) x y = r := by
+        intro name x y r h; simp [g, h 0]
+      have fold := fun depth => difference_fold (depth + 1) (.function "Elixir.Module.Types.Descr" "bare_difference" 3 #[])
+        g (mapEntries B) A (mapEntries_distinct B) (by
+          intro e member v₁ found
+          have hy := mapLookup_of_mem_mapEntries member
+          obtain ⟨name, key⟩ := nA.atomKey found
+          rw [key] at found hy ⊢
+          obtain ⟨r, run, -⟩ := nfield_diff hterm (nA.fields name v₁ found) (nB.fields name e.2 hy)
+          rw [Erlang.program.«Elixir.Module.Types.Descr:bare_difference/3».pure, run, gval _ _ _ _ run])
+      obtain ⟨C, -, lookC, eqC⟩ := fold 0
+      have look : ∀ name, mapLookup C (.atom name) =
+          match mapLookup B (.atom name) with
+          | some y => (mapLookup A (.atom name)).bind fun x =>
+              if kept (.atom name, g (.atom name) x y) then some (g (.atom name) x y) else Option.none
+          | none => mapLookup A (.atom name) := by
+        intro name
+        rw [lookC, find_atom]
+        cases mapLookup B (.atom name) <;> rfl
+      have keys : ∀ q, (mapLookup C q).isSome → (mapLookup A q).isSome := by
+        intro q some
+        rw [lookC] at some
+        split at some
+        · rename_i e hit
+          have same : exactCompare q e.1 = .eq := by simpa using List.find?_some hit
+          rw [mapLookup_congr same]
+          cases h : mapLookup A e.1 <;> simp_all
+        · exact some
+      refine ⟨C, fun m hm => ?_, ⟨fun q h => nA.keys q (keys q h), fun name w h => ?_⟩, keys⟩
+      · obtain ⟨depth, rfl⟩ : ∃ depth, m = depth + 1 + 2 := ⟨m - 3, by omega⟩
+        obtain ⟨C', fold', -, eq'⟩ := fold depth
+        rw [eqC, ← eq']
+        rcases hleft with rfl | ⟨rfl, -, term⟩
+        · unfold Elixir.Module.Types.Descr.«bare_difference/2»
+          simp [Erlang.erlang.«==/2», unfold_map, static_map nA.static, static_map nB.static, emptyB]
+          unfold Elixir.Module.Types.Descr.«dynamic_difference/3»
+          simp [Erlang.erlang.«==/2», emptyB, unfold_map, Erlang.maps.«fold/3»]
+          simpa using fold'
+        · unfold Elixir.Module.Types.Descr.«bare_difference/2»
+          simp [Erlang.erlang.«==/2», unfold_map, static_map nB.static, emptyB]
+          unfold Elixir.Module.Types.Descr.«dynamic_difference/3»
+          simp [Erlang.erlang.«==/2», emptyB, unfold_map, Erlang.maps.«fold/3», term]
+          simpa using fold'
+      · rw [look] at h
+        cases hy : mapLookup B (.atom name) with
+        | none => rw [hy] at h; exact nA.fields name w h
+        | some y =>
+          rw [hy] at h
+          cases hx : mapLookup A (.atom name) with
+          | none => rw [hx] at h; cases h
+          | some x =>
+            rw [hx] at h
+            obtain ⟨r, run, ok⟩ := nfield_diff hterm (nA.fields name x hx) (nB.fields name y hy)
+            simp only [gval _ _ _ _ run, Option.bind_some] at h
+            split at h
+            · rename_i k; cases h; exact ok k
+            · cases h
+
+    /-- The emptiness of nested types does not depend on the call depth. -/
+    theorem nest_empty (ops : ElemOk E K) (dops : ElemDiff E K) (hnone : E (.map [])) (tail : TailOk E)
+        {M : List (Term × Term)}
+        (nM : NestFields E M) (S : List (Term × Term))
+        (funB : ∃ fb, ∀ w, mapLookup M (.atom "fun") = some w → ∀ m, K + 2 ≤ m →
+          Elixir.Module.Types.Descr.«fun_empty?/2» (D m) w (.map S) = .ok (boolAtom fb)) :
+        ∃ b, ∀ m, K + 2 ≤ m → Elixir.Module.Types.Descr.«empty_seen?/2» (D m) (.map M) (.map S) = .ok (boolAtom b) := by
+      by_cases nonempty : M = []
+      · subst nonempty
+        exact ⟨Bool.true, fun m _ => by simpa [boolAtom] using empty_none_seen (D m) (.map S)⟩
+      have static : mapLookup M (.atom "dynamic") = Option.none := nM.static
+      have listB : ∃ lb, ∀ w, mapLookup M (.atom "list") = some w → ∀ m, K + 2 ≤ m →
+          Elixir.Module.Types.Descr.«list_empty?/2» (D m) w (.map S) = .ok (boolAtom lb) := by
+        cases h : mapLookup M (.atom "list") with
+        | none => exact ⟨Bool.false, fun w hw => by cases hw⟩
+        | some w =>
+          rcases nM.fields _ w h with ⟨-, -, e, -, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, f⟩
+          · exact absurd rfl e
+          · simp at e
+          · simp at e
+          · simp at e
+          · obtain ⟨lb, hlb⟩ := list_total ops dops tail S f
+            exact ⟨lb, fun w' hw' m hm => by cases hw'; exact hlb m hm⟩
+      have tupleB : ∃ tb, ∀ w, mapLookup M (.atom "tuple") = some w → ∀ m, K + 2 ≤ m →
+          Elixir.Module.Types.Descr.«tuple_empty?/2» (D m) w (.map S) = .ok (boolAtom tb) := by
+        cases h : mapLookup M (.atom "tuple") with
+        | none => exact ⟨Bool.false, fun w hw => by cases hw⟩
+        | some w =>
+          rcases nM.fields _ w h with ⟨e, -, -, -, -⟩ | ⟨e, -⟩ | ⟨-, f⟩ | ⟨e, -⟩ | ⟨e, -⟩
+          · exact absurd rfl e
+          · simp at e
+          · obtain ⟨tb, htb⟩ := tuple_total ops dops S f
+            exact ⟨tb, fun w' hw' m hm => by cases hw'; exact htb m (by omega)⟩
+          · simp at e
+          · simp at e
+      have mapB : ∃ mb, ∀ w, mapLookup M (.atom "map") = some w → ∀ m, K + 2 ≤ m →
+          Elixir.Module.Types.Descr.«map_empty?/2» (D m) w (.map S) = .ok (boolAtom mb) := by
+        cases h : mapLookup M (.atom "map") with
+        | none => exact ⟨Bool.false, fun w hw => by cases hw⟩
+        | some w =>
+          rcases nM.fields _ w h with ⟨-, e, -, -, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, f⟩ | ⟨e, -⟩
+          · exact absurd rfl e
+          · simp at e
+          · simp at e
+          · obtain ⟨mb, hmb⟩ := map_total ops dops hnone S f
+            exact ⟨mb, fun w' hw' m hm => by cases hw'; exact hmb m hm⟩
+          · simp at e
+      obtain ⟨tb, ht⟩ := tupleB
+      obtain ⟨mb, hm⟩ := mapB
+      obtain ⟨lb, hl⟩ := listB
+      obtain ⟨fb, hf⟩ := funB
+      refine ⟨!(mapLookup M (.atom "atom")).isSome && !(mapLookup M (.atom "bitmap")).isSome &&
+        (!(mapLookup M (.atom "tuple")).isSome || tb) && (!(mapLookup M (.atom "map")).isSome || mb) &&
+        (!(mapLookup M (.atom "list")).isSome || lb) && (!(mapLookup M (.atom "fun")).isSome || fb), fun m hmk => ?_⟩
+      unfold Elixir.Module.Types.Descr.«empty_seen?/2»
+      simp [getMapKeys_single, static, Erlang.erlang.«==/2», nonempty]
+      cases ha : mapLookup M (.atom "atom") with
+      | some _ => simp [Erlang.erlang.«is_map_key/2», any_key, ha, Lynx.Except.andAlso, boolAtom]
+      | none =>
+      cases hb : mapLookup M (.atom "bitmap") with
+      | some _ => simp [Erlang.erlang.«is_map_key/2», any_key, ha, hb, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+      | none =>
+      have tB := fun w h => ht w h m hmk
+      have mB := fun w h => hm w h m hmk
+      have lB := fun w h => hl w h m hmk
+      have fB := fun w h => hf w h m hmk
+      clear ht hm hl hf
+      cases htu : mapLookup M (.atom "tuple") with
+      | none =>
+        cases hma : mapLookup M (.atom "map") with
+        | none =>
+          cases hli : mapLookup M (.atom "list") with
+          | none =>
+            cases hfu : mapLookup M (.atom "fun") with
+            | none =>
+              simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+            | some _ =>
+              cases fb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+          | some _ =>
+            cases hfu : mapLookup M (.atom "fun") with
+            | none =>
+              cases lb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+            | some _ =>
+              cases fb <;> cases lb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+        | some _ =>
+          cases hli : mapLookup M (.atom "list") with
+          | none =>
+            cases hfu : mapLookup M (.atom "fun") with
+            | none =>
+              cases mb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+            | some _ =>
+              cases fb <;> cases mb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+          | some _ =>
+            cases hfu : mapLookup M (.atom "fun") with
+            | none =>
+              cases mb <;> cases lb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+            | some _ =>
+              cases fb <;> cases mb <;> cases lb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+      | some _ =>
+        cases hma : mapLookup M (.atom "map") with
+        | none =>
+          cases hli : mapLookup M (.atom "list") with
+          | none =>
+            cases hfu : mapLookup M (.atom "fun") with
+            | none =>
+              cases tb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+            | some _ =>
+              cases fb <;> cases tb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+          | some _ =>
+            cases hfu : mapLookup M (.atom "fun") with
+            | none =>
+              cases tb <;> cases lb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+            | some _ =>
+              cases fb <;> cases tb <;> cases lb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+        | some _ =>
+          cases hli : mapLookup M (.atom "list") with
+          | none =>
+            cases hfu : mapLookup M (.atom "fun") with
+            | none =>
+              cases tb <;> cases mb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+            | some _ =>
+              cases fb <;> cases tb <;> cases mb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+          | some _ =>
+            cases hfu : mapLookup M (.atom "fun") with
+            | none =>
+              cases tb <;> cases mb <;> cases lb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+            | some _ =>
+              cases fb <;> cases tb <;> cases mb <;> cases lb <;> simp_all [Erlang.erlang.«is_map_key/2», any_key, Erlang.erlang.«not/1», Lynx.Except.andAlso, boolAtom]
+
+    theorem list_union_closure {x y : Term} (wx : Bdd (LLit E) x) (wy : Bdd (LLit E) y) :
+        ∃ w, Elixir.Module.Types.Descr.«list_union/2» x y = .ok w ∧ Bdd (LLit E) w := by
+      by_cases tx : ∃ k, x = .tuple #[k, .atom "term", .atom "term"]
+      · obtain ⟨k, rfl⟩ := tx
+        exact ⟨_, by unfold Elixir.Module.Types.Descr.«list_union/2»; rfl, wx⟩
+      by_cases ty : ∃ k, y = .tuple #[k, .atom "term", .atom "term"]
+      · obtain ⟨k, rfl⟩ := ty
+        refine ⟨_, ?_, wy⟩
+        unfold Elixir.Module.Types.Descr.«list_union/2»
+        split
+        · exact absurd ⟨_, rfl⟩ tx
+        · rename_i _ heq; rw [← heq]; rfl
+        · exfalso; simp_all
+      obtain ⟨w, run, keep, -⟩ := union_ok wx wy
+      refine ⟨w, ?_, keep _ wx wy⟩
+      unfold Elixir.Module.Types.Descr.«list_union/2»
+      split
+      · exact absurd ⟨_, rfl⟩ tx
+      · exact absurd ⟨_, rfl⟩ ty
+      · exact run
+
+    theorem nfield_union {name : String} {x y : Term} (hx : NField E name x)
+        (hy : NField E name y) :
+        ∃ r, (∀ n, Elixir.Module.Types.Descr.«bare_union/3» (D (n + 1)) (.atom name) x y = .ok r) ∧ NField E name r := by
+      rcases hx with ⟨nt, nm, nl, nf, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩
+      · rcases hy with ⟨-, -, -, -, fy⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩ | ⟨rfl, -⟩
+        · obtain ⟨r, run, ok⟩ := fieldok_union name fx fy
+          exact ⟨r, run, Or.inl ⟨nt, nm, nl, nf, ok⟩⟩
+        · exact absurd rfl nf
+        · exact absurd rfl nt
+        · exact absurd rfl nm
+        · exact absurd rfl nl
+      · rcases hy with ⟨-, -, -, n, -⟩ | ⟨-, fy⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨e, -⟩
+        · exact absurd rfl n
+        · obtain ⟨r, run, k⟩ := ffield_union fx fy
+          exact ⟨r, run, Or.inr (Or.inl ⟨rfl, k⟩)⟩
+        all_goals simp at e
+      · rcases hy with ⟨n, -, -, -, -⟩ | ⟨e, -⟩ | ⟨-, fy⟩ | ⟨e, -⟩ | ⟨e, -⟩
+        · exact absurd rfl n
+        · simp at e
+        · obtain ⟨w, run, fw, -⟩ := open_union_spec tupleOk_not _ tuple_union_shape.1 tuple_union_shape.2.1
+            tuple_union_shape.2.2 fx fy
+          exact ⟨w, fun _ => by simp [Elixir.Module.Types.Descr.«bare_union/3», run], Or.inr (Or.inr (Or.inl ⟨rfl, fw⟩))⟩
+        all_goals simp at e
+      · rcases hy with ⟨-, n, -, -, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, fy⟩ | ⟨e, -⟩
+        · exact absurd rfl n
+        · simp at e
+        · simp at e
+        · obtain ⟨w, run, fw, -⟩ := open_union_spec mapOk_not _ map_union_shape.1 map_union_shape.2.1
+            map_union_shape.2.2 fx fy
+          exact ⟨w, fun _ => by simp [Elixir.Module.Types.Descr.«bare_union/3», run],
+            Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, fw⟩)))⟩
+        · simp at e
+      · rcases hy with ⟨-, -, n, -, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, fy⟩
+        · exact absurd rfl n
+        all_goals try simp at e
+        obtain ⟨w, run, k⟩ := list_union_closure fx fy
+        exact ⟨w, fun _ => by simp [Elixir.Module.Types.Descr.«bare_union/3», run], Or.inr (Or.inr (Or.inr (Or.inr ⟨rfl, k⟩)))⟩
+
+    /-- Fields of nested types decide their emptiness at every call depth from `K + 5`. -/
+    theorem nfield_empty (ops : ElemOk E K) (dops : ElemDiff E K) (fops : ElemFun E K) (dm : DomOk Dm E K)
+        (hnone : E (.map [])) (tail : TailOk E) {name : String} {x : Term} (hx : NField E name x)
+        (S : List (Term × Term)) :
+        BoolAt (K + 5) (fun m => Elixir.Module.Types.Descr.«empty_key?/3» (D m) (.atom name) x (.map S)) := by
+      rcases hx with ⟨nt, nm, nl, nf, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩ | ⟨rfl, fx⟩
+      · rcases fx with ⟨rfl, -⟩ | ⟨rfl, -⟩ | ⟨nb, na, tx⟩
+        · exact ⟨Bool.false, fun m _ => rfl⟩
+        · exact ⟨Bool.false, fun m _ => rfl⟩
+        · simp [topValue, nb, na, nt, nm, nl, nf] at tx
+      · obtain ⟨b, hb⟩ := fun_total ops dops fops dm hnone fx S
+        exact ⟨b, fun m hm => by dsimp only; unfold Elixir.Module.Types.Descr.«empty_key?/3»; exact hb m hm⟩
+      · obtain ⟨b, hb⟩ := tuple_total ops dops S fx
+        exact ⟨b, fun m hm => by dsimp only; unfold Elixir.Module.Types.Descr.«empty_key?/3»; exact hb m (by omega)⟩
+      · obtain ⟨b, hb⟩ := map_total ops dops hnone S fx
+        exact ⟨b, fun m hm => by dsimp only; unfold Elixir.Module.Types.Descr.«empty_key?/3»; exact hb m (by omega)⟩
+      · obtain ⟨b, hb⟩ := list_total ops dops tail S fx
+        exact ⟨b, fun m hm => by dsimp only; unfold Elixir.Module.Types.Descr.«empty_key?/3»; exact hb m (by omega)⟩
+
+    /-- Unions of nested types are nested types, whose fields are fields of either type. -/
+    theorem nest_union (A B : List (Term × Term)) (nA : NestFields E A)
+        (nB : NestFields E B) :
+        ∃ U, (∀ m, 1 + 1 ≤ m → Elixir.Module.Types.Descr.«bare_union/2» (D m) (.map A) (.map B) = .ok (.map U)) ∧
+          NestFields E U ∧ ∀ q, (mapLookup U q).isSome → (mapLookup A q).isSome ∨ (mapLookup B q).isSome := by
+      let g : Term → Term → Term → Term := fun q x y =>
+        match Elixir.Module.Types.Descr.«bare_union/3» (D 1) q x y with | .ok w => w | .error _ => .nil
+      have gval : ∀ name x y r, (∀ n, Elixir.Module.Types.Descr.«bare_union/3» (D (n + 1)) (.atom name) x y =
+          .ok r) → g (.atom name) x y = r := by
+        intro name x y r h; simp [g, h 0]
+      have calls : ∀ q x y, mapLookup A q = some x → mapLookup B q = some y → ∀ m, 1 ≤ m →
+          Elixir.Module.Types.Descr.«bare_union/3» (D m) q x y = .ok (g q x y) := by
+        intro q x y hx hy m hm
+        obtain ⟨name, rfl⟩ := nA.atomKey hx
+        obtain ⟨r, run, -⟩ := nfield_union (nA.fields name x hx) (nB.fields name y hy)
+        obtain ⟨n, rfl, -⟩ := succ_of_le hm
+        rw [run, gval _ _ _ _ run]
+      obtain ⟨U, run, look⟩ := union_uniform 1 A B nA.static nB.static (fun q h => by
+        obtain ⟨w, hw⟩ := Option.isSome_iff_exists.mp h; exact nB.atomKey hw) g calls
+      have keys : ∀ q, (mapLookup U q).isSome → (mapLookup A q).isSome ∨ (mapLookup B q).isSome := by
+        intro q h
+        cases hb : mapLookup B q with
+        | none => rw [(look q).1 hb] at h; exact Or.inl h
+        | some y => exact Or.inr (by simp [hb])
+      refine ⟨U, run, ⟨fun q h => ?_, fun name w h => ?_⟩, keys⟩
+      · rcases keys q h with h | h
+        · exact nA.keys q h
+        · exact nB.keys q h
+      · cases hb : mapLookup B (.atom name) with
+        | none => rw [(look _).1 hb] at h; exact nA.fields name w h
+        | some y =>
+          cases ha : mapLookup A (.atom name) with
+          | none => rw [(look _).2.1 y hb ha] at h; rw [← Option.some.inj h]; exact nB.fields name y hb
+          | some x =>
+            rw [(look _).2.2 x y ha hb] at h
+            rw [← Option.some.inj h]
+            obtain ⟨r, run, ok⟩ := nfield_union (nA.fields name x ha) (nB.fields name y hb)
+            rw [gval _ _ _ _ run]
+            exact ok
+
+    /-- Domains of nested function types: maps of tuples of element types. -/
+    def TupC (E : Term → Prop) (t : Term) : Prop :=
+      ∃ X, t = .map X ∧ NestFields E X ∧ ∀ q, (mapLookup X q).isSome → q = .atom "tuple"
+
+    theorem domOk (ops : ElemOk E K) (dops : ElemDiff E K) (fops : ElemFun E K) (hnone : E (.map []))
+        (tail : TailOk E) : DomOk (TupC E) E (K + 3) := by
+      have hterm := ops.term
+      refine ⟨fun l hl => ?_, ⟨[], rfl, ⟨fun q h => by simp [mapLookup] at h, fun name w h => by simp [mapLookup] at h⟩,
+        fun q h => by simp [mapLookup] at h⟩, fun ⟨X, e, _⟩ => ⟨X, e⟩, fun {a b} ha hb => ?_, fun {a b} ha hb => ?_,
+        fun {a b} ha hb => ?_, fun {a} ha S => ?_⟩
+      · obtain ⟨k, run⟩ := args_domain l fun e me => fops.static (hl e me)
+        have look : ∀ q, mapLookup [(Term.atom "tuple", Term.tuple #[.integer k, .atom "closed", Term.list l])] q =
+            if exactCompare q (.atom "tuple") = .eq then some (.tuple #[.integer k, .atom "closed", Term.list l])
+            else Option.none := by
+          intro q; by_cases e : exactCompare q (.atom "tuple") = .eq <;> simp [mapLookup, e]
+        refine ⟨_, ⟨_, rfl, ⟨fun q h => ?_, fun name w h => ?_⟩, fun q h => ?_⟩, run⟩
+        · rw [look] at h; split at h
+          · rename_i e; exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ((exactCompare_eq_atom _ _).mp e)))))
+          · simp at h
+        · rw [look] at h; split at h
+          · rename_i e
+            simp only [atom_exactCompare_eq, Term.atom.injEq] at e
+            subst e
+            simp at h; subst h
+            exact Or.inr (Or.inr (Or.inl ⟨rfl, Or.inr (Bdd.leaf_iff.mpr
+              ⟨⟨k, "closed", l, rfl, Or.inr rfl, hl⟩, fun ⟨_, e⟩ => by simp at e⟩)⟩))
+          · simp at h
+        · rw [look] at h; split at h
+          · rename_i e; exact (exactCompare_eq_atom _ _).mp e
+          · simp at h
+      · obtain ⟨A, rfl, nA, tA⟩ := ha
+        obtain ⟨B, rfl, nB, tB⟩ := hb
+        obtain ⟨U, run, nU, keys⟩ := nest_union A B nA nB
+        exact ⟨_, ⟨U, rfl, nU, fun q h => (keys q h).elim (tA q) (tB q)⟩, fun m hm => run m (by omega)⟩
+      · obtain ⟨A, rfl, nA, tA⟩ := ha
+        obtain ⟨B, rfl, nB, -⟩ := hb
+        obtain ⟨C, run, nC, keys⟩ := nest_inter A B nA nB
+        exact ⟨_, ⟨C, rfl, nC, fun q h => tA q (keys q h)⟩, fun m hm => run m (by omega)⟩
+      · obtain ⟨A, rfl, nA, tA⟩ := ha
+        obtain ⟨B, rfl, nB, -⟩ := hb
+        obtain ⟨C, run, nC, keys⟩ := nest_diff_fold hterm (.map A) A B nA nB (Or.inl rfl)
+        exact ⟨_, ⟨C, rfl, nC, fun q h => tA q (keys q h)⟩, fun m hm => run m (by omega)⟩
+      · obtain ⟨A, rfl, nA, tA⟩ := ha
+        obtain ⟨b, hb⟩ := nest_empty ops dops hnone tail nA S ⟨Bool.false, fun w h => by
+          have := tA _ (by rw [h]; rfl); simp at this⟩
+        exact ⟨b, fun m hm => hb m (by omega)⟩
+
+    theorem nestOk (ops : ElemOk E K) (dops : ElemDiff E K) (fops : ElemFun E K) (hnone : E (.map []))
+        (tail : TailOk E) : ElemOk (NestC E) (K + 8) := by
+      have dm := domOk ops dops fops hnone tail
+      refine ⟨Or.inl rfl, fun {a b} ha hb => ?_, fun {a} ha S => ?_⟩
+      · rcases ha with rfl | ⟨A, rfl, nA⟩
+        · exact ⟨b, hb, fun _ _ => by unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl⟩
+        rcases hb with rfl | ⟨B, rfl, nB⟩
+        · exact ⟨_, Or.inr ⟨A, rfl, nA⟩, fun m _ => inter_term_right _ _⟩
+        obtain ⟨C, run, nC, -⟩ := nest_inter A B nA nB
+        exact ⟨_, Or.inr ⟨C, rfl, nC⟩, fun m hm => run m (by omega)⟩
+      · rcases ha with rfl | ⟨M, rfl, nM⟩
+        · exact ⟨Bool.false, fun m _ => by rw [Elixir.Module.Types.Descr.«empty_seen?/2».eq_def]; rfl⟩
+        · have funB : ∃ fb, ∀ w, mapLookup M (.atom "fun") = some w → ∀ m, K + 6 + 2 ≤ m →
+              Elixir.Module.Types.Descr.«fun_empty?/2» (D m) w (.map S) = .ok (boolAtom fb) := by
+            cases h : mapLookup M (.atom "fun") with
+            | none => exact ⟨Bool.false, fun w hw => by cases hw⟩
+            | some w =>
+              rcases nM.fields _ w h with ⟨-, -, -, n, -⟩ | ⟨-, f⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨e, -⟩
+              · exact absurd rfl n
+              · obtain ⟨fb, hfb⟩ := fun_total (ops.mono (Nat.le_add_right K 3)) (dops.mono (Nat.le_add_right K 3))
+                  ⟨fops.static, fun ha hb => let ⟨c, hc, run⟩ := fops.union ha hb; ⟨c, hc, fun m hm => run m (by omega)⟩,
+                    fun ha hb => (fops.sub ha hb).mono (by omega), fun ha hb => (fops.disj ha hb).mono (by omega)⟩
+                  dm hnone f S
+                exact ⟨fb, fun w' hw' m hm => by cases hw'; exact hfb m (by omega)⟩
+              all_goals simp at e
+          exact nest_empty (ops.mono (Nat.le_add_right K 6)) (dops.mono (Nat.le_add_right K 6)) hnone tail nM S funB
+
+    theorem nestDiff (hterm : E (.atom "term")) (K : Nat) : ElemDiff (NestC E) (K + 3) := by
+      refine ⟨fun {a b} ha hb => ?_⟩
+      rcases hb with rfl | ⟨B, rfl, nB⟩
+      · exact ⟨_, Or.inr ⟨[], rfl, ⟨fun q h => by simp [mapLookup] at h, fun name w h => by simp [mapLookup] at h⟩⟩,
+          fun m _ => diff_term_right _ _⟩
+      by_cases empty : B = []
+      · subst empty
+        refine ⟨a, ha, fun m _ => ?_⟩
+        unfold Elixir.Module.Types.Descr.«bare_difference/2»
+        rcases ha with rfl | ⟨A, rfl, -⟩ <;> simp [Erlang.erlang.«==/2»]
+      rcases ha with rfl | ⟨A, rfl, nA⟩
+      · obtain ⟨T, term, -⟩ := unfolded_term_fields
+        obtain ⟨C, run, nC, -⟩ := nest_diff_fold hterm (.atom "term") T B (Basic.nest hterm (term_basic term).1) nB
+          (Or.inr ⟨rfl, empty, term⟩)
+        exact ⟨_, Or.inr ⟨C, rfl, nC⟩, fun m hm => run m (by omega)⟩
+      · obtain ⟨C, run, nC, -⟩ := nest_diff_fold hterm (.map A) A B nA nB (Or.inl rfl)
+        exact ⟨_, Or.inr ⟨C, rfl, nC⟩, fun m hm => run m (by omega)⟩
+
+    theorem nest_none : NestC E (.map []) :=
+      Or.inr ⟨[], rfl, ⟨fun q h => by simp [mapLookup] at h, fun name w h => by simp [mapLookup] at h⟩⟩
+
+    /-- `list_tail_unfold/1` of the top type: the top type without lists. -/
+    def tailTerm : List (Term × Term) :=
+      [(.atom "bitmap", .integer 255), (.atom "tuple", .tuple #[.integer 61102469, .atom "open", .nil]),
+        (.atom "fun", .tuple #[.atom "negation", .map []]),
+        (.atom "map", .tuple #[.integer 61102469, .atom "open", .nil]),
+        (.atom "atom", .tuple #[.atom "negation", .map []])]
+
+    theorem tailTerm_basic : Basic tailTerm := by
+      refine basic_of (fun q h => ?_) fun name w h => ?_
+      · obtain ⟨e, me, qe⟩ := (mapLookup_isSome _ _).mp h
+        simp only [tailTerm, List.mem_cons, List.mem_nil_iff, or_false] at me
+        rcases me with rfl | rfl | rfl | rfl | rfl <;> rw [(exactCompare_eq_atom _ _).mp qe] <;> simp
+      · have look : ∀ n, mapLookup tailTerm (.atom n) =
+            if n = "bitmap" then some (.integer 255) else if n = "tuple" then
+              some (.tuple #[.integer 61102469, .atom "open", .nil]) else if n = "fun" then
+              some (.tuple #[.atom "negation", .map []]) else if n = "map" then
+              some (.tuple #[.integer 61102469, .atom "open", .nil]) else if n = "atom" then
+              some (.tuple #[.atom "negation", .map []]) else none := by
+          intro n
+          simp only [tailTerm, mapLookup, List.find?]
+          by_cases b : n = "bitmap" <;> by_cases t : n = "tuple" <;> by_cases f : n = "fun" <;>
+            by_cases m : n = "map" <;> by_cases a : n = "atom" <;> simp_all
+        rw [look] at h
+        split at h
+        · rename_i e; subst e; cases h; exact Or.inl ⟨rfl, 255, rfl, by decide, by decide⟩
+        split at h
+        · rename_i e; subst e; cases h; exact Or.inr (Or.inr ⟨by decide, by decide, rfl⟩)
+        split at h
+        · rename_i e; subst e; cases h; exact Or.inr (Or.inr ⟨by decide, by decide, rfl⟩)
+        split at h
+        · rename_i e; subst e; cases h; exact Or.inr (Or.inr ⟨by decide, by decide, rfl⟩)
+        split at h
+        · rename_i e; subst e; cases h
+          exact Or.inr (Or.inl ⟨rfl, ⟨Bool.false, [], rfl, by simp [Erlang.sets.elements?]⟩,
+            atom_nonempty Bool.false [] (by simp)⟩)
+        · cases h
+
+    def noList (M : List (Term × Term)) : List (Term × Term) :=
+      M.filter fun e => exactCompare (.atom "list") e.1 != .eq
+
+    theorem tail_map (d : Dispatcher) (M : List (Term × Term)) :
+        Elixir.Module.Types.Descr.«list_tail_unfold/1» d (.map M) = .ok (.map (noList M)) := by
+      unfold Elixir.Module.Types.Descr.«list_tail_unfold/1»
+      simp [Erlang.maps.«remove/2», noList]
+
+    theorem noList_lookup (M : List (Term × Term)) (q : Term) (h : (mapLookup (noList M) q).isSome) :
+        mapLookup (noList M) q = mapLookup M q := by
+      simp only [noList, mapLookup_filter] at h ⊢
+      split at h
+      · simp at h
+      · rename_i n; simp [n]
+
+    theorem Basic.noList {M : List (Term × Term)} (basic : Basic M) : Basic (noList M) := by
+      refine basic_of (fun q h => basic.keys q (by rw [← noList_lookup M q h]; exact h)) fun name w h => ?_
+      have := noList_lookup M (.atom name) (by rw [h]; rfl)
+      rw [this] at h
+      exact basic.field h
+
+    theorem NestFields.noList {M : List (Term × Term)} (n : NestFields E M) : NestFields E (noList M) := by
+      refine ⟨fun q h => n.keys q (by rw [← noList_lookup M q h]; exact h), fun name w h => ?_⟩
+      have := noList_lookup M (.atom name) (by rw [h]; rfl)
+      rw [this] at h
+      exact n.fields name w h
+
+    theorem tail_lelem : TailOk LElem := by
+      intro e he
+      rcases he with rfl | ⟨M, rfl, bM⟩
+      · exact ⟨.map tailTerm, fun d => by unfold Elixir.Module.Types.Descr.«list_tail_unfold/1»; rfl,
+          Or.inr ⟨tailTerm, rfl, tailTerm_basic⟩⟩
+      · exact ⟨_, fun d => tail_map d M, Or.inr ⟨_, rfl, bM.noList⟩⟩
+
+    theorem tail_nest (hterm : E (.atom "term")) : TailOk (NestC E) := by
+      intro e he
+      rcases he with rfl | ⟨M, rfl, nM⟩
+      · exact ⟨.map tailTerm, fun d => by unfold Elixir.Module.Types.Descr.«list_tail_unfold/1»; rfl,
+          Or.inr ⟨tailTerm, rfl, Basic.nest hterm tailTerm_basic⟩⟩
+      · exact ⟨_, fun d => tail_map d M, Or.inr ⟨_, rfl, nM.noList⟩⟩
+
+    theorem ElemFun.mono {E : Term → Prop} {K K' : Nat} (fops : ElemFun E K) (le : K ≤ K') : ElemFun E K' :=
+      ⟨fops.static, fun ha hb => let ⟨c, hc, run⟩ := fops.union ha hb; ⟨c, hc, fun m hm => run m (by omega)⟩,
+        fun ha hb => (fops.sub ha hb).mono le, fun ha hb => (fops.disj ha hb).mono le⟩
+
+    theorem union_term_l (d : Dispatcher) (b : Term) :
+        Elixir.Module.Types.Descr.«bare_union/2» d (.atom "term") b = .ok (.atom "term") := by
+      unfold Elixir.Module.Types.Descr.«bare_union/2»; rfl
+
+    theorem union_term_r (d : Dispatcher) (A : List (Term × Term)) :
+        Elixir.Module.Types.Descr.«bare_union/2» d (.map A) (.atom "term") = .ok (.atom "term") := by
+      unfold Elixir.Module.Types.Descr.«bare_union/2»; rfl
+
+    theorem disjoint_term_l (d : Dispatcher) (b : Term) :
+        Elixir.Module.Types.Descr.«disjoint?/2» d (.atom "term") b = Elixir.Module.Types.Descr.«empty?/1» d b := by
+      unfold Elixir.Module.Types.Descr.«disjoint?/2»; rfl
+
+    theorem disjoint_term_r (d : Dispatcher) (A : List (Term × Term)) :
+        Elixir.Module.Types.Descr.«disjoint?/2» d (.map A) (.atom "term") =
+          Elixir.Module.Types.Descr.«empty?/1» d (.map A) := by
+      unfold Elixir.Module.Types.Descr.«disjoint?/2»; rfl
+
+    /-- Classes of the top type and static maps decide subtyping and disjointness from their fields. -/
+    theorem class_sub_disj (C : Term → Prop) (F : String → Term → Prop) (P : List (Term × Term) → Prop) (K : Nat)
+        (hC : ∀ {a}, C a → a = .atom "term" ∨ ∃ A, a = .map A ∧ P A)
+        (top : ∃ T, Elixir.Module.Types.Descr.«unfolded_term/0» = .ok (.map T) ∧ P T)
+        (static : ∀ {A}, P A → mapLookup A (.atom "dynamic") = Option.none)
+        (keys : ∀ {A}, P A → ∀ q, (mapLookup A q).isSome → q = .atom "bitmap" ∨ q = .atom "atom" ∨ q = .atom "fun" ∨
+          q = .atom "list" ∨ q = .atom "tuple" ∨ q = .atom "map")
+        (fields : ∀ {A}, P A → ∀ name w, mapLookup A (.atom name) = some w → F name w)
+        (diff : ∀ name x y, F name x → F name y → ∃ r, (∀ m, K ≤ m →
+          Elixir.Module.Types.Descr.«bare_difference/3» (D m) (.atom name) x y = .ok r) ∧
+          (kept (.atom name, r) = Bool.true → F name r))
+        (inter : ∀ name x y, F name x → F name y → ∃ r, (∀ m, K ≤ m →
+          Elixir.Module.Types.Descr.«bare_intersection/3» (D m) (.atom name) x y = .ok r) ∧
+          (kept (.atom name, r) = Bool.true → F name r))
+        (empty : ∀ name x, F name x →
+          BoolAt K (fun m => Elixir.Module.Types.Descr.«empty_key?/3» (D m) (.atom name) x (.map [])))
+        (emptyC : ∀ {a}, C a → BoolAt K (fun m => Elixir.Module.Types.Descr.«empty?/1» (D m) a)) :
+        (∀ {a b}, C a → C b → BoolAt K (fun m => Elixir.Module.Types.Descr.«subtype?/2» (D m) a b)) ∧
+          (∀ {a b}, C a → C b → BoolAt (K + 6) (fun m => Elixir.Module.Types.Descr.«disjoint?/2» (D m) a b)) := by
+      obtain ⟨T, term, pT⟩ := top
+      have kA : ∀ {A}, P A → ∀ q, (mapLookup A q).isSome → ∃ name, q = .atom name := fun pA q h => by
+        rcases keys pA q h with e | e | e | e | e | e <;> exact ⟨_, e⟩
+      have toMap : ∀ {a}, C a → ∃ A, P A ∧ ∀ d b,
+          Elixir.Module.Types.Descr.«subtype?/2» d a b = Elixir.Module.Types.Descr.«subtype?/2» d (.map A) b := by
+        intro a ha
+        rcases hC ha with rfl | ⟨A, rfl, pA⟩
+        · exact ⟨T, pT, fun d b => subtype_term_l term d b⟩
+        · exact ⟨A, pA, fun _ _ => rfl⟩
+      have toMapR : ∀ {b}, C b → ∃ B, P B ∧ ∀ d A,
+          Elixir.Module.Types.Descr.«subtype?/2» d (.map A) b = Elixir.Module.Types.Descr.«subtype?/2» d (.map A) (.map B) := by
+        intro b hb
+        rcases hC hb with rfl | ⟨B, rfl, pB⟩
+        · exact ⟨T, pT, fun d A => subtype_term_r term d (.map A)⟩
+        · exact ⟨B, pB, fun _ _ => rfl⟩
+      refine ⟨fun {a b} ha hb => ?_, fun {a b} ha hb => ?_⟩
+      · obtain ⟨A, pA, ea⟩ := toMap ha
+        obtain ⟨B, pB, eb⟩ := toMapR hb
+        obtain ⟨r, hr⟩ := sub_fields K F A B (static pA) (static pB) (kA pA) (fields pA) (fields pB) diff empty
+        exact ⟨r, fun m hm => by dsimp only; rw [ea, eb]; exact hr m hm⟩
+      · rcases hC ha with rfl | ⟨A, rfl, pA⟩
+        · obtain ⟨r, hr⟩ := emptyC hb
+          exact ⟨r, fun m hm => by dsimp only; rw [disjoint_term_l]; exact hr m (by omega)⟩
+        rcases hC hb with rfl | ⟨B, rfl, pB⟩
+        · obtain ⟨r, hr⟩ := emptyC ha
+          exact ⟨r, fun m hm => by dsimp only; rw [disjoint_term_r]; exact hr m (by omega)⟩
+        exact disj_fields K F A B (static pA) (static pB) (keys pA) (keys pB) (fields pA) (fields pB) inter empty
+
+    theorem nestFun (ops : ElemOk E K) (dops : ElemDiff E K) (fops : ElemFun E K) (hnone : E (.map []))
+        (tail : TailOk E) : ElemFun (NestC E) (K + 14) := by
+      have hterm := ops.term
+      have dm := domOk ops dops fops hnone tail
+      have nops := nestOk ops dops fops hnone tail
+      have empty : ∀ name x, NField E name x →
+          BoolAt (K + 8) (fun m => Elixir.Module.Types.Descr.«empty_key?/3» (D m) (.atom name) x (.map [])) :=
+        fun name x hx => nfield_empty (ops.mono (Nat.le_add_right K 3)) (dops.mono (Nat.le_add_right K 3))
+          (fops.mono (Nat.le_add_right K 3)) dm hnone tail hx []
+      obtain ⟨T, term, -⟩ := unfolded_term_fields
+      obtain ⟨sub, disj⟩ := class_sub_disj (NestC E) (NField E) (NestFields E) (K + 8)
+        (fun ha => ha) ⟨T, term, Basic.nest hterm (term_basic term).1⟩ (fun pA => pA.static) (fun pA => pA.keys)
+        (fun pA => pA.fields)
+        (fun name x y hx hy => by
+          obtain ⟨r, run, k⟩ := nfield_diff hterm hx hy
+          exact ⟨r, fun m hm => by obtain ⟨n, rfl, -⟩ := succ_of_le (show 1 ≤ m by omega); exact run n, k⟩)
+        (fun name x y hx hy => by
+          obtain ⟨r, run, k⟩ := nfield_inter hx hy
+          exact ⟨r, fun m hm => by obtain ⟨n, rfl, -⟩ := succ_of_le (show 1 ≤ m by omega); exact run n, k⟩)
+        empty
+        (fun {a} ha => by
+          rcases ha with rfl | ⟨A, rfl, nA⟩
+          · exact ⟨Bool.false, fun m _ => by dsimp only; unfold Elixir.Module.Types.Descr.«empty?/1»; rfl⟩
+          · obtain ⟨b, hb⟩ := nops.empty (Or.inr ⟨A, rfl, nA⟩) []
+            exact ⟨b, fun m hm => by dsimp only; unfold Elixir.Module.Types.Descr.«empty?/1»; exact hb m hm⟩)
+      refine ⟨fun {a} ha => ?_, fun {a b} ha hb => ?_, fun ha hb => (sub ha hb).mono (by omega), disj⟩
+      · rcases ha with rfl | ⟨A, rfl, nA⟩
+        · exact Or.inl rfl
+        · exact Or.inr ⟨A, rfl, nA.static⟩
+      · rcases ha with rfl | ⟨A, rfl, nA⟩
+        · exact ⟨_, Or.inl rfl, fun m _ => union_term_l _ _⟩
+        rcases hb with rfl | ⟨B, rfl, nB⟩
+        · exact ⟨_, Or.inl rfl, fun m _ => union_term_r _ _⟩
+        obtain ⟨U, run, nU, -⟩ := nest_union A B nA nB
+        exact ⟨_, Or.inr ⟨U, rfl, nU⟩, fun m hm => run m (by omega)⟩
+
+    /-- Unions of basic types are basic types. -/
+    theorem basic_union (A B : List (Term × Term)) (bA : Basic A) (bB : Basic B) :
+        ∃ U, (∀ m, 1 + 1 ≤ m → Elixir.Module.Types.Descr.«bare_union/2» (D m) (.map A) (.map B) = .ok (.map U)) ∧
+          Basic U := by
+      let g : Term → Term → Term → Term := fun q x y =>
+        match Elixir.Module.Types.Descr.«bare_union/3» (D 1) q x y with | .ok w => w | .error _ => .nil
+      have gval : ∀ name x y r, (∀ n, Elixir.Module.Types.Descr.«bare_union/3» (D (n + 1)) (.atom name) x y =
+          .ok r) → g (.atom name) x y = r := by
+        intro name x y r h; simp [g, h 0]
+      have atomKey : ∀ {X : List (Term × Term)}, Basic X → ∀ {q w : Term}, mapLookup X q = some w →
+          ∃ name, q = .atom name := fun bX q w h => by
+        rcases bX.keys q (by rw [h]; rfl) with e | e | e | e | e | e <;> exact ⟨_, e⟩
+      have calls : ∀ q x y, mapLookup A q = some x → mapLookup B q = some y → ∀ m, 1 ≤ m →
+          Elixir.Module.Types.Descr.«bare_union/3» (D m) q x y = .ok (g q x y) := by
+        intro q x y hx hy m hm
+        obtain ⟨name, rfl⟩ := atomKey bA hx
+        obtain ⟨r, run, -⟩ := fieldok_union name (bA.field hx) (bB.field hy)
+        obtain ⟨n, rfl, -⟩ := succ_of_le hm
+        rw [run, gval _ _ _ _ run]
+      obtain ⟨U, run, look⟩ := union_uniform 1 A B bA.static bB.static (fun q h => by
+        obtain ⟨w, hw⟩ := Option.isSome_iff_exists.mp h; exact atomKey bB hw) g calls
+      refine ⟨U, run, basic_of (fun q h => ?_) fun name w h => ?_⟩
+      · cases hb : mapLookup B q with
+        | none => rw [(look q).1 hb] at h; exact bA.keys q h
+        | some y => exact bB.keys q (by simp [hb])
+      · cases hb : mapLookup B (.atom name) with
+        | none => rw [(look _).1 hb] at h; exact bA.field h
+        | some y =>
+          cases ha : mapLookup A (.atom name) with
+          | none => rw [(look _).2.1 y hb ha] at h; rw [← Option.some.inj h]; exact bB.field hb
+          | some x =>
+            rw [(look _).2.2 x y ha hb] at h
+            rw [← Option.some.inj h]
+            obtain ⟨r, run, ok⟩ := fieldok_union name (bA.field ha) (bB.field hb)
+            rw [gval _ _ _ _ run]
+            exact ok
+
+    theorem lelemFun : ElemFun LElem 8 := by
+      obtain ⟨T, term, -⟩ := unfolded_term_fields
+      obtain ⟨sub, disj⟩ := class_sub_disj LElem FieldOk Basic 2 (fun ha => ha) ⟨T, term, (term_basic term).1⟩
+        (fun bA => bA.static) (fun bA => bA.keys) (fun bA _ _ h => bA.field h)
+        (fun name x y hx hy => by
+          obtain ⟨r, run, ok, -⟩ := diff_key name x y hx hy
+          exact ⟨r, fun m _ => run _, ok⟩)
+        (fun name x y hx hy => by
+          obtain ⟨r, run, ok, -⟩ := inter_key name x y hx hy
+          exact ⟨r, fun m _ => run _, ok⟩)
+        (fun name x hx => ⟨Bool.false, fun m _ => fieldok_empty (D m) name hx⟩)
+        (fun {a} ha => by
+          rcases ha with rfl | ⟨A, rfl, bA⟩
+          · exact ⟨Bool.false, fun m _ => by dsimp only; unfold Elixir.Module.Types.Descr.«empty?/1»; rfl⟩
+          · obtain ⟨b, hb⟩ := lelemOk.empty (Or.inr ⟨A, rfl, bA⟩) []
+            exact ⟨b, fun m hm => by dsimp only; unfold Elixir.Module.Types.Descr.«empty?/1»; exact hb m hm⟩)
+      refine ⟨fun {a} ha => ?_, fun {a b} ha hb => ?_, fun ha hb => (sub ha hb).mono (by omega), disj⟩
+      · rcases ha with rfl | ⟨A, rfl, bA⟩
+        · exact Or.inl rfl
+        · exact Or.inr ⟨A, rfl, bA.static⟩
+      · rcases ha with rfl | ⟨A, rfl, bA⟩
+        · exact ⟨_, Or.inl rfl, fun m _ => union_term_l _ _⟩
+        rcases hb with rfl | ⟨B, rfl, bB⟩
+        · exact ⟨_, Or.inl rfl, fun m _ => union_term_r _ _⟩
+        obtain ⟨U, run, bU⟩ := basic_union A B bA bB
+        exact ⟨_, Or.inr ⟨U, rfl, bU⟩, fun m hm => run m (by omega)⟩
+
+    /-- Nested element types of a depth, closed under intersection and difference. -/
+    def Closed : Nat → Term → Prop
+      | 0 => LElem
+      | d + 1 => NestC (Closed d)
+
+    theorem closed_ok : ∀ d, ElemOk (Closed d) (8 + 14 * d) ∧ ElemDiff (Closed d) (8 + 14 * d) ∧
+        ElemFun (Closed d) (8 + 14 * d) ∧ Closed d (.map []) ∧ TailOk (Closed d)
+      | 0 => ⟨lelemOk.mono (by omega), lelemDiff.mono (by omega), lelemFun, Or.inr ⟨[], rfl, basic_nil⟩, tail_lelem⟩
+      | d + 1 => by
+        obtain ⟨ops, dops, fops, hnone, tail⟩ := closed_ok d
+        exact ⟨(nestOk ops dops fops hnone tail).mono (by omega), (nestDiff ops.term (8 + 14 * d)).mono (by omega),
+          (nestFun ops dops fops hnone tail).mono (by omega), nest_none, tail_nest ops.term⟩
+
+    theorem OField.mono {ok ok' : Term → Prop} (h : ∀ t, ok t → ok' t) {x : Term} (f : OField ok x) : OField ok' x := by
+      rcases f with top | b
+      · exact Or.inl top
+      · exact Or.inr (b.mono h)
+
+    theorem FField.mono {E E' : Term → Prop} (h : ∀ t, E t → E' t) {w : Term} (f : FField E w) : FField E' w := by
+      obtain ⟨p, R, rfl, b⟩ := f
+      exact ⟨p, R, rfl, fun q v hv => (b q v hv).mono fun t ⟨n, e, k, args, ret, ht, len, ha, hr⟩ =>
+        ⟨n, e, k, args, ret, ht, len, fun a ma => h a (ha a ma), h ret hr⟩⟩
+
+    /-- The nested types of the specification are closed nested types. -/
+    theorem nest_closed : ∀ d e, Nest d e → Closed d e
+      | 0, _, h => elem_lelem h
+      | d + 1, _, h => by
+        rcases h with rfl | ⟨X, rfl, v⟩
+        · exact Or.inl rfl
+        refine Or.inr ⟨X, rfl, ⟨v.keys, fun name w h => ?_⟩⟩
+        rcases v.keys (.atom name) (by rw [h]; rfl) with e | e | e | e | e | e <;> simp only [Term.atom.injEq] at e <;>
+          subst e
+        · exact Or.inl ⟨by decide, by decide, by decide, by decide, Or.inl ⟨rfl, v.bitmap w h⟩⟩
+        · obtain ⟨p, S, rfl, set⟩ := v.atom w h
+          refine Or.inl ⟨by decide, by decide, by decide, by decide, Or.inr (Or.inl ⟨rfl, ⟨p, S, rfl, set⟩, ?_⟩)⟩
+          exact atom_nonempty p S fun hp => v.atomUnion S (by subst hp; simpa using h)
+        · exact Or.inr (Or.inl ⟨rfl, (v.funs w h).mono (nest_closed d)⟩)
+        · refine Or.inr (Or.inr (Or.inr (Or.inr ⟨rfl, ?_⟩)))
+          rcases v.lists w h with ⟨k, rfl⟩ | b
+          · exact Bdd.leaf_iff.mpr ⟨k, _, _, rfl, (closed_ok d).1.term, (closed_ok d).1.term⟩
+          · exact b.mono fun t ok => by
+              obtain ⟨-, k, a, b, rfl, ha, hb⟩ := ok
+              exact ⟨k, a, b, rfl, nest_closed d a ha, nest_closed d b hb⟩
+        · exact Or.inr (Or.inr (Or.inl ⟨rfl, OField.mono (fun t ok => ok.mono (nest_closed d)) (v.tuples w h)⟩))
+        · exact Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, OField.mono (fun t ok => ok.mono (nest_closed d)) (v.maps w h)⟩)))
+
     /-! The law. -/
 
-    theorem Negatable.sem {X : List (Term × Term)} (v : Negatable X) : Sem X := by
+    theorem Negatable.sem {X : List (Term × Term)} (v : Negatable E X) : Sem E X := by
       refine ⟨fun q h => ?_, fun name x hx => ?_⟩
       · rcases v.keys q h with rfl | rfl | rfl | rfl | rfl | rfl <;> exact ⟨_, by simp [names], rfl⟩
       · rcases v.keys (.atom name) (by simp [hx]) with e | e | e | e | e | e <;> simp only [Term.atom.injEq] at e <;>
@@ -11556,7 +15584,7 @@ defmodule STTDescrProofsTest do
         Term.true]
 
     /-- De Morgan's law for any two types of bitmaps, atoms, functions, lists, tuples, and maps. -/
-    theorem de_morgan_union_law (L R : List (Term × Term)) (vL : Negatable L) (vR : Negatable R) :
+    theorem de_morgan_union_law (ops : ElemOk E K) (dops : ElemDiff E K) (hK : K ≤ 90) (L R : List (Term × Term)) (vL : Negatable E L) (vR : Negatable E R) :
         (do
           let u ← Elixir.Module.Types.Descr.«bare_union/2» (D 100) (.map L) (.map R)
           let a ← Elixir.Module.Types.Descr.«bare_negation/1» (D 100) u
@@ -11573,14 +15601,14 @@ defmodule STTDescrProofsTest do
           unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl
         simp [union, negation_none_term, inter, equal_self]
       · subst eL
-        obtain ⟨N, neg, -⟩ := sem_neg R vR.sem eR
+        obtain ⟨N, neg, -⟩ := sem_neg ops.term R vR.sem eR
         have union : Elixir.Module.Types.Descr.«bare_union/2» (D 100) (.map []) (.map R) = .ok (.map R) := by
           unfold Elixir.Module.Types.Descr.«bare_union/2»; simp [Erlang.erlang.«==/2»]
         have inter : Elixir.Module.Types.Descr.«bare_intersection/2» (D 100) (.atom "term") (.map N) = .ok (.map N) := by
           unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl
         simp [union, neg, negation_none_term, inter, equal_self]
       · subst eR
-        obtain ⟨N, neg, -⟩ := sem_neg L vL.sem eL
+        obtain ⟨N, neg, -⟩ := sem_neg ops.term L vL.sem eL
         have union : Elixir.Module.Types.Descr.«bare_union/2» (D 100) (.map L) (.map []) = .ok (.map L) := by
           unfold Elixir.Module.Types.Descr.«bare_union/2»
           cases L with
@@ -11589,7 +15617,7 @@ defmodule STTDescrProofsTest do
         have inter : Elixir.Module.Types.Descr.«bare_intersection/2» (D 100) (.map N) (.atom "term") = .ok (.map N) := by
           unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl
         simp [union, neg, negation_none_term, inter, equal_self]
-      · obtain ⟨U, A, NL, NR, B, union, negU, negL, negR, inter, sub₁, sub₂⟩ := de_morgan_sem L R vL.sem vR.sem eL eR
+      · obtain ⟨U, A, NL, NR, B, union, negU, negL, negR, inter, sub₁, sub₂⟩ := de_morgan_sem ops dops hK L R vL.sem vR.sem eL eR
         simp only [union, negU, negL, negR, inter, Lynx.Except.ok_bind]
         by_cases c : Term.compare (.map A) (.map B) = .eq <;>
           simp [Elixir.Module.Types.Descr.«equal?/2», sub₁, sub₂, Lynx.Except.orElse, Lynx.Except.andAlso,
@@ -11629,8 +15657,10 @@ defmodule STTDescrProofsTest do
       expects: Descr.empty?(Descr.bare_intersection(descr, Descr.bare_negation(descr))),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«intersection_negation_empty:requires/1»] at requires
-      obtain ⟨X, rfl, valid⟩ := negatable_map descr requires
+      simp only [«intersection_negation_empty:requires/1», «negatable?/1»] at requires
+      obtain ⟨X, rfl, valid⟩ := negatable_map 2 descr requires
+      obtain ⟨ops, -, -, -, -⟩ := closed_ok 2
+      replace valid := valid.mono (nest_closed 2)
       simp only [Lynx.apply_eq, «intersection_negation_empty:ensures/1»]
       by_cases empty : X = []
       · subst empty
@@ -11644,19 +15674,20 @@ defmodule STTDescrProofsTest do
           unfold Elixir.Module.Types.Descr.«bare_intersection/2»
           rfl
         simp [negation, intersection, empty_none]
-      · obtain ⟨N, negation, static, bitmaps, atoms, funs, lists, tuples, maps, -⟩ := negation_fields 98 X valid empty
+      · obtain ⟨N, negation, static, bitmaps, atoms, funs, lists, tuples, maps, -⟩ :=
+          negation_fields ops 98 X valid empty
         obtain ⟨I, run, only⟩ := intersection_disjoint 99 X N valid static bitmaps atoms
           (fun x y hx hy => funs x y hx hy 99) lists tuples maps
-        simp [negation, run, empty_gone 97 I only]
+        simp [negation, run, empty_gone (m := 100) (by omega) I only]
       """
 
     law opt_intersection_negation_empty(descr),
-      requires: negatable?(descr),
+      requires: negatable?(descr, 0),
       expects: Descr.empty?(Descr.opt_intersection(descr, Descr.opt_negation(descr))),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
       simp only [«opt_intersection_negation_empty:requires/1»] at requires
-      obtain ⟨X, rfl, valid⟩ := negatable_map descr requires
+      obtain ⟨X, rfl, valid⟩ := negatable_map 0 descr requires
       simp only [Lynx.apply_eq, «opt_intersection_negation_empty:ensures/1»]
       by_cases empty : X = []
       · subst empty
@@ -11672,11 +15703,12 @@ defmodule STTDescrProofsTest do
           unfold Elixir.Module.Types.Descr.«opt_intersection/3»
           rfl
         simp [negation, intersection, empty_none]
-      · obtain ⟨N, negation, static, bitmaps, atoms, funs, lists, tuples, maps, -, -⟩ := opt_negation_fields 97 X valid empty
+      · obtain ⟨N, negation, static, bitmaps, atoms, funs, lists, tuples, maps, -, -⟩ :=
+          opt_negation_fields flatOk 97 X valid empty
           (.map []) (fun x y => ∀ m, ∃ r, Elixir.Module.Types.Descr.«opt_map_intersection/3»
             (Dispatcher.ofTable Erlang.program.fun_table (m + 4)) x y (.map []) = .ok r ∧
-            (kept (.atom "map", r) = Bool.true → EmptyMap r))
-          (fun x hx => opt_map_cancel 93 x (valid.maps x hx))
+            (kept (.atom "map", r) = Bool.true → EmptyMap 1 r))
+          (fun x hx => opt_map_cancel flatOk 93 x (valid.maps x hx))
         obtain ⟨I, run, only⟩ := opt_intersection_disjoint 99 X N (.map []) valid static bitmaps atoms
           (fun x y hx hy => funs x y hx hy 99) lists (fun x y hx hy => tuples x y hx hy _)
           (fun x y hx hy => maps x y hx hy 95)
@@ -11684,7 +15716,7 @@ defmodule STTDescrProofsTest do
             (Dispatcher.ofTable Erlang.program.fun_table 100) (.map X) = .ok (.map N) := by
           rw [Elixir.Module.Types.Descr.«opt_negation/1».eq_def]
           simpa [Elixir.Module.Types.Descr.«opt_difference/2»] using negation
-        simp [negation', Elixir.Module.Types.Descr.«opt_intersection/2», run, empty_gone 97 I only]
+        simp [negation', Elixir.Module.Types.Descr.«opt_intersection/2», run, empty_gone (m := 100) (by omega) I only]
       """
 
     law union_negation_term(descr),
@@ -11692,8 +15724,10 @@ defmodule STTDescrProofsTest do
       expects: Descr.subtype?(Descr.term(), Descr.bare_union(descr, Descr.bare_negation(descr))),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«union_negation_term:requires/1»] at requires
-      obtain ⟨X, rfl, valid⟩ := negatable_map descr requires
+      simp only [«union_negation_term:requires/1», «negatable?/1»] at requires
+      obtain ⟨X, rfl, valid⟩ := negatable_map 2 descr requires
+      obtain ⟨ops, -, -, -, -⟩ := closed_ok 2
+      replace valid := valid.mono (nest_closed 2)
       simp only [Lynx.apply_eq, «union_negation_term:ensures/1»]
       by_cases empty : X = []
       · subst empty
@@ -11713,17 +15747,17 @@ defmodule STTDescrProofsTest do
           Erlang.erlang.«/=/2»]
         unfold Elixir.Module.Types.Descr.«subtype_static?/2»
         simp [Lynx.Except.guard, Erlang.erlang.«=:=/2»]
-      · obtain ⟨N, U, negation, union, sub⟩ := union_negation_covers X valid empty
+      · obtain ⟨N, U, negation, union, sub⟩ := union_negation_covers ops (by omega) X valid empty
         simp [Elixir.Module.Types.Descr.«term/0», negation, union, sub]
       """
 
     law opt_union_negation_term(descr),
-      requires: negatable?(descr),
+      requires: negatable?(descr, 0),
       expects: Descr.subtype?(Descr.term(), Descr.opt_union(descr, Descr.opt_negation(descr))),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
       simp only [«opt_union_negation_term:requires/1»] at requires
-      obtain ⟨X, rfl, valid⟩ := negatable_map descr requires
+      obtain ⟨X, rfl, valid⟩ := negatable_map 0 descr requires
       simp only [Lynx.apply_eq, «opt_union_negation_term:ensures/1»]
       by_cases empty : X = []
       · subst empty
@@ -11745,7 +15779,7 @@ defmodule STTDescrProofsTest do
           Erlang.erlang.«/=/2»]
         unfold Elixir.Module.Types.Descr.«subtype_static?/2»
         simp [Lynx.Except.guard, Erlang.erlang.«=:=/2»]
-      · obtain ⟨N, U, negation, union, sub⟩ := opt_union_negation_covers X valid empty
+      · obtain ⟨N, U, negation, union, sub⟩ := opt_union_negation_covers flatOk (by omega) X valid empty
         simp [Elixir.Module.Types.Descr.«term/0», negation, union, sub]
       """
 
@@ -11759,10 +15793,11 @@ defmodule STTDescrProofsTest do
       proof: ~LEAN"""
       open Lynx Lynx.Term in
       simp only [«de_morgan_union:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      obtain ⟨L, rfl, vL⟩ := negatable_map left (by simpa [Term.true] using requires.1)
-      obtain ⟨R, rfl, vR⟩ := negatable_map right (by simpa [Term.true] using requires.2)
+      obtain ⟨L, rfl, vL⟩ := negatable_map 2 left (by simpa [Term.true, «negatable?/1»] using requires.1)
+      obtain ⟨R, rfl, vR⟩ := negatable_map 2 right (by simpa [Term.true, «negatable?/1»] using requires.2)
+      obtain ⟨ops, dops, -, -, -⟩ := closed_ok 2
       simp only [Lynx.apply_eq, «de_morgan_union:ensures/2»]
-      exact de_morgan_union_law L R vL vR
+      exact de_morgan_union_law ops dops (by omega) L R (vL.mono (nest_closed 2)) (vR.mono (nest_closed 2))
       """
   end
 end
