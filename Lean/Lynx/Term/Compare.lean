@@ -562,6 +562,7 @@ instance : Std.TransCmp compare where
 @[simp] theorem compare_self (a : Term) : compare a a = .eq :=
   Std.ReflCmp.compare_self
 
+
 end Lynx.Term
 
 /-! ## Exact equality -/
@@ -1169,5 +1170,65 @@ Guards test membership in sets of literals as chains of `=:=` comparisons. -/
 @[simp] theorem isMember_cons (value candidate : Term) (rest : List Term) :
     isMember value (candidate :: rest) =
       if exactCompare value candidate = .eq then .atom "true" else isMember value rest := rfl
+
+end Lynx.Term
+
+/-! ## Exact and ordinary equality -/
+
+namespace Lynx.Term
+
+/-- A lexicographic comparison that finds every pair equal still does so with a
+comparator that equates at least as much. -/
+private theorem compareLex_eq_mono {α : Type} {f g : α → α → Ordering} :
+    ∀ {xs ys : List α}, (∀ x ∈ xs, ∀ y ∈ ys, f x y = .eq → g x y = .eq) →
+      List.compareLex f xs ys = .eq → List.compareLex g xs ys = .eq
+  | [], [], _, _ => List.compareLex_nil_nil
+  | [], _ :: _, _, h => by simp [List.compareLex_nil_cons] at h
+  | _ :: _, [], _, h => by simp [List.compareLex_cons_nil] at h
+  | x :: xs, y :: ys, step, h => by
+    rw [List.compareLex_cons_cons, Ordering.then_eq_eq] at h ⊢
+    exact ⟨step x List.mem_cons_self y List.mem_cons_self h.1,
+      compareLex_eq_mono (fun a ha b hb => step a (List.mem_cons_of_mem _ ha) b (List.mem_cons_of_mem _ hb)) h.2⟩
+
+/-- Exactly equal terms are equal under ordinary comparison. -/
+theorem compare_eq_of_exactCompare_eq (a b : Term) (h : exactCompare a b = .eq) : compare a b = .eq := by
+  rw [exactCompare_eq_step] at h
+  rw [compare_eq_step]
+  cases a <;> cases b
+  all_goals try simp only [Compare.compareStep, ite_true, Bool.false_eq_true, ite_false, reduceCtorEq] at h ⊢
+  all_goals first | exact h | skip
+  case integer.integer x y =>
+    have : x = y := by simpa using h
+    subst this
+    simp
+  case float.float x y =>
+    have : x = y := by simpa using h
+    subst this
+    simp
+  case tuple.tuple xs ys =>
+    simp only [Ordering.then_eq_eq] at h ⊢
+    refine ⟨h.1, compareLex_eq_mono (fun x hx y hy e => ?_) h.2⟩
+    have := Array.sizeOf_lt_of_mem (by simpa using hx : x ∈ xs)
+    have := Array.sizeOf_lt_of_mem (by simpa using hy : y ∈ ys)
+    exact compare_eq_of_exactCompare_eq x y e
+  case map.map xs ys =>
+    simp only [Compare.compareMapViews, compareLex, Compare.compareOn, Ordering.then_eq_eq] at h ⊢
+    refine ⟨h.1, h.2.1, compareLex_eq_mono (fun x hx y hy e => ?_) h.2.2⟩
+    obtain ⟨⟨kx, vx⟩, mx, rfl⟩ := List.mem_map.mp hx
+    obtain ⟨⟨ky, vy⟩, my, rfl⟩ := List.mem_map.mp hy
+    have := List.sizeOf_lt_of_mem (Compare.mem_mapView exactCompare mx)
+    have := List.sizeOf_lt_of_mem (Compare.mem_mapView exactCompare my)
+    simp only [Prod.mk.sizeOf_spec] at *
+    exact compare_eq_of_exactCompare_eq vx vy e
+  case cons.cons x xs y ys =>
+    simp only [Ordering.then_eq_eq] at h ⊢
+    exact ⟨compare_eq_of_exactCompare_eq x y h.1, compare_eq_of_exactCompare_eq xs ys h.2⟩
+termination_by sizeOf a + sizeOf b
+decreasing_by
+  all_goals
+    subst_vars
+    simp only [Term.tuple.sizeOf_spec, Term.map.sizeOf_spec, Term.cons.sizeOf_spec,
+      Prod.mk.sizeOf_spec] at *
+    omega
 
 end Lynx.Term
