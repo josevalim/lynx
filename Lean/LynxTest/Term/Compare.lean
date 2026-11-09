@@ -160,6 +160,13 @@ theorem exact_map_equality_lookup (k v : Term) :
   have rel := Term.lookup_of_map_exactCompare_eq _ _ equal k
   simp at rel
 
+/-- Semantically equal maps bind the same keys. -/
+theorem map_equality_lookup (k v : Term) :
+    Term.compare (.map [(k, v)]) (.map []) ≠ .eq := by
+  intro equal
+  have rel := Term.lookup_of_map_compare_eq _ _ equal k
+  simp at rel
+
 /-- Binaries are never exactly equal to other kinds of terms, such as `[]` or `%{}`. -/
 theorem binary_exact_kinds (bytes : ByteArray) :
     Term.exactCompare (.bitstring bytes 0 (Term.Bitstring.valid_aligned _)) .nil ≠ .eq ∧
