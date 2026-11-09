@@ -1,5 +1,6 @@
 # LYNX_DEBUG=lean LYNX_CACHE=0 mix run examples/elixir/stt/descr.exs
-# Prove the set operations of Elixir's type system on static types of bitmaps and atoms.
+# Prove the set operations of Elixir's type system. The empty type law covers every type,
+# the other laws cover static types of bitmaps and atoms.
 # Checked against Elixir 1.21.0-dev (d17b3abe7), Erlang/OTP 29.1.2.
 # Source reference: ../elixir/lib/elixir/lib/module/types/descr.ex.
 # These proofs depend on implementation details; rerun after Elixir upgrades.
@@ -56,6 +57,12 @@ defmodule STTDescrProofsTest do
   defp atom_keys?([{atom, []} | rest]), do: is_atom(atom) and atom_keys?(rest)
   defp atom_keys?([]), do: true
   defp atom_keys?(_rest), do: false
+
+  # Any type: the top type or a map of fields, whose dynamic part, if any,
+  # is the top type or a map. The fields may hold anything.
+  def descr?(:term), do: true
+  def descr?(%{dynamic: dynamic}), do: dynamic == :term or is_map(dynamic)
+  def descr?(descr), do: is_map(descr)
 
   laws "static" do
     # Elixir's default map field access falls back to a remote call on non-maps.
@@ -1088,23 +1095,76 @@ defmodule STTDescrProofsTest do
         have := none entry.1
         simp [mapLookup] at this
 
-    /-- The intersection with the empty type is empty. -/
-    theorem intersection_none (depth : Nat) (X : List (Term × Term)) (valid : Valid X) :
-        Elixir.Module.Types.Descr.«bare_intersection/2»
-          (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) (.map X) (.map []) = .ok (.map []) := by
-      obtain ⟨I, runI, lookI⟩ := Erlang.maps.intersect_with_lookup
-        (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) "Elixir.Module.Types.Descr"
+    /-- Intersecting a map of fields with the empty type keeps no field. -/
+    theorem symmetrical_none (d : Dispatcher) (X : List (Term × Term)) :
+        Elixir.Module.Types.Descr.«symmetrical_intersection/3» d (.map X) (.map [])
+          (.function "Elixir.Module.Types.Descr" "bare_intersection" 3 #[]) = .ok (.map []) := by
+      obtain ⟨I, runI, lookI⟩ := Erlang.maps.intersect_with_lookup d "Elixir.Module.Types.Descr"
         "bare_intersection" #[] X [] (fun _ _ _ => .nil) (by intro e _ y hy; simp [mapLookup] at hy)
       obtain rfl : I = [] := nil_of_lookup_none I fun q => by
         rw [lookI]
         cases (mapEntries X).find? (fun e => decide (exactCompare q e.1 = .eq)) <;> simp [mapLookup]
-      obtain ⟨out, runO, lookO⟩ := Erlang.maps.filter_lookup
-        (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) "Elixir.Module.Types.Descr"
+      obtain ⟨out, runO, lookO⟩ := Erlang.maps.filter_lookup d "Elixir.Module.Types.Descr"
         "-symmetrical_intersection/3-fun-0-" #[] [] kept (by intro e member; simp at member)
       obtain rfl : out = [] := nil_of_lookup_none out fun q => by rw [lookO]; simp
+      unfold Elixir.Module.Types.Descr.«symmetrical_intersection/3»
+      simp [runI, runO]
+
+    /-- The intersection of a static type with the empty type is empty, whatever its fields hold. -/
+    theorem intersection_none_static (depth : Nat) (X : List (Term × Term))
+        (static : mapLookup X (.atom "dynamic") = Option.none) :
+        Elixir.Module.Types.Descr.«bare_intersection/2»
+          (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) (.map X) (.map []) = .ok (.map []) := by
       have absent : mapLookup ([] : List (Term × Term)) (.atom "dynamic") = Option.none := rfl
       unfold Elixir.Module.Types.Descr.«bare_intersection/2»
-      simp [getMapKeys_single, no_dynamic valid, absent]
+      simp [getMapKeys_single, static, absent, symmetrical_none]
+
+    /-- The intersection of a gradual type with the empty type is empty, when its dynamic
+    part is the top type or a map of fields. -/
+    theorem intersection_none_dynamic (depth : Nat) (X : List (Term × Term)) (Dy : Term)
+        (dynamic : mapLookup X (.atom "dynamic") = some Dy)
+        (inner : Dy = .atom "term" ∨ ∃ Y, Dy = .map Y) :
+        Elixir.Module.Types.Descr.«bare_intersection/2»
+          (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) (.map X) (.map []) = .ok (.map []) := by
+      have part : Elixir.Module.Types.Descr.«bare_intersection/3»
+          (Dispatcher.ofTable Erlang.program.fun_table depth) (.atom "dynamic") Dy (.map []) =
+            .ok (.integer 0) := by
+        simp only [Elixir.Module.Types.Descr.«bare_intersection/3»]
+        unfold Elixir.Module.Types.Descr.«dynamic_intersection/3»
+        rcases inner with rfl | ⟨Y, rfl⟩
+        · simp [Erlang.erlang.«==/2»]
+        · simp [symmetrical_none, Erlang.erlang.«==/2»]
+      obtain ⟨I, runI, lookI⟩ := Erlang.maps.intersect_with_lookup
+        (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) "Elixir.Module.Types.Descr"
+        "bare_intersection" #[] X [(.atom "dynamic", .map [])] (fun _ _ _ => .integer 0) (by
+          intro e me y hy
+          simp [mapLookup] at hy
+          obtain ⟨key, rfl⟩ := hy
+          have hx := mapLookup_of_mem_mapEntries me
+          rw [key, dynamic] at hx
+          cases hx
+          rw [Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/3».pure, key, part])
+      have zero : ∀ e ∈ mapEntries I, e.2 = .integer 0 := by
+        intro e me
+        have hx := mapLookup_of_mem_mapEntries me
+        rw [lookI] at hx
+        split at hx
+        · simp at hx
+          exact hx.2.symm
+        · cases hx
+      obtain ⟨out, runO, lookO⟩ := Erlang.maps.filter_lookup
+        (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) "Elixir.Module.Types.Descr"
+        "-symmetrical_intersection/3-fun-0-" #[] I kept (by
+          intro e _
+          rw [Erlang.program.«Elixir.Module.Types.Descr:-symmetrical_intersection/3-fun-0-/2».pure, keep_field])
+      obtain rfl : out = [] := nil_of_lookup_none out fun q => by
+        rw [lookO]
+        cases found : (mapEntries I).find? (fun e => decide (exactCompare q e.1 = .eq)) with
+        | none => rfl
+        | some e => simp [kept, zero e (List.mem_of_find?_eq_some found)]
+      have absent : mapLookup ([] : List (Term × Term)) (.atom "dynamic") = Option.none := rfl
+      unfold Elixir.Module.Types.Descr.«bare_intersection/2»
+      simp [getMapKeys_single, dynamic, absent, Erlang.maps.«put/3»]
       unfold Elixir.Module.Types.Descr.«symmetrical_intersection/3»
       simp [runI, runO]
 
@@ -1342,14 +1402,29 @@ defmodule STTDescrProofsTest do
       """
 
     law intersection_none_empty(descr),
-      requires: valid?(descr),
+      requires: descr?(descr),
       expects: Descr.empty?(Descr.bare_intersection(descr, Descr.none())),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
       simp only [«intersection_none_empty:requires/1»] at requires
-      obtain ⟨X, rfl, valid⟩ := valid_map descr requires
-      simp [Lynx.apply_eq, «intersection_none_empty:ensures/1», Elixir.Module.Types.Descr.«none/0»,
-        intersection_none 99 X valid, empty_none]
+      simp only [Lynx.apply_eq, «intersection_none_empty:ensures/1», Elixir.Module.Types.Descr.«none/0»]
+      cases descr with
+      | map X =>
+        cases dynamic : mapLookup X (.atom "dynamic") with
+        | none => simp [intersection_none_static 99 X dynamic, empty_none]
+        | some Dy =>
+          have inner : Dy = .atom "term" ∨ ∃ Y, Dy = .map Y := by
+            simp [«descr?/1», getMapKeys_single, dynamic, Erlang.erlang.«==/2», Erlang.erlang.«is_map/1»,
+              Lynx.Except.orElse_eq_true] at requires
+            cases Dy <;> simp_all
+          simp [intersection_none_dynamic 99 X Dy dynamic inner, empty_none]
+      | atom name =>
+        by_cases top : name = "term"
+        · subst top
+          unfold Elixir.Module.Types.Descr.«bare_intersection/2»
+          simp [empty_none]
+        · simp [«descr?/1», top, Lynx.Term.getMapKeys, Erlang.erlang.«is_map/1»] at requires
+      | _ => simp [«descr?/1», Lynx.Term.getMapKeys, Erlang.erlang.«is_map/1»] at requires
       """
 
     law intersection_negation_empty(descr),
