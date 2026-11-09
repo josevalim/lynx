@@ -1039,6 +1039,44 @@ theorem map_exactCompare_eq_of_lookup (a b : List (Term × Term))
   simp only [Compare.mapViewLookup_view]
   exact h q
 
+private theorem mapViewLookup_rel {xs ys : List (Term × Term)}
+    (keys : List.compareLex exactCompare (xs.map Prod.fst) (ys.map Prod.fst) = .eq)
+    (values : List.compareLex exactCompare (xs.map Prod.snd) (ys.map Prod.snd) = .eq) (q : Term) :
+    Option.Rel (fun a b => exactCompare a b = .eq) (Compare.mapViewLookup exactCompare xs q)
+      (Compare.mapViewLookup exactCompare ys q) := by
+  induction xs generalizing ys with
+  | nil =>
+    cases ys with
+    | nil => exact Option.Rel.none
+    | cons y ys => simp [List.compareLex_nil_cons] at keys
+  | cons x xs ih =>
+    cases ys with
+    | nil => simp [List.compareLex_cons_nil] at keys
+    | cons y ys =>
+      simp only [List.map_cons, List.compareLex_cons_cons, Ordering.then_eq_eq] at keys values
+      simp only [Compare.mapViewLookup_cons]
+      have same : exactCompare q x.1 = .eq ↔ exactCompare q y.1 = .eq :=
+        ⟨fun h => Std.TransCmp.eq_trans h keys.1,
+          fun h => Std.TransCmp.eq_trans h (Std.OrientedCmp.eq_symm keys.1)⟩
+      by_cases hit : exactCompare q x.1 = .eq
+      · simp only [hit, ite_true, same.mp hit]
+        exact Option.Rel.some values.1
+      · simp only [hit, (not_congr same).mp hit]
+        exact ih keys.2 values.2
+
+/-- Exactly equal maps have exactly equal first-binding lookups. -/
+theorem lookup_of_map_exactCompare_eq (a b : List (Term × Term))
+    (equal : exactCompare (.map a) (.map b) = .eq) (q : Term) :
+    Option.Rel (fun x y => exactCompare x y = .eq)
+      ((a.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd)
+      ((b.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd) := by
+  rw [exactCompare_eq_step] at equal
+  simp only [Compare.compareStep, Compare.compareMapViews, compareLex, Compare.compareOn,
+    Ordering.then_eq_eq] at equal
+  have rel := mapViewLookup_rel equal.2.1 equal.2.2 q
+  simp only [Compare.mapViewLookup_view] at rel
+  exact rel
+
 /-- First-binding lookup of a key in a map's entries. -/
 @[expose] def mapLookup (entries : List (Term × Term)) (key : Term) : Option Term :=
   (entries.find? fun entry => decide (exactCompare key entry.1 = .eq)).map Prod.snd
