@@ -1039,10 +1039,10 @@ theorem map_exactCompare_eq_of_lookup (a b : List (Term × Term))
   simp only [Compare.mapViewLookup_view]
   exact h q
 
-private theorem mapViewLookup_rel {xs ys : List (Term × Term)}
+private theorem mapViewLookup_rel (cmp : Term → Term → Ordering) {xs ys : List (Term × Term)}
     (keys : List.compareLex exactCompare (xs.map Prod.fst) (ys.map Prod.fst) = .eq)
-    (values : List.compareLex exactCompare (xs.map Prod.snd) (ys.map Prod.snd) = .eq) (q : Term) :
-    Option.Rel (fun a b => exactCompare a b = .eq) (Compare.mapViewLookup exactCompare xs q)
+    (values : List.compareLex cmp (xs.map Prod.snd) (ys.map Prod.snd) = .eq) (q : Term) :
+    Option.Rel (fun a b => cmp a b = .eq) (Compare.mapViewLookup exactCompare xs q)
       (Compare.mapViewLookup exactCompare ys q) := by
   induction xs generalizing ys with
   | nil =>
@@ -1073,7 +1073,20 @@ theorem lookup_of_map_exactCompare_eq (a b : List (Term × Term))
   rw [exactCompare_eq_step] at equal
   simp only [Compare.compareStep, Compare.compareMapViews, compareLex, Compare.compareOn,
     Ordering.then_eq_eq] at equal
-  have rel := mapViewLookup_rel equal.2.1 equal.2.2 q
+  have rel := mapViewLookup_rel exactCompare equal.2.1 equal.2.2 q
+  simp only [Compare.mapViewLookup_view] at rel
+  exact rel
+
+/-- Semantically equal maps bind exactly equal keys to semantically equal values. -/
+theorem lookup_of_map_compare_eq (a b : List (Term × Term))
+    (equal : compare (.map a) (.map b) = .eq) (q : Term) :
+    Option.Rel (fun x y => compare x y = .eq)
+      ((a.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd)
+      ((b.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd) := by
+  rw [compare_eq_step] at equal
+  simp only [Compare.compareStep, Compare.compareMapViews, compareLex, Compare.compareOn,
+    Ordering.then_eq_eq] at equal
+  have rel := mapViewLookup_rel compare equal.2.1 equal.2.2 q
   simp only [Compare.mapViewLookup_view] at rel
   exact rel
 
