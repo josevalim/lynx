@@ -1066,6 +1066,43 @@ defmodule Lynx.TranslationTest do
                    end
     end
 
+    test "defines cut-off functions of preloaded modules as cutoffs" do
+      core =
+        cerl("""
+        -module(example).
+        -export([entry/1, capture/0]).
+        entry(X) -> {erlang:abs(X), erlang:system_info(X)}.
+        capture() -> fun erlang:system_info/1.
+        """)
+
+      translation =
+        Translation.new(cutoffs: [{:erlang, :system_info, 1}])
+        |> Translation.add({"example.erl", core})
+        |> Translation.translate(:example, [{:entry, 1}, {:capture, 0}])
+
+      assert Map.keys(translation.modules.erlang.translations) == [{:system_info, 1}]
+      assert Map.keys(translation.funs) == [{:erlang, :system_info, 1}]
+
+      # The translated module also imports the functions built into Lean.
+      assert [
+               %{
+                 "module" => "Erlang.erlang",
+                 "imports" => ["Erlang.erlang"],
+                 "contents" => [
+                   %{"name" => "system_info", "params" => [_], "body" => %{"kind" => "cutoff"}}
+                 ]
+               },
+               %{"module" => "Erlang.example", "imports" => ["Erlang.erlang"]},
+               %{"module" => "Erlang.program"}
+             ] = Translation.assemble(translation, cache: false)
+    end
+
+    test "does not cut off functions built into Lean" do
+      assert_raise ArgumentError, "cannot cut off :erlang.abs/1, which is built into Lean", fn ->
+        Translation.new(cutoffs: [{:erlang, :abs, 1}])
+      end
+    end
+
     test "raises on unsupported binary segments" do
       # No source syntax yields an unknown segment type, so rewrite the Core.
       unknown_type = fn node ->
