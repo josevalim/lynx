@@ -76,6 +76,38 @@ defmodule Lynx.RunnerTest do
   end
 
   @tag :tmp_dir
+  test "renders preludes with the imports they elaborate with", %{tmp_dir: tmp_dir} do
+    blocks =
+      for {source, line} <- [
+            {"module\npublic import Lynx\n\n@[expose] public section\n", 1},
+            {"def value := @Erlang.maps.«new/0»\n", 10}
+          ] do
+        %{"file" => "custom.exs", "span" => [line], "indentation" => 4, "source" => source}
+      end
+
+    files = [
+      file("custom.exs", "Erlang.prelude.Rendered", [], ["Erlang.maps"])
+      |> Map.put("preludes", blocks)
+    ]
+
+    assert [%{status: :ok}] =
+             Lynx.Commands.verify!(@lean_dir, files, debug_dir: tmp_dir, debug: :lean)
+
+    assert File.read!(Path.join(tmp_dir, "Erlang/prelude/Rendered.lean")) == """
+           module
+           public import Lynx
+           import Lynx.Runner.Elab
+           public import Lynx.Modules.Erlang.maps
+
+           @[expose] public section
+
+
+           def value := @Erlang.maps.«new/0»
+
+           """
+  end
+
+  @tag :tmp_dir
   test "sets Lean options in translated modules and caches them separately", %{tmp_dir: tmp_dir} do
     key = :crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)
 
