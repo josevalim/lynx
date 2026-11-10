@@ -12,7 +12,10 @@
 # intersections distribute over plain unions.
 # The laws cover the top type and types whose lists, tuples, maps, and functions nest other
 # types up to three levels deep. For the laws on the optimized operations, the only function
-# type inside other types is the top function type.
+# type inside other types is the top function type. Except for the negation laws, the laws
+# on the optimized operations and the plain laws on intersections and unions also cover
+# gradual types, whose dynamic part includes their static part, and hold for both parts.
+# The negation laws hold for static types only: dynamic() meets its negation.
 # Checked against Elixir 1.21.0-dev (1dbf7a379), Erlang/OTP 29.1.2.
 # Source reference: ../elixir/lib/elixir/lib/module/types/descr.ex.
 # These proofs depend on implementation details; rerun after Elixir upgrades.
@@ -232,6 +235,21 @@ defmodule STTDescrProofsTest do
   # have atom keys in order. Function types inside other types are the top function type.
   def opt_negatable?(:term), do: true
   def opt_negatable?(descr), do: negatable?(descr) and keyed_fields?(:maps.to_list(descr), 2, false)
+
+  # Gradual types of the laws on optimized operations: the types above, or a static part and
+  # a dynamic part of those types, where the dynamic part includes the static part, as Descr
+  # maintains. Inclusion is checked with Descr. The laws model function types without the
+  # meaning of arrows, so the difference must remove the static function types exactly.
+  def opt_gradual?(%{dynamic: dynamic} = descr) do
+    static = Map.delete(descr, :dynamic)
+
+    opt_negatable?(static) and opt_negatable?(dynamic) and
+      included?(Descr.bare_difference(static, dynamic))
+  end
+
+  def opt_gradual?(descr), do: opt_negatable?(descr)
+
+  defp included?(difference), do: not is_map_key(difference, :fun) and Descr.empty?(difference)
 
   defp keyed?(:term, _depth), do: true
   defp keyed?(_descr, 0), do: true
@@ -36060,25 +36078,6 @@ defmodule STTDescrProofsTest do
         exact (denD_map _).mp this
       · rw [lookup_out' sA mem, dn_none] at h; cases h
 
-    theorem tc_equal {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 4 ≤ m)
-        (same : ∀ v : TP L, denD a v ↔ denD b v) :
-        Elixir.Module.Types.Descr.«equal?/2» (D m) a b = .ok (.atom "true") := by
-      have s₁ := tc_sub ha hb hm fun v => (same v).mp
-      have s₂ := tc_sub hb ha hm fun v => (same v).mpr
-      by_cases c : Term.compare a b = .eq <;>
-        simp [Elixir.Module.Types.Descr.«equal?/2», s₁, s₂, Lynx.Except.orElse, Lynx.Except.andAlso,
-          Erlang.erlang.«==/2», c, Term.true, Term.false]
-
-    theorem tc_neg {a : Term} (ha : TC L a) {m : Nat} (hm : L.K + 6 ≤ m) :
-        ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok c ∧
-          ∀ v : TP L, denD c v ↔ ¬denD a v := by
-      rcases ha with rfl | ⟨X, rfl, sX⟩
-      · exact ⟨_, tc_nil, by simp [Elixir.Module.Types.Descr.«bare_negation/1», Elixir.Module.Types.Descr.«none/0»],
-          fun v => by simp [denD_nil, denD_term]⟩
-      obtain ⟨c, hc, run, sem⟩ := tc_diff (L := L) (Or.inl rfl) (Or.inr ⟨X, rfl, sX⟩) hm
-      exact ⟨c, hc, by simpa [Elixir.Module.Types.Descr.«bare_negation/1», Elixir.Module.Types.Descr.«term/0»] using run,
-        fun v => by simp [sem, denD_term]⟩
-
     theorem tc_opt_neg {a : Term} (ha : TC L a) {m : Nat} (hm : L.K + 6 ≤ m) :
         ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok c ∧
           ∀ v : TP L, denD c v ↔ ¬denD a v := by
@@ -36250,11 +36249,6 @@ defmodule STTDescrProofsTest do
           ∀ v : TP L, denD c v ↔ denD a v ∧ denD b v := by
       simpa [Elixir.Module.Types.Descr.«opt_intersection/2»] using tc_opt_inter ha hb [] hm
 
-    theorem tc_opt_diff2 {a b : Term} (ha : TC L a) (hb : TC L b) (hm : L.K + 6 ≤ m) :
-        ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«opt_difference/2» (D m) a b = .ok c ∧
-          ∀ v : TP L, denD c v ↔ denD a v ∧ ¬denD b v := by
-      simpa [Elixir.Module.Types.Descr.«opt_difference/2»] using tc_opt_diff ha hb [] hm
-
     theorem tc_term : TC L (.atom "term") := Or.inl rfl
 
     theorem opt_inter_neg_empty_gen {a : Term} (ha : TC L a) (hm : L.K + 6 ≤ m) :
@@ -36276,112 +36270,6 @@ defmodule STTDescrProofsTest do
         by_cases h : denD a v
         · exact Or.inl h
         · exact Or.inr ((sn v).mpr h))⟩
-
-    theorem opt_de_morgan_union_gen {a b : Term} (ha : TC L a) (hb : TC L b) (hm : L.K + 6 ≤ m) :
-        ∃ u x nl nr y, Elixir.Module.Types.Descr.«opt_union/2» (D m) a b = .ok u ∧
-          Elixir.Module.Types.Descr.«opt_negation/1» (D m) u = .ok x ∧
-          Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok nl ∧
-          Elixir.Module.Types.Descr.«opt_negation/1» (D m) b = .ok nr ∧
-          Elixir.Module.Types.Descr.«opt_intersection/2» (D m) nl nr = .ok y ∧
-          Elixir.Module.Types.Descr.«equal?/2» (D m) x y = .ok (.atom "true") := by
-      obtain ⟨u, hu, ru, su⟩ := tc_opt_union2 (m := m) ha hb (by omega)
-      obtain ⟨x, hx, rx, sx⟩ := tc_opt_neg (m := m) hu hm
-      obtain ⟨nl, hnl, rnl, snl⟩ := tc_opt_neg (m := m) ha hm
-      obtain ⟨nr, hnr, rnr, snr⟩ := tc_opt_neg (m := m) hb hm
-      obtain ⟨y, hy, ry, sy⟩ := tc_opt_inter2 (m := m) hnl hnr (by omega)
-      exact ⟨u, x, nl, nr, y, ru, rx, rnl, rnr, ry, tc_equal (m := m) hx hy (by omega) fun v => by
-        rw [sx, su, sy, snl, snr]; exact not_or⟩
-
-    theorem opt_de_morgan_inter_gen {a b : Term} (ha : TC L a) (hb : TC L b) (hm : L.K + 6 ≤ m) :
-        ∃ i x nl nr y, Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a b = .ok i ∧
-          Elixir.Module.Types.Descr.«opt_negation/1» (D m) i = .ok x ∧
-          Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok nl ∧
-          Elixir.Module.Types.Descr.«opt_negation/1» (D m) b = .ok nr ∧
-          Elixir.Module.Types.Descr.«opt_union/2» (D m) nl nr = .ok y ∧
-          Elixir.Module.Types.Descr.«equal?/2» (D m) x y = .ok (.atom "true") := by
-      obtain ⟨i, hi, ri, si⟩ := tc_opt_inter2 (m := m) ha hb (by omega)
-      obtain ⟨x, hx, rx, sx⟩ := tc_opt_neg (m := m) hi hm
-      obtain ⟨nl, hnl, rnl, snl⟩ := tc_opt_neg (m := m) ha hm
-      obtain ⟨nr, hnr, rnr, snr⟩ := tc_opt_neg (m := m) hb hm
-      obtain ⟨y, hy, ry, sy⟩ := tc_opt_union2 (m := m) hnl hnr (by omega)
-      exact ⟨i, x, nl, nr, y, ri, rx, rnl, rnr, ry, tc_equal (m := m) hx hy (by omega) fun v => by
-        rw [sx, si, sy, snl, snr]
-        by_cases h₁ : denD a v <;> by_cases h₂ : denD b v <;> simp [h₁, h₂]⟩
-
-    theorem opt_inter_sub_gen {a b : Term} (ha : TC L a) (hb : TC L b) (hm : L.K + 4 ≤ m) :
-        ∃ i, Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a b = .ok i ∧
-          Elixir.Module.Types.Descr.«subtype?/2» (D m) i a = .ok (.atom "true") ∧
-          Elixir.Module.Types.Descr.«subtype?/2» (D m) i b = .ok (.atom "true") := by
-      obtain ⟨i, hi, ri, si⟩ := tc_opt_inter2 (m := m) ha hb hm
-      exact ⟨i, ri, tc_sub (m := m) hi ha hm fun v h => ((si v).mp h).1, tc_sub (m := m) hi hb hm fun v h => ((si v).mp h).2⟩
-
-    theorem opt_union_sup_gen {a b : Term} (ha : TC L a) (hb : TC L b) (hm : L.K + 4 ≤ m) :
-        ∃ u, Elixir.Module.Types.Descr.«opt_union/2» (D m) a b = .ok u ∧
-          Elixir.Module.Types.Descr.«subtype?/2» (D m) a u = .ok (.atom "true") ∧
-          Elixir.Module.Types.Descr.«subtype?/2» (D m) b u = .ok (.atom "true") := by
-      obtain ⟨u, hu, ru, su⟩ := tc_opt_union2 (m := m) ha hb hm
-      exact ⟨u, ru, tc_sub (m := m) ha hu hm fun v h => (su v).mpr (Or.inl h), tc_sub (m := m) hb hu hm fun v h => (su v).mpr (Or.inr h)⟩
-
-    theorem inter_sub_gen {a b : Term} (ha : TC L a) (hb : TC L b) (hm : L.K + 4 ≤ m) :
-        ∃ i, Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok i ∧
-          Elixir.Module.Types.Descr.«subtype?/2» (D m) i a = .ok (.atom "true") ∧
-          Elixir.Module.Types.Descr.«subtype?/2» (D m) i b = .ok (.atom "true") := by
-      obtain ⟨i, hi, ri, si⟩ := tc_inter (m := m) ha hb hm
-      exact ⟨i, ri, tc_sub (m := m) hi ha hm fun v h => ((si v).mp h).1, tc_sub (m := m) hi hb hm fun v h => ((si v).mp h).2⟩
-
-    theorem union_sup_gen {a b : Term} (ha : TC L a) (hb : TC L b) (hm : L.K + 4 ≤ m) :
-        ∃ u, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok u ∧
-          Elixir.Module.Types.Descr.«subtype?/2» (D m) a u = .ok (.atom "true") ∧
-          Elixir.Module.Types.Descr.«subtype?/2» (D m) b u = .ok (.atom "true") := by
-      obtain ⟨u, hu, ru, su⟩ := tc_union (m := m) ha hb hm
-      exact ⟨u, ru, tc_sub (m := m) ha hu hm fun v h => (su v).mpr (Or.inl h), tc_sub (m := m) hb hu hm fun v h => (su v).mpr (Or.inr h)⟩
-
-    theorem union_equal_gen {a b : Term} (ha : TC L a) (hb : TC L b) (hm : L.K + 4 ≤ m) :
-        ∃ u w, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok u ∧
-          Elixir.Module.Types.Descr.«opt_union/2» (D m) a b = .ok w ∧
-          Elixir.Module.Types.Descr.«equal?/2» (D m) u w = .ok (.atom "true") := by
-      obtain ⟨u, hu, ru, su⟩ := tc_union (m := m) ha hb hm
-      obtain ⟨w, hw, rw', sw⟩ := tc_opt_union2 (m := m) ha hb hm
-      exact ⟨u, w, ru, rw', tc_equal (m := m) hu hw hm fun v => by rw [su, sw]⟩
-
-    theorem inter_equal_gen {a b : Term} (ha : TC L a) (hb : TC L b) (hm : L.K + 4 ≤ m) :
-        ∃ i j, Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok i ∧
-          Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a b = .ok j ∧
-          Elixir.Module.Types.Descr.«equal?/2» (D m) i j = .ok (.atom "true") := by
-      obtain ⟨i, hi, ri, si⟩ := tc_inter (m := m) ha hb hm
-      obtain ⟨j, hj, rj, sj⟩ := tc_opt_inter2 (m := m) ha hb hm
-      exact ⟨i, j, ri, rj, tc_equal (m := m) hi hj hm fun v => by rw [si, sj]⟩
-
-    theorem distrib_gen {t a b : Term} (ht : TC L t) (ha : TC L a) (hb : TC L b) (hm : L.K + 4 ≤ m) :
-        ∃ u x y z w, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok u ∧
-          Elixir.Module.Types.Descr.«bare_intersection/2» (D m) t u = .ok x ∧
-          Elixir.Module.Types.Descr.«bare_intersection/2» (D m) t a = .ok y ∧
-          Elixir.Module.Types.Descr.«bare_intersection/2» (D m) t b = .ok z ∧
-          Elixir.Module.Types.Descr.«bare_union/2» (D m) y z = .ok w ∧
-          Elixir.Module.Types.Descr.«equal?/2» (D m) x w = .ok (.atom "true") := by
-      obtain ⟨u, hu, ru, su⟩ := tc_union (m := m) ha hb hm
-      obtain ⟨x, hx, rx, sx⟩ := tc_inter (m := m) ht hu hm
-      obtain ⟨y, hy, ry, sy⟩ := tc_inter (m := m) ht ha hm
-      obtain ⟨z, hz, rz, sz⟩ := tc_inter (m := m) ht hb hm
-      obtain ⟨w, hw, rw', sw⟩ := tc_union (m := m) hy hz hm
-      exact ⟨u, x, y, z, w, ru, rx, ry, rz, rw', tc_equal (m := m) hx hw hm fun v => by
-        rw [sx, su, sw, sy, sz]; exact and_or_left⟩
-
-    theorem neg_equal_gen {a : Term} (ha : TC L a) (hm : L.K + 6 ≤ m) :
-        ∃ x y, Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok x ∧
-          Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok y ∧
-          Elixir.Module.Types.Descr.«equal?/2» (D m) x y = .ok (.atom "true") := by
-      obtain ⟨x, hx, rx, sx⟩ := tc_neg (m := m) ha hm
-      obtain ⟨y, hy, ry, sy⟩ := tc_opt_neg (m := m) ha hm
-      exact ⟨x, y, rx, ry, tc_equal (m := m) hx hy (by omega) fun v => by rw [sx, sy]⟩
-
-    theorem diff_equal_gen {a b : Term} (ha : TC L a) (hb : TC L b) (hm : L.K + 6 ≤ m) :
-        ∃ x y, Elixir.Module.Types.Descr.«bare_difference/2» (D m) a b = .ok x ∧
-          Elixir.Module.Types.Descr.«opt_difference/2» (D m) a b = .ok y ∧
-          Elixir.Module.Types.Descr.«equal?/2» (D m) x y = .ok (.atom "true") := by
-      obtain ⟨x, hx, rx, sx⟩ := tc_diff (m := m) ha hb hm
-      obtain ⟨y, hy, ry, sy⟩ := tc_opt_diff2 (m := m) ha hb hm
-      exact ⟨x, y, rx, ry, tc_equal (m := m) hx hy (by omega) fun v => by rw [sx, sy]⟩
 
     end
 
@@ -36866,6 +36754,1488 @@ defmodule STTDescrProofsTest do
     end Elixir.STTDescrProofsTest
     """
 
+    postlude ~LEAN"""
+    set_option linter.unusedSimpArgs false
+    set_option linter.deprecated false
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! Merging maps field by field, whatever their keys. -/
+
+    /-- The bindings of a map other than its dynamic part, as `maps:remove/2` and `maps:take/2` leave them. -/
+    def rmDyn (X : List (Term × Term)) : List (Term × Term) :=
+      X.filter fun entry => exactCompare (.atom "dynamic") entry.1 != .eq
+
+    theorem lookup_rmDyn (X : List (Term × Term)) (q : Term) :
+        mapLookup (rmDyn X) q = if exactCompare q (.atom "dynamic") = .eq then none else mapLookup X q := by
+      rw [rmDyn, mapLookup_filter]
+
+    theorem lookup_rmDyn_dyn (X : List (Term × Term)) : mapLookup (rmDyn X) (.atom "dynamic") = none := by
+      simp [lookup_rmDyn]
+
+    theorem lookup_rmDyn_name (X : List (Term × Term)) {name : String} (h : name ≠ "dynamic") :
+        mapLookup (rmDyn X) (.atom name) = mapLookup X (.atom name) := by
+      simp [lookup_rmDyn, h]
+
+    theorem rmDyn_static {X : List (Term × Term)} (h : mapLookup X (.atom "dynamic") = none) : rmDyn X = X := by
+      refine List.filter_eq_self.mpr fun e me => ?_
+      cases c : exactCompare (.atom "dynamic") e.1 <;> simp
+      have : (mapLookup X (.atom "dynamic")).isSome := (mapLookup_isSome X _).mpr ⟨e, me, c⟩
+      rw [h] at this; cases this
+
+    theorem names_ne_dyn {name : String} (h : name ∈ names) : name ≠ "dynamic" := by
+      simp [names] at h; rintro rfl; simp at h
+
+    /-- Merging maps with atom keys looks up the combined values of shared keys and the others' values. -/
+    theorem merge_gen (d : Dispatcher) (module name : String) (caps : Array Term)
+        (f : Term → Term → Term → Except Exception Term)
+        (call : ∀ q v₁ v₂, d.pure (.function module name 3 caps) #[q, v₁, v₂] = f q v₁ v₂)
+        (L R : List (Term × Term)) (keysR : ∀ q, (mapLookup R q).isSome → ∃ n, q = .atom n)
+        (calls : ∀ q x y, mapLookup L q = some x → mapLookup R q = some y → ∃ u, f q x y = .ok u) :
+        ∃ U, Elixir.Module.Types.Descr.«symmetrical_merge/3» d (.map L) (.map R) (.function module name 3 caps) =
+            .ok (.map U) ∧
+          ∀ q, (mapLookup R q = none → mapLookup U q = mapLookup L q) ∧
+            (∀ y, mapLookup R q = some y → mapLookup L q = none → mapLookup U q = some y) ∧
+            (∀ x y u, mapLookup L q = some x → mapLookup R q = some y → f q x y = .ok u → mapLookup U q = some u) := by
+      let g : Term → Term → Term → Term := fun k₀ v₁ v₂ =>
+        match f k₀ v₁ v₂ with
+        | .ok w => w
+        | .error _ => .nil
+      have value : ∀ q x y u, f q x y = .ok u → g q x y = u := by
+        intro q x y u run; simp [g, run]
+      unfold Elixir.Module.Types.Descr.«symmetrical_merge/3»
+      obtain ⟨out, run, look⟩ := Erlang.maps.merge_with_lookup d module name caps L R g (by
+        intro e me x hx
+        have hy := mapLookup_of_mem_mapEntries me
+        obtain ⟨u, ru⟩ := calls e.1 x e.2 hx hy
+        rw [call, ru, value _ _ _ _ ru])
+      refine ⟨out, by simpa using run, fun q => ⟨fun hR => ?_, fun y hR hL => ?_, fun x y u hL hR ru => ?_⟩⟩
+      · rw [look q]
+        cases hit : (mapEntries R).find? (fun e => decide (exactCompare q e.1 = .eq)) with
+        | none => rfl
+        | some e => rw [(find_entry hit).2] at hR; cases hR
+      · rw [look q]
+        cases hit : (mapEntries R).find? (fun e => decide (exactCompare q e.1 = .eq)) with
+        | none => rw [find_none hit] at hR; cases hR
+        | some e =>
+          obtain ⟨qe, h⟩ := find_entry hit
+          rw [h] at hR; cases hR
+          simp [← mapLookup_congr qe, hL]
+      · rw [look q]
+        cases hit : (mapEntries R).find? (fun e => decide (exactCompare q e.1 = .eq)) with
+        | none => rw [find_none hit] at hR; cases hR
+        | some e =>
+          obtain ⟨qe, h⟩ := find_entry hit
+          rw [h] at hR; cases hR
+          obtain ⟨n, hn⟩ := keysR e.1 (by rw [← mapLookup_congr qe, h]; rfl)
+          rw [hn] at qe
+          obtain rfl := (exactCompare_eq_atom q n).mp qe
+          simp [hn, hL, value _ _ _ _ ru]
+
+    /-- Intersecting maps looks up the kept combined values of shared keys. -/
+    theorem intersect_gen (n : Nat) (module name : String) (caps : Array Term)
+        (f : Term → Term → Term → Except Exception Term)
+        (call : ∀ q v₁ v₂, (D (n + 1)).pure (.function module name 3 caps) #[q, v₁, v₂] = f q v₁ v₂)
+        (L R : List (Term × Term)) (keysL : ∀ q, (mapLookup L q).isSome → ∃ n, q = .atom n)
+        (calls : ∀ q x y, mapLookup L q = some x → mapLookup R q = some y → ∃ u, f q x y = .ok u) :
+        ∃ I, Elixir.Module.Types.Descr.«symmetrical_intersection/3» (D (n + 1)) (.map L) (.map R) (.function module name 3 caps) =
+            .ok (.map I) ∧
+          ∀ q, (mapLookup L q = none → mapLookup I q = none) ∧ (mapLookup R q = none → mapLookup I q = none) ∧
+            (∀ x y u, mapLookup L q = some x → mapLookup R q = some y → f q x y = .ok u →
+              mapLookup I q = if kept (q, u) then some u else none) := by
+      let g : Term → Term → Term → Term := fun k₀ v₁ v₂ =>
+        match f k₀ v₁ v₂ with
+        | .ok w => w
+        | .error _ => .nil
+      have value : ∀ q x y u, f q x y = .ok u → g q x y = u := by
+        intro q x y u run; simp [g, run]
+      obtain ⟨I, runI, lookI⟩ := Erlang.maps.intersect_with_lookup (D (n + 1)) module name caps L R g (by
+        intro e member y hy
+        obtain ⟨w, run⟩ := calls e.1 e.2 y (mapLookup_of_mem_mapEntries member) hy
+        rw [call, run, value _ _ _ _ run])
+      have lookI' : ∀ q, mapLookup I q =
+          match mapLookup L q, mapLookup R q with
+          | some x, some y => some (g q x y)
+          | _, _ => none := by
+        intro q
+        rw [lookI]
+        cases hit : (mapEntries L).find? (fun e => decide (exactCompare q e.1 = .eq)) with
+        | none => rw [find_none hit]
+        | some e =>
+          obtain ⟨qe, h⟩ := find_entry hit
+          obtain ⟨n, hn⟩ := keysL e.1 (by rw [← mapLookup_congr qe, h]; rfl)
+          rw [hn] at qe
+          obtain rfl := (exactCompare_eq_atom q n).mp qe
+          rw [h, ← hn]
+          dsimp only
+          cases mapLookup R e.1 <;> rfl
+      obtain ⟨out, runO, lookO⟩ := Erlang.maps.filter_lookup (D (n + 1)) "Elixir.Module.Types.Descr"
+        "-symmetrical_intersection/3-fun-0-" #[] I kept (by
+          intro e _
+          rw [Erlang.program.«Elixir.Module.Types.Descr:-symmetrical_intersection/3-fun-0-/2».pure, keep_field])
+      refine ⟨out, ?_, fun q => ?_⟩
+      · unfold Elixir.Module.Types.Descr.«symmetrical_intersection/3»
+        simp [runI, runO]
+      have look : mapLookup out q =
+          match mapLookup L q, mapLookup R q with
+          | some x, some y => if kept (q, g q x y) then some (g q x y) else none
+          | _, _ => none := by
+        rw [lookO]
+        cases hit : (mapEntries I).find? (fun e => decide (exactCompare q e.1 = .eq)) with
+        | none =>
+          have := find_none hit
+          rw [lookI'] at this
+          revert this
+          cases mapLookup L q <;> cases mapLookup R q <;> simp
+        | some e =>
+          obtain ⟨qe, h⟩ := find_entry hit
+          rw [lookI'] at h
+          revert h
+          cases mapLookup L q <;> cases mapLookup R q <;> simp
+          intro h
+          simp only [kept]
+          rw [h]
+          rfl
+      refine ⟨fun hL => by rw [look, hL], fun hR => by rw [look, hR]; cases mapLookup L q <;> rfl,
+        fun x y w hL hR run => by rw [look, hL, hR]; simp only [value _ _ _ _ run]⟩
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
+    postlude ~LEAN"""
+    set_option linter.unusedSimpArgs false
+    set_option linter.deprecated false
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! Gradual top-level types: a static part and a dynamic part that includes it. -/
+
+    section
+    variable {L : Level}
+
+    abbrev DC (L : Level) := DescrC FunF (TField L.E) (LF L.E) (MField L.E)
+    abbrev FC (L : Level) := FieldC FunF (TField L.E) (LF L.E) (MField L.E)
+
+    theorem denD_rmDyn (X : List (Term × Term)) (v : TP L) : denD (.map (rmDyn X)) v ↔ denD (.map X) v := by
+      simp only [denD_map, lookup_rmDyn_name X (names_ne_dyn v.2.1)]
+
+    /-- Field operations a union merges fields with: they unite the points of their fields. -/
+    structure UnionOp (L : Level) (d : Dispatcher) (module name : String) (caps : Array Term)
+        (f : Term → Term → Term → Except Exception Term) : Prop where
+      call : ∀ q v₁ v₂, d.pure (.function module name 3 caps) #[q, v₁, v₂] = f q v₁ v₂
+      spec : ∀ name x y, FC L name x → FC L name y → ∃ u, f (.atom name) x y = .ok u ∧ FC L name u ∧
+        ∀ p, PtOkD L.E L.den L.tl name p → dn name (some u) p = (dn name (some x) p || dn name (some y) p)
+
+    theorem DC.atoms {X : List (Term × Term)} (sX : DC L X) : ∀ q, (mapLookup X q).isSome → ∃ n, q = .atom n :=
+      fun q h => let ⟨n, _, e⟩ := sX.keys q h; ⟨n, e⟩
+
+    /-- Maps whose bindings other than the dynamic one are fields have atom keys. -/
+    theorem rmDyn_atoms {X : List (Term × Term)} (sX : DC L (rmDyn X)) : ∀ q, (mapLookup X q).isSome → ∃ n, q = .atom n := by
+      intro q h
+      by_cases e : exactCompare q (.atom "dynamic") = .eq
+      · exact ⟨"dynamic", (exactCompare_eq_atom q _).mp e⟩
+      · exact sX.atoms q (by rw [lookup_rmDyn, if_neg e]; exact h)
+
+    /-- Merging static types unites them. -/
+    theorem merge_descr {d : Dispatcher} {module name : String} {caps : Array Term}
+        {f : Term → Term → Term → Except Exception Term} (op : UnionOp L d module name caps f)
+        {A B : List (Term × Term)} (sA : DC L A) (sB : DC L B) :
+        ∃ U, Elixir.Module.Types.Descr.«symmetrical_merge/3» d (.map A) (.map B) (.function module name 3 caps) =
+            .ok (.map U) ∧ DC L U ∧ ∀ v : TP L, denD (.map U) v ↔ denD (.map A) v ∨ denD (.map B) v := by
+      obtain ⟨U, run, look⟩ := merge_gen d module name caps f op.call A B sB.atoms (fun q x y hx hy => by
+        obtain ⟨n, -, rfl⟩ := sA.keys q (by simp [hx])
+        obtain ⟨u, ru, -⟩ := op.spec n x y (sA.fields n x hx) (sB.fields n y hy)
+        exact ⟨u, ru⟩)
+      have keysU : ∀ q, (mapLookup U q).isSome → (mapLookup A q).isSome ∨ (mapLookup B q).isSome := by
+        intro q h
+        cases hB : mapLookup B q with
+        | none => rw [(look q).1 hB] at h; exact Or.inl h
+        | some y => exact Or.inr (by simp)
+      obtain ⟨cU, sem, -⟩ := union_gen (slh := False) sA sB f
+        (fun n => ⟨(look _).1, (look _).2.1, (look _).2.2⟩) keysU
+        (fun n x y fx fy => let ⟨u, ru, fu, su⟩ := op.spec n x y fx fy; ⟨u, ru, fu, su, False.elim⟩)
+      exact ⟨U, run, cU, fun v => by simp only [denD_map, sem _ _ v.2.2, Bool.or_eq_true]⟩
+
+    /-- Unions of dynamic parts: top-level types merged field by field. -/
+    theorem dyn_union_tc {d : Dispatcher} {module name : String} {caps : Array Term}
+        {f : Term → Term → Term → Except Exception Term} (op : UnionOp L d module name caps f)
+        {a b : Term} (ha : TC L a) (hb : TC L b) :
+        ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«dynamic_union/3» d a b (.function module name 3 caps) = .ok c ∧
+          ∀ v : TP L, denD c v ↔ denD a v ∨ denD b v := by
+      rcases ha with rfl | ⟨A, rfl, sA⟩
+      · exact ⟨_, Or.inl rfl, by unfold Elixir.Module.Types.Descr.«dynamic_union/3»; rfl, fun v => by simp [denD_term]⟩
+      rcases hb with rfl | ⟨B, rfl, sB⟩
+      · exact ⟨_, Or.inl rfl, by unfold Elixir.Module.Types.Descr.«dynamic_union/3»; rfl, fun v => by simp [denD_term]⟩
+      obtain ⟨U, run, sU, sem⟩ := merge_descr op sA sB
+      refine ⟨_, Or.inr ⟨U, rfl, sU⟩, ?_, sem⟩
+      unfold Elixir.Module.Types.Descr.«dynamic_union/3»
+      simpa [unfold_map] using run
+
+    /-- The upper bound of a type: its dynamic part, or the type itself when it is static. -/
+    def upper (a : Term) : Term :=
+      match a with
+      | .map X => (mapLookup X (.atom "dynamic")).getD a
+      | _ => a
+
+    /-- Gradual top-level types: top-level types, or maps of fields with a dynamic part, a top-level type that holds
+    every point of the fields, as Descr maintains. -/
+    def GC (L : Level) (a : Term) : Prop :=
+      TC L a ∨ ∃ X Dy, a = .map X ∧ mapLookup X (.atom "dynamic") = some Dy ∧ TC L Dy ∧ DC L (rmDyn X) ∧
+        ∀ v : TP L, denD a v → denD Dy v
+
+    theorem upper_tc {a : Term} (ha : TC L a) : upper a = a := by
+      rcases ha with rfl | ⟨X, rfl, sX⟩
+      · rfl
+      · simp [upper, sX.static]
+
+    theorem upper_dyn {X : List (Term × Term)} {Dy : Term} (h : mapLookup X (.atom "dynamic") = some Dy) :
+        upper (.map X) = Dy := by
+      simp [upper, h]
+
+    theorem GC.tc {a : Term} (ha : TC L a) : GC L a := Or.inl ha
+
+    theorem GC.up_tc {a : Term} (ha : GC L a) : TC L (upper a) := by
+      rcases ha with ha | ⟨X, Dy, rfl, hD, tD, -, -⟩
+      · rwa [upper_tc ha]
+      · rwa [upper_dyn hD]
+
+    theorem GC.inv {a : Term} (ha : GC L a) (v : TP L) (h : denD a v) : denD (upper a) v := by
+      rcases ha with ha | ⟨X, Dy, rfl, hD, -, -, inv⟩
+      · rwa [upper_tc ha]
+      · rw [upper_dyn hD]; exact inv v h
+
+    /-- A static operand meets a gradual one as its own dynamic part. -/
+    def alignT (X : List (Term × Term)) : List (Term × Term) :=
+      match mapLookup X (.atom "dynamic") with
+      | some _ => X
+      | none => (.atom "dynamic", .map X) :: X
+
+    theorem rmDyn_cons_dyn (X : List (Term × Term)) (w : Term) : rmDyn ((.atom "dynamic", w) :: X) = rmDyn X := by
+      simp [rmDyn]
+
+    /-- Aligned maps of gradual types: their dynamic part is the upper bound, and their fields those of the type. -/
+    theorem align_gc {X : List (Term × Term)} (hX : GC L (.map X)) :
+        mapLookup (alignT X) (.atom "dynamic") = some (upper (.map X)) ∧ DC L (rmDyn (alignT X)) ∧
+          ∀ v : TP L, denD (.map (alignT X)) v ↔ denD (.map X) v := by
+      rcases hX with (h | ⟨X', e, sX⟩) | ⟨X', Dy, e, hD, -, sX, -⟩
+      · cases h
+      · simp only [Term.map.injEq] at e; subst e
+        have st := sX.static
+        refine ⟨by rw [alignT, st, upper_tc (Or.inr ⟨X, rfl, sX⟩)]; simp [mapLookup], ?_, fun v => ?_⟩
+        · rw [alignT, st]; simp only; rw [rmDyn_cons_dyn, rmDyn_static st]; exact sX
+        · rw [alignT, st]; simp only
+          rw [← denD_rmDyn, rmDyn_cons_dyn, denD_rmDyn]
+      · simp only [Term.map.injEq] at e; subst e
+        refine ⟨by simp [alignT, hD, upper], by simpa [alignT, hD] using sX, fun v => by simp [alignT, hD]⟩
+
+    /-- Merging maps with dynamic parts merges their fields and their dynamic parts. -/
+    theorem merge_grad {d : Dispatcher} {module name : String} {caps : Array Term}
+        {f : Term → Term → Term → Except Exception Term} (op : UnionOp L d module name caps f)
+        {X Y : List (Term × Term)} {Dx Dy Du : Term} (hX : mapLookup X (.atom "dynamic") = some Dx)
+        (hY : mapLookup Y (.atom "dynamic") = some Dy) (sX : DC L (rmDyn X)) (sY : DC L (rmDyn Y))
+        (du : f (.atom "dynamic") Dx Dy = .ok Du) :
+        ∃ U, Elixir.Module.Types.Descr.«symmetrical_merge/3» d (.map X) (.map Y) (.function module name 3 caps) =
+            .ok (.map U) ∧ mapLookup U (.atom "dynamic") = some Du ∧ DC L (rmDyn U) ∧
+            ∀ v : TP L, denD (.map U) v ↔ denD (.map X) v ∨ denD (.map Y) v := by
+      obtain ⟨U, run, look⟩ := merge_gen d module name caps f op.call X Y (rmDyn_atoms sY) (fun q x y hx hy => by
+        by_cases e : exactCompare q (.atom "dynamic") = .eq
+        · obtain rfl := (exactCompare_eq_atom q _).mp e
+          rw [hX] at hx; rw [hY] at hy; cases hx; cases hy
+          exact ⟨Du, du⟩
+        · have hx' : mapLookup (rmDyn X) q = some x := by rw [lookup_rmDyn, if_neg e]; exact hx
+          have hy' : mapLookup (rmDyn Y) q = some y := by rw [lookup_rmDyn, if_neg e]; exact hy
+          obtain ⟨n, -, rfl⟩ := sX.keys q (by simp [hx'])
+          obtain ⟨u, ru, -⟩ := op.spec n x y (sX.fields n x hx') (sY.fields n y hy')
+          exact ⟨u, ru⟩)
+      have lookR : ∀ q, (mapLookup (rmDyn Y) q = none → mapLookup (rmDyn U) q = mapLookup (rmDyn X) q) ∧
+          (∀ y, mapLookup (rmDyn Y) q = some y → mapLookup (rmDyn X) q = none → mapLookup (rmDyn U) q = some y) ∧
+          (∀ x y u, mapLookup (rmDyn X) q = some x → mapLookup (rmDyn Y) q = some y → f q x y = .ok u →
+            mapLookup (rmDyn U) q = some u) := by
+        intro q
+        simp only [lookup_rmDyn]
+        by_cases e : exactCompare q (.atom "dynamic") = .eq
+        · simp [e]
+        · simp only [e, if_false]; exact look q
+      have keysU : ∀ q, (mapLookup (rmDyn U) q).isSome → (mapLookup (rmDyn X) q).isSome ∨ (mapLookup (rmDyn Y) q).isSome := by
+        intro q h
+        cases hB : mapLookup (rmDyn Y) q with
+        | none => rw [(lookR q).1 hB] at h; exact Or.inl h
+        | some y => exact Or.inr (by simp)
+      obtain ⟨cU, sem, -⟩ := union_gen (slh := False) sX sY f
+        (fun n => ⟨(lookR _).1, (lookR _).2.1, (lookR _).2.2⟩) keysU
+        (fun n x y fx fy => let ⟨u, ru, fu, su⟩ := op.spec n x y fx fy; ⟨u, ru, fu, su, False.elim⟩)
+      refine ⟨U, run, (look _).2.2 Dx Dy Du hX hY du, cU, fun v => ?_⟩
+      rw [← denD_rmDyn U, ← denD_rmDyn X, ← denD_rmDyn Y]
+      simp only [denD_map, sem _ _ v.2.2, Bool.or_eq_true]
+
+    /-- Merging aligned gradual types unites their fields and their upper bounds. -/
+    theorem merge_aligned {d d' : Dispatcher} {module name module' name' : String} {caps caps' : Array Term}
+        {f f' : Term → Term → Term → Except Exception Term} (op : UnionOp L d module name caps f)
+        (op' : UnionOp L d' module' name' caps' f')
+        (dyn : ∀ x y, f (.atom "dynamic") x y =
+          Elixir.Module.Types.Descr.«dynamic_union/3» d' x y (.function module' name' 3 caps'))
+        {X Y : List (Term × Term)} (hX : GC L (.map X)) (hY : GC L (.map Y)) :
+        ∃ c, GC L c ∧
+          Elixir.Module.Types.Descr.«symmetrical_merge/3» d (.map (alignT X)) (.map (alignT Y))
+            (.function module name 3 caps) = .ok c ∧
+          (∀ v : TP L, denD c v ↔ denD (.map X) v ∨ denD (.map Y) v) ∧
+          (∀ v : TP L, denD (upper c) v ↔ denD (upper (.map X)) v ∨ denD (upper (.map Y)) v) := by
+      obtain ⟨dX, sX, eX⟩ := align_gc hX
+      obtain ⟨dY, sY, eY⟩ := align_gc hY
+      obtain ⟨Du, tu, ru, su⟩ := dyn_union_tc op' hX.up_tc hY.up_tc
+      obtain ⟨U, run, dU, sU, sem⟩ := merge_grad op dX dY sX sY (by rw [dyn]; exact ru)
+      have lo : ∀ v : TP L, denD (.map U) v ↔ denD (.map X) v ∨ denD (.map Y) v := fun v => by
+        rw [sem, eX, eY]
+      refine ⟨_, Or.inr ⟨U, Du, rfl, dU, tu, sU, fun v h => ?_⟩, run, lo, fun v => by rw [upper_dyn dU, su]⟩
+      rw [su]
+      rcases (lo v).mp h with h | h
+      · exact Or.inl (hX.inv v h)
+      · exact Or.inr (hY.inv v h)
+
+    end
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
+    postlude ~LEAN"""
+    set_option linter.unusedSimpArgs false
+    set_option linter.deprecated false
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! Unions of gradual types. -/
+
+    section
+    variable {L : Level}
+
+    theorem bare_union_op {n : Nat} (hm : L.K + 3 ≤ n) :
+        UnionOp L (D (n + 1)) "Elixir.Module.Types.Descr" "bare_union" #[]
+          (Elixir.Module.Types.Descr.«bare_union/3» (D n)) where
+      call := fun q v₁ v₂ => Erlang.program.«Elixir.Module.Types.Descr:bare_union/3».pure n q v₁ v₂
+      spec := fun _ _ _ fx fy =>
+        let ⟨u, ru, fu, su, _⟩ := fieldC_union (tks L) (tfc L) (by omega) fx fy; ⟨u, ru, fu, su⟩
+
+    theorem opt_union_op {n : Nat} (hm : L.K + 3 ≤ n) (S : List (Term × Term)) :
+        UnionOp L (D (n + 1)) "Elixir.Module.Types.Descr" "-opt_union/3-anonymous-0-" #[.map S]
+          (fun q x y => Elixir.Module.Types.Descr.«opt_union/4» (D n) q x y (.map S)) where
+      call := fun q v₁ v₂ => by
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-opt_union/3-anonymous-0-/3».pure]; rfl
+      spec := fun _ _ _ fx fy => fieldC_opt_union (tks L) (tfc L) (by omega) fx fy S
+
+    theorem opt_union_dyn_op {n : Nat} (hm : L.K + 3 ≤ n) (S : List (Term × Term)) :
+        UnionOp L (D (n + 1)) "Elixir.Module.Types.Descr" "-opt_union/4-fun-0-" #[.map S]
+          (fun q x y => Elixir.Module.Types.Descr.«opt_union/4» (D n) q x y (.map S)) where
+      call := fun q v₁ v₂ => by
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-opt_union/4-fun-0-/3».pure]; rfl
+      spec := fun _ _ _ fx fy => fieldC_opt_union (tks L) (tfc L) (by omega) fx fy S
+
+    theorem bare_union_dyn (d : Dispatcher) (x y : Term) :
+        Elixir.Module.Types.Descr.«bare_union/3» d (.atom "dynamic") x y =
+          Elixir.Module.Types.Descr.«dynamic_union/3» d x y (.function "Elixir.Module.Types.Descr" "bare_union" 3 #[]) := by
+      unfold Elixir.Module.Types.Descr.«bare_union/3»; rfl
+
+    theorem opt_union_dyn (d : Dispatcher) (x y S : Term) :
+        Elixir.Module.Types.Descr.«opt_union/4» d (.atom "dynamic") x y S =
+          Elixir.Module.Types.Descr.«dynamic_union/3» d x y (.function "Elixir.Module.Types.Descr" "-opt_union/4-fun-0-" 3 #[S]) := by
+      unfold Elixir.Module.Types.Descr.«opt_union/4»; rfl
+
+    theorem union_run_grad (d : Dispatcher) {X Y : List (Term × Term)} (nX : X ≠ []) (nY : Y ≠ [])
+        (g : (mapLookup X (.atom "dynamic")).isSome ∨ (mapLookup Y (.atom "dynamic")).isSome) :
+        Elixir.Module.Types.Descr.«bare_union/2» d (.map X) (.map Y) =
+          Elixir.Module.Types.Descr.«symmetrical_merge/3» d (.map (alignT X)) (.map (alignT Y))
+            (.function "Elixir.Module.Types.Descr" "bare_union" 3 #[]) := by
+      unfold Elixir.Module.Types.Descr.«bare_union/2»
+      cases hX : mapLookup X (.atom "dynamic") <;> cases hY : mapLookup Y (.atom "dynamic") <;> rw [hX, hY] at g <;>
+        simp at g <;>
+        simp [getMapKeys_single, Erlang.erlang.«==/2», hX, hY, nX, nY, unfold_map, Erlang.maps.«put/3», alignT]
+
+    theorem opt_union_run_grad (d : Dispatcher) {X Y : List (Term × Term)} (S : Term) (nX : X ≠ []) (nY : Y ≠ [])
+        (g : (mapLookup X (.atom "dynamic")).isSome ∨ (mapLookup Y (.atom "dynamic")).isSome) :
+        Elixir.Module.Types.Descr.«opt_union/3» d (.map X) (.map Y) S =
+          Elixir.Module.Types.Descr.«symmetrical_merge/3» d (.map (alignT X)) (.map (alignT Y))
+            (.function "Elixir.Module.Types.Descr" "-opt_union/3-anonymous-0-" 3 #[S]) := by
+      unfold Elixir.Module.Types.Descr.«opt_union/3»
+      cases hX : mapLookup X (.atom "dynamic") <;> cases hY : mapLookup Y (.atom "dynamic") <;> rw [hX, hY] at g <;>
+        simp at g <;>
+        simp [getMapKeys_single, Erlang.erlang.«==/2», hX, hY, nX, nY, unfold_map, Erlang.maps.«put/3», alignT]
+
+    theorem GC.shape {a : Term} (ha : GC L a) : a = .atom "term" ∨ ∃ X, a = .map X := by
+      rcases ha with (h | ⟨X, rfl, -⟩) | ⟨X, -, rfl, -⟩
+      · exact Or.inl h
+      · exact Or.inr ⟨X, rfl⟩
+      · exact Or.inr ⟨X, rfl⟩
+
+    theorem GC.static {X : List (Term × Term)} (hX : GC L (.map X)) (st : mapLookup X (.atom "dynamic") = none) :
+        TC L (.map X) := by
+      rcases hX with h | ⟨X', Dy, e, hD, -⟩
+      · exact h
+      · simp only [Term.map.injEq] at e; subst e; rw [st] at hD; cases hD
+
+    theorem upper_term : upper (.atom "term") = .atom "term" := rfl
+
+    theorem upper_nil : upper (.map []) = .map [] := rfl
+
+    /-- Unions hold the points of either type, at both bounds. -/
+    def USem (L : Level) (a b c : Term) : Prop :=
+      (∀ v : TP L, denD c v ↔ denD a v ∨ denD b v) ∧ ∀ v : TP L, denD (upper c) v ↔ denD (upper a) v ∨ denD (upper b) v
+
+    theorem usem_term_l (a : Term) : USem L (.atom "term") a (.atom "term") :=
+      ⟨fun v => by simp [denD_term], fun v => by simp [upper_term, denD_term]⟩
+
+    theorem usem_term_r (a : Term) : USem L a (.atom "term") (.atom "term") :=
+      ⟨fun v => by simp [denD_term], fun v => by simp [upper_term, denD_term]⟩
+
+    theorem usem_nil_l (a : Term) : USem L (.map []) a a :=
+      ⟨fun v => by simp [denD_nil], fun v => by simp [upper_nil, denD_nil]⟩
+
+    theorem usem_nil_r (a : Term) : USem L a (.map []) a :=
+      ⟨fun v => by simp [denD_nil], fun v => by simp [upper_nil, denD_nil]⟩
+
+    theorem usem_tc {a b c : Term} (ha : TC L a) (hb : TC L b) (hc : TC L c)
+        (sem : ∀ v : TP L, denD c v ↔ denD a v ∨ denD b v) : USem L a b c :=
+      ⟨sem, by rw [upper_tc ha, upper_tc hb, upper_tc hc]; exact sem⟩
+
+    theorem union_nil_l (d : Dispatcher) (Y : List (Term × Term)) :
+        Elixir.Module.Types.Descr.«bare_union/2» d (.map []) (.map Y) = .ok (.map Y) := by
+      unfold Elixir.Module.Types.Descr.«bare_union/2»; simp [Erlang.erlang.«==/2»]
+
+    theorem union_nil_r (d : Dispatcher) (X : List (Term × Term)) :
+        Elixir.Module.Types.Descr.«bare_union/2» d (.map X) (.map []) = .ok (.map X) := by
+      unfold Elixir.Module.Types.Descr.«bare_union/2»
+      by_cases h : X = [] <;> simp [Erlang.erlang.«==/2», h]
+
+    theorem opt_union_nil_l (d : Dispatcher) (Y : List (Term × Term)) (S : Term) :
+        Elixir.Module.Types.Descr.«opt_union/3» d (.map []) (.map Y) S = .ok (.map Y) := by
+      unfold Elixir.Module.Types.Descr.«opt_union/3»; simp [Erlang.erlang.«==/2»]
+
+    theorem opt_union_nil_r (d : Dispatcher) (X : List (Term × Term)) (S : Term) :
+        Elixir.Module.Types.Descr.«opt_union/3» d (.map X) (.map []) S = .ok (.map X) := by
+      unfold Elixir.Module.Types.Descr.«opt_union/3»
+      by_cases h : X = [] <;> simp [Erlang.erlang.«==/2», h]
+
+    theorem dyn_isSome {X : List (Term × Term)} (st : ¬TC L (.map X)) (hX : GC L (.map X)) :
+        (mapLookup X (.atom "dynamic")).isSome := by
+      cases h : mapLookup X (.atom "dynamic")
+      · exact absurd (hX.static h) st
+      · rfl
+
+    theorem gc_union {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 5 ≤ m) :
+        ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok c ∧ USem L a b c := by
+      obtain ⟨k, rfl⟩ : ∃ k, m = k + 2 := ⟨m - 2, by omega⟩
+      rcases ha.shape with rfl | ⟨X, rfl⟩
+      · exact ⟨_, GC.tc tc_term, union_term_l _ _, usem_term_l _⟩
+      rcases hb.shape with rfl | ⟨Y, rfl⟩
+      · exact ⟨_, GC.tc tc_term, union_term_r _ _, usem_term_r _⟩
+      by_cases nX : X = []
+      · subst nX; exact ⟨_, hb, union_nil_l _ _, usem_nil_l _⟩
+      by_cases nY : Y = []
+      · subst nY; exact ⟨_, ha, union_nil_r _ _, usem_nil_r _⟩
+      by_cases st : TC L (.map X) ∧ TC L (.map Y)
+      · obtain ⟨c, hc, run, sem⟩ := tc_union st.1 st.2 (m := k + 2) (by omega)
+        exact ⟨c, GC.tc hc, run, usem_tc st.1 st.2 hc sem⟩
+      have g : (mapLookup X (.atom "dynamic")).isSome ∨ (mapLookup Y (.atom "dynamic")).isSome := by
+        by_cases sX : TC L (.map X)
+        · exact Or.inr (dyn_isSome (fun h => st ⟨sX, h⟩) hb)
+        · exact Or.inl (dyn_isSome sX ha)
+      obtain ⟨c, hc, run, lo, up⟩ := merge_aligned (bare_union_op (n := k + 1) (by omega))
+        (bare_union_op (n := k) (by omega)) (bare_union_dyn _) ha hb
+      exact ⟨c, hc, (union_run_grad _ nX nY g).trans run, lo, up⟩
+
+    theorem gc_opt_union {a b : Term} (ha : GC L a) (hb : GC L b) (S : List (Term × Term)) {m : Nat} (hm : L.K + 5 ≤ m) :
+        ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_union/3» (D m) a b (.map S) = .ok c ∧ USem L a b c := by
+      obtain ⟨k, rfl⟩ : ∃ k, m = k + 2 := ⟨m - 2, by omega⟩
+      rcases ha.shape with rfl | ⟨X, rfl⟩
+      · exact ⟨_, GC.tc tc_term, opt_union_term_left _ _ _, usem_term_l _⟩
+      rcases hb.shape with rfl | ⟨Y, rfl⟩
+      · exact ⟨_, GC.tc tc_term, opt_union_term_r _ _ _, usem_term_r _⟩
+      by_cases nX : X = []
+      · subst nX; exact ⟨_, hb, opt_union_nil_l _ _ _, usem_nil_l _⟩
+      by_cases nY : Y = []
+      · subst nY; exact ⟨_, ha, opt_union_nil_r _ _ _, usem_nil_r _⟩
+      by_cases st : TC L (.map X) ∧ TC L (.map Y)
+      · obtain ⟨c, hc, run, sem⟩ := tc_opt_union st.1 st.2 S (m := k + 2) (by omega)
+        exact ⟨c, GC.tc hc, run, usem_tc st.1 st.2 hc sem⟩
+      have g : (mapLookup X (.atom "dynamic")).isSome ∨ (mapLookup Y (.atom "dynamic")).isSome := by
+        by_cases sX : TC L (.map X)
+        · exact Or.inr (dyn_isSome (fun h => st ⟨sX, h⟩) hb)
+        · exact Or.inl (dyn_isSome sX ha)
+      obtain ⟨c, hc, run, lo, up⟩ := merge_aligned (opt_union_op (n := k + 1) (by omega) S)
+        (opt_union_dyn_op (n := k) (by omega) S) (fun x y => opt_union_dyn _ x y _) ha hb
+      exact ⟨c, hc, (opt_union_run_grad _ _ nX nY g).trans run, lo, up⟩
+
+    end
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
+    postlude ~LEAN"""
+    set_option linter.unusedSimpArgs false
+    set_option linter.deprecated false
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! Intersections of gradual types. -/
+
+    section
+    variable {L : Level}
+
+    /-- Field operations an intersection combines fields with: they keep the common points of their fields. -/
+    structure InterOp (L : Level) (n : Nat) (module name : String) (caps : Array Term)
+        (f : Term → Term → Term → Except Exception Term) : Prop where
+      call : ∀ q v₁ v₂, (D (n + 1)).pure (.function module name 3 caps) #[q, v₁, v₂] = f q v₁ v₂
+      spec : ∀ name x y, FC L name x → FC L name y → ∃ w, f (.atom name) x y = .ok w ∧
+        (kept (.atom name, w) = Bool.true → FC L name w) ∧
+        ∀ p, PtOkD L.E L.den L.tl name p → dn name (keptO name w) p = (dn name (some x) p && dn name (some y) p)
+
+    /-- Intersecting static types keeps their common points. -/
+    theorem inter_descr {n : Nat} {module name : String} {caps : Array Term}
+        {f : Term → Term → Term → Except Exception Term} (op : InterOp L n module name caps f)
+        {A B : List (Term × Term)} (sA : DC L A) (sB : DC L B) :
+        ∃ I, Elixir.Module.Types.Descr.«symmetrical_intersection/3» (D (n + 1)) (.map A) (.map B)
+            (.function module name 3 caps) = .ok (.map I) ∧ DC L I ∧
+          ∀ v : TP L, denD (.map I) v ↔ denD (.map A) v ∧ denD (.map B) v := by
+      obtain ⟨I, run, look⟩ := intersect_gen n module name caps f op.call A B sA.atoms (fun q x y hx hy => by
+        obtain ⟨k, -, rfl⟩ := sA.keys q (by simp [hx])
+        obtain ⟨w, rw', -⟩ := op.spec k x y (sA.fields k x hx) (sB.fields k y hy)
+        exact ⟨w, rw'⟩)
+      have keysI : ∀ q, (mapLookup I q).isSome → (mapLookup A q).isSome := by
+        intro q h
+        cases hA : mapLookup A q with
+        | none => rw [(look q).1 hA] at h; cases h
+        | some _ => rfl
+      obtain ⟨cI, sem, -⟩ := inter_gen (slh := False) sA sB f
+        (fun k => ⟨(look _).1, (look _).2.1, fun x y w hx hy rw' => (look _).2.2 x y w hx hy rw'⟩) keysI
+        (fun k x y fx fy => let ⟨w, rw', kw, sw⟩ := op.spec k x y fx fy; ⟨w, rw', fun h => ⟨kw h, False.elim⟩, sw⟩)
+      exact ⟨I, run, cI, fun v => by simp only [denD_map, sem _ _ v.2.2, Bool.and_eq_true]⟩
+
+    /-- Intersections of dynamic parts. -/
+    theorem dyn_inter_tc {n : Nat} {module name : String} {caps : Array Term}
+        {f : Term → Term → Term → Except Exception Term} (op : InterOp L n module name caps f)
+        {a b : Term} (ha : TC L a) (hb : TC L b) :
+        ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«dynamic_intersection/3» (D (n + 1)) a b (.function module name 3 caps) =
+          .ok c ∧ ∀ v : TP L, denD c v ↔ denD a v ∧ denD b v := by
+      rcases ha with rfl | ⟨A, rfl, sA⟩
+      · exact ⟨b, hb, by unfold Elixir.Module.Types.Descr.«dynamic_intersection/3»; rfl, fun v => by simp [denD_term]⟩
+      rcases hb with rfl | ⟨B, rfl, sB⟩
+      · exact ⟨_, Or.inr ⟨A, rfl, sA⟩, by unfold Elixir.Module.Types.Descr.«dynamic_intersection/3»; rfl,
+          fun v => by simp [denD_term]⟩
+      obtain ⟨I, run, sI, sem⟩ := inter_descr op sA sB
+      refine ⟨_, Or.inr ⟨I, rfl, sI⟩, ?_, sem⟩
+      unfold Elixir.Module.Types.Descr.«dynamic_intersection/3»
+      simpa [unfold_map] using run
+
+    /-- The dynamic field of an intersection: dropped when empty. -/
+    def dynZero : Term → Term
+      | .map [] => .integer 0
+      | c => c
+
+    theorem bare_inter_dyn (d : Dispatcher) {x y c : Term}
+        (run : Elixir.Module.Types.Descr.«dynamic_intersection/3» d x y
+          (.function "Elixir.Module.Types.Descr" "bare_intersection" 3 #[]) = .ok c) (hc : TC L c) :
+        Elixir.Module.Types.Descr.«bare_intersection/3» d (.atom "dynamic") x y = .ok (dynZero c) := by
+      unfold Elixir.Module.Types.Descr.«bare_intersection/3»
+      rcases hc with rfl | ⟨C, rfl, -⟩
+      · have c : Term.compare (.atom "term") (.map []) ≠ .eq := by rw [compare_eq_step]; simp [Compare.compareStep]
+        simp [run, Erlang.erlang.«==/2», dynZero, c]
+      · cases C <;> simp [run, Erlang.erlang.«==/2», dynZero]
+
+    theorem opt_inter_dyn (d : Dispatcher) {x y c S : Term}
+        (run : Elixir.Module.Types.Descr.«dynamic_intersection/3» d x y
+          (.function "Elixir.Module.Types.Descr" "-opt_intersection/4-fun-0-" 3 #[S]) = .ok c) (hc : TC L c) :
+        Elixir.Module.Types.Descr.«opt_intersection/4» d (.atom "dynamic") x y S = .ok (dynZero c) := by
+      unfold Elixir.Module.Types.Descr.«opt_intersection/4»
+      rcases hc with rfl | ⟨C, rfl, -⟩
+      · have c : Term.compare (.atom "term") (.map []) ≠ .eq := by rw [compare_eq_step]; simp [Compare.compareStep]
+        simp [run, Erlang.erlang.«==/2», dynZero, c]
+      · cases C <;> simp [run, Erlang.erlang.«==/2», dynZero]
+
+    /-- Intersections hold the common points of the types, at both bounds. -/
+    def ISem (L : Level) (a b c : Term) : Prop :=
+      (∀ v : TP L, denD c v ↔ denD a v ∧ denD b v) ∧ ∀ v : TP L, denD (upper c) v ↔ denD (upper a) v ∧ denD (upper b) v
+
+    /-- Intersecting aligned gradual types intersects their fields and their upper bounds. When the upper bounds do not
+    meet, the dynamic part is dropped, and so are the points of the fields, which the upper bounds include. -/
+    theorem inter_aligned {n : Nat} {module name module' name' : String} {caps caps' : Array Term}
+        {f f' : Term → Term → Term → Except Exception Term} (op : InterOp L (n + 1) module name caps f)
+        (op' : InterOp L n module' name' caps' f')
+        (dyn : ∀ x y c, Elixir.Module.Types.Descr.«dynamic_intersection/3» (D (n + 1)) x y
+          (.function module' name' 3 caps') = .ok c → TC L c → f (.atom "dynamic") x y = .ok (dynZero c))
+        {X Y : List (Term × Term)} (hX : GC L (.map X)) (hY : GC L (.map Y)) :
+        ∃ c, GC L c ∧
+          Elixir.Module.Types.Descr.«symmetrical_intersection/3» (D (n + 2)) (.map (alignT X)) (.map (alignT Y))
+            (.function module name 3 caps) = .ok c ∧ ISem L (.map X) (.map Y) c := by
+      obtain ⟨dX, sX, eX⟩ := align_gc hX
+      obtain ⟨dY, sY, eY⟩ := align_gc hY
+      obtain ⟨Di, ti, ri, si⟩ := dyn_inter_tc op' hX.up_tc hY.up_tc
+      have rD := dyn _ _ _ ri ti
+      obtain ⟨I, run, look⟩ := intersect_gen (n + 1) module name caps f op.call (alignT X) (alignT Y)
+        (rmDyn_atoms sX) (fun q x y hx hy => by
+          by_cases e : exactCompare q (.atom "dynamic") = .eq
+          · obtain rfl := (exactCompare_eq_atom q _).mp e
+            rw [dX] at hx; rw [dY] at hy; cases hx; cases hy
+            exact ⟨_, rD⟩
+          · have hx' : mapLookup (rmDyn (alignT X)) q = some x := by rw [lookup_rmDyn, if_neg e]; exact hx
+            have hy' : mapLookup (rmDyn (alignT Y)) q = some y := by rw [lookup_rmDyn, if_neg e]; exact hy
+            obtain ⟨k, -, rfl⟩ := sX.keys q (by simp [hx'])
+            obtain ⟨w, rw', -⟩ := op.spec k x y (sX.fields k x hx') (sY.fields k y hy')
+            exact ⟨w, rw'⟩)
+      have lookR : ∀ k, (mapLookup (rmDyn (alignT X)) (.atom k) = none → mapLookup (rmDyn I) (.atom k) = none) ∧
+          (mapLookup (rmDyn (alignT Y)) (.atom k) = none → mapLookup (rmDyn I) (.atom k) = none) ∧
+          (∀ x y w, mapLookup (rmDyn (alignT X)) (.atom k) = some x → mapLookup (rmDyn (alignT Y)) (.atom k) = some y →
+            f (.atom k) x y = .ok w → mapLookup (rmDyn I) (.atom k) = keptO k w) := by
+        intro k
+        simp only [lookup_rmDyn]
+        by_cases e : exactCompare (.atom k) (.atom "dynamic") = .eq
+        · simp [e]
+        · simp only [e, if_false]; exact ⟨(look _).1, (look _).2.1, fun x y w hx hy rw' => (look _).2.2 x y w hx hy rw'⟩
+      have keysI : ∀ q, (mapLookup (rmDyn I) q).isSome → (mapLookup (rmDyn (alignT X)) q).isSome := by
+        intro q h
+        simp only [lookup_rmDyn] at h ⊢
+        by_cases e : exactCompare q (.atom "dynamic") = .eq
+        · simp [e] at h
+        · simp only [e, if_false] at h ⊢
+          cases hA : mapLookup (alignT X) q with
+          | none => rw [(look q).1 hA] at h; cases h
+          | some _ => rfl
+      obtain ⟨cI, sem, -⟩ := inter_gen (slh := False) sX sY f lookR keysI
+        (fun k x y fx fy => let ⟨w, rw', kw, sw⟩ := op.spec k x y fx fy; ⟨w, rw', fun h => ⟨kw h, False.elim⟩, sw⟩)
+      have lo : ∀ v : TP L, denD (.map I) v ↔ denD (.map X) v ∧ denD (.map Y) v := fun v => by
+        rw [← denD_rmDyn I, ← eX, ← eY, ← denD_rmDyn (alignT X), ← denD_rmDyn (alignT Y)]
+        simp only [denD_map, sem _ _ v.2.2, Bool.and_eq_true]
+      have dI := (look _).2.2 _ _ _ dX dY rD
+      -- The upper bounds meet unless their intersection is the empty map.
+      by_cases z : Di = .map []
+      · subst z
+        have none : mapLookup I (.atom "dynamic") = none := by rw [dI]; simp [dynZero, kept]
+        have tI : TC L (.map I) := Or.inr ⟨I, rfl, by rw [← rmDyn_static none]; exact cI⟩
+        have empty : ∀ v : TP L, ¬(denD (upper (.map X)) v ∧ denD (upper (.map Y)) v) := fun v h =>
+          denD_nil v ((si v).mpr h)
+        refine ⟨_, GC.tc tI, run, lo, fun v => ?_⟩
+        rw [upper_tc tI, lo]
+        exact ⟨fun h => absurd ⟨hX.inv v h.1, hY.inv v h.2⟩ (empty v), fun h => absurd h (empty v)⟩
+      · have kD : dynZero Di = Di := by
+          rcases ti with rfl | ⟨C, rfl, -⟩
+          · rfl
+          · cases C
+            · exact absurd rfl z
+            · rfl
+        have keep : kept (.atom "dynamic", Di) = Bool.true := by
+          rcases ti with rfl | ⟨C, rfl, -⟩
+          · simp [kept]
+          · simp [kept]
+        have hD : mapLookup I (.atom "dynamic") = some Di := by rw [dI, kD]; simp [keep]
+        refine ⟨_, Or.inr ⟨I, Di, rfl, hD, ti, cI, fun v h => ?_⟩, run, lo, fun v => by rw [upper_dyn hD, si]⟩
+        rw [si]
+        obtain ⟨h₁, h₂⟩ := (lo v).mp h
+        exact ⟨hX.inv v h₁, hY.inv v h₂⟩
+
+    theorem bare_inter_op {n : Nat} (hm : L.K + 3 ≤ n) :
+        InterOp L n "Elixir.Module.Types.Descr" "bare_intersection" #[]
+          (Elixir.Module.Types.Descr.«bare_intersection/3» (D n)) where
+      call := fun q v₁ v₂ => Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/3».pure n q v₁ v₂
+      spec := fun _ _ _ fx fy =>
+        let ⟨w, rw', k, sw⟩ := fieldC_inter (tks L) (tfc L) (by omega) fx fy; ⟨w, rw', fun h => (k h).1, sw⟩
+
+    theorem opt_inter_op {n : Nat} (hm : L.K + 3 ≤ n) (S : List (Term × Term)) :
+        InterOp L n "Elixir.Module.Types.Descr" "-opt_intersection/3-anonymous-0-" #[.map S]
+          (fun q x y => Elixir.Module.Types.Descr.«opt_intersection/4» (D n) q x y (.map S)) where
+      call := fun q v₁ v₂ => by
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-opt_intersection/3-anonymous-0-/3».pure]; rfl
+      spec := fun _ _ _ fx fy => fieldC_opt_inter (tks L) (tfc L) (by omega) fx fy S
+
+    theorem opt_inter_dyn_op {n : Nat} (hm : L.K + 3 ≤ n) (S : List (Term × Term)) :
+        InterOp L n "Elixir.Module.Types.Descr" "-opt_intersection/4-fun-0-" #[.map S]
+          (fun q x y => Elixir.Module.Types.Descr.«opt_intersection/4» (D n) q x y (.map S)) where
+      call := fun q v₁ v₂ => by
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-opt_intersection/4-fun-0-/3».pure]; rfl
+      spec := fun _ _ _ fx fy => fieldC_opt_inter (tks L) (tfc L) (by omega) fx fy S
+
+    theorem inter_run_grad (d : Dispatcher) {X Y : List (Term × Term)}
+        (g : (mapLookup X (.atom "dynamic")).isSome ∨ (mapLookup Y (.atom "dynamic")).isSome) :
+        Elixir.Module.Types.Descr.«bare_intersection/2» d (.map X) (.map Y) =
+          Elixir.Module.Types.Descr.«symmetrical_intersection/3» d (.map (alignT X)) (.map (alignT Y))
+            (.function "Elixir.Module.Types.Descr" "bare_intersection" 3 #[]) := by
+      unfold Elixir.Module.Types.Descr.«bare_intersection/2»
+      cases hX : mapLookup X (.atom "dynamic") <;> cases hY : mapLookup Y (.atom "dynamic") <;> rw [hX, hY] at g <;>
+        simp at g <;>
+        simp [getMapKeys_single, hX, hY, unfold_map, Erlang.maps.«put/3», alignT]
+
+    theorem opt_inter_run_grad (d : Dispatcher) {X Y : List (Term × Term)} (S : Term)
+        (g : (mapLookup X (.atom "dynamic")).isSome ∨ (mapLookup Y (.atom "dynamic")).isSome) :
+        Elixir.Module.Types.Descr.«opt_intersection/3» d (.map X) (.map Y) S =
+          Elixir.Module.Types.Descr.«symmetrical_intersection/3» d (.map (alignT X)) (.map (alignT Y))
+            (.function "Elixir.Module.Types.Descr" "-opt_intersection/3-anonymous-0-" 3 #[S]) := by
+      unfold Elixir.Module.Types.Descr.«opt_intersection/3»
+      cases hX : mapLookup X (.atom "dynamic") <;> cases hY : mapLookup Y (.atom "dynamic") <;> rw [hX, hY] at g <;>
+        simp at g <;>
+        simp [getMapKeys_single, hX, hY, unfold_map, Erlang.maps.«put/3», alignT]
+
+    theorem isem_term_l (a : Term) : ISem L (.atom "term") a a :=
+      ⟨fun v => by simp [denD_term], fun v => by simp [upper_term, denD_term]⟩
+
+    theorem isem_term_r (a : Term) : ISem L a (.atom "term") a :=
+      ⟨fun v => by simp [denD_term], fun v => by simp [upper_term, denD_term]⟩
+
+    theorem isem_tc {a b c : Term} (ha : TC L a) (hb : TC L b) (hc : TC L c)
+        (sem : ∀ v : TP L, denD c v ↔ denD a v ∧ denD b v) : ISem L a b c :=
+      ⟨sem, by rw [upper_tc ha, upper_tc hb, upper_tc hc]; exact sem⟩
+
+    theorem gc_inter {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 5 ≤ m) :
+        ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok c ∧ ISem L a b c := by
+      obtain ⟨k, rfl⟩ : ∃ k, m = k + 2 := ⟨m - 2, by omega⟩
+      rcases ha.shape with rfl | ⟨X, rfl⟩
+      · exact ⟨_, hb, inter_term_left _ _, isem_term_l _⟩
+      rcases hb.shape with rfl | ⟨Y, rfl⟩
+      · exact ⟨_, ha, inter_term_right _ _, isem_term_r _⟩
+      by_cases st : TC L (.map X) ∧ TC L (.map Y)
+      · obtain ⟨c, hc, run, sem⟩ := tc_inter st.1 st.2 (m := k + 2) (by omega)
+        exact ⟨c, GC.tc hc, run, isem_tc st.1 st.2 hc sem⟩
+      have g : (mapLookup X (.atom "dynamic")).isSome ∨ (mapLookup Y (.atom "dynamic")).isSome := by
+        by_cases sX : TC L (.map X)
+        · exact Or.inr (dyn_isSome (fun h => st ⟨sX, h⟩) hb)
+        · exact Or.inl (dyn_isSome sX ha)
+      obtain ⟨c, hc, run, sem⟩ := inter_aligned (bare_inter_op (n := k + 1) (by omega))
+        (bare_inter_op (n := k) (by omega)) (fun _ _ _ r t => bare_inter_dyn _ r t) ha hb
+      exact ⟨c, hc, (inter_run_grad _ g).trans run, sem⟩
+
+    theorem gc_opt_inter {a b : Term} (ha : GC L a) (hb : GC L b) (S : List (Term × Term)) {m : Nat} (hm : L.K + 5 ≤ m) :
+        ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_intersection/3» (D m) a b (.map S) = .ok c ∧ ISem L a b c := by
+      obtain ⟨k, rfl⟩ : ∃ k, m = k + 2 := ⟨m - 2, by omega⟩
+      rcases ha.shape with rfl | ⟨X, rfl⟩
+      · exact ⟨_, hb, opt_inter_term_l _ _ _, isem_term_l _⟩
+      rcases hb.shape with rfl | ⟨Y, rfl⟩
+      · exact ⟨_, ha, opt_inter_term_r _ _ _, isem_term_r _⟩
+      by_cases st : TC L (.map X) ∧ TC L (.map Y)
+      · obtain ⟨c, hc, run, sem⟩ := tc_opt_inter st.1 st.2 S (m := k + 2) (by omega)
+        exact ⟨c, GC.tc hc, run, isem_tc st.1 st.2 hc sem⟩
+      have g : (mapLookup X (.atom "dynamic")).isSome ∨ (mapLookup Y (.atom "dynamic")).isSome := by
+        by_cases sX : TC L (.map X)
+        · exact Or.inr (dyn_isSome (fun h => st ⟨sX, h⟩) hb)
+        · exact Or.inl (dyn_isSome sX ha)
+      obtain ⟨c, hc, run, sem⟩ := inter_aligned (opt_inter_op (n := k + 1) (by omega) S)
+        (opt_inter_dyn_op (n := k) (by omega) S) (fun _ _ _ r t => opt_inter_dyn _ r t) ha hb
+      exact ⟨c, hc, (opt_inter_run_grad _ _ g).trans run, sem⟩
+
+    end
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
+    postlude ~LEAN"""
+    set_option linter.unusedSimpArgs false
+    set_option linter.deprecated false
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! Differences of gradual types. -/
+
+    section
+    variable {L : Level}
+
+    /-- Field operations a difference removes fields with: they keep the points of the first field outside the second. -/
+    structure DiffOp (L : Level) (n : Nat) (fn : Term) (f : Term → Term → Term → Except Exception Term) : Prop where
+      call : ∀ q v₁ v₂, (D (n + 1)).pure fn #[q, v₁, v₂] = f q v₁ v₂
+      spec : ∀ name x y, FC L name x → FC L name y → ∃ w, f (.atom name) x y = .ok w ∧
+        (kept (.atom name, w) = Bool.true → FC L name w) ∧
+        ∀ p, PtOkD L.E L.den L.tl name p → dn name (keptO name w) p = (dn name (some x) p && !dn name (some y) p)
+
+    /-- Differences of static parts. -/
+    theorem dyn_diff_tc {n : Nat} {fn : Term} {f : Term → Term → Term → Except Exception Term} (op : DiffOp L n fn f)
+        {a b : Term} (ha : TC L a) (hb : TC L b) :
+        ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«dynamic_difference/3» (D (n + 2)) a b fn = .ok c ∧
+          ∀ v : TP L, denD c v ↔ denD a v ∧ ¬denD b v := by
+      rcases hb with rfl | ⟨B, rfl, sB⟩
+      · have c : Term.compare (.atom "term") (.map []) ≠ .eq := by rw [compare_eq_step]; simp [Compare.compareStep]
+        refine ⟨_, tc_nil, ?_, fun v => by simp [denD_nil, denD_term]⟩
+        unfold Elixir.Module.Types.Descr.«dynamic_difference/3»
+        simp [Erlang.erlang.«==/2», c]
+      by_cases nB : B = []
+      · subst nB
+        refine ⟨a, ha, ?_, fun v => by simp [denD_nil]⟩
+        unfold Elixir.Module.Types.Descr.«dynamic_difference/3»
+        simp [Erlang.erlang.«==/2»]
+      have left : ∃ A, DC L A ∧ (∀ v : TP L, denD a v ↔ denD (.map A) v) ∧
+          Elixir.Module.Types.Descr.«dynamic_difference/3» (D (n + 2)) a (.map B) fn =
+            Elixir.Module.Types.Descr.«dynamic_difference/3» (D (n + 2)) (.map A) (.map B) fn := by
+        rcases ha with rfl | ⟨A, rfl, sA⟩
+        · obtain ⟨T, term, sT, -, all⟩ := termT L
+          refine ⟨T, sT, fun v => ⟨fun _ => all v, fun _ => denD_term v⟩, ?_⟩
+          unfold Elixir.Module.Types.Descr.«dynamic_difference/3»
+          simp [Erlang.erlang.«==/2», nB, unfold_map, term]
+        · exact ⟨A, sA, fun v => Iff.rfl, rfl⟩
+      obtain ⟨A, sA, eA, rA⟩ := left
+      obtain ⟨O, fold, sO, dO, -⟩ := diff_gen (slh := False) n fn f sA sB op.call
+        (fun k x y fx fy => let ⟨w, rw', kw, sw⟩ := op.spec k x y fx fy; ⟨w, rw', fun h => ⟨kw h, False.elim⟩, sw⟩)
+      refine ⟨_, Or.inr ⟨O, rfl, sO⟩, ?_, fun v => ?_⟩
+      · rw [rA]
+        unfold Elixir.Module.Types.Descr.«dynamic_difference/3»
+        simp [Erlang.erlang.«==/2», nB, unfold_map, Erlang.maps.«fold/3»]
+        simpa using fold
+      · rw [eA]
+        simp only [denD_map, dO _ _ v.2.2]
+        cases dn v.1.1 (mapLookup A (.atom v.1.1)) v.1.2 <;> cases dn v.1.1 (mapLookup B (.atom v.1.1)) v.1.2 <;> simp
+
+    /-- The static part of a type, as `pop_dynamic/1` takes it. -/
+    def lower (a : Term) : Term :=
+      match a with
+      | .map X => .map (rmDyn X)
+      | _ => a
+
+    theorem GC.low_tc {a : Term} (ha : GC L a) : TC L (lower a) := by
+      rcases ha with (rfl | ⟨X, rfl, sX⟩) | ⟨X, -, rfl, -, -, sX, -⟩
+      · exact tc_term
+      · exact Or.inr ⟨_, rfl, by rw [rmDyn_static sX.static]; exact sX⟩
+      · exact Or.inr ⟨_, rfl, sX⟩
+
+    theorem denD_lower (a : Term) (v : TP L) : denD (lower a) v ↔ denD a v := by
+      cases a <;> simp [lower, denD_rmDyn]
+
+    theorem pop_dyn (Y : List (Term × Term)) :
+        Elixir.Map.«pop/3» (.map Y) (.atom "dynamic") (.map Y) = .ok (.tuple #[upper (.map Y), lower (.map Y)]) := by
+      cases h : mapLookup Y (.atom "dynamic") <;>
+        simp [Elixir.Map.«pop/3», Erlang.maps.«take/2», h, upper, lower, rmDyn]
+      rw [← rmDyn, rmDyn_static h]
+
+    /-- Differences with a gradual type subtract the upper bound from the static part, and the static part from the
+    upper bound. -/
+    theorem diff_run_grad (d : Dispatcher) {a : Term} {Y : List (Term × Term)} (nY : Y ≠ [])
+        (ha : a = .atom "term" ∨ ∃ X, a = .map X)
+        (g : (∃ X, a = .map X ∧ (mapLookup X (.atom "dynamic")).isSome) ∨ (mapLookup Y (.atom "dynamic")).isSome) :
+        Elixir.Module.Types.Descr.«bare_difference/2» d a (.map Y) = (do
+          let dp ← Elixir.Module.Types.Descr.«dynamic_difference/3» d (upper a) (lower (.map Y))
+            (.function "Elixir.Module.Types.Descr" "bare_difference" 3 #[])
+          let sp ← Elixir.Module.Types.Descr.«dynamic_difference/3» d (lower a) (upper (.map Y))
+            (.function "Elixir.Module.Types.Descr" "bare_difference" 3 #[])
+          Elixir.Module.Types.Descr.«put_dynamic/2» sp dp) := by
+      unfold Elixir.Module.Types.Descr.«bare_difference/2»
+      rcases ha with rfl | ⟨X, rfl⟩
+      · cases hY : mapLookup Y (.atom "dynamic") <;> simp [hY] at g
+        simp [Erlang.erlang.«==/2», nY, unfold_map, getMapKeys_single, hY, Erlang.erlang.«is_map_key/2», any_key, pop_dyn]
+        rfl
+      · have c : Term.compare (.map X) (.atom "term") ≠ .eq := by rw [compare_eq_step]; simp [Compare.compareStep]
+        have gr : ((mapLookup X (.atom "dynamic")).isSome || (mapLookup Y (.atom "dynamic")).isSome) = Bool.true := by
+          rcases g with ⟨X', e, h⟩ | h
+          · simp only [Term.map.injEq] at e; subst e; simp [h]
+          · simp [h]
+        cases hX : mapLookup X (.atom "dynamic") <;> cases hY : mapLookup Y (.atom "dynamic") <;> simp [hX, hY] at gr <;>
+          simp [Erlang.erlang.«==/2», nY, c, unfold_map, getMapKeys_single, hX, hY, Erlang.erlang.«is_map_key/2», any_key,
+            pop_dyn, Lynx.Except.orElse]
+
+    theorem opt_diff_run_grad (d : Dispatcher) {a : Term} {Y : List (Term × Term)} (S : Term) (nY : Y ≠ [])
+        (ha : a = .atom "term" ∨ ∃ X, a = .map X)
+        (g : (∃ X, a = .map X ∧ (mapLookup X (.atom "dynamic")).isSome) ∨ (mapLookup Y (.atom "dynamic")).isSome) :
+        Elixir.Module.Types.Descr.«opt_difference/3» d a (.map Y) S = (do
+          let dp ← Elixir.Module.Types.Descr.«dynamic_difference/3» d (upper a) (lower (.map Y))
+            (.function "Elixir.Module.Types.Descr" "-opt_difference/3-anonymous-1-" 3 #[S])
+          let sp ← Elixir.Module.Types.Descr.«dynamic_difference/3» d (lower a) (upper (.map Y))
+            (.function "Elixir.Module.Types.Descr" "-opt_difference/3-anonymous-2-" 3 #[S])
+          Elixir.Module.Types.Descr.«put_dynamic/2» sp dp) := by
+      unfold Elixir.Module.Types.Descr.«opt_difference/3»
+      rcases ha with rfl | ⟨X, rfl⟩
+      · cases hY : mapLookup Y (.atom "dynamic") <;> simp [hY] at g
+        simp [Erlang.erlang.«==/2», nY, unfold_map, getMapKeys_single, hY, Erlang.erlang.«is_map_key/2», any_key, pop_dyn]
+        rfl
+      · have c : Term.compare (.map X) (.atom "term") ≠ .eq := by rw [compare_eq_step]; simp [Compare.compareStep]
+        have gr : ((mapLookup X (.atom "dynamic")).isSome || (mapLookup Y (.atom "dynamic")).isSome) = Bool.true := by
+          rcases g with ⟨X', e, h⟩ | h
+          · simp only [Term.map.injEq] at e; subst e; simp [h]
+          · simp [h]
+        cases hX : mapLookup X (.atom "dynamic") <;> cases hY : mapLookup Y (.atom "dynamic") <;> simp [hX, hY] at gr <;>
+          simp [Erlang.erlang.«==/2», nY, c, unfold_map, getMapKeys_single, hX, hY, Erlang.erlang.«is_map_key/2», any_key,
+            pop_dyn, Lynx.Except.orElse]
+
+    /-- Top-level types equal by comparison hold the same points. -/
+    theorem tc_congr {a b : Term} (ha : TC L a) (hb : TC L b) (e : Term.compare a b = .eq) (v : TP L) :
+        denD a v ↔ denD b v := by
+      rcases ha with rfl | ⟨A, rfl, sA⟩ <;> rcases hb with rfl | ⟨B, rfl, sB⟩
+      · exact Iff.rfl
+      · rw [compare_eq_step] at e; simp [Compare.compareStep] at e
+      · rw [compare_eq_step] at e; simp [Compare.compareStep] at e
+      · simp only [denD_map, descr_congr (tks L) (tfc L) sA sB e v.1.1 v.1.2 v.2.2]
+
+    /-- Putting a dynamic part that includes the static one: a gradual type with these bounds. -/
+    theorem put_dyn_sem {sp dp : Term} (hs : TC L sp) (hd : TC L dp) (inv : ∀ v : TP L, denD sp v → denD dp v) :
+        ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«put_dynamic/2» sp dp = .ok c ∧
+          (∀ v : TP L, denD c v ↔ denD sp v) ∧ ∀ v : TP L, denD (upper c) v ↔ denD dp v := by
+      rcases hs with rfl | ⟨S, rfl, sS⟩
+      · exact ⟨_, GC.tc tc_term, by unfold Elixir.Module.Types.Descr.«put_dynamic/2»; rfl, fun v => Iff.rfl,
+          fun v => ⟨fun _ => inv v (denD_term v), fun _ => denD_term v⟩⟩
+      have tS : TC L (.map S) := Or.inr ⟨S, rfl, sS⟩
+      by_cases e₁ : Term.compare (.map S) dp = .eq
+      · refine ⟨_, GC.tc tS, ?_, fun v => Iff.rfl, fun v => by rw [upper_tc tS]; exact tc_congr tS hd e₁ v⟩
+        unfold Elixir.Module.Types.Descr.«put_dynamic/2»
+        simp [Erlang.erlang.«==/2», e₁, Lynx.Except.guard]
+      by_cases e₂ : Term.compare dp (.map []) = .eq
+      · have none : ∀ v : TP L, ¬denD dp v := fun v h => denD_nil v ((tc_congr hd tc_nil e₂ v).mp h)
+        refine ⟨_, GC.tc tc_nil, ?_, fun v => ⟨fun h => absurd h (denD_nil v), fun h => absurd (inv v h) (none v)⟩,
+          fun v => ⟨fun h => absurd h (denD_nil v), fun h => absurd h (none v)⟩⟩
+        unfold Elixir.Module.Types.Descr.«put_dynamic/2»
+        simp [Erlang.erlang.«==/2», e₁, e₂, Lynx.Except.guard]
+      have st := sS.static
+      have hD : mapLookup ((.atom "dynamic", dp) :: S) (.atom "dynamic") = some dp := by simp [mapLookup]
+      have same : ∀ v : TP L, denD (.map ((.atom "dynamic", dp) :: S)) v ↔ denD (.map S) v := fun v => by
+        rw [← denD_rmDyn, rmDyn_cons_dyn, rmDyn_static st]
+      refine ⟨_, Or.inr ⟨_, dp, rfl, hD, hd, by rw [rmDyn_cons_dyn, rmDyn_static st]; exact sS,
+        fun v h => inv v ((same v).mp h)⟩, ?_, same, fun v => by rw [upper_dyn hD]⟩
+      unfold Elixir.Module.Types.Descr.«put_dynamic/2»
+      simp [Erlang.erlang.«==/2», e₁, e₂, Lynx.Except.guard, Erlang.maps.«put/3»]
+
+    /-- Differences hold the points of the first type outside the second, crossing the bounds. -/
+    def DSem (L : Level) (a b c : Term) : Prop :=
+      (∀ v : TP L, denD c v ↔ denD a v ∧ ¬denD (upper b) v) ∧
+        ∀ v : TP L, denD (upper c) v ↔ denD (upper a) v ∧ ¬denD b v
+
+    theorem bare_diff_op {n : Nat} (hm : L.K + 4 ≤ n) :
+        DiffOp L n (.function "Elixir.Module.Types.Descr" "bare_difference" 3 #[])
+          (Elixir.Module.Types.Descr.«bare_difference/3» (D n)) where
+      call := fun q v₁ v₂ => Erlang.program.«Elixir.Module.Types.Descr:bare_difference/3».pure n q v₁ v₂
+      spec := fun _ _ _ fx fy =>
+        let ⟨w, rw', k, sw⟩ := fieldC_diff (tks L) (tfc L) (by omega) fx fy; ⟨w, rw', fun h => (k h).1, sw⟩
+
+    theorem opt_diff_op₁ {n : Nat} (hm : L.K + 4 ≤ n) (S : List (Term × Term)) :
+        DiffOp L n (.function "Elixir.Module.Types.Descr" "-opt_difference/3-anonymous-1-" 3 #[.map S])
+          (fun q x y => Elixir.Module.Types.Descr.«opt_difference/4» (D n) q x y (.map S)) where
+      call := fun q v₁ v₂ => by
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-opt_difference/3-anonymous-1-/3».pure]; rfl
+      spec := fun _ _ _ fx fy => fieldC_opt_diff (tks L) (tfc L) (by omega) fx fy S
+
+    theorem opt_diff_op₂ {n : Nat} (hm : L.K + 4 ≤ n) (S : List (Term × Term)) :
+        DiffOp L n (.function "Elixir.Module.Types.Descr" "-opt_difference/3-anonymous-2-" 3 #[.map S])
+          (fun q x y => Elixir.Module.Types.Descr.«opt_difference/4» (D n) q x y (.map S)) where
+      call := fun q v₁ v₂ => by
+        rw [Erlang.program.«Elixir.Module.Types.Descr:-opt_difference/3-anonymous-2-/3».pure]; rfl
+      spec := fun _ _ _ fx fy => fieldC_opt_diff (tks L) (tfc L) (by omega) fx fy S
+
+    /-- The gradual difference: the dynamic part and the static part, put together. -/
+    theorem diff_grad {n : Nat} {fn₁ fn₂ : Term} {f₁ f₂ : Term → Term → Term → Except Exception Term}
+        (op₁ : DiffOp L n fn₁ f₁) (op₂ : DiffOp L n fn₂ f₂) {a b : Term} (ha : GC L a) (hb : GC L b) :
+        ∃ c, GC L c ∧ (do
+          let dp ← Elixir.Module.Types.Descr.«dynamic_difference/3» (D (n + 2)) (upper a) (lower b) fn₁
+          let sp ← Elixir.Module.Types.Descr.«dynamic_difference/3» (D (n + 2)) (lower a) (upper b) fn₂
+          Elixir.Module.Types.Descr.«put_dynamic/2» sp dp) = .ok c ∧ DSem L a b c := by
+      obtain ⟨dp, tdp, rdp, sdp⟩ := dyn_diff_tc op₁ ha.up_tc hb.low_tc
+      obtain ⟨sp, tsp, rsp, ssp⟩ := dyn_diff_tc op₂ ha.low_tc hb.up_tc
+      obtain ⟨c, hc, rc, lo, up⟩ := put_dyn_sem tsp tdp fun v h => by
+        rw [ssp, denD_lower] at h
+        rw [sdp, denD_lower]
+        exact ⟨ha.inv v h.1, fun h' => h.2 (hb.inv v h')⟩
+      refine ⟨c, hc, by simp [rdp, rsp, rc], fun v => ?_, fun v => ?_⟩
+      · rw [lo, ssp, denD_lower]
+      · rw [up, sdp, denD_lower]
+
+    theorem diff_nil_r (d : Dispatcher) (a : Term) :
+        Elixir.Module.Types.Descr.«bare_difference/2» d a (.map []) = .ok a := by
+      unfold Elixir.Module.Types.Descr.«bare_difference/2»; simp [Erlang.erlang.«==/2»]
+
+    theorem opt_diff_nil_r (d : Dispatcher) (a S : Term) :
+        Elixir.Module.Types.Descr.«opt_difference/3» d a (.map []) S = .ok a := by
+      unfold Elixir.Module.Types.Descr.«opt_difference/3»; simp [Erlang.erlang.«==/2»]
+
+    theorem dsem_term_r (a : Term) : DSem L a (.atom "term") (.map []) :=
+      ⟨fun v => by simp [denD_nil, upper_term, denD_term], fun v => by simp [upper_nil, denD_nil, denD_term]⟩
+
+    theorem dsem_nil_r (a : Term) : DSem L a (.map []) a :=
+      ⟨fun v => by simp [denD_nil, upper_nil], fun v => by simp [denD_nil]⟩
+
+    theorem dsem_tc {a b c : Term} (ha : TC L a) (hb : TC L b) (hc : TC L c)
+        (sem : ∀ v : TP L, denD c v ↔ denD a v ∧ ¬denD b v) : DSem L a b c :=
+      ⟨by rw [upper_tc hb]; exact sem, by rw [upper_tc ha, upper_tc hc]; exact sem⟩
+
+    theorem gc_diff {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 6 ≤ m) :
+        ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«bare_difference/2» (D m) a b = .ok c ∧ DSem L a b c := by
+      obtain ⟨n, rfl⟩ : ∃ n, m = n + 2 := ⟨m - 2, by omega⟩
+      rcases hb.shape with rfl | ⟨Y, rfl⟩
+      · exact ⟨_, GC.tc tc_nil, diff_term_right _ _, dsem_term_r _⟩
+      by_cases nY : Y = []
+      · subst nY; exact ⟨a, ha, diff_nil_r _ _, dsem_nil_r _⟩
+      by_cases st : TC L a ∧ TC L (.map Y)
+      · obtain ⟨c, hc, run, sem⟩ := tc_diff st.1 st.2 (m := n + 2) (by omega)
+        exact ⟨c, GC.tc hc, run, dsem_tc st.1 st.2 hc sem⟩
+      have g : (∃ X, a = .map X ∧ (mapLookup X (.atom "dynamic")).isSome) ∨ (mapLookup Y (.atom "dynamic")).isSome := by
+        by_cases sY : TC L (.map Y)
+        · rcases ha.shape with rfl | ⟨X, rfl⟩
+          · exact absurd ⟨tc_term, sY⟩ st
+          · exact Or.inl ⟨X, rfl, dyn_isSome (fun h => st ⟨h, sY⟩) ha⟩
+        · exact Or.inr (dyn_isSome sY hb)
+      obtain ⟨c, hc, run, sem⟩ := diff_grad (bare_diff_op (n := n) (by omega)) (bare_diff_op (n := n) (by omega)) ha hb
+      exact ⟨c, hc, (diff_run_grad _ nY ha.shape g).trans run, sem⟩
+
+    theorem gc_opt_diff {a b : Term} (ha : GC L a) (hb : GC L b) (S : List (Term × Term)) {m : Nat} (hm : L.K + 6 ≤ m) :
+        ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_difference/3» (D m) a b (.map S) = .ok c ∧ DSem L a b c := by
+      obtain ⟨n, rfl⟩ : ∃ n, m = n + 2 := ⟨m - 2, by omega⟩
+      rcases hb.shape with rfl | ⟨Y, rfl⟩
+      · exact ⟨_, GC.tc tc_nil, difference_term_term _ _ _, dsem_term_r _⟩
+      by_cases nY : Y = []
+      · subst nY; exact ⟨a, ha, opt_diff_nil_r _ _ _, dsem_nil_r _⟩
+      by_cases st : TC L a ∧ TC L (.map Y)
+      · obtain ⟨c, hc, run, sem⟩ := tc_opt_diff st.1 st.2 S (m := n + 2) (by omega)
+        exact ⟨c, GC.tc hc, run, dsem_tc st.1 st.2 hc sem⟩
+      have g : (∃ X, a = .map X ∧ (mapLookup X (.atom "dynamic")).isSome) ∨ (mapLookup Y (.atom "dynamic")).isSome := by
+        by_cases sY : TC L (.map Y)
+        · rcases ha.shape with rfl | ⟨X, rfl⟩
+          · exact absurd ⟨tc_term, sY⟩ st
+          · exact Or.inl ⟨X, rfl, dyn_isSome (fun h => st ⟨h, sY⟩) ha⟩
+        · exact Or.inr (dyn_isSome sY hb)
+      obtain ⟨c, hc, run, sem⟩ := diff_grad (opt_diff_op₁ (n := n) (by omega) S) (opt_diff_op₂ (n := n) (by omega) S) ha hb
+      exact ⟨c, hc, (opt_diff_run_grad _ _ nY ha.shape g).trans run, sem⟩
+
+    end
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
+    postlude ~LEAN"""
+    set_option linter.unusedSimpArgs false
+    set_option linter.deprecated false
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! Negations of gradual types, and subtyping of gradual types by both bounds. -/
+
+    section
+    variable {L : Level}
+
+    /-- Negations swap the bounds. -/
+    def GNSem (L : Level) (a c : Term) : Prop :=
+      (∀ v : TP L, denD c v ↔ ¬denD (upper a) v) ∧ ∀ v : TP L, denD (upper c) v ↔ ¬denD a v
+
+    theorem nsem_of_dsem {a c : Term} (h : DSem L (.atom "term") a c) : GNSem L a c :=
+      ⟨fun v => by simp [h.1 v, denD_term], fun v => by simp [h.2 v, upper_term, denD_term]⟩
+
+    theorem nsem_term : GNSem L (.atom "term") (.map []) :=
+      ⟨fun v => by simp [denD_nil, upper_term, denD_term], fun v => by simp [upper_nil, denD_nil, denD_term]⟩
+
+    theorem gc_neg {a : Term} (ha : GC L a) {m : Nat} (hm : L.K + 6 ≤ m) :
+        ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok c ∧ GNSem L a c := by
+      rcases ha.shape with rfl | ⟨X, rfl⟩
+      · exact ⟨_, GC.tc tc_nil, by simp [Elixir.Module.Types.Descr.«bare_negation/1», Elixir.Module.Types.Descr.«none/0»],
+          nsem_term⟩
+      obtain ⟨c, hc, run, sem⟩ := gc_diff (GC.tc tc_term) ha hm
+      exact ⟨c, hc, by simpa [Elixir.Module.Types.Descr.«bare_negation/1», Elixir.Module.Types.Descr.«term/0»] using run,
+        nsem_of_dsem sem⟩
+
+    theorem gc_opt_neg {a : Term} (ha : GC L a) {m : Nat} (hm : L.K + 6 ≤ m) :
+        ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok c ∧ GNSem L a c := by
+      rcases ha.shape with rfl | ⟨X, rfl⟩
+      · refine ⟨_, GC.tc tc_nil, ?_, nsem_term⟩
+        rw [Elixir.Module.Types.Descr.«opt_negation/1».eq_def]
+        simp [Elixir.Module.Types.Descr.«none/0»]
+      obtain ⟨c, hc, run, sem⟩ := gc_opt_diff (GC.tc tc_term) ha [] hm
+      refine ⟨c, hc, ?_, nsem_of_dsem sem⟩
+      rw [Elixir.Module.Types.Descr.«opt_negation/1».eq_def]
+      simpa [Elixir.Module.Types.Descr.«opt_difference/2», Elixir.Module.Types.Descr.«term/0», unfold_map] using run
+
+    theorem gc_opt_union2 {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 5 ≤ m) :
+        ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_union/2» (D m) a b = .ok c ∧ USem L a b c := by
+      simpa [Elixir.Module.Types.Descr.«opt_union/2»] using gc_opt_union ha hb [] hm
+
+    theorem gc_opt_inter2 {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 5 ≤ m) :
+        ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a b = .ok c ∧ ISem L a b c := by
+      simpa [Elixir.Module.Types.Descr.«opt_intersection/2»] using gc_opt_inter ha hb [] hm
+
+    theorem gc_opt_diff2 {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 6 ≤ m) :
+        ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_difference/2» (D m) a b = .ok c ∧ DSem L a b c := by
+      simpa [Elixir.Module.Types.Descr.«opt_difference/2»] using gc_opt_diff ha hb [] hm
+
+    /-- Each field of an included static type is covered by the other type. -/
+    theorem keysub_complete {m : Nat} (hm : L.K + 4 ≤ m) {A B : List (Term × Term)} (sA : DC L A) (sB : DC L B)
+        (incl : ∀ v : TP L, denD (.map A) v → denD (.map B) v) : ∀ e ∈ mapEntries A, KeySub (D m) B e.1 e.2 := by
+      intro e me
+      have hx := mapLookup_of_mem_mapEntries me
+      obtain ⟨name, mem, key⟩ := sA.keys e.1 (by simp [hx])
+      rw [key] at hx ⊢
+      have fx := sA.fields name e.2 hx
+      have none : ∀ w, FC L name w → (∀ p, PtOkD L.E L.den L.tl name p → dn name (some w) p = Bool.false) →
+          Elixir.Module.Types.Descr.«empty_key?/3» (D m) (.atom name) w (.map []) = .ok (.atom "true") :=
+        fun w fw empty => fieldC_empty_none (tks L) (tfc L) (show L.K + 2 ≤ m by omega) fw (fun _ => rfl) empty
+      have inc : ∀ p, PtOkD L.E L.den L.tl name p → dn name (some e.2) p = Bool.true →
+          dn name (mapLookup B (.atom name)) p = Bool.true := fun p ok h =>
+        (denD_map ⟨(name, p), mem, ok⟩).mp (incl ⟨(name, p), mem, ok⟩ ((denD_map _).mpr (by rw [hx]; exact h)))
+      cases hy : mapLookup B (.atom name) with
+      | none =>
+        refine Or.inr ⟨hy, none _ fx fun p ok => ?_⟩
+        cases h : dn name (some e.2) p
+        · rfl
+        · have := inc p ok h; rw [hy, dn_none] at this; cases this
+      | some y =>
+        obtain ⟨w, run, k, sem⟩ := fieldC_diff (tks L) (tfc L) (show L.K + 2 + 2 ≤ m by omega) fx (sB.fields name y hy)
+        refine Or.inl ⟨y, w, hy, run, ?_⟩
+        cases kw : kept (.atom name, w)
+        · rcases kept_of_ne kw with h | h
+          · exact Or.inl h
+          · exact Or.inr (Or.inl h)
+        · refine Or.inr (Or.inr (none w (k kw).1 fun p ok => ?_))
+          have := sem p ok
+          rw [keptO_true kw] at this
+          rw [this]
+          cases h : dn name (some e.2) p
+          · rfl
+          · have := inc p ok h; rw [hy] at this; simp [this]
+
+    /-- The subtraction check of `subtype?/2` is complete on top-level types. -/
+    theorem esub_complete {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 4 ≤ m)
+        (incl : ∀ v : TP L, denD a v → denD b v) :
+        Elixir.Module.Types.Descr.«empty_difference_subtype?/3» (D m) a b (.map []) = .ok (.atom "true") := by
+      rcases hb with rfl | ⟨B, rfl, sB⟩
+      · rw [Elixir.Module.Types.Descr.«empty_difference_subtype?/3».eq_def]
+        rcases ha with rfl | ⟨A, rfl, sA⟩
+        · simp [getMapKeys]
+        · simp [getMapKeys_single, sA.static]
+      have left : ∃ A, DC L A ∧ (∀ v : TP L, denD a v ↔ denD (.map A) v) ∧
+          Elixir.Module.Types.Descr.«empty_difference_subtype?/3» (D m) a (.map B) (.map []) =
+            (do
+              let it ← Erlang.maps.«next/1» (Term.list ((mapEntries A).map fun (e : Term × Term) => .tuple #[e.1, e.2]))
+              Elixir.Module.Types.Descr.«iterator_empty_difference_subtype?/3» (D m) it (.map B) (.map [])) := by
+        rw [Elixir.Module.Types.Descr.«empty_difference_subtype?/3».eq_def]
+        rcases ha with rfl | ⟨A, rfl, sA⟩
+        · obtain ⟨T, term, sT, -, all⟩ := termT L
+          refine ⟨T, sT, fun v => ⟨fun _ => all v, fun _ => denD_term v⟩, ?_⟩
+          simp [getMapKeys, term, unfold_map, Erlang.maps.«iterator/1»]
+        · exact ⟨A, sA, fun v => Iff.rfl, by simp [getMapKeys_single, sA.static, unfold_map, Erlang.maps.«iterator/1»]⟩
+      obtain ⟨A, sA, eA, rA⟩ := left
+      rw [rA]
+      exact iterator_sub (D m) B (mapEntries A) (keysub_complete hm sA sB fun v h => incl v ((eA v).mpr h))
+
+    theorem sstatic_complete {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 4 ≤ m)
+        (incl : ∀ v : TP L, denD a v → denD b v) :
+        Elixir.Module.Types.Descr.«subtype_static?/2» (D m) a b = .ok (.atom "true") := by
+      unfold Elixir.Module.Types.Descr.«subtype_static?/2»
+      by_cases same : exactCompare b a = .eq
+      · simp [Lynx.Except.guard, Erlang.erlang.«=:=/2», same]
+      · simp [Lynx.Except.guard, Erlang.erlang.«=:=/2», same, Elixir.Module.Types.Descr.«empty_difference_subtype?/2»,
+          esub_complete ha hb hm incl]
+
+    end
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
+    postlude ~LEAN"""
+    set_option linter.unusedSimpArgs false
+    set_option linter.deprecated false
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! Subtyping and equality of gradual types are complete for both bounds. -/
+
+    section
+    variable {L : Level}
+
+    theorem map_get_dyn {X : List (Term × Term)} {Dx : Term} (h : mapLookup X (.atom "dynamic") = some Dx) :
+        Elixir.Map.«get/2» (.map X) (.atom "dynamic") = .ok Dx := by
+      simp [Elixir.Map.«get/2», Elixir.Map.«get/3», getMapKeys_single, h]
+
+    theorem tc_rmDyn {X : List (Term × Term)} (hX : GC L (.map X)) : TC L (.map (rmDyn X)) := hX.low_tc
+
+    /-- Gradual subtyping on maps: compares the bounds. -/
+    theorem gc_sub_maps {X Y : List (Term × Term)} (hX : GC L (.map X)) (hY : GC L (.map Y)) {m : Nat} (hm : L.K + 4 ≤ m)
+        (lo : ∀ v : TP L, denD (.map X) v → denD (.map Y) v)
+        (up : ∀ v : TP L, denD (upper (.map X)) v → denD (upper (.map Y)) v) :
+        Elixir.Module.Types.Descr.«subtype?/2» (D m) (.map X) (.map Y) = .ok (.atom "true") := by
+      have lo' : ∀ v : TP L, denD (.map (rmDyn X)) v → denD (.map (rmDyn Y)) v := fun v h =>
+        (denD_rmDyn Y v).mpr (lo v ((denD_rmDyn X v).mp h))
+      cases hx : mapLookup X (.atom "dynamic") with
+      | none =>
+        have tX := hX.static hx
+        cases hy : mapLookup Y (.atom "dynamic") with
+        | none => exact tc_sub tX (hY.static hy) hm lo
+        | some Dy =>
+          have run := sstatic_complete tX (tc_rmDyn hY) hm fun v h => by
+            have := lo' v; rw [rmDyn_static hx] at this; exact this h
+          unfold Elixir.Module.Types.Descr.«subtype?/2»
+          simp [unfold_map, Erlang.erlang.«is_map_key/2», getMapKeys_single, hx, hy, any_key, Lynx.Except.andAlso,
+            Erlang.erlang.«not/1», Lynx.Except.guard, Erlang.erlang.«/=/2», Erlang.maps.«remove/2»]
+          simpa [rmDyn] using run
+      | some Dx =>
+        cases hy : mapLookup Y (.atom "dynamic") with
+        | none =>
+          have tY := hY.static hy
+          have run := sstatic_complete hX.up_tc tY hm fun v h => by
+            have := up v; rw [upper_tc tY] at this; exact this h
+          rw [upper_dyn hx] at run
+          unfold Elixir.Module.Types.Descr.«subtype?/2»
+          simp [unfold_map, Erlang.erlang.«is_map_key/2», getMapKeys_single, hx, hy, any_key, Lynx.Except.andAlso,
+            Erlang.erlang.«not/1», Lynx.Except.guard, Erlang.erlang.«/=/2», map_get_dyn hx, run]
+        | some Dy =>
+          have tX := hX.up_tc; have tY := hY.up_tc
+          rw [upper_dyn hx] at tX; rw [upper_dyn hy] at tY
+          have r₁ := esub_complete tX tY hm fun v h => by
+            have := up v; rw [upper_dyn hx, upper_dyn hy] at this; exact this h
+          have r₂ := esub_complete (tc_rmDyn hX) (tc_rmDyn hY) hm lo'
+          unfold Elixir.Module.Types.Descr.«subtype?/2»
+          simp [unfold_map, Erlang.erlang.«is_map_key/2», getMapKeys_single, hx, hy, any_key, Lynx.Except.andAlso,
+            Erlang.erlang.«not/1», Lynx.Except.guard, Erlang.erlang.«/=/2»]
+          unfold Elixir.Module.Types.Descr.«subtype_static?/2»
+          by_cases same : exactCompare (.map Y) (.map X) = .eq
+          · simp [Lynx.Except.guard, Erlang.erlang.«=:=/2», same]
+          · simp [Lynx.Except.guard, Erlang.erlang.«=:=/2», same, Elixir.Module.Types.Descr.«empty_difference_subtype?/2»]
+            rw [Elixir.Module.Types.Descr.«empty_difference_subtype?/3».eq_def]
+            simp [getMapKeys_single, hx, hy, r₁, Erlang.maps.«remove/2», Lynx.Except.andAlso]
+            simpa [rmDyn] using r₂
+
+    /-- Gradual subtyping is complete for both bounds. -/
+    theorem gc_sub {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 4 ≤ m)
+        (lo : ∀ v : TP L, denD a v → denD b v) (up : ∀ v : TP L, denD (upper a) v → denD (upper b) v) :
+        Elixir.Module.Types.Descr.«subtype?/2» (D m) a b = .ok (.atom "true") := by
+      obtain ⟨T, term, sT, -, all⟩ := termT L
+      have tT : GC L (.map T) := GC.tc (Or.inr ⟨T, rfl, sT⟩)
+      have uT : upper (.map T) = .map T := upper_tc (Or.inr ⟨T, rfl, sT⟩)
+      have left : ∃ X, GC L (.map X) ∧ (∀ v : TP L, denD a v ↔ denD (.map X) v) ∧
+          (∀ v : TP L, denD (upper a) v ↔ denD (upper (.map X)) v) ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) a b = Elixir.Module.Types.Descr.«subtype?/2» (D m) (.map X) b := by
+        rcases ha.shape with rfl | ⟨X, rfl⟩
+        · exact ⟨T, tT, fun v => ⟨fun _ => all v, fun _ => denD_term v⟩,
+            fun v => by rw [upper_term, uT]; exact ⟨fun _ => all v, fun _ => denD_term v⟩, subtype_term_l term _ _⟩
+        · exact ⟨X, ha, fun v => Iff.rfl, fun v => Iff.rfl, rfl⟩
+      obtain ⟨X, hX, eX, uX, rX⟩ := left
+      have right : ∃ Y, GC L (.map Y) ∧ (∀ v : TP L, denD b v ↔ denD (.map Y) v) ∧
+          (∀ v : TP L, denD (upper b) v ↔ denD (upper (.map Y)) v) ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) (.map X) b =
+            Elixir.Module.Types.Descr.«subtype?/2» (D m) (.map X) (.map Y) := by
+        rcases hb.shape with rfl | ⟨Y, rfl⟩
+        · exact ⟨T, tT, fun v => ⟨fun _ => all v, fun _ => denD_term v⟩,
+            fun v => by rw [upper_term, uT]; exact ⟨fun _ => all v, fun _ => denD_term v⟩, subtype_term_r term _ _⟩
+        · exact ⟨Y, hb, fun v => Iff.rfl, fun v => Iff.rfl, rfl⟩
+      obtain ⟨Y, hY, eY, uY, rY⟩ := right
+      rw [rX, rY]
+      exact gc_sub_maps hX hY hm (fun v h => (eY v).mp (lo v ((eX v).mpr h)))
+        (fun v h => (uY v).mp (up v ((uX v).mpr h)))
+
+    /-- Gradual equality is complete for both bounds. -/
+    theorem gc_equal {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 4 ≤ m)
+        (lo : ∀ v : TP L, denD a v ↔ denD b v) (up : ∀ v : TP L, denD (upper a) v ↔ denD (upper b) v) :
+        Elixir.Module.Types.Descr.«equal?/2» (D m) a b = .ok (.atom "true") := by
+      have s₁ := gc_sub ha hb hm (fun v => (lo v).mp) (fun v => (up v).mp)
+      have s₂ := gc_sub hb ha hm (fun v => (lo v).mpr) (fun v => (up v).mpr)
+      by_cases c : Term.compare a b = .eq <;>
+        simp [Elixir.Module.Types.Descr.«equal?/2», s₁, s₂, Lynx.Except.orElse, Lynx.Except.andAlso,
+          Erlang.erlang.«==/2», c, Term.true, Term.false]
+
+    end
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
+    postlude ~LEAN"""
+    set_option linter.unusedSimpArgs false
+    set_option linter.deprecated false
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! The laws on gradual types, at both bounds. -/
+
+    section
+    variable {L : Level} {m : Nat}
+
+    theorem gd_opt_de_morgan_union {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 6 ≤ m) :
+        ∃ u x nl nr y, Elixir.Module.Types.Descr.«opt_union/2» (D m) a b = .ok u ∧
+          Elixir.Module.Types.Descr.«opt_negation/1» (D m) u = .ok x ∧
+          Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok nl ∧
+          Elixir.Module.Types.Descr.«opt_negation/1» (D m) b = .ok nr ∧
+          Elixir.Module.Types.Descr.«opt_intersection/2» (D m) nl nr = .ok y ∧
+          Elixir.Module.Types.Descr.«equal?/2» (D m) x y = .ok (.atom "true") := by
+      obtain ⟨u, hu, ru, su⟩ := gc_opt_union2 ha hb (m := m) (by omega)
+      obtain ⟨x, hx, rx, sx⟩ := gc_opt_neg hu hm
+      obtain ⟨nl, hnl, rnl, snl⟩ := gc_opt_neg ha hm
+      obtain ⟨nr, hnr, rnr, snr⟩ := gc_opt_neg hb hm
+      obtain ⟨y, hy, ry, sy⟩ := gc_opt_inter2 hnl hnr (m := m) (by omega)
+      exact ⟨u, x, nl, nr, y, ru, rx, rnl, rnr, ry, gc_equal hx hy (by omega)
+        (fun v => by rw [sx.1, su.2, sy.1, snl.1, snr.1]; exact not_or)
+        (fun v => by rw [sx.2, su.1, sy.2, snl.2, snr.2]; exact not_or)⟩
+
+    theorem gd_opt_de_morgan_inter {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 6 ≤ m) :
+        ∃ i x nl nr y, Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a b = .ok i ∧
+          Elixir.Module.Types.Descr.«opt_negation/1» (D m) i = .ok x ∧
+          Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok nl ∧
+          Elixir.Module.Types.Descr.«opt_negation/1» (D m) b = .ok nr ∧
+          Elixir.Module.Types.Descr.«opt_union/2» (D m) nl nr = .ok y ∧
+          Elixir.Module.Types.Descr.«equal?/2» (D m) x y = .ok (.atom "true") := by
+      obtain ⟨i, hi, ri, si⟩ := gc_opt_inter2 ha hb (m := m) (by omega)
+      obtain ⟨x, hx, rx, sx⟩ := gc_opt_neg hi hm
+      obtain ⟨nl, hnl, rnl, snl⟩ := gc_opt_neg ha hm
+      obtain ⟨nr, hnr, rnr, snr⟩ := gc_opt_neg hb hm
+      obtain ⟨y, hy, ry, sy⟩ := gc_opt_union2 hnl hnr (m := m) (by omega)
+      exact ⟨i, x, nl, nr, y, ri, rx, rnl, rnr, ry, gc_equal hx hy (by omega)
+        (fun v => by rw [sx.1, si.2, sy.1, snl.1, snr.1]; exact Classical.not_and_iff_not_or_not)
+        (fun v => by rw [sx.2, si.1, sy.2, snl.2, snr.2]; exact Classical.not_and_iff_not_or_not)⟩
+
+    theorem gd_opt_inter_sub {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+        ∃ i, Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a b = .ok i ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) i a = .ok (.atom "true") ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) i b = .ok (.atom "true") := by
+      obtain ⟨i, hi, ri, si⟩ := gc_opt_inter2 ha hb hm
+      exact ⟨i, ri, gc_sub hi ha (by omega) (fun v h => ((si.1 v).mp h).1) (fun v h => ((si.2 v).mp h).1),
+        gc_sub hi hb (by omega) (fun v h => ((si.1 v).mp h).2) (fun v h => ((si.2 v).mp h).2)⟩
+
+    theorem gd_opt_union_sup {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+        ∃ u, Elixir.Module.Types.Descr.«opt_union/2» (D m) a b = .ok u ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) a u = .ok (.atom "true") ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) b u = .ok (.atom "true") := by
+      obtain ⟨u, hu, ru, su⟩ := gc_opt_union2 ha hb hm
+      exact ⟨u, ru, gc_sub ha hu (by omega) (fun v h => (su.1 v).mpr (Or.inl h)) (fun v h => (su.2 v).mpr (Or.inl h)),
+        gc_sub hb hu (by omega) (fun v h => (su.1 v).mpr (Or.inr h)) (fun v h => (su.2 v).mpr (Or.inr h))⟩
+
+    theorem gd_inter_sub {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+        ∃ i, Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok i ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) i a = .ok (.atom "true") ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) i b = .ok (.atom "true") := by
+      obtain ⟨i, hi, ri, si⟩ := gc_inter ha hb hm
+      exact ⟨i, ri, gc_sub hi ha (by omega) (fun v h => ((si.1 v).mp h).1) (fun v h => ((si.2 v).mp h).1),
+        gc_sub hi hb (by omega) (fun v h => ((si.1 v).mp h).2) (fun v h => ((si.2 v).mp h).2)⟩
+
+    theorem gd_union_sup {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+        ∃ u, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok u ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) a u = .ok (.atom "true") ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) b u = .ok (.atom "true") := by
+      obtain ⟨u, hu, ru, su⟩ := gc_union ha hb hm
+      exact ⟨u, ru, gc_sub ha hu (by omega) (fun v h => (su.1 v).mpr (Or.inl h)) (fun v h => (su.2 v).mpr (Or.inl h)),
+        gc_sub hb hu (by omega) (fun v h => (su.1 v).mpr (Or.inr h)) (fun v h => (su.2 v).mpr (Or.inr h))⟩
+
+    theorem gd_union_equal {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+        ∃ u w, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok u ∧
+          Elixir.Module.Types.Descr.«opt_union/2» (D m) a b = .ok w ∧
+          Elixir.Module.Types.Descr.«equal?/2» (D m) u w = .ok (.atom "true") := by
+      obtain ⟨u, hu, ru, su⟩ := gc_union ha hb hm
+      obtain ⟨w, hw, rw', sw⟩ := gc_opt_union2 ha hb hm
+      exact ⟨u, w, ru, rw', gc_equal hu hw (by omega) (fun v => by rw [su.1, sw.1]) (fun v => by rw [su.2, sw.2])⟩
+
+    theorem gd_inter_equal {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+        ∃ i j, Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok i ∧
+          Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a b = .ok j ∧
+          Elixir.Module.Types.Descr.«equal?/2» (D m) i j = .ok (.atom "true") := by
+      obtain ⟨i, hi, ri, si⟩ := gc_inter ha hb hm
+      obtain ⟨j, hj, rj, sj⟩ := gc_opt_inter2 ha hb hm
+      exact ⟨i, j, ri, rj, gc_equal hi hj (by omega) (fun v => by rw [si.1, sj.1]) (fun v => by rw [si.2, sj.2])⟩
+
+    theorem gd_distrib {t a b : Term} (ht : GC L t) (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+        ∃ u x y z w, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok u ∧
+          Elixir.Module.Types.Descr.«bare_intersection/2» (D m) t u = .ok x ∧
+          Elixir.Module.Types.Descr.«bare_intersection/2» (D m) t a = .ok y ∧
+          Elixir.Module.Types.Descr.«bare_intersection/2» (D m) t b = .ok z ∧
+          Elixir.Module.Types.Descr.«bare_union/2» (D m) y z = .ok w ∧
+          Elixir.Module.Types.Descr.«equal?/2» (D m) x w = .ok (.atom "true") := by
+      obtain ⟨u, hu, ru, su⟩ := gc_union ha hb hm
+      obtain ⟨x, hx, rx, sx⟩ := gc_inter ht hu hm
+      obtain ⟨y, hy, ry, sy⟩ := gc_inter ht ha hm
+      obtain ⟨z, hz, rz, sz⟩ := gc_inter ht hb hm
+      obtain ⟨w, hw, rw', sw⟩ := gc_union hy hz hm
+      exact ⟨u, x, y, z, w, ru, rx, ry, rz, rw', gc_equal hx hw (by omega)
+        (fun v => by rw [sx.1, su.1, sw.1, sy.1, sz.1]; exact and_or_left)
+        (fun v => by rw [sx.2, su.2, sw.2, sy.2, sz.2]; exact and_or_left)⟩
+
+    theorem gd_neg_equal {a : Term} (ha : GC L a) (hm : L.K + 6 ≤ m) :
+        ∃ x y, Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok x ∧
+          Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok y ∧
+          Elixir.Module.Types.Descr.«equal?/2» (D m) x y = .ok (.atom "true") := by
+      obtain ⟨x, hx, rx, sx⟩ := gc_neg ha hm
+      obtain ⟨y, hy, ry, sy⟩ := gc_opt_neg ha hm
+      exact ⟨x, y, rx, ry, gc_equal hx hy (by omega) (fun v => by rw [sx.1, sy.1]) (fun v => by rw [sx.2, sy.2])⟩
+
+    theorem gd_diff_equal {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 6 ≤ m) :
+        ∃ x y, Elixir.Module.Types.Descr.«bare_difference/2» (D m) a b = .ok x ∧
+          Elixir.Module.Types.Descr.«opt_difference/2» (D m) a b = .ok y ∧
+          Elixir.Module.Types.Descr.«equal?/2» (D m) x y = .ok (.atom "true") := by
+      obtain ⟨x, hx, rx, sx⟩ := gc_diff ha hb hm
+      obtain ⟨y, hy, ry, sy⟩ := gc_opt_diff2 ha hb hm
+      exact ⟨x, y, rx, ry, gc_equal hx hy (by omega) (fun v => by rw [sx.1, sy.1]) (fun v => by rw [sx.2, sy.2])⟩
+
+    end
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
+    postlude ~LEAN"""
+    set_option linter.unusedSimpArgs false
+    set_option linter.deprecated false
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! Types without function fields checked empty hold no points. -/
+
+    section
+    variable {L : Level}
+
+    /-- Without function fields, the function fields' class does not matter. -/
+    theorem DescrC.nofun {TF LF MF Fn Fn' : Term → Prop} {X : List (Term × Term)} (s : DescrC Fn TF LF MF X)
+        (nf : mapLookup X (.atom "fun") = none) : DescrC Fn' TF LF MF X := by
+      refine ⟨s.keys, fun name x h => ?_⟩
+      rcases s.fields name x h with h' | h' | ⟨e, -⟩ | h' | h' | h'
+      · exact Or.inl h'
+      · exact Or.inr (Or.inl h')
+      · subst e; rw [nf] at h; cases h
+      · exact Or.inr (Or.inr (Or.inr (Or.inl h')))
+      · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h'))))
+      · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr h'))))
+
+    /-- Emptiness is sound on types without function fields. -/
+    theorem tc_empty_sound {C : List (Term × Term)} (sC : DC L C) (nf : mapLookup C (.atom "fun") = none) {m : Nat}
+        (hm : L.K + 2 ≤ m) (h : Elixir.Module.Types.Descr.«empty?/1» (D m) (.map C) = .ok (.atom "true")) :
+        ∀ v : TP L, ¬denD (.map C) v := by
+      have sC' : DescrC FunTop (TField L.E) (LF L.E) (MField L.E) C := sC.nofun nf
+      obtain ⟨b, run, ex⟩ := descr_empty (tks L) (funTopC (K := L.K + 2) (by omega)) trivial hm sC' [] trivial
+      rw [empty_map_seen, run] at h
+      have hb : b = Bool.true := by cases b <;> simp_all [boolAtom]
+      have none := (ex (lh (.map C) + 1) (by omega) (safeN_nil _)).2 (fun x hx => by rw [nf] at hx; cases hx) hb
+      intro v hv
+      have := none v.1.1 v.1.2 v.2.2
+      rw [(denD_map v).mp hv] at this
+      cases this
+
+    end
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
+    postlude ~LEAN"""
+    set_option linter.unusedSimpArgs false
+    set_option linter.deprecated false
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! The types of the laws on gradual types. -/
+
+    /-- Gradual types of the laws: a static part and a dynamic part that Descr checks includes it. -/
+    theorem opt_gradual_gc {m : Nat} (hm : (level 2).K + 6 ≤ m) (descr : Term)
+        (h : «opt_gradual?/1» (D m) descr = .ok Term.true) : GC (level 2) descr := by
+      have static : «opt_negatable?/1» descr = .ok Term.true → GC (level 2) descr := fun h =>
+        GC.tc (opt_negatable_tc descr h)
+      unfold «opt_gradual?/1» at h
+      cases descr with
+      | map X =>
+        cases hD : mapLookup X (.atom "dynamic") with
+        | none => simp [getMapKeys_single, hD] at h; exact static h
+        | some Dy =>
+          simp only [getMapKeys_single, hD, Option.toList, Erlang.maps.«remove/2», Lynx.Except.ok_bind, Term.true,
+            Lynx.Except.andAlso_eq_true] at h
+          obtain ⟨⟨hS, hDy⟩, hI⟩ := h
+          have tS : TC (level 2) (.map (rmDyn X)) := opt_negatable_tc _ hS
+          have tD := opt_negatable_tc _ hDy
+          have sS : DC (level 2) (rmDyn X) := by
+            rcases tS with e | ⟨S, e, sS⟩
+            · cases e
+            · simp only [Term.map.injEq] at e; rw [e]; exact sS
+          obtain ⟨c, tc, run, sem⟩ := tc_diff tS tD (m := m) hm
+          rw [← rmDyn, run] at hI
+          simp only [Lynx.Except.ok_bind] at hI
+          rcases tc with rfl | ⟨C, rfl, sC⟩
+          · simp [«included?/1», Erlang.erlang.«is_map_key/2»] at hI
+          · have nf : mapLookup C (.atom "fun") = none := by
+              cases hf : mapLookup C (.atom "fun") with
+              | none => rfl
+              | some _ =>
+                simp [«included?/1», Erlang.erlang.«is_map_key/2», any_key, hf] at hI
+            have empty : Elixir.Module.Types.Descr.«empty?/1» (D m) (.map C) = .ok (.atom "true") := by
+              simpa [«included?/1», Erlang.erlang.«is_map_key/2», any_key, nf] using hI
+            have none := tc_empty_sound sC nf (by omega) empty
+            refine Or.inr ⟨X, Dy, rfl, hD, tD, sS, fun v hv => ?_⟩
+            apply Classical.byContradiction
+            intro hn
+            exact none v ((sem v).mpr ⟨(denD_rmDyn X v).mpr hv, hn⟩)
+      | _ => simp at h; exact static h
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
     law intersection_none_empty(descr),
       requires: descr?(descr),
       expects: Descr.empty?(Descr.bare_intersection(descr, Descr.none())),
@@ -37004,7 +38374,7 @@ defmodule STTDescrProofsTest do
       """
 
     law opt_de_morgan_union(left, right),
-      requires: opt_negatable?(left) and opt_negatable?(right),
+      requires: opt_gradual?(left) and opt_gradual?(right),
       expects:
         Descr.equal?(
           Descr.opt_negation(Descr.opt_union(left, right)),
@@ -37012,17 +38382,17 @@ defmodule STTDescrProofsTest do
         ),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«opt_de_morgan_union:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_negatable_tc left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_negatable_tc right (by simpa [Term.true] using requires.2)
+      simp only [Lynx.apply_eq, «opt_de_morgan_union:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      have tL := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨u, x, nl, nr, y, r₁, r₂, r₃, r₄, r₅, eq⟩ :=
-        Nest.opt_de_morgan_union_gen tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
+        Nest.gd_opt_de_morgan_union tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «opt_de_morgan_union:ensures/2»]
       simp [r₁, r₂, r₃, r₄, r₅, eq]
       """
 
     law opt_de_morgan_intersection(left, right),
-      requires: opt_negatable?(left) and opt_negatable?(right),
+      requires: opt_gradual?(left) and opt_gradual?(right),
       expects:
         Descr.equal?(
           Descr.opt_negation(Descr.opt_intersection(left, right)),
@@ -37030,105 +38400,105 @@ defmodule STTDescrProofsTest do
         ),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«opt_de_morgan_intersection:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_negatable_tc left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_negatable_tc right (by simpa [Term.true] using requires.2)
+      simp only [Lynx.apply_eq, «opt_de_morgan_intersection:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      have tL := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨i, x, nl, nr, y, r₁, r₂, r₃, r₄, r₅, eq⟩ :=
-        Nest.opt_de_morgan_inter_gen tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
+        Nest.gd_opt_de_morgan_inter tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «opt_de_morgan_intersection:ensures/2»]
       simp [r₁, r₂, r₃, r₄, r₅, eq]
       """
 
     law opt_intersection_subtype(left, right),
-      requires: opt_negatable?(left) and opt_negatable?(right),
+      requires: opt_gradual?(left) and opt_gradual?(right),
       expects:
         Descr.subtype?(Descr.opt_intersection(left, right), left) and
           Descr.subtype?(Descr.opt_intersection(left, right), right),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«opt_intersection_subtype:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_negatable_tc left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_negatable_tc right (by simpa [Term.true] using requires.2)
-      obtain ⟨i, r₁, s₁, s₂⟩ := Nest.opt_inter_sub_gen tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
+      simp only [Lynx.apply_eq, «opt_intersection_subtype:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      have tL := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨i, r₁, s₁, s₂⟩ := Nest.gd_opt_inter_sub tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «opt_intersection_subtype:ensures/2»]
       simp [r₁, s₁, s₂]
       """
 
     law opt_union_supertype(left, right),
-      requires: opt_negatable?(left) and opt_negatable?(right),
+      requires: opt_gradual?(left) and opt_gradual?(right),
       expects:
         Descr.subtype?(left, Descr.opt_union(left, right)) and
           Descr.subtype?(right, Descr.opt_union(left, right)),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«opt_union_supertype:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_negatable_tc left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_negatable_tc right (by simpa [Term.true] using requires.2)
-      obtain ⟨u, r₁, s₁, s₂⟩ := Nest.opt_union_sup_gen tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
+      simp only [Lynx.apply_eq, «opt_union_supertype:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      have tL := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨u, r₁, s₁, s₂⟩ := Nest.gd_opt_union_sup tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «opt_union_supertype:ensures/2»]
       simp [r₁, s₁, s₂]
       """
 
     law intersection_subtype(left, right),
-      requires: opt_negatable?(left) and opt_negatable?(right),
+      requires: opt_gradual?(left) and opt_gradual?(right),
       expects:
         Descr.subtype?(Descr.bare_intersection(left, right), left) and
           Descr.subtype?(Descr.bare_intersection(left, right), right),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«intersection_subtype:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_negatable_tc left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_negatable_tc right (by simpa [Term.true] using requires.2)
-      obtain ⟨i, r₁, s₁, s₂⟩ := Nest.inter_sub_gen tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
+      simp only [Lynx.apply_eq, «intersection_subtype:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      have tL := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨i, r₁, s₁, s₂⟩ := Nest.gd_inter_sub tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «intersection_subtype:ensures/2»]
       simp [r₁, s₁, s₂]
       """
 
     law union_supertype(left, right),
-      requires: opt_negatable?(left) and opt_negatable?(right),
+      requires: opt_gradual?(left) and opt_gradual?(right),
       expects:
         Descr.subtype?(left, Descr.bare_union(left, right)) and
           Descr.subtype?(right, Descr.bare_union(left, right)),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«union_supertype:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_negatable_tc left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_negatable_tc right (by simpa [Term.true] using requires.2)
-      obtain ⟨u, r₁, s₁, s₂⟩ := Nest.union_sup_gen tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
+      simp only [Lynx.apply_eq, «union_supertype:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      have tL := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨u, r₁, s₁, s₂⟩ := Nest.gd_union_sup tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «union_supertype:ensures/2»]
       simp [r₁, s₁, s₂]
       """
 
     law opt_union_equal(left, right),
-      requires: opt_negatable?(left) and opt_negatable?(right),
+      requires: opt_gradual?(left) and opt_gradual?(right),
       expects:
         Descr.equal?(Descr.bare_union(left, right), Descr.opt_union(left, right)),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«opt_union_equal:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_negatable_tc left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_negatable_tc right (by simpa [Term.true] using requires.2)
-      obtain ⟨u, w, r₁, r₂, eq⟩ := Nest.union_equal_gen tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
+      simp only [Lynx.apply_eq, «opt_union_equal:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      have tL := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨u, w, r₁, r₂, eq⟩ := Nest.gd_union_equal tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «opt_union_equal:ensures/2»]
       simp [r₁, r₂, eq]
       """
 
     law opt_intersection_equal(left, right),
-      requires: opt_negatable?(left) and opt_negatable?(right),
+      requires: opt_gradual?(left) and opt_gradual?(right),
       expects:
         Descr.equal?(Descr.bare_intersection(left, right), Descr.opt_intersection(left, right)),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«opt_intersection_equal:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_negatable_tc left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_negatable_tc right (by simpa [Term.true] using requires.2)
-      obtain ⟨i, j, r₁, r₂, eq⟩ := Nest.inter_equal_gen tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
+      simp only [Lynx.apply_eq, «opt_intersection_equal:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      have tL := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨i, j, r₁, r₂, eq⟩ := Nest.gd_inter_equal tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «opt_intersection_equal:ensures/2»]
       simp [r₁, r₂, eq]
       """
 
     law intersection_union_distributive(descr, left, right),
-      requires: opt_negatable?(descr) and opt_negatable?(left) and opt_negatable?(right),
+      requires: opt_gradual?(descr) and opt_gradual?(left) and opt_gradual?(right),
       expects:
         Descr.equal?(
           Descr.bare_intersection(descr, Descr.bare_union(left, right)),
@@ -37136,37 +38506,37 @@ defmodule STTDescrProofsTest do
         ),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«intersection_union_distributive:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tT := Nest.opt_negatable_tc descr (by simpa [Term.true] using requires.1.1)
-      have tL := Nest.opt_negatable_tc left (by simpa [Term.true] using requires.1.2)
-      have tR := Nest.opt_negatable_tc right (by simpa [Term.true] using requires.2)
+      simp only [Lynx.apply_eq, «intersection_union_distributive:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      have tT := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) descr (by simpa [Term.true] using requires.1.1)
+      have tL := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1.2)
+      have tR := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨u, x, y, z, w, r₁, r₂, r₃, r₄, r₅, eq⟩ :=
-        Nest.distrib_gen tT tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
+        Nest.gd_distrib tT tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «intersection_union_distributive:ensures/3»]
       simp [r₁, r₂, r₃, r₄, r₅, eq]
       """
 
     law opt_negation_equal(descr),
-      requires: opt_negatable?(descr),
+      requires: opt_gradual?(descr),
       expects: Descr.equal?(Descr.bare_negation(descr), Descr.opt_negation(descr)),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«opt_negation_equal:requires/1»] at requires
-      have t := Nest.opt_negatable_tc descr requires
-      obtain ⟨x, y, r₁, r₂, eq⟩ := Nest.neg_equal_gen t (m := 100) (by rw [Nest.level_two_K]; omega)
+      simp only [Lynx.apply_eq, «opt_negation_equal:requires/1»] at requires
+      have t := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) descr requires
+      obtain ⟨x, y, r₁, r₂, eq⟩ := Nest.gd_neg_equal t (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «opt_negation_equal:ensures/1»]
       simp [r₁, r₂, eq]
       """
 
     law opt_difference_equal(left, right),
-      requires: opt_negatable?(left) and opt_negatable?(right),
+      requires: opt_gradual?(left) and opt_gradual?(right),
       expects: Descr.equal?(Descr.bare_difference(left, right), Descr.opt_difference(left, right)),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«opt_difference_equal:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_negatable_tc left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_negatable_tc right (by simpa [Term.true] using requires.2)
-      obtain ⟨x, y, r₁, r₂, eq⟩ := Nest.diff_equal_gen tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
+      simp only [Lynx.apply_eq, «opt_difference_equal:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      have tL := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨x, y, r₁, r₂, eq⟩ := Nest.gd_diff_equal tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «opt_difference_equal:ensures/2»]
       simp [r₁, r₂, eq]
       """
