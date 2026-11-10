@@ -2,20 +2,25 @@
 # Prove the set operations of Elixir's type system. The empty type law covers every type,
 # and the negation laws cover bitmaps, atoms, functions, lists, tuples, and maps, both for
 # the plain operations and for the optimized ones the type checker uses: a type does not
-# meet its negation, and a type united with its negation is the top type. De Morgan's law,
+# meet its negation, and a type united with its negation is the top type. A gradual type
+# meets its negation only in its dynamic part, so the negation laws on gradual types check
+# its lower bound for the intersection and its upper bound for the union. De Morgan's law,
 # the negation of a union is the intersection of negations, holds for the plain operations
 # and for the optimized ones, comparing tuples and maps by their values. So does its dual
 # for the optimized ones, the negation of an intersection is the union of negations, which
 # also compares lists by their values. Intersections are included in their arguments and
 # unions include them, for both the plain and the optimized operations, the plain and
 # optimized unions, intersections, differences, and negations are equal, and plain
-# intersections distribute over plain unions.
+# intersections distribute over plain unions. The top function type of each arity is equal
+# to the arrow from that many arguments of none() to term(). A type is compatible with another
+# when its static part is included in the dynamic part of the other and the two meet.
 # The laws cover the top type and types whose lists, tuples, maps, and functions nest other
 # types up to three levels deep. For the laws on the optimized operations, the only function
-# type inside other types is the top function type. Except for the negation laws, the laws
-# on the optimized operations and the plain laws on intersections and unions also cover
-# gradual types, whose dynamic part includes their static part, and hold for both parts.
-# The negation laws hold for static types only: dynamic() meets its negation.
+# type inside other types is the top function type. The laws on the optimized operations
+# and the plain laws also cover gradual types of those types, whose dynamic part includes
+# their static part, and hold for both parts. The compatibility law covers those gradual
+# types whose function types are the top one, as the laws model function types without the
+# meaning of arrows.
 # Checked against Elixir 1.21.0-dev (1dbf7a379), Erlang/OTP 29.1.2.
 # Source reference: ../elixir/lib/elixir/lib/module/types/descr.ex.
 # These proofs depend on implementation details; rerun after Elixir upgrades.
@@ -250,6 +255,15 @@ defmodule STTDescrProofsTest do
   def opt_gradual?(descr), do: opt_negatable?(descr)
 
   defp included?(difference), do: not is_map_key(difference, :fun) and Descr.empty?(difference)
+
+  # Gradual types of the compatibility law: the laws model function types without the meaning
+  # of arrows, and compatibility checks emptiness, so both parts of these types hold no function
+  # types other than the top one.
+  def top_fun_gradual?(descr),
+    do: opt_gradual?(descr) and top_fun?(Descr.lower_bound(descr)) and top_fun?(Descr.upper_bound(descr))
+
+  defp top_fun?(%{fun: fun}), do: fun == {:negation, %{}}
+  defp top_fun?(_descr), do: true
 
   defp keyed?(:term, _depth), do: true
   defp keyed?(_descr, 0), do: true
@@ -6221,7 +6235,7 @@ defmodule STTDescrProofsTest do
         ∃ N U, Elixir.Module.Types.Descr.«bare_negation/1» (Dispatcher.ofTable Erlang.program.fun_table 100) (.map X) =
             .ok (.map N) ∧
           Elixir.Module.Types.Descr.«bare_union/2» (Dispatcher.ofTable Erlang.program.fun_table 100) (.map X) (.map N) =
-            .ok (.map U) ∧
+            .ok (.map U) ∧ mapLookup U (.atom "dynamic") = Option.none ∧
           Elixir.Module.Types.Descr.«subtype?/2» (Dispatcher.ofTable Erlang.program.fun_table 100) (.atom "term")
             (.map U) = .ok (.atom "true") := by
       obtain ⟨N, negation, staticN, -, -, -, -, -, -, lookups⟩ := negation_fields ops 98 X valid nonempty
@@ -6244,9 +6258,10 @@ defmodule STTDescrProofsTest do
           obtain ⟨u, ru, -⟩ := keep k
           exact ⟨u, look ▸ ru⟩
         · simp [k] at look)
-      refine ⟨N, U, negation, union, subtype_term _ T U term ?_ fun e member => ?_⟩
-      · rw [(lookU "dynamic").1 staticN]
+      have staticU : mapLookup U (.atom "dynamic") = Option.none := by
+        rw [(lookU "dynamic").1 staticN]
         exact valid.static
+      refine ⟨N, U, negation, union, staticU, subtype_term _ T U term staticU fun e member => ?_⟩
       have hT := mapLookup_of_mem_mapEntries member
       obtain ⟨name, key⟩ := atom_key_of term hT
       rw [key] at hT ⊢
@@ -36078,18 +36093,6 @@ defmodule STTDescrProofsTest do
         exact (denD_map _).mp this
       · rw [lookup_out' sA mem, dn_none] at h; cases h
 
-    theorem tc_opt_neg {a : Term} (ha : TC L a) {m : Nat} (hm : L.K + 6 ≤ m) :
-        ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok c ∧
-          ∀ v : TP L, denD c v ↔ ¬denD a v := by
-      rcases ha with rfl | ⟨X, rfl, sX⟩
-      · refine ⟨_, tc_nil, ?_, fun v => by simp [denD_nil, denD_term]⟩
-        rw [Elixir.Module.Types.Descr.«opt_negation/1».eq_def]
-        simp [Elixir.Module.Types.Descr.«none/0»]
-      obtain ⟨c, hc, run, sem⟩ := tc_opt_diff (L := L) (Or.inl rfl) (Or.inr ⟨X, rfl, sX⟩) [] hm
-      refine ⟨c, hc, ?_, fun v => by simp [sem, denD_term]⟩
-      rw [Elixir.Module.Types.Descr.«opt_negation/1».eq_def]
-      simpa [Elixir.Module.Types.Descr.«opt_difference/2», Elixir.Module.Types.Descr.«term/0», unfold_map] using run
-
     end
 
     end Elixir.STTDescrProofsTest.Nest
@@ -36234,42 +36237,12 @@ defmodule STTDescrProofsTest do
     namespace Elixir.STTDescrProofsTest.Nest
     open Lynx Lynx.Term BddProofs
 
-    /-! The laws of the optimized operations on top-level types over the element types of a level. -/
+    /-! The top type is a top-level type at every level, and the laws use level 2. -/
 
     section
     variable {L : Level} {m : Nat}
 
-    theorem tc_opt_union2 {a b : Term} (ha : TC L a) (hb : TC L b) (hm : L.K + 4 ≤ m) :
-        ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«opt_union/2» (D m) a b = .ok c ∧
-          ∀ v : TP L, denD c v ↔ denD a v ∨ denD b v := by
-      simpa [Elixir.Module.Types.Descr.«opt_union/2»] using tc_opt_union ha hb [] hm
-
-    theorem tc_opt_inter2 {a b : Term} (ha : TC L a) (hb : TC L b) (hm : L.K + 4 ≤ m) :
-        ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a b = .ok c ∧
-          ∀ v : TP L, denD c v ↔ denD a v ∧ denD b v := by
-      simpa [Elixir.Module.Types.Descr.«opt_intersection/2»] using tc_opt_inter ha hb [] hm
-
     theorem tc_term : TC L (.atom "term") := Or.inl rfl
-
-    theorem opt_inter_neg_empty_gen {a : Term} (ha : TC L a) (hm : L.K + 6 ≤ m) :
-        ∃ n i, Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok n ∧
-          Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a n = .ok i ∧
-          Elixir.Module.Types.Descr.«empty?/1» (D m) i = .ok (.atom "true") := by
-      obtain ⟨n, hn, rn, sn⟩ := tc_opt_neg (m := m) ha hm
-      obtain ⟨i, hi, ri, si⟩ := tc_opt_inter2 (m := m) ha hn (by omega)
-      exact ⟨n, i, rn, ri, tc_empty (m := m) hi (by omega) fun v h => by
-        obtain ⟨h₁, h₂⟩ := (si v).mp h; exact (sn v).mp h₂ h₁⟩
-
-    theorem opt_union_neg_term_gen {a : Term} (ha : TC L a) (hm : L.K + 6 ≤ m) :
-        ∃ n u, Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok n ∧
-          Elixir.Module.Types.Descr.«opt_union/2» (D m) a n = .ok u ∧
-          Elixir.Module.Types.Descr.«subtype?/2» (D m) (.atom "term") u = .ok (.atom "true") := by
-      obtain ⟨n, hn, rn, sn⟩ := tc_opt_neg (m := m) ha hm
-      obtain ⟨u, hu, ru, su⟩ := tc_opt_union2 (m := m) ha hn (by omega)
-      exact ⟨n, u, rn, ru, tc_sub (m := m) tc_term hu (by omega) fun v _ => (su v).mpr (by
-        by_cases h : denD a v
-        · exact Or.inl h
-        · exact Or.inr ((sn v).mpr h))⟩
 
     end
 
@@ -38236,6 +38209,645 @@ defmodule STTDescrProofsTest do
     end Elixir.STTDescrProofsTest.Nest
     """
 
+    postlude ~LEAN"""
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! A gradual type meets its negation only in its dynamic part, which `lower_bound/1` removes, and united with its
+    negation it covers every value in its dynamic part, which `upper_bound/1` returns. -/
+
+    theorem lower_bound_run {a : Term} (h : a = .atom "term" ∨ ∃ X, a = .map X) :
+        Elixir.Module.Types.Descr.«lower_bound/1» a = .ok (lower a) := by
+      rcases h with rfl | ⟨X, rfl⟩
+      · rfl
+      · simp [Elixir.Module.Types.Descr.«lower_bound/1», Erlang.maps.«remove/2», lower, rmDyn]
+
+    theorem upper_bound_run {a : Term} (h : a = .atom "term" ∨ ∃ X, a = .map X) :
+        Elixir.Module.Types.Descr.«upper_bound/1» a = .ok (upper a) := by
+      rcases h with rfl | ⟨X, rfl⟩
+      · rfl
+      · unfold Elixir.Module.Types.Descr.«upper_bound/1»
+        cases hd : mapLookup X (.atom "dynamic") <;> simp [getMapKeys_single, hd, upper]
+
+    section
+    variable {L : Level} {m : Nat}
+
+    theorem gd_inter_neg_lower {a : Term} (ha : GC L a) (hm : L.K + 6 ≤ m) :
+        ∃ n i, Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok n ∧
+          Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a n = .ok i ∧
+          Elixir.Module.Types.Descr.«lower_bound/1» i = .ok (lower i) ∧
+          Elixir.Module.Types.Descr.«empty?/1» (D m) (lower i) = .ok (.atom "true") := by
+      obtain ⟨n, hn, rn, sn⟩ := gc_neg ha hm
+      obtain ⟨i, hi, ri, si⟩ := gc_inter ha hn (m := m) (by omega)
+      exact ⟨n, i, rn, ri, lower_bound_run hi.shape, tc_empty hi.low_tc (by omega) fun v h => by
+        obtain ⟨h₁, h₂⟩ := (si.1 v).mp ((denD_lower i v).mp h)
+        exact (sn.1 v).mp h₂ (ha.inv v h₁)⟩
+
+    theorem gd_opt_inter_neg_lower {a : Term} (ha : GC L a) (hm : L.K + 6 ≤ m) :
+        ∃ n i, Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok n ∧
+          Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a n = .ok i ∧
+          Elixir.Module.Types.Descr.«lower_bound/1» i = .ok (lower i) ∧
+          Elixir.Module.Types.Descr.«empty?/1» (D m) (lower i) = .ok (.atom "true") := by
+      obtain ⟨n, hn, rn, sn⟩ := gc_opt_neg ha hm
+      obtain ⟨i, hi, ri, si⟩ := gc_opt_inter2 ha hn (m := m) (by omega)
+      exact ⟨n, i, rn, ri, lower_bound_run hi.shape, tc_empty hi.low_tc (by omega) fun v h => by
+        obtain ⟨h₁, h₂⟩ := (si.1 v).mp ((denD_lower i v).mp h)
+        exact (sn.1 v).mp h₂ (ha.inv v h₁)⟩
+
+    theorem gd_union_neg_upper {a : Term} (ha : GC L a) (hm : L.K + 6 ≤ m) :
+        ∃ n u, Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok n ∧
+          Elixir.Module.Types.Descr.«bare_union/2» (D m) a n = .ok u ∧
+          Elixir.Module.Types.Descr.«upper_bound/1» u = .ok (upper u) ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) (.atom "term") (upper u) = .ok (.atom "true") := by
+      obtain ⟨n, hn, rn, sn⟩ := gc_neg ha hm
+      obtain ⟨u, hu, ru, su⟩ := gc_union ha hn (m := m) (by omega)
+      refine ⟨n, u, rn, ru, upper_bound_run hu.shape, tc_sub tc_term hu.up_tc (by omega) fun v _ => (su.2 v).mpr ?_⟩
+      by_cases h : denD a v
+      · exact Or.inl (ha.inv v h)
+      · exact Or.inr ((sn.2 v).mpr h)
+
+    theorem gd_opt_union_neg_upper {a : Term} (ha : GC L a) (hm : L.K + 6 ≤ m) :
+        ∃ n u, Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok n ∧
+          Elixir.Module.Types.Descr.«opt_union/2» (D m) a n = .ok u ∧
+          Elixir.Module.Types.Descr.«upper_bound/1» u = .ok (upper u) ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) (.atom "term") (upper u) = .ok (.atom "true") := by
+      obtain ⟨n, hn, rn, sn⟩ := gc_opt_neg ha hm
+      obtain ⟨u, hu, ru, su⟩ := gc_opt_union2 ha hn (m := m) (by omega)
+      refine ⟨n, u, rn, ru, upper_bound_run hu.shape, tc_sub tc_term hu.up_tc (by omega) fun v _ => (su.2 v).mpr ?_⟩
+      by_cases h : denD a v
+      · exact Or.inl (ha.inv v h)
+      · exact Or.inr ((sn.2 v).mpr h)
+
+    theorem gd_de_morgan_union {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 6 ≤ m) :
+        ∃ u x nl nr y, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok u ∧
+          Elixir.Module.Types.Descr.«bare_negation/1» (D m) u = .ok x ∧
+          Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok nl ∧
+          Elixir.Module.Types.Descr.«bare_negation/1» (D m) b = .ok nr ∧
+          Elixir.Module.Types.Descr.«bare_intersection/2» (D m) nl nr = .ok y ∧
+          Elixir.Module.Types.Descr.«equal?/2» (D m) x y = .ok (.atom "true") := by
+      obtain ⟨u, hu, ru, su⟩ := gc_union ha hb (m := m) (by omega)
+      obtain ⟨x, hx, rx, sx⟩ := gc_neg hu hm
+      obtain ⟨nl, hnl, rnl, snl⟩ := gc_neg ha hm
+      obtain ⟨nr, hnr, rnr, snr⟩ := gc_neg hb hm
+      obtain ⟨y, hy, ry, sy⟩ := gc_inter hnl hnr (m := m) (by omega)
+      exact ⟨u, x, nl, nr, y, ru, rx, rnl, rnr, ry, gc_equal hx hy (by omega)
+        (fun v => by rw [sx.1, su.2, sy.1, snl.1, snr.1]; exact not_or)
+        (fun v => by rw [sx.2, su.1, sy.2, snl.2, snr.2]; exact not_or)⟩
+
+    end
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
+    # Compatibility only checks emptiness, inclusion, and disjointness of the bounds of gradual types, which are
+    # exact on the element types of the next level, whose function types are the top one.
+    postlude ~LEAN"""
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! Compatibility of gradual types whose function types are the top one. -/
+
+    section
+    variable {L : Level}
+
+    theorem map_nil_of_compare {R : List (Term × Term)} (h : Term.compare (.map R) (.map []) = .eq) : R = [] := by
+      cases R with
+      | nil => rfl
+      | cons e rest =>
+        have := lookup_of_map_compare_eq (e :: rest) [] h e.1
+        simp at this
+
+    /-- A function field equal to the top function type is the top function type. -/
+    theorem fun_top_of_eq {x : Term} (fx : FunF x)
+        (h : Erlang.erlang.«==/2» x funTopT = .ok (.atom "true")) : x = funTopT := by
+      obtain ⟨p, R, rfl, -⟩ := fx
+      have e : Term.compare (.tuple #[.atom (if p then "union" else "negation"), .map R]) funTopT = .eq := by
+        simp only [Erlang.erlang.«==/2»] at h
+        split at h <;> simp_all
+      rw [funTopT, compare_eq_step] at e
+      cases p <;> simp [Compare.compareStep, List.compareLex_cons_cons, List.compareLex_nil_nil, Ordering.then] at e
+      split at e
+      · rename_i c; rw [map_nil_of_compare c]; rfl
+      · exact absurd e (by assumption)
+
+    /-- Static types whose function types are the top one are element types of the next level. -/
+    theorem de_of_tc {a : Term} (ha : TC L a)
+        (top : ∀ X x, a = .map X → mapLookup X (.atom "fun") = some x → x = funTopT) : DE L.E a := by
+      rcases ha with rfl | ⟨X, rfl, sX⟩
+      · exact Or.inl rfl
+      · refine Or.inr ⟨X, rfl, sX.keys, fun name x h => ?_⟩
+        rcases sX.fields name x h with h' | h' | ⟨e, -⟩ | h' | h' | h'
+        · exact Or.inl h'
+        · exact Or.inr (Or.inl h')
+        · subst e; exact Or.inr (Or.inr (Or.inl ⟨rfl, top X x rfl h⟩))
+        · exact Or.inr (Or.inr (Or.inr (Or.inl h')))
+        · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h'))))
+        · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr h'))))
+
+    theorem de_tc {a : Term} (ha : DE L.E a) : TC L a := by
+      rcases ha with rfl | ⟨X, rfl, sX⟩
+      · exact Or.inl rfl
+      · exact Or.inr ⟨X, rfl, sX.funF⟩
+
+    /-- Static types that `top_fun?/1` accepts are element types of the next level. -/
+    theorem top_fun_de {b : Term} (hb : TC L b) (h : «top_fun?/1» b = .ok (.atom "true")) : DE L.E b := by
+      refine de_of_tc hb fun X x e hx => ?_
+      subst e
+      obtain ⟨Y, e, sY⟩ := hb.resolve_left (by simp)
+      simp only [Term.map.injEq] at e; subst e
+      rcases sY.fields "fun" x hx with ⟨e, -⟩ | ⟨e, -⟩ | ⟨-, fx⟩ | ⟨e, -⟩ | ⟨e, -⟩ | ⟨e, -⟩
+      all_goals try (simp at e)
+      unfold «top_fun?/1» at h
+      simp [getMapKeys_single, hx] at h
+      exact fun_top_of_eq fx (by simpa [funTopT] using h)
+
+    /-- The shapes of gradual types: the top type, static maps, maps whose dynamic part is the top type, and maps whose
+    dynamic part is a static map. -/
+    theorem GC.cases {a : Term} (ha : GC L a) :
+        a = .atom "term" ∨ (∃ X, a = .map X ∧ mapLookup X (.atom "dynamic") = none) ∨
+          (∃ X, a = .map X ∧ mapLookup X (.atom "dynamic") = some (.atom "term")) ∨
+          ∃ X Y, a = .map X ∧ mapLookup X (.atom "dynamic") = some (.map Y) ∧ mapLookup Y (.atom "dynamic") = none := by
+      rcases ha with (rfl | ⟨X, rfl, sX⟩) | ⟨X, Dy, rfl, hD, tD, -, -⟩
+      · exact Or.inl rfl
+      · exact Or.inr (Or.inl ⟨X, rfl, sX.static⟩)
+      · rcases tD with rfl | ⟨Y, rfl, sY⟩
+        · exact Or.inr (Or.inr (Or.inl ⟨X, rfl, hD⟩))
+        · exact Or.inr (Or.inr (Or.inr ⟨X, Y, rfl, hD, sY.static⟩))
+
+    /-- Emptiness of a gradual type checks its dynamic part. -/
+    theorem empty_upper (d : Dispatcher) {a : Term} (ha : GC L a) :
+        Elixir.Module.Types.Descr.«empty?/1» d a = Elixir.Module.Types.Descr.«empty?/1» d (upper a) := by
+      rcases ha.cases with rfl | ⟨X, rfl, h⟩ | ⟨X, rfl, h⟩ | ⟨X, Y, rfl, h, hY⟩
+      · rfl
+      · simp [upper, h]
+      · simp only [upper, h, Option.getD_some, empty_map_seen]
+        rw [Elixir.Module.Types.Descr.«empty_seen?/2».eq_def]
+        simp [getMapKeys_single, h, Elixir.Module.Types.Descr.«empty?/1»]
+      · simp only [upper, h, Option.getD_some, empty_map_seen]
+        conv => lhs; rw [Elixir.Module.Types.Descr.«empty_seen?/2».eq_def]
+        conv => rhs; rw [Elixir.Module.Types.Descr.«empty_seen?/2».eq_def]
+        simp [getMapKeys_single, h, hY]
+
+    /-- Disjointness of gradual types checks their dynamic parts. -/
+    theorem disj_upper (d : Dispatcher) {a b : Term} (ha : GC L a) (hb : GC L b) :
+        Elixir.Module.Types.Descr.«disjoint?/2» d a b = Elixir.Module.Types.Descr.«disjoint?/2» d (upper a) (upper b) := by
+      have ea := empty_upper d ha
+      have eb := empty_upper d hb
+      rcases ha.cases with rfl | ⟨X, rfl, h⟩ | ⟨X, rfl, h⟩ | ⟨X, X', rfl, h, h'⟩ <;>
+        rcases hb.cases with rfl | ⟨Y, rfl, k⟩ | ⟨Y, rfl, k⟩ | ⟨Y, Y', rfl, k, k'⟩ <;>
+        simp only [upper, Option.getD_some, Option.getD_none, *] at ea eb ⊢ <;>
+        unfold Elixir.Module.Types.Descr.«disjoint?/2» <;>
+        simp [getMapKeys_single, upper_term, *]
+
+    /-- On static types, `subtype_static?/2` answers as `subtype?/2`. -/
+    theorem sstatic_sub {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 4 ≤ m) :
+        Elixir.Module.Types.Descr.«subtype_static?/2» (D m) a b = Elixir.Module.Types.Descr.«subtype?/2» (D m) a b := by
+      by_cases incl : ∀ v : TP L, denD a v → denD b v
+      · rw [sstatic_complete ha hb hm incl, tc_sub ha hb hm incl]
+      obtain ⟨T, term, sT, -, all⟩ := termT L
+      have static : ∀ {X : List (Term × Term)}, DC L X → ∀ {Y : List (Term × Term)}, DC L Y →
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) (.map X) (.map Y) =
+            Elixir.Module.Types.Descr.«subtype_static?/2» (D m) (.map X) (.map Y) := by
+        intro X sX Y sY
+        unfold Elixir.Module.Types.Descr.«subtype?/2»
+        simp [unfold_map, Erlang.erlang.«is_map_key/2», sX.static, sY.static, any_key,
+          Lynx.Except.andAlso, Erlang.erlang.«not/1», Lynx.Except.guard, Erlang.erlang.«/=/2»]
+      rcases hb with rfl | ⟨B, rfl, sB⟩
+      · exact absurd (fun v _ => denD_term v) incl
+      rcases ha with rfl | ⟨A, rfl, sA⟩
+      · rw [subtype_term_l term, static sT sB]
+        have ne : exactCompare (.map B) (.map T) ≠ .eq := fun e => incl fun v _ =>
+          (tc_congr (Or.inr ⟨B, rfl, sB⟩) (Or.inr ⟨T, rfl, sT⟩) (compare_eq_of_exactCompare_eq _ _ e) v).mpr (all v)
+        unfold Elixir.Module.Types.Descr.«subtype_static?/2»
+        simp [Lynx.Except.guard, Erlang.erlang.«=:=/2», ne, Elixir.Module.Types.Descr.«empty_difference_subtype?/2»]
+        conv => lhs; rw [Elixir.Module.Types.Descr.«empty_difference_subtype?/3».eq_def]
+        conv => rhs; rw [Elixir.Module.Types.Descr.«empty_difference_subtype?/3».eq_def]
+        simp [getMapKeys_single, sT.static, sB.static, term]
+        split <;> rfl
+      · exact (static sA sB).symm
+
+    end
+
+    /-- Gradual types whose parts hold no function types other than the top one: the parts are element types of
+    level 3. -/
+    theorem top_fun_gradual_ok {a : Term} (h : «top_fun_gradual?/1» (D 100) a = .ok (.atom "true")) :
+        GC (level 2) a ∧ DE (level 2).E (lower a) ∧ DE (level 2).E (upper a) := by
+      unfold «top_fun_gradual?/1» at h
+      simp only [Lynx.Except.andAlso_eq_true] at h
+      obtain ⟨⟨hg, hl⟩, hu⟩ := h
+      have ga := opt_gradual_gc (m := 100) (by rw [level_two_K]; omega) a (by simpa [Term.true] using hg)
+      rw [lower_bound_run ga.shape, Lynx.Except.ok_bind] at hl
+      rw [upper_bound_run ga.shape, Lynx.Except.ok_bind] at hu
+      exact ⟨ga, top_fun_de ga.low_tc hl, top_fun_de ga.up_tc hu⟩
+
+    /-- `compatible?/2` checks the dynamic parts when the static part of the left type is empty, and inclusion of the
+    static part otherwise. -/
+    theorem compat_run (d : Dispatcher) {l r : Term} (hl : l = .atom "term" ∨ ∃ X, l = .map X)
+        (hr : r = .atom "term" ∨ ∃ Y, r = .map Y) {e s j : Bool}
+        (eE : Elixir.Module.Types.Descr.«empty?/1» d (lower l) = .ok (boolAtom e))
+        (eS : Elixir.Module.Types.Descr.«subtype_static?/2» d (lower l) (upper r) = .ok (boolAtom s))
+        (eJ : Elixir.Module.Types.Descr.«disjoint?/2» d (upper l) (upper r) = .ok (boolAtom j)) :
+        Elixir.Module.Types.Descr.«compatible?/2» d l r = .ok (boolAtom (if e then !j else s)) := by
+      have finish : ∀ {lo up up' : Term}, Elixir.Module.Types.Descr.«empty?/1» d lo = .ok (boolAtom e) →
+          Elixir.Module.Types.Descr.«subtype_static?/2» d lo up' = .ok (boolAtom s) →
+          Elixir.Module.Types.Descr.«disjoint?/2» d up up' = .ok (boolAtom j) →
+          (do
+            let x ← Elixir.Module.Types.Descr.«empty?/1» d lo
+            Lynx.Except.guard (.ok (x.isMember [.atom "false", .atom "nil"]))
+              (fun _ => Elixir.Module.Types.Descr.«subtype_static?/2» d lo up')
+              fun _ => do
+                let y ← Elixir.Module.Types.Descr.«disjoint?/2» d up up'
+                Erlang.erlang.«not/1» y) = .ok (boolAtom (if e then !j else s)) := by
+        intro lo up up' h₁ h₂ h₃
+        cases e <;> cases j <;> simp [h₁, h₂, h₃, boolAtom, isMember, Lynx.Except.guard, Erlang.erlang.«not/1»]
+      rcases hl with rfl | ⟨X, rfl⟩ <;> rcases hr with rfl | ⟨Y, rfl⟩
+      · unfold Elixir.Module.Types.Descr.«compatible?/2»
+        simp
+        exact finish eE eS eJ
+      · unfold Elixir.Module.Types.Descr.«compatible?/2»
+        cases hY : mapLookup Y (.atom "dynamic") <;> simp only [upper, hY, Option.getD_none, Option.getD_some] at eS eJ <;>
+          simp [getMapKeys_single, hY]
+        · exact finish eE eS eJ
+        · exact finish eE eS eJ
+      · unfold Elixir.Module.Types.Descr.«compatible?/2»
+        simp [unfold_map, pop_dyn]
+        exact finish eE eS eJ
+      · unfold Elixir.Module.Types.Descr.«compatible?/2»
+        cases hY : mapLookup Y (.atom "dynamic") <;> simp only [upper, hY, Option.getD_none, Option.getD_some] at eS eJ <;>
+          simp [unfold_map, pop_dyn, getMapKeys_single, hY]
+        · exact finish eE eS eJ
+        · exact finish eE eS eJ
+
+    /-- `compatible?/2` checks that the static part of the left type is included in the dynamic part of the right one and
+    that the two meet, as the law states it. -/
+    theorem gd_compatible {l r : Term} (gl : GC (level 2) l) (gr : GC (level 2) r) (ll : DE (level 2).E (lower l))
+        (ul : DE (level 2).E (upper l)) (ur : DE (level 2).E (upper r)) {m : Nat} (hm : 50 ≤ m) :
+        ∃ b : Bool, Elixir.Module.Types.Descr.«compatible?/2» (D m) l r = .ok (boolAtom b) ∧
+          Lynx.Except.andAlso (Elixir.Module.Types.Descr.«subtype?/2» (D m) (lower l) (upper r))
+            (do
+              let j ← Elixir.Module.Types.Descr.«disjoint?/2» (D m) l r
+              Erlang.erlang.«not/1» j) true = .ok (boolAtom b) := by
+      have ef3 : EF (DE (level 2).E) (TP (level 2)) denD tlD 50 := (level 3).ef
+      obtain ⟨bE, rE, semE⟩ := ef3.empty [] ll
+      replace semE := semE (lh (lower l) + 1) (by omega) (safeN_nil _)
+      obtain ⟨s, rS, semS⟩ := ef3.sub ll ur
+      obtain ⟨dj, rJ, semJ⟩ := ef3.disj ul ur
+      have tl := de_tc ll
+      have tr := de_tc ur
+      have eS : Elixir.Module.Types.Descr.«subtype_static?/2» (D m) (lower l) (upper r) = .ok (boolAtom s) := by
+        rw [sstatic_sub tl tr (by rw [level_two_K]; omega), rS m hm]
+      have eE : Elixir.Module.Types.Descr.«empty?/1» (D m) (lower l) = .ok (boolAtom bE) := by
+        rcases tl with e | ⟨X, e, -⟩ <;> rw [e] at rE semE ⊢
+        · have : bE = Bool.false := by
+            cases bE
+            · rfl
+            · exact absurd (denD_term ptWit) ((semE.mp rfl) ptWit)
+          subst this; rfl
+        · rw [empty_map_seen]; exact rE m hm
+      have eJ : Elixir.Module.Types.Descr.«disjoint?/2» (D m) l r = .ok (boolAtom dj) := by
+        rw [disj_upper (D m) gl gr]; exact rJ m hm
+      have eJ' : Elixir.Module.Types.Descr.«disjoint?/2» (D m) (upper l) (upper r) = .ok (boolAtom dj) := rJ m hm
+      have hc := compat_run (D m) gl.shape gr.shape eE eS eJ'
+      rw [hc]
+      simp only [eJ, rS m hm, Lynx.Except.ok_bind]
+      cases bE
+      · -- The static part is not empty: it must be included and then the types meet.
+        refine ⟨s, by simp, ?_⟩
+        cases s
+        · simp [boolAtom, Lynx.Except.andAlso]
+        · have meet : dj = Bool.false := by
+            cases dj
+            · rfl
+            · obtain ⟨v, hv⟩ : ∃ v, denD (lower l) v := by
+                apply Classical.byContradiction; intro h
+                exact absurd (semE.mpr fun v hv => h ⟨v, hv⟩) (by simp)
+              exact (semJ rfl v (gl.inv v ((denD_lower l v).mp hv)) (semS rfl v hv)).elim
+          subst meet
+          simp [boolAtom, Lynx.Except.andAlso, Erlang.erlang.«not/1»]
+      · -- The static part is empty, so it is included.
+        have sub : s = Bool.true := by
+          have := tc_sub tl tr (m := m) (by rw [level_two_K]; omega) fun v hv => absurd hv ((semE.mp rfl) v)
+          rw [rS m hm] at this
+          cases s <;> simp_all [boolAtom]
+        subst sub
+        refine ⟨!dj, by simp, ?_⟩
+        cases dj <;> simp [boolAtom, Lynx.Except.andAlso, Erlang.erlang.«not/1»]
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
+    # The top function type of an arity is the arrow from that many arguments of none() to term():
+    # removing the arrow leaves a line whose only negative literal is the arrow itself, which phi covers.
+    postlude ~LEAN"""
+    namespace Elixir.STTDescrProofsTest
+    open Lynx Lynx.Term BddProofs
+
+    /-- The arguments of the top function of arity `n`. -/
+    abbrev noneArgs (n : Nat) : Term := Term.list (List.replicate n (.map []))
+
+    theorem fun_arity_run (n : Nat) :
+        Elixir.Module.Types.Descr.«fun/1» (.integer n) =
+          .ok (.map [(.atom "fun", .tuple #[.atom "union", .map [(.integer n, .atom "bdd_top")]])]) := by
+      unfold Elixir.Module.Types.Descr.«fun/1»
+      simp [Lynx.Except.guard, Erlang.erlang.«is_integer/1», Erlang.erlang.«>=/2», Lynx.Except.andAlso, Int.isGE_compare]
+
+    theorem fun_none_run (n : Nat) : ∃ k : Int, ∀ m, 1 ≤ m →
+        Elixir.Module.Types.Descr.«fun/2» (D m) (noneArgs n) (.atom "term") =
+          .ok (.map [(.atom "fun", .tuple #[.atom "union", .map [(.integer n, .tuple #[.integer k, noneArgs n, .atom "term"])]])]) ∧
+        Elixir.Module.Types.Descr.«bdd_leaf_new/2» (noneArgs n) (.atom "term") = .ok (.tuple #[.integer k, noneArgs n, .atom "term"]) := by
+      obtain ⟨k, leaf⟩ := leaf_fun (List.replicate n (.map []))
+      obtain ⟨r, ⟨s, d, rfl⟩, run⟩ := foldl_uni 1 "Elixir.Module.Types.Descr" "-fun_descr/2-fun-0-" #[]
+        (fun a => ∃ s d, a = .tuple #[s, d, .atom "false"]) (List.replicate n (.map [])) (by
+          intro x mx a ⟨s, d, ha⟩
+          subst ha
+          rw [List.eq_of_mem_replicate mx]
+          refine ⟨.tuple #[.cons (.map []) s, .cons (.map []) d, .atom "false"], ⟨_, _, rfl⟩, fun m hm => ?_⟩
+          obtain ⟨m', rfl, -⟩ := succ_of_le hm
+          rw [Erlang.program.«Elixir.Module.Types.Descr:-fun_descr/2-fun-0-/2».pure]
+          simp [Elixir.Module.Types.Descr.«-fun_descr/2-fun-0-/2», split_static (Or.inr ⟨[], rfl, rfl⟩),
+            Lynx.Except.orElse]) (.tuple #[.nil, .nil, .atom "false"]) ⟨_, _, rfl⟩
+      refine ⟨k, fun m hm => ⟨?_, leaf⟩⟩
+      have hl : Erlang.erlang.«is_list/1» (noneArgs n) = .ok (.atom "true") := by
+        cases n <;> simp [noneArgs, Erlang.erlang.«is_list/1», Term.list, List.replicate]
+      unfold Elixir.Module.Types.Descr.«fun/2» Elixir.Module.Types.Descr.«fun_descr/2»
+      simp [Lynx.Except.guard, hl, length_list, run m hm, split_static (Or.inl rfl), Lynx.Except.orElse, isMember,
+        Elixir.Module.Types.Descr.«fun_new/3», leaf]
+
+    /-- The top function of arity `n` without its arrow leaves the negated leaf. -/
+    theorem fun_top_diff (n : Nat) (L : Term) (leaf : IsLeaf L) (m : Nat) : ∃ h : Int,
+        Elixir.Module.Types.Descr.«bare_difference/3» (D (m + 1)) (.atom "fun")
+            (.tuple #[.atom "union", .map [(.integer n, .atom "bdd_top")]]) (.tuple #[.atom "union", .map [(.integer n, L)]]) =
+          .ok (.tuple #[.atom "union", .map [(.integer n, .tuple #[.integer h, L, .atom "bdd_bot", .atom "bdd_bot", .atom "bdd_top"]),
+            (.integer n, .atom "bdd_top")]]) := by
+      obtain ⟨h, hN⟩ := node_new (okc := fun _ => True) (oku := fun _ => True) (okd := fun _ => True) L (.atom "bdd_bot")
+        (.atom "bdd_bot") (.atom "bdd_top") leaf (by simp [Bdd]) (by simp [Bdd]) (by simp [Bdd])
+      obtain ⟨k, x, y, rfl⟩ := leaf
+      refine ⟨h, ?_⟩
+      simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«fun_difference/2»,
+        Elixir.Module.Types.Descr.«fun_repr_difference/2», Erlang.maps.«fold/3»,
+        Erlang.program.«Elixir.Module.Types.Descr:-fun_repr_difference/2-fun-0-/3».pure,
+        Elixir.Module.Types.Descr.«-fun_repr_difference/2-fun-0-/3», getMapKeys_single, mapLookup, hN,
+        Elixir.Module.Types.Descr.«bdd_difference/2», Elixir.Module.Types.Descr.«bdd_negation/1», Erlang.erlang.«=:=/2»,
+        Erlang.erlang.«is_map/1»,
+        Erlang.maps.«update/3», Erlang.maps.«remove/2», Erlang.erlang.«map_size/1», Erlang.erlang.«==/2»,
+        Lynx.Except.andAlso, List.eraseDupsBy, List.eraseDupsBy.loop]
+
+    /-- An arrow leaf without the top function of its arity is empty. -/
+    theorem fun_leaf_diff (n : Nat) (L : Term) (leaf : IsLeaf L) (m : Nat) :
+        Elixir.Module.Types.Descr.«bare_difference/3» (D (m + 1)) (.atom "fun")
+            (.tuple #[.atom "union", .map [(.integer n, L)]]) (.tuple #[.atom "union", .map [(.integer n, .atom "bdd_top")]]) =
+          .ok (.integer 0) := by
+      obtain ⟨k, x, y, rfl⟩ := leaf
+      simp [Elixir.Module.Types.Descr.«bare_difference/3», Elixir.Module.Types.Descr.«fun_difference/2»,
+        Elixir.Module.Types.Descr.«fun_repr_difference/2», Erlang.maps.«fold/3»,
+        Erlang.program.«Elixir.Module.Types.Descr:-fun_repr_difference/2-fun-0-/3».pure,
+        Elixir.Module.Types.Descr.«-fun_repr_difference/2-fun-0-/3», getMapKeys_single, mapLookup,
+        Elixir.Module.Types.Descr.«bdd_difference/2», Erlang.erlang.«=:=/2», Erlang.erlang.«is_map/1»,
+        Erlang.maps.«update/3», Erlang.maps.«remove/2», Erlang.erlang.«map_size/1», Erlang.erlang.«==/2»,
+        Lynx.Except.andAlso]
+
+    /-- A tuple domain is a subtype of itself. -/
+    theorem domain_sub_self (k : Int) (A : Term) (m : Nat) (S : Term) :
+        Elixir.Module.Types.Descr.«subtype_seen?/3» (D (m + 2)) (.map [(.atom "tuple", .tuple #[.integer k, .atom "closed", A])])
+          (.map [(.atom "tuple", .tuple #[.integer k, .atom "closed", A])]) S =
+          .ok (.atom "true") := by
+      simp [Elixir.Module.Types.Descr.«subtype_seen?/3»]
+      unfold Elixir.Module.Types.Descr.«bare_difference/2»
+      simp [Erlang.erlang.«==/2», unfold_map, Erlang.erlang.«is_map_key/2»]
+      unfold Elixir.Module.Types.Descr.«dynamic_difference/3»
+      simp [Erlang.erlang.«==/2», Erlang.maps.«fold/3»,
+        Erlang.program.«Elixir.Module.Types.Descr:-dynamic_difference/3-fun-0-/3».pure,
+        Elixir.Module.Types.Descr.«-dynamic_difference/3-fun-0-/4», getMapKeys_single, mapLookup,
+        Erlang.program.«Elixir.Module.Types.Descr:bare_difference/3».pure, Elixir.Module.Types.Descr.«bare_difference/3»,
+        Elixir.Module.Types.Descr.«tuple_difference/2», bdd_difference_self, Erlang.maps.«remove/2», empty_none_seen]
+
+    theorem diff_none_none (d : Dispatcher) :
+        Elixir.Module.Types.Descr.«bare_difference/2» d (.map []) (.map []) = .ok (.map []) := by
+      unfold Elixir.Module.Types.Descr.«bare_difference/2»
+      simp [Erlang.erlang.«==/2», Lynx.Except.guard]
+
+    /-- Arguments of `none()` stay empty after removing any arrow argument of `none()`. -/
+    theorem phi_args_none (n : Nat) (ret pos C S : Term) (m : Nat) : ∀ (r j : Nat), j + r = n →
+        Elixir.Module.Types.Descr.«phi_arguments/7» (D m) (Term.list (List.replicate r (.map []))) (.integer j)
+            (Term.list (List.replicate n (.tuple #[.atom "false", .map []]))) ret pos C S =
+          .ok (.tuple #[.atom "true", C]) := by
+      intro r
+      induction r with
+      | zero => intro j _; rw [Elixir.Module.Types.Descr.«phi_arguments/7».eq_def]; rfl
+      | succ r ih =>
+        intro j hj
+        have nth := nth_list (List.replicate n (.tuple #[.atom "false", .map []])) j (by simp; omega)
+        rw [List.getElem?_replicate_of_lt (by omega)] at nth
+        have next := ih (j + 1) (by omega)
+        rw [Elixir.Module.Types.Descr.«phi_arguments/7».eq_def]
+        simp only [List.replicate_succ, Term.list, Erlang.erlang.«+/2_integers»]
+        rw [show ((j + 1 : Nat) : Int) = (j : Int) + 1 by omega] at next
+        simp [nth, diff_none_none, empty_none_seen, isMember, Lynx.Except.guard, next]
+
+    /-- `phi/5` holds for arguments and a return of `none()` against the top arrow of their arity. -/
+    theorem phi_none (n : Nat) (k : Int) (S : Term) (m : Nat) : ∃ C,
+        Elixir.Module.Types.Descr.«phi/5» (D m) (Term.list (List.replicate n (.tuple #[.atom "false", .map []])))
+            (.tuple #[.atom "false", .map []]) (Term.list [.tuple #[.integer k, noneArgs n, .atom "term"]]) (.map []) S =
+          .ok (.tuple #[.atom "true", C]) := by
+      have args := phi_args_none n (.tuple #[.atom "false", .map []]) .nil (.map []) S m n 0 (by omega)
+      have inter : Elixir.Module.Types.Descr.«bare_intersection/2» (D m) (.map []) (.atom "term") = .ok (.map []) := by
+        unfold Elixir.Module.Types.Descr.«bare_intersection/2»; rfl
+      refine ⟨.map [(.tuple #[Term.list (List.replicate n (.tuple #[.atom "false", .map []])),
+        .tuple #[.atom "false", .map []], Term.list [.tuple #[.integer k, noneArgs n, .atom "term"]]], .atom "true")], ?_⟩
+      rw [Elixir.Module.Types.Descr.«phi/5».eq_def]
+      rw [show ((0 : Nat) : Int) = 0 from rfl] at args
+      simp only [Term.list, noneArgs] at args ⊢
+      simp [getMapKeys_single, mapLookup, inter, empty_none_seen, isMember, Lynx.Except.guard, args, Erlang.maps.«put/3»]
+
+    theorem sub_none_term (d : Dispatcher) :
+        Elixir.Module.Types.Descr.«subtype?/2» d (.map []) (.atom "term") = .ok (.atom "true") := by
+      obtain ⟨T, term, -, -, -, staticT⟩ := unfolded_term_fields
+      rw [subtype_term_r term]
+      exact subtype_keys d [] T rfl staticT (by simp)
+
+    theorem sub_term_term (d : Dispatcher) :
+        Elixir.Module.Types.Descr.«subtype?/2» d (.atom "term") (.atom "term") = .ok (.atom "true") := by
+      obtain ⟨T, term, -, -, -, staticT⟩ := unfolded_term_fields
+      unfold Elixir.Module.Types.Descr.«subtype?/2»
+      simp [term, unfold_map, Erlang.erlang.«is_map_key/2», staticT, any_key, Lynx.Except.andAlso, Erlang.erlang.«/=/2»]
+      unfold Elixir.Module.Types.Descr.«subtype_static?/2»
+      simp [Lynx.Except.guard, Erlang.erlang.«=:=/2»]
+
+    /-- With no arguments, the top arrow applies to the empty tuple and returns a subtype of `term()`. -/
+    theorem phi_starter_zero (k : Int) (S : Term) (m : Nat) (hm : 12 ≤ m) :
+        Elixir.Module.Types.Descr.«phi_starter/4» (D m) .nil (.atom "term") (Term.list [.tuple #[.integer k, .nil, .atom "term"]])
+          S = .ok (.atom "true") := by
+      obtain ⟨ops, dops, fops, hnone, tail⟩ := closed_ok 0
+      have dm := domOk ops dops fops hnone tail
+      obtain ⟨dom, hdom, rdom⟩ := dm.dom [] (by simp)
+      obtain ⟨i, hi, ri⟩ := dm.inter hdom hdom
+      obtain ⟨X, rfl⟩ := dm.isMap hi
+      obtain ⟨e, he⟩ := dm.empty hi []
+      obtain ⟨m', rfl⟩ : ∃ m', m = m' + 1 := ⟨m - 1, by omega⟩
+      have apply : ∃ r, (r = .map [] ∨ r = .atom "term") ∧
+          Elixir.Module.Types.Descr.«apply_disjoint/2» (D (m' + 1)) .nil (Term.list [.tuple #[.integer k, .nil, .atom "term"]]) =
+            .ok r := by
+        simp only [Term.list] at rdom
+        unfold Elixir.Module.Types.Descr.«apply_disjoint/2»
+        cases e
+        · refine ⟨.atom "term", Or.inr rfl, ?_⟩
+          simp [rdom, Erlang.lists.«foldl/3», Lynx.Except.guard, Erlang.erlang.«is_function/2»,
+            Erlang.lists.«foldl_1/3», Erlang.program.«Elixir.Module.Types.Descr:-apply_disjoint/2-fun-0-/2».pure,
+            Elixir.Module.Types.Descr.«-apply_disjoint/2-fun-0-/3», ri m' (by omega), Elixir.Module.Types.Descr.«empty?/1»,
+            he m' (by omega), isMember]
+          unfold Elixir.Module.Types.Descr.«bare_union/2»
+          rfl
+        · refine ⟨.map [], Or.inl rfl, ?_⟩
+          simp [rdom, Erlang.lists.«foldl/3», Lynx.Except.guard, Erlang.erlang.«is_function/2»,
+            Erlang.lists.«foldl_1/3», Erlang.program.«Elixir.Module.Types.Descr:-apply_disjoint/2-fun-0-/2».pure,
+            Elixir.Module.Types.Descr.«-apply_disjoint/2-fun-0-/3», ri m' (by omega), Elixir.Module.Types.Descr.«empty?/1»,
+            he m' (by omega), isMember]
+      obtain ⟨r, hr, run⟩ := apply
+      have sub : Elixir.Module.Types.Descr.«subtype?/2» (D (m' + 1)) r (.atom "term") = .ok (.atom "true") := by
+        rcases hr with rfl | rfl
+        · exact sub_none_term _
+        · exact sub_term_term _
+      unfold Elixir.Module.Types.Descr.«phi_starter/4» Elixir.Module.Types.Descr.«disjoint_non_empty_domains?/3»
+      simp [Term.list, Erlang.lists.«all/2», Lynx.Except.guard, Erlang.erlang.«is_function/2»,
+        Elixir.Module.Types.Descr.«all_non_empty_arguments?/2»,
+        Erlang.program.«Elixir.Module.Types.Descr:-all_non_empty_arguments?/2-fun-1-/1».pure,
+        Elixir.Module.Types.Descr.«-all_non_empty_arguments?/2-fun-1-/2», Erlang.lists.«all_1/2»,
+        Elixir.Module.Types.Descr.«all_disjoint_arguments?/1», Lynx.Except.andAlso, Erlang.erlang.«/=/2», run, sub]
+
+    /-- With arguments of `none()`, `phi/5` decides that the top arrow is covered. -/
+    theorem phi_starter_succ (n : Nat) (k : Int) (S : Term) (m : Nat) :
+        Elixir.Module.Types.Descr.«phi_starter/4» (D (m + 1)) (noneArgs (n + 1)) (.atom "term")
+          (Term.list [.tuple #[.integer k, noneArgs (n + 1), .atom "term"]]) S = .ok (.atom "true") := by
+      have all := all_list (D (m + 1)) "Elixir.Module.Types.Descr" "-disjoint_non_empty_domains?/3-fun-0-" #[S]
+        (fun _ => Bool.false) (List.replicate (n + 1) (.map [])) (by
+          intro x mx
+          rw [List.eq_of_mem_replicate mx, Erlang.program.«Elixir.Module.Types.Descr:-disjoint_non_empty_domains?/3-fun-0-/1».pure]
+          simp [Elixir.Module.Types.Descr.«-disjoint_non_empty_domains?/3-fun-0-/2», empty_none_seen, Erlang.erlang.«not/1»,
+            boolAtom])
+      have args := map_list (D (m + 1)) "Elixir.Module.Types.Descr" "-phi_starter/4-fun-0-" #[]
+        (fun x => .tuple #[.atom "false", x]) (List.replicate (n + 1) (.map [])) (fun x _ => by
+          rw [Erlang.program.«Elixir.Module.Types.Descr:-phi_starter/4-fun-0-/1».pure]; rfl)
+      have neg : Elixir.Module.Types.Descr.«bare_negation/1» (D (m + 1)) (.atom "term") = .ok (.map []) := by
+        simp [Elixir.Module.Types.Descr.«bare_negation/1»]
+      obtain ⟨C, phi⟩ := phi_none (n + 1) k S (m + 1)
+      simp only [List.map_replicate] at args
+      simp only [List.all_replicate] at all
+      unfold Elixir.Module.Types.Descr.«phi_starter/4» Elixir.Module.Types.Descr.«disjoint_non_empty_domains?/3»
+      simp [noneArgs, all, boolAtom, Lynx.Except.andAlso, args, neg, phi]
+
+    theorem phi_starter_none (n : Nat) (k : Int) (S : Term) (m : Nat) (hm : 12 ≤ m) :
+        Elixir.Module.Types.Descr.«phi_starter/4» (D m) (noneArgs n) (.atom "term")
+          (Term.list [.tuple #[.integer k, noneArgs n, .atom "term"]]) S = .ok (.atom "true") := by
+      cases n with
+      | zero => exact phi_starter_zero k S m hm
+      | succ n =>
+        obtain ⟨m', rfl⟩ : ∃ m', m = m' + 1 := ⟨m - 1, by omega⟩
+        exact phi_starter_succ n k S m'
+
+    /-- The line of the top function of arity `n` without its arrow leaf is empty. -/
+    theorem fun_line_top (n : Nat) (k : Int) (S : Term) (m : Nat) (hm : 14 ≤ m)
+        (leaf : Elixir.Module.Types.Descr.«bdd_leaf_new/2» (noneArgs n) (.atom "term") =
+          .ok (.tuple #[.integer k, noneArgs n, .atom "term"])) :
+        Elixir.Module.Types.Descr.«fun_line_empty?/3» (D m) .nil (Term.list [.tuple #[.integer k, noneArgs n, .atom "term"]]) S =
+          .ok (.atom "true") := by
+      obtain ⟨kd, dom⟩ := args_domain (List.replicate n (.map [])) (fun e me => by
+        rw [List.eq_of_mem_replicate me]; exact Or.inr ⟨[], rfl, rfl⟩)
+      obtain ⟨m', rfl⟩ : ∃ m', m = m' + 3 := ⟨m - 3, by omega⟩
+      have margs := map_list (D (m' + 3)) "Elixir.Module.Types.Descr" "-fun_line_empty?/3-fun-0-" #[]
+        (fun _ => .map []) (List.replicate n (.map [])) (fun x _ => by
+          rw [Erlang.program.«Elixir.Module.Types.Descr:-fun_line_empty?/3-fun-0-/1».pure]; rfl)
+      simp only [List.map_const'] at margs
+      have fd : Elixir.Module.Types.Descr.«fetch_domain/1» (D (m' + 2)) (Term.list [.tuple #[.integer k, noneArgs n, .atom "term"]]) =
+          .ok (.map [(.atom "tuple", .tuple #[.integer kd, .atom "closed", noneArgs n])]) := by
+        unfold Elixir.Module.Types.Descr.«fetch_domain/1»
+        simp [Erlang.lists.«foldl/3», Lynx.Except.guard, Erlang.erlang.«is_function/2», Erlang.lists.«foldl_1/3»,
+          Erlang.program.«Elixir.Module.Types.Descr:-fetch_domain/1-fun-0-/2».pure,
+          Elixir.Module.Types.Descr.«-fetch_domain/1-fun-0-/2», dom]
+        unfold Elixir.Module.Types.Descr.«bare_union/2»
+        simp [Erlang.erlang.«==/2», Lynx.Except.guard]
+      rw [Elixir.Module.Types.Descr.«fun_line_empty?/3».eq_def]
+      simp [Term.list, margs, leaf]
+      simp only [noneArgs] at fd leaf ⊢
+      rw [Elixir.Module.Types.Descr.«fun_line_empty?/3».eq_def]
+      simp [Erlang.lists.«any/2», Lynx.Except.guard, Erlang.erlang.«is_function/2», Erlang.lists.«any_1/2»,
+        Erlang.program.«Elixir.Module.Types.Descr:-fun_line_empty?/3-fun-1-/1».pure,
+        Elixir.Module.Types.Descr.«-fun_line_empty?/3-fun-1-/3», dom, fd, domain_sub_self kd _ m',
+        phi_starter_none n k S (m' + 2) (by omega)]
+
+    /-- A negated leaf has a single line, whose only literal is negative. -/
+    theorem dnf_neg_leaf (h : Int) (L : Term) :
+        Elixir.Module.Types.Descr.«bdd_to_dnf/4» .nil .nil .nil
+            (.tuple #[.integer h, L, .atom "bdd_bot", .atom "bdd_bot", .atom "bdd_top"]) =
+          .ok (Term.list [.tuple #[.nil, Term.list [L]]]) := by
+      have bot : ∀ acc p q, Elixir.Module.Types.Descr.«bdd_to_dnf/4» acc p q (.atom "bdd_bot") = .ok acc := by
+        intro acc p q; rw [Elixir.Module.Types.Descr.«bdd_to_dnf/4».eq_def]; rfl
+      have top : ∀ acc p q, Elixir.Module.Types.Descr.«bdd_to_dnf/4» acc p q (.atom "bdd_top") =
+          .ok (.cons (.tuple #[p, q]) acc) := by
+        intro acc p q; rw [Elixir.Module.Types.Descr.«bdd_to_dnf/4».eq_def]; rfl
+      rw [Elixir.Module.Types.Descr.«bdd_to_dnf/4».eq_def]
+      simp [bot, top, Term.list]
+
+    /-- The top function of arity `n` without its arrow leaf is empty. -/
+    theorem fun_empty_top (n : Nat) (k h : Int) (m : Nat) (hm : 18 ≤ m)
+        (leaf : Elixir.Module.Types.Descr.«bdd_leaf_new/2» (noneArgs n) (.atom "term") =
+          .ok (.tuple #[.integer k, noneArgs n, .atom "term"])) :
+        Elixir.Module.Types.Descr.«fun_empty?/2» (D m) (.tuple #[.atom "union", .map [(.integer n,
+            .tuple #[.integer h, .tuple #[.integer k, noneArgs n, .atom "term"], .atom "bdd_bot", .atom "bdd_bot",
+              .atom "bdd_top"]), (.integer n, .atom "bdd_top")]]) (.map []) = .ok (.atom "true") := by
+      obtain ⟨m', rfl⟩ : ∃ m', m = m' + 2 := ⟨m - 2, by omega⟩
+      unfold Elixir.Module.Types.Descr.«fun_empty?/2»
+      simp only [Erlang.maps.«to_list/1», Lynx.Except.ok_bind]
+      refine all_true _ _ _ _ _ fun x mx => ?_
+      obtain ⟨e, me, rfl⟩ := List.mem_map.mp mx
+      have hv := mapLookup_of_mem_mapEntries me
+      have he : e.2 = .tuple #[.integer h, .tuple #[.integer k, noneArgs n, .atom "term"], .atom "bdd_bot", .atom "bdd_bot",
+          .atom "bdd_top"] := by
+        by_cases c : exactCompare e.1 (.integer n) = .eq
+        · simp [mapLookup, c] at hv; exact hv.symm
+        · simp [mapLookup, c] at hv
+      rw [he]
+      have line := fun_line_top n k (.map [(.cons e.1 (.tuple #[.integer h, .tuple #[.integer k, noneArgs n, .atom "term"],
+        .atom "bdd_bot", .atom "bdd_bot", .atom "bdd_top"]), .atom "true")]) m' (by omega) leaf
+      rw [Erlang.program.«Elixir.Module.Types.Descr:-fun_empty?/2-fun-1-/1».pure]
+      simp [Elixir.Module.Types.Descr.«-fun_empty?/2-fun-1-/2», Elixir.Module.Types.Descr.«empty_bdd_seen_key/2»,
+        Erlang.erlang.«is_map_key/2», Erlang.maps.«put/3», Elixir.Module.Types.Descr.«bdd_to_dnf/1», dnf_neg_leaf]
+      refine all_true _ _ _ _ _ fun y my => ?_
+      rw [List.mem_singleton.mp my, Erlang.program.«Elixir.Module.Types.Descr:-fun_empty?/2-fun-0-/1».pure]
+      simpa [Elixir.Module.Types.Descr.«-fun_empty?/2-fun-0-/2»] using line
+
+    /-- The top function of arity `n` is equal to the arrow from `n` arguments of `none()` to `term()`. -/
+    theorem fun_arity_equal_run (n : Nat) (m : Nat) (hm : 20 ≤ m) : ∃ right,
+        Elixir.Module.Types.Descr.«fun/2» (D m) (noneArgs n) (.atom "term") = .ok right ∧
+        Elixir.Module.Types.Descr.«equal?/2» (D m)
+          (.map [(.atom "fun", .tuple #[.atom "union", .map [(.integer n, .atom "bdd_top")]])]) right = .ok (.atom "true") := by
+      obtain ⟨k, run⟩ := fun_none_run n
+      obtain ⟨r, leaf⟩ := run m (by omega)
+      refine ⟨_, r, ?_⟩
+      obtain ⟨m', rfl⟩ : ∃ m', m = m' + 1 := ⟨m - 1, by omega⟩
+      obtain ⟨h, diff⟩ := fun_top_diff n (.tuple #[.integer k, noneArgs n, .atom "term"]) ⟨k, _, _, rfl⟩ m'
+      have sub₁ := subtype_keys (D (m' + 1)) [(.atom "fun", .tuple #[.atom "union", .map [(.integer n, .atom "bdd_top")]])]
+        [(.atom "fun", .tuple #[.atom "union", .map [(.integer n, .tuple #[.integer k, noneArgs n, .atom "term"])]])]
+        (by simp [mapLookup]) (by simp [mapLookup]) (by
+          intro e me
+          simp only [mapEntries_singleton, List.mem_singleton] at me
+          subst me
+          refine Or.inl ⟨_, _, by simp [mapLookup], diff, Or.inr (Or.inr ?_)⟩
+          simp only [Elixir.Module.Types.Descr.«empty_key?/3»]
+          exact fun_empty_top n k h (m' + 1) (by omega) leaf)
+      have sub₂ := subtype_keys (D (m' + 1))
+        [(.atom "fun", .tuple #[.atom "union", .map [(.integer n, .tuple #[.integer k, noneArgs n, .atom "term"])]])]
+        [(.atom "fun", .tuple #[.atom "union", .map [(.integer n, .atom "bdd_top")]])]
+        (by simp [mapLookup]) (by simp [mapLookup]) (by
+          intro e me
+          simp only [mapEntries_singleton, List.mem_singleton] at me
+          subst me
+          exact Or.inl ⟨_, _, by simp [mapLookup], fun_leaf_diff n _ ⟨k, _, _, rfl⟩ m', Or.inl rfl⟩)
+      simp [Elixir.Module.Types.Descr.«equal?/2», Erlang.erlang.«==/2», Lynx.Except.orElse, Lynx.Except.andAlso, sub₁, sub₂]
+      split <;> simp_all
+
+    end Elixir.STTDescrProofsTest
+    """
+
     law intersection_none_empty(descr),
       requires: descr?(descr),
       expects: Descr.empty?(Descr.bare_intersection(descr, Descr.none())),
@@ -38263,102 +38875,102 @@ defmodule STTDescrProofsTest do
       """
 
     law intersection_negation_empty(descr),
-      requires: negatable?(descr),
-      expects: Descr.empty?(Descr.bare_intersection(descr, Descr.bare_negation(descr))),
+      requires: negatable?(descr) or opt_gradual?(descr),
+      expects: Descr.empty?(Descr.lower_bound(Descr.bare_intersection(descr, Descr.bare_negation(descr)))),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«intersection_negation_empty:requires/1»] at requires
-      rcases Nest.negatable_cases descr requires with rfl | ⟨X, rfl, valid⟩
-      · simp only [Lynx.apply_eq, «intersection_negation_empty:ensures/1»]
-        simp [negation_term_none, inter_term_left, empty_none]
-      obtain ⟨ops, -, -, -, -⟩ := closed_ok 2
-      replace valid := valid.mono (nest_closed 2)
+      simp only [Lynx.apply_eq, «intersection_negation_empty:requires/1», Term.true, Lynx.Except.orElse_eq_true] at requires
       simp only [Lynx.apply_eq, «intersection_negation_empty:ensures/1»]
-      by_cases empty : X = []
-      · subst empty
-        have negation : Elixir.Module.Types.Descr.«bare_negation/1»
-            (Dispatcher.ofTable Erlang.program.fun_table 100) (.map []) = .ok (.atom "term") := by
-          simp only [Elixir.Module.Types.Descr.«bare_negation/1»]
-          unfold Elixir.Module.Types.Descr.«bare_difference/2»
-          simp [Erlang.erlang.«==/2»]
-        have intersection : Elixir.Module.Types.Descr.«bare_intersection/2»
-            (Dispatcher.ofTable Erlang.program.fun_table 100) (.map []) (.atom "term") = .ok (.map []) := by
-          unfold Elixir.Module.Types.Descr.«bare_intersection/2»
-          rfl
-        simp [negation, intersection, empty_none]
-      · obtain ⟨N, negation, static, bitmaps, atoms, funs, lists, tuples, maps, -⟩ :=
-          negation_fields ops 98 X valid empty
-        obtain ⟨I, run, only⟩ := intersection_disjoint 99 X N valid static bitmaps atoms
-          (fun x y hx hy => funs x y hx hy 99) lists tuples maps
-        simp [negation, run, empty_gone (m := 100) (by omega) I only]
+      rcases requires with static | ⟨-, gradual⟩
+      · rcases Nest.negatable_cases descr (by simpa [Term.true] using static) with rfl | ⟨X, rfl, valid⟩
+        · simp [negation_term_none, inter_term_left, Nest.lower_bound_run, Nest.lower, Nest.rmDyn, empty_none]
+        obtain ⟨ops, -, -, -, -⟩ := closed_ok 2
+        replace valid := valid.mono (nest_closed 2)
+        by_cases empty : X = []
+        · subst empty
+          have negation : Elixir.Module.Types.Descr.«bare_negation/1»
+              (Dispatcher.ofTable Erlang.program.fun_table 100) (.map []) = .ok (.atom "term") := by
+            simp only [Elixir.Module.Types.Descr.«bare_negation/1»]
+            unfold Elixir.Module.Types.Descr.«bare_difference/2»
+            simp [Erlang.erlang.«==/2»]
+          have intersection : Elixir.Module.Types.Descr.«bare_intersection/2»
+              (Dispatcher.ofTable Erlang.program.fun_table 100) (.map []) (.atom "term") = .ok (.map []) := by
+            unfold Elixir.Module.Types.Descr.«bare_intersection/2»
+            rfl
+          simp [negation, intersection, Nest.lower_bound_run, Nest.lower, Nest.rmDyn, empty_none]
+        · obtain ⟨N, negation, static, bitmaps, atoms, funs, lists, tuples, maps, -⟩ :=
+            negation_fields ops 98 X valid empty
+          obtain ⟨I, run, only⟩ := intersection_disjoint 99 X N valid static bitmaps atoms
+            (fun x y hx hy => funs x y hx hy 99) lists tuples maps
+          have staticI : mapLookup I (.atom "dynamic") = Option.none := by
+            cases h : mapLookup I (.atom "dynamic") with
+            | none => rfl
+            | some w => rcases only _ _ h with ⟨e, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ <;> simp at e
+          simp [negation, run, Nest.lower_bound_run, Nest.lower, Nest.rmDyn_static staticI,
+            empty_gone (m := 100) (by omega) I only]
+      · have t := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) descr gradual
+        obtain ⟨n, i, r₁, r₂, r₃, eq⟩ := Nest.gd_inter_neg_lower t (m := 100) (by rw [Nest.level_two_K]; omega)
+        simp [r₁, r₂, r₃, eq]
       """
 
     law opt_intersection_negation_empty(descr),
-      requires: opt_negatable?(descr),
-      expects: Descr.empty?(Descr.opt_intersection(descr, Descr.opt_negation(descr))),
+      requires: opt_gradual?(descr),
+      expects: Descr.empty?(Descr.lower_bound(Descr.opt_intersection(descr, Descr.opt_negation(descr)))),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«opt_intersection_negation_empty:requires/1»] at requires
-      have t := Nest.opt_negatable_tc descr requires
-      obtain ⟨n, i, r₁, r₂, eq⟩ := Nest.opt_inter_neg_empty_gen t (m := 100) (by rw [Nest.level_two_K]; omega)
+      simp only [Lynx.apply_eq, «opt_intersection_negation_empty:requires/1»] at requires
+      have t := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) descr requires
+      obtain ⟨n, i, r₁, r₂, r₃, eq⟩ := Nest.gd_opt_inter_neg_lower t (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «opt_intersection_negation_empty:ensures/1»]
-      simp [r₁, r₂, eq]
+      simp [r₁, r₂, r₃, eq]
       """
 
     law union_negation_term(descr),
-      requires: negatable?(descr),
-      expects: Descr.subtype?(Descr.term(), Descr.bare_union(descr, Descr.bare_negation(descr))),
+      requires: negatable?(descr) or opt_gradual?(descr),
+      expects: Descr.subtype?(Descr.term(), Descr.upper_bound(Descr.bare_union(descr, Descr.bare_negation(descr)))),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«union_negation_term:requires/1»] at requires
-      rcases Nest.negatable_cases descr requires with rfl | ⟨X, rfl, valid⟩
-      · obtain ⟨T, term, -, -, -, staticT⟩ := unfolded_term_fields
-        simp only [Lynx.apply_eq, «union_negation_term:ensures/1»]
-        simp [Elixir.Module.Types.Descr.«term/0», negation_term_none, union_term_l]
-        unfold Elixir.Module.Types.Descr.«subtype?/2»
-        simp [term, unfold_map, Erlang.erlang.«is_map_key/2», staticT, any_key, Lynx.Except.andAlso,
-          Erlang.erlang.«/=/2»]
-        unfold Elixir.Module.Types.Descr.«subtype_static?/2»
-        simp [Lynx.Except.guard, Erlang.erlang.«=:=/2»]
-      obtain ⟨ops, -, -, -, -⟩ := closed_ok 2
-      replace valid := valid.mono (nest_closed 2)
+      simp only [Lynx.apply_eq, «union_negation_term:requires/1», Term.true, Lynx.Except.orElse_eq_true] at requires
       simp only [Lynx.apply_eq, «union_negation_term:ensures/1»]
-      by_cases empty : X = []
-      · subst empty
-        have negation : Elixir.Module.Types.Descr.«bare_negation/1»
-            (Dispatcher.ofTable Erlang.program.fun_table 100) (.map []) = .ok (.atom "term") := by
-          simp only [Elixir.Module.Types.Descr.«bare_negation/1»]
-          unfold Elixir.Module.Types.Descr.«bare_difference/2»
-          simp [Erlang.erlang.«==/2»]
-        have union : Elixir.Module.Types.Descr.«bare_union/2»
-            (Dispatcher.ofTable Erlang.program.fun_table 100) (.map []) (.atom "term") = .ok (.atom "term") := by
-          unfold Elixir.Module.Types.Descr.«bare_union/2»
-          rfl
-        obtain ⟨T, term, -, -, -, staticT⟩ := unfolded_term_fields
-        simp [Elixir.Module.Types.Descr.«term/0», negation, union]
-        unfold Elixir.Module.Types.Descr.«subtype?/2»
-        simp [term, unfold_map, Erlang.erlang.«is_map_key/2», staticT, any_key, Lynx.Except.andAlso,
-          Erlang.erlang.«/=/2»]
-        unfold Elixir.Module.Types.Descr.«subtype_static?/2»
-        simp [Lynx.Except.guard, Erlang.erlang.«=:=/2»]
-      · obtain ⟨N, U, negation, union, sub⟩ := union_negation_covers ops (by omega) X valid empty
-        simp [Elixir.Module.Types.Descr.«term/0», negation, union, sub]
+      rcases requires with static | ⟨-, gradual⟩
+      · rcases Nest.negatable_cases descr (by simpa [Term.true] using static) with rfl | ⟨X, rfl, valid⟩
+        · simp [Elixir.Module.Types.Descr.«term/0», negation_term_none, union_term_l, Nest.upper_bound_run, Nest.upper,
+            sub_term_term]
+        obtain ⟨ops, -, -, -, -⟩ := closed_ok 2
+        replace valid := valid.mono (nest_closed 2)
+        by_cases empty : X = []
+        · subst empty
+          have negation : Elixir.Module.Types.Descr.«bare_negation/1»
+              (Dispatcher.ofTable Erlang.program.fun_table 100) (.map []) = .ok (.atom "term") := by
+            simp only [Elixir.Module.Types.Descr.«bare_negation/1»]
+            unfold Elixir.Module.Types.Descr.«bare_difference/2»
+            simp [Erlang.erlang.«==/2»]
+          have union : Elixir.Module.Types.Descr.«bare_union/2»
+              (Dispatcher.ofTable Erlang.program.fun_table 100) (.map []) (.atom "term") = .ok (.atom "term") := by
+            unfold Elixir.Module.Types.Descr.«bare_union/2»
+            rfl
+          simp [Elixir.Module.Types.Descr.«term/0», negation, union, Nest.upper_bound_run, Nest.upper, sub_term_term]
+        · obtain ⟨N, U, negation, union, staticU, sub⟩ := union_negation_covers ops (by omega) X valid empty
+          simp [Elixir.Module.Types.Descr.«term/0», negation, union, Nest.upper_bound_run, Nest.upper, staticU, sub]
+      · have t := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) descr gradual
+        obtain ⟨n, u, r₁, r₂, r₃, sub⟩ := Nest.gd_union_neg_upper t (m := 100) (by rw [Nest.level_two_K]; omega)
+        simp [Elixir.Module.Types.Descr.«term/0», r₁, r₂, r₃, sub]
       """
 
     law opt_union_negation_term(descr),
-      requires: opt_negatable?(descr),
-      expects: Descr.subtype?(Descr.term(), Descr.opt_union(descr, Descr.opt_negation(descr))),
+      requires: opt_gradual?(descr),
+      expects: Descr.subtype?(Descr.term(), Descr.upper_bound(Descr.opt_union(descr, Descr.opt_negation(descr)))),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«opt_union_negation_term:requires/1»] at requires
-      have t := Nest.opt_negatable_tc descr requires
-      obtain ⟨n, u, r₁, r₂, eq⟩ := Nest.opt_union_neg_term_gen t (m := 100) (by rw [Nest.level_two_K]; omega)
+      simp only [Lynx.apply_eq, «opt_union_negation_term:requires/1»] at requires
+      have t := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) descr requires
+      obtain ⟨n, u, r₁, r₂, r₃, sub⟩ := Nest.gd_opt_union_neg_upper t (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «opt_union_negation_term:ensures/1»]
-      simp [Elixir.Module.Types.Descr.«term/0», r₁, r₂, eq]
+      simp [Elixir.Module.Types.Descr.«term/0», r₁, r₂, r₃, sub]
       """
 
     law de_morgan_union(left, right),
-      requires: negatable?(left) and negatable?(right),
+      requires: (negatable?(left) and negatable?(right)) or (opt_gradual?(left) and opt_gradual?(right)),
       expects:
         Descr.equal?(
           Descr.bare_negation(Descr.bare_union(left, right)),
@@ -38366,11 +38978,17 @@ defmodule STTDescrProofsTest do
         ),
       proof: ~LEAN"""
       open Lynx Lynx.Term in
-      simp only [«de_morgan_union:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have hl := Nest.negatable_cases left (by simpa [Term.true] using requires.1)
-      have hr := Nest.negatable_cases right (by simpa [Term.true] using requires.2)
+      simp only [Lynx.apply_eq, «de_morgan_union:requires/2», Term.true, Lynx.Except.orElse_eq_true,
+        Lynx.Except.andAlso_eq_true] at requires
       simp only [Lynx.apply_eq, «de_morgan_union:ensures/2»]
-      exact de_morgan_union_any hl hr
+      rcases requires with ⟨sl, sr⟩ | ⟨-, gl, gr⟩
+      · exact de_morgan_union_any (Nest.negatable_cases left (by simpa [Term.true] using sl))
+          (Nest.negatable_cases right (by simpa [Term.true] using sr))
+      · have tL := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) left gl
+        have tR := Nest.opt_gradual_gc (m := 100) (by rw [Nest.level_two_K]; omega) right gr
+        obtain ⟨u, x, nl, nr, y, r₁, r₂, r₃, r₄, r₅, eq⟩ :=
+          Nest.gd_de_morgan_union tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
+        simp [r₁, r₂, r₃, r₄, r₅, eq]
       """
 
     law opt_de_morgan_union(left, right),
@@ -38539,6 +39157,38 @@ defmodule STTDescrProofsTest do
       obtain ⟨x, y, r₁, r₂, eq⟩ := Nest.gd_diff_equal tL tR (m := 100) (by rw [Nest.level_two_K]; omega)
       simp only [Lynx.apply_eq, «opt_difference_equal:ensures/2»]
       simp [r₁, r₂, eq]
+      """
+
+    law fun_arity_equal(arity),
+      requires: is_integer(arity) and arity >= 0,
+      expects: Descr.equal?(Descr.fun(arity), Descr.fun(:lists.duplicate(arity, Descr.none()), Descr.term())),
+      proof: ~LEAN"""
+      open Lynx Lynx.Term in
+      obtain ⟨n, rfl⟩ : ∃ n : Nat, arity = .integer n := by
+        simp only [«fun_arity_equal:requires/1»] at requires
+        cases arity <;> simp [Erlang.erlang.«is_integer/1», Lynx.Except.andAlso, Term.true, Erlang.erlang.«>=/2»,
+          Int.isGE_compare] at requires
+        rename_i z
+        exact ⟨z.toNat, by simp only [Term.integer.injEq]; omega⟩
+      obtain ⟨right, run, eq⟩ := fun_arity_equal_run n 100 (by omega)
+      simp only [Lynx.apply_eq, «fun_arity_equal:ensures/1»]
+      simp [fun_arity_run, Elixir.Module.Types.Descr.«none/0», dup_nat, Elixir.Module.Types.Descr.«term/0», run, eq,
+        Term.true]
+      """
+
+    law compatible_bounds(left, right),
+      requires: top_fun_gradual?(left) and top_fun_gradual?(right),
+      expects:
+        Descr.compatible?(left, right) ==
+          (Descr.subtype?(Descr.lower_bound(left), Descr.upper_bound(right)) and not Descr.disjoint?(left, right)),
+      proof: ~LEAN"""
+      open Lynx Lynx.Term in
+      simp only [Lynx.apply_eq, «compatible_bounds:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      obtain ⟨gl, ll, ul⟩ := Nest.top_fun_gradual_ok requires.1
+      obtain ⟨gr, -, ur⟩ := Nest.top_fun_gradual_ok requires.2
+      obtain ⟨b, r₁, r₂⟩ := Nest.gd_compatible gl gr ll ul ur (m := 100) (by omega)
+      simp only [Lynx.apply_eq, «compatible_bounds:ensures/2»]
+      simp [r₁, Nest.lower_bound_run gl.shape, Nest.upper_bound_run gr.shape, r₂, Erlang.erlang.«==/2», Term.true]
       """
   end
 end
