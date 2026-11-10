@@ -2028,10 +2028,28 @@ private def insertProofSource (source rendered : String) : String := Id.run do
     if line.trimAscii.isEmpty then "" else "  " ++ line
   return before ++ " by\n" ++ "\n".intercalate lines ++ after
 
+/-- The runtime modules every rendered file imports, so it elaborates as the runner does. -/
+private def renderedRuntime : List (String × String) :=
+  [("public import ", "Lynx"), ("import ", "Lynx.Runner.Elab")]
+
+/-- Prelude blocks follow their header, which the runner extends with the runtime and the
+file's imports. The rendered header declares them too, after the prelude's own imports. -/
+private def renderPreludes (file : DecodedFile) : IO String := do
+  let sources ← file.preludes.mapM fun block => IO.ofExcept (str block "source")
+  let some first := sources[0]? | return ""
+  let input := Parser.mkInputContext first file.fileName (normalizeLineEndings := false)
+  let (header, _, _) ← Parser.parseHeader input
+  let header : Elab.HeaderSyntax := header
+  let declared := (header.imports (includeInit := false)).map fun (declared : Import) => declared.module.toString
+  let added := renderedRuntime ++ file.imports.toList.map ("public import ", ·)
+  let imports := added.filter (!declared.contains ·.2) |>.map fun (keyword, name) => keyword ++ name
+  let stop := header.raw.getTailPos?.getD 0
+  let first := String.Pos.Raw.extract first 0 stop ++ String.join (imports.map ("\n" ++ ·)) ++
+    String.Pos.Raw.extract first stop first.rawEndPos
+  return String.intercalate "\n\n" (first :: sources.toList.drop 1) ++ "\n"
+
 private def renderFile (file : DecodedFile) (env : Lean.Environment) : IO String := do
-  if !file.preludes.isEmpty then
-    let sources ← file.preludes.mapM fun block => IO.ofExcept (str block "source")
-    return String.intercalate "\n\n" sources.toList ++ "\n"
+  if !file.preludes.isEmpty then return ← renderPreludes file
   let action : CoreM String := do
     let commands ← file.commands.mapM fun cmd => do
       let some (index, cmd) := withProofPlaceholder file cmd
@@ -2045,7 +2063,7 @@ private def renderFile (file : DecodedFile) (env : Lean.Environment) : IO String
     let imports := if file.theorems.isEmpty then imports else
       imports ++ file.imports.toList.map ("meta import " ++ ·)
     -- The runner elaborates every file with its elaborators and simplification procedures.
-    let runtime := ["public import Lynx", "import Lynx.Runner.Elab"]
+    let runtime := renderedRuntime.map fun (keyword, name) => keyword ++ name
     return "module\n\n" ++ String.intercalate "\n" (runtime ++ imports) ++
       "\n\n" ++ String.intercalate "\n\n" commands.toList ++ "\n"
   (action.run' { fileName := file.fileName, fileMap := file.fileMap }
