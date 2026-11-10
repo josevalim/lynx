@@ -59,11 +59,18 @@ defmodule Lynx.Translation do
   defp lean_bif(_, _, _), do: :error
 
   def new(opts \\ []) do
+    cutoffs = MapSet.new(Keyword.get(opts, :cutoffs, []))
+
+    for {module, function, arity} <- cutoffs, lean_bif(module, function, arity) != :error do
+      raise ArgumentError,
+            "cannot cut off #{Exception.format_mfa(module, function, arity)}, which is built into Lean"
+    end
+
     %__MODULE__{
       preludes: Keyword.get(opts, :preludes, []),
       postludes: Keyword.get(opts, :postludes, []),
       termination_suffixes: Keyword.get(opts, :termination_suffixes, %{}),
-      cutoffs: MapSet.new(Keyword.get(opts, :cutoffs, [])),
+      cutoffs: cutoffs,
       dynamic: Enum.to_list(Keyword.get(opts, :dynamic, []))
     }
   end
@@ -214,8 +221,9 @@ defmodule Lynx.Translation do
        ) do
     location = fn -> source_location(span_anno, translation.modules[caller].file) end
 
-    # Preloaded modules have no BEAM to translate, so their functions must be built into Lean.
-    if not is_map_key(translation.modules, module) and :code.which(module) == :preloaded do
+    # Preloaded modules have no BEAM to translate, so their functions must be built into Lean,
+    # unless they are cut off.
+    if {module, function, arity} not in translation.cutoffs and preloaded?(translation, module) do
       raise CompileError,
             location.() ++
               [
@@ -269,9 +277,36 @@ defmodule Lynx.Translation do
         {data, translation}
 
       %{} ->
-        data = load_module!(module, location)
+        data =
+          if :code.which(module) == :preloaded,
+            do: cutoff_module(translation, module),
+            else: load_module!(module, location)
+
         {data, put_in(translation.modules[module], data)}
     end
+  end
+
+  # Modules without a BEAM, or holding only the functions cut off from one.
+  defp preloaded?(translation, module) do
+    case translation.modules do
+      %{^module => data} -> Map.get(data, :preloaded, false)
+      %{} -> :code.which(module) == :preloaded
+    end
+  end
+
+  # Preloaded modules have no BEAM, so the functions cut off from them are defined to
+  # raise. Their bodies are then cut off like those of any other function.
+  defp cutoff_module(translation, module) do
+    definitions =
+      for {^module, function, arity} <- Enum.sort(translation.cutoffs) do
+        params = for index <- 1..arity//1, do: :cerl.c_var(:"_#{index}")
+        body = :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:error), [:cerl.c_atom(:cutoff)])
+        {:cerl.c_fname(function, arity), :cerl.c_fun(params, body)}
+      end
+
+    exports = for {name, _} <- definitions, do: name
+    core = :cerl.c_module(:cerl.c_atom(module), exports, definitions)
+    module_data("preloaded", core) |> Map.put(:preloaded, true)
   end
 
   defp load_module!(module, location) do

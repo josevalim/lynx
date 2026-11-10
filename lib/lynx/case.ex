@@ -292,6 +292,8 @@ defmodule Lynx.Case do
   cutoff is never reached. This supports proofs whose unreachable error paths
   depend on libraries outside the model; it makes no claim about executing those
   paths. The function remains pure (see the purity model in `Lynx`).
+
+  Functions built into Lean cannot be cut off.
   """
   defmacro cutoff(target) do
     mfa = mfa!(target, "cutoff", __CALLER__)
