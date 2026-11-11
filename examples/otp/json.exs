@@ -2179,17 +2179,17 @@ defmodule JsonProofsTest do
               simp [Erlang.erlang.binary_part_whole, «erlang:binary_to_integer/1», parsed, unexpected_whole]
 
         -- The encoder dispatches through the program table to integer_to_binary/1.
-        have roundtrip_integer : ∀ n : Int,
-            «roundtrip/1» (Dispatcher.ofTable Erlang.program.fun_table 100) (.integer n) =
+        have roundtrip_integer : ∀ (n : Int) (depth : Nat),
+            «roundtrip/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) (.integer n) =
               .ok Term.true := by
-          intro n
+          intro n depth
           simp only [«roundtrip/1», «encode/1», «encode/2», Erlang.erlang.«is_function/2»]
           simp
           unfold «do_encode/2»
           simp only []
           obtain ⟨first, rest, text, -, -⟩ := Erlang.erlang.integer_to_binary_decimal n
           simp [text, Erlang.erlang.iolist_to_binary_binary,
-            decode_integer n 100 _ text, Erlang.erlang.«=:=/2»]
+            decode_integer n (depth + 1) _ text, Erlang.erlang.«=:=/2»]
 
         have continue_array : ∀ {d : Dispatcher} (bs : List UInt8)
             (orig skip acc rest value : Term),
@@ -2848,17 +2848,17 @@ defmodule JsonProofsTest do
           rw [float_decode_end _ _ _ _ _ _ f depth parsed, unexpected_whole]
           simp
 
-        have roundtrip_float : ∀ f : Term.FiniteFloat,
-            «roundtrip/1» (Dispatcher.ofTable Erlang.program.fun_table 100) (.float f) =
+        have roundtrip_float : ∀ (f : Term.FiniteFloat) (depth : Nat),
+            «roundtrip/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) (.float f) =
               .ok Term.true := by
-          intro f
+          intro f depth
           obtain ⟨-, -, -, -, -, encoded, -⟩ := float_text f
           simp only [«roundtrip/1», «encode/1», «encode/2», Erlang.erlang.«is_function/2»]
           simp
           unfold «do_encode/2»
           simp only [Term.list]
           simp [encoded, Erlang.erlang.iolist_to_binary_binary,
-            decode_float f 100, Erlang.erlang.«=:=/2»]
+            decode_float f (depth + 1), Erlang.erlang.«=:=/2»]
 
         -- A float embedded in the input, followed by a separator, continues with its value.
         have float_element : ∀ (f : Term.FiniteFloat) (pre post : List UInt8) (b : UInt8)
@@ -3755,14 +3755,15 @@ defmodule JsonProofsTest do
               · exact rest
           case equalField => intro k v hv; exact hv
 
-        have roundtrip_value : ∀ (v : Json) (t : Term), Represents t v →
+        have roundtrip_value : ∀ (v : Json) (t : Term) (depth : Nat), Represents t v →
             (∀ n, v ≠ .int n) ∧ (∀ f, v ≠ .float f) →
-            v.depth < 99 →
-            «roundtrip/1» (Dispatcher.ofTable Erlang.program.fun_table 100) t = .ok Term.true := by
-          intro v t represents number bound
+            v.depth < depth →
+            «roundtrip/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) t =
+              .ok Term.true := by
+          intro v t depth represents number bound
           simp only [«roundtrip/1», «encode/1», «encode/2», Erlang.erlang.«is_function/2»]
           simp
-          obtain ⟨io, encoded, flat⟩ := encode_value v t 99 represents bound
+          obtain ⟨io, encoded, flat⟩ := encode_value v t depth represents bound
           rw [encoded, Lynx.Except.ok_bind]
           rw [flat, Lynx.Except.ok_bind,
             decode_value v _ number, Lynx.Except.ok_bind]
@@ -3887,16 +3888,19 @@ defmodule JsonProofsTest do
 
         simp only [«json_roundtrip:requires/1», «supported?/1»] at requires
         obtain ⟨v, represents, bound⟩ := extract 64 data requires
+        -- Encoding calls do_encode/2 one level down, which nests once per level of data.
+        refine ⟨66, fun depth deep => ?_⟩
+        obtain ⟨depth, rfl⟩ : ∃ k, depth = k + 1 := ⟨depth - 1, by omega⟩
         cases v with
         | int n =>
           cases represents
-          simpa [«json_roundtrip:ensures/1»] using roundtrip_integer n
+          simpa [«json_roundtrip:ensures/1»] using roundtrip_integer n depth
         | float f =>
           cases represents
-          simpa [«json_roundtrip:ensures/1»] using roundtrip_float f
+          simpa [«json_roundtrip:ensures/1»] using roundtrip_float f depth
         | _ =>
           simpa [«json_roundtrip:ensures/1»] using
-            roundtrip_value _ _ represents (by simp) (by omega))
+            roundtrip_value _ _ depth represents (by simp) (by omega))
       """
   end
 end

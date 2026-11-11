@@ -16,12 +16,12 @@ public import Lynx.Concurrent.Trace
 namespace Lynx
 
 /-- Call a definition that is not pure with the dispatcher of a program's
-function table, up to a call depth of 100. -/
-@[expose] public def apply (definition : Dispatcher → α) (table : Term.FunTable) : α :=
-  definition (Dispatcher.ofTable table 100)
+function table, up to the given call depth. -/
+@[expose] public def apply (definition : Dispatcher → α) (table : Term.FunTable) (depth : Nat) : α :=
+  definition (Dispatcher.ofTable table depth)
 
-@[simp] public theorem apply_eq (definition : Dispatcher → α) (table : Term.FunTable) :
-    apply definition table = definition (Dispatcher.ofTable table 100) := rfl
+@[simp] public theorem apply_eq (definition : Dispatcher → α) (table : Term.FunTable) (depth : Nat) :
+    apply definition table depth = definition (Dispatcher.ofTable table depth) := rfl
 
 /-- Run a complete process tree from a fresh runtime using the supplied
 scheduler choices.

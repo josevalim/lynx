@@ -92,10 +92,12 @@ defmodule Lynx do
       program's table is.
 
   Code at the `apply` level and above receives the dispatcher as its first
-  parameter. Laws pass it through `Lynx.apply helper table`, where `table` is the
-  program's function table, `Erlang.program.fun_table`, and the dispatcher
-  resolves it up to a call depth of 100. Each law then uses the strongest
-  construction its purity allows:
+  parameter. Laws pass it through `Lynx.apply helper table depth`, where `table`
+  is the program's function table, `Erlang.program.fun_table`, and the
+  dispatcher resolves it up to the given call depth. Such code must return
+  `true` from some depth on, so a law holds however deep its calls go, and the
+  proof chooses the bound, which may depend on the inputs. Each law then uses
+  the strongest construction its purity allows:
 
     * Pure code is stated directly, as an `Except` value:
 
@@ -105,21 +107,31 @@ defmodule Lynx do
 
     * Code at the `apply` level is also stated directly, as an `Except` value:
 
-          Lynx.apply «law:ensures/1» table x = .ok Lynx.Term.true
+          ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
+            Lynx.apply «law:ensures/1» table depth x = .ok Lynx.Term.true
 
     * Sequential code is stated through `Lynx.sequential`, which executes the
       code from a fresh runtime:
 
-          Lynx.sequential (Lynx.apply «law:ensures/1» table x) = .ok Lynx.Term.true
+          ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
+            Lynx.sequential (Lynx.apply «law:ensures/1» table depth x) = .ok Lynx.Term.true
 
     * Concurrent code is stated through `Lynx.concurrent`, which also takes the
       scheduler's choices. The precondition must hold under some schedule, and
       the expectation under all of them:
 
-          (requires : ∃ schedule,
-            Lynx.concurrent (Lynx.apply «law:requires/1» table x) schedule = .ok Lynx.Term.true)
+          (requires : ∃ schedule, ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
+            Lynx.concurrent (Lynx.apply «law:requires/1» table depth x) schedule =
+              .ok Lynx.Term.true)
           (schedule : List Lynx.ScheduleChoice) :
-          Lynx.concurrent (Lynx.apply «law:ensures/1» table x) schedule = .ok Lynx.Term.true
+          ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
+            Lynx.concurrent (Lynx.apply «law:ensures/1» table depth x) schedule =
+              .ok Lynx.Term.true
+
+  A precondition at these levels is assumed in the same form, with its own
+  bound. Start such a proof with `refine ⟨bound, fun depth deep => ?_⟩`. When
+  the code makes no dynamic calls, or only calls pure functions, any depth
+  works and the bound is `0`.
 
   Both `Lynx.sequential` and `Lynx.concurrent` start from a fresh runtime: a single
   process, with an empty process dictionary, and an empty mailbox. The
@@ -287,12 +299,12 @@ defmodule Lynx do
       function for every input. Check the property against the data the law
       uses instead, such as `Enum.all?(list, &is_boolean(fun.(&1)))`.
 
-    * Invocations are bounded by a call depth of 100. Pure functions consume no
+    * Invocations are bounded by the call depth. Pure functions consume no
       depth, and neither do calls in sequence, such as `Enum.map/2` invoking
       `fun` once per element. A function that itself invokes function values
       consumes one level for the invocations it makes. Exceeding the depth
-      raises `Lynx.Exception.exhausted`, so laws about deeply nested invocations
-      cannot be proven.
+      raises `Lynx.Exception.exhausted`, so the bound a proof chooses must
+      cover the deepest nesting of invocations, which may grow with the input.
 
   ### Proving concurrent laws
 
@@ -336,8 +348,10 @@ defmodule Lynx do
 
       obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
         cases x <;> simp_all [«law:requires/1», Erlang.erlang.«is_integer/1»]
+      refine ⟨1, fun depth deep => ?_⟩
+      obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       have checked := Lynx.concurrent_of_check
-        (Lynx.apply «law:ensures/1» Erlang.program.fun_table (.integer n))
+        (Lynx.apply «law:ensures/1» Erlang.program.fun_table (depth + 1) (.integer n))
         (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
         (by cbv; simp [Rat.lt_irrefl]) schedule
       split at checked
@@ -345,7 +359,8 @@ defmodule Lynx do
       · contradiction
 
   The predicate accepts the outcomes the law allows, and `cbv` evaluates the
-  check. The final comparison of `n * 2` with itself depends on `n`, which
+  check. Writing the depth as `depth + 1` lets evaluation take the level the
+  spawned function consumes, whatever the remaining depth. The final comparison of `n * 2` with itself depends on `n`, which
   `simp` decides (`==` compares numbers as rationals, hence `Rat.lt_irrefl`).
   A few things to keep in mind:
 
