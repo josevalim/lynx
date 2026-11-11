@@ -22,6 +22,10 @@ defmodule ListsProofsTest do
   defp proper_list([_ | tail]), do: proper_list(tail)
   defp proper_list(_), do: false
 
+  defp pair_list([]), do: true
+  defp pair_list([{_, _} | tail]), do: pair_list(tail)
+  defp pair_list(_), do: false
+
   defp sorted([]), do: true
   defp sorted([_]), do: true
   defp sorted([left, right | tail]), do: left <= right and sorted([right | tail])
@@ -43,6 +47,11 @@ defmodule ListsProofsTest do
 
     sorted(result) and multiplicity(result, value) === multiplicity(list, value) and
       Enum.sort(result) === result
+  end
+
+  def zip_unzip_contract(pairs) do
+    {xs, ys} = :lists.unzip(pairs)
+    :lists.zip(xs, ys) === pairs
   end
 
   laws "sort preserves multiplicities and is idempotent" do
@@ -1317,6 +1326,151 @@ defmodule ListsProofsTest do
           simp only [Int.toNat_of_nonneg nonnegative, value] at indexed
           simp [lengthModel, len, Erlang.erlang.«==/2», Erlang.erlang.«div/2»,
             Erlang.erlang.«=:=/2», counted, outside, indexed, zero]
+      """
+  end
+
+  laws "zip and unzip round trip" do
+    # Only lists of equal length zip; unzip accumulates in reverse and reverses at the end.
+    law unzip_zip(xs, ys),
+      requires: proper_list(xs) and proper_list(ys) and length(xs) === length(ys),
+      expects: :lists.unzip(:lists.zip(xs, ys)) === {xs, ys},
+      proof: ~LEAN"""
+      let pair (p : Lynx.Term × Lynx.Term) : Lynx.Term := .tuple #[p.1, p.2]
+      have reverse2 (l tail : List Lynx.Term) :
+          Erlang.lists.«reverse/2» (Lynx.Term.list l) (Lynx.Term.list tail) =
+            .ok (Lynx.Term.list (l.reverse ++ tail)) := by
+        induction l generalizing tail with
+        | nil => simp [Erlang.lists.«reverse/2»]
+        | cons x xs ih =>
+          simp only [Lynx.Term.list_cons, Erlang.lists.«reverse/2»]
+          rw [show Lynx.Term.cons x (Lynx.Term.list tail) = Lynx.Term.list (x :: tail) from rfl, ih]
+          simp
+      have reverse1 (l : List Lynx.Term) :
+          Erlang.lists.«reverse/1» (Lynx.Term.list l) = .ok (Lynx.Term.list l.reverse) := by
+        match l with
+        | [] => simp [Erlang.lists.«reverse/1»]
+        | [a] => simp [Erlang.lists.«reverse/1»]
+        | [a, b] => simp [Erlang.lists.«reverse/1»]
+        | a :: b :: c :: rest =>
+          unfold Erlang.lists.«reverse/1»
+          have reversed := reverse2 (c :: rest) [b, a]
+          simp only [Lynx.Term.list_cons, Lynx.Term.list_nil] at reversed ⊢
+          rw [reversed]
+          simp
+      have unzipModel (ps : List (Lynx.Term × Lynx.Term)) (xs ys : List Lynx.Term) :
+          Erlang.lists.«unzip/3» (Lynx.Term.list (ps.map pair)) (Lynx.Term.list xs) (Lynx.Term.list ys) =
+            .ok (.tuple #[Lynx.Term.list (xs.reverse ++ ps.map Prod.fst),
+              Lynx.Term.list (ys.reverse ++ ps.map Prod.snd)]) := by
+        induction ps generalizing xs ys with
+        | nil => simp [Erlang.lists.«unzip/3», reverse1]
+        | cons p ps ih =>
+          have returned := ih (p.1 :: xs) (p.2 :: ys)
+          simpa [Erlang.lists.«unzip/3», pair] using returned
+      have zipModel (xs ys : List Lynx.Term) (same : xs.length = ys.length) :
+          Erlang.lists.«zip/2» (Lynx.Term.list xs) (Lynx.Term.list ys) =
+            .ok (Lynx.Term.list ((xs.zip ys).map pair)) := by
+        unfold Erlang.lists.«zip/2»
+        induction xs generalizing ys with
+        | nil => cases ys <;> simp_all [Erlang.lists.«zip/3»]
+        | cons x xs ih =>
+          cases ys with
+          | nil => simp at same
+          | cons y ys => simp_all [Erlang.lists.«zip/3», pair]
+      have properModel (term : Lynx.Term)
+          (valid : «proper_list/1» term = .ok Lynx.Term.true) :
+          ∃ l, term = Lynx.Term.list l := by
+        induction term with
+        | nil => exact ⟨[], rfl⟩
+        | cons head tail _ ih =>
+          obtain ⟨l, rfl⟩ := ih (by simpa [«proper_list/1»] using valid)
+          exact ⟨head :: l, rfl⟩
+        | _ => simp [«proper_list/1»] at valid
+      have lengthModel (l : List Lynx.Term) :
+          Erlang.erlang.«length/1» (Lynx.Term.list l) = .ok (.integer l.length) := by
+        induction l with
+        | nil => rfl
+        | cons x xs ih => simp [Erlang.erlang.«length/1», ih, Int.natCast_add]
+      simp only [«unzip_zip:requires/2», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at requires
+      obtain ⟨⟨validXs, validYs⟩, sameLength⟩ := requires
+      obtain ⟨xs, rfl⟩ := properModel xs validXs
+      obtain ⟨ys, rfl⟩ := properModel ys validYs
+      replace sameLength : xs.length = ys.length := by
+        simp [lengthModel, Erlang.erlang.«=:=/2»] at sameLength
+        omega
+      have zipped := zipModel xs ys sameLength
+      have unzipped := unzipModel (xs.zip ys) [] []
+      simp only [List.reverse_nil, List.nil_append, List.map_fst_zip (Nat.le_of_eq sameLength),
+        List.map_snd_zip (Nat.le_of_eq sameLength.symm)] at unzipped
+      simp [«unzip_zip:ensures/2», Erlang.lists.«unzip/1», zipped, unzipped, Erlang.erlang.«=:=/2»]
+      """
+
+    law zip_unzip(pairs),
+      requires: pair_list(pairs),
+      expects: zip_unzip_contract(pairs),
+      proof: ~LEAN"""
+      let pair (p : Lynx.Term × Lynx.Term) : Lynx.Term := .tuple #[p.1, p.2]
+      have reverse2 (l tail : List Lynx.Term) :
+          Erlang.lists.«reverse/2» (Lynx.Term.list l) (Lynx.Term.list tail) =
+            .ok (Lynx.Term.list (l.reverse ++ tail)) := by
+        induction l generalizing tail with
+        | nil => simp [Erlang.lists.«reverse/2»]
+        | cons x xs ih =>
+          simp only [Lynx.Term.list_cons, Erlang.lists.«reverse/2»]
+          rw [show Lynx.Term.cons x (Lynx.Term.list tail) = Lynx.Term.list (x :: tail) from rfl, ih]
+          simp
+      have reverse1 (l : List Lynx.Term) :
+          Erlang.lists.«reverse/1» (Lynx.Term.list l) = .ok (Lynx.Term.list l.reverse) := by
+        match l with
+        | [] => simp [Erlang.lists.«reverse/1»]
+        | [a] => simp [Erlang.lists.«reverse/1»]
+        | [a, b] => simp [Erlang.lists.«reverse/1»]
+        | a :: b :: c :: rest =>
+          unfold Erlang.lists.«reverse/1»
+          have reversed := reverse2 (c :: rest) [b, a]
+          simp only [Lynx.Term.list_cons, Lynx.Term.list_nil] at reversed ⊢
+          rw [reversed]
+          simp
+      have unzipModel (ps : List (Lynx.Term × Lynx.Term)) (xs ys : List Lynx.Term) :
+          Erlang.lists.«unzip/3» (Lynx.Term.list (ps.map pair)) (Lynx.Term.list xs) (Lynx.Term.list ys) =
+            .ok (.tuple #[Lynx.Term.list (xs.reverse ++ ps.map Prod.fst),
+              Lynx.Term.list (ys.reverse ++ ps.map Prod.snd)]) := by
+        induction ps generalizing xs ys with
+        | nil => simp [Erlang.lists.«unzip/3», reverse1]
+        | cons p ps ih =>
+          have returned := ih (p.1 :: xs) (p.2 :: ys)
+          simpa [Erlang.lists.«unzip/3», pair] using returned
+      have zipModel (xs ys : List Lynx.Term) (same : xs.length = ys.length) :
+          Erlang.lists.«zip/2» (Lynx.Term.list xs) (Lynx.Term.list ys) =
+            .ok (Lynx.Term.list ((xs.zip ys).map pair)) := by
+        unfold Erlang.lists.«zip/2»
+        induction xs generalizing ys with
+        | nil => cases ys <;> simp_all [Erlang.lists.«zip/3»]
+        | cons x xs ih =>
+          cases ys with
+          | nil => simp at same
+          | cons y ys => simp_all [Erlang.lists.«zip/3», pair]
+      have pairModel (term : Lynx.Term)
+          (valid : «pair_list/1» term = .ok Lynx.Term.true) :
+          ∃ ps : List (Lynx.Term × Lynx.Term), term = Lynx.Term.list (ps.map pair) := by
+        induction term with
+        | nil => exact ⟨[], rfl⟩
+        | cons head tail _ ih =>
+          cases head with
+          | tuple elements =>
+            rcases elements with ⟨_ | ⟨a, _ | ⟨b, _ | ⟨c, rest⟩⟩⟩⟩ <;>
+              simp [«pair_list/1»] at valid
+            obtain ⟨ps, rfl⟩ := ih valid
+            exact ⟨(a, b) :: ps, rfl⟩
+          | _ => simp [«pair_list/1»] at valid
+        | _ => simp [«pair_list/1»] at valid
+      obtain ⟨ps, rfl⟩ := pairModel pairs requires
+      have rezip := List.zip_unzip ps
+      simp only [List.unzip_fst, List.unzip_snd] at rezip
+      have unzipped := unzipModel ps [] []
+      simp only [List.reverse_nil, List.nil_append, Lynx.Term.list_nil] at unzipped
+      have zipped := zipModel (ps.map Prod.fst) (ps.map Prod.snd) (by simp)
+      simp [«zip_unzip:ensures/1», «zip_unzip_contract/1», Erlang.lists.«unzip/1», unzipped,
+        zipped, rezip, Erlang.erlang.«=:=/2»]
       """
   end
 end
