@@ -28,6 +28,11 @@ defmodule Lynx.Case do
   Set `LYNX_EXPORT=dir` to write each group's elaborated declarations to
   `dir/<test module>/<group>.ndjson` for independent kernel checks, as
   described in `Lynx`. Exporting bypasses the verification cache.
+
+  Lean's own environment variables reach the Lean processes that verify each group.
+  For example, set `LEAN_NUM_THREADS=n` to elaborate the proofs of a translated
+  module on at most `n` threads, instead of one per core. Groups verify
+  concurrently, each in its own process with its own threads.
   """
 
   @lean_dir Path.expand("../../Lean", __DIR__)

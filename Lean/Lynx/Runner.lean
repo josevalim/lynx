@@ -1809,17 +1809,27 @@ private def lawFailureDetails (name : Name) : Elab.Command.CommandElabM (Option 
         return some details
   catch _ => return none
 
+/-- Laws elaborate one command at a time, so each theorem is timed with its proof. Other files
+elaborate proofs and check declarations in parallel, as `lean` does, keeping only the snapshot
+data a command-line run needs. -/
+private def elabOptions (async : Bool) : Options :=
+  (Options.empty.setBool `Elab.async async).setBool `internal.cmdlineSnapshots async
+
 private def elaborateFile (env : Lean.Environment) (file : String) (map : FileMap)
-    (commands : Array (TSyntax `command)) (theoremNames : Array Name)
+    (commands : Array (TSyntax `command)) (theoremNames : Array Name) (async : Bool := false)
     : IO (Elab.Command.State × Array (Message × Option Name) × Array Json) := do
   let action : Elab.Command.CommandElabM (Array (Message × Option Name) × Array Json) := do
     let mut messages := #[]
     let mut theorems := #[]
+    let mut pending := #[]
     for cmd in commands do
       let names := declarationNames cmd.raw
       let declarationName := if names.size == 1 then names[0]? else none
       let started ← IO.monoMsNow
+      let tasks := (← get).snapshotTasks.size
       Elab.Command.elabCommandTopLevel cmd
+      -- Proofs and kernel checks elaborating in the background report through snapshot tasks.
+      pending := pending.push ((← get).snapshotTasks.extract tasks, declarationName)
       let elapsed := (← IO.monoMsNow) - started
       if let some name := declarationName then
         if theoremNames.contains name then
@@ -1839,9 +1849,14 @@ private def elaborateFile (env : Lean.Environment) (file : String) (map : FileMa
               pure { msg with data := m!"{explanation}\n\n{msg.data}" }
           | _, _ => pure msg
         messages := messages.push (msg, declarationName)
+    for (tasks, declarationName) in pending do
+      for task in tasks do
+        for snapshot in task.get.getAll do
+          for msg in snapshot.diagnostics.msgLog.toList do
+            messages := messages.push (msg, declarationName)
     return (messages, theorems)
   let ((messages, theorems), state) ← (action.run { fileName := file, fileMap := map, snap? := none, cancelTk? := none }).run
-    (Elab.Command.mkState env {} (Options.empty.setBool `Elab.async false)) |>.toIO
+    (Elab.Command.mkState env {} (elabOptions async)) |>.toIO
       (fun _ => IO.userError "runner elaboration failed")
   return (state, messages, theorems)
 
@@ -2249,14 +2264,28 @@ private def preludeImports (entry : Json) : IO (Array Import) := do
   let (_, header, _, _) ← preludeHeader first
   return header.imports (includeInit := false)
 
+/-- Elaborate one prelude block without waiting for the proofs elaborating in the background:
+the final command state, whose environment may still be checking proofs, and the snapshot tree
+that reports their diagnostics. -/
+private partial def processBlock (input : Parser.InputContext) (parserState : Parser.ModuleParserState)
+    (state : Elab.Command.State) : IO (Elab.Command.State × Language.SnapshotTree) := do
+  let initial := (← Language.Lean.processCommands input parserState state).get
+  let rec last (snap : Language.Lean.CommandParsedSnapshot) : Language.Lean.CommandParsedSnapshot :=
+    match snap.nextCmdSnap? with
+    | some next => last next.task.get
+    | none => snap
+  let final := last initial
+  return (final.elabSnap.resultSnap.get.cmdState, Language.toSnapshotTree initial)
+
 /-- Elaborate a prelude as one module: the first block begins with its header, and
 blocks follow in order, so each command can extend the parser for later commands.
 The frontend retains the sigils' original positions. -/
 private def elaboratePreludes (env : Lean.Environment) (file : DecodedFile) :
     IO (Elab.Command.State × Array (Message × Option Name) × Array Json) := do
-  let (initial, _, _) ← elaborateFile env file.fileName file.fileMap #[] #[]
+  let (initial, _, _) ← elaborateFile env file.fileName file.fileMap #[] #[] (async := true)
   let mut state := initial
   let mut messages : Array (Message × Option Name) := #[]
+  let mut trees : Array Language.SnapshotTree := #[]
   let mut first := true
   for block in file.preludes do
     let (input, parserState) ← if first then
@@ -2273,11 +2302,15 @@ private def elaboratePreludes (env : Lean.Environment) (file : DecodedFile) :
         let (origin, source) ← IO.ofExcept (preludeSource block)
         pure (Parser.mkInputContext source origin (normalizeLineEndings := false), {})
     first := false
-    let result ← Elab.IO.processCommands input parserState { state with messages := {} }
-    state := result.commandState
-    for message in state.messages.toList do
-      messages := messages.push (message, none)
-  return (state, messages, #[])
+    let (next, tree) ← processBlock input parserState { state with messages := {} }
+    state := next
+    trees := trees.push tree
+  -- Proofs of all blocks elaborate in parallel; report their diagnostics once they finish.
+  for tree in trees do
+    for snapshot in tree.getAll do
+      for message in snapshot.diagnostics.msgLog.toList do
+        messages := messages.push (message, none)
+  return ({ state with messages := {} }, messages, #[])
 
 /-- Copy compiled modules into `root` by module path, such as `Erlang/json.olean`, so
 tools that load modules by name through `LEAN_PATH` can use them. -/
@@ -2401,7 +2434,7 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
         else
           let (state, messages, timings) ← if file.preludes.isEmpty then
             elaborateFile (env.setMainModule mainModule)
-              file.fileName file.fileMap file.commands (file.theorems.map Prod.fst)
+              file.fileName file.fileMap file.commands (file.theorems.map Prod.fst) file.theorems.isEmpty
             else elaboratePreludes (env.setMainModule mainModule) file
           theorems := timings
           for (msg, declarationName) in messages do
