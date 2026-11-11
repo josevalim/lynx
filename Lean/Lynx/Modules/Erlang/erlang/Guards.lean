@@ -326,6 +326,13 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
       .ok (.cons head rest)
   | _, _ => throw (.error (.atom "badarg"))
 
+/-- Removes, for each element of the right list, the first exactly equal element of the left one. -/
+@[expose] def «--/2» (left right : Term) : Except Exception Term :=
+  match Term.properList? left, Term.properList? right with
+  | some xs, some ys =>
+    .ok (Term.list (ys.foldl (fun acc y => acc.eraseP fun x => Term.exactCompare x y == .eq) xs))
+  | _, _ => throw (.error (.atom "badarg"))
+
 @[expose] def «xor/2» : Term → Term → Except Exception Term
   | .atom "true", .atom "false" | .atom "false", .atom "true" => .ok Term.true
   | .atom "true", .atom "true" | .atom "false", .atom "false" => .ok Term.false

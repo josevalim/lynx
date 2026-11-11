@@ -411,6 +411,21 @@ theorem append_reduces (head tail right : Term) :
       («++/2» tail right >>= fun rest => .ok (.cons head rest)) :=
   rfl
 
+/-- List subtraction removes the first exactly equal element for each subtracted one,
+and both arguments must be proper lists. -/
+theorem list_subtraction :
+    «--/2» (Term.list [.integer 1, .integer 2, .integer 1, .integer 3]) (Term.list [.integer 1, .integer 3]) =
+      .ok (Term.list [.integer 2, .integer 1]) ∧
+    «--/2» (Term.list [.integer 1, .integer 2]) (Term.list [.integer 3, .integer 2, .integer 2]) =
+      .ok (Term.list [.integer 1]) ∧
+    «--/2» (Term.list [.integer 1]) (Term.list [.float floatOne]) = .ok (Term.list [.integer 1]) ∧
+    «--/2» (Term.list [.float floatOne, .integer 1]) (Term.list [.integer 1]) = .ok (Term.list [.float floatOne]) ∧
+    «--/2» (.cons (.atom "a") (.atom "b")) .nil = .error (.error (.atom "badarg")) ∧
+    «--/2» .nil (.cons (.atom "a") (.atom "b")) = .error (.error (.atom "badarg")) ∧
+    «--/2» (.atom "a") .nil = .error (.error (.atom "badarg")) := by
+  repeat' apply And.intro
+  all_goals first | exact rfl | (cbv <;> rfl) | decide
+
 theorem ordered_operators :
     orderedTerms.Pairwise (fun a b =>
       «</2» a b = .ok (.atom "true") ∧
