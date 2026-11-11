@@ -110,13 +110,11 @@ defmodule STTDescrProofsTest do
 
   # Nested types: the top type, the recursive node, valid types, or types of bitmaps, atoms,
   # functions, lists, tuples, and maps whose contents nest at most `depth - 1` levels. The
-  # depth comes with the recursive node the types may hold, as `{depth, node}`. Equal terms
-  # hash equally, which the proofs' model of terms does not establish, so nodes are also
-  # checked to hash as the node does where Descr keys their expansion.
+  # depth comes with the recursive node the types may hold, as `{depth, node}`.
   defp nested?(:term, _depth), do: true
 
   defp nested?({_, _, _} = other, {_depth, node}) when other === node,
-    do: recursive_node?(other) and :erlang.phash2([:term, other]) === :erlang.phash2([:term, node])
+    do: recursive_node?(other)
 
   defp nested?(type, {0, _node}), do: valid?(type)
 
@@ -5083,13 +5081,17 @@ defmodule STTDescrProofsTest do
       | .tuple ⟨[.reference r, _, _]⟩ => r
       | _ => []
 
-    /-- The recursive nodes the laws accept: those equal to their node `t`, and hashing as it does in expansion literals. -/
+    /-- The recursive nodes the laws accept: those equal to their node `t`. -/
     def IsT (t e : Term) : Prop :=
-      exactCompare e t = .eq ∧ «recursive_node?/1» e = .ok Term.true ∧
-        Erlang.erlang.«phash2/1» (Term.list [.atom "term", e]) = Erlang.erlang.«phash2/1» (Term.list [.atom "term", t])
+      exactCompare e t = .eq ∧ «recursive_node?/1» e = .ok Term.true
+
+    /-- Accepted nodes hash as `t` does in expansion literals. -/
+    theorem IsT.hash {t e : Term} (h : IsT t e) :
+        Erlang.erlang.«phash2/1» (Term.list [.atom "term", e]) = Erlang.erlang.«phash2/1» (Term.list [.atom "term", t]) :=
+      Erlang.erlang.phash2_congr (by simp [Term.list, exactCompare_cons, h.1])
 
     theorem IsT.node {t e : Term} (h : IsT t e) : NodeAt (refOf t) e := by
-      obtain ⟨r, S, rfl, hk⟩ := recursive_node_shape h.2.1
+      obtain ⟨r, S, rfl, hk⟩ := recursive_node_shape h.2
       have same := h.1
       rw [exactCompare_eq_step] at same
       cases t <;> simp [Compare.compareStep] at same
@@ -5112,7 +5114,7 @@ defmodule STTDescrProofsTest do
       exact Std.TransCmp.eq_trans h₁.1 b
 
     /-- Optimized laws hold no recursive node. -/
-    theorem not_isT_nil {e : Term} : ¬IsT (.atom "nil") e := fun ⟨same, h, _⟩ => by
+    theorem not_isT_nil {e : Term} : ¬IsT (.atom "nil") e := fun ⟨same, h⟩ => by
       obtain ⟨r, S, rfl, -⟩ := recursive_node_shape h
       simp at same
 
@@ -5218,17 +5220,11 @@ defmodule STTDescrProofsTest do
     theorem nested_node {e t : Term} {d : Nat} (h : «nested?/2» e (.tuple #[.integer d, t]) = .ok Term.true)
         (shape : ∃ a b c, e = .tuple #[a, b, c]) : IsT t e := by
       obtain ⟨a, b, c, rfl⟩ := shape
-      obtain ⟨h₁, r₁, -⟩ := Erlang.erlang.phash2_range (Term.list [.atom "term", .tuple #[a, b, c]])
-      obtain ⟨h₂, r₂, -⟩ := Erlang.erlang.phash2_range (Term.list [.atom "term", t])
       unfold «nested?/2» at h
       simp only [Lynx.Except.guard, Erlang.erlang.«=:=/2»] at h
       by_cases hc : (Term.tuple #[a, b, c]).exactCompare t = .eq
-      · simp only [hc, ite_true, Term.list] at h r₁ r₂
-        simp [Term.true, Lynx.Except.andAlso_eq_true, r₁, r₂] at h
-        refine ⟨hc, h.1, ?_⟩
-        simp only [Term.list, r₁, r₂]
-        congr 2
-        simpa using h.2
+      · simp only [hc, ite_true] at h
+        exact ⟨hc, h⟩
       · simp [hc, Term.true, Term.false] at h
         split at h
         · simp [«valid?/1»] at h
@@ -14661,7 +14657,7 @@ defmodule STTDescrProofsTest do
         Elixir.Module.Types.Descr.«bdd_leaf_new/2» (.atom "closed") (Term.list [.atom "term", e]) =
           .ok (.tuple #[.integer (keyOf t), .atom "closed", Term.list [.atom "term", e]]) := by
       obtain ⟨hash, hrun, -⟩ := Erlang.erlang.phash2_range (Term.list [.atom "term", t])
-      have hk := h.2.2
+      have hk := h.hash
       rw [hrun] at hk
       simp [Elixir.Module.Types.Descr.«bdd_leaf_new/2», hk, keyOf, hrun, Elixir.Module.Types.Descr.«bdd_leaf_key/2»,
         Erlang.erlang.«is_list/1», bsl27, Term.list, Erlang.erlang.«length/1», Erlang.erlang.«-/2_integers»] <;> decide
