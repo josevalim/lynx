@@ -15,8 +15,8 @@
 # to the arrow from that many arguments of none() to term(). A type is compatible with another
 # when its static part is included in the dynamic part of the other and the two meet.
 # The laws cover the top type and types whose lists, tuples, maps, and functions nest other
-# types up to three levels deep, including maps with domains, which type the values of every
-# key of a kind. For the laws on the optimized operations, the only function
+# types at any depth, including maps with domains, which type the values of every key of a
+# kind. The laws take the depth as an input. For the laws on the optimized operations, the only function
 # type inside other types is the top function type. The laws on the optimized operations
 # and the plain laws also cover gradual types of those types, whose dynamic part includes
 # their static part, and hold for both parts. The compatibility law covers those gradual
@@ -63,11 +63,11 @@ defmodule STTDescrProofsTest do
   # types are unions or negations of maps from arities to BDDs, whose literals are not
   # inspected. List elements and tails, tuple elements, map fields, and the arguments and
   # returns of nested functions nest types of bitmaps, atoms, functions, lists, tuples, and
-  # maps, so types are at most three levels deep.
-  def negatable?(:term), do: true
-  def negatable?(descr), do: negatable?(descr, 2)
+  # maps, at most `depth` levels deep. The laws take any depth as an input, so they hold for
+  # types of every depth.
+  def depth?(depth), do: is_integer(depth) and depth >= 0
 
-  # The same types, whose list, tuple, and map types nest at most `depth` levels.
+  def negatable?(:term, _depth), do: true
   def negatable?(descr, depth) when is_map(descr), do: negatable_fields?(:maps.to_list(descr), depth)
   def negatable?(_descr, _depth), do: false
 
@@ -250,29 +250,33 @@ defmodule STTDescrProofsTest do
   # literals and those with domains have non-negative keys, and map literals have atom keys
   # in order and domains of the kinds Descr knows in order. Function types inside other
   # types are the top function type.
-  def opt_negatable?(:term), do: true
-  def opt_negatable?(descr), do: negatable?(descr) and keyed_fields?(:maps.to_list(descr), 2, false)
+  def opt_negatable?(:term, _depth), do: true
+
+  def opt_negatable?(descr, depth),
+    do: negatable?(descr, depth) and keyed_fields?(:maps.to_list(descr), depth, false)
 
   # Gradual types of the laws on optimized operations: the types above, or a static part and
   # a dynamic part of those types, where the dynamic part includes the static part, as Descr
   # maintains. Inclusion is checked with Descr. The laws model function types without the
   # meaning of arrows, so the difference must remove the static function types exactly.
-  def opt_gradual?(%{dynamic: dynamic} = descr) do
+  def opt_gradual?(%{dynamic: dynamic} = descr, depth) do
     static = Map.delete(descr, :dynamic)
 
-    opt_negatable?(static) and opt_negatable?(dynamic) and
+    opt_negatable?(static, depth) and opt_negatable?(dynamic, depth) and
       included?(Descr.bare_difference(static, dynamic))
   end
 
-  def opt_gradual?(descr), do: opt_negatable?(descr)
+  def opt_gradual?(descr, depth), do: opt_negatable?(descr, depth)
 
   defp included?(difference), do: not is_map_key(difference, :fun) and Descr.empty?(difference)
 
   # Gradual types of the compatibility law: the laws model function types without the meaning
   # of arrows, and compatibility checks emptiness, so both parts of these types hold no function
   # types other than the top one.
-  def top_fun_gradual?(descr),
-    do: opt_gradual?(descr) and top_fun?(Descr.lower_bound(descr)) and top_fun?(Descr.upper_bound(descr))
+  def top_fun_gradual?(descr, depth),
+    do:
+      opt_gradual?(descr, depth) and top_fun?(Descr.lower_bound(descr)) and
+        top_fun?(Descr.upper_bound(descr))
 
   defp top_fun?(%{fun: fun}), do: fun == {:negation, %{}}
   defp top_fun?(_descr), do: true
@@ -5205,9 +5209,16 @@ defmodule STTDescrProofsTest do
         · exact ih valid.2 p member
 
     theorem negatable_map (depth : Nat) (descr : Term) (valid : «negatable?/2» descr (.integer depth) = .ok Term.true) :
-        ∃ X, descr = .map X ∧ Negatable (Nest depth) X := by
-      cases descr <;> simp [«negatable?/2», Term.true] at valid
+        descr = .atom "term" ∨ ∃ X, descr = .map X ∧ Negatable (Nest depth) X := by
+      cases descr
+      case atom name =>
+        by_cases top : name = "term"
+        · exact Or.inl (by rw [top])
+        · simp [«negatable?/2», top] at valid
+      all_goals try (simp [«negatable?/2»] at valid; done)
       rename_i X
+      refine Or.inr ?_
+      simp [«negatable?/2», Term.true] at valid
       simp only [Erlang.maps.«to_list/1», Lynx.Except.ok_bind] at valid
       have each := negatable_fields_spec (nested_spec depth) (mapEntries X) valid
       have entry (q w : Term) (lookup : mapLookup X q = some w) :
@@ -32377,7 +32388,7 @@ defmodule STTDescrProofsTest do
     namespace Elixir.STTDescrProofsTest.Nest
     open Lynx Lynx.Term BddProofs
 
-    /-! The top type is a top-level type at every level, and the laws use level 2. -/
+    /-! The top type is a top-level type at every level, and the laws use the level of their depth. -/
 
     section
     variable {L : Level} {m : Nat}
@@ -32386,7 +32397,12 @@ defmodule STTDescrProofsTest do
 
     end
 
-    theorem level_two_K : (level 2).K = 36 := rfl
+    theorem level_K : ∀ n, (level n).K = 8 + 14 * n
+      | 0 => rfl
+      | n + 1 => by
+        show (level n).K + 14 = _
+        rw [level_K n]
+        omega
 
     end Elixir.STTDescrProofsTest.Nest
     """
@@ -32874,24 +32890,29 @@ defmodule STTDescrProofsTest do
             simpa [sub, boolAtom] using h
           | _ => simp [Erlang.maps.«to_list/1»] at h
 
-    theorem negatable_cases (descr : Term) (h : «negatable?/1» descr = .ok Term.true) :
-        descr = .atom "term" ∨ ∃ X, descr = .map X ∧ Negatable (Nest 2) X := by
-      unfold «negatable?/1» at h
-      split at h
-      · exact Or.inl rfl
-      · exact Or.inr (negatable_map 2 _ h)
+    /-- The depths of the laws are natural numbers. -/
+    theorem depth_nat {depth : Term} (h : «depth?/1» depth = .ok Term.true) : ∃ n : Nat, depth = .integer n := by
+      cases depth <;> simp [«depth?/1», Erlang.erlang.«is_integer/1», Lynx.Except.andAlso, Term.true, Erlang.erlang.«>=/2»,
+        Int.isGE_compare] at h
+      rename_i z
+      exact ⟨z.toNat, by simp only [Term.integer.injEq]; omega⟩
 
-    /-- The types of `opt_negatable?/1` are top-level types over the element types of depth two. -/
-    theorem opt_negatable_tc (descr : Term) (h : «opt_negatable?/1» descr = .ok Term.true) : TC (level 2) descr := by
-      unfold «opt_negatable?/1» at h
+    theorem negatable_cases (n : Nat) (descr : Term) (h : «negatable?/2» descr (.integer n) = .ok Term.true) :
+        descr = .atom "term" ∨ ∃ X, descr = .map X ∧ Negatable (Nest n) X :=
+      negatable_map n descr h
+
+    /-- The types of `opt_negatable?/2` are top-level types over the element types of their depth. -/
+    theorem opt_negatable_tc (n : Nat) (descr : Term) (h : «opt_negatable?/2» descr (.integer n) = .ok Term.true) :
+        TC (level n) descr := by
+      unfold «opt_negatable?/2» at h
       split at h
       · exact Or.inl rfl
       · rename_i notTerm
         simp only [Term.true, Lynx.Except.andAlso_eq_true] at h
         obtain ⟨hn, hk⟩ := h
-        rcases negatable_cases _ hn with rfl | ⟨X, rfl, v⟩
+        rcases negatable_cases n _ hn with rfl | ⟨X, rfl, v⟩
         · exact (notTerm rfl).elim
-        · exact negatable_tc 2 v (keyedF_of (keyed_spec 2) Bool.false X (by simpa [boolAtom] using hk))
+        · exact negatable_tc n v (keyedF_of (keyed_spec n) Bool.false X (by simpa [boolAtom] using hk))
 
     end Elixir.STTDescrProofsTest.Nest
     """
@@ -32929,21 +32950,23 @@ defmodule STTDescrProofsTest do
       simp [Elixir.Module.Types.Descr.«bare_negation/1», Elixir.Module.Types.Descr.«none/0»]
 
     /-- The negation of a negatable type, or of the top type, is a static map of fields. -/
-    theorem negation_static (δ : Nat) {a : Term} (ha : a = .atom "term" ∨ ∃ X, a = .map X ∧ Negatable (Nest 2) X) :
+    theorem negation_static (δ : Nat) {n : Nat} (hn : 14 * n ≤ δ + 82) {a : Term}
+        (ha : a = .atom "term" ∨ ∃ X, a = .map X ∧ Negatable (Nest n) X) :
         (∃ N, Elixir.Module.Types.Descr.«bare_negation/1» (D (δ + 100)) a = .ok (.map N) ∧
           mapLookup N (.atom "dynamic") = Option.none) ∨
         Elixir.Module.Types.Descr.«bare_negation/1» (D (δ + 100)) a = .ok (.atom "term") := by
-      obtain ⟨ops, -, -, -, -⟩ := closed_ok 2
+      obtain ⟨ops, -, -, -, -⟩ := closed_ok n
       rcases ha with rfl | ⟨X, rfl, v⟩
       · exact Or.inl ⟨[], negation_term_none _, rfl⟩
       by_cases e : X = []
       · subst e; exact Or.inr (negation_none_term δ)
-      obtain ⟨N, neg, sN, -⟩ := sem_neg δ ops.term X (v.mono (nest_closed 2)).sem e
+      obtain ⟨N, neg, sN, -⟩ := sem_neg δ ops.term X (v.mono (nest_closed n)).sem e
       exact Or.inl ⟨N, neg, sN.static⟩
 
     /-- De Morgan's law for any two negatable types or top types. -/
-    theorem de_morgan_union_any (δ : Nat) {l r : Term} (hl : l = .atom "term" ∨ ∃ L, l = .map L ∧ Negatable (Nest 2) L)
-        (hr : r = .atom "term" ∨ ∃ R, r = .map R ∧ Negatable (Nest 2) R) :
+    theorem de_morgan_union_any (δ : Nat) {n : Nat} (hn : 14 * n ≤ δ + 82) {l r : Term}
+        (hl : l = .atom "term" ∨ ∃ L, l = .map L ∧ Negatable (Nest n) L)
+        (hr : r = .atom "term" ∨ ∃ R, r = .map R ∧ Negatable (Nest n) R) :
         (do
           let u ← Elixir.Module.Types.Descr.«bare_union/2» (D (δ + 100)) l r
           let a ← Elixir.Module.Types.Descr.«bare_negation/1» (D (δ + 100)) u
@@ -32952,15 +32975,15 @@ defmodule STTDescrProofsTest do
           let b ← Elixir.Module.Types.Descr.«bare_intersection/2» (D (δ + 100)) nl nr
           Elixir.Module.Types.Descr.«equal?/2» (D (δ + 100)) a b) = .ok (.atom "true") := by
       rcases hl with rfl | ⟨L, rfl, vL⟩
-      · rcases negation_static δ hr with ⟨N, neg, sN⟩ | neg
+      · rcases negation_static δ hn hr with ⟨N, neg, sN⟩ | neg
         · simp [union_term_l, negation_term_none, neg, intersection_none_left (δ + 99) N sN, equal_self]
         · simp [union_term_l, negation_term_none, neg, inter_term_right, equal_self]
       rcases hr with rfl | ⟨R, rfl, vR⟩
-      · rcases negation_static δ (Or.inr ⟨L, rfl, vL⟩) with ⟨N, neg, sN⟩ | neg
+      · rcases negation_static δ hn (Or.inr ⟨L, rfl, vL⟩) with ⟨N, neg, sN⟩ | neg
         · simp [union_term_r, negation_term_none, neg, intersection_none_static (δ + 99) N sN, equal_self]
         · simp [union_term_r, negation_term_none, neg, inter_term_left, equal_self]
-      obtain ⟨ops, dops, -, -, -⟩ := closed_ok 2
-      exact de_morgan_union_law δ ops dops (by omega) L R (vL.mono (nest_closed 2)) (vR.mono (nest_closed 2))
+      obtain ⟨ops, dops, -, -, -⟩ := closed_ok n
+      exact de_morgan_union_law δ ops dops (by omega) L R (vL.mono (nest_closed n)) (vR.mono (nest_closed n))
 
     end Elixir.STTDescrProofsTest
     """
@@ -34403,11 +34426,11 @@ defmodule STTDescrProofsTest do
     /-! The types of the laws on gradual types. -/
 
     /-- Gradual types of the laws: a static part and a dynamic part that Descr checks includes it. -/
-    theorem opt_gradual_gc {m : Nat} (hm : (level 2).K + 6 ≤ m) (descr : Term)
-        (h : «opt_gradual?/1» (D m) descr = .ok Term.true) : GC (level 2) descr := by
-      have static : «opt_negatable?/1» descr = .ok Term.true → GC (level 2) descr := fun h =>
-        GC.tc (opt_negatable_tc descr h)
-      unfold «opt_gradual?/1» at h
+    theorem opt_gradual_gc {m n : Nat} (hm : (level n).K + 6 ≤ m) (descr : Term)
+        (h : «opt_gradual?/2» (D m) descr (.integer n) = .ok Term.true) : GC (level n) descr := by
+      have static : «opt_negatable?/2» descr (.integer n) = .ok Term.true → GC (level n) descr := fun h =>
+        GC.tc (opt_negatable_tc n descr h)
+      unfold «opt_gradual?/2» at h
       cases descr with
       | map X =>
         cases hD : mapLookup X (.atom "dynamic") with
@@ -34416,9 +34439,9 @@ defmodule STTDescrProofsTest do
           simp only [getMapKeys_single, hD, Option.toList, Erlang.maps.«remove/2», Lynx.Except.ok_bind, Term.true,
             Lynx.Except.andAlso_eq_true] at h
           obtain ⟨⟨hS, hDy⟩, hI⟩ := h
-          have tS : TC (level 2) (.map (rmDyn X)) := opt_negatable_tc _ hS
-          have tD := opt_negatable_tc _ hDy
-          have sS : DC (level 2) (rmDyn X) := by
+          have tS : TC (level n) (.map (rmDyn X)) := opt_negatable_tc n _ hS
+          have tD := opt_negatable_tc n _ hDy
+          have sS : DC (level n) (rmDyn X) := by
             rcases tS with e | ⟨S, e, sS⟩
             · cases e
             · simp only [Term.map.injEq] at e; rw [e]; exact sS
@@ -34691,10 +34714,11 @@ defmodule STTDescrProofsTest do
     end
 
     /-- Gradual types whose parts hold no function types other than the top one: the parts are element types of
-    level 3. -/
-    theorem top_fun_gradual_ok {m : Nat} (hm : (level 2).K + 6 ≤ m) {a : Term} (h : «top_fun_gradual?/1» (D m) a = .ok (.atom "true")) :
-        GC (level 2) a ∧ DE (level 2).E (lower a) ∧ DE (level 2).E (upper a) := by
-      unfold «top_fun_gradual?/1» at h
+    the next level. -/
+    theorem top_fun_gradual_ok {m n : Nat} (hm : (level n).K + 6 ≤ m) {a : Term}
+        (h : «top_fun_gradual?/2» (D m) a (.integer n) = .ok (.atom "true")) :
+        GC (level n) a ∧ DE (level n).E (lower a) ∧ DE (level n).E (upper a) := by
+      unfold «top_fun_gradual?/2» at h
       simp only [Lynx.Except.andAlso_eq_true] at h
       obtain ⟨⟨hg, hl⟩, hu⟩ := h
       have ga := opt_gradual_gc hm a (by simpa [Term.true] using hg)
@@ -34751,14 +34775,14 @@ defmodule STTDescrProofsTest do
 
     /-- `compatible?/2` checks that the static part of the left type is included in the dynamic part of the right one and
     that the two meet, as the law states it. -/
-    theorem gd_compatible {l r : Term} (gl : GC (level 2) l) (gr : GC (level 2) r) (ll : DE (level 2).E (lower l))
-        (ul : DE (level 2).E (upper l)) (ur : DE (level 2).E (upper r)) {m : Nat} (hm : 50 ≤ m) :
+    theorem gd_compatible {n : Nat} {l r : Term} (gl : GC (level n) l) (gr : GC (level n) r) (ll : DE (level n).E (lower l))
+        (ul : DE (level n).E (upper l)) (ur : DE (level n).E (upper r)) {m : Nat} (hm : (level n).K + 14 ≤ m) :
         ∃ b : Bool, Elixir.Module.Types.Descr.«compatible?/2» (D m) l r = .ok (boolAtom b) ∧
           Lynx.Except.andAlso (Elixir.Module.Types.Descr.«subtype?/2» (D m) (lower l) (upper r))
             (do
               let j ← Elixir.Module.Types.Descr.«disjoint?/2» (D m) l r
               Erlang.erlang.«not/1» j) true = .ok (boolAtom b) := by
-      have ef3 : EF (DE (level 2).E) (TP (level 2)) denD tlD 50 := (level 3).ef
+      have ef3 : EF (DE (level n).E) (TP (level n)) denD tlD ((level n).K + 14) := (level (n + 1)).ef
       obtain ⟨bE, rE, semE⟩ := ef3.empty [] ll
       replace semE := semE (lh (lower l) + 1) (by omega) (safeN_nil _)
       obtain ⟨s, rS, semS⟩ := ef3.sub ll ur
@@ -34766,7 +34790,7 @@ defmodule STTDescrProofsTest do
       have tl := de_tc ll
       have tr := de_tc ur
       have eS : Elixir.Module.Types.Descr.«subtype_static?/2» (D m) (lower l) (upper r) = .ok (boolAtom s) := by
-        rw [sstatic_sub tl tr (by rw [level_two_K]; omega), rS m hm]
+        rw [sstatic_sub tl tr (by omega), rS m hm]
       have eE : Elixir.Module.Types.Descr.«empty?/1» (D m) (lower l) = .ok (boolAtom bE) := by
         rcases tl with e | ⟨X, e, -⟩ <;> rw [e] at rE semE ⊢
         · have : bE = Bool.false := by
@@ -34797,7 +34821,7 @@ defmodule STTDescrProofsTest do
           simp [boolAtom, Lynx.Except.andAlso, Erlang.erlang.«not/1»]
       · -- The static part is empty, so it is included.
         have sub : s = Bool.true := by
-          have := tc_sub tl tr (m := m) (by rw [level_two_K]; omega) fun v hv => absurd hv ((semE.mp rfl) v)
+          have := tc_sub tl tr (m := m) (by omega) fun v hv => absurd hv ((semE.mp rfl) v)
           rw [rS m hm] at this
           cases s <;> simp_all [boolAtom]
         subst sub
@@ -35148,24 +35172,29 @@ defmodule STTDescrProofsTest do
       | _ => simp [«descr?/1», Lynx.Term.getMapKeys, Erlang.erlang.«is_map/1»] at requires
       """
 
-    law intersection_negation_empty(descr),
-      requires: negatable?(descr) or opt_gradual?(descr),
+    law intersection_negation_empty(descr, depth),
+      requires: (negatable?(descr, depth) or opt_gradual?(descr, depth)) and depth?(depth),
       expects: Descr.empty?(Descr.lower_bound(Descr.bare_intersection(descr, Descr.bare_negation(descr)))),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «intersection_negation_empty:requires/2», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «intersection_negation_empty:requires/1», Term.true, Lynx.Except.orElse_eq_true] at requires
-      simp only [Lynx.apply_eq, «intersection_negation_empty:ensures/1»]
+      simp only [Lynx.apply_eq, «intersection_negation_empty:requires/2», Term.true, Lynx.Except.orElse_eq_true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      simp only [Lynx.apply_eq, «intersection_negation_empty:ensures/2»]
       rcases requires with static | ⟨-, gradual⟩
-      · rcases Nest.negatable_cases descr (by simpa [Term.true] using static) with rfl | ⟨X, rfl, valid⟩
+      · rcases Nest.negatable_cases d descr (by simpa [Term.true] using static) with rfl | ⟨X, rfl, valid⟩
         · simp [negation_term_none, inter_term_left, Nest.lower_bound_run, Nest.lower, Nest.rmDyn, empty_none]
-        obtain ⟨ops, -, -, -, -⟩ := closed_ok 2
-        replace valid := valid.mono (nest_closed 2)
+        obtain ⟨ops, -, -, -, -⟩ := closed_ok d
+        replace valid := valid.mono (nest_closed d)
         by_cases empty : X = []
         · subst empty
           have negation : Elixir.Module.Types.Descr.«bare_negation/1»
@@ -35188,48 +35217,58 @@ defmodule STTDescrProofsTest do
             | some w => rcases only _ _ h with ⟨e, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ <;> simp at e
           simp [negation, run, Nest.lower_bound_run, Nest.lower, Nest.rmDyn_static staticI,
             empty_gone (m := δ + 100) (by omega) I only]
-      · have t := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) descr gradual
-        obtain ⟨n, i, r₁, r₂, r₃, eq⟩ := Nest.gd_inter_neg_lower t (m := δ + 100) (by rw [Nest.level_two_K]; omega)
+      · have t := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr gradual
+        obtain ⟨n, i, r₁, r₂, r₃, eq⟩ := Nest.gd_inter_neg_lower t (m := δ + 100) (by rw [Nest.level_K]; omega)
         simp [r₁, r₂, r₃, eq]
       """
 
-    law opt_intersection_negation_empty(descr),
-      requires: opt_gradual?(descr),
+    law opt_intersection_negation_empty(descr, depth),
+      requires: opt_gradual?(descr, depth) and depth?(depth),
       expects: Descr.empty?(Descr.lower_bound(Descr.opt_intersection(descr, Descr.opt_negation(descr)))),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «opt_intersection_negation_empty:requires/2», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «opt_intersection_negation_empty:requires/1»] at requires
-      have t := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) descr requires
-      obtain ⟨n, i, r₁, r₂, r₃, eq⟩ := Nest.gd_opt_inter_neg_lower t (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «opt_intersection_negation_empty:ensures/1»]
+      simp only [Lynx.apply_eq, «opt_intersection_negation_empty:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have t := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr requires
+      obtain ⟨n, i, r₁, r₂, r₃, eq⟩ := Nest.gd_opt_inter_neg_lower t (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «opt_intersection_negation_empty:ensures/2»]
       simp [r₁, r₂, r₃, eq]
       """
 
-    law union_negation_term(descr),
-      requires: negatable?(descr) or opt_gradual?(descr),
+    law union_negation_term(descr, depth),
+      requires: (negatable?(descr, depth) or opt_gradual?(descr, depth)) and depth?(depth),
       expects: Descr.subtype?(Descr.term(), Descr.upper_bound(Descr.bare_union(descr, Descr.bare_negation(descr)))),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «union_negation_term:requires/2», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «union_negation_term:requires/1», Term.true, Lynx.Except.orElse_eq_true] at requires
-      simp only [Lynx.apply_eq, «union_negation_term:ensures/1»]
+      simp only [Lynx.apply_eq, «union_negation_term:requires/2», Term.true, Lynx.Except.orElse_eq_true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      simp only [Lynx.apply_eq, «union_negation_term:ensures/2»]
       rcases requires with static | ⟨-, gradual⟩
-      · rcases Nest.negatable_cases descr (by simpa [Term.true] using static) with rfl | ⟨X, rfl, valid⟩
+      · rcases Nest.negatable_cases d descr (by simpa [Term.true] using static) with rfl | ⟨X, rfl, valid⟩
         · simp [Elixir.Module.Types.Descr.«term/0», negation_term_none, union_term_l, Nest.upper_bound_term, Nest.upper,
             sub_term_term]
-        obtain ⟨ops, -, -, -, -⟩ := closed_ok 2
-        replace valid := valid.mono (nest_closed 2)
+        obtain ⟨ops, -, -, -, -⟩ := closed_ok d
+        replace valid := valid.mono (nest_closed d)
         by_cases empty : X = []
         · subst empty
           have negation : Elixir.Module.Types.Descr.«bare_negation/1»
@@ -35244,288 +35283,355 @@ defmodule STTDescrProofsTest do
           simp [Elixir.Module.Types.Descr.«term/0», negation, union, Nest.upper_bound_term, Nest.upper, sub_term_term]
         · obtain ⟨N, U, negation, union, staticU, sub⟩ := union_negation_covers δ ops (by omega) X valid empty
           simp [Elixir.Module.Types.Descr.«term/0», negation, union, Nest.upper_bound_static staticU, staticU, sub]
-      · have t := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) descr gradual
-        obtain ⟨n, u, r₁, r₂, r₃, sub⟩ := Nest.gd_union_neg_upper t (m := δ + 100) (by rw [Nest.level_two_K]; omega)
+      · have t := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr gradual
+        obtain ⟨n, u, r₁, r₂, r₃, sub⟩ := Nest.gd_union_neg_upper t (m := δ + 100) (by rw [Nest.level_K]; omega)
         simp [Elixir.Module.Types.Descr.«term/0», r₁, r₂, r₃, sub]
       """
 
-    law opt_union_negation_term(descr),
-      requires: opt_gradual?(descr),
+    law opt_union_negation_term(descr, depth),
+      requires: opt_gradual?(descr, depth) and depth?(depth),
       expects: Descr.subtype?(Descr.term(), Descr.upper_bound(Descr.opt_union(descr, Descr.opt_negation(descr)))),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «opt_union_negation_term:requires/2», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «opt_union_negation_term:requires/1»] at requires
-      have t := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) descr requires
-      obtain ⟨n, u, r₁, r₂, r₃, sub⟩ := Nest.gd_opt_union_neg_upper t (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «opt_union_negation_term:ensures/1»]
+      simp only [Lynx.apply_eq, «opt_union_negation_term:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have t := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr requires
+      obtain ⟨n, u, r₁, r₂, r₃, sub⟩ := Nest.gd_opt_union_neg_upper t (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «opt_union_negation_term:ensures/2»]
       simp [Elixir.Module.Types.Descr.«term/0», r₁, r₂, r₃, sub]
       """
 
-    law de_morgan_union(left, right),
-      requires: (negatable?(left) and negatable?(right)) or (opt_gradual?(left) and opt_gradual?(right)),
+    law de_morgan_union(left, right, depth),
+      requires:
+        ((negatable?(left, depth) and negatable?(right, depth)) or
+           (opt_gradual?(left, depth) and opt_gradual?(right, depth))) and depth?(depth),
       expects:
         Descr.equal?(
           Descr.bare_negation(Descr.bare_union(left, right)),
           Descr.bare_intersection(Descr.bare_negation(left), Descr.bare_negation(right))
         ),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «de_morgan_union:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «de_morgan_union:requires/2», Term.true, Lynx.Except.orElse_eq_true,
+      simp only [Lynx.apply_eq, «de_morgan_union:requires/3», Term.true, Lynx.Except.orElse_eq_true,
         Lynx.Except.andAlso_eq_true] at requires
-      simp only [Lynx.apply_eq, «de_morgan_union:ensures/2»]
+      replace requires := requires.1
+      simp only [Lynx.apply_eq, «de_morgan_union:ensures/3»]
       rcases requires with ⟨sl, sr⟩ | ⟨-, gl, gr⟩
-      · exact de_morgan_union_any δ (Nest.negatable_cases left (by simpa [Term.true] using sl))
-          (Nest.negatable_cases right (by simpa [Term.true] using sr))
-      · have tL := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) left gl
-        have tR := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) right gr
+      · exact de_morgan_union_any δ (by omega) (Nest.negatable_cases d left (by simpa [Term.true] using sl))
+          (Nest.negatable_cases d right (by simpa [Term.true] using sr))
+      · have tL := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left gl
+        have tR := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right gr
         obtain ⟨u, x, nl, nr, y, r₁, r₂, r₃, r₄, r₅, eq⟩ :=
-          Nest.gd_de_morgan_union tL tR (m := δ + 100) (by rw [Nest.level_two_K]; omega)
+          Nest.gd_de_morgan_union tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
         simp [r₁, r₂, r₃, r₄, r₅, eq]
       """
 
-    law opt_de_morgan_union(left, right),
-      requires: opt_gradual?(left) and opt_gradual?(right),
+    law opt_de_morgan_union(left, right, depth),
+      requires: opt_gradual?(left, depth) and opt_gradual?(right, depth) and depth?(depth),
       expects:
         Descr.equal?(
           Descr.opt_negation(Descr.opt_union(left, right)),
           Descr.opt_intersection(Descr.opt_negation(left), Descr.opt_negation(right))
         ),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «opt_de_morgan_union:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «opt_de_morgan_union:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
+      simp only [Lynx.apply_eq, «opt_de_morgan_union:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have tL := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨u, x, nl, nr, y, r₁, r₂, r₃, r₄, r₅, eq⟩ :=
-        Nest.gd_opt_de_morgan_union tL tR (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «opt_de_morgan_union:ensures/2»]
+        Nest.gd_opt_de_morgan_union tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «opt_de_morgan_union:ensures/3»]
       simp [r₁, r₂, r₃, r₄, r₅, eq]
       """
 
-    law opt_de_morgan_intersection(left, right),
-      requires: opt_gradual?(left) and opt_gradual?(right),
+    law opt_de_morgan_intersection(left, right, depth),
+      requires: opt_gradual?(left, depth) and opt_gradual?(right, depth) and depth?(depth),
       expects:
         Descr.equal?(
           Descr.opt_negation(Descr.opt_intersection(left, right)),
           Descr.opt_union(Descr.opt_negation(left), Descr.opt_negation(right))
         ),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «opt_de_morgan_intersection:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «opt_de_morgan_intersection:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
+      simp only [Lynx.apply_eq, «opt_de_morgan_intersection:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have tL := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨i, x, nl, nr, y, r₁, r₂, r₃, r₄, r₅, eq⟩ :=
-        Nest.gd_opt_de_morgan_inter tL tR (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «opt_de_morgan_intersection:ensures/2»]
+        Nest.gd_opt_de_morgan_inter tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «opt_de_morgan_intersection:ensures/3»]
       simp [r₁, r₂, r₃, r₄, r₅, eq]
       """
 
-    law opt_intersection_subtype(left, right),
-      requires: opt_gradual?(left) and opt_gradual?(right),
+    law opt_intersection_subtype(left, right, depth),
+      requires: opt_gradual?(left, depth) and opt_gradual?(right, depth) and depth?(depth),
       expects:
         Descr.subtype?(Descr.opt_intersection(left, right), left) and
           Descr.subtype?(Descr.opt_intersection(left, right), right),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «opt_intersection_subtype:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «opt_intersection_subtype:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
-      obtain ⟨i, r₁, s₁, s₂⟩ := Nest.gd_opt_inter_sub tL tR (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «opt_intersection_subtype:ensures/2»]
+      simp only [Lynx.apply_eq, «opt_intersection_subtype:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have tL := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨i, r₁, s₁, s₂⟩ := Nest.gd_opt_inter_sub tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «opt_intersection_subtype:ensures/3»]
       simp [r₁, s₁, s₂]
       """
 
-    law opt_union_supertype(left, right),
-      requires: opt_gradual?(left) and opt_gradual?(right),
+    law opt_union_supertype(left, right, depth),
+      requires: opt_gradual?(left, depth) and opt_gradual?(right, depth) and depth?(depth),
       expects:
         Descr.subtype?(left, Descr.opt_union(left, right)) and
           Descr.subtype?(right, Descr.opt_union(left, right)),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «opt_union_supertype:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «opt_union_supertype:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
-      obtain ⟨u, r₁, s₁, s₂⟩ := Nest.gd_opt_union_sup tL tR (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «opt_union_supertype:ensures/2»]
+      simp only [Lynx.apply_eq, «opt_union_supertype:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have tL := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨u, r₁, s₁, s₂⟩ := Nest.gd_opt_union_sup tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «opt_union_supertype:ensures/3»]
       simp [r₁, s₁, s₂]
       """
 
-    law intersection_subtype(left, right),
-      requires: opt_gradual?(left) and opt_gradual?(right),
+    law intersection_subtype(left, right, depth),
+      requires: opt_gradual?(left, depth) and opt_gradual?(right, depth) and depth?(depth),
       expects:
         Descr.subtype?(Descr.bare_intersection(left, right), left) and
           Descr.subtype?(Descr.bare_intersection(left, right), right),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «intersection_subtype:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «intersection_subtype:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
-      obtain ⟨i, r₁, s₁, s₂⟩ := Nest.gd_inter_sub tL tR (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «intersection_subtype:ensures/2»]
+      simp only [Lynx.apply_eq, «intersection_subtype:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have tL := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨i, r₁, s₁, s₂⟩ := Nest.gd_inter_sub tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «intersection_subtype:ensures/3»]
       simp [r₁, s₁, s₂]
       """
 
-    law union_supertype(left, right),
-      requires: opt_gradual?(left) and opt_gradual?(right),
+    law union_supertype(left, right, depth),
+      requires: opt_gradual?(left, depth) and opt_gradual?(right, depth) and depth?(depth),
       expects:
         Descr.subtype?(left, Descr.bare_union(left, right)) and
           Descr.subtype?(right, Descr.bare_union(left, right)),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «union_supertype:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «union_supertype:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
-      obtain ⟨u, r₁, s₁, s₂⟩ := Nest.gd_union_sup tL tR (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «union_supertype:ensures/2»]
+      simp only [Lynx.apply_eq, «union_supertype:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have tL := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨u, r₁, s₁, s₂⟩ := Nest.gd_union_sup tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «union_supertype:ensures/3»]
       simp [r₁, s₁, s₂]
       """
 
-    law opt_union_equal(left, right),
-      requires: opt_gradual?(left) and opt_gradual?(right),
+    law opt_union_equal(left, right, depth),
+      requires: opt_gradual?(left, depth) and opt_gradual?(right, depth) and depth?(depth),
       expects:
         Descr.equal?(Descr.bare_union(left, right), Descr.opt_union(left, right)),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «opt_union_equal:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «opt_union_equal:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
-      obtain ⟨u, w, r₁, r₂, eq⟩ := Nest.gd_union_equal tL tR (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «opt_union_equal:ensures/2»]
+      simp only [Lynx.apply_eq, «opt_union_equal:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have tL := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨u, w, r₁, r₂, eq⟩ := Nest.gd_union_equal tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «opt_union_equal:ensures/3»]
       simp [r₁, r₂, eq]
       """
 
-    law opt_intersection_equal(left, right),
-      requires: opt_gradual?(left) and opt_gradual?(right),
+    law opt_intersection_equal(left, right, depth),
+      requires: opt_gradual?(left, depth) and opt_gradual?(right, depth) and depth?(depth),
       expects:
         Descr.equal?(Descr.bare_intersection(left, right), Descr.opt_intersection(left, right)),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «opt_intersection_equal:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «opt_intersection_equal:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
-      obtain ⟨i, j, r₁, r₂, eq⟩ := Nest.gd_inter_equal tL tR (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «opt_intersection_equal:ensures/2»]
+      simp only [Lynx.apply_eq, «opt_intersection_equal:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have tL := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨i, j, r₁, r₂, eq⟩ := Nest.gd_inter_equal tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «opt_intersection_equal:ensures/3»]
       simp [r₁, r₂, eq]
       """
 
-    law intersection_union_distributive(descr, left, right),
-      requires: opt_gradual?(descr) and opt_gradual?(left) and opt_gradual?(right),
+    law intersection_union_distributive(descr, left, right, depth),
+      requires: opt_gradual?(descr, depth) and opt_gradual?(left, depth) and opt_gradual?(right, depth) and depth?(depth),
       expects:
         Descr.equal?(
           Descr.bare_intersection(descr, Descr.bare_union(left, right)),
           Descr.bare_union(Descr.bare_intersection(descr, left), Descr.bare_intersection(descr, right))
         ),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «intersection_union_distributive:requires/4», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «intersection_union_distributive:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tT := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) descr (by simpa [Term.true] using requires.1.1)
-      have tL := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1.2)
-      have tR := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
+      simp only [Lynx.apply_eq, «intersection_union_distributive:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have tT := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr (by simpa [Term.true] using requires.1.1)
+      have tL := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1.2)
+      have tR := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨u, x, y, z, w, r₁, r₂, r₃, r₄, r₅, eq⟩ :=
-        Nest.gd_distrib tT tL tR (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «intersection_union_distributive:ensures/3»]
+        Nest.gd_distrib tT tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «intersection_union_distributive:ensures/4»]
       simp [r₁, r₂, r₃, r₄, r₅, eq]
       """
 
-    law opt_negation_equal(descr),
-      requires: opt_gradual?(descr),
+    law opt_negation_equal(descr, depth),
+      requires: opt_gradual?(descr, depth) and depth?(depth),
       expects: Descr.equal?(Descr.bare_negation(descr), Descr.opt_negation(descr)),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «opt_negation_equal:requires/2», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «opt_negation_equal:requires/1»] at requires
-      have t := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) descr requires
-      obtain ⟨x, y, r₁, r₂, eq⟩ := Nest.gd_neg_equal t (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «opt_negation_equal:ensures/1»]
+      simp only [Lynx.apply_eq, «opt_negation_equal:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have t := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr requires
+      obtain ⟨x, y, r₁, r₂, eq⟩ := Nest.gd_neg_equal t (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «opt_negation_equal:ensures/2»]
       simp [r₁, r₂, eq]
       """
 
-    law opt_difference_equal(left, right),
-      requires: opt_gradual?(left) and opt_gradual?(right),
+    law opt_difference_equal(left, right, depth),
+      requires: opt_gradual?(left, depth) and opt_gradual?(right, depth) and depth?(depth),
       expects: Descr.equal?(Descr.bare_difference(left, right), Descr.opt_difference(left, right)),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «opt_difference_equal:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «opt_difference_equal:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      have tL := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (m := δ + 100) (by rw [Nest.level_two_K]; omega) right (by simpa [Term.true] using requires.2)
-      obtain ⟨x, y, r₁, r₂, eq⟩ := Nest.gd_diff_equal tL tR (m := δ + 100) (by rw [Nest.level_two_K]; omega)
-      simp only [Lynx.apply_eq, «opt_difference_equal:ensures/2»]
+      simp only [Lynx.apply_eq, «opt_difference_equal:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have tL := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.opt_gradual_gc (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      obtain ⟨x, y, r₁, r₂, eq⟩ := Nest.gd_diff_equal tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «opt_difference_equal:ensures/3»]
       simp [r₁, r₂, eq]
       """
 
@@ -35549,24 +35655,29 @@ defmodule STTDescrProofsTest do
         Term.true]
       """
 
-    law compatible_bounds(left, right),
-      requires: top_fun_gradual?(left) and top_fun_gradual?(right),
+    law compatible_bounds(left, right, depth),
+      requires: top_fun_gradual?(left, depth) and top_fun_gradual?(right, depth) and depth?(depth),
       expects:
         Descr.compatible?(left, right) ==
           (Descr.subtype?(Descr.lower_bound(left), Descr.upper_bound(right)) and not Descr.disjoint?(left, right)),
       proof: ~LEAN"""
-      -- The proofs run from a depth of 100 on, and the precondition from its own bound.
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
       obtain ⟨bound, requires⟩ := requires
-      refine ⟨max bound 100, fun depth deep => ?_⟩
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «compatible_bounds:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 14 * d), fun depth deep => ?_⟩
       obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
-      obtain ⟨δ, rfl⟩ := Nat.exists_eq_add_of_le' hd
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
       have requires := requires (δ + 100) hb
       open Lynx Lynx.Term in
-      simp only [Lynx.apply_eq, «compatible_bounds:requires/2», Term.true, Lynx.Except.andAlso_eq_true] at requires
-      obtain ⟨gl, ll, ul⟩ := Nest.top_fun_gradual_ok (by rw [Nest.level_two_K]; omega) requires.1
-      obtain ⟨gr, -, ur⟩ := Nest.top_fun_gradual_ok (by rw [Nest.level_two_K]; omega) requires.2
-      obtain ⟨b, r₁, r₂⟩ := Nest.gd_compatible gl gr ll ul ur (m := δ + 100) (by omega)
-      simp only [Lynx.apply_eq, «compatible_bounds:ensures/2»]
+      simp only [Lynx.apply_eq, «compatible_bounds:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      obtain ⟨gl, ll, ul⟩ := Nest.top_fun_gradual_ok (n := d) (by rw [Nest.level_K]; omega) requires.1
+      obtain ⟨gr, -, ur⟩ := Nest.top_fun_gradual_ok (n := d) (by rw [Nest.level_K]; omega) requires.2
+      obtain ⟨b, r₁, r₂⟩ := Nest.gd_compatible gl gr ll ul ur (m := δ + 100) (by rw [Nest.level_K]; omega)
+      simp only [Lynx.apply_eq, «compatible_bounds:ensures/3»]
       simp [r₁, Nest.lower_bound_run gl.shape, Nest.upper_bound_run gr.ub, r₂, Erlang.erlang.«==/2», Term.true]
       """
   end
