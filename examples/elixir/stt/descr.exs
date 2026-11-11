@@ -1,29 +1,45 @@
 # LYNX_DEBUG=lean LYNX_CACHE=0 mix run examples/elixir/stt/descr.exs
-# Prove the set operations of Elixir's type system. The empty type law covers every type,
-# and the negation laws cover bitmaps, atoms, functions, lists, tuples, and maps, both for
-# the plain operations and for the optimized ones the type checker uses: a type does not
-# meet its negation, and a type united with its negation is the top type. A gradual type
-# meets its negation only in its dynamic part, so the negation laws on gradual types check
-# its lower bound for the intersection and its upper bound for the union. De Morgan's law,
-# the negation of a union is the intersection of negations, holds for the plain operations
-# and for the optimized ones, comparing tuples and maps by their values. So does its dual
-# for the optimized ones, the negation of an intersection is the union of negations, which
-# also compares lists by their values. Intersections are included in their arguments and
-# unions include them, for both the plain and the optimized operations, the plain and
-# optimized unions, intersections, differences, and negations are equal, and plain
-# intersections distribute over plain unions. The top function type of each arity is equal
-# to the arrow from that many arguments of none() to term(). A type is compatible with another
-# when its static part is included in the dynamic part of the other and the two meet.
-# The laws cover the top type and types whose lists, tuples, maps, and functions nest other
-# types at any depth, including maps with domains, which type the values of every key of a
-# kind. The laws take the depth as an input. The plain negation and De Morgan laws also cover
-# a recursive type, t = nil or {term(), t}, wherever types nest, as a node of Descr; the laws
-# on optimized and gradual types do not cover it yet. For the laws on the optimized
-# operations, the only function type inside other types is the top function type. The laws on the optimized operations
-# and the plain laws also cover gradual types of those types, whose dynamic part includes
-# their static part, and hold for both parts. The compatibility law covers those gradual
-# types whose function types are the top one, as the laws model function types without the
-# meaning of arrows.
+# Prove the set operations of Elixir's type system, Module.Types.Descr.
+#
+# Laws:
+#
+#   * Empty type: a type meets none() in the empty type.
+#   * Negation: a type does not meet its negation, and a type united with its negation
+#     is the top type. A gradual type meets its negation in its dynamic part, so the
+#     intersection is checked on its lower bound and the union on its upper bound.
+#   * De Morgan: the negation of a union is the intersection of the negations. For the
+#     optimized operations, so is the dual: the negation of an intersection is the
+#     union of the negations.
+#   * Bounds: intersections are included in their arguments, and unions include them.
+#   * Agreement: the plain and optimized unions, intersections, differences, and
+#     negations are equal.
+#   * Distributivity: plain intersections distribute over plain unions.
+#   * Function arity: the top function type of each arity is the arrow from that many
+#     arguments of none() to term().
+#   * Compatibility: a type is compatible with another when its static part is included
+#     in the dynamic part of the other and the two meet.
+#
+# The negation, De Morgan, and bounds laws hold for both the plain operations and the
+# optimized ones the type checker uses.
+#
+# Types:
+#
+#   * The empty type law holds for any map, valid type or not.
+#   * The other laws need the invariants Descr maintains, and cover the top type and the
+#     types of bitmaps, atoms, functions, lists, tuples, and maps. Lists, tuples, maps,
+#     maps with domains, and functions nest types at any depth: each law takes the
+#     depth as an input.
+#   * Gradual types, whose dynamic part includes their static part, for both parts.
+#   * The recursive type t = nil or {term(), t}, as a Descr node wherever types nest.
+#
+# Restrictions:
+#
+#   * Only the plain negation and De Morgan laws on static types cover the recursive type
+#     and function types with arrows nested in other types. In the other laws, the nested
+#     function types are the top function type, as the laws model function types without
+#     the meaning of arrows.
+#   * The compatibility law takes no function type other than the top one.
+#
 # Checked against Elixir 1.21.0-dev (51b9afd40), Erlang/OTP 29.1.2.
 # Source reference: ../elixir/lib/elixir/lib/module/types/descr.ex.
 # These proofs depend on implementation details; rerun after Elixir upgrades.
