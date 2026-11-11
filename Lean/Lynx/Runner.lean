@@ -1912,8 +1912,11 @@ private partial def sourceExtent (j : Json) : Nat × Nat := Id.run do
     if let some column := xs[1]? then
       columns := max columns (column.getNat?.toOption.getD 1)
   if let .ok source := str j "source" then
-    lines := lines + (source.splitOn "\n").length + 1
-    columns := columns + source.length + (field j "indentation" >>= Json.getNat?).toOption.getD 0
+    let sourceLines := source.splitOn "\n"
+    lines := lines + sourceLines.length + 1
+    -- Later lines start after the indentation, so the longest line bounds every column.
+    let longest := sourceLines.foldl (fun longest line => max longest line.length) 0
+    columns := columns + longest + (field j "indentation" >>= Json.getNat?).toOption.getD 0
   let children : Array Json := match j with
     | .arr xs => xs
     | .obj xs => xs.toArray.map (·.2)
@@ -2221,16 +2224,22 @@ private def writeCached (directory : System.FilePath) (env : Lean.Environment)
   finally
     if ← temporary.pathExists then IO.FS.removeDirAll temporary
 
-/-- Preserve the location precision supplied by a prelude block. -/
-private def preludeLocation (file : DecodedFile) (message : Message) : Location := Id.run do
-  for block in file.preludes do
-    if (str block "file").toOption != some message.fileName then continue
+/-- The file, first line, line count, and span length of each prelude block. -/
+private def preludeRanges (file : DecodedFile) : Array (Option String × Nat × Nat × Nat) :=
+  file.preludes.map fun block =>
     let positions := (arr block "span").toOption.getD #[]
     let start := (positions[0]?.bind (·.getNat?.toOption)).getD 1
     let lines := ((str block "source").toOption.getD "").splitOn "\n" |>.length
+    ((str block "file").toOption, start, lines, positions.size)
+
+/-- Preserve the location precision supplied by a prelude block. -/
+private def preludeLocation (ranges : Array (Option String × Nat × Nat × Nat)) (message : Message) :
+    Location := Id.run do
+  for (origin, start, lines, precision) in ranges do
+    if origin != some message.fileName then continue
     if start ≤ message.pos.line && message.pos.line < start + lines then
-      if positions.size ≥ 2 then return .column message.pos
-      if positions.size == 1 then return .line message.pos.line
+      if precision ≥ 2 then return .column message.pos
+      if precision == 1 then return .line message.pos.line
       return .unknown
   return .unknown
 
@@ -2437,11 +2446,12 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
               file.fileName file.fileMap file.commands (file.theorems.map Prod.fst) file.theorems.isEmpty
             else elaboratePreludes (env.setMainModule mainModule) file
           theorems := timings
+          let ranges := preludeRanges file
           for (msg, declarationName) in messages do
             if msg.severity == .error then fileFailed := true
             let (origin, location) := if file.preludes.isEmpty then
               messageLocation file.fileMap file.spans msg
-              else (some msg.fileName, preludeLocation file msg)
+              else (some msg.fileName, preludeLocation ranges msg)
             diagnostics := diagnostics.push (diagnostic (origin.getD file.fileName) file.moduleName
               msg.severity.toString
               (← msg.data.toString) location declarationName)
