@@ -41,7 +41,7 @@
 #     Boolean combinations of arrows, so the static part of a gradual type minus its dynamic
 #     part must hold no function type.
 #
-# Checked against Elixir 1.21.0-dev (5d69df631), Erlang/OTP 29.1.2.
+# Checked against Elixir 1.21.0-dev (2d81cf3fc), Erlang/OTP 29.1.2.
 # Source reference: ../elixir/lib/elixir/lib/module/types/descr.ex.
 # These proofs depend on implementation details; rerun after Elixir upgrades.
 ExUnit.start()
