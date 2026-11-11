@@ -1826,10 +1826,11 @@ private def elaborateFile (env : Lean.Environment) (file : String) (map : FileMa
       let names := declarationNames cmd.raw
       let declarationName := if names.size == 1 then names[0]? else none
       let started ← IO.monoMsNow
-      let tasks := (← get).snapshotTasks.size
       Elab.Command.elabCommandTopLevel cmd
       -- Proofs and kernel checks elaborating in the background report through snapshot tasks.
-      pending := pending.push ((← get).snapshotTasks.extract tasks, declarationName)
+      -- Take them out of the state, which later commands would otherwise wait on and report again.
+      pending := pending.push ((← get).snapshotTasks, declarationName)
+      modify fun state => { state with snapshotTasks := #[] }
       let elapsed := (← IO.monoMsNow) - started
       if let some name := declarationName then
         if theoremNames.contains name then
