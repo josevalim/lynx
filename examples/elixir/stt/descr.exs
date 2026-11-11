@@ -20,6 +20,13 @@
 #     in the dynamic part of the other and the two meet.
 #   * Order: subtyping is reflexive and transitive, two types are equal when each is a
 #     subtype of the other, and two types are disjoint when their intersection is empty.
+#   * Lattice: unions and intersections are commutative, associative, and idempotent,
+#     absorb each other, and unions distribute over intersections. A type is a subtype
+#     of another when their union is the other, and when their intersection is the first.
+#   * Difference: for static types, a type is a subtype of another when their difference is
+#     empty, a type is the union of its difference with another type and its intersection
+#     with it, a difference is disjoint from the type it removes, and negating a type twice
+#     gives it back.
 #
 # The negation, De Morgan, and bounds laws hold for both the plain operations and the
 # optimized ones the type checker uses.
@@ -309,9 +316,9 @@ defmodule STTDescrProofsTest do
 
   defp included?(difference), do: not is_map_key(difference, :fun) and Descr.empty?(difference)
 
-  # Gradual types of the compatibility law: compatibility checks emptiness, so the function types
-  # of both parts of these types are arrows between nested types, as function types inside other
-  # types are.
+  # Gradual types of the compatibility, order, and lattice laws: these laws check emptiness, so the
+  # function types of both parts of these types are arrows between nested types, as function types
+  # inside other types are.
   def arrows_gradual?(descr, nested),
     do:
       opt_gradual?(descr, nested) and arrows?(Descr.lower_bound(descr), nested) and
@@ -321,6 +328,9 @@ defmodule STTDescrProofsTest do
     do: nested_field?({:fun, fun}, nested) and keyed_fields?([{:fun, fun}], depth, true)
 
   defp arrows?(_descr, _nested), do: true
+
+  # Static types of the laws on differences and negations, whose function types are arrows.
+  def arrows_static?(descr, nested), do: opt_negatable?(descr, nested) and arrows?(descr, nested)
 
   defp keyed?(:term, _depth), do: true
   defp keyed?({_, _, _}, _depth), do: true
@@ -39541,6 +39551,26 @@ defmodule STTDescrProofsTest do
       · simp only [Term.map.injEq] at e; subst e
         refine ⟨by simp [alignT, hD, upper], by simpa [alignT, hD] using sX, fun v => by simp [alignT, hD]⟩
 
+    /-- The fields of `U` merge those of `L` and `R` with `f`. -/
+    def MergeL (f : Term → Term → Term → Except Exception Term) (L R U : List (Term × Term)) : Prop :=
+      (∀ name, (mapLookup R (.atom name) = none → mapLookup U (.atom name) = mapLookup L (.atom name)) ∧
+        (∀ y, mapLookup R (.atom name) = some y → mapLookup L (.atom name) = none → mapLookup U (.atom name) = some y) ∧
+        (∀ x y u, mapLookup L (.atom name) = some x → mapLookup R (.atom name) = some y → f (.atom name) x y = .ok u →
+          mapLookup U (.atom name) = some u)) ∧
+      ∀ q, (mapLookup U q).isSome → (mapLookup L q).isSome ∨ (mapLookup R q).isSome
+
+    /-- The fields of `I` intersect those of `L` and `R` with `f`. -/
+    def InterL (f : Term → Term → Term → Except Exception Term) (L R I : List (Term × Term)) : Prop :=
+      (∀ name, (mapLookup L (.atom name) = none → mapLookup I (.atom name) = none) ∧
+        (mapLookup R (.atom name) = none → mapLookup I (.atom name) = none) ∧
+        (∀ x y w, mapLookup L (.atom name) = some x → mapLookup R (.atom name) = some y → f (.atom name) x y = .ok w →
+          mapLookup I (.atom name) = keptO name w)) ∧
+      ∀ q, (mapLookup I q).isSome → (mapLookup L q).isSome
+
+    theorem rmDyn_alignT (X : List (Term × Term)) : rmDyn (alignT X) = rmDyn X := by
+      unfold alignT
+      cases mapLookup X (.atom "dynamic") <;> simp [rmDyn_cons_dyn]
+
     /-- Merging maps with dynamic parts merges their fields and their dynamic parts. -/
     theorem merge_grad {d : Dispatcher} {module name : String} {caps : Array Term}
         {f : Term → Term → Term → Except Exception Term} (op : UnionOp L d module name caps f)
@@ -39549,7 +39579,7 @@ defmodule STTDescrProofsTest do
         (du : f (.atom "dynamic") Dx Dy = .ok Du) :
         ∃ U, Elixir.Module.Types.Descr.«symmetrical_merge/3» d (.map X) (.map Y) (.function module name 3 caps) =
             .ok (.map U) ∧ mapLookup U (.atom "dynamic") = some Du ∧ DC L (rmDyn U) ∧
-            ∀ v : TP L, denD (.map U) v ↔ denD (.map X) v ∨ denD (.map Y) v := by
+            (∀ v : TP L, denD (.map U) v ↔ denD (.map X) v ∨ denD (.map Y) v) ∧ MergeL f (rmDyn X) (rmDyn Y) (rmDyn U) := by
       obtain ⟨U, run, look⟩ := merge_gen d module name caps f op.call X Y (rmDyn_atoms sY) (fun q x y hx hy => by
         by_cases e : exactCompare q (.atom "dynamic") = .eq
         · obtain rfl := (exactCompare_eq_atom q _).mp e
@@ -39577,7 +39607,8 @@ defmodule STTDescrProofsTest do
       obtain ⟨cU, sem, -⟩ := union_gen (slh := False) sX sY f
         (fun n => ⟨(lookR _).1, (lookR _).2.1, (lookR _).2.2⟩) keysU
         (fun n x y fx fy => let ⟨u, ru, fu, su⟩ := op.spec n x y fx fy; ⟨u, ru, fu, su, False.elim⟩)
-      refine ⟨U, run, (look _).2.2 Dx Dy Du hX hY du, cU, fun v => ?_⟩
+      refine ⟨U, run, (look _).2.2 Dx Dy Du hX hY du, cU, fun v => ?_, fun n => ⟨(lookR _).1, (lookR _).2.1, (lookR _).2.2⟩,
+        keysU⟩
       rw [← denD_rmDyn U, ← denD_rmDyn X, ← denD_rmDyn Y]
       simp only [denD_map, sem _ _ v.2.2, Bool.or_eq_true]
 
@@ -39592,14 +39623,19 @@ defmodule STTDescrProofsTest do
           Elixir.Module.Types.Descr.«symmetrical_merge/3» d (.map (alignT X)) (.map (alignT Y))
             (.function module name 3 caps) = .ok c ∧
           (∀ v : TP L, denD c v ↔ denD (.map X) v ∨ denD (.map Y) v) ∧
-          (∀ v : TP L, denD (upper c) v ↔ denD (upper (.map X)) v ∨ denD (upper (.map Y)) v) := by
+          (∀ v : TP L, denD (upper c) v ↔ denD (upper (.map X)) v ∨ denD (upper (.map Y)) v) ∧
+          ∃ U, c = .map U ∧ MergeL f (rmDyn X) (rmDyn Y) (rmDyn U) ∧
+            Elixir.Module.Types.Descr.«dynamic_union/3» d' (upper (.map X)) (upper (.map Y))
+              (.function module' name' 3 caps') = .ok (upper c) := by
       obtain ⟨dX, sX, eX⟩ := align_gc hX
       obtain ⟨dY, sY, eY⟩ := align_gc hY
       obtain ⟨Du, tu, ru, su⟩ := dyn_union_tc op' hX.up_tc hY.up_tc
-      obtain ⟨U, run, dU, sU, sem⟩ := merge_grad op dX dY sX sY (by rw [dyn]; exact ru)
+      obtain ⟨U, run, dU, sU, sem, look⟩ := merge_grad op dX dY sX sY (by rw [dyn]; exact ru)
+      rw [rmDyn_alignT, rmDyn_alignT] at look
       have lo : ∀ v : TP L, denD (.map U) v ↔ denD (.map X) v ∨ denD (.map Y) v := fun v => by
         rw [sem, eX, eY]
-      refine ⟨_, Or.inr ⟨U, Du, rfl, dU, tu, sU, fun v h => ?_⟩, run, lo, fun v => by rw [upper_dyn dU, su]⟩
+      refine ⟨_, Or.inr ⟨U, Du, rfl, dU, tu, sU, fun v h => ?_⟩, run, lo, fun v => by rw [upper_dyn dU, su],
+        U, rfl, look, by rw [upper_dyn dU]; exact ru⟩
       rw [su]
       rcases (lo v).mp h with h | h
       · exact Or.inl (hX.inv v h)
@@ -39748,7 +39784,7 @@ defmodule STTDescrProofsTest do
         by_cases sX : TC L (.map X)
         · exact Or.inr (dyn_isSome (fun h => st ⟨sX, h⟩) hb)
         · exact Or.inl (dyn_isSome sX ha)
-      obtain ⟨c, hc, run, lo, up⟩ := merge_aligned (bare_union_op (n := k + 1) (by omega))
+      obtain ⟨c, hc, run, lo, up, -⟩ := merge_aligned (bare_union_op (n := k + 1) (by omega))
         (bare_union_op (n := k) (by omega)) (bare_union_dyn _) ha hb
       exact ⟨c, hc, (union_run_grad _ nX nY g).trans run, lo, up⟩
 
@@ -39770,7 +39806,7 @@ defmodule STTDescrProofsTest do
         by_cases sX : TC L (.map X)
         · exact Or.inr (dyn_isSome (fun h => st ⟨sX, h⟩) hb)
         · exact Or.inl (dyn_isSome sX ha)
-      obtain ⟨c, hc, run, lo, up⟩ := merge_aligned (opt_union_op (n := k + 1) (by omega) S)
+      obtain ⟨c, hc, run, lo, up, -⟩ := merge_aligned (opt_union_op (n := k + 1) (by omega) S)
         (opt_union_dyn_op (n := k) (by omega) S) (fun x y => opt_union_dyn _ x y _) ha hb
       exact ⟨c, hc, (opt_union_run_grad _ _ nX nY g).trans run, lo, up⟩
 
@@ -39873,8 +39909,10 @@ defmodule STTDescrProofsTest do
         ∃ c, GC L c ∧
           Elixir.Module.Types.Descr.«symmetrical_intersection/3» (D (n + 2)) (.map (alignT X)) (.map (alignT Y))
             (.function module name 3 caps) = .ok c ∧ ISem L (.map X) (.map Y) c ∧
-          ((∀ v : TP L, ¬denD (upper c) v) ∨ Elixir.Module.Types.Descr.«dynamic_intersection/3» (D (n + 1))
-            (upper (.map X)) (upper (.map Y)) (.function module' name' 3 caps') = .ok (upper c)) := by
+          ∃ I, c = .map I ∧ InterL f (rmDyn X) (rmDyn Y) (rmDyn I) ∧
+            ((mapLookup I (.atom "dynamic") = none ∧ ∀ v : TP L, ¬denD (upper c) v) ∨
+              Elixir.Module.Types.Descr.«dynamic_intersection/3» (D (n + 1))
+                (upper (.map X)) (upper (.map Y)) (.function module' name' 3 caps') = .ok (upper c)) := by
       obtain ⟨dX, sX, eX⟩ := align_gc hX
       obtain ⟨dY, sY, eY⟩ := align_gc hY
       obtain ⟨Di, ti, ri, si⟩ := dyn_inter_tc op' hX.up_tc hY.up_tc
@@ -39908,6 +39946,8 @@ defmodule STTDescrProofsTest do
           cases hA : mapLookup (alignT X) q with
           | none => rw [(look q).1 hA] at h; cases h
           | some _ => rfl
+      have interL : InterL f (rmDyn X) (rmDyn Y) (rmDyn I) := by
+        rw [← rmDyn_alignT X, ← rmDyn_alignT Y]; exact ⟨lookR, keysI⟩
       obtain ⟨cI, sem, -⟩ := inter_gen (slh := False) sX sY f lookR keysI
         (fun k x y fx fy => let ⟨w, rw', kw, sw⟩ := op.spec k x y fx fy; ⟨w, rw', fun h => ⟨kw h, False.elim⟩, sw⟩)
       have lo : ∀ v : TP L, denD (.map I) v ↔ denD (.map X) v ∧ denD (.map Y) v := fun v => by
@@ -39921,7 +39961,7 @@ defmodule STTDescrProofsTest do
         have tI : TC L (.map I) := Or.inr ⟨I, rfl, by rw [← rmDyn_static none]; exact cI⟩
         have empty : ∀ v : TP L, ¬(denD (upper (.map X)) v ∧ denD (upper (.map Y)) v) := fun v h =>
           denD_nil v ((si v).mpr h)
-        refine ⟨_, GC.tc tI, run, ⟨lo, fun v => ?_⟩, Or.inl fun v h => ?_⟩
+        refine ⟨_, GC.tc tI, run, ⟨lo, fun v => ?_⟩, I, rfl, interL, Or.inl ⟨none, fun v h => ?_⟩⟩
         · rw [upper_tc tI, lo]
           exact ⟨fun h => absurd ⟨hX.inv v h.1, hY.inv v h.2⟩ (empty v), fun h => absurd h (empty v)⟩
         · rw [upper_tc tI, lo] at h
@@ -39938,7 +39978,7 @@ defmodule STTDescrProofsTest do
           · simp [kept]
         have hD : mapLookup I (.atom "dynamic") = some Di := by rw [dI, kD]; simp [keep]
         refine ⟨_, Or.inr ⟨I, Di, rfl, hD, ti, cI, fun v h => ?_⟩, run, ⟨lo, fun v => by rw [upper_dyn hD, si]⟩,
-          Or.inr (by rw [upper_dyn hD]; exact ri)⟩
+          I, rfl, interL, Or.inr (by rw [upper_dyn hD]; exact ri)⟩
         rw [si]
         obtain ⟨h₁, h₂⟩ := (lo v).mp h
         exact ⟨hX.inv v h₁, hY.inv v h₂⟩
@@ -40026,8 +40066,9 @@ defmodule STTDescrProofsTest do
         · exact Or.inl (dyn_isSome sX ha)
       obtain ⟨c, hc, run, sem, up⟩ := inter_aligned (bare_inter_op (n := k + 1) (by omega))
         (bare_inter_op (n := k) (by omega)) (fun _ _ _ r t => bare_inter_dyn _ r t) ha hb
-      refine ⟨c, hc, (inter_run_grad _ g).trans run, sem, ?_⟩
-      rcases up with up | up
+      obtain ⟨I, rfl, -, up⟩ := up
+      refine ⟨_, hc, (inter_run_grad _ g).trans run, sem, ?_⟩
+      rcases up with ⟨-, up⟩ | up
       · exact Or.inl up
       · exact Or.inr ⟨k + 1, by omega, by rw [← dyn_inter_bare _ ha.up_tc hb.up_tc]; exact up⟩
 
@@ -41544,6 +41585,277 @@ defmodule STTDescrProofsTest do
     end Elixir.STTDescrProofsTest.Nest
     """
 
+    postlude ~LEAN"""
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! Unions and intersections of gradual types whose function types are arrows. -/
+
+    section
+    variable {K : Nat} {Fn TF LF MF : Term → Prop} {TV LV MV : (Term → Bool) → Prop} {FV : Term → (Term → Bool) → Prop}
+      {FS : List (Term × Term) → Prop} {H : Prop}
+
+    /-- Merging fields keeps them in their classes. -/
+    theorem mergeL_descr (ks : Kinds K TF LF MF TV LV MV) (fc : FunC K Fn FV FS H) {k : Nat} (hk : K + 1 ≤ k)
+        {A B U : List (Term × Term)} (sA : DescrC Fn TF LF MF A) (sB : DescrC Fn TF LF MF B)
+        (h : MergeL (Elixir.Module.Types.Descr.«bare_union/3» (D k)) A B U) : DescrC Fn TF LF MF U :=
+      (union_gen (slh := False) (TV := TV) (LV := LV) (MV := MV) (FV := FV) sA sB _ h.1 h.2 fun _ _ _ fx fy =>
+        let ⟨u, ru, fu, su, _⟩ := fieldC_union ks fc hk fx fy; ⟨u, ru, fu, su, False.elim⟩).1
+
+    /-- Intersecting fields keeps them in their classes. -/
+    theorem interL_descr (ks : Kinds K TF LF MF TV LV MV) (fc : FunC K Fn FV FS H) {k : Nat} (hk : K + 1 ≤ k)
+        {A B I : List (Term × Term)} (sA : DescrC Fn TF LF MF A) (sB : DescrC Fn TF LF MF B)
+        (h : InterL (Elixir.Module.Types.Descr.«bare_intersection/3» (D k)) A B I) : DescrC Fn TF LF MF I :=
+      (inter_gen (slh := False) (TV := TV) (LV := LV) (MV := MV) (FV := FV) sA sB _ h.1 h.2 fun _ _ _ fx fy =>
+        let ⟨w, rw', kw, sw⟩ := fieldC_inter ks fc hk fx fy; ⟨w, rw', fun h => ⟨(kw h).1, False.elim⟩, sw⟩).1
+
+    end
+
+    section
+    variable {t : Term} {n : Nat}
+
+    /-- Gradual types whose bounds are element types of the next level, so their function types are arrows. -/
+    def GD (t : Term) (n : Nat) (a : Term) : Prop :=
+      GC (level t n) a ∧ DE (level t n).E (lower a) ∧ DE (level t n).E (upper a)
+
+    theorem de_map {X : List (Term × Term)} (h : DE (level t n).E (.map X)) :
+        DescrC (FunA (level t n).E) (TField (level t n).E) (LF (level t n).E) (MField (level t n).E) X := by
+      rcases h with h | ⟨X', e, sX⟩
+      · cases h
+      · simp only [Term.map.injEq] at e; subst e; exact sX
+
+    /-- Element types of the next level are their own bounds. -/
+    theorem de_gd {a : Term} (ha : DE (level t n).E a) : GD t n a ∧ lower a = a ∧ upper a = a := by
+      have tc := de_tc ha
+      have e : lower a = a ∧ upper a = a := by
+        rcases ha with rfl | ⟨X, rfl, sX⟩
+        · exact ⟨rfl, rfl⟩
+        · exact ⟨by simp [lower, rmDyn_static sX.static], upper_tc tc⟩
+      exact ⟨⟨GC.tc tc, by rw [e.1]; exact ha, by rw [e.2]; exact ha⟩, e⟩
+
+    /-- Unions of dynamic parts keep arrows. -/
+    theorem dyn_union_de {k : Nat} (hk : (level t n).K + 12 ≤ k) {a b c : Term} (ha : DE (level t n).E a)
+        (hb : DE (level t n).E b)
+        (run : Elixir.Module.Types.Descr.«dynamic_union/3» (D (k + 1)) a b
+          (.function "Elixir.Module.Types.Descr" "bare_union" 3 #[]) = .ok c) : DE (level t n).E c := by
+      rcases ha with rfl | ⟨A, rfl, sA⟩
+      · have e : Elixir.Module.Types.Descr.«dynamic_union/3» (D (k + 1)) (.atom "term") b
+            (.function "Elixir.Module.Types.Descr" "bare_union" 3 #[]) = .ok (.atom "term") := by
+          unfold Elixir.Module.Types.Descr.«dynamic_union/3»; rfl
+        rw [e] at run; cases run; exact Or.inl rfl
+      rcases hb with rfl | ⟨B, rfl, sB⟩
+      · have e : Elixir.Module.Types.Descr.«dynamic_union/3» (D (k + 1)) (.map A) (.atom "term")
+            (.function "Elixir.Module.Types.Descr" "bare_union" 3 #[]) = .ok (.atom "term") := by
+          unfold Elixir.Module.Types.Descr.«dynamic_union/3»; rfl
+        rw [e] at run; cases run; exact Or.inl rfl
+      have st := stepOf (level t n).ef (level t n).none
+      obtain ⟨U, rU, look⟩ := merge_gen (D (k + 1)) "Elixir.Module.Types.Descr" "bare_union" #[] _
+        (fun q v₁ v₂ => Erlang.program.«Elixir.Module.Types.Descr:bare_union/3».pure k q v₁ v₂) A B
+        (fun q h => let ⟨n', _, e⟩ := sB.keys q h; ⟨n', e⟩) (fun q x y hx hy => by
+          obtain ⟨name, -, rfl⟩ := sA.keys q (by simp [hx])
+          obtain ⟨u, ru, -⟩ := fieldC_union st.ks st.fc (by omega) (sA.fields name x hx) (sB.fields name y hy)
+          exact ⟨u, ru⟩)
+      have e : Elixir.Module.Types.Descr.«dynamic_union/3» (D (k + 1)) (.map A) (.map B)
+          (.function "Elixir.Module.Types.Descr" "bare_union" 3 #[]) = .ok (.map U) := by
+        unfold Elixir.Module.Types.Descr.«dynamic_union/3»; simpa [unfold_map] using rU
+      rw [e] at run; cases run
+      refine Or.inr ⟨U, rfl, mergeL_descr st.ks st.fc (by omega) sA sB ⟨fun name => look _, fun q h => ?_⟩⟩
+      cases hB : mapLookup B q with
+      | none => rw [(look q).1 hB] at h; exact Or.inl h
+      | some _ => exact Or.inr rfl
+
+    /-- Unions of gradual types whose function types are arrows unite both bounds and keep arrows. -/
+    theorem gd_union {a b : Term} (ga : GD t n a) (gb : GD t n b) {m : Nat} (hm : (level t n).K + 25 ≤ m) :
+        ∃ c, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok c ∧ GD t n c ∧
+          (∀ v : PN t n, denD (lower c) v ↔ denD (lower a) v ∨ denD (lower b) v) ∧
+          (∀ v : PN t n, denD (upper c) v ↔ denD (upper a) v ∨ denD (upper b) v) := by
+      obtain ⟨k, rfl⟩ : ∃ k, m = k + 2 := ⟨m - 2, by omega⟩
+      obtain ⟨ha, la, ua⟩ := ga
+      obtain ⟨hb, lb, ub⟩ := gb
+      have bounds : ∀ c, USem (level t n) a b c →
+          (∀ v : PN t n, denD (lower c) v ↔ denD (lower a) v ∨ denD (lower b) v) ∧
+          (∀ v : PN t n, denD (upper c) v ↔ denD (upper a) v ∨ denD (upper b) v) := fun c sem =>
+        ⟨fun v => (denD_lower c (toTPN v)).trans ((sem.1 _).trans
+          (or_congr (denD_lower a (toTPN v)).symm (denD_lower b (toTPN v)).symm)), fun v => sem.2 (toTPN v)⟩
+      rcases ha.shape with rfl | ⟨X, rfl⟩
+      · exact ⟨_, union_term_l _ _, ⟨GC.tc tc_term, Or.inl rfl, Or.inl rfl⟩, bounds _ (usem_term_l _)⟩
+      rcases hb.shape with rfl | ⟨Y, rfl⟩
+      · exact ⟨_, union_term_r _ _, ⟨GC.tc tc_term, Or.inl rfl, Or.inl rfl⟩, bounds _ (usem_term_r _)⟩
+      by_cases nX : X = []
+      · subst nX; exact ⟨_, union_nil_l _ _, ⟨hb, lb, ub⟩, bounds _ (usem_nil_l _)⟩
+      by_cases nY : Y = []
+      · subst nY; exact ⟨_, union_nil_r _ _, ⟨ha, la, ua⟩, bounds _ (usem_nil_r _)⟩
+      by_cases st : mapLookup X (.atom "dynamic") = none ∧ mapLookup Y (.atom "dynamic") = none
+      · have eX : lower (.map X) = .map X ∧ upper (.map X) = .map X := by simp [lower, upper, rmDyn_static st.1, st.1]
+        have eY : lower (.map Y) = .map Y ∧ upper (.map Y) = .map Y := by simp [lower, upper, rmDyn_static st.2, st.2]
+        rw [eX.1] at la; rw [eY.1] at lb
+        obtain ⟨c, dc, run, sem, -⟩ := (ef_next t n).union la lb
+        obtain ⟨gc, lc, uc⟩ := de_gd dc
+        exact ⟨c, run _ (by omega), gc, fun v => by rw [lc, eX.1, eY.1]; exact sem v,
+          fun v => by rw [uc, eX.2, eY.2]; exact sem v⟩
+      have g : (mapLookup X (.atom "dynamic")).isSome ∨ (mapLookup Y (.atom "dynamic")).isSome := by
+        cases hX : mapLookup X (.atom "dynamic") <;> cases hY : mapLookup Y (.atom "dynamic") <;> simp_all
+      obtain ⟨c, hc, run, lo, up, U, rfl, look, rD⟩ := merge_aligned (bare_union_op (L := level t n) (n := k + 1) (by omega))
+        (bare_union_op (n := k) (by omega)) (bare_union_dyn _) ha hb
+      have st := stepOf (level t n).ef (level t n).none
+      have dl : DE (level t n).E (lower (.map U)) :=
+        Or.inr ⟨_, rfl, mergeL_descr st.ks st.fc (by omega) (de_map la) (de_map lb) look⟩
+      exact ⟨_, (union_run_grad _ nX nY g).trans run, ⟨hc, dl, dyn_union_de (by omega) ua ub rD⟩, bounds _ ⟨lo, up⟩⟩
+
+    /-- Intersections of gradual types whose function types are arrows intersect both bounds and keep arrows. -/
+    theorem gd_inter {a b : Term} (ga : GD t n a) (gb : GD t n b) {m : Nat} (hm : (level t n).K + 25 ≤ m) :
+        ∃ c, Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok c ∧ GD t n c ∧
+          (∀ v : PN t n, denD (lower c) v ↔ denD (lower a) v ∧ denD (lower b) v) ∧
+          (∀ v : PN t n, denD (upper c) v ↔ denD (upper a) v ∧ denD (upper b) v) := by
+      obtain ⟨k, rfl⟩ : ∃ k, m = k + 2 := ⟨m - 2, by omega⟩
+      obtain ⟨ha, la, ua⟩ := ga
+      obtain ⟨hb, lb, ub⟩ := gb
+      have bounds : ∀ c, ISem (level t n) a b c →
+          (∀ v : PN t n, denD (lower c) v ↔ denD (lower a) v ∧ denD (lower b) v) ∧
+          (∀ v : PN t n, denD (upper c) v ↔ denD (upper a) v ∧ denD (upper b) v) := fun c sem =>
+        ⟨fun v => (denD_lower c (toTPN v)).trans ((sem.1 _).trans
+          (and_congr (denD_lower a (toTPN v)).symm (denD_lower b (toTPN v)).symm)), fun v => sem.2 (toTPN v)⟩
+      rcases ha.shape with rfl | ⟨X, rfl⟩
+      · exact ⟨_, inter_term_left _ _, ⟨hb, lb, ub⟩, bounds _ (isem_term_l _)⟩
+      rcases hb.shape with rfl | ⟨Y, rfl⟩
+      · exact ⟨_, inter_term_right _ _, ⟨ha, la, ua⟩, bounds _ (isem_term_r _)⟩
+      by_cases st : mapLookup X (.atom "dynamic") = none ∧ mapLookup Y (.atom "dynamic") = none
+      · have eX : lower (.map X) = .map X ∧ upper (.map X) = .map X := by simp [lower, upper, rmDyn_static st.1, st.1]
+        have eY : lower (.map Y) = .map Y ∧ upper (.map Y) = .map Y := by simp [lower, upper, rmDyn_static st.2, st.2]
+        rw [eX.1] at la; rw [eY.1] at lb
+        obtain ⟨c, dc, run, sem, -⟩ := (ef_next t n).inter la lb
+        obtain ⟨gc, lc, uc⟩ := de_gd dc
+        exact ⟨c, run _ (by omega), gc, fun v => by rw [lc, eX.1, eY.1]; exact sem v,
+          fun v => by rw [uc, eX.2, eY.2]; exact sem v⟩
+      have g : (mapLookup X (.atom "dynamic")).isSome ∨ (mapLookup Y (.atom "dynamic")).isSome := by
+        cases hX : mapLookup X (.atom "dynamic") <;> cases hY : mapLookup Y (.atom "dynamic") <;> simp_all
+      obtain ⟨c, hc, run, sem, I, rfl, look, up⟩ := inter_aligned (bare_inter_op (L := level t n) (n := k + 1) (by omega))
+        (bare_inter_op (n := k) (by omega)) (fun _ _ _ r t => bare_inter_dyn _ r t) ha hb
+      have st := stepOf (level t n).ef (level t n).none
+      have dl : DE (level t n).E (lower (.map I)) :=
+        Or.inr ⟨_, rfl, interL_descr st.ks st.fc (by omega) (de_map la) (de_map lb) look⟩
+      have du : DE (level t n).E (upper (.map I)) := by
+        rcases up with ⟨none, -⟩ | run'
+        · rw [show upper (.map I) = lower (.map I) by simp [upper, lower, none, rmDyn_static none]]; exact dl
+        · rw [dyn_inter_bare _ ha.up_tc hb.up_tc] at run'
+          obtain ⟨c', dc', rc', -⟩ := (ef_next t n).inter ua ub
+          have e := (rc' (k + 1) (by omega)).symm.trans run'
+          simp only [Except.ok.injEq] at e
+          rw [← e]; exact dc'
+      exact ⟨_, (inter_run_grad _ g).trans run, ⟨hc, dl, du⟩, bounds _ sem⟩
+
+    theorem boolAtom_inj {p q : Bool} (h : boolAtom p = boolAtom q) : p = q := by
+      cases p <;> cases q <;> simp_all [boolAtom]
+
+    /-- Equality of gradual types whose function types are arrows compares both bounds exactly. -/
+    theorem gd_eq {a b : Term} (ga : GD t n a) (gb : GD t n b) {m : Nat} (hm : (level t n).K + 23 ≤ m) :
+        Elixir.Module.Types.Descr.«equal?/2» (D m) a b = .ok (boolAtom (bp (∀ v : PN t n,
+          (denD (lower a) v ↔ denD (lower b) v) ∧ (denD (upper a) v ↔ denD (upper b) v)))) := by
+      obtain ⟨s₁, s₂, r₁, r₂, r₃⟩ := gd_equal ga.1 gb.1 ga.2.1 ga.2.2 gb.2.1 gb.2.2 hm
+      rw [gd_sub ga.1 gb.1 ga.2.1 ga.2.2 gb.2.1 gb.2.2 hm, Except.ok.injEq] at r₁
+      rw [gd_sub gb.1 ga.1 gb.2.1 gb.2.2 ga.2.1 ga.2.2 hm, Except.ok.injEq] at r₂
+      rw [r₃, ← boolAtom_inj r₁, ← boolAtom_inj r₂, bp_and]
+      refine congrArg (fun x => Except.ok (boolAtom x)) (bp_congr ?_)
+      simp only [SubN]
+      constructor
+      · rintro ⟨⟨h₁, h₂⟩, h₃, h₄⟩ v
+        exact ⟨⟨h₁ v, h₃ v⟩, ⟨h₂ v, h₄ v⟩⟩
+      · intro h
+        exact ⟨⟨fun v => (h v).1.1, fun v => (h v).2.1⟩, fun v => (h v).1.2, fun v => (h v).2.2⟩
+
+    theorem gd_eq_true {a b : Term} (ga : GD t n a) (gb : GD t n b) {m : Nat} (hm : (level t n).K + 23 ≤ m)
+        (lo : ∀ v : PN t n, denD (lower a) v ↔ denD (lower b) v) (up : ∀ v : PN t n, denD (upper a) v ↔ denD (upper b) v) :
+        Elixir.Module.Types.Descr.«equal?/2» (D m) a b = .ok (.atom "true") := by
+      rw [gd_eq ga gb hm, bp_true.mpr fun v => ⟨lo v, up v⟩]; rfl
+
+    /-- A type is a subtype of another exactly when their union is the other. -/
+    theorem gd_sub_union {a b : Term} (ga : GD t n a) (gb : GD t n b) {m : Nat} (hm : (level t n).K + 25 ≤ m) :
+        ∃ c s, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok c ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) a b = .ok (boolAtom s) ∧
+          Elixir.Module.Types.Descr.«equal?/2» (D m) c b = .ok (boolAtom s) := by
+      obtain ⟨c, run, gc, lc, uc⟩ := gd_union ga gb hm
+      refine ⟨c, _, run, gd_sub ga.1 gb.1 ga.2.1 ga.2.2 gb.2.1 gb.2.2 (by omega), ?_⟩
+      rw [gd_eq gc gb (by omega)]
+      refine congrArg (fun x => Except.ok (boolAtom x)) (bp_congr ?_)
+      simp only [SubN, lc, uc]
+      constructor
+      · intro h; exact ⟨fun v hv => (h v).1.mp (Or.inl hv), fun v hv => (h v).2.mp (Or.inl hv)⟩
+      · intro h v; exact ⟨⟨fun h' => h'.elim (h.1 v) id, Or.inr⟩, ⟨fun h' => h'.elim (h.2 v) id, Or.inr⟩⟩
+
+    /-- A type is a subtype of another exactly when their intersection is the first. -/
+    theorem gd_sub_inter {a b : Term} (ga : GD t n a) (gb : GD t n b) {m : Nat} (hm : (level t n).K + 25 ≤ m) :
+        ∃ c s, Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok c ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) a b = .ok (boolAtom s) ∧
+          Elixir.Module.Types.Descr.«equal?/2» (D m) c a = .ok (boolAtom s) := by
+      obtain ⟨c, run, gc, lc, uc⟩ := gd_inter ga gb hm
+      refine ⟨c, _, run, gd_sub ga.1 gb.1 ga.2.1 ga.2.2 gb.2.1 gb.2.2 (by omega), ?_⟩
+      rw [gd_eq gc ga (by omega)]
+      refine congrArg (fun x => Except.ok (boolAtom x)) (bp_congr ?_)
+      simp only [SubN, lc, uc]
+      constructor
+      · intro h; exact ⟨fun v hv => ((h v).1.mpr hv).2, fun v hv => ((h v).2.mpr hv).2⟩
+      · intro h v; exact ⟨⟨And.left, fun h' => ⟨h', h.1 v h'⟩⟩, ⟨And.left, fun h' => ⟨h', h.2 v h'⟩⟩⟩
+
+    end
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
+    postlude ~LEAN"""
+    namespace Elixir.STTDescrProofsTest.Nest
+    open Lynx Lynx.Term BddProofs
+
+    /-! Differences and negations of static types whose function types are arrows. -/
+
+    section
+    variable {t : Term} {n : Nat}
+
+    /-- The static types of the laws are element types of the next level. -/
+    theorem arrows_static_ok {a : Term} (h : «arrows_static?/2» a (.tuple #[.integer n, t]) = .ok (.atom "true")) :
+        DE (level t n).E a := by
+      unfold «arrows_static?/2» at h
+      simp only [Lynx.Except.andAlso_eq_true] at h
+      exact arrows_de (opt_negatable_tc t n a (by simpa [Term.true] using h.1)) h.2
+
+    theorem denN_nil (v : PN t n) : ¬denD (.map []) v := by simp [denD_map, mapLookup, dn_none]
+
+    /-- Negations of element types of the next level. -/
+    theorem next_neg {a : Term} (ha : DE (level t n).E a) {m : Nat} (hm : (level t n).K + 23 ≤ m) :
+        ∃ c, Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok c ∧ DE (level t n).E c ∧
+          ∀ v : PN t n, denD c v ↔ ¬denD a v := by
+      rcases ha with rfl | ⟨X, rfl, sX⟩
+      · exact ⟨_, by simp [Elixir.Module.Types.Descr.«bare_negation/1»], (ef_next t n).none,
+          fun v => by simp [denN_nil, denD_term]⟩
+      obtain ⟨c, dc, run, sem, -⟩ := (ef_next t n).diff (ef_next t n).term (Or.inr ⟨X, rfl, sX⟩)
+      exact ⟨c, by simpa [Elixir.Module.Types.Descr.«bare_negation/1», Elixir.Module.Types.Descr.«term/0»] using run m hm,
+        dc, fun v => by rw [sem]; simp [denD_term]⟩
+
+    /-- Equality of element types of the next level is exact. -/
+    theorem next_eq_true {a b : Term} (ha : DE (level t n).E a) (hb : DE (level t n).E b) {m : Nat}
+        (hm : (level t n).K + 23 ≤ m) (h : ∀ v : PN t n, denD a v ↔ denD b v) :
+        Elixir.Module.Types.Descr.«equal?/2» (D m) a b = .ok (.atom "true") := by
+      obtain ⟨ga, la, ua⟩ := de_gd ha
+      obtain ⟨gb, lb, ub⟩ := de_gd hb
+      exact gd_eq_true ga gb hm (fun v => by rw [la, lb]; exact h v) (fun v => by rw [ua, ub]; exact h v)
+
+    /-- A static type is a subtype of another exactly when their difference is empty. -/
+    theorem next_sub_diff {a b : Term} (ha : DE (level t n).E a) (hb : DE (level t n).E b) {m : Nat}
+        (hm : (level t n).K + 23 ≤ m) :
+        ∃ c s, Elixir.Module.Types.Descr.«bare_difference/2» (D m) a b = .ok c ∧
+          Elixir.Module.Types.Descr.«subtype?/2» (D m) a b = .ok (boolAtom s) ∧
+          Elixir.Module.Types.Descr.«empty?/1» (D m) c = .ok (boolAtom s) := by
+      obtain ⟨c, dc, run, sem, -⟩ := (ef_next t n).diff ha hb
+      refine ⟨c, _, run m hm, next_sub ha hb hm, ?_⟩
+      rw [next_empty dc hm]
+      refine congrArg (fun x => Except.ok (boolAtom x)) (bp_congr ⟨fun h v h₁ => ?_, fun h v hc => ?_⟩)
+      · exact Classical.byContradiction fun h₂ => h v ((sem v).mpr ⟨h₁, h₂⟩)
+      · exact ((sem v).mp hc).2 (h v ((sem v).mp hc).1)
+
+    end
+
+    end Elixir.STTDescrProofsTest.Nest
+    """
+
     # The top function type of an arity is the arrow from that many arguments of none() to term():
     # removing the arrow leaves a line whose only negative literal is the arrow itself, which phi covers.
     postlude ~LEAN"""
@@ -42492,6 +42804,433 @@ defmodule STTDescrProofsTest do
       obtain ⟨c, s, run, r₁, r₂⟩ := Nest.gd_disj_empty gl gr ul ur (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «disjoint_empty:ensures/4»]
       cases s <;> simp [run, r₁, r₂, boolAtom, Erlang.erlang.«==/2», Term.true]
+      """
+
+    law union_commutative(left, right, depth, node),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
+      expects: Descr.equal?(Descr.bare_union(left, right), Descr.bare_union(right, left)),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
+      obtain ⟨bound, requires⟩ := requires
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «union_commutative:requires/4», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 24 * d), fun depth deep => ?_⟩
+      obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      have requires := requires (δ + 100) hb
+      open Lynx Lynx.Term in
+      simp only [Lynx.apply_eq, «union_commutative:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1
+      have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
+      obtain ⟨c₁, r₁, g₁, l₁, u₁⟩ := Nest.gd_union gl gr hm
+      obtain ⟨c₂, r₂, g₂, l₂, u₂⟩ := Nest.gd_union gr gl hm
+      have eq := Nest.gd_eq_true g₁ g₂ (m := δ + 100) (by omega) (fun v => by rw [l₁, l₂]; exact or_comm)
+        (fun v => by rw [u₁, u₂]; exact or_comm)
+      simp only [Lynx.apply_eq, «union_commutative:ensures/4»]
+      simp [r₁, r₂, eq, Term.true]
+      """
+
+    law intersection_commutative(left, right, depth, node),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
+      expects: Descr.equal?(Descr.bare_intersection(left, right), Descr.bare_intersection(right, left)),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
+      obtain ⟨bound, requires⟩ := requires
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «intersection_commutative:requires/4», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 24 * d), fun depth deep => ?_⟩
+      obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      have requires := requires (δ + 100) hb
+      open Lynx Lynx.Term in
+      simp only [Lynx.apply_eq, «intersection_commutative:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1
+      have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
+      obtain ⟨c₁, r₁, g₁, l₁, u₁⟩ := Nest.gd_inter gl gr hm
+      obtain ⟨c₂, r₂, g₂, l₂, u₂⟩ := Nest.gd_inter gr gl hm
+      have eq := Nest.gd_eq_true g₁ g₂ (m := δ + 100) (by omega) (fun v => by rw [l₁, l₂]; exact and_comm)
+        (fun v => by rw [u₁, u₂]; exact and_comm)
+      simp only [Lynx.apply_eq, «intersection_commutative:ensures/4»]
+      simp [r₁, r₂, eq, Term.true]
+      """
+
+    law union_associative(left, middle, right, depth, node),
+      requires:
+        arrows_gradual?(left, {depth, node}) and arrows_gradual?(middle, {depth, node}) and
+          arrows_gradual?(right, {depth, node}) and depth?(depth),
+      expects:
+        Descr.equal?(
+          Descr.bare_union(Descr.bare_union(left, middle), right),
+          Descr.bare_union(left, Descr.bare_union(middle, right))
+        ),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
+      obtain ⟨bound, requires⟩ := requires
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «union_associative:requires/5», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 24 * d), fun depth deep => ?_⟩
+      obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      have requires := requires (δ + 100) hb
+      open Lynx Lynx.Term in
+      simp only [Lynx.apply_eq, «union_associative:requires/5», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1.1
+      have gm : Nest.GD node d middle := Nest.arrows_gradual_ok hK requires.1.2
+      have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
+      obtain ⟨c₁, r₁, g₁, l₁, u₁⟩ := Nest.gd_union gl gm hm
+      obtain ⟨c₂, r₂, g₂, l₂, u₂⟩ := Nest.gd_union g₁ gr hm
+      obtain ⟨c₃, r₃, g₃, l₃, u₃⟩ := Nest.gd_union gm gr hm
+      obtain ⟨c₄, r₄, g₄, l₄, u₄⟩ := Nest.gd_union gl g₃ hm
+      have eq := Nest.gd_eq_true g₂ g₄ (m := δ + 100) (by omega) (fun v => by rw [l₂, l₁, l₄, l₃]; exact or_assoc)
+        (fun v => by rw [u₂, u₁, u₄, u₃]; exact or_assoc)
+      simp only [Lynx.apply_eq, «union_associative:ensures/5»]
+      simp [r₁, r₂, r₃, r₄, eq, Term.true]
+      """
+
+    law intersection_associative(left, middle, right, depth, node),
+      requires:
+        arrows_gradual?(left, {depth, node}) and arrows_gradual?(middle, {depth, node}) and
+          arrows_gradual?(right, {depth, node}) and depth?(depth),
+      expects:
+        Descr.equal?(
+          Descr.bare_intersection(Descr.bare_intersection(left, middle), right),
+          Descr.bare_intersection(left, Descr.bare_intersection(middle, right))
+        ),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
+      obtain ⟨bound, requires⟩ := requires
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «intersection_associative:requires/5», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 24 * d), fun depth deep => ?_⟩
+      obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      have requires := requires (δ + 100) hb
+      open Lynx Lynx.Term in
+      simp only [Lynx.apply_eq, «intersection_associative:requires/5», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1.1
+      have gm : Nest.GD node d middle := Nest.arrows_gradual_ok hK requires.1.2
+      have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
+      obtain ⟨c₁, r₁, g₁, l₁, u₁⟩ := Nest.gd_inter gl gm hm
+      obtain ⟨c₂, r₂, g₂, l₂, u₂⟩ := Nest.gd_inter g₁ gr hm
+      obtain ⟨c₃, r₃, g₃, l₃, u₃⟩ := Nest.gd_inter gm gr hm
+      obtain ⟨c₄, r₄, g₄, l₄, u₄⟩ := Nest.gd_inter gl g₃ hm
+      have eq := Nest.gd_eq_true g₂ g₄ (m := δ + 100) (by omega) (fun v => by rw [l₂, l₁, l₄, l₃]; exact and_assoc)
+        (fun v => by rw [u₂, u₁, u₄, u₃]; exact and_assoc)
+      simp only [Lynx.apply_eq, «intersection_associative:ensures/5»]
+      simp [r₁, r₂, r₃, r₄, eq, Term.true]
+      """
+
+    law union_idempotent(descr, depth, node),
+      requires: arrows_gradual?(descr, {depth, node}) and depth?(depth),
+      expects: Descr.equal?(Descr.bare_union(descr, descr), descr),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
+      obtain ⟨bound, requires⟩ := requires
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «union_idempotent:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 24 * d), fun depth deep => ?_⟩
+      obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      have requires := requires (δ + 100) hb
+      open Lynx Lynx.Term in
+      simp only [Lynx.apply_eq, «union_idempotent:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have gd : Nest.GD node d descr := Nest.arrows_gradual_ok hK requires
+      obtain ⟨c₁, r₁, g₁, l₁, u₁⟩ := Nest.gd_union gd gd hm
+      have eq := Nest.gd_eq_true g₁ gd (m := δ + 100) (by omega) (fun v => by rw [l₁]; exact or_self_iff)
+        (fun v => by rw [u₁]; exact or_self_iff)
+      simp only [Lynx.apply_eq, «union_idempotent:ensures/3»]
+      simp [r₁, eq, Term.true]
+      """
+
+    law intersection_idempotent(descr, depth, node),
+      requires: arrows_gradual?(descr, {depth, node}) and depth?(depth),
+      expects: Descr.equal?(Descr.bare_intersection(descr, descr), descr),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
+      obtain ⟨bound, requires⟩ := requires
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «intersection_idempotent:requires/3», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 24 * d), fun depth deep => ?_⟩
+      obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      have requires := requires (δ + 100) hb
+      open Lynx Lynx.Term in
+      simp only [Lynx.apply_eq, «intersection_idempotent:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have gd : Nest.GD node d descr := Nest.arrows_gradual_ok hK requires
+      obtain ⟨c₁, r₁, g₁, l₁, u₁⟩ := Nest.gd_inter gd gd hm
+      have eq := Nest.gd_eq_true g₁ gd (m := δ + 100) (by omega) (fun v => by rw [l₁]; exact and_self_iff)
+        (fun v => by rw [u₁]; exact and_self_iff)
+      simp only [Lynx.apply_eq, «intersection_idempotent:ensures/3»]
+      simp [r₁, eq, Term.true]
+      """
+
+    law union_absorption(left, right, depth, node),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
+      expects: Descr.equal?(Descr.bare_union(left, Descr.bare_intersection(left, right)), left),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
+      obtain ⟨bound, requires⟩ := requires
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «union_absorption:requires/4», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 24 * d), fun depth deep => ?_⟩
+      obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      have requires := requires (δ + 100) hb
+      open Lynx Lynx.Term in
+      simp only [Lynx.apply_eq, «union_absorption:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1
+      have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
+      obtain ⟨c₁, r₁, g₁, l₁, u₁⟩ := Nest.gd_inter gl gr hm
+      obtain ⟨c₂, r₂, g₂, l₂, u₂⟩ := Nest.gd_union gl g₁ hm
+      have eq := Nest.gd_eq_true g₂ gl (m := δ + 100) (by omega) (fun v => by rw [l₂, l₁]; exact ⟨fun h => h.elim id And.left, Or.inl⟩)
+        (fun v => by rw [u₂, u₁]; exact ⟨fun h => h.elim id And.left, Or.inl⟩)
+      simp only [Lynx.apply_eq, «union_absorption:ensures/4»]
+      simp [r₁, r₂, eq, Term.true]
+      """
+
+    law intersection_absorption(left, right, depth, node),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
+      expects: Descr.equal?(Descr.bare_intersection(left, Descr.bare_union(left, right)), left),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
+      obtain ⟨bound, requires⟩ := requires
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «intersection_absorption:requires/4», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 24 * d), fun depth deep => ?_⟩
+      obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      have requires := requires (δ + 100) hb
+      open Lynx Lynx.Term in
+      simp only [Lynx.apply_eq, «intersection_absorption:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1
+      have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
+      obtain ⟨c₁, r₁, g₁, l₁, u₁⟩ := Nest.gd_union gl gr hm
+      obtain ⟨c₂, r₂, g₂, l₂, u₂⟩ := Nest.gd_inter gl g₁ hm
+      have eq := Nest.gd_eq_true g₂ gl (m := δ + 100) (by omega) (fun v => by rw [l₂, l₁]; exact ⟨And.left, fun h => ⟨h, Or.inl h⟩⟩)
+        (fun v => by rw [u₂, u₁]; exact ⟨And.left, fun h => ⟨h, Or.inl h⟩⟩)
+      simp only [Lynx.apply_eq, «intersection_absorption:ensures/4»]
+      simp [r₁, r₂, eq, Term.true]
+      """
+
+    law union_intersection_distributive(descr, left, right, depth, node),
+      requires:
+        arrows_gradual?(descr, {depth, node}) and arrows_gradual?(left, {depth, node}) and
+          arrows_gradual?(right, {depth, node}) and depth?(depth),
+      expects:
+        Descr.equal?(
+          Descr.bare_union(descr, Descr.bare_intersection(left, right)),
+          Descr.bare_intersection(Descr.bare_union(descr, left), Descr.bare_union(descr, right))
+        ),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
+      obtain ⟨bound, requires⟩ := requires
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «union_intersection_distributive:requires/5», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 24 * d), fun depth deep => ?_⟩
+      obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      have requires := requires (δ + 100) hb
+      open Lynx Lynx.Term in
+      simp only [Lynx.apply_eq, «union_intersection_distributive:requires/5», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have gd : Nest.GD node d descr := Nest.arrows_gradual_ok hK requires.1.1
+      have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1.2
+      have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
+      obtain ⟨c₁, r₁, g₁, l₁, u₁⟩ := Nest.gd_inter gl gr hm
+      obtain ⟨c₂, r₂, g₂, l₂, u₂⟩ := Nest.gd_union gd g₁ hm
+      obtain ⟨c₃, r₃, g₃, l₃, u₃⟩ := Nest.gd_union gd gl hm
+      obtain ⟨c₄, r₄, g₄, l₄, u₄⟩ := Nest.gd_union gd gr hm
+      obtain ⟨c₅, r₅, g₅, l₅, u₅⟩ := Nest.gd_inter g₃ g₄ hm
+      have eq := Nest.gd_eq_true g₂ g₅ (m := δ + 100) (by omega) (fun v => by rw [l₂, l₁, l₅, l₃, l₄]; exact or_and_left)
+        (fun v => by rw [u₂, u₁, u₅, u₃, u₄]; exact or_and_left)
+      simp only [Lynx.apply_eq, «union_intersection_distributive:ensures/5»]
+      simp [r₁, r₂, r₃, r₄, r₅, eq, Term.true]
+      """
+
+    law subtype_union(left, right, depth, node),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
+      expects: Descr.subtype?(left, right) == Descr.equal?(Descr.bare_union(left, right), right),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
+      obtain ⟨bound, requires⟩ := requires
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «subtype_union:requires/4», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 24 * d), fun depth deep => ?_⟩
+      obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      have requires := requires (δ + 100) hb
+      open Lynx Lynx.Term in
+      simp only [Lynx.apply_eq, «subtype_union:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1
+      have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
+      obtain ⟨c, s, r₁, r₂, r₃⟩ := Nest.gd_sub_union gl gr hm
+      simp only [Lynx.apply_eq, «subtype_union:ensures/4»]
+      cases s <;> simp [r₁, r₂, r₃, boolAtom, Erlang.erlang.«==/2», Term.true]
+      """
+
+    law subtype_intersection(left, right, depth, node),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
+      expects: Descr.subtype?(left, right) == Descr.equal?(Descr.bare_intersection(left, right), left),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
+      -- precondition from its own bound.
+      obtain ⟨bound, requires⟩ := requires
+      have checked := requires bound (Nat.le_refl _)
+      simp only [Lynx.apply_eq, «subtype_intersection:requires/4», Lynx.Term.true, Lynx.Except.andAlso_eq_true] at checked
+      obtain ⟨d, rfl⟩ := Nest.depth_nat checked.2
+      refine ⟨max bound (100 + 24 * d), fun depth deep => ?_⟩
+      obtain ⟨hb, hd⟩ := Nat.max_le.mp deep
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      have requires := requires (δ + 100) hb
+      open Lynx Lynx.Term in
+      simp only [Lynx.apply_eq, «subtype_intersection:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      replace requires := requires.1
+      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1
+      have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
+      obtain ⟨c, s, r₁, r₂, r₃⟩ := Nest.gd_sub_inter gl gr hm
+      simp only [Lynx.apply_eq, «subtype_intersection:ensures/4»]
+      cases s <;> simp [r₁, r₂, r₃, boolAtom, Erlang.erlang.«==/2», Term.true]
+      """
+
+    law subtype_difference(left, right, depth, node),
+      requires: arrows_static?(left, {depth, node}) and arrows_static?(right, {depth, node}) and depth?(depth),
+      expects: Descr.subtype?(left, right) == Descr.empty?(Descr.bare_difference(left, right)),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on.
+      open Lynx Lynx.Term in
+      simp only [«subtype_difference:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      obtain ⟨d, rfl⟩ := Nest.depth_nat requires.2
+      refine ⟨100 + 24 * d, fun depth deep => ?_⟩
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      replace requires := requires.1
+      have hm : (Nest.level node d).K + 23 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have dl := Nest.arrows_static_ok requires.1
+      have dr := Nest.arrows_static_ok requires.2
+      obtain ⟨c, s, r₁, r₂, r₃⟩ := Nest.next_sub_diff dl dr hm
+      simp only [Lynx.apply_eq, «subtype_difference:ensures/4»]
+      cases s <;> simp [r₁, r₂, r₃, boolAtom, Erlang.erlang.«==/2», Term.true]
+      """
+
+    law difference_partition(left, right, depth, node),
+      requires: arrows_static?(left, {depth, node}) and arrows_static?(right, {depth, node}) and depth?(depth),
+      expects:
+        Descr.equal?(
+          Descr.bare_union(Descr.bare_difference(left, right), Descr.bare_intersection(left, right)),
+          left
+        ),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on.
+      open Lynx Lynx.Term in
+      simp only [«difference_partition:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      obtain ⟨d, rfl⟩ := Nest.depth_nat requires.2
+      refine ⟨100 + 24 * d, fun depth deep => ?_⟩
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      replace requires := requires.1
+      have hm : (Nest.level node d).K + 23 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have dl := Nest.arrows_static_ok requires.1
+      have dr := Nest.arrows_static_ok requires.2
+      have ef := Nest.ef_next node d
+      obtain ⟨c₁, d₁, r₁, s₁, -⟩ := ef.diff dl dr
+      obtain ⟨c₂, d₂, r₂, s₂, -⟩ := ef.inter dl dr
+      obtain ⟨c₃, d₃, r₃, s₃, -⟩ := ef.union d₁ d₂
+      have eq := Nest.next_eq_true d₃ dl hm fun v => by
+        rw [s₃, s₁, s₂]
+        exact ⟨fun h => h.elim And.left And.left, fun h => (Classical.em _).elim (fun h' => Or.inr ⟨h, h'⟩)
+          fun h' => Or.inl ⟨h, h'⟩⟩
+      simp only [Lynx.apply_eq, «difference_partition:ensures/4»]
+      simp [r₁ _ hm, r₂ _ (by omega), r₃ _ hm, eq, Term.true]
+      """
+
+    law difference_disjoint(left, right, depth, node),
+      requires: arrows_static?(left, {depth, node}) and arrows_static?(right, {depth, node}) and depth?(depth),
+      expects: Descr.disjoint?(Descr.bare_difference(left, right), right),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on.
+      open Lynx Lynx.Term in
+      simp only [«difference_disjoint:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      obtain ⟨d, rfl⟩ := Nest.depth_nat requires.2
+      refine ⟨100 + 24 * d, fun depth deep => ?_⟩
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      replace requires := requires.1
+      have hm : (Nest.level node d).K + 23 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have dl := Nest.arrows_static_ok requires.1
+      have dr := Nest.arrows_static_ok requires.2
+      obtain ⟨c, dc, run, sem, -⟩ := (Nest.ef_next node d).diff dl dr
+      have disj := Nest.next_disj dc dr hm
+      rw [Nest.bp_true.mpr fun v h₁ h₂ => ((sem v).mp h₁).2 h₂] at disj
+      simp only [Lynx.apply_eq, «difference_disjoint:ensures/4»]
+      simp [run _ hm, disj, Term.true]
+      """
+
+    law negation_involutive(descr, depth, node),
+      requires: arrows_static?(descr, {depth, node}) and depth?(depth),
+      expects: Descr.equal?(Descr.bare_negation(Descr.bare_negation(descr)), descr),
+      proof: ~LEAN"""
+      -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on.
+      open Lynx Lynx.Term in
+      simp only [«negation_involutive:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
+      obtain ⟨d, rfl⟩ := Nest.depth_nat requires.2
+      refine ⟨100 + 24 * d, fun depth deep => ?_⟩
+      obtain ⟨δ, rfl⟩ : ∃ δ, depth = δ + 100 := ⟨depth - 100, by omega⟩
+      replace requires := requires.1
+      have hm : (Nest.level node d).K + 23 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have dd := Nest.arrows_static_ok requires
+      obtain ⟨c₁, r₁, d₁, s₁⟩ := Nest.next_neg dd hm
+      obtain ⟨c₂, r₂, d₂, s₂⟩ := Nest.next_neg d₁ hm
+      have eq := Nest.next_eq_true d₂ dd hm fun v => by rw [s₂, s₁]; exact Classical.not_not
+      simp only [Lynx.apply_eq, «negation_involutive:ensures/3»]
+      simp [r₁, r₂, eq, Term.true]
       """
   end
 end
