@@ -501,6 +501,32 @@ defmodule Lynx.RunnerDiagnosticsTest do
              Lynx.Commands.verify!(@lean_dir, [support])
   end
 
+  test "reports failed proofs of every prelude block, elaborated in parallel" do
+    blocks = [
+      %{
+        "file" => "custom.exs",
+        "span" => [10, 7],
+        "indentation" => 4,
+        "source" => @header <> "theorem first : 1 = 2 := by decide\ntheorem fine : 1 = 1 := rfl\n"
+      },
+      %{
+        "file" => "custom.exs",
+        "span" => [20, 7],
+        "indentation" => 4,
+        "source" => "theorem second : 1 = 1 := fine\ntheorem third : 2 = 3 := by decide\n"
+      }
+    ]
+
+    support = file("custom.exs", "Erlang.prelude.Parallel", []) |> Map.put("preludes", blocks)
+
+    assert [%{status: :error, diagnostics: diagnostics}] =
+             Lynx.Commands.verify!(@lean_dir, [support])
+
+    assert [first, third] = Enum.sort_by(diagnostics, & &1.line)
+    assert %{file: "custom.exs", line: 13, message: "Tactic `decide` proved" <> _} = first
+    assert %{file: "custom.exs", line: 21, message: "Tactic `decide` proved" <> _} = third
+  end
+
   test "reports expected and actual values for expects" do
     receive_body = fn timeout ->
       %{
