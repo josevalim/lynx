@@ -2,6 +2,8 @@ module
 
 import Lynx.Modules.Erlang.erlang
 meta import Lynx.Modules.Erlang.erlang
+meta import LynxTest.ProofAudit
+import Lynx
 
 namespace LynxTest.Modules.Hashing
 open Lynx
@@ -105,8 +107,28 @@ private meta def result : Except Exception Term → Option Int
 #guard result (Erlang.erlang.«phash2/1» (.map [(.atom "a", .integer 1), (.atom "a", .integer 2)])) ==
   result (Erlang.erlang.«phash2/1» (.map [(.atom "a", .integer 1)]))
 
+/-- Exactly equal maps hash the same, whatever their shadowed bindings. -/
+theorem shadowed_bindings_hash (k v w : Term) :
+    Erlang.erlang.«phash2/1» (.map [(k, v), (k, w)]) = Erlang.erlang.«phash2/1» (.map [(k, v)]) := by
+  apply Erlang.erlang.phash2_congr
+  apply Term.map_exactCompare_eq_of_lookup
+  intro q
+  by_cases same : Term.exactCompare q k = .eq <;> simp [same]
+
+/-- Closures hash the same when their captures are exactly equal. -/
+theorem capture_hash (k v w : Term) :
+    Erlang.erlang.«phash2/1» (.function "m" "f" 0 #[.map [(k, v), (k, w)]]) =
+      Erlang.erlang.«phash2/1» (.function "m" "f" 0 #[.map [(k, v)]]) := by
+  apply Erlang.erlang.phash2_congr
+  have := Term.map_exactCompare_eq_of_lookup [(k, v), (k, w)] [(k, v)] fun q => by
+    by_cases same : Term.exactCompare q k = .eq <;> simp [same]
+  rw [Term.exactCompare_eq_step]
+  simp [Term.Compare.compareStep, List.compareLex_cons_cons, List.compareLex_nil_nil, this]
+
 #guard result (Erlang.erlang.«phash2/2» (.atom "a") (.integer 7)) == some 6
 #guard result (Erlang.erlang.«phash2/2» (.atom "a") (.integer 0)) == some (-1)
 #guard result (Erlang.erlang.«phash2/2» (.atom "a") (.integer (2 ^ 32 + 1))) == some (-1)
 
 end LynxTest.Modules.Hashing
+
+run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Modules.Hashing
