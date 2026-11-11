@@ -47,12 +47,9 @@
 #   * Gradual types, whose dynamic part includes their static part, for both parts.
 #   * The recursive type t = nil or {term(), t}, as a Descr node wherever types nest.
 #
-# Restrictions:
-#
-#   * Function types are modeled as sets of functions inside other types and in the
-#     compatibility law. At the top of the types of the other laws, they are modeled as
-#     Boolean combinations of arrows, so the static part of a gradual type minus its dynamic
-#     part must hold no function type.
+# Function types are modeled as sets of functions, whose arguments and returns are nested
+# types. The plain negation and De Morgan laws also hold for static types whose function
+# types hold any literals, modeled as Boolean combinations of arrows.
 #
 # Checked against Elixir 1.21.0-dev (2d81cf3fc), Erlang/OTP 29.1.2.
 # Source reference: ../elixir/lib/elixir/lib/module/types/descr.ex.
@@ -306,37 +303,24 @@ defmodule STTDescrProofsTest do
   def opt_negatable?(descr, {depth, _node} = nested),
     do: negatable?(descr, nested) and keyed_fields?(:maps.to_list(descr), depth, false)
 
-  # Gradual types of the laws on optimized operations: the types above, or a static part and
-  # a dynamic part of those types, where the dynamic part includes the static part, as Descr
-  # maintains. Inclusion is checked with Descr. Function types at the top of these types may
-  # hold any literals, whose emptiness is only complete, so the difference must remove the
-  # static function types exactly.
-  def opt_gradual?(%{dynamic: dynamic} = descr, nested) do
-    static = Map.delete(descr, :dynamic)
-
-    opt_negatable?(static, nested) and opt_negatable?(dynamic, nested) and
-      included?(Descr.bare_difference(static, dynamic))
-  end
-
-  def opt_gradual?(descr, nested), do: opt_negatable?(descr, nested)
-
-  defp included?(difference), do: not is_map_key(difference, :fun) and Descr.empty?(difference)
-
-  # Gradual types of the compatibility, order, and lattice laws: these laws check emptiness, so the
-  # function types of both parts of these types are arrows between nested types, as function types
-  # inside other types are.
-  def arrows_gradual?(descr, nested),
-    do:
-      opt_gradual?(descr, nested) and arrows?(Descr.lower_bound(descr), nested) and
-        arrows?(Descr.upper_bound(descr), nested)
-
   defp arrows?(%{fun: fun}, {depth, _node} = nested),
     do: nested_field?({:fun, fun}, nested) and keyed_fields?([{:fun, fun}], depth, true)
 
   defp arrows?(_descr, _nested), do: true
 
-  # Static types of the laws on differences and negations, whose function types are arrows.
+  # Static types of the laws: the types above whose function types are arrows between nested types.
   def arrows_static?(descr, nested), do: opt_negatable?(descr, nested) and arrows?(descr, nested)
+
+  # Gradual types of the laws: static types, or a static part and a dynamic part of those types, where the dynamic
+  # part includes the static part, as Descr maintains. Inclusion is checked with Descr.
+  def arrows_gradual?(%{dynamic: dynamic} = descr, nested) do
+    static = Map.delete(descr, :dynamic)
+
+    arrows_static?(static, nested) and arrows_static?(dynamic, nested) and
+      Descr.empty?(Descr.bare_difference(static, dynamic))
+  end
+
+  def arrows_gradual?(descr, nested), do: arrows_static?(descr, nested)
 
   defp keyed?(:term, _depth), do: true
   defp keyed?({_, _, _}, _depth), do: true
@@ -38213,46 +38197,10 @@ defmodule STTDescrProofsTest do
     namespace Elixir.STTDescrProofsTest.Nest
     open Lynx Lynx.Term BddProofs
 
-    /-! Function fields of top-level types: any function types, whose emptiness is complete. -/
-
-    theorem funFC : FunC 2 FunF FVT (fun S => S = []) False where
-      funF := id
-      union := fun {x y} hx hy m w hm run => by
-        obtain ⟨n, rfl⟩ : ∃ n, m = n + 1 := ⟨m - 1, by omega⟩
-        obtain ⟨w', run', fw, -⟩ := fun_union_spec n hx hy
-        rw [run'] at run; cases run
-        exact ⟨fw, False.elim⟩
-      inter := fun {x y} hx hy m w hm run kw => by
-        obtain ⟨n, rfl⟩ : ∃ n, m = n + 1 := ⟨m - 1, by omega⟩
-        obtain ⟨w', run', k, -⟩ := fun_inter_spec n hx hy
-        rw [run'] at run; cases run
-        exact ⟨(k kw).1, False.elim⟩
-      diff := fun {x y} hx hy m w hm run kw => by
-        obtain ⟨n, rfl⟩ : ∃ n, m = n + 2 := ⟨m - 2, by omega⟩
-        obtain ⟨w', run', k, -⟩ := fun_diff_spec n hx hy
-        rw [run'] at run; cases run
-        exact ⟨(k kw).1, False.elim⟩
-      empty := fun {x} S {m} hx hS hm => by
-        subst hS
-        refine ⟨fun N _ _ h => ?_, False.elim⟩
-        obtain ⟨n, rfl⟩ : ∃ n, m = n + 2 := ⟨m - 2, by omega⟩
-        have := (fun_sub_spec n hx none (fun y h => by cases h) fun q ρ resp hq => by
-          have := h (0, q, ρ) resp trivial
-          rw [dn_fun] at this
-          rw [this] at hq; cases hq).2 rfl
-        simpa [Elixir.Module.Types.Descr.«empty_key?/3»] using this
-
     section
     variable {K : Nat} {Fn TF LF MF : Term → Prop} {TV LV MV : (Term → Bool) → Prop} {FV : Term → (Term → Bool) → Prop}
       {FS : List (Term × Term) → Prop}
       {H : Prop}
-
-    theorem FunC.mono (fc : FunC K Fn FV FS H) {K' : Nat} (le : K ≤ K') : FunC K' Fn FV FS H where
-      funF := fc.funF
-      union := fun hx hy m w hm run => fc.union hx hy m w (by omega) run
-      inter := fun hx hy m w hm run kw => fc.inter hx hy m w (by omega) run kw
-      diff := fun hx hy m w hm run kw => fc.diff hx hy m w (by omega) run kw
-      empty := by intro x S m hx hS hm; exact fc.empty S hx hS (by omega)
 
     /-- Types with no points are checked empty. -/
     theorem descr_empty_none (ks : Kinds K TF LF MF TV LV MV) (fc : FunC K Fn FV FS H) (hS : FS []) {m : Nat} (hm : K ≤ m)
@@ -38296,30 +38244,24 @@ defmodule STTDescrProofsTest do
     namespace Elixir.STTDescrProofsTest.Nest
     open Lynx Lynx.Term BddProofs
 
-    /-! Top-level types over the element types of a level: the top type or types whose function fields are any function
-    types. Their plain and optimized operations hold the expected points, and their emptiness and subtyping checks are
-    complete. -/
+    /-! Top-level types over the element types of a level: the top type or types whose function fields are arrows
+    between element types. Their plain and optimized operations hold the expected points, and their emptiness and
+    subtyping checks are exact. -/
 
     /-- Top-level types over the element types of a level. -/
     def TC (L : Level) (a : Term) : Prop :=
+      a = .atom "term" ∨ ∃ X, a = .map X ∧ DescrC (FunA L.E) (TField L.E) (LF L.E) (MField L.E) X
+
+    abbrev TP (L : Level) : Type := PtD L.E L.den L.tl (FVal L.E L.den)
+
+    /-- Top-level types whose function types may hold any literals, as the specs accept them. -/
+    def TCF (L : Level) (a : Term) : Prop :=
       a = .atom "term" ∨ ∃ X, a = .map X ∧ DescrC FunF (TField L.E) (LF L.E) (MField L.E) X
 
-    abbrev TP (L : Level) : Type := PtD L.E L.den L.tl FVT
+    theorem tks (L : Level) : Kinds (L.K + 11) (TField L.E) (LF L.E) (MField L.E) (ValT L.E L.den) (ValLN L.E L.den L.tl)
+        (ValMN L.E L.den) := (kinds L.ef).mono (by omega)
 
-    abbrev tks (L : Level) := kinds L.ef
-
-    theorem tfc (L : Level) : FunC (L.K + 2) FunF FVT (fun S => S = []) False := funFC.mono (by omega)
-
-    theorem DescrC.funF {Fn TF LF MF : Term → Prop} {X : List (Term × Term)} (s : DescrC Fn TF LF MF X)
-        (fF : ∀ {x}, Fn x → FunF x) : DescrC FunF TF LF MF X := by
-      refine ⟨s.keys, fun name x h => ?_⟩
-      rcases s.fields name x h with h | h | ⟨e, f⟩ | h | h | h
-      · exact Or.inl h
-      · exact Or.inr (Or.inl h)
-      · exact Or.inr (Or.inr (Or.inl ⟨e, fF f⟩))
-      · exact Or.inr (Or.inr (Or.inr (Or.inl h)))
-      · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h))))
-      · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr h))))
+    theorem tfc (L : Level) : FunC (L.K + 11) (FunA L.E) (FVal L.E L.den) (fun _ => True) True := funAC L.ef L.ef.subc
 
     theorem lookup_out' {Fn TF LF MF : Term → Prop} {X : List (Term × Term)} (sX : DescrC Fn TF LF MF X) {name : String}
         (h : name ∉ names) : mapLookup X (.atom name) = none := by
@@ -38334,16 +38276,16 @@ defmodule STTDescrProofsTest do
     variable {L : Level}
 
     theorem termT (L : Level) : ∃ T, Elixir.Module.Types.Descr.«unfolded_term/0» = .ok (.map T) ∧
-        DescrC FunF (TField L.E) (LF L.E) (MField L.E) T ∧ T ≠ [] ∧
+        DescrC (FunA L.E) (TField L.E) (LF L.E) (MField L.E) T ∧ T ≠ [] ∧
         ∀ v : TP L, denD (.map T) v := by
-      obtain ⟨T, term, sT, ne, -, all⟩ := termC (FV := FVT) (tks L) (Fn := FunTop) rfl
-      exact ⟨T, term, sT.funF fun h => h ▸ funF_top, ne, fun v => (denD_map v).mpr (all _ v.2.1 _ v.2.2)⟩
+      obtain ⟨T, term, sT, ne, -, all⟩ := termC (FV := FVal L.E L.den) (tks L) (Fn := FunA L.E) funA_top
+      exact ⟨T, term, sT, ne, fun v => (denD_map v).mpr (all _ v.2.1 _ v.2.2)⟩
 
-    theorem tc_nil : TC L (.map []) := Or.inr ⟨[], rfl, descrC_nil (Fn := FunF)⟩
+    theorem tc_nil : TC L (.map []) := Or.inr ⟨[], rfl, descrC_nil (Fn := FunA L.E)⟩
 
     theorem denD_nil (v : TP L) : ¬denD (.map []) v := by simp [denD_map, mapLookup, dn_none]
 
-    theorem tc_union {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 4 ≤ m) :
+    theorem tc_union {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 13 ≤ m) :
         ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok c ∧
           ∀ v : TP L, denD c v ↔ denD a v ∨ denD b v := by
       rcases ha with rfl | ⟨A, rfl, sA⟩
@@ -38354,7 +38296,7 @@ defmodule STTDescrProofsTest do
       obtain ⟨U, run, sU, sem, -⟩ := descr_union (tks L) (tfc L) (m := n) (by omega) sA sB
       exact ⟨_, Or.inr ⟨U, rfl, sU⟩, run, fun v => by simp only [denD_map, sem _ _ v.2.2, Bool.or_eq_true]⟩
 
-    theorem tc_inter {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 4 ≤ m) :
+    theorem tc_inter {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 13 ≤ m) :
         ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok c ∧
           ∀ v : TP L, denD c v ↔ denD a v ∧ denD b v := by
       rcases ha with rfl | ⟨A, rfl, sA⟩
@@ -38370,7 +38312,7 @@ defmodule STTDescrProofsTest do
       unfold Elixir.Module.Types.Descr.«bare_difference/2»
       rcases ha with rfl | ⟨A, rfl, -⟩ <;> simp [Erlang.erlang.«==/2»]
 
-    theorem tc_diff {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 6 ≤ m) :
+    theorem tc_diff {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 15 ≤ m) :
         ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«bare_difference/2» (D m) a b = .ok c ∧
           ∀ v : TP L, denD c v ↔ denD a v ∧ ¬denD b v := by
       rcases hb with rfl | ⟨B, rfl, sB⟩
@@ -38392,7 +38334,7 @@ defmodule STTDescrProofsTest do
         cases dn v.1.1 (mapLookup A (.atom v.1.1)) v.1.2 <;> cases dn v.1.1 (mapLookup B (.atom v.1.1)) v.1.2 <;> simp
 
     theorem tc_opt_union {a b : Term} (ha : TC L a) (hb : TC L b) (S : List (Term × Term)) {m : Nat}
-        (hm : L.K + 4 ≤ m) : ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«opt_union/3» (D m) a b (.map S) = .ok c ∧
+        (hm : L.K + 13 ≤ m) : ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«opt_union/3» (D m) a b (.map S) = .ok c ∧
           ∀ v : TP L, denD c v ↔ denD a v ∨ denD b v := by
       rcases ha with rfl | ⟨A, rfl, sA⟩
       · exact ⟨_, Or.inl rfl, opt_union_term_left _ _ _, fun v => by simp [denD_term]⟩
@@ -38403,7 +38345,7 @@ defmodule STTDescrProofsTest do
       exact ⟨_, Or.inr ⟨U, rfl, sU⟩, run, fun v => by simp only [denD_map, sem _ _ v.2.2, Bool.or_eq_true]⟩
 
     theorem tc_opt_inter {a b : Term} (ha : TC L a) (hb : TC L b) (S : List (Term × Term)) {m : Nat}
-        (hm : L.K + 4 ≤ m) : ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«opt_intersection/3» (D m) a b (.map S) = .ok c ∧
+        (hm : L.K + 13 ≤ m) : ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«opt_intersection/3» (D m) a b (.map S) = .ok c ∧
           ∀ v : TP L, denD c v ↔ denD a v ∧ denD b v := by
       rcases ha with rfl | ⟨A, rfl, sA⟩
       · exact ⟨b, hb, opt_inter_term_l _ _ _, fun v => by simp [denD_term]⟩
@@ -38414,7 +38356,7 @@ defmodule STTDescrProofsTest do
       exact ⟨_, Or.inr ⟨U, rfl, sU⟩, run, fun v => by simp only [denD_map, sem _ _ v.2.2, Bool.and_eq_true]⟩
 
     theorem tc_opt_diff {a b : Term} (ha : TC L a) (hb : TC L b) (S : List (Term × Term)) {m : Nat}
-        (hm : L.K + 6 ≤ m) : ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«opt_difference/3» (D m) a b (.map S) = .ok c ∧
+        (hm : L.K + 15 ≤ m) : ∃ c, TC L c ∧ Elixir.Module.Types.Descr.«opt_difference/3» (D m) a b (.map S) = .ok c ∧
           ∀ v : TP L, denD c v ↔ denD a v ∧ ¬denD b v := by
       rcases hb with rfl | ⟨B, rfl, sB⟩
       · exact ⟨_, tc_nil, difference_term_term _ _ _, fun v => by simp [denD_nil, denD_term]⟩
@@ -38435,30 +38377,30 @@ defmodule STTDescrProofsTest do
         cases dn v.1.1 (mapLookup A (.atom v.1.1)) v.1.2 <;> cases dn v.1.1 (mapLookup B (.atom v.1.1)) v.1.2 <;> simp
 
     /-- Types without points are checked empty. -/
-    theorem tc_empty {a : Term} (ha : TC L a) {m : Nat} (hm : L.K + 2 ≤ m) (none : ∀ v : TP L, ¬denD a v) :
+    theorem tc_empty {a : Term} (ha : TC L a) {m : Nat} (hm : L.K + 11 ≤ m) (none : ∀ v : TP L, ¬denD a v) :
         Elixir.Module.Types.Descr.«empty?/1» (D m) a = .ok (.atom "true") := by
       rcases ha with rfl | ⟨X, rfl, sX⟩
       · exact absurd (denD_term ptWit) (none ptWit)
       rw [empty_map_seen]
-      refine descr_empty_none (tks L) (tfc L) rfl hm sX fun name p ok => ?_
+      refine descr_empty_none (tks L) (tfc L) trivial hm sX fun name p ok => ?_
       by_cases mem : name ∈ names
       · have := none ⟨(name, p), mem, ok⟩
         simpa [denD] using this
       · rw [lookup_out' sX mem, dn_none]
 
     /-- Subtyping of top-level types is complete. -/
-    theorem tc_sub {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 4 ≤ m)
+    theorem tc_sub {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 13 ≤ m)
         (incl : ∀ v : TP L, denD a v → denD b v) :
         Elixir.Module.Types.Descr.«subtype?/2» (D m) a b = .ok (.atom "true") := by
       obtain ⟨T, term, sT, -, all⟩ := termT L
-      have left : ∃ A, DescrC FunF (TField L.E) (LF L.E) (MField L.E) A ∧
+      have left : ∃ A, DescrC (FunA L.E) (TField L.E) (LF L.E) (MField L.E) A ∧
           Elixir.Module.Types.Descr.«subtype?/2» (D m) a b = Elixir.Module.Types.Descr.«subtype?/2» (D m) (.map A) b ∧
           ∀ v : TP L, denD a v ↔ denD (.map A) v := by
         rcases ha with rfl | ⟨A, rfl, sA⟩
         · exact ⟨T, sT, subtype_term_l term _ _, fun v => ⟨fun _ => all v, fun _ => denD_term v⟩⟩
         · exact ⟨A, sA, rfl, fun v => Iff.rfl⟩
       obtain ⟨A, sA, eA, dA⟩ := left
-      have right : ∃ B, DescrC FunF (TField L.E) (LF L.E) (MField L.E) B ∧
+      have right : ∃ B, DescrC (FunA L.E) (TField L.E) (LF L.E) (MField L.E) B ∧
           Elixir.Module.Types.Descr.«subtype?/2» (D m) (.map A) b =
             Elixir.Module.Types.Descr.«subtype?/2» (D m) (.map A) (.map B) ∧
           ∀ v : TP L, denD b v ↔ denD (.map B) v := by
@@ -38467,7 +38409,7 @@ defmodule STTDescrProofsTest do
         · exact ⟨B, sB, rfl, fun v => Iff.rfl⟩
       obtain ⟨B, sB, eB, dB⟩ := right
       rw [eA, eB]
-      refine descr_sub_complete (tks L) (tfc L) rfl (by omega) sA sB fun name p ok h => ?_
+      refine descr_sub_complete (tks L) (tfc L) trivial (by omega) sA sB fun name p ok h => ?_
       by_cases mem : name ∈ names
       · have := (dB ⟨(name, p), mem, ok⟩).mp (incl _ ((dA _).mpr ((denD_map _).mpr h)))
         exact (denD_map _).mp this
@@ -38650,7 +38592,7 @@ defmodule STTDescrProofsTest do
 
     /-- Keyed negatable types are top-level types over the element types of their depth. -/
     theorem negatable_tc (t : Term) (d : Nat) {X : List (Term × Term)} (v : Negatable (Nest t d) X)
-        (kf : KeyedF (Keyed d) Bool.false X) : TC (level t d) (.map X) := by
+        (kf : KeyedF (Keyed d) Bool.false X) : TCF (level t d) (.map X) := by
       have conv : ∀ e, Nest t d e → Keyed d e → (level t d).E e := nest_level t d
       refine Or.inr ⟨X, rfl, fun q hq => ?_, fun name w h => ?_⟩
       · rcases v.keys q hq with rfl | rfl | rfl | rfl | rfl | rfl <;> exact ⟨_, by simp [names], rfl⟩
@@ -39215,7 +39157,7 @@ defmodule STTDescrProofsTest do
 
     /-- The types of `opt_negatable?/2` are top-level types over the element types of their depth. -/
     theorem opt_negatable_tc (t : Term) (n : Nat) (descr : Term)
-        (h : «opt_negatable?/2» descr (.tuple #[.integer n, t]) = .ok Term.true) : TC (level t n) descr := by
+        (h : «opt_negatable?/2» descr (.tuple #[.integer n, t]) = .ok Term.true) : TCF (level t n) descr := by
       unfold «opt_negatable?/2» at h
       split at h
       · exact Or.inl rfl
@@ -39453,8 +39395,8 @@ defmodule STTDescrProofsTest do
     section
     variable {L : Level}
 
-    abbrev DC (L : Level) := DescrC FunF (TField L.E) (LF L.E) (MField L.E)
-    abbrev FC (L : Level) := FieldC FunF (TField L.E) (LF L.E) (MField L.E)
+    abbrev DC (L : Level) := DescrC (FunA L.E) (TField L.E) (LF L.E) (MField L.E)
+    abbrev FC (L : Level) := FieldC (FunA L.E) (TField L.E) (LF L.E) (MField L.E)
 
     theorem denD_rmDyn (X : List (Term × Term)) (v : TP L) : denD (.map (rmDyn X)) v ↔ denD (.map X) v := by
       simp only [denD_map, lookup_rmDyn_name X (names_ne_dyn v.2.1)]
@@ -39464,7 +39406,7 @@ defmodule STTDescrProofsTest do
         (f : Term → Term → Term → Except Exception Term) : Prop where
       call : ∀ q v₁ v₂, d.pure (.function module name 3 caps) #[q, v₁, v₂] = f q v₁ v₂
       spec : ∀ name x y, FC L name x → FC L name y → ∃ u, f (.atom name) x y = .ok u ∧ FC L name u ∧
-        ∀ p, PtOkD L.E L.den L.tl FVT name p → dn name (some u) p = (dn name (some x) p || dn name (some y) p)
+        ∀ p, PtOkD L.E L.den L.tl (FVal L.E L.den) name p → dn name (some u) p = (dn name (some x) p || dn name (some y) p)
 
     theorem DC.atoms {X : List (Term × Term)} (sX : DC L X) : ∀ q, (mapLookup X q).isSome → ∃ n, q = .atom n :=
       fun q h => let ⟨n, _, e⟩ := sX.keys q h; ⟨n, e⟩
@@ -39672,21 +39614,21 @@ defmodule STTDescrProofsTest do
     section
     variable {L : Level}
 
-    theorem bare_union_op {n : Nat} (hm : L.K + 3 ≤ n) :
+    theorem bare_union_op {n : Nat} (hm : L.K + 12 ≤ n) :
         UnionOp L (D (n + 1)) "Elixir.Module.Types.Descr" "bare_union" #[]
           (Elixir.Module.Types.Descr.«bare_union/3» (D n)) where
       call := fun q v₁ v₂ => Erlang.program.«Elixir.Module.Types.Descr:bare_union/3».pure n q v₁ v₂
       spec := fun _ _ _ fx fy =>
         let ⟨u, ru, fu, su, _⟩ := fieldC_union (tks L) (tfc L) (by omega) fx fy; ⟨u, ru, fu, su⟩
 
-    theorem opt_union_op {n : Nat} (hm : L.K + 3 ≤ n) (S : List (Term × Term)) :
+    theorem opt_union_op {n : Nat} (hm : L.K + 12 ≤ n) (S : List (Term × Term)) :
         UnionOp L (D (n + 1)) "Elixir.Module.Types.Descr" "-opt_union/3-anonymous-0-" #[.map S]
           (fun q x y => Elixir.Module.Types.Descr.«opt_union/4» (D n) q x y (.map S)) where
       call := fun q v₁ v₂ => by
         rw [Erlang.program.«Elixir.Module.Types.Descr:-opt_union/3-anonymous-0-/3».pure]; rfl
       spec := fun _ _ _ fx fy => fieldC_opt_union (tks L) (tfc L) (by omega) fx fy S
 
-    theorem opt_union_dyn_op {n : Nat} (hm : L.K + 3 ≤ n) (S : List (Term × Term)) :
+    theorem opt_union_dyn_op {n : Nat} (hm : L.K + 12 ≤ n) (S : List (Term × Term)) :
         UnionOp L (D (n + 1)) "Elixir.Module.Types.Descr" "-opt_union/4-fun-0-" #[.map S]
           (fun q x y => Elixir.Module.Types.Descr.«opt_union/4» (D n) q x y (.map S)) where
       call := fun q v₁ v₂ => by
@@ -39783,7 +39725,7 @@ defmodule STTDescrProofsTest do
       · exact absurd (hX.static h) st
       · rfl
 
-    theorem gc_union {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 5 ≤ m) :
+    theorem gc_union {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 14 ≤ m) :
         ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok c ∧ USem L a b c := by
       obtain ⟨k, rfl⟩ : ∃ k, m = k + 2 := ⟨m - 2, by omega⟩
       rcases ha.shape with rfl | ⟨X, rfl⟩
@@ -39805,7 +39747,7 @@ defmodule STTDescrProofsTest do
         (bare_union_op (n := k) (by omega)) (bare_union_dyn _) ha hb
       exact ⟨c, hc, (union_run_grad _ nX nY g).trans run, lo, up⟩
 
-    theorem gc_opt_union {a b : Term} (ha : GC L a) (hb : GC L b) (S : List (Term × Term)) {m : Nat} (hm : L.K + 5 ≤ m) :
+    theorem gc_opt_union {a b : Term} (ha : GC L a) (hb : GC L b) (S : List (Term × Term)) {m : Nat} (hm : L.K + 14 ≤ m) :
         ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_union/3» (D m) a b (.map S) = .ok c ∧ USem L a b c := by
       obtain ⟨k, rfl⟩ : ∃ k, m = k + 2 := ⟨m - 2, by omega⟩
       rcases ha.shape with rfl | ⟨X, rfl⟩
@@ -39847,7 +39789,7 @@ defmodule STTDescrProofsTest do
       call : ∀ q v₁ v₂, (D (n + 1)).pure (.function module name 3 caps) #[q, v₁, v₂] = f q v₁ v₂
       spec : ∀ name x y, FC L name x → FC L name y → ∃ w, f (.atom name) x y = .ok w ∧
         (kept (.atom name, w) = Bool.true → FC L name w) ∧
-        ∀ p, PtOkD L.E L.den L.tl FVT name p → dn name (keptO name w) p = (dn name (some x) p && dn name (some y) p)
+        ∀ p, PtOkD L.E L.den L.tl (FVal L.E L.den) name p → dn name (keptO name w) p = (dn name (some x) p && dn name (some y) p)
 
     /-- Intersecting static types keeps their common points. -/
     theorem inter_descr {n : Nat} {module name : String} {caps : Array Term}
@@ -40000,21 +39942,21 @@ defmodule STTDescrProofsTest do
         obtain ⟨h₁, h₂⟩ := (lo v).mp h
         exact ⟨hX.inv v h₁, hY.inv v h₂⟩
 
-    theorem bare_inter_op {n : Nat} (hm : L.K + 3 ≤ n) :
+    theorem bare_inter_op {n : Nat} (hm : L.K + 12 ≤ n) :
         InterOp L n "Elixir.Module.Types.Descr" "bare_intersection" #[]
           (Elixir.Module.Types.Descr.«bare_intersection/3» (D n)) where
       call := fun q v₁ v₂ => Erlang.program.«Elixir.Module.Types.Descr:bare_intersection/3».pure n q v₁ v₂
       spec := fun _ _ _ fx fy =>
         let ⟨w, rw', k, sw⟩ := fieldC_inter (tks L) (tfc L) (by omega) fx fy; ⟨w, rw', fun h => (k h).1, sw⟩
 
-    theorem opt_inter_op {n : Nat} (hm : L.K + 3 ≤ n) (S : List (Term × Term)) :
+    theorem opt_inter_op {n : Nat} (hm : L.K + 12 ≤ n) (S : List (Term × Term)) :
         InterOp L n "Elixir.Module.Types.Descr" "-opt_intersection/3-anonymous-0-" #[.map S]
           (fun q x y => Elixir.Module.Types.Descr.«opt_intersection/4» (D n) q x y (.map S)) where
       call := fun q v₁ v₂ => by
         rw [Erlang.program.«Elixir.Module.Types.Descr:-opt_intersection/3-anonymous-0-/3».pure]; rfl
       spec := fun _ _ _ fx fy => fieldC_opt_inter (tks L) (tfc L) (by omega) fx fy S
 
-    theorem opt_inter_dyn_op {n : Nat} (hm : L.K + 3 ≤ n) (S : List (Term × Term)) :
+    theorem opt_inter_dyn_op {n : Nat} (hm : L.K + 12 ≤ n) (S : List (Term × Term)) :
         InterOp L n "Elixir.Module.Types.Descr" "-opt_intersection/4-fun-0-" #[.map S]
           (fun q x y => Elixir.Module.Types.Descr.«opt_intersection/4» (D n) q x y (.map S)) where
       call := fun q v₁ v₂ => by
@@ -40064,7 +40006,7 @@ defmodule STTDescrProofsTest do
       simp [getMapKeys_single, sA.static, sB.static]
 
     /-- Intersections of gradual types, whose upper bound is empty or the intersection of the upper bounds. -/
-    theorem gc_inter {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 5 ≤ m) :
+    theorem gc_inter {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 14 ≤ m) :
         ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok c ∧ ISem L a b c ∧
           ((∀ v : TP L, ¬denD (upper c) v) ∨ ∃ j, m ≤ j + 1 ∧
             Elixir.Module.Types.Descr.«bare_intersection/2» (D j) (upper a) (upper b) = .ok (upper c)) := by
@@ -40089,7 +40031,7 @@ defmodule STTDescrProofsTest do
       · exact Or.inl up
       · exact Or.inr ⟨k + 1, by omega, by rw [← dyn_inter_bare _ ha.up_tc hb.up_tc]; exact up⟩
 
-    theorem gc_opt_inter {a b : Term} (ha : GC L a) (hb : GC L b) (S : List (Term × Term)) {m : Nat} (hm : L.K + 5 ≤ m) :
+    theorem gc_opt_inter {a b : Term} (ha : GC L a) (hb : GC L b) (S : List (Term × Term)) {m : Nat} (hm : L.K + 14 ≤ m) :
         ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_intersection/3» (D m) a b (.map S) = .ok c ∧ ISem L a b c := by
       obtain ⟨k, rfl⟩ : ∃ k, m = k + 2 := ⟨m - 2, by omega⟩
       rcases ha.shape with rfl | ⟨X, rfl⟩
@@ -40126,7 +40068,7 @@ defmodule STTDescrProofsTest do
       call : ∀ q v₁ v₂, (D (n + 1)).pure fn #[q, v₁, v₂] = f q v₁ v₂
       spec : ∀ name x y, FC L name x → FC L name y → ∃ w, f (.atom name) x y = .ok w ∧
         (kept (.atom name, w) = Bool.true → FC L name w) ∧
-        ∀ p, PtOkD L.E L.den L.tl FVT name p → dn name (keptO name w) p = (dn name (some x) p && !dn name (some y) p)
+        ∀ p, PtOkD L.E L.den L.tl (FVal L.E L.den) name p → dn name (keptO name w) p = (dn name (some x) p && !dn name (some y) p)
 
     /-- Differences of static parts. -/
     theorem dyn_diff_tc {n : Nat} {fn : Term} {f : Term → Term → Term → Except Exception Term} (op : DiffOp L n fn f)
@@ -40274,21 +40216,21 @@ defmodule STTDescrProofsTest do
       (∀ v : TP L, denD c v ↔ denD a v ∧ ¬denD (upper b) v) ∧
         ∀ v : TP L, denD (upper c) v ↔ denD (upper a) v ∧ ¬denD b v
 
-    theorem bare_diff_op {n : Nat} (hm : L.K + 4 ≤ n) :
+    theorem bare_diff_op {n : Nat} (hm : L.K + 13 ≤ n) :
         DiffOp L n (.function "Elixir.Module.Types.Descr" "bare_difference" 3 #[])
           (Elixir.Module.Types.Descr.«bare_difference/3» (D n)) where
       call := fun q v₁ v₂ => Erlang.program.«Elixir.Module.Types.Descr:bare_difference/3».pure n q v₁ v₂
       spec := fun _ _ _ fx fy =>
         let ⟨w, rw', k, sw⟩ := fieldC_diff (tks L) (tfc L) (by omega) fx fy; ⟨w, rw', fun h => (k h).1, sw⟩
 
-    theorem opt_diff_op₁ {n : Nat} (hm : L.K + 4 ≤ n) (S : List (Term × Term)) :
+    theorem opt_diff_op₁ {n : Nat} (hm : L.K + 13 ≤ n) (S : List (Term × Term)) :
         DiffOp L n (.function "Elixir.Module.Types.Descr" "-opt_difference/3-anonymous-1-" 3 #[.map S])
           (fun q x y => Elixir.Module.Types.Descr.«opt_difference/4» (D n) q x y (.map S)) where
       call := fun q v₁ v₂ => by
         rw [Erlang.program.«Elixir.Module.Types.Descr:-opt_difference/3-anonymous-1-/3».pure]; rfl
       spec := fun _ _ _ fx fy => fieldC_opt_diff (tks L) (tfc L) (by omega) fx fy S
 
-    theorem opt_diff_op₂ {n : Nat} (hm : L.K + 4 ≤ n) (S : List (Term × Term)) :
+    theorem opt_diff_op₂ {n : Nat} (hm : L.K + 13 ≤ n) (S : List (Term × Term)) :
         DiffOp L n (.function "Elixir.Module.Types.Descr" "-opt_difference/3-anonymous-2-" 3 #[.map S])
           (fun q x y => Elixir.Module.Types.Descr.«opt_difference/4» (D n) q x y (.map S)) where
       call := fun q v₁ v₂ => by
@@ -40330,7 +40272,7 @@ defmodule STTDescrProofsTest do
         (sem : ∀ v : TP L, denD c v ↔ denD a v ∧ ¬denD b v) : DSem L a b c :=
       ⟨by rw [upper_tc hb]; exact sem, by rw [upper_tc ha, upper_tc hc]; exact sem⟩
 
-    theorem gc_diff {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 6 ≤ m) :
+    theorem gc_diff {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 15 ≤ m) :
         ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«bare_difference/2» (D m) a b = .ok c ∧ DSem L a b c := by
       obtain ⟨n, rfl⟩ : ∃ n, m = n + 2 := ⟨m - 2, by omega⟩
       rcases hb.shape with rfl | ⟨Y, rfl⟩
@@ -40349,7 +40291,7 @@ defmodule STTDescrProofsTest do
       obtain ⟨c, hc, run, sem⟩ := diff_grad (bare_diff_op (n := n) (by omega)) (bare_diff_op (n := n) (by omega)) ha hb
       exact ⟨c, hc, (diff_run_grad _ nY ha.shape g).trans run, sem⟩
 
-    theorem gc_opt_diff {a b : Term} (ha : GC L a) (hb : GC L b) (S : List (Term × Term)) {m : Nat} (hm : L.K + 6 ≤ m) :
+    theorem gc_opt_diff {a b : Term} (ha : GC L a) (hb : GC L b) (S : List (Term × Term)) {m : Nat} (hm : L.K + 15 ≤ m) :
         ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_difference/3» (D m) a b (.map S) = .ok c ∧ DSem L a b c := by
       obtain ⟨n, rfl⟩ : ∃ n, m = n + 2 := ⟨m - 2, by omega⟩
       rcases hb.shape with rfl | ⟨Y, rfl⟩
@@ -40392,7 +40334,7 @@ defmodule STTDescrProofsTest do
     theorem nsem_term : GNSem L (.atom "term") (.map []) :=
       ⟨fun v => by simp [denD_nil, upper_term, denD_term], fun v => by simp [upper_nil, denD_nil, denD_term]⟩
 
-    theorem gc_neg {a : Term} (ha : GC L a) {m : Nat} (hm : L.K + 6 ≤ m) :
+    theorem gc_neg {a : Term} (ha : GC L a) {m : Nat} (hm : L.K + 15 ≤ m) :
         ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok c ∧ GNSem L a c := by
       rcases ha.shape with rfl | ⟨X, rfl⟩
       · exact ⟨_, GC.tc tc_nil, by simp [Elixir.Module.Types.Descr.«bare_negation/1»],
@@ -40401,7 +40343,7 @@ defmodule STTDescrProofsTest do
       exact ⟨c, hc, by simpa [Elixir.Module.Types.Descr.«bare_negation/1», Elixir.Module.Types.Descr.«term/0»] using run,
         nsem_of_dsem sem⟩
 
-    theorem gc_opt_neg {a : Term} (ha : GC L a) {m : Nat} (hm : L.K + 6 ≤ m) :
+    theorem gc_opt_neg {a : Term} (ha : GC L a) {m : Nat} (hm : L.K + 15 ≤ m) :
         ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok c ∧ GNSem L a c := by
       rcases ha.shape with rfl | ⟨X, rfl⟩
       · refine ⟨_, GC.tc tc_nil, ?_, nsem_term⟩
@@ -40412,30 +40354,30 @@ defmodule STTDescrProofsTest do
       rw [Elixir.Module.Types.Descr.«opt_negation/1».eq_def]
       simpa [Elixir.Module.Types.Descr.«opt_difference/2», Elixir.Module.Types.Descr.«term/0», unfold_map] using run
 
-    theorem gc_opt_union2 {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 5 ≤ m) :
+    theorem gc_opt_union2 {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 14 ≤ m) :
         ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_union/2» (D m) a b = .ok c ∧ USem L a b c := by
       simpa [Elixir.Module.Types.Descr.«opt_union/2»] using gc_opt_union ha hb [] hm
 
-    theorem gc_opt_inter2 {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 5 ≤ m) :
+    theorem gc_opt_inter2 {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 14 ≤ m) :
         ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a b = .ok c ∧ ISem L a b c := by
       simpa [Elixir.Module.Types.Descr.«opt_intersection/2»] using gc_opt_inter ha hb [] hm
 
-    theorem gc_opt_diff2 {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 6 ≤ m) :
+    theorem gc_opt_diff2 {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 15 ≤ m) :
         ∃ c, GC L c ∧ Elixir.Module.Types.Descr.«opt_difference/2» (D m) a b = .ok c ∧ DSem L a b c := by
       simpa [Elixir.Module.Types.Descr.«opt_difference/2»] using gc_opt_diff ha hb [] hm
 
     /-- Each field of an included static type is covered by the other type. -/
-    theorem keysub_complete {m : Nat} (hm : L.K + 4 ≤ m) {A B : List (Term × Term)} (sA : DC L A) (sB : DC L B)
+    theorem keysub_complete {m : Nat} (hm : L.K + 13 ≤ m) {A B : List (Term × Term)} (sA : DC L A) (sB : DC L B)
         (incl : ∀ v : TP L, denD (.map A) v → denD (.map B) v) : ∀ e ∈ mapEntries A, KeySub (D m) B e.1 e.2 := by
       intro e me
       have hx := mapLookup_of_mem_mapEntries me
       obtain ⟨name, mem, key⟩ := sA.keys e.1 (by simp [hx])
       rw [key] at hx ⊢
       have fx := sA.fields name e.2 hx
-      have none : ∀ w, FC L name w → (∀ p, PtOkD L.E L.den L.tl FVT name p → dn name (some w) p = Bool.false) →
+      have none : ∀ w, FC L name w → (∀ p, PtOkD L.E L.den L.tl (FVal L.E L.den) name p → dn name (some w) p = Bool.false) →
           Elixir.Module.Types.Descr.«empty_key?/3» (D m) (.atom name) w (.map []) = .ok (.atom "true") :=
-        fun w fw empty => fieldC_empty_none (tks L) (tfc L) (show L.K + 2 ≤ m by omega) fw (fun _ => rfl) empty
-      have inc : ∀ p, PtOkD L.E L.den L.tl FVT name p → dn name (some e.2) p = Bool.true →
+        fun w fw empty => fieldC_empty_none (tks L) (tfc L) (show L.K + 11 ≤ m by omega) fw (fun _ => trivial) empty
+      have inc : ∀ p, PtOkD L.E L.den L.tl (FVal L.E L.den) name p → dn name (some e.2) p = Bool.true →
           dn name (mapLookup B (.atom name)) p = Bool.true := fun p ok h =>
         (denD_map ⟨(name, p), mem, ok⟩).mp (incl ⟨(name, p), mem, ok⟩ ((denD_map _).mpr (by rw [hx]; exact h)))
       cases hy : mapLookup B (.atom name) with
@@ -40445,7 +40387,7 @@ defmodule STTDescrProofsTest do
         · rfl
         · have := inc p ok h; rw [hy, dn_none] at this; cases this
       | some y =>
-        obtain ⟨w, run, k, sem⟩ := fieldC_diff (tks L) (tfc L) (show L.K + 2 + 2 ≤ m by omega) fx (sB.fields name y hy)
+        obtain ⟨w, run, k, sem⟩ := fieldC_diff (tks L) (tfc L) (show L.K + 11 + 2 ≤ m by omega) fx (sB.fields name y hy)
         refine Or.inl ⟨y, w, hy, run, ?_⟩
         cases kw : kept (.atom name, w)
         · rcases kept_of_ne kw with h | h
@@ -40460,7 +40402,7 @@ defmodule STTDescrProofsTest do
           · have := inc p ok h; rw [hy] at this; simp [this]
 
     /-- The subtraction check of `subtype?/2` is complete on top-level types. -/
-    theorem esub_complete {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 4 ≤ m)
+    theorem esub_complete {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 13 ≤ m)
         (incl : ∀ v : TP L, denD a v → denD b v) :
         Elixir.Module.Types.Descr.«empty_difference_subtype?/3» (D m) a b (.map []) = .ok (.atom "true") := by
       rcases hb with rfl | ⟨B, rfl, sB⟩
@@ -40483,7 +40425,7 @@ defmodule STTDescrProofsTest do
       rw [rA]
       exact iterator_sub (D m) B (mapEntries A) (keysub_complete hm sA sB fun v h => incl v ((eA v).mpr h))
 
-    theorem sstatic_complete {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 4 ≤ m)
+    theorem sstatic_complete {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 13 ≤ m)
         (incl : ∀ v : TP L, denD a v → denD b v) :
         Elixir.Module.Types.Descr.«subtype_static?/2» (D m) a b = .ok (.atom "true") := by
       unfold Elixir.Module.Types.Descr.«subtype_static?/2»
@@ -40513,7 +40455,7 @@ defmodule STTDescrProofsTest do
     theorem tc_rmDyn {X : List (Term × Term)} (hX : GC L (.map X)) : TC L (.map (rmDyn X)) := hX.low_tc
 
     /-- Gradual subtyping on maps: compares the bounds. -/
-    theorem gc_sub_maps {X Y : List (Term × Term)} (hX : GC L (.map X)) (hY : GC L (.map Y)) {m : Nat} (hm : L.K + 4 ≤ m)
+    theorem gc_sub_maps {X Y : List (Term × Term)} (hX : GC L (.map X)) (hY : GC L (.map Y)) {m : Nat} (hm : L.K + 13 ≤ m)
         (lo : ∀ v : TP L, denD (.map X) v → denD (.map Y) v)
         (up : ∀ v : TP L, denD (upper (.map X)) v → denD (upper (.map Y)) v) :
         Elixir.Module.Types.Descr.«subtype?/2» (D m) (.map X) (.map Y) = .ok (.atom "true") := by
@@ -40559,7 +40501,7 @@ defmodule STTDescrProofsTest do
             simpa [rmDyn] using r₂
 
     /-- Gradual subtyping is complete for both bounds. -/
-    theorem gc_sub {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 4 ≤ m)
+    theorem gc_sub {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 13 ≤ m)
         (lo : ∀ v : TP L, denD a v → denD b v) (up : ∀ v : TP L, denD (upper a) v → denD (upper b) v) :
         Elixir.Module.Types.Descr.«subtype?/2» (D m) a b = .ok (.atom "true") := by
       obtain ⟨T, term, sT, -, all⟩ := termT L
@@ -40587,7 +40529,7 @@ defmodule STTDescrProofsTest do
         (fun v h => (uY v).mp (up v ((uX v).mpr h)))
 
     /-- Gradual equality is complete for both bounds. -/
-    theorem gc_equal {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 4 ≤ m)
+    theorem gc_equal {a b : Term} (ha : GC L a) (hb : GC L b) {m : Nat} (hm : L.K + 13 ≤ m)
         (lo : ∀ v : TP L, denD a v ↔ denD b v) (up : ∀ v : TP L, denD (upper a) v ↔ denD (upper b) v) :
         Elixir.Module.Types.Descr.«equal?/2» (D m) a b = .ok (.atom "true") := by
       have s₁ := gc_sub ha hb hm (fun v => (lo v).mp) (fun v => (up v).mp)
@@ -40610,7 +40552,7 @@ defmodule STTDescrProofsTest do
     section
     variable {L : Level} {m : Nat}
 
-    theorem gd_opt_de_morgan_union {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 6 ≤ m) :
+    theorem gd_opt_de_morgan_union {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 15 ≤ m) :
         ∃ u x nl nr y, Elixir.Module.Types.Descr.«opt_union/2» (D m) a b = .ok u ∧
           Elixir.Module.Types.Descr.«opt_negation/1» (D m) u = .ok x ∧
           Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok nl ∧
@@ -40626,7 +40568,7 @@ defmodule STTDescrProofsTest do
         (fun v => by rw [sx.1, su.2, sy.1, snl.1, snr.1]; exact not_or)
         (fun v => by rw [sx.2, su.1, sy.2, snl.2, snr.2]; exact not_or)⟩
 
-    theorem gd_opt_de_morgan_inter {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 6 ≤ m) :
+    theorem gd_opt_de_morgan_inter {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 15 ≤ m) :
         ∃ i x nl nr y, Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a b = .ok i ∧
           Elixir.Module.Types.Descr.«opt_negation/1» (D m) i = .ok x ∧
           Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok nl ∧
@@ -40642,7 +40584,7 @@ defmodule STTDescrProofsTest do
         (fun v => by rw [sx.1, si.2, sy.1, snl.1, snr.1]; exact Classical.not_and_iff_not_or_not)
         (fun v => by rw [sx.2, si.1, sy.2, snl.2, snr.2]; exact Classical.not_and_iff_not_or_not)⟩
 
-    theorem gd_opt_inter_sub {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+    theorem gd_opt_inter_sub {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 14 ≤ m) :
         ∃ i, Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a b = .ok i ∧
           Elixir.Module.Types.Descr.«subtype?/2» (D m) i a = .ok (.atom "true") ∧
           Elixir.Module.Types.Descr.«subtype?/2» (D m) i b = .ok (.atom "true") := by
@@ -40650,7 +40592,7 @@ defmodule STTDescrProofsTest do
       exact ⟨i, ri, gc_sub hi ha (by omega) (fun v h => ((si.1 v).mp h).1) (fun v h => ((si.2 v).mp h).1),
         gc_sub hi hb (by omega) (fun v h => ((si.1 v).mp h).2) (fun v h => ((si.2 v).mp h).2)⟩
 
-    theorem gd_opt_union_sup {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+    theorem gd_opt_union_sup {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 14 ≤ m) :
         ∃ u, Elixir.Module.Types.Descr.«opt_union/2» (D m) a b = .ok u ∧
           Elixir.Module.Types.Descr.«subtype?/2» (D m) a u = .ok (.atom "true") ∧
           Elixir.Module.Types.Descr.«subtype?/2» (D m) b u = .ok (.atom "true") := by
@@ -40658,7 +40600,7 @@ defmodule STTDescrProofsTest do
       exact ⟨u, ru, gc_sub ha hu (by omega) (fun v h => (su.1 v).mpr (Or.inl h)) (fun v h => (su.2 v).mpr (Or.inl h)),
         gc_sub hb hu (by omega) (fun v h => (su.1 v).mpr (Or.inr h)) (fun v h => (su.2 v).mpr (Or.inr h))⟩
 
-    theorem gd_inter_sub {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+    theorem gd_inter_sub {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 14 ≤ m) :
         ∃ i, Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok i ∧
           Elixir.Module.Types.Descr.«subtype?/2» (D m) i a = .ok (.atom "true") ∧
           Elixir.Module.Types.Descr.«subtype?/2» (D m) i b = .ok (.atom "true") := by
@@ -40666,7 +40608,7 @@ defmodule STTDescrProofsTest do
       exact ⟨i, ri, gc_sub hi ha (by omega) (fun v h => ((si.1 v).mp h).1) (fun v h => ((si.2 v).mp h).1),
         gc_sub hi hb (by omega) (fun v h => ((si.1 v).mp h).2) (fun v h => ((si.2 v).mp h).2)⟩
 
-    theorem gd_union_sup {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+    theorem gd_union_sup {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 14 ≤ m) :
         ∃ u, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok u ∧
           Elixir.Module.Types.Descr.«subtype?/2» (D m) a u = .ok (.atom "true") ∧
           Elixir.Module.Types.Descr.«subtype?/2» (D m) b u = .ok (.atom "true") := by
@@ -40674,7 +40616,7 @@ defmodule STTDescrProofsTest do
       exact ⟨u, ru, gc_sub ha hu (by omega) (fun v h => (su.1 v).mpr (Or.inl h)) (fun v h => (su.2 v).mpr (Or.inl h)),
         gc_sub hb hu (by omega) (fun v h => (su.1 v).mpr (Or.inr h)) (fun v h => (su.2 v).mpr (Or.inr h))⟩
 
-    theorem gd_union_equal {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+    theorem gd_union_equal {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 14 ≤ m) :
         ∃ u w, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok u ∧
           Elixir.Module.Types.Descr.«opt_union/2» (D m) a b = .ok w ∧
           Elixir.Module.Types.Descr.«equal?/2» (D m) u w = .ok (.atom "true") := by
@@ -40682,7 +40624,7 @@ defmodule STTDescrProofsTest do
       obtain ⟨w, hw, rw', sw⟩ := gc_opt_union2 ha hb hm
       exact ⟨u, w, ru, rw', gc_equal hu hw (by omega) (fun v => by rw [su.1, sw.1]) (fun v => by rw [su.2, sw.2])⟩
 
-    theorem gd_inter_equal {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+    theorem gd_inter_equal {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 14 ≤ m) :
         ∃ i j, Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a b = .ok i ∧
           Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a b = .ok j ∧
           Elixir.Module.Types.Descr.«equal?/2» (D m) i j = .ok (.atom "true") := by
@@ -40690,7 +40632,7 @@ defmodule STTDescrProofsTest do
       obtain ⟨j, hj, rj, sj⟩ := gc_opt_inter2 ha hb hm
       exact ⟨i, j, ri, rj, gc_equal hi hj (by omega) (fun v => by rw [si.1, sj.1]) (fun v => by rw [si.2, sj.2])⟩
 
-    theorem gd_distrib {t a b : Term} (ht : GC L t) (ha : GC L a) (hb : GC L b) (hm : L.K + 5 ≤ m) :
+    theorem gd_distrib {t a b : Term} (ht : GC L t) (ha : GC L a) (hb : GC L b) (hm : L.K + 14 ≤ m) :
         ∃ u x y z w, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok u ∧
           Elixir.Module.Types.Descr.«bare_intersection/2» (D m) t u = .ok x ∧
           Elixir.Module.Types.Descr.«bare_intersection/2» (D m) t a = .ok y ∧
@@ -40706,7 +40648,7 @@ defmodule STTDescrProofsTest do
         (fun v => by rw [sx.1, su.1, sw.1, sy.1, sz.1]; exact and_or_left)
         (fun v => by rw [sx.2, su.2, sw.2, sy.2, sz.2]; exact and_or_left)⟩
 
-    theorem gd_neg_equal {a : Term} (ha : GC L a) (hm : L.K + 6 ≤ m) :
+    theorem gd_neg_equal {a : Term} (ha : GC L a) (hm : L.K + 15 ≤ m) :
         ∃ x y, Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok x ∧
           Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok y ∧
           Elixir.Module.Types.Descr.«equal?/2» (D m) x y = .ok (.atom "true") := by
@@ -40714,7 +40656,7 @@ defmodule STTDescrProofsTest do
       obtain ⟨y, hy, ry, sy⟩ := gc_opt_neg ha hm
       exact ⟨x, y, rx, ry, gc_equal hx hy (by omega) (fun v => by rw [sx.1, sy.1]) (fun v => by rw [sx.2, sy.2])⟩
 
-    theorem gd_diff_equal {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 6 ≤ m) :
+    theorem gd_diff_equal {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 15 ≤ m) :
         ∃ x y, Elixir.Module.Types.Descr.«bare_difference/2» (D m) a b = .ok x ∧
           Elixir.Module.Types.Descr.«opt_difference/2» (D m) a b = .ok y ∧
           Elixir.Module.Types.Descr.«equal?/2» (D m) x y = .ok (.atom "true") := by
@@ -40736,25 +40678,11 @@ defmodule STTDescrProofsTest do
     section
     variable {L : Level}
 
-    /-- Without function fields, the function fields' class does not matter. -/
-    theorem DescrC.nofun {TF LF MF Fn Fn' : Term → Prop} {X : List (Term × Term)} (s : DescrC Fn TF LF MF X)
-        (nf : mapLookup X (.atom "fun") = none) : DescrC Fn' TF LF MF X := by
-      refine ⟨s.keys, fun name x h => ?_⟩
-      rcases s.fields name x h with h' | h' | ⟨e, -⟩ | h' | h' | h'
-      · exact Or.inl h'
-      · exact Or.inr (Or.inl h')
-      · subst e; rw [nf] at h; cases h
-      · exact Or.inr (Or.inr (Or.inr (Or.inl h')))
-      · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h'))))
-      · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr h'))))
-
-    /-- Emptiness is sound on types without function fields. -/
-    theorem tc_empty_sound {C : List (Term × Term)} (sC : DC L C) (nf : mapLookup C (.atom "fun") = none) {m : Nat}
-        (hm : L.K + 2 ≤ m) (h : Elixir.Module.Types.Descr.«empty?/1» (D m) (.map C) = .ok (.atom "true")) :
+    /-- Emptiness is sound on top-level types, whose function types are arrows. -/
+    theorem tc_empty_sound {C : List (Term × Term)} (sC : DC L C) {m : Nat} (hm : L.K + 11 ≤ m)
+        (h : Elixir.Module.Types.Descr.«empty?/1» (D m) (.map C) = .ok (.atom "true")) :
         ∀ v : TP L, ¬denD (.map C) v := by
-      have sC' : DescrC FunTop (TField L.E) (LF L.E) (MField L.E) C := sC.nofun nf
-      obtain ⟨b, run, ex⟩ := descr_empty (tks L) (funTopC (K := L.K + 2) (FV := FVT) (by omega)
-        ⟨.nil, fun _ => Bool.true, resp_const _, trivial⟩) trivial hm sC' [] trivial
+      obtain ⟨b, run, ex⟩ := descr_empty (tks L) (tfc L) trivial hm sC [] trivial
       rw [empty_map_seen, run] at h
       have hb : b = Bool.true := by cases b <;> simp_all [boolAtom]
       have none := (ex (lh (.map C) + 1) (by omega) (safeN_nil _)).2 hb
@@ -40764,54 +40692,6 @@ defmodule STTDescrProofsTest do
       cases this
 
     end
-
-    end Elixir.STTDescrProofsTest.Nest
-    """
-
-    postlude ~LEAN"""
-    namespace Elixir.STTDescrProofsTest.Nest
-    open Lynx Lynx.Term BddProofs
-
-    /-! The types of the laws on gradual types. -/
-
-    /-- Gradual types of the laws: a static part and a dynamic part that Descr checks includes it. -/
-    theorem opt_gradual_gc {t : Term} {m n : Nat} (hm : (level t n).K + 6 ≤ m) (descr : Term)
-        (h : «opt_gradual?/2» (D m) descr (.tuple #[.integer n, t]) = .ok Term.true) : GC (level t n) descr := by
-      have static : «opt_negatable?/2» descr (.tuple #[.integer n, t]) = .ok Term.true → GC (level t n) descr := fun h =>
-        GC.tc (opt_negatable_tc t n descr h)
-      unfold «opt_gradual?/2» at h
-      cases descr with
-      | map X =>
-        cases hD : mapLookup X (.atom "dynamic") with
-        | none => simp [getMapKeys_single, hD] at h; exact static h
-        | some Dy =>
-          simp only [getMapKeys_single, hD, Option.toList, Erlang.maps.«remove/2», Lynx.Except.ok_bind, Term.true,
-            Lynx.Except.andAlso_eq_true] at h
-          obtain ⟨⟨hS, hDy⟩, hI⟩ := h
-          have tS : TC (level t n) (.map (rmDyn X)) := opt_negatable_tc t n _ hS
-          have tD := opt_negatable_tc t n _ hDy
-          have sS : DC (level t n) (rmDyn X) := by
-            rcases tS with e | ⟨S, e, sS⟩
-            · cases e
-            · simp only [Term.map.injEq] at e; rw [e]; exact sS
-          obtain ⟨c, tc, run, sem⟩ := tc_diff tS tD (m := m) hm
-          rw [← rmDyn, run] at hI
-          simp only [Lynx.Except.ok_bind] at hI
-          rcases tc with rfl | ⟨C, rfl, sC⟩
-          · simp [«included?/1», Erlang.erlang.«is_map_key/2»] at hI
-          · have nf : mapLookup C (.atom "fun") = none := by
-              cases hf : mapLookup C (.atom "fun") with
-              | none => rfl
-              | some _ =>
-                simp [«included?/1», Erlang.erlang.«is_map_key/2», any_key, hf] at hI
-            have empty : Elixir.Module.Types.Descr.«empty?/1» (D m) (.map C) = .ok (.atom "true") := by
-              simpa [«included?/1», Erlang.erlang.«is_map_key/2», any_key, nf] using hI
-            have none := tc_empty_sound sC nf (by omega) empty
-            refine Or.inr ⟨X, Dy, rfl, hD, tD, sS, fun v hv => ?_⟩
-            apply Classical.byContradiction
-            intro hn
-            exact none v ((sem v).mpr ⟨(denD_rmDyn X v).mpr hv, hn⟩)
-      | _ => simp at h; exact static h
 
     end Elixir.STTDescrProofsTest.Nest
     """
@@ -40866,7 +40746,7 @@ defmodule STTDescrProofsTest do
         · exact Or.inl h
         · exact Or.inr ⟨Y, rfl⟩
 
-    theorem gd_inter_neg_lower {a : Term} (ha : GC L a) (hm : L.K + 6 ≤ m) :
+    theorem gd_inter_neg_lower {a : Term} (ha : GC L a) (hm : L.K + 15 ≤ m) :
         ∃ n i, Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok n ∧
           Elixir.Module.Types.Descr.«bare_intersection/2» (D m) a n = .ok i ∧
           Elixir.Module.Types.Descr.«lower_bound/1» (D m) i = .ok (lower i) ∧
@@ -40877,7 +40757,7 @@ defmodule STTDescrProofsTest do
         obtain ⟨h₁, h₂⟩ := (si.1 v).mp ((denD_lower i v).mp h)
         exact (sn.1 v).mp h₂ (ha.inv v h₁)⟩
 
-    theorem gd_opt_inter_neg_lower {a : Term} (ha : GC L a) (hm : L.K + 6 ≤ m) :
+    theorem gd_opt_inter_neg_lower {a : Term} (ha : GC L a) (hm : L.K + 15 ≤ m) :
         ∃ n i, Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok n ∧
           Elixir.Module.Types.Descr.«opt_intersection/2» (D m) a n = .ok i ∧
           Elixir.Module.Types.Descr.«lower_bound/1» (D m) i = .ok (lower i) ∧
@@ -40888,7 +40768,7 @@ defmodule STTDescrProofsTest do
         obtain ⟨h₁, h₂⟩ := (si.1 v).mp ((denD_lower i v).mp h)
         exact (sn.1 v).mp h₂ (ha.inv v h₁)⟩
 
-    theorem gd_union_neg_upper {a : Term} (ha : GC L a) (hm : L.K + 6 ≤ m) :
+    theorem gd_union_neg_upper {a : Term} (ha : GC L a) (hm : L.K + 15 ≤ m) :
         ∃ n u, Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok n ∧
           Elixir.Module.Types.Descr.«bare_union/2» (D m) a n = .ok u ∧
           Elixir.Module.Types.Descr.«upper_bound/1» (D m) u = .ok (upper u) ∧
@@ -40900,7 +40780,7 @@ defmodule STTDescrProofsTest do
       · exact Or.inl (ha.inv v h)
       · exact Or.inr ((sn.2 v).mpr h)
 
-    theorem gd_opt_union_neg_upper {a : Term} (ha : GC L a) (hm : L.K + 6 ≤ m) :
+    theorem gd_opt_union_neg_upper {a : Term} (ha : GC L a) (hm : L.K + 15 ≤ m) :
         ∃ n u, Elixir.Module.Types.Descr.«opt_negation/1» (D m) a = .ok n ∧
           Elixir.Module.Types.Descr.«opt_union/2» (D m) a n = .ok u ∧
           Elixir.Module.Types.Descr.«upper_bound/1» (D m) u = .ok (upper u) ∧
@@ -40912,7 +40792,7 @@ defmodule STTDescrProofsTest do
       · exact Or.inl (ha.inv v h)
       · exact Or.inr ((sn.2 v).mpr h)
 
-    theorem gd_de_morgan_union {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 6 ≤ m) :
+    theorem gd_de_morgan_union {a b : Term} (ha : GC L a) (hb : GC L b) (hm : L.K + 15 ≤ m) :
         ∃ u x nl nr y, Elixir.Module.Types.Descr.«bare_union/2» (D m) a b = .ok u ∧
           Elixir.Module.Types.Descr.«bare_negation/1» (D m) u = .ok x ∧
           Elixir.Module.Types.Descr.«bare_negation/1» (D m) a = .ok nl ∧
@@ -40945,7 +40825,7 @@ defmodule STTDescrProofsTest do
     variable {L : Level}
 
     /-- Static types whose function types are function types of element types are element types of the next level. -/
-    theorem de_of_tc {a : Term} (ha : TC L a)
+    theorem de_of_tc {a : Term} (ha : TCF L a)
         (top : ∀ X x, a = .map X → mapLookup X (.atom "fun") = some x → FunA L.E x) : DE L.E a := by
       rcases ha with rfl | ⟨X, rfl, sX⟩
       · exact Or.inl rfl
@@ -40958,10 +40838,7 @@ defmodule STTDescrProofsTest do
         · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h'))))
         · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr h'))))
 
-    theorem de_tc {a : Term} (ha : DE L.E a) : TC L a := by
-      rcases ha with rfl | ⟨X, rfl, sX⟩
-      · exact Or.inl rfl
-      · exact Or.inr ⟨X, rfl, sX.funF FunA.funF⟩
+    theorem de_tc {a : Term} (ha : DE L.E a) : TC L a := ha
 
     /-- The shapes of gradual types: the top type, static maps, maps whose dynamic part is the top type, and maps whose
     dynamic part is a static map. -/
@@ -41002,7 +40879,7 @@ defmodule STTDescrProofsTest do
         simp [getMapKeys_single, upper_term, *]
 
     /-- On static types, `subtype_static?/2` answers as `subtype?/2`. -/
-    theorem sstatic_sub {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 4 ≤ m) :
+    theorem sstatic_sub {a b : Term} (ha : TC L a) (hb : TC L b) {m : Nat} (hm : L.K + 13 ≤ m) :
         Elixir.Module.Types.Descr.«subtype_static?/2» (D m) a b = Elixir.Module.Types.Descr.«subtype?/2» (D m) a b := by
       by_cases incl : ∀ v : TP L, denD a v → denD b v
       · rw [sstatic_complete ha hb hm incl, tc_sub ha hb hm incl]
@@ -41032,7 +40909,7 @@ defmodule STTDescrProofsTest do
 
     /-- Static types whose function types `arrows?/2` accepts, arrows between nested types, are element types of the
     next level. -/
-    theorem arrows_de {t : Term} {n : Nat} {b : Term} (hb : TC (level t n) b)
+    theorem arrows_de {t : Term} {n : Nat} {b : Term} (hb : TCF (level t n) b)
         (h : «arrows?/2» b (.tuple #[.integer n, t]) = .ok (.atom "true")) : DE (level t n).E b := by
       refine de_of_tc hb fun X x e hx => ?_
       subst e
@@ -41046,19 +40923,6 @@ defmodule STTDescrProofsTest do
         _ (List.mem_singleton_self _)
       rw [← level_nd t n] at ff
       exact funA_of (nest_level t n) (by rw [level_nd] at ff; exact ff) (fq.1 rfl rfl)
-
-    /-- Gradual types whose parts' function types are arrows between nested types: the parts are element types of
-    the next level. -/
-    theorem arrows_gradual_ok {t : Term} {m n : Nat} (hm : (level t n).K + 6 ≤ m) {a : Term}
-        (h : «arrows_gradual?/2» (D m) a (.tuple #[.integer n, t]) = .ok (.atom "true")) :
-        GC (level t n) a ∧ DE (level t n).E (lower a) ∧ DE (level t n).E (upper a) := by
-      unfold «arrows_gradual?/2» at h
-      simp only [Lynx.Except.andAlso_eq_true] at h
-      obtain ⟨⟨hg, hl⟩, hu⟩ := h
-      have ga := opt_gradual_gc hm a (by simpa [Term.true] using hg)
-      rw [lower_bound_run ga.shape, Lynx.Except.ok_bind] at hl
-      rw [upper_bound_run ga.ub, Lynx.Except.ok_bind] at hu
-      exact ⟨ga, arrows_de ga.low_tc hl, arrows_de ga.up_tc hu⟩
 
     /-- `compatible?/2` checks the dynamic parts when the static part of the left type is empty, and inclusion of the
     static part otherwise. -/
@@ -41120,7 +40984,7 @@ defmodule STTDescrProofsTest do
           (PtD (level t n).E (level t n).den (level t n).tl (FVal (level t n).E (level t n).den)) denD tlD
           ((level t n).K + 23) := ef_step (level t n).ef (level t n).none
       let toTP : PtD (level t n).E (level t n).den (level t n).tl (FVal (level t n).E (level t n).den) → TP (level t n) :=
-        fun v => ⟨v.1, v.2.1, v.2.2.1, v.2.2.2.1, v.2.2.2.2.1, v.2.2.2.2.2.1, v.2.2.2.2.2.2.1, fun _ => trivial⟩
+        fun v => v
       obtain ⟨bE, rE, semE⟩ := ef3.empty [] ll
       replace semE := semE (lh (lower l) + 1) (by omega) (safeN_nil _)
       obtain ⟨s, rS, semS⟩ := ef3.sub ll ur
@@ -41224,8 +41088,7 @@ defmodule STTDescrProofsTest do
       PtD (level t n).E (level t n).den (level t n).tl (FVal (level t n).E (level t n).den)
 
     /-- A point of the next level, as a point of the top-level types. -/
-    def toTPN (v : PN t n) : TP (level t n) :=
-      ⟨v.1, v.2.1, v.2.2.1, v.2.2.2.1, v.2.2.2.2.1, v.2.2.2.2.2.1, v.2.2.2.2.2.2.1, fun _ => trivial⟩
+    def toTPN (v : PN t n) : TP (level t n) := v
 
     theorem denD_toTPN (a : Term) (v : PN t n) : denD a (toTPN v) ↔ denD a v := Iff.rfl
 
@@ -41833,6 +41696,45 @@ defmodule STTDescrProofsTest do
       unfold «arrows_static?/2» at h
       simp only [Lynx.Except.andAlso_eq_true] at h
       exact arrows_de (opt_negatable_tc t n a (by simpa [Term.true] using h.1)) h.2
+
+    /-- Gradual types whose parts' function types are arrows between nested types, the dynamic part including the
+    static one. -/
+    theorem arrows_gradual_gc {m : Nat} (hm : (level t n).K + 15 ≤ m) (descr : Term)
+        (h : «arrows_gradual?/2» (D m) descr (.tuple #[.integer n, t]) = .ok Term.true) : GC (level t n) descr := by
+      have static : «arrows_static?/2» descr (.tuple #[.integer n, t]) = .ok Term.true → GC (level t n) descr := fun h =>
+        GC.tc (arrows_static_ok (by simpa [Term.true] using h))
+      unfold «arrows_gradual?/2» at h
+      cases descr with
+      | map X =>
+        cases hD : mapLookup X (.atom "dynamic") with
+        | none => simp [getMapKeys_single, hD] at h; exact static h
+        | some Dy =>
+          simp only [getMapKeys_single, hD, Option.toList, Erlang.maps.«remove/2», Lynx.Except.ok_bind, Term.true,
+            Lynx.Except.andAlso_eq_true] at h
+          obtain ⟨⟨hS, hDy⟩, hI⟩ := h
+          have tS : TC (level t n) (.map (rmDyn X)) := arrows_static_ok hS
+          have tD : TC (level t n) Dy := arrows_static_ok hDy
+          have sS : DC (level t n) (rmDyn X) := by
+            rcases tS with e | ⟨S, e, sS⟩
+            · cases e
+            · simp only [Term.map.injEq] at e; rw [e]; exact sS
+          obtain ⟨c, tc, run, sem⟩ := tc_diff tS tD (m := m) hm
+          rw [← rmDyn, run, Lynx.Except.ok_bind] at hI
+          have none : ∀ v : TP (level t n), ¬denD c v := by
+            rcases tc with rfl | ⟨C, rfl, sC⟩
+            · simp [Elixir.Module.Types.Descr.«empty?/1»] at hI
+            · exact tc_empty_sound sC (by omega) hI
+          refine Or.inr ⟨X, Dy, rfl, hD, tD, sS, fun v hv => ?_⟩
+          exact Classical.byContradiction fun hn => none v ((sem v).mpr ⟨(denD_rmDyn X v).mpr hv, hn⟩)
+      | _ => simp at h; exact static h
+
+    /-- Gradual types whose parts' function types are arrows between nested types: the parts are element types of
+    the next level. -/
+    theorem arrows_gradual_ok {m : Nat} (hm : (level t n).K + 15 ≤ m) {a : Term}
+        (h : «arrows_gradual?/2» (D m) a (.tuple #[.integer n, t]) = .ok (.atom "true")) :
+        GC (level t n) a ∧ DE (level t n).E (lower a) ∧ DE (level t n).E (upper a) :=
+      let ga := arrows_gradual_gc hm a h
+      ⟨ga, ga.low_tc, ga.up_tc⟩
 
     theorem denN_nil (v : PN t n) : ¬denD (.map []) v := by simp [denD_map, mapLookup, dn_none]
 
@@ -47005,7 +46907,7 @@ defmodule STTDescrProofsTest do
       """
 
     law intersection_negation_empty(descr, depth, node),
-      requires: (negatable?(descr, {depth, node}) or opt_gradual?(descr, {depth, node})) and depth?(depth),
+      requires: (negatable?(descr, {depth, node}) or arrows_gradual?(descr, {depth, node})) and depth?(depth),
       expects: Descr.empty?(Descr.lower_bound(Descr.bare_intersection(descr, Descr.bare_negation(descr)))),
       proof: ~LEAN"""
       -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
@@ -47049,13 +46951,13 @@ defmodule STTDescrProofsTest do
             | some w => rcases only _ _ h with ⟨e, -⟩ | ⟨e, -⟩ | ⟨e, -⟩ <;> simp at e
           simp [negation, run, Nest.lower_bound_run, Nest.lower, Nest.rmDyn_static staticI,
             empty_gone (m := δ + 100) (by omega) I only]
-      · have t := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr gradual
+      · have t := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr gradual
         obtain ⟨n, i, r₁, r₂, r₃, eq⟩ := Nest.gd_inter_neg_lower t (m := δ + 100) (by rw [Nest.level_K]; omega)
         simp [r₁, r₂, r₃, eq]
       """
 
     law opt_intersection_negation_empty(descr, depth, node),
-      requires: opt_gradual?(descr, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(descr, {depth, node}) and depth?(depth),
       expects: Descr.empty?(Descr.lower_bound(Descr.opt_intersection(descr, Descr.opt_negation(descr)))),
       proof: ~LEAN"""
       -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
@@ -47071,14 +46973,14 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «opt_intersection_negation_empty:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have t := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr requires
+      have t := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr requires
       obtain ⟨n, i, r₁, r₂, r₃, eq⟩ := Nest.gd_opt_inter_neg_lower t (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «opt_intersection_negation_empty:ensures/3»]
       simp [r₁, r₂, r₃, eq]
       """
 
     law union_negation_term(descr, depth, node),
-      requires: (negatable?(descr, {depth, node}) or opt_gradual?(descr, {depth, node})) and depth?(depth),
+      requires: (negatable?(descr, {depth, node}) or arrows_gradual?(descr, {depth, node})) and depth?(depth),
       expects: Descr.subtype?(Descr.term(), Descr.upper_bound(Descr.bare_union(descr, Descr.bare_negation(descr)))),
       proof: ~LEAN"""
       -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
@@ -47115,13 +47017,13 @@ defmodule STTDescrProofsTest do
           simp [Elixir.Module.Types.Descr.«term/0», negation, union, Nest.upper_bound_term, Nest.sub_term_term]
         · obtain ⟨N, U, negation, union, staticU, sub⟩ := union_negation_covers δ ops (by omega) X valid empty
           simp [Elixir.Module.Types.Descr.«term/0», negation, union, Nest.upper_bound_static staticU, sub]
-      · have t := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr gradual
+      · have t := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr gradual
         obtain ⟨n, u, r₁, r₂, r₃, sub⟩ := Nest.gd_union_neg_upper t (m := δ + 100) (by rw [Nest.level_K]; omega)
         simp [Elixir.Module.Types.Descr.«term/0», r₁, r₂, r₃, sub]
       """
 
     law opt_union_negation_term(descr, depth, node),
-      requires: opt_gradual?(descr, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(descr, {depth, node}) and depth?(depth),
       expects: Descr.subtype?(Descr.term(), Descr.upper_bound(Descr.opt_union(descr, Descr.opt_negation(descr)))),
       proof: ~LEAN"""
       -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
@@ -47137,7 +47039,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «opt_union_negation_term:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have t := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr requires
+      have t := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr requires
       obtain ⟨n, u, r₁, r₂, r₃, sub⟩ := Nest.gd_opt_union_neg_upper t (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «opt_union_negation_term:ensures/3»]
       simp [Elixir.Module.Types.Descr.«term/0», r₁, r₂, r₃, sub]
@@ -47146,7 +47048,7 @@ defmodule STTDescrProofsTest do
     law de_morgan_union(left, right, depth, node),
       requires:
         ((negatable?(left, {depth, node}) and negatable?(right, {depth, node})) or
-           (opt_gradual?(left, {depth, node}) and opt_gradual?(right, {depth, node}))) and depth?(depth),
+           (arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}))) and depth?(depth),
       expects:
         Descr.equal?(
           Descr.bare_negation(Descr.bare_union(left, right)),
@@ -47171,15 +47073,15 @@ defmodule STTDescrProofsTest do
       rcases requires with ⟨sl, sr⟩ | ⟨-, gl, gr⟩
       · exact de_morgan_union_any δ (by omega) (Nest.negatable_cases node d left (by simpa [Term.true] using sl))
           (Nest.negatable_cases node d right (by simpa [Term.true] using sr))
-      · have tL := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left gl
-        have tR := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right gr
+      · have tL := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left gl
+        have tR := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right gr
         obtain ⟨u, x, nl, nr, y, r₁, r₂, r₃, r₄, r₅, eq⟩ :=
           Nest.gd_de_morgan_union tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
         simp [r₁, r₂, r₃, r₄, r₅, eq]
       """
 
     law opt_de_morgan_union(left, right, depth, node),
-      requires: opt_gradual?(left, {depth, node}) and opt_gradual?(right, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
       expects:
         Descr.equal?(
           Descr.opt_negation(Descr.opt_union(left, right)),
@@ -47199,8 +47101,8 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «opt_de_morgan_union:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have tL := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      have tL := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨u, x, nl, nr, y, r₁, r₂, r₃, r₄, r₅, eq⟩ :=
         Nest.gd_opt_de_morgan_union tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «opt_de_morgan_union:ensures/4»]
@@ -47208,7 +47110,7 @@ defmodule STTDescrProofsTest do
       """
 
     law opt_de_morgan_intersection(left, right, depth, node),
-      requires: opt_gradual?(left, {depth, node}) and opt_gradual?(right, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
       expects:
         Descr.equal?(
           Descr.opt_negation(Descr.opt_intersection(left, right)),
@@ -47228,8 +47130,8 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «opt_de_morgan_intersection:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have tL := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      have tL := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨i, x, nl, nr, y, r₁, r₂, r₃, r₄, r₅, eq⟩ :=
         Nest.gd_opt_de_morgan_inter tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «opt_de_morgan_intersection:ensures/4»]
@@ -47237,7 +47139,7 @@ defmodule STTDescrProofsTest do
       """
 
     law opt_intersection_subtype(left, right, depth, node),
-      requires: opt_gradual?(left, {depth, node}) and opt_gradual?(right, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
       expects:
         Descr.subtype?(Descr.opt_intersection(left, right), left) and
           Descr.subtype?(Descr.opt_intersection(left, right), right),
@@ -47255,15 +47157,15 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «opt_intersection_subtype:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have tL := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      have tL := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨i, r₁, s₁, s₂⟩ := Nest.gd_opt_inter_sub tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «opt_intersection_subtype:ensures/4»]
       simp [r₁, s₁, s₂]
       """
 
     law opt_union_supertype(left, right, depth, node),
-      requires: opt_gradual?(left, {depth, node}) and opt_gradual?(right, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
       expects:
         Descr.subtype?(left, Descr.opt_union(left, right)) and
           Descr.subtype?(right, Descr.opt_union(left, right)),
@@ -47281,15 +47183,15 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «opt_union_supertype:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have tL := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      have tL := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨u, r₁, s₁, s₂⟩ := Nest.gd_opt_union_sup tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «opt_union_supertype:ensures/4»]
       simp [r₁, s₁, s₂]
       """
 
     law intersection_subtype(left, right, depth, node),
-      requires: opt_gradual?(left, {depth, node}) and opt_gradual?(right, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
       expects:
         Descr.subtype?(Descr.bare_intersection(left, right), left) and
           Descr.subtype?(Descr.bare_intersection(left, right), right),
@@ -47307,15 +47209,15 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «intersection_subtype:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have tL := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      have tL := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨i, r₁, s₁, s₂⟩ := Nest.gd_inter_sub tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «intersection_subtype:ensures/4»]
       simp [r₁, s₁, s₂]
       """
 
     law union_supertype(left, right, depth, node),
-      requires: opt_gradual?(left, {depth, node}) and opt_gradual?(right, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
       expects:
         Descr.subtype?(left, Descr.bare_union(left, right)) and
           Descr.subtype?(right, Descr.bare_union(left, right)),
@@ -47333,15 +47235,15 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «union_supertype:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have tL := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      have tL := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨u, r₁, s₁, s₂⟩ := Nest.gd_union_sup tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «union_supertype:ensures/4»]
       simp [r₁, s₁, s₂]
       """
 
     law opt_union_equal(left, right, depth, node),
-      requires: opt_gradual?(left, {depth, node}) and opt_gradual?(right, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
       expects:
         Descr.equal?(Descr.bare_union(left, right), Descr.opt_union(left, right)),
       proof: ~LEAN"""
@@ -47358,15 +47260,15 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «opt_union_equal:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have tL := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      have tL := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨u, w, r₁, r₂, eq⟩ := Nest.gd_union_equal tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «opt_union_equal:ensures/4»]
       simp [r₁, r₂, eq]
       """
 
     law opt_intersection_equal(left, right, depth, node),
-      requires: opt_gradual?(left, {depth, node}) and opt_gradual?(right, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
       expects:
         Descr.equal?(Descr.bare_intersection(left, right), Descr.opt_intersection(left, right)),
       proof: ~LEAN"""
@@ -47383,15 +47285,15 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «opt_intersection_equal:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have tL := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      have tL := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨i, j, r₁, r₂, eq⟩ := Nest.gd_inter_equal tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «opt_intersection_equal:ensures/4»]
       simp [r₁, r₂, eq]
       """
 
     law intersection_union_distributive(descr, left, right, depth, node),
-      requires: opt_gradual?(descr, {depth, node}) and opt_gradual?(left, {depth, node}) and opt_gradual?(right, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(descr, {depth, node}) and arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
       expects:
         Descr.equal?(
           Descr.bare_intersection(descr, Descr.bare_union(left, right)),
@@ -47411,9 +47313,9 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «intersection_union_distributive:requires/5», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have tT := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr (by simpa [Term.true] using requires.1.1)
-      have tL := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1.2)
-      have tR := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      have tT := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr (by simpa [Term.true] using requires.1.1)
+      have tL := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1.2)
+      have tR := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨u, x, y, z, w, r₁, r₂, r₃, r₄, r₅, eq⟩ :=
         Nest.gd_distrib tT tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «intersection_union_distributive:ensures/5»]
@@ -47421,7 +47323,7 @@ defmodule STTDescrProofsTest do
       """
 
     law opt_negation_equal(descr, depth, node),
-      requires: opt_gradual?(descr, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(descr, {depth, node}) and depth?(depth),
       expects: Descr.equal?(Descr.bare_negation(descr), Descr.opt_negation(descr)),
       proof: ~LEAN"""
       -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
@@ -47437,14 +47339,14 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «opt_negation_equal:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have t := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr requires
+      have t := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) descr requires
       obtain ⟨x, y, r₁, r₂, eq⟩ := Nest.gd_neg_equal t (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «opt_negation_equal:ensures/3»]
       simp [r₁, r₂, eq]
       """
 
     law opt_difference_equal(left, right, depth, node),
-      requires: opt_gradual?(left, {depth, node}) and opt_gradual?(right, {depth, node}) and depth?(depth),
+      requires: arrows_gradual?(left, {depth, node}) and arrows_gradual?(right, {depth, node}) and depth?(depth),
       expects: Descr.equal?(Descr.bare_difference(left, right), Descr.opt_difference(left, right)),
       proof: ~LEAN"""
       -- The types nest at most `d` levels, so the proofs run from the bound of level `d` on, and the
@@ -47460,8 +47362,8 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «opt_difference_equal:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have tL := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
-      have tR := Nest.opt_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
+      have tL := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) left (by simpa [Term.true] using requires.1)
+      have tR := Nest.arrows_gradual_gc (t := node) (m := δ + 100) (n := d) (by rw [Nest.level_K]; omega) right (by simpa [Term.true] using requires.2)
       obtain ⟨x, y, r₁, r₂, eq⟩ := Nest.gd_diff_equal tL tR (m := δ + 100) (by rw [Nest.level_K]; omega)
       simp only [Lynx.apply_eq, «opt_difference_equal:ensures/4»]
       simp [r₁, r₂, eq]
@@ -47551,7 +47453,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «subtype_transitive:requires/5», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       obtain ⟨ga, la, ua⟩ := Nest.arrows_gradual_ok hK requires.1.1
       obtain ⟨gb, lb, ub⟩ := Nest.arrows_gradual_ok hK requires.1.2
       obtain ⟨gc, lc, uc⟩ := Nest.arrows_gradual_ok hK requires.2
@@ -47587,7 +47489,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «equal_subtype:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       obtain ⟨gl, ll, ul⟩ := Nest.arrows_gradual_ok hK requires.1
       obtain ⟨gr, lr, ur⟩ := Nest.arrows_gradual_ok hK requires.2
       obtain ⟨s₁, s₂, r₁, r₂, r₃⟩ := Nest.gd_equal gl gr ll ul lr ur (m := δ + 100) (by rw [Nest.level_K]; omega)
@@ -47612,7 +47514,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «disjoint_empty:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       obtain ⟨gl, -, ul⟩ := Nest.arrows_gradual_ok hK requires.1
       obtain ⟨gr, -, ur⟩ := Nest.arrows_gradual_ok hK requires.2
       obtain ⟨c, s, run, r₁, r₂⟩ := Nest.gd_disj_empty gl gr ul ur (m := δ + 100) (by rw [Nest.level_K]; omega)
@@ -47637,7 +47539,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «union_commutative:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1
       have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
@@ -47666,7 +47568,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «intersection_commutative:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1
       have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
@@ -47701,7 +47603,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «union_associative:requires/5», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1.1
       have gm : Nest.GD node d middle := Nest.arrows_gradual_ok hK requires.1.2
@@ -47739,7 +47641,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «intersection_associative:requires/5», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1.1
       have gm : Nest.GD node d middle := Nest.arrows_gradual_ok hK requires.1.2
@@ -47771,7 +47673,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «union_idempotent:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have gd : Nest.GD node d descr := Nest.arrows_gradual_ok hK requires
       obtain ⟨c₁, r₁, g₁, l₁, u₁⟩ := Nest.gd_union gd gd hm
@@ -47798,7 +47700,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «intersection_idempotent:requires/3», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have gd : Nest.GD node d descr := Nest.arrows_gradual_ok hK requires
       obtain ⟨c₁, r₁, g₁, l₁, u₁⟩ := Nest.gd_inter gd gd hm
@@ -47825,7 +47727,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «union_absorption:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1
       have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
@@ -47854,7 +47756,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «intersection_absorption:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1
       have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
@@ -47889,7 +47791,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «union_intersection_distributive:requires/5», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have gd : Nest.GD node d descr := Nest.arrows_gradual_ok hK requires.1.1
       have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1.2
@@ -47922,7 +47824,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «subtype_union:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1
       have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
@@ -47948,7 +47850,7 @@ defmodule STTDescrProofsTest do
       open Lynx Lynx.Term in
       simp only [Lynx.apply_eq, «subtype_intersection:requires/4», Term.true, Lynx.Except.andAlso_eq_true] at requires
       replace requires := requires.1
-      have hK : (Nest.level node d).K + 6 ≤ δ + 100 := by rw [Nest.level_K]; omega
+      have hK : (Nest.level node d).K + 15 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have hm : (Nest.level node d).K + 25 ≤ δ + 100 := by rw [Nest.level_K]; omega
       have gl : Nest.GD node d left := Nest.arrows_gradual_ok hK requires.1
       have gr : Nest.GD node d right := Nest.arrows_gradual_ok hK requires.2
