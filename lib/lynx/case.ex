@@ -25,6 +25,9 @@ defmodule Lynx.Case do
 
   Set `LYNX_CACHE=0` to disable the verification cache.
 
+  Lean's warnings and information messages are printed with their locations
+  whenever a group verifies, including from cached results.
+
   Set `LYNX_EXPORT=dir` to write each group's elaborated declarations to
   `dir/<test module>/<group>.ndjson` for independent kernel checks, as
   described in `Lynx`. Exporting bypasses the verification cache.
@@ -551,17 +554,24 @@ defmodule Lynx.Case do
       IO.puts("Translated .lean files written to #{dir}")
     end
 
+    # Cached reports keep their warnings, so they are printed on every run.
+    for report <- reports,
+        diagnostic <- report.diagnostics,
+        diagnostic.severity != :error do
+      message = "#{diagnostic.message}\n└─ #{diagnostic_location(diagnostic)}"
+
+      case diagnostic.severity do
+        :warning -> IO.warn(message, [])
+        :information -> IO.puts("info: " <> message)
+      end
+    end
+
     errors =
       for report <- reports,
           report.status != :ok,
           diagnostic <- report.diagnostics,
           diagnostic.severity == :error do
-        location =
-          Exception.format_file_line_column(
-            Path.relative_to_cwd(diagnostic.file),
-            diagnostic[:line],
-            diagnostic[:column]
-          )
+        location = diagnostic_location(diagnostic)
 
         message =
           case Map.fetch(signatures, {diagnostic.module, diagnostic.declaration}) do
@@ -590,6 +600,14 @@ defmodule Lynx.Case do
     end
 
     :ok
+  end
+
+  defp diagnostic_location(diagnostic) do
+    Exception.format_file_line_column(
+      Path.relative_to_cwd(diagnostic.file),
+      diagnostic[:line],
+      diagnostic[:column]
+    )
   end
 
   # Match ExUnit's tmp_dir path sanitization.

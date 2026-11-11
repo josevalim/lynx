@@ -89,6 +89,33 @@ defmodule Lynx.CaseTest do
     assert output =~ "unsupported built-in function :erlang.nif_error/1"
   end
 
+  test "prints Lean warnings of verified laws" do
+    defmodule Warnings do
+      use ExUnit.Case, register: false
+      use Lynx.Case
+
+      laws "unused simp argument" do
+        law valid,
+          expects: true,
+          proof: ~LEAN"""
+          simp [«valid:ensures/0», Nat.add_zero]
+          """
+      end
+    end
+
+    output =
+      capture_io(:stderr, fn ->
+        capture_io(fn ->
+          assert ExUnit.run([Warnings]) ==
+                   %{failures: 0, skipped: 0, total: 1, excluded: 0}
+        end)
+      end)
+
+    assert output =~ "warning: This simp argument is unused"
+    assert output =~ "Nat.add_zero"
+    assert output =~ "└─ test/lynx/case_test.exs:"
+  end
+
   test "verifies termination suffixes within their laws group" do
     defmodule TerminationSuffix do
       use ExUnit.Case, register: false
