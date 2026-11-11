@@ -742,7 +742,7 @@ private theorem Effect.calm {effect : Effect} {processId : PID} {state : State}
         rename_i equal
         subst equal
         simp only [found, Option.getD_some] at links monitors signal
-        simp [found, (keeps process).1, (keeps process).2.1, (keeps process).2.2, links, monitors,
+        simp [(keeps process).1, (keeps process).2.1, (keeps process).2.2, links, monitors,
           signal]
     · exact ⟨links, monitors, signal⟩
   have update : ∀ (current : State) (target : PID) (process : Option ProcessState), Calm current →
