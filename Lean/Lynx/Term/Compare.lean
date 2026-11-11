@@ -826,7 +826,8 @@ private theorem mem_mapViewInsert {xs : List (α × α)} {e p : α × α} (h : p
         · exact Or.inl h
         · exact Or.inr (List.mem_cons_of_mem _ h)
 
-private theorem mem_mapView {xs : List (α × α)} {p : α × α} (h : p ∈ mapView cmp xs) : p ∈ xs := by
+/-- The visible bindings of a map are among its bindings. -/
+theorem mem_mapView {xs : List (α × α)} {p : α × α} (h : p ∈ mapView cmp xs) : p ∈ xs := by
   induction xs with
   | nil => simp [mapView] at h
   | cons e xs ih =>

@@ -155,6 +155,74 @@ public theorem pack_toBits_aligned (bytes : ByteArray) : pack (toBits bytes 0) =
     simp [getElem!_pos bytes i hj, ByteArray.getElem_eq_getElem_data,
       show (i * 8 + offset) / 8 = i by omega, show (i * 8 + offset) % 8 = offset by omega]
 
+/-- Valid storage is recovered by packing its bits. -/
+public theorem pack_toBits_valid {bytes : ByteArray} {lastBits : Fin 8} (valid : Valid bytes lastBits) :
+    pack (toBits bytes lastBits) = bytes := by
+  have length : (toBits bytes lastBits).length = bitSize bytes lastBits := by simp [toBits]
+  have size : (bitSize bytes lastBits + 7) / 8 = bytes.size := by
+    have := lastBits.isLt
+    simp only [bitSize]
+    split
+    · omega
+    · split <;> omega
+  apply ByteArray.ext_getElem
+  · rw [pack_size, length, size]
+  · intro i hi hj
+    apply UInt8.toBitVec_inj.mp
+    apply BitVec.eq_of_getMsbD_eq
+    intro offset ho
+    have bound : i < ((toBits bytes lastBits).length + 7) / 8 := by
+      rw [←pack_size]
+      exact hi
+    simp only [ByteArray.getElem_eq_getElem_data, pack, List.getElem_toArray,
+      List.getElem_map, List.getElem_range, UInt8.toBitVec_ofBitVec,
+      BitVec.getMsbD_cast, BitVec.getMsbD_ofBoolListBE]
+    simp only [List.getD, List.getElem?_map, (List.getElem?_range ho), Option.map_some,
+      Option.getD_some]
+    by_cases inside : i * 8 + offset < (toBits bytes lastBits).length
+    · rw [List.getElem?_eq_getElem inside]
+      simp only [Option.getD_some, toBits, List.getElem_map, List.getElem_range]
+      simp [getElem!_pos bytes i hj, ByteArray.getElem_eq_getElem_data,
+        show (i * 8 + offset) / 8 = i by omega, show (i * 8 + offset) % 8 = offset by omega]
+    · -- Past the meaningful bits, only unused low bits of the final byte remain, which are zero.
+      rw [List.getElem?_eq_none (by omega)]
+      simp only [Option.getD_none]
+      rw [length] at inside
+      have := lastBits.isLt
+      simp only [bitSize] at inside
+      split at inside
+      · omega
+      split at inside
+      · omega
+      rename_i _ unaligned
+      have last : i = bytes.size - 1 := by omega
+      have unused := valid.2 unaligned ⟨offset, ho⟩ (by simp; omega)
+      subst last
+      rw [getElem!_pos bytes _ hj] at unused
+      simpa [ByteArray.getElem_eq_getElem_data] using unused.symm
+
+/-- Valid bitstrings with the same bits are the same bitstring. -/
+public theorem eq_of_toBits_eq {bytes other : ByteArray} {lastBits otherBits : Fin 8}
+    (valid : Valid bytes lastBits) (otherValid : Valid other otherBits)
+    (equal : toBits bytes lastBits = toBits other otherBits) : bytes = other ∧ lastBits = otherBits := by
+  have sameBytes : bytes = other := by
+    rw [← pack_toBits_valid valid, ← pack_toBits_valid otherValid, equal]
+  subst sameBytes
+  refine ⟨rfl, ?_⟩
+  have length := congrArg List.length equal
+  simp only [toBits, List.length_map, List.length_range, bitSize] at length
+  have := lastBits.isLt
+  have := otherBits.isLt
+  apply Fin.ext
+  by_cases empty : bytes.size = 0
+  · rw [valid.1 empty, otherValid.1 empty]
+  simp only [empty, ite_false] at length
+  by_cases a : lastBits = 0 <;> by_cases b : otherBits = 0 <;> simp only [a, b, ite_true, ite_false] at length
+  · simp [a, b]
+  · have := Fin.val_ne_of_ne b; simp at this; omega
+  · have := Fin.val_ne_of_ne a; simp at this; omega
+  · omega
+
 private theorem decode_acc (bits : List Bool) (acc : Nat) :
     bits.foldl (fun value bit => value * 2 + if bit then 1 else 0) acc =
       acc * 2 ^ bits.length + (BitVec.ofBoolListBE bits).toNat := by
