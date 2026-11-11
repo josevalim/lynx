@@ -17,12 +17,14 @@ defmodule Lynx.Commands do
   @spec runner!(String.t(), map()) :: [map()]
   def runner!(project_dir, request) do
     port = open_lake(project_dir, ["--quiet", "exe", "Lynx/Lynx.Runner"], [{:line, 1_000_000}])
+    ref = Port.monitor(port)
 
     try do
       Port.command(port, JSON.encode!(request) <> "\n")
-      collect_responses(port, [])
+      collect_responses(port, ref, [])
     after
-      Port.close(port)
+      # The runner serves requests until its stdin closes, unless it already exited.
+      if Port.demonitor(ref, [:flush, :info]), do: Port.close(port)
     end
   end
 
@@ -186,8 +188,8 @@ defmodule Lynx.Commands do
     Path.join(build_path, "lynx") |> Path.expand()
   end
 
-  defp collect_responses(port, responses) do
-    output = collect_response(port, [])
+  defp collect_responses(port, ref, responses) do
+    output = collect_response(port, ref, [])
 
     response =
       case JSON.decode(output) do
@@ -206,7 +208,7 @@ defmodule Lynx.Commands do
         Enum.reverse(responses)
 
       %{"status" => status} when is_binary(status) ->
-        collect_responses(port, [response | responses])
+        collect_responses(port, ref, [response | responses])
 
       _ ->
         raise "lynx runner returned an unexpected response: #{output}"
@@ -217,15 +219,19 @@ defmodule Lynx.Commands do
   defp json_error({:invalid_byte, offset, byte}), do: "invalid byte #{byte} at offset #{offset}"
   defp json_error(reason), do: inspect(reason)
 
-  defp collect_response(port, chunks) do
+  defp collect_response(port, ref, chunks) do
     receive do
       {^port, {:data, {:eol, data}}} ->
         [data | chunks] |> Enum.reverse() |> IO.iodata_to_binary()
 
       {^port, {:data, {:noeol, data}}} ->
-        collect_response(port, [data | chunks])
+        collect_response(port, ref, [data | chunks])
 
       {^port, {:exit_status, status}} ->
+        receive do
+          {:DOWN, ^ref, :port, ^port, _reason} -> :ok
+        end
+
         raise "lynx runner exited with status #{status} before responding"
     end
   end
