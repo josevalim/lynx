@@ -146,6 +146,10 @@ defmodule RandProofsTest do
       requires: shuffle_returns(list, alg, seed),
       expects: shuffle_contract(list, alg, seed, value),
       proof: ~LEAN"""
+      -- The law holds at every depth from the one where its precondition does.
+      obtain ⟨bound, requires⟩ := requires
+      refine ⟨bound, fun depth deep => ?_⟩
+      have requires := requires depth deep
       open ShuffleProof in
       have two : ∀ (d : Lynx.Dispatcher) X acc P S Y r,
           Erlang.rand.«shuffle_r_2/5» d X acc P S Y = .ok r →
@@ -281,6 +285,10 @@ defmodule RandProofsTest do
       requires: shuffle_returns(list, alg, seed) and at_most_one(list),
       expects: shuffle_unchanged(list, alg, seed),
       proof: ~LEAN"""
+      -- The law holds at every depth from the one where its precondition does.
+      obtain ⟨bound, requires⟩ := requires
+      refine ⟨bound, fun depth deep => ?_⟩
+      have requires := requires depth deep
       open ShuffleProof in
       have init : ∀ R alg v, Erlang.rand.«shuffle_init_bitstream/2» R alg = .ok v →
           ∃ P W, v = .cons P (.cons R W) := by

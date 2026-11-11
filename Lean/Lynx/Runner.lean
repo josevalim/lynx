@@ -54,8 +54,10 @@ Helpers returning `Except` are stated directly as `= .ok true`. Other helpers ar
 through `Lynx.sequential`, except concurrent ones, which are stated through
 `Lynx.concurrent`: the requires helper under some schedule, and the ensures helper under
 every schedule. An absent requires helper means no assumption. Helpers that are not pure
-are called through `Lynx.apply helper table`, which passes them the dispatcher of the
-program's function table; an optional table names it, and it defaults to empty.
+are called through `Lynx.apply helper table depth`, which passes them the dispatcher of the
+program's function table up to a call depth; an optional table names it, and it defaults
+to empty. Their statements hold from some depth on: `∃ bound, ∀ depth, bound ≤ depth → …`,
+inside the requires helper's schedule.
 Proofs are elaborated against these statements as given.
 Levels are `pure`, `apply`, `sequential`, and `concurrent`. Definitions, mutual groups,
 table entries, remote calls, and theorem helpers state their purity (`pure`, `sequential`, or
@@ -1531,11 +1533,18 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
     let table ← match field j "table" with
       | .error _ => pure (Unhygienic.run `([]))
       | .ok value => pure (⟨(← identifier (← value.getStr?)).raw⟩ : TSyntax `term)
-    -- Helpers that are not pure call function values through the program table.
+    -- Helpers that are not pure call function values through the program table,
+    -- up to a depth bound the statement quantifies. Its names avoid the parameters.
+    let fresh (base : String) : Ident := Id.run do
+      let mut name := base
+      while params.any (·.getId == Name.mkSimple name) do name := name ++ "'"
+      return mkIdent (Name.mkSimple name)
+    let depth := fresh "depth"
+    let bound := fresh "bound"
     let apply := mkIdent ``Lynx.apply
     let helper (callee : Ident) (level : String) : TSyntax `term :=
       if level == "pure" then Unhygienic.run `($callee $args*)
-      else Unhygienic.run `($apply $callee $table $args*)
+      else Unhygienic.run `($apply $callee $table $depth $args*)
     let requirement ← match field j "requires" with
       | .error _ => pure none
       | .ok value => do
@@ -1559,6 +1568,13 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
     -- returns `Except`, through `Lynx.sequential` when it needs an environment,
     -- and through `Lynx.concurrent` when it needs scheduler choices.
     let exceptOk := mkIdent ``Except.ok
+    let natType := mkIdent ``Nat
+    -- Helpers that are not pure return `true` from some depth on, so a law holds
+    -- for every input however deep its calls go. Each helper has its own bound.
+    let eventually (level : String) (statement : TSyntax `term) : TSyntax `term :=
+      if level == "pure" then statement
+      else Unhygienic.run `(∃ $bound:ident : $natType, ∀ $depth:ident : $natType,
+        $bound ≤ $depth → $statement)
     let direct (computation : TSyntax `term) : TSyntax `term :=
       Unhygienic.run `($computation = $exceptOk $trueTerm)
     let runs (computation : TSyntax `term) : TSyntax `term :=
@@ -1571,17 +1587,18 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
       | none => binders
       | some (requires, level) =>
         let statement := match level with
-          | "concurrent" => Unhygienic.run `(∃ $schedule:ident : List $scheduleType, $(schedules requires))
-          | "sequential" => runs requires
-          | _ => direct requires
+          | "concurrent" => Unhygienic.run
+              `(∃ $schedule:ident : List $scheduleType, $(eventually level (schedules requires)))
+          | "sequential" => eventually level (runs requires)
+          | _ => eventually level (direct requires)
         binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $statement)))
     -- A direct expectation implies it holds when run, under every schedule.
     let (binders, goal) := match ensuresPurity with
-      | "pure" | "apply" => (binders, direct ensures)
+      | "pure" | "apply" => (binders, eventually ensuresPurity (direct ensures))
       | "concurrent" =>
         (binders.push (Unhygienic.run `(bracketedBinder| ($schedule : List $scheduleType))),
-          schedules ensures)
-      | _ => (binders, runs ensures)
+          eventually ensuresPurity (schedules ensures))
+      | _ => (binders, eventually ensuresPurity (runs ensures))
     pure (Unhygienic.run `(theorem $name $binders:bracketedBinder* : $goal := $proof))
   | "def" => do
     fields j ["kind", "name", "params", "body", "purity", "dispatches", "span",
@@ -1767,22 +1784,27 @@ private def comparisonDescription (type : Expr) : MetaM (Option String) := do
   withOptions (fun opts => opts.set `pp.maxSteps (80 : Nat)) do
     return some s!"  expected: {← Meta.ppExpr expected}\n  got:      {← Meta.ppExpr actual}"
 
+/-- Describe the comparison inside a law's quantifiers: some schedule, and every
+depth from some bound on. -/
+private partial def lawComparison (type : Expr) : MetaM (Option String) := do
+  if type.isAppOfArity ``Exists 2 then
+    Meta.lambdaTelescope type.appArg! fun _ body => lawComparison body
+  else if type.isForall then
+    Meta.forallTelescope type fun _ body => lawComparison body
+  else comparisonDescription type
+
 private def lawFailureDetails (name : Name) : Elab.Command.CommandElabM (Option String) := do
   try
     let name := (← getCurrNamespace) ++ name
     let some (.thmInfo info) := (← getEnv).find? name | return none
     Elab.Command.liftTermElabM do
       Meta.forallTelescopeReducing info.type fun binders type => do
-        let some expectation ← comparisonDescription type | return none
+        let some expectation ← lawComparison type | return none
         let mut details := s!"Expectation (definitionally reduced):\n{expectation}"
         for binder in binders do
           let declaration ← binder.fvarId!.getDecl
           if declaration.userName == `requires then
-            -- The precondition holds under some schedule; describe its body.
-            let requirement ← if declaration.type.isAppOfArity ``Exists 2 then
-                Meta.lambdaTelescope declaration.type.appArg! fun _ body => comparisonDescription body
-              else comparisonDescription declaration.type
-            if let some requirement := requirement then
+            if let some requirement ← lawComparison declaration.type then
               details := details ++ s!"\n\nRequires (definitionally reduced):\n{requirement}"
         return some details
   catch _ => return none

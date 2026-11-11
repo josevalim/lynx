@@ -110,7 +110,7 @@ example : Lynx.Dispatcher → Lynx.Term → Lynx.Term → Lynx.Result := Erlang.
 example : Lynx.Dispatcher → Lynx.Term → Lynx.Term → Except Lynx.Exception Lynx.Term :=
   Erlang.erlang.«apply/2»
 example : (Lynx.Dispatcher → Lynx.Term → Except Lynx.Exception Lynx.Term) →
-    Lynx.Term.FunTable → Lynx.Term → Except Lynx.Exception Lynx.Term := Lynx.apply
+    Lynx.Term.FunTable → Nat → Lynx.Term → Except Lynx.Exception Lynx.Term := Lynx.apply
 example : Lynx.Dispatcher → Lynx.Term → Lynx.Result := Erlang.erlang.«spawn/1»
 example : Lynx.Term → (Lynx.Environment → Lynx.Term → Option β) →
     (Option β → Lynx.Result α) → Lynx.Result α :=
