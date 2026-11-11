@@ -154,56 +154,6 @@ defmodule Lynx do
   the generated Lean code, even when the behavior is the same. Laws that held
   before may require further proofs afterwards.
 
-  ### Guidelines
-
-  A few tools and proof patterns help when working with existing library code:
-
-    * State the input domain with `requires:` and the intended general property
-      with `expects:`. Focus on properties ranging over variables instead of
-      passing specific values whenever possible. A terminating example does
-      not establish totality over all inputs.
-
-    * Use `cutoff &Module.function/arity` inside a `laws` group for dependencies
-      that the property's inputs must never reach, such as unsupported error
-      formatting. Lynx replaces the function before traversing its body or
-      dependencies. It raises `Lynx.Exception.exhausted`, which no handler
-      catches, so a proof of a successful result must establish that the
-      cutoff is never reached. A cutoff does not assume a return value or an
-      Erlang exception. Keep reachable behavior translated and prove the actual
-      implementation.
-
-    * Use `termination_suffix &Module.function/arity, ~LEAN"..."` inside a group
-      when Lean cannot infer termination of a translated recursive function.
-      Supply a well-founded `termination_by` argument when appropriate, or use
-      `partial_fixpoint` when totality depends on the law's input domain. Lean
-      proves its monotonicity for translated code. Inputs on which the function
-      diverges raise `Lynx.Exception.exhausted`. Use the generated `.eq_def`
-      equation and induction on a decreasing measure to establish that calls
-      in the domain return. To prove a property of every value the function
-      returns, use its `fixpoint_induct` principle with
-      `Lynx.Except.admissible_returnsN` instead (see `Lynx.Case.termination_suffix/2`).
-      The suffix alone does not prove totality, and does not change the
-      function's purity.
-
-    * Inspect the generated Lean before writing the proof. BEAM compilation
-      can inline helpers or replace arithmetic with bit operations. Prove
-      equations for the translated operations first, then reason about those
-      equations mathematically. Keep the implementation separate from its
-      specification instead of proving a rewritten substitute.
-
-    * Reduce type checks and impossible branches early. Preserve shared
-      continuations and introduce names for intermediate arithmetic values
-      before simplifying; expanding every bind and nested expression can make
-      a small property expensive to prove. For complex nonrecursive functions,
-      `unfold` followed by selective simplification can avoid expensive
-      generation of simplification equations.
-
-    * Use `options: [maxHeartbeats: 1_000_000]` on a laws group when a proof
-      needs a larger Lean elaboration budget. It does not weaken kernel checking.
-      First look for repeated expansion or unnecessary case splits. Measure
-      verification with `LYNX_DEBUG=lean LYNX_CACHE=0` so cached results do not
-      hide slow proofs, and see "Profiling proofs" to find where time goes.
-
   ### Limitations
 
   Lynx implements most Erlang/Elixir language constructs, although several
@@ -241,14 +191,15 @@ defmodule Lynx do
       `is_element/2` operate on those maps directly, and do not return for
       version 1 sets or maps holding other values.
 
+    * All functions must terminate. Those who cannot be inferred automatically
+      to terminate must declare how to do so via `Lynx.Case.termination_suffix/3`
+
     * Function references and calls that name their module and function at
       compile time, such as `&Foo.bar/1`, `fun foo:bar/1`, and `Foo.bar(x)`,
       are translated directly. Dynamic references and calls, such as
       `&mod.bar/1`, `mod.bar(x)`, and `apply(mod, fun, args)`, only reach the
       functions the program captures by name and those declared with
-      `Lynx.Case.dynamic/1`. Spawning a named function, as in
-      `spawn_link(Foo, :bar, [x])`, is supported when the module and function
-      are literals and the arguments a literal list.
+      `Lynx.Case.dynamic/1`
 
     * Laws cannot quantify over arbitrary functions, only over the functions
       the program defines. See "Anonymous functions" below.
@@ -305,6 +256,56 @@ defmodule Lynx do
       consumes one level for the invocations it makes. Exceeding the depth
       raises `Lynx.Exception.exhausted`, so the bound a proof chooses must
       cover the deepest nesting of invocations, which may grow with the input.
+
+  ### Guidelines
+
+  A few tools and proof patterns help when working with existing library code:
+
+    * State the input domain with `requires:` and the intended general property
+      with `expects:`. Focus on properties ranging over variables instead of
+      passing specific values whenever possible. A terminating example does
+      not establish totality over all inputs.
+
+    * Use `cutoff &Module.function/arity` inside a `laws` group for dependencies
+      that the property's inputs must never reach, such as unsupported error
+      formatting. Lynx replaces the function before traversing its body or
+      dependencies. It raises `Lynx.Exception.exhausted`, which no handler
+      catches, so a proof of a successful result must establish that the
+      cutoff is never reached. A cutoff does not assume a return value or an
+      Erlang exception. Keep reachable behavior translated and prove the actual
+      implementation.
+
+    * Use `termination_suffix &Module.function/arity, ~LEAN"..."` inside a group
+      when Lean cannot infer termination of a translated recursive function.
+      Supply a well-founded `termination_by` argument when appropriate, or use
+      `partial_fixpoint` when totality depends on the law's input domain. Lean
+      proves its monotonicity for translated code. Inputs on which the function
+      diverges raise `Lynx.Exception.exhausted`. Use the generated `.eq_def`
+      equation and induction on a decreasing measure to establish that calls
+      in the domain return. To prove a property of every value the function
+      returns, use its `fixpoint_induct` principle with
+      `Lynx.Except.admissible_returnsN` instead (see `Lynx.Case.termination_suffix/2`).
+      The suffix alone does not prove totality, and does not change the
+      function's purity.
+
+    * Inspect the generated Lean before writing the proof. BEAM compilation
+      can inline helpers or replace arithmetic with bit operations. Prove
+      equations for the translated operations first, then reason about those
+      equations mathematically. Keep the implementation separate from its
+      specification instead of proving a rewritten substitute.
+
+    * Reduce type checks and impossible branches early. Preserve shared
+      continuations and introduce names for intermediate arithmetic values
+      before simplifying; expanding every bind and nested expression can make
+      a small property expensive to prove. For complex nonrecursive functions,
+      `unfold` followed by selective simplification can avoid expensive
+      generation of simplification equations.
+
+    * Use `options: [maxHeartbeats: 1_000_000]` on a laws group when a proof
+      needs a larger Lean elaboration budget. It does not weaken kernel checking.
+      First look for repeated expansion or unnecessary case splits. Measure
+      verification with `LYNX_DEBUG=lean LYNX_CACHE=0` so cached results do not
+      hide slow proofs, and see "Profiling proofs" to find where time goes.
 
   ### Proving concurrent laws
 
