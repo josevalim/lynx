@@ -20,7 +20,8 @@ Cached and skipped files have no theorem timings because no elaboration occurs.
 Files blocked by an unsuccessful input import are skipped without elaboration.
 A `{"status": "done"}` message terminates each completed request.
 Each newline-delimited request includes `"command": "verify"`.
-Updates are flushed as each file finishes. The runner continues until stdin closes.
+Updates are flushed as each file finishes. The runner exits when stdin closes,
+abandoning any request in progress, as nobody reads its result.
 Invalid input and runner failures return `{"status": "failure", "message": "..."}`.
 Each verification diagnostic has `file`, `module`, nullable `declaration`, `severity`
 (error/warning/information), and `message`, with `line` and `column` included only when known.
@@ -2559,11 +2560,15 @@ public def main (args : List String) : IO UInt32 := do
     let emit := fun payload : Lean.Json => do
       stdout.putStrLn payload.compress
       stdout.flush
+    -- Requests run in order on a dedicated thread while this one keeps reading
+    -- stdin, so the runner exits once it closes, even during an evaluation that
+    -- never checks for it.
+    let mut pending : Task (Except IO.Error Unit) := .pure (.ok ())
     repeat
       let request ← stdin.getLine
       if request.isEmpty then break
-      Lynx.Runner.run request cache emit
-    return 0
+      pending ← IO.bindTask pending (fun _ => IO.asTask (Lynx.Runner.run request cache emit) .dedicated)
+    IO.Process.exit 0
   | _ =>
     IO.println (Lean.Json.mkObj [("status", Lean.toJson "failure"),
       ("message", Lean.toJson "usage: Runner.lean")]).compress
