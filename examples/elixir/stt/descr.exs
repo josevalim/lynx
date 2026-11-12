@@ -2359,16 +2359,22 @@ defmodule STTDescrProofsTest do
       | .tuple ⟨[k, x, y]⟩ => [.tuple #[k, x, y]]
       | _ => []
 
+    -- Stated by `rfl`: the equation of the last clause of `lits` takes seconds to generate.
+    theorem lits_node (h lit c u d : Term) : lits (.tuple #[h, lit, c, u, d]) = lit :: (lits c ++ lits u ++ lits d) :=
+      rfl
+
+    theorem lits_leaf (k x y : Term) : lits (.tuple #[k, x, y]) = [.tuple #[k, x, y]] := rfl
+
     theorem Bdd.lits {ok : Term → Prop} {a : Term} (wa : Bdd ok a) : Bdd (· ∈ BddProofs.lits a) a := by
       refine Bdd.induction (P := fun _ a => Bdd (· ∈ BddProofs.lits a) a) ?_ ?_ ?_ ?_ ok a wa
       · intro _; exact Bdd.top
       · intro _; exact Bdd.bot
-      · intro _ k x y _; exact Bdd.leaf_iff.mpr (by simp [BddProofs.lits])
+      · intro _ k x y _; exact Bdd.leaf_iff.mpr (by simp [lits_leaf])
       · intro _ h lit c u d leaf _ hc hu hd ic iu id
-        refine Bdd.node_iff.mpr ⟨leaf, by simp [BddProofs.lits], ?_, ?_, ?_⟩
-        · exact (Bdd.and ic hc).mono fun t ht => ⟨by simp [BddProofs.lits, ht.1], ht.2.2⟩
-        · exact (Bdd.and iu hu).mono fun t ht => ⟨by simp [BddProofs.lits, ht.1], ht.2.2⟩
-        · exact (Bdd.and id hd).mono fun t ht => ⟨by simp [BddProofs.lits, ht.1], ht.2.2⟩
+        refine Bdd.node_iff.mpr ⟨leaf, by simp [lits_node], ?_, ?_, ?_⟩
+        · exact (Bdd.and ic hc).mono fun t ht => ⟨by simp [lits_node, ht.1], ht.2.2⟩
+        · exact (Bdd.and iu hu).mono fun t ht => ⟨by simp [lits_node, ht.1], ht.2.2⟩
+        · exact (Bdd.and id hd).mono fun t ht => ⟨by simp [lits_node, ht.1], ht.2.2⟩
 
     theorem union_okN {oka okb : Term → Prop} {a b : Term} (wa : Bdd oka a) (wb : Bdd okb b) : UnionOkN a b :=
       let U := lits a ++ lits b
@@ -33146,7 +33152,8 @@ defmodule STTDescrProofsTest do
     def InDom : List (V → Prop) → List (Option V) → Prop
       | [], [] => True
       | t :: ts, o :: os => Opt false t o ∧ InDom ts os
-      | _, _ => False
+      | [], _ :: _ => False
+      | _ :: _, [] => False
 
     /-- A row an arrow allows: when the arrow applies, the row returns a value of its return type. -/
     def Allows (a : Arrow V) (r : Row V) : Prop :=
@@ -33156,7 +33163,8 @@ defmodule STTDescrProofsTest do
     def Args : List (Bool × (V → Prop)) → List (Option V) → Prop
       | [], [] => True
       | (b, a) :: as, o :: os => Opt b a o ∧ Args as os
-      | _, _ => False
+      | [], _ :: _ => False
+      | _ :: _, [] => False
 
     /-- No row with these arguments and result is allowed by all the arrows. -/
     def NoRow (args : List (Bool × (V → Prop))) (ret : Bool × (V → Prop)) (P : List (Arrow V)) : Prop :=
@@ -33165,7 +33173,8 @@ defmodule STTDescrProofsTest do
     /-- The arguments of the recursive calls that skip an arrow through each of its arguments. -/
     def Skips : List (V → Prop) → List (Bool × (V → Prop)) → List (List (Bool × (V → Prop)))
       | u :: us, (b, a) :: as => ((true, fun v => a v ∧ ¬u v) :: as) :: (Skips us as).map ((b, a) :: ·)
-      | _, _ => []
+      | [], _ => []
+      | _ :: _, [] => []
 
     /-- The `phi` recursion over sets, without its shortcuts. -/
     def phiS (args : List (Bool × (V → Prop))) (ret : Bool × (V → Prop)) : List (Arrow V) → Prop
@@ -34101,7 +34110,8 @@ defmodule STTDescrProofsTest do
     def InDomR : List (V → Prop) → List V → Prop
       | [], [] => True
       | t :: ts, v :: vs => t v ∧ InDomR ts vs
-      | _, _ => False
+      | [], _ :: _ => False
+      | _ :: _, [] => False
 
     theorem inDom_real : ∀ (ts : List (V → Prop)) (x : List V), InDom ts (x.map some) ↔ InDomR ts x
       | [], [] => Iff.rfl
@@ -54132,9 +54142,9 @@ defmodule STTDescrProofsTest do
           (∀ k ∈ ks, ∃ s, k = .atom s) →
           ∃ dl', Elixir.Module.Types.Descr.«map_put_domain/4» (D m) (fieldsTerm dl) (Term.list ks) v v =
             .ok (fieldsTerm dl') ∧ DomL t n dl' ∧ (∀ e ∈ dl', e.1 ∈ dl.map Prod.fst ∨ e.1 ∈ ks) ∧
-            ∀ s, ((mapLookup dl' (.atom s)).isNone ↔ (mapLookup dl (.atom s)).isNone ∧ .atom s ∉ ks) ∧
+            ∀ s, ((mapLookup dl' (.atom s)).isNone ↔ (mapLookup dl (.atom s)).isNone ∧ Term.atom s ∉ ks) ∧
               ∀ U', mapLookup dl' (.atom s) = some U' → ∀ x, (level t n).den U' x ↔
-                ((∃ U, mapLookup dl (.atom s) = some U ∧ (level t n).den U x) ∨ (.atom s ∈ ks ∧ (level t n).den v x)) := by
+                ((∃ U, mapLookup dl (.atom s) = some U ∧ (level t n).den U x) ∨ (Term.atom s ∈ ks ∧ (level t n).den v x)) := by
       intro N
       induction N with
       | zero =>
@@ -54155,7 +54165,7 @@ defmodule STTDescrProofsTest do
       have sk' := sak_cons.1 sk
       obtain ⟨s2, rfl⟩ := ka k (by simp)
       have ka' : ∀ k ∈ ks, ∃ s, k = .atom s := fun k hk => ka k (by simp [hk])
-      have mem2 : ∀ s, (Term.atom s ∈ Term.atom s2 :: ks) ↔ (s = s2 ∨ .atom s ∈ ks) := by simp
+      have mem2 : ∀ s, (Term.atom s ∈ Term.atom s2 :: ks) ↔ (s = s2 ∨ Term.atom s ∈ ks) := by simp
       cases dl with
       | nil =>
         obtain ⟨dl', run, hd', keys, sem⟩ := ih [] ks (by simp at len ⊢; omega) hd sk'.2 ka'
@@ -54399,9 +54409,9 @@ defmodule STTDescrProofsTest do
         {v : Term} (hv : (level t n).E v) (F : List Term) (dl : List (Term × Term)) (hd : DomL t n dl) (b : Bool) :
         ∃ dl', Elixir.Module.Types.Descr.«-map_descr_pairs/1-fun-0-/2» (D m) (.tuple #[Term.list ks, v]) (accT F dl b) =
           .ok (accT F dl' b) ∧ DomL t n dl' ∧ (∀ e ∈ dl', e.1 ∈ dl.map Prod.fst ∨ e.1 ∈ ks) ∧
-          ∀ s, ((mapLookup dl' (.atom s)).isNone ↔ (mapLookup dl (.atom s)).isNone ∧ .atom s ∉ ks) ∧
+          ∀ s, ((mapLookup dl' (.atom s)).isNone ↔ (mapLookup dl (.atom s)).isNone ∧ Term.atom s ∉ ks) ∧
             ∀ U', mapLookup dl' (.atom s) = some U' → ∀ x, (level t n).den U' x ↔
-              ((∃ U, mapLookup dl (.atom s) = some U ∧ (level t n).den U x) ∨ (.atom s ∈ ks ∧ (level t n).den v x)) := by
+              ((∃ U, mapLookup dl (.atom s) = some U ∧ (level t n).den U x) ∨ (Term.atom s ∈ ks ∧ (level t n).den v x)) := by
       have sv := (level t n).ef.static hv
       obtain ⟨R, ru, sr, mr⟩ := usort_atoms ks hks
       obtain ⟨dl', run, hd', keys, sem⟩ := mpd_run hm hv (dl.length + R.length) dl R (Nat.le_refl _) hd sr
@@ -54435,7 +54445,7 @@ defmodule STTDescrProofsTest do
     def fieldsRev (P : List Term) : List Term := (P.filter isF).reverse
 
     /-- Some domain pair names a kind. -/
-    def DomAny (P : List Term) (s : String) : Prop := ∃ ks v, .tuple #[Term.list ks, v] ∈ P ∧ .atom s ∈ ks
+    def DomAny (P : List Term) (s : String) : Prop := ∃ ks v, Term.tuple #[Term.list ks, v] ∈ P ∧ Term.atom s ∈ ks
 
     section
     variable {t : Term} {n : Nat}
@@ -54447,7 +54457,7 @@ defmodule STTDescrProofsTest do
 
     /-- A value of the types that some domain pair gives a kind. -/
     def DomMem (P : List Term) (s : String) (x : (level t n).V) : Prop :=
-      ∃ ks v, .tuple #[Term.list ks, v] ∈ P ∧ .atom s ∈ ks ∧ (level t n).den v x
+      ∃ ks v, Term.tuple #[Term.list ks, v] ∈ P ∧ Term.atom s ∈ ks ∧ (level t n).den v x
 
     /-- Domains holding, at each kind, the union of the types of the pairs naming it. -/
     def DomSem (t : Term) (n : Nat) (P : List Term) (dl : List (Term × Term)) : Prop :=
@@ -54485,14 +54495,14 @@ defmodule STTDescrProofsTest do
       | p :: rest, P, hr, dl, b, hd, hs => by
         rcases hr p (by simp) with ⟨a, v, o, rfl, hv⟩ | ⟨ks, v, rfl, hks, hv⟩
         · obtain ⟨b', st⟩ := step_field m a ((level t n).ef.static hv) o (fieldsRev P) dl b
-          have e : fieldsRev (P ++ [.tuple #[.atom a, .tuple #[v, boolAtom o]]]) =
+          have e : fieldsRev (P ++ [Term.tuple #[.atom a, .tuple #[v, boolAtom o]]]) =
               .tuple #[.atom a, .tuple #[v, boolAtom o]] :: fieldsRev P := by
             unfold fieldsRev
             rw [List.filter_append, List.filter_cons, isF_field]
             simp
-          have hs' : DomSem t n (P ++ [.tuple #[.atom a, .tuple #[v, boolAtom o]]]) dl := by
+          have hs' : DomSem t n (P ++ [Term.tuple #[.atom a, .tuple #[v, boolAtom o]]]) dl := by
             refine ⟨hs.1, fun s => ?_⟩
-            have nd : ∀ ks' v', Term.tuple #[Term.list ks', v'] ∈ P ++ [.tuple #[.atom a, .tuple #[v, boolAtom o]]] ↔
+            have nd : ∀ ks' v', Term.tuple #[Term.list ks', v'] ∈ P ++ [Term.tuple #[.atom a, .tuple #[v, boolAtom o]]] ↔
                 Term.tuple #[Term.list ks', v'] ∈ P := by
               intro ks' v'
               simp only [List.mem_append, List.mem_singleton, or_iff_left_iff_imp]
@@ -54508,9 +54518,9 @@ defmodule STTDescrProofsTest do
           simpa using run
         · have hks' : ∀ k ∈ ks, ∃ s, k = .atom s := fun k hk => by obtain ⟨s, -, rfl⟩ := hks k hk; exact ⟨s, rfl⟩
           obtain ⟨dl', st, hd', keys, sem⟩ := step_domain hm ks hks' hv (fieldsRev P) dl hd b
-          have e : fieldsRev (P ++ [.tuple #[Term.list ks, v]]) = fieldsRev P := by
+          have e : fieldsRev (P ++ [Term.tuple #[Term.list ks, v]]) = fieldsRev P := by
             simp [fieldsRev, isF_dom]
-          have hs' : DomSem t n (P ++ [.tuple #[Term.list ks, v]]) dl' := by
+          have hs' : DomSem t n (P ++ [Term.tuple #[Term.list ks, v]]) dl' := by
             refine ⟨fun e he => ?_, fun s => ⟨?_, fun U' hU' x => ?_⟩⟩
             · rcases keys e he with h | h
               · obtain ⟨e', he', hee⟩ := List.mem_map.mp h; rw [← hee]; exact hs.1 e' he'
@@ -54972,12 +54982,12 @@ defmodule STTDescrProofsTest do
         have app : P ++ p :: rest = (P ++ [p]) ++ rest := by simp
         rcases hr p (by simp) with ⟨a, v, o, rfl, hv⟩ | ⟨ks, v, rfl, hks, hv⟩
         · -- fields are skipped
-          have nd : ∀ ks' v', Term.tuple #[Term.list ks', v'] ∈ P ++ [.tuple #[.atom a, .tuple #[v, boolAtom o]]] ↔
+          have nd : ∀ ks' v', Term.tuple #[Term.list ks', v'] ∈ P ++ [Term.tuple #[.atom a, .tuple #[v, boolAtom o]]] ↔
               Term.tuple #[Term.list ks', v'] ∈ P := by
             intro ks' v'
             simp only [List.mem_append, List.mem_singleton, or_iff_left_iff_imp]
             intro h; exact absurd h.symm (field_ne_dom a _ ks' v')
-          obtain ⟨U, run, hU, h1, h2⟩ := dv_run hm s rest (P ++ [.tuple #[.atom a, .tuple #[v, boolAtom o]]]) hr'
+          obtain ⟨U, run, hU, h1, h2⟩ := dv_run hm s rest (P ++ [Term.tuple #[.atom a, .tuple #[v, boolAtom o]]]) hr'
             acc found he
             (by simp only [DomAny, nd]; exact hf) (fun f x => by simp only [DomMem, nd]; exact hd f x)
           refine ⟨U, ?_, hU, by rw [app]; exact h1, by rw [app]; exact h2⟩
@@ -54986,7 +54996,7 @@ defmodule STTDescrProofsTest do
         · have hks' : ∀ k ∈ ks, ∃ s', k = .atom s' := fun k hk => by
             obtain ⟨s', -, rfl⟩ := hks k hk; exact ⟨s', rfl⟩
           have ki := kind_in_run s ks hks'
-          have anyP : ∀ s', DomAny (P ++ [.tuple #[Term.list ks, v]]) s' ↔ DomAny P s' ∨ .atom s' ∈ ks := by
+          have anyP : ∀ s', DomAny (P ++ [Term.tuple #[Term.list ks, v]]) s' ↔ DomAny P s' ∨ Term.atom s' ∈ ks := by
             intro s'
             simp only [DomAny, List.mem_append, List.mem_singleton]
             constructor
@@ -54996,8 +55006,8 @@ defmodule STTDescrProofsTest do
             · rintro (⟨ks', v', h1, h2⟩ | h2)
               · exact ⟨ks', v', Or.inl h1, h2⟩
               · exact ⟨ks, v, Or.inr rfl, h2⟩
-          have memP : ∀ x, DomMem (t := t) (n := n) (P ++ [.tuple #[Term.list ks, v]]) s x ↔
-              DomMem (t := t) (n := n) P s x ∨ (.atom s ∈ ks ∧ (level t n).den v x) := by
+          have memP : ∀ x, DomMem (t := t) (n := n) (P ++ [Term.tuple #[Term.list ks, v]]) s x ↔
+              DomMem (t := t) (n := n) P s x ∨ (Term.atom s ∈ ks ∧ (level t n).den v x) := by
             intro x
             simp only [DomMem, List.mem_append, List.mem_singleton]
             constructor
@@ -55012,9 +55022,9 @@ defmodule STTDescrProofsTest do
           by_cases mem : Term.atom s ∈ ks
           · have bt : b = Bool.true := hb.mpr mem
             subst bt
-            have anyAll : DomAny (P ++ .tuple #[Term.list ks, v] :: rest) s := ⟨ks, v, by simp, mem⟩
+            have anyAll : DomAny (P ++ Term.tuple #[Term.list ks, v] :: rest) s := ⟨ks, v, by simp, mem⟩
             cases found
-            · obtain ⟨U, run, hU, h1, h2⟩ := dv_run hm s rest (P ++ [.tuple #[Term.list ks, v]]) hr' v Bool.true hv
+            · obtain ⟨U, run, hU, h1, h2⟩ := dv_run hm s rest (P ++ [Term.tuple #[Term.list ks, v]]) hr' v Bool.true hv
                 (by simp [anyP, mem]) (fun _ x => by
                   rw [memP]
                   have : ¬DomMem (t := t) (n := n) P s x := fun ⟨ks', v', h1, h2, _⟩ => nf rfl ⟨ks', v', h1, h2⟩
@@ -55024,7 +55034,7 @@ defmodule STTDescrProofsTest do
               simp only [boolAtom, ↓reduceIte] at run
               simp [is_list_list, ki, boolAtom, exact_ok, run]
             · obtain ⟨c, hc, rc, sc, -⟩ := (level t n).ef.union he hv
-              obtain ⟨U, run, hU, h1, h2⟩ := dv_run hm s rest (P ++ [.tuple #[Term.list ks, v]]) hr' c Bool.true hc
+              obtain ⟨U, run, hU, h1, h2⟩ := dv_run hm s rest (P ++ [Term.tuple #[Term.list ks, v]]) hr' c Bool.true hc
                 (by simp [anyP, mem]) (fun _ x => by rw [memP, sc x, hd rfl x]; simp [mem])
               refine ⟨U, ?_, hU, by rw [app]; exact h1, fun h => absurd anyAll h⟩
               rw [Term.list_cons, Elixir.STTDescrProofsTest.«domain_value/4».eq_def]
@@ -55032,7 +55042,7 @@ defmodule STTDescrProofsTest do
               simp [is_list_list, ki, boolAtom, exact_ok, rc m hm, run]
           · have bf : b = Bool.false := by cases b <;> simp_all
             subst bf
-            obtain ⟨U, run, hU, h1, h2⟩ := dv_run hm s rest (P ++ [.tuple #[Term.list ks, v]]) hr' acc found he
+            obtain ⟨U, run, hU, h1, h2⟩ := dv_run hm s rest (P ++ [Term.tuple #[Term.list ks, v]]) hr' acc found he
               (by rw [hf, anyP]; simp [mem]) (fun f x => by rw [memP, hd f x]; simp [mem])
             refine ⟨U, ?_, hU, by rw [app]; exact h1, by rw [app]; exact h2⟩
             rw [Term.list_cons, Elixir.STTDescrProofsTest.«domain_value/4».eq_def]
