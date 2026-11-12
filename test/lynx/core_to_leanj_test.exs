@@ -1813,18 +1813,15 @@ defmodule Lynx.CoreToLeanjTest do
 
     test "implementations calling their protocol dispatch through local copies" do
       depth = beam_core(:code.which(Lynx.Support.Depth.List))
-      assert :lynx_core_to_leanj.called_protocol(depth) == Lynx.Support.Depth
+
+      assert :lynx_core_to_leanj.called_protocol(depth) ==
+               {Lynx.Support.Depth, [{:depth, 1}]}
 
       assert :lynx_core_to_leanj.called_protocol(beam_core(:code.which(Lynx.Support.Size.List))) ==
                nil
 
-      definitions =
-        :lynx_core_to_leanj.dispatch_locally(
-          :lynx_core_to_leanj.to_definitions(depth),
-          Lynx.Support.Depth,
-          protocol_definitions(:code.which(Lynx.Support.Depth)),
-          []
-        )
+      definitions = :lynx_core_to_leanj.to_definitions(depth)
+      dispatch = {Lynx.Support.Depth, protocol_definitions(:code.which(Lynx.Support.Depth)), []}
 
       callback = fn calls, module, function, arity, _, funs ->
         if module == Lynx.Support.Depth.List,
@@ -1833,7 +1830,15 @@ defmodule Lynx.CoreToLeanjTest do
       end
 
       assert {:ok, functions, _, _, _, calls} =
-               core_translate(Lynx.Support.Depth.List, definitions, [{:depth, 1}], callback)
+               core_translate(
+                 Lynx.Support.Depth.List,
+                 definitions,
+                 [{:depth, 1}],
+                 callback,
+                 %{},
+                 [],
+                 dispatch
+               )
 
       assert Enum.sort(Map.keys(functions)) == [
                {:"Lynx.Support.Depth.depth", 1},
@@ -1878,15 +1883,9 @@ defmodule Lynx.CoreToLeanjTest do
       depth = beam_core(:code.which(Lynx.Support.Depth.List))
       definitions = :lynx_core_to_leanj.to_definitions(depth)
 
-      assert :lynx_core_to_leanj.protocol_calls(definitions, Lynx.Support.Depth) == [{:depth, 1}]
-
-      definitions =
-        :lynx_core_to_leanj.dispatch_locally(
-          definitions,
-          Lynx.Support.Depth,
-          protocol_definitions(:code.which(Lynx.Support.Depth)),
-          [{:"impl_for!", 1}]
-        )
+      dispatch =
+        {Lynx.Support.Depth, protocol_definitions(:code.which(Lynx.Support.Depth)),
+         [{:impl_for!, 1}]}
 
       callback = fn calls, module, function, arity, _, funs ->
         if module == Lynx.Support.Depth.List,
@@ -1895,11 +1894,19 @@ defmodule Lynx.CoreToLeanjTest do
       end
 
       assert {:ok, functions, _, _, _, calls} =
-               core_translate(Lynx.Support.Depth.List, definitions, [{:depth, 1}], callback)
+               core_translate(
+                 Lynx.Support.Depth.List,
+                 definitions,
+                 [{:depth, 1}],
+                 callback,
+                 %{},
+                 [],
+                 dispatch
+               )
 
       # Only the cut off impl_for!/1 calls impl_for/1, so it is not reached.
       assert Enum.sort(Map.keys(functions)) == [{:"Lynx.Support.Depth.depth", 1}, {:depth, 1}]
-      assert {Lynx.Support.Depth, :"impl_for!", 1} in calls
+      assert {Lynx.Support.Depth, :impl_for!, 1} in calls
     end
   end
 
@@ -1989,7 +1996,15 @@ defmodule Lynx.CoreToLeanjTest do
   end
 
   # Translates roots starting from an empty literal pool and function registry.
-  defp core_translate(module, definitions, roots, callback, translated \\ %{}, dynamic \\ []) do
+  defp core_translate(
+         module,
+         definitions,
+         roots,
+         callback,
+         translated \\ %{},
+         dynamic \\ [],
+         dispatch \\ :none
+       ) do
     :lynx_core_to_leanj.translate(
       module,
       definitions,
@@ -1999,7 +2014,8 @@ defmodule Lynx.CoreToLeanjTest do
       %{},
       [],
       dynamic,
-      {[], callback}
+      {[], callback},
+      dispatch
     )
   end
 

@@ -1,7 +1,6 @@
 -module(lynx_core_to_leanj).
 
--export([module_name/1, to_definitions/1, called_protocol/1, protocol_calls/2,
-         dispatch_locally/4, translate/9,
+-export([module_name/1, to_definitions/1, called_protocol/1, translate/10,
          fun_table/2, join_purity/2, with_purity/2]).
 
 %% Purity levels, ordered by what running a definition requires: `pure` needs
@@ -19,8 +18,10 @@
 %% anonymous counts the funs of the definition without a compiler name.
 %% size_facts maps variables to the parameter they equal or are strictly
 %% smaller than; size_calls records what each local call passes, so groups
-%% of recursive definitions can be given termination measures.
--record(state, {module, name, defs, translated, laws = #{}, funs = #{},
+%% of recursive definitions can be given termination measures. dispatch holds
+%% the protocol an implementation calls, whose dispatch it copies, see
+%% local_dispatch/3.
+-record(state, {module, name, defs, translated, laws = #{}, funs = #{}, dispatch = none,
                 local_calls = #{}, purity = pure, dispatches = false, remote, next_var = 0,
                 anonymous = 0,
                 labels = #{},
@@ -244,43 +245,34 @@ protocol_dispatch({Name, _Arity}, Impls, #c_fun{anno = Anno, vars = [Data | _] =
                                              [cerl:ann_c_tuple(Anno, [cerl:ann_c_atom(Anno, case_clause), Impl])]))],
     Fun#c_fun{body = cerl:ann_c_case(Anno, ImplFor, Clauses)}.
 
-%% The protocol an implementation calls, which then dispatches locally.
--spec called_protocol(cerl:c_module()) -> module() | nil.
+%% The protocol an implementation calls, which then dispatches locally, and
+%% the functions of it the implementation calls.
+-spec called_protocol(cerl:c_module()) -> {module(), [{atom(), arity()}]} | nil.
 called_protocol(#c_module{defs = Defs, attrs = Attrs}) ->
     Protocols = [Protocol || {#c_literal{val = '__impl__'}, Value} <- Attrs,
                              {protocol, Protocol} <- lists:flatten([cerl:concrete(Value)])],
     Called = fun(Protocol) ->
-        lists:any(fun({_, Fun}) ->
-            cerl_trees:fold(fun
-                (#c_call{module = #c_literal{val = Module}}, _) when Module =:= Protocol -> true;
-                (_, Found) -> Found
-            end, false, Fun)
-        end, Defs)
+        lists:usort(lists:append([cerl_trees:fold(fun
+            (#c_call{module = #c_literal{val = Module}, name = #c_literal{val = Name}, args = Args},
+             Found) when Module =:= Protocol ->
+                [{Name, length(Args)} | Found];
+            (_, Found) ->
+                Found
+        end, [], Fun) || {_, Fun} <- Defs]))
     end,
-    case [Protocol || Protocol <- Protocols, Called(Protocol)] of
-        [Protocol] -> Protocol;
+    case [{Protocol, Calls} || Protocol <- Protocols, Calls <- [Called(Protocol)], Calls =/= []] of
+        [Called0] -> Called0;
         [] -> nil
     end.
-
-%% The functions of a protocol an implementation calls.
--spec protocol_calls(map(), module()) -> [{atom(), arity()}].
-protocol_calls(Definitions, Protocol) ->
-    lists:usort(lists:append([cerl_trees:fold(fun
-        (#c_call{module = #c_literal{val = Module}, name = #c_literal{val = Name}, args = Args}, Found)
-                when Module =:= Protocol ->
-            [{Name, length(Args)} | Found];
-        (_, Found) ->
-            Found
-    end, [], Fun) || {function, Fun} <- maps:values(Definitions)])).
 
 %% Implementations calling their own protocol, such as streams of streams,
 %% would form a module cycle through it. Instead, they call local copies of
 %% the protocol's dispatch, which call the implementation's own functions
 %% locally and other implementations directly. Functions of the protocol that
 %% are cut off are not copied, and calls to them stay calls to the protocol.
--spec dispatch_locally(map(), module(), map(), [{atom(), arity()}]) -> map().
-dispatch_locally(Definitions, Protocol, #{{'__protocol__', 1} := {function, Info}} = ProtocolDefinitions,
-                 Cut) ->
+local_dispatch(none) ->
+    none;
+local_dispatch({Protocol, #{{'__protocol__', 1} := {function, Info}} = Definitions, Cut}) ->
     Functions = [Function || Function <- [{impl_for, 1}, {'impl_for!', 1} | protocol_info(Info, functions)],
                              not lists:member(Function, Cut)],
     Prefix = case atom_to_binary(Protocol) of
@@ -289,11 +281,17 @@ dispatch_locally(Definitions, Protocol, #{{'__protocol__', 1} := {function, Info
     end,
     Local = maps:from_list([{Function, {binary_to_atom(<<Prefix/binary, ".", (atom_to_binary(Name))/binary>>), Arity}}
                             || {Name, Arity} = Function <- Functions]),
-    Rename = fun
-        (#c_var{name = {_, _} = Function} = Var) when is_map_key(Function, Local) ->
-            Var#c_var{name = map_get(Function, Local)};
-        (#c_apply{anno = Anno, op = #c_var{name = {Name, Arity} = Function}, args = Args} = Node) ->
-            case lists:member(Function, Cut) of
+    {Protocol, Local, #{LocalName => Function || Function := LocalName <- Local}, Definitions, Cut}.
+
+%% The local copy of a function of the protocol, calling the other copies.
+dispatch_copy(LocalName, {Protocol, Local, Originals, Definitions, Cut}) ->
+    #{LocalName := Function} = Originals,
+    #{Function := {function, Fun}} = Definitions,
+    {function, cerl_trees:map(fun
+        (#c_var{name = {_, _} = Name} = Var) when is_map_key(Name, Local) ->
+            Var#c_var{name = map_get(Name, Local)};
+        (#c_apply{anno = Anno, op = #c_var{name = {Name, Arity} = Called}, args = Args} = Node) ->
+            case lists:member(Called, Cut) of
                 true when length(Args) =:= Arity ->
                     cerl:ann_c_call(Anno, cerl:ann_c_atom(Anno, Protocol), cerl:ann_c_atom(Anno, Name), Args);
                 _ ->
@@ -301,26 +299,7 @@ dispatch_locally(Definitions, Protocol, #{{'__protocol__', 1} := {function, Info
             end;
         (Node) ->
             Node
-    end,
-    Redirect = fun
-        (#c_call{anno = Anno, module = #c_literal{val = Module}, name = #c_literal{val = Name}, args = Args} = Node)
-                when Module =:= Protocol ->
-            case Local of
-                #{{Name, length(Args)} := {LocalName, Arity}} ->
-                    cerl:ann_c_apply(Anno, cerl:ann_c_fname(Anno, LocalName, Arity), Args);
-                #{} ->
-                    Node
-            end;
-        (Node) ->
-            Node
-    end,
-    Redirected = maps:map(fun
-        (_, {function, Fun}) -> {function, cerl_trees:map(Redirect, Fun)};
-        (_, Definition) -> Definition
-    end, Definitions),
-    maps:merge(Redirected, #{LocalName => {function, cerl_trees:map(Rename, Fun)}
-                             || Function := LocalName <- Local,
-                                #{Function := {function, Fun}} <- [ProtocolDefinitions]}).
+    end, Fun)}.
 
 -spec fun_table(map(), map()) -> [map()].
 fun_table(Funs, Modules) ->
@@ -378,16 +357,20 @@ purity_rank(concurrent) -> 3.
 %% The callback returns the remote callee's purity and whether it calls function values.
 %% Local purity is propagated by Lynx.Translation.
 %% Unsupported constructs return their annotations and pretty-printed Core as a UTF-8 binary.
+%% Dispatch is `none`, or the protocol the module implements and calls, its
+%% definitions, and those of its functions that are cut off.
 -spec translate(module(), #{{atom(), arity()} => {function | cutoff, cerl:c_fun()} | {law, map()}}, [{atom(), arity()}], map(),
                 #{term() => binary()}, map(), [{atom(), arity()}], [mfa()],
                 {term(), fun((term(), module(), atom(), arity(), list(), map()) ->
-                    {{purity(), boolean()}, map(), term()} | local)}) ->
+                    {{purity(), boolean()}, map(), term()} | local)},
+                none | {module(), map(), [{atom(), arity()}]}) ->
     {ok, map(), map(), map(), map(), term()} | {error, list(), binary()}.
-translate(Module, Definitions, Names, Translated, Literals, Funs, Suffixed, Dynamic, Remote) ->
+translate(Module, Definitions, Names, Translated, Literals, Funs, Suffixed, Dynamic, Remote, Dispatch) ->
     try
         State = #state{
           module = Module,
           defs = Definitions,
+          dispatch = local_dispatch(Dispatch),
           translated = Translated,
           literals = Literals,
           funs = Funs,
@@ -412,7 +395,13 @@ translate(Module, Definitions, Names, Translated, Literals, Funs, Suffixed, Dyna
 translate_def(Name, #state{translated = Translated, laws = Laws} = State) ->
     case maps:is_key(Name, Translated) orelse maps:is_key(Name, Laws) of
         true -> State;
-        false -> translate_def(Name, maps:get(Name, State#state.defs), State)
+        false -> translate_def(Name, definition(Name, State), State)
+    end.
+
+definition(Name, #state{defs = Definitions, dispatch = Dispatch}) ->
+    case Definitions of
+        #{Name := Definition} -> Definition;
+        #{} -> dispatch_copy(Name, Dispatch)
     end.
 
 translate_def(Name, {function, #c_fun{anno = Anno, vars = Vars0, body = Body0}}, State) ->
@@ -791,6 +780,15 @@ computation(Core, _State) ->
 %% this module.
 remote_computation(#c_call{anno = Anno, module = #c_literal{val = Module},
                            name = #c_literal{val = Name}, args = Args}, State0) ->
+    Arity = length(Args),
+    case State0#state.dispatch of
+        {Module, #{{Name, Arity} := Local}, _, _, _} ->
+            expression(#c_apply{anno = Anno, op = #c_var{name = Local}, args = Args}, State0);
+        _ ->
+            remote_call(Module, Name, Args, Anno, State0)
+    end.
+
+remote_call(Module, Name, Args, Anno, State0) ->
     Arity = length(Args),
     {Context, Callback} = State0#state.remote,
     case Callback(Context, Module, Name, Arity, Anno, State0#state.funs) of
