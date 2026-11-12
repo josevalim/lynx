@@ -16,18 +16,20 @@ open Lynx
 /-! ### Effects on other processes -/
 
 /-- What steps of other processes keep in a record: what the process reads, the
-children it spawned, and a pending exit signal. -/
+children it spawned, a pending exit signal, and the messages it has yet to
+receive, which they can only follow with more. -/
 private def Unchanged (before after : ProcessState) : Prop :=
   after.pdict = before.pdict ∧ after.refCounter = before.refCounter ∧
-    after.children = before.children ∧ (before.signal.isSome → after.signal.isSome)
+    after.children = before.children ∧ (before.signal.isSome → after.signal.isSome) ∧
+    before.mailbox <+: after.mailbox
 
 private theorem Unchanged.refl (process : ProcessState) : Unchanged process process :=
-  ⟨rfl, rfl, rfl, id⟩
+  ⟨rfl, rfl, rfl, id, List.prefix_refl _⟩
 
 private theorem Unchanged.trans {first second third : ProcessState}
     (left : Unchanged first second) (right : Unchanged second third) : Unchanged first third :=
   ⟨right.1.trans left.1, right.2.1.trans left.2.1, right.2.2.1.trans left.2.2.1,
-    fun pending => right.2.2.2 (left.2.2.2 pending)⟩
+    fun pending => right.2.2.2.1 (left.2.2.2.1 pending), left.2.2.2.2.trans right.2.2.2.2⟩
 
 /-- A state change keeps a process's record, and whether the process is live. -/
 private def Keeps (processId : PID) (before after : State) : Prop :=
@@ -101,14 +103,14 @@ private theorem keeps_deliver {state : State} {processId other : PID} {message :
     by_cases equal : processId = other
     · subst equal
       simp only [Keeps, State.update, ite_true, found]
-      exact .some ⟨rfl, rfl, rfl, id⟩
+      exact .some ⟨rfl, rfl, rfl, id, List.prefix_append _ _⟩
     · exact keeps_update_ne equal
   · exact Keeps.refl _ _
 
 private theorem keeps_kill {state : State} {processId other : PID} {reason : Term} :
     Keeps processId state (state.kill other reason) :=
   keeps_modify (.inr fun process => ⟨rfl, rfl, rfl, fun pending => by
-    cases signal : process.signal <;> simp_all⟩)
+    cases signal : process.signal <;> simp_all, List.prefix_refl _⟩)
 
 private theorem keeps_signal {state : State} {processId target sender : PID} {reason : Term}
     {untrappable : Bool} : Keeps processId state (state.signal target sender reason untrappable) := by
@@ -164,10 +166,10 @@ private theorem Keeps.foldl {state before : State} {processId : PID} {items : Li
   | cons item rest ih => exact ih (each _ _ kept)
 
 /-- Records of other processes keep their fields, other than the ones listed. -/
-private theorem unchanged_fields (process : ProcessState) (mailbox : List Term)
+private theorem unchanged_fields (process : ProcessState)
     (links : List PID) (monitors monitoring : List (List Nat × PID)) (aliases : List (List Nat)) :
-    Unchanged process { process with mailbox, links, monitors, monitoring, aliases } :=
-  ⟨rfl, rfl, rfl, id⟩
+    Unchanged process { process with links, monitors, monitoring, aliases } :=
+  ⟨rfl, rfl, rfl, id, List.prefix_refl _⟩
 
 /-- Unfold a compound operation on a kept record. -/
 syntax "keeps_chain" : tactic
@@ -180,7 +182,7 @@ macro_rules
       | (apply Keeps.signal)
       | (apply Keeps.update (by assumption))
       | (apply Keeps.modify (.inl (by assumption)))
-      | (apply Keeps.modify (.inr fun process => unchanged_fields process _ _ _ _ _))
+      | (apply Keeps.modify (.inr fun process => unchanged_fields process _ _ _ _))
       | refine Keeps.foldl ?_ (fun current item kept => ?_)
       | split))
 
@@ -1285,7 +1287,7 @@ private theorem twins_run {processId : PID} {first last : Config α} {events : L
       obtain ⟨events', run'⟩ := ih terminal (Step.wellformed (.timer possible) wellformed)
         (other := .running next (before ++ (processId, ⟨computation', finish⟩) :: after) finished'
           exhausted')
-        ⟨rfl, rfl, rfl, (timerSteps_keeps possible processId).1.process.2.2.2 pending, before,
+        ⟨rfl, rfl, rfl, (timerSteps_keeps possible processId).1.process.2.2.2.1 pending, before,
           after, β, finish, computation, computation', split, rfl⟩
       exact ⟨_, .step (.timer possible) run'⟩
     | @run tasks before' stepping task' after' transition state finished exhausted split'
@@ -1305,7 +1307,7 @@ private theorem twins_run {processId : PID} {first last : Config α} {events : L
       · -- Another process steps the same way from both.
         obtain ⟨kept, order⟩ := other_step wellformed split' same possible
         have pending' : (transition.state.process processId).signal.isSome :=
-          kept.process.2.2.2 pending
+          kept.process.2.2.2.1 pending
         have wellformed' := Step.wellformed (.run split' possible) wellformed
         rcases order with ⟨middle, rfl, rfl⟩ | ⟨middle, rfl, rfl⟩
         · obtain ⟨events', run'⟩ := ih terminal wellformed'
@@ -1552,7 +1554,7 @@ private theorem run_signaled {first last : Config α} {events : List Event} {out
         obtain ⟨moved, possible', event, tasks, finishedEq, exhaustedEq, erased⟩ :=
           transition_of_erase ne fresh same possible
         have wellformed' := Step.wellformed (.run split' possible) wellformed
-        have pending' := kept.process.2.2.2 pending
+        have pending' := kept.process.2.2.2.1 pending
         rcases order with ⟨middle, rfl, rfl⟩ | ⟨middle, rfl, rfl⟩
         · obtain ⟨events', last', run', terminal'⟩ := ih terminal (state := transition.state)
             (state' := moved.state) (before := before) (after := middle ++ transition.tasks ++ after')
@@ -1700,6 +1702,527 @@ private theorem write_first {first last : Config α} {events : List Event} {outc
         (Step.wellformed (.timer possible) wellformed) (by rw [timerSignal]; exact signal)
       exact ⟨_ :: events', last', .step (.timer possible') (stored ▸ run'), terminal'⟩
 
+/-! ### Receiving first
+
+Other processes only append to the mailbox of a process, and never read it, so
+taking a message that it is about to receive commutes with their steps. -/
+
+/-- A record without one of its messages. -/
+private def ProcessState.take (process : ProcessState) (index : Nat) : ProcessState :=
+  { process with mailbox := process.mailbox.eraseIdx index }
+
+/-- A state without one message of a process. -/
+private def State.take (state : State) (processId : PID) (index : Nat) : State :=
+  { state with processes := fun candidate =>
+      if candidate = processId then (state.processes candidate).map (·.take index)
+      else state.processes candidate }
+
+@[simp] private theorem take_timers {state : State} {processId : PID} {index : Nat} :
+    (state.take processId index).timers = state.timers := rfl
+
+private theorem take_processes {state : State} {processId candidate : PID} {index : Nat} :
+    (state.take processId index).processes candidate =
+      if candidate = processId then (state.processes candidate).map (·.take index)
+      else state.processes candidate := rfl
+
+private theorem take_process_ne {state : State} {processId other : PID} {index : Nat}
+    (ne : other ≠ processId) : (state.take processId index).process other = state.process other := by
+  simp [State.process, take_processes, ne]
+
+/-- What a process reads does not include its mailbox. -/
+private theorem take_view {state : State} {processId other : PID} {index : Nat} :
+    (state.take processId index).view other = state.view other := by
+  by_cases same : other = processId
+  · subst same
+    simp only [State.view, State.process, take_processes, ite_true]
+    cases state.processes other <;> rfl
+  · simp [State.view, take_process_ne same]
+
+/-- Taking a message keeps every field other than the mailbox. -/
+private theorem take_process_fields {state : State} {processId other : PID} {index : Nat} :
+    ((state.take processId index).process other).links = (state.process other).links ∧
+    ((state.take processId index).process other).monitors = (state.process other).monitors ∧
+    ((state.take processId index).process other).monitoring = (state.process other).monitoring ∧
+    ((state.take processId index).process other).aliases = (state.process other).aliases ∧
+    ((state.take processId index).process other).trapExit = (state.process other).trapExit ∧
+    ((state.take processId index).process other).signal = (state.process other).signal ∧
+    ((state.take processId index).process other).children = (state.process other).children ∧
+    ((state.take processId index).process other).refCounter = (state.process other).refCounter := by
+  by_cases equal : other = processId
+  · subst equal
+    simp only [State.process, take_processes, ite_true]
+    cases state.processes other <;> simp [ProcessState.take]
+  · simp [take_process_ne equal]
+
+private theorem take_isSome {state : State} {processId other : PID} {index : Nat} :
+    ((state.take processId index).processes other).isSome = (state.processes other).isSome := by
+  simp only [take_processes]; split <;> simp
+
+private theorem take_processes_none {state : State} {processId target : PID} {index : Nat} :
+    (state.take processId index).processes target = none ↔ state.processes target = none := by
+  rw [take_processes]; split <;> simp
+
+private theorem take_processes_some {state : State} {processId target : PID} {index : Nat}
+    {process : ProcessState} (found : state.processes target = some process) :
+    ∃ taken, (state.take processId index).processes target = some taken := by
+  rw [take_processes]; split <;> simp [found]
+
+private theorem take_update_ne {state : State} {processId other : PID} {index : Nat}
+    {process : Option ProcessState} (ne : other ≠ processId) :
+    (state.update other process).take processId index =
+      (state.take processId index).update other process := by
+  refine State.ext' rfl fun candidate => ?_
+  simp only [take_processes, State.update]
+  by_cases first : candidate = other <;> by_cases second : candidate = processId <;> simp_all
+
+private theorem take_modify {state : State} {processId other : PID} {index : Nat}
+    {change : ProcessState → ProcessState}
+    (oblivious : ∀ process, (change process).take index = change (process.take index)) :
+    (state.modify other change).take processId index =
+      (state.take processId index).modify other change := by
+  refine State.ext' (by simp) fun candidate => ?_
+  unfold State.modify
+  rw [take_processes]
+  by_cases same : other = processId
+  · subst same
+    cases found : state.processes other with
+    | none => simp [take_processes, found]
+    | some process =>
+      simp only [take_processes, found, ite_true, Option.map_some, State.update]
+      by_cases equal : candidate = other <;> simp_all [oblivious process]
+  · cases found : state.processes other with
+    | none => simp [take_processes, found, same]
+    | some process =>
+      simp only [take_processes, found, same, ite_false, State.update]
+      by_cases equal : candidate = other <;> by_cases equal' : candidate = processId <;> simp_all
+
+private theorem take_modify_ne {state : State} {processId other : PID} {index : Nat}
+    {change : ProcessState → ProcessState} (ne : other ≠ processId) :
+    (state.modify other change).take processId index =
+      (state.take processId index).modify other change := by
+  refine State.ext' (by simp) fun candidate => ?_
+  unfold State.modify
+  cases found : state.processes other with
+  | none => simp [take_processes, found, ne]
+  | some process =>
+    simp only [take_processes, found, ne, ite_false, State.update]
+    by_cases equal : candidate = other <;> by_cases equal' : candidate = processId <;> simp_all
+
+/-- The message is still in the mailbox. -/
+private def Holds (state : State) (processId : PID) (index : Nat) : Prop :=
+  index < (state.process processId).mailbox.length
+
+/-- Steps of other processes keep the message in the mailbox. -/
+private theorem Keeps.holds {state after : State} {processId : PID} {index : Nat}
+    (kept : Keeps processId state after) (holds : Holds state processId index) :
+    Holds after processId index :=
+  Nat.lt_of_lt_of_le holds kept.process.2.2.2.2.length_le
+
+private theorem take_deliver {state : State} {processId other : PID} {index : Nat}
+    {message : Term} (holds : Holds state processId index) :
+    (state.deliver other message).take processId index =
+      (state.take processId index).deliver other message := by
+  have : state.deliver other message = state.modify other fun process =>
+      { process with mailbox := process.mailbox ++ [message] } := by
+    unfold State.deliver State.modify; split <;> rfl
+  have : (state.take processId index).deliver other message = (state.take processId index).modify
+      other fun process => { process with mailbox := process.mailbox ++ [message] } := by
+    unfold State.deliver State.modify; split <;> rfl
+  rw [‹state.deliver other message = _›, this]
+  by_cases same : other = processId
+  · subst same
+    refine State.ext' (by simp) fun candidate => ?_
+    unfold State.modify
+    simp only [Holds, State.process] at holds
+    cases found : state.processes other with
+    | none => simp [found] at holds
+    | some process =>
+      simp only [found, Option.getD_some] at holds
+      simp only [take_processes, found, ite_true, Option.map_some, State.update]
+      by_cases equal : candidate = other <;>
+        simp_all [ProcessState.take, List.eraseIdx_append_of_lt_length holds]
+  · exact take_modify_ne same
+
+private theorem take_kill {state : State} {processId other : PID} {index : Nat} {reason : Term} :
+    (state.kill other reason).take processId index =
+      (state.take processId index).kill other reason :=
+  take_modify (by intro _; rfl)
+
+private theorem take_signal {state : State} {processId target sender : PID} {index : Nat}
+    {reason : Term} {untrappable : Bool} (holds : Holds state processId index) :
+    (state.signal target sender reason untrappable).take processId index =
+      (state.take processId index).signal target sender reason untrappable := by
+  have trapExit := (take_process_fields (state := state) (processId := processId) (index := index)
+    (other := target)).2.2.2.2.1
+  unfold State.signal
+  rw [trapExit]
+  split
+  · exact take_kill
+  · split
+    · exact take_deliver holds
+    · split
+      · rfl
+      · exact take_kill
+
+private theorem take_foldl {items : List γ} {step : State → γ → State} {processId : PID}
+    {index : Nat}
+    (each : ∀ state item, Holds state processId index →
+      (step state item).take processId index = step (state.take processId index) item)
+    (kept : ∀ state item, Keeps processId state (step state item))
+    (state : State) (holds : Holds state processId index) :
+    (items.foldl step state).take processId index = items.foldl step (state.take processId index) := by
+  induction items generalizing state with
+  | nil => rfl
+  | cons item rest ih =>
+    simp only [List.foldl_cons]
+    rw [ih _ ((kept state item).holds holds), each _ _ holds]
+
+private theorem take_with_timers {state : State} {processId : PID} {index : Nat}
+    {timers : List Timer} :
+    ({ state with timers } : State).take processId index =
+      { state.take processId index with timers } := rfl
+
+private theorem take_terminate {state : State} {processId other : PID} {index : Nat} {reason : Term}
+    (ne : other ≠ processId) (holds : Holds state processId index) :
+    (state.terminate other reason).take processId index =
+      (state.take processId index).terminate other reason := by
+  have removed : Holds ({ state.update other none with
+      timers := state.timers.filter (·.destination != other) } : State) processId index :=
+    (keeps_update_ne (Ne.symm ne)).holds holds
+  simp only [State.terminate, take_process_ne ne]
+  rw [take_foldl (fun current item holds' => by
+      rw [take_modify (by intro _; rfl), take_deliver holds'])
+    (fun _ _ => by keeps_chain) _ (by
+      refine keeps_foldl (fun current item => ?_) _ |>.holds removed
+      keeps_chain)]
+  rw [take_foldl (fun current item holds' => by
+      rw [take_signal ((show Keeps processId current _ by keeps_chain).holds holds'),
+        take_modify (by intro _; rfl)])
+    (fun _ _ => by keeps_chain) _ removed]
+  rw [take_with_timers, take_update_ne ne]
+  rfl
+
+private theorem take_monitor {state : State} {processId other target : PID} {index : Nat}
+    {alias : Bool} (ne : other ≠ processId) (holds : Holds state processId index) :
+    (state.take processId index).monitor other target alias =
+      ((state.monitor other target alias).1,
+        (state.monitor other target alias).2.take processId index) := by
+  have counting : Holds (state.modify other fun process =>
+      { process with refCounter := process.refCounter + 1 }) processId index :=
+    (Keeps.modify (.inl (Ne.symm ne)) (Keeps.refl _ _)).holds holds
+  simp only [State.monitor, take_process_ne ne]
+  rw [← take_modify_ne (change := fun process =>
+    { process with refCounter := process.refCounter + 1 }) ne]
+  generalize (state.modify other fun process =>
+    { process with refCounter := process.refCounter + 1 }) = counted at counting
+  rw [take_processes]
+  by_cases same : target = processId
+  · subst same
+    cases found : counted.processes target with
+    | none => simp [take_deliver counting]
+    | some watched =>
+      simp only [ite_true, Option.map_some]
+      rw [take_modify_ne ne, take_modify (by intro _; rfl)]
+  · cases found : counted.processes target with
+    | none => simp [same, take_deliver counting]
+    | some watched =>
+      simp only [same, ite_false]
+      rw [take_modify_ne ne, take_modify (by intro _; rfl)]
+
+private theorem take_request {state : State} {processId other : PID} {index : Nat}
+    {query : Request} (ne : other ≠ processId) (holds : Holds state processId index) :
+    (state.take processId index).request other query =
+      ((state.request other query).1, (state.request other query).2.take processId index) := by
+  cases query with
+  | monitor target alias =>
+    simp only [State.request, take_monitor ne holds]
+  | demonitor reference flush =>
+    simp only [State.request, take_process_ne ne]
+    rw [take_modify_ne ne, take_foldl (fun current item _ => by
+        obtain ⟨found, target⟩ := item
+        dsimp only
+        split
+        · exact take_modify (by intro _; rfl)
+        · rfl)
+      (fun _ _ => by keeps_chain) _ holds]
+  | link target =>
+    simp only [State.request]
+    split
+    · rfl
+    · cases found : state.processes target with
+      | none =>
+        simp only [take_processes_none.mpr found, take_process_ne ne]
+        split
+        · simp [take_deliver holds]
+        · rfl
+      | some process =>
+        obtain ⟨taken, found'⟩ := take_processes_some (processId := processId) (index := index) found
+        simp only [found']
+        rw [take_modify (by intro _; rfl), take_modify_ne ne]
+  | unlink target =>
+    simp only [State.request]
+    rw [take_modify (by intro _; rfl), take_modify_ne ne]
+  | exit target reason =>
+    simp only [State.request, take_process_ne ne]
+    split
+    · simp [take_kill]
+    · simp [take_signal holds]
+  | trapExit enabled =>
+    simp only [State.request, take_process_ne ne, take_modify_ne ne]
+  | alive target =>
+    simp only [State.request]
+    cases found : state.processes target with
+    | none => simp [take_processes_none.mpr found]
+    | some process =>
+      obtain ⟨taken, found'⟩ := take_processes_some (processId := processId) (index := index) found
+      simp [found']
+  | sendAlias alias message =>
+    simp only [State.request, (take_process_fields (state := state) (processId := processId)
+      (index := index) (other := alias.dropLast)).2.2.2.1]
+    split
+    · simp [take_deliver holds]
+    · rfl
+  | startTimer destination message duration =>
+    simp only [State.request, take_process_ne ne, ← take_modify_ne (change := fun process =>
+      { process with refCounter := process.refCounter + 1 }) ne]
+    generalize (state.modify other fun process =>
+      { process with refCounter := process.refCounter + 1 }) = counted
+    rw [take_isSome]
+    split <;> rfl
+  | cancelTimer reference =>
+    simp only [State.request, take_timers]
+    split <;> rfl
+
+private theorem take_spawnWith {state : State} {processId other : PID} {index : Nat}
+    {options : SpawnOptions} (ne : other ≠ processId)
+    (fresh : other ++ [(state.process other).children + 1] ≠ processId)
+    (holds : Holds state processId index) :
+    (state.take processId index).spawnWith other options =
+      ((state.spawnWith other options).1, (state.spawnWith other options).2.take processId index) := by
+  obtain ⟨link, monitor⟩ := options
+  have spawned : Holds ((state.update other (some { state.process other with
+      children := (state.process other).children + 1 })).update
+      (other ++ [(state.process other).children + 1]) (some {})) processId index :=
+    ((keeps_update_ne (Ne.symm ne)).trans (keeps_update_ne (Ne.symm fresh))).holds holds
+  simp only [State.spawnWith, State.spawn, take_process_ne ne]
+  rw [← take_update_ne ne, ← take_update_ne fresh]
+  cases link <;> cases monitor <;>
+    simp only [Bool.false_eq_true, ite_false, ite_true]
+  · rw [take_monitor ne spawned]
+  · rw [← take_modify_ne ne, ← take_modify (by intro _; rfl)]
+  · rw [← take_modify_ne ne, ← take_modify (by intro _; rfl),
+      take_monitor ne ((show Keeps processId _ _ by keeps_chain).holds spawned)]
+
+private theorem take_timerSteps {state : State} {processId : PID} {index : Nat}
+    (holds : Holds state processId index) :
+    (state.take processId index).timerSteps =
+      state.timerSteps.map fun (event, next) => (event, next.take processId index) := by
+  simp only [State.timerSteps, take_timers, List.map_map]
+  apply List.map_congr_left
+  intro timer _
+  simp only [Function.comp_apply]
+  split
+  · rw [← take_deliver holds]; rfl
+  · rfl
+
+/-- Steps of other processes commute with taking a message of a process. -/
+private theorem transitions_take {state : State} {processId other : PID} {index : Nat}
+    {task : Task α} (ne : other ≠ processId)
+    (fresh : other ++ [(state.process other).children + 1] ≠ processId)
+    (holds : Holds state processId index) :
+    task.transitions (state.take processId index) other =
+      (task.transitions state other).map fun transition =>
+        { transition with state := transition.state.take processId index } := by
+  obtain ⟨computation, finish⟩ := task
+  simp only [Task.transitions, take_view, take_process_ne ne]
+  split
+  · simp [take_terminate ne holds]
+  · cases computation with
+    | ok => simp [take_terminate ne holds]
+    | error exception =>
+      cases exception <;> simp [take_terminate ne holds, take_update_ne ne]
+    | get => simp
+    | set updated next =>
+      simp [State.store, take_update_ne ne, take_process_ne ne]
+    | schedule options child next =>
+      simp only [take_spawnWith ne fresh holds, List.map_cons, List.map_nil]
+    | send destination message next => simp [take_deliver holds]
+    | receive timeout select next =>
+      dsimp only
+      split
+      · simp [take_update_ne ne]
+      · cases timeout <;> simp
+    | request query next =>
+      simp only [take_request ne holds, List.map_map]
+      rfl
+
+/-- Exiting forgets the messages of the process. -/
+private theorem terminate_take {state : State} {processId : PID} {index : Nat} {reason : Term} :
+    (state.take processId index).terminate processId reason = state.terminate processId reason := by
+  have fields := take_process_fields (state := state) (processId := processId) (index := index)
+    (other := processId)
+  have removed : (state.take processId index).update processId none = state.update processId none := by
+    refine State.ext' rfl fun candidate => ?_
+    simp only [take_processes, State.update]
+    split <;> simp_all
+  simp only [State.terminate, fields.1, fields.2.1, removed, take_timers]
+
+/-- A step of another process has the same step once a message is taken. -/
+private theorem transition_of_take {state : State} {processId other : PID} {index : Nat}
+    {task : Task α} {transition : Transition α} (ne : other ≠ processId)
+    (fresh : other ++ [(state.process other).children + 1] ≠ processId)
+    (holds : Holds state processId index) (possible : transition ∈ task.transitions state other) :
+    { transition with state := transition.state.take processId index } ∈
+      task.transitions (state.take processId index) other := by
+  rw [transitions_take ne fresh holds]
+  exact List.mem_map_of_mem possible
+
+/-- A timer step has the same step once a message is taken. -/
+private theorem timer_of_take {state next : State} {processId : PID} {index : Nat} {event : Event}
+    (holds : Holds state processId index) (possible : (event, next) ∈ state.timerSteps) :
+    (event, next.take processId index) ∈ (state.take processId index).timerSteps := by
+  rw [take_timerSteps holds]
+  exact List.mem_map_of_mem (f := fun (event, next) => (event, next.take processId index)) possible
+
+/-- More messages keep the selected one selected. -/
+private theorem selected_extend {select : Term → Option γ} {mailbox mailbox' : List Term}
+    {index : Nat} {message : Term} {value : γ}
+    (selected : selectMessage select mailbox = some (message, value, mailbox.eraseIdx index))
+    (bound : index < mailbox.length) (extended : mailbox <+: mailbox') :
+    selectMessage select mailbox' = some (message, value, mailbox'.eraseIdx index) := by
+  obtain ⟨extra, rfl⟩ := extended
+  obtain ⟨-, -, -, extend⟩ := selectMessage_index selected
+  rw [extend extra, List.eraseIdx_append_of_lt_length bound]
+
+/-- Steps of other processes keep what a process reads. -/
+private theorem Keeps.view {state after : State} {processId : PID}
+    (kept : Keeps processId state after) : after.view processId = state.view processId := by
+  simp only [State.view, kept.process.1, kept.process.2.1]
+
+/-- Taking the message a process receives leaves the rest of its mailbox. -/
+private theorem take_received {state : State} {processId : PID} {index : Nat}
+    {process : ProcessState} (found : state.processes processId = some process) :
+    state.update processId (some { process with mailbox := process.mailbox.eraseIdx index }) =
+      state.take processId index := by
+  refine State.ext' rfl fun candidate => ?_
+  simp only [take_processes, State.update]
+  split <;> simp_all [ProcessState.take]
+
+/-- Every run where a process is about to receive a message already in its
+mailbox can receive it first, reaching the same terminal configuration. -/
+private theorem receive_first {first last : Config α} {events : List Event} {outcome : Outcome α}
+    (run : Run first events last) (terminal : Terminal last outcome) :
+    ∀ {state : State} {before after : List (PID × Task α)} {processId : PID} {β γ : Type}
+      {timeout : ReceiveTimeout} {select : Environment → Term → Option γ}
+      {next : Option γ → Result β} {finish : Except Exception β → Option (Except Exception α)}
+      {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {index : Nat}
+      {message : Term} {value : γ},
+      first = .running state (before ++ (processId, ⟨.receive timeout select next, finish⟩) ::
+        after) finished exhausted →
+      Wellformed first →
+      selectMessage (select (state.view processId)) (state.process processId).mailbox =
+        some (message, value, (state.process processId).mailbox.eraseIdx index) →
+      Holds state processId index →
+      ∃ events', Run (Config.running (state.take processId index)
+        (before ++ (processId, ⟨next (some value), finish⟩) :: after) finished exhausted) events' last := by
+  induction run with
+  | @refl config =>
+    intro state before after processId β γ timeout select next finish finished exhausted index
+      message value equal wellformed selected holds
+    subst equal
+    exfalso
+    cases signal : (state.process processId).signal with
+    | none =>
+      exact not_terminal (Step.run (transition :=
+        { event := .receive processId message
+          state := state.update processId (some { state.process processId with
+            mailbox := (state.process processId).mailbox.eraseIdx index })
+          tasks := [(processId, ⟨next (some value), finish⟩)] })
+        rfl (by simp [Task.transitions, signal, selected])) terminal
+    | some reason =>
+      exact not_terminal (Step.run (transition :=
+        { event := .exit processId reason, state := state.terminate processId reason, tasks := []
+          finished := (finish (.error (.exit reason))).map (·, state.view processId) })
+        rfl (by simp [Task.transitions, signal])) terminal
+  | @step _ _ _ restEvents _ step rest ih =>
+    intro state before after processId β γ timeout select next finish finished exhausted index
+      message value equal wellformed selected holds
+    subst equal
+    obtain ⟨process, found⟩ := Option.isSome_iff_exists.mp
+      (wellformed.2.2.1 (processId, ⟨.receive timeout select next, finish⟩) (by simp))
+    cases step with
+    | @run tasks before' stepping task' after' transition _ _ _ split' possible =>
+      by_cases sameProcess : before = before'
+      · -- The receiving process steps: it receives the message, or exits either way.
+        subst sameProcess
+        have equal := List.append_cancel_left split'
+        simp only [List.cons.injEq, Prod.mk.injEq] at equal
+        obtain ⟨⟨rfl, rfl⟩, rfl⟩ := equal
+        cases signal : (state.process processId).signal with
+        | none =>
+          have transitions : (⟨.receive timeout select next, finish⟩ : Task α).transitions state
+              processId = [{ event := .receive processId message, state := state.take processId index
+                             tasks := [(processId, ⟨next (some value), finish⟩)] }] := by
+            have process : state.process processId = process := by simp [State.process, found]
+            rw [process] at signal selected
+            rw [← take_received (index := index) found]
+            simp [Task.transitions, process, signal, selected]
+          rw [transitions, List.mem_singleton] at possible
+          subst possible
+          exact ⟨restEvents, by simpa [Transition.apply] using rest⟩
+        | some reason =>
+          simp only [Task.transitions, signal, List.mem_singleton] at possible
+          subst possible
+          have signal' : ((state.take processId index).process processId).signal = some reason := by
+            rw [(take_process_fields (other := processId)).2.2.2.2.2.1, signal]
+          refine ⟨.exit processId reason :: restEvents, .step (Step.run (transition :=
+            { event := .exit processId reason
+              state := (state.take processId index).terminate processId reason, tasks := []
+              finished := (finish (.error (.exit reason))).map
+                (·, (state.take processId index).view processId) })
+            rfl (by simp [Task.transitions, signal'])) ?_⟩
+          simp only [Transition.apply] at rest ⊢
+          rw [terminate_take, take_view]
+          simpa using rest
+      · -- Another process steps the same way, after which the message is still there.
+        obtain ⟨kept, order⟩ := other_step wellformed split' sameProcess possible
+        obtain ⟨ne, fresh⟩ := other_distinct wellformed split' sameProcess
+        have moved := transition_of_take ne fresh holds possible
+        have wellformed' := Step.wellformed (.run split' possible) wellformed
+        have selected' := selected_extend selected holds kept.process.2.2.2.2
+        rw [← kept.view] at selected'
+        rcases order with ⟨middle, rfl, rfl⟩ | ⟨middle, rfl, rfl⟩
+        · obtain ⟨events', run'⟩ := ih terminal (state := transition.state) (before := before)
+            (after := middle ++ transition.tasks ++ after') (timeout := timeout) (select := select)
+            (next := next) (finish := finish) (index := index) (message := message) (value := value)
+            (finished := transition.finished.orElse fun _ => finished)
+            (exhausted := exhausted || transition.exhausted)
+            (by simp [Transition.apply]) wellformed' selected' (kept.holds holds)
+          refine ⟨transition.event :: events', .step (Step.run (before := before ++
+            (processId, ⟨next (some value), finish⟩) :: middle) (after := after')
+            (processId := stepping) (task := task')
+            (transition := { transition with state := transition.state.take processId index })
+            (by simp) moved) ?_⟩
+          simpa [Transition.apply] using run'
+        · obtain ⟨events', run'⟩ := ih terminal (state := transition.state)
+            (before := before' ++ transition.tasks ++ middle) (after := after) (timeout := timeout)
+            (select := select) (next := next) (index := index) (message := message) (value := value)
+            (finish := finish) (finished := transition.finished.orElse fun _ => finished)
+            (exhausted := exhausted || transition.exhausted)
+            (by simp [Transition.apply]) wellformed' selected' (kept.holds holds)
+          refine ⟨transition.event :: events', .step (Step.run (before := before') (after := middle ++
+            (processId, ⟨next (some value), finish⟩) :: after) (processId := stepping) (task := task')
+            (transition := { transition with state := transition.state.take processId index })
+            (by simp) moved) ?_⟩
+          simpa [Transition.apply] using run'
+    | timer possible =>
+      obtain ⟨kept, -, -⟩ := timerSteps_keeps possible processId
+      have selected' := selected_extend selected holds kept.process.2.2.2.2
+      rw [← kept.view] at selected'
+      obtain ⟨events', run'⟩ := ih terminal rfl (Step.wellformed (.timer possible) wellformed)
+        selected' (kept.holds holds)
+      exact ⟨_ :: events', .step (.timer (timer_of_take holds possible)) run'⟩
+
 /-! ### Soundness -/
 
 /-- One level of `check` where it follows every step. -/
@@ -1738,7 +2261,7 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
       exact check_successors ih wellformed rfl checked run terminal
     | running state tasks finished exhausted =>
       cases found : (splits tasks).find? (fun (_, (processId, task), _) =>
-          task.internal state processId) with
+          task.independent state processId) with
       | none =>
         exact check_successors ih wellformed (by simp [Config.reduced, found]) checked run terminal
       | some split =>
@@ -1747,7 +2270,7 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
         have split := eq_of_mem_splits (List.mem_of_find?_eq_some found)
         cases computation with
         | get read =>
-          simp only [Task.internal, Bool.and_true, Option.isNone_iff_eq_none] at reads
+          simp only [Task.independent, Bool.and_true, Option.isNone_iff_eq_none] at reads
           -- Every run can read first.
           obtain ⟨events', run'⟩ := read_first run terminal rfl wellformed split reads
           have possible := read_transitions (finish := finish) (read := read) (state := state)
@@ -1764,7 +2287,7 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
           refine ih (events := events') (Step.wellformed step wellformed) checked ?_ terminal
           simpa [Transition.apply, readStep] using run'
         | set updated next =>
-          simp only [Task.internal, Bool.and_true, Option.isNone_iff_eq_none] at reads
+          simp only [Task.independent, Bool.and_true, Option.isNone_iff_eq_none] at reads
           -- Every run can write first, ending the same way.
           obtain ⟨events', last', run', terminal'⟩ :=
             write_first run terminal (by rw [split]) (split ▸ wellformed) reads
@@ -1782,7 +2305,32 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
           simp only [List.all_cons, List.all_nil, Bool.and_true] at checked
           refine ih (events := events') (Step.wellformed step wellformed) checked ?_ terminal'
           simpa [Transition.apply, writeStep] using run'
-        | _ => simp [Task.internal] at reads
+        | receive timeout select next =>
+          simp only [Task.independent, Bool.and_eq_true, Option.isNone_iff_eq_none,
+            Option.isSome_iff_exists] at reads
+          obtain ⟨signal, ⟨message, value, remaining⟩, selected⟩ := reads
+          obtain ⟨index, bound, rfl, -⟩ := selectMessage_index selected
+          obtain ⟨process, live⟩ := Option.isSome_iff_exists.mp
+            (wellformed.2.2.1 (processId, ⟨.receive timeout select next, finish⟩)
+              (by rw [split]; simp))
+          -- Every run can receive the message first, reaching the same configuration.
+          obtain ⟨events', run'⟩ :=
+            receive_first run terminal (by rw [split]) (split ▸ wellformed) selected bound
+          have possible : (⟨.receive timeout select next, finish⟩ : Task α).transitions state
+              processId = [{ event := .receive processId message, state := state.take processId index
+                             tasks := [(processId, ⟨next (some value), finish⟩)] }] := by
+            have process : state.process processId = process := by simp [State.process, live]
+            rw [process] at signal selected
+            rw [← take_received (index := index) live]
+            simp [Task.transitions, process, signal, selected]
+          have step := Step.run (finished := finished) (exhausted := exhausted) split
+            (by rw [possible]; exact List.mem_singleton_self _)
+          unfold check at checked
+          simp only [Config.reduced, found, possible, List.map_cons, List.map_nil] at checked
+          simp only [List.all_cons, List.all_nil, Bool.and_true] at checked
+          refine ih (events := events') (Step.wellformed step wellformed) checked ?_ terminal
+          simpa [Transition.apply] using run'
+        | _ => simp [Task.independent] at reads
 
 /-- `check` accepts the outcome of every run of a computation. -/
 theorem check_sound {accept : Outcome α → Bool} {depth : Nat} {env : Environment}
