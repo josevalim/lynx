@@ -97,7 +97,7 @@ defmodule TaskProofsTest do
       expects: double_in_task(x) == x * 2,
       proof: ~LEAN"""
       obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
-        cases x <;> simp_all [«double_in_task_doubles:requires/1», Erlang.erlang.«is_integer/1»]
+        cases x <;> simp [«double_in_task_doubles:requires/1», Erlang.erlang.«is_integer/1»] at requires ⊢
       -- The task is spawned, receives its work, and applies its function
       -- through :erlang.apply/2, each one level down.
       refine ⟨4, fun depth deep => ?_⟩
@@ -117,7 +117,7 @@ defmodule TaskProofsTest do
       expects: double_or_timeout(x) in [x * 2, :timeout],
       proof: ~LEAN"""
       obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
-        cases x <;> simp_all [«double_or_timeout_doubles:requires/1», Erlang.erlang.«is_integer/1»]
+        cases x <;> simp [«double_or_timeout_doubles:requires/1», Erlang.erlang.«is_integer/1»] at requires ⊢
       -- The task is spawned, receives its work, and applies its function
       -- through :erlang.apply/2, each one level down.
       refine ⟨4, fun depth deep => ?_⟩
