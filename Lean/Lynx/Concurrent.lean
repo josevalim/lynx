@@ -122,6 +122,11 @@ structure State where
   | .atom "normal" => true
   | _ => false
 
+/-- Whether an exit reason cannot be trapped. -/
+@[expose] def isKill : Term → Bool
+  | .atom "kill" => true
+  | _ => false
+
 /-- Whether a message has the shape `{_, Reference, _, _, _}` of a monitor's
 `DOWN` message, which flushing a monitor removes. -/
 @[expose] def isMonitorMessage (reference : List Nat) : Term → Bool
@@ -226,7 +231,7 @@ process that does not exist delivers its `DOWN` message at once. -/
         (.atom "true", state.kill processId reason)
       else
         (.atom "true", state.signal target processId reason
-          (match reason with | .atom "kill" => true | _ => false))
+          (isKill reason))
   | .trapExit enabled =>
       (.atom (if (state.process processId).trapExit then "true" else "false"),
         state.modify processId fun process => { process with trapExit := enabled })
@@ -871,10 +876,6 @@ instance : DecidableEq Loc := fun first second => decidable_of_iff (first == sec
 @[expose] def Loc.process (processId : PID) : List Loc :=
   .alive processId :: Field.all.map (.field processId)
 
-/-- What signaling a process reads. -/
-@[expose] def Loc.signaled (target : PID) : List Loc :=
-  [.alive target, .field target .trapExit, .field target .signal, .field target .mailbox]
-
 /-- The locations a step reads and those it writes. -/
 structure Footprint where
   reads : List Loc
@@ -890,6 +891,21 @@ structure Footprint where
   state.timers.filterMap fun timer =>
     if timer.reference == reference then some (.timersTo timer.destination) else none
 
+/-- What signaling a process reads and writes, given whether it traps exits. A
+process trapping exits receives the signal as a message, and otherwise acts on a
+reason other than `normal`. An untrappable signal always makes it exit. -/
+@[expose] def Footprint.signal (target : PID) (reason : Term) (untrappable trapping : Bool) :
+    Footprint :=
+  if untrappable then
+    { reads := [.alive target, .field target .signal], writes := [.field target .signal] }
+  else if trapping then
+    { reads := [.alive target, .field target .trapExit, .field target .mailbox]
+      writes := [.field target .mailbox] }
+  else if isNormal reason then { reads := [.alive target, .field target .trapExit], writes := [] }
+  else
+    { reads := [.alive target, .field target .trapExit, .field target .signal]
+      writes := [.field target .signal] }
+
 /-- What a process exiting reads and writes, besides its own record: linked
 processes receive exit signals, watchers `DOWN` messages, and timers sending to
 it are canceled. -/
@@ -898,13 +914,15 @@ it are canceled. -/
   let timers : List Loc :=
     if state.timers.any (·.destination == processId) then [.timers, .timersTo processId] else []
   { reads := Loc.process processId ++ .timersTo processId :: timers ++
-      process.links.flatMap (fun linked => .field linked .links :: Loc.signaled linked) ++
+      process.links.flatMap (fun linked =>
+        .field linked .links ::
+          (Footprint.signal linked reason false (state.process linked).trapExit).reads) ++
       process.monitors.flatMap fun (_, watcher) =>
         [.alive watcher, .field watcher .mailbox, .field watcher .monitoring, .field watcher .aliases]
     writes := Loc.process processId ++ timers ++
       process.links.flatMap (fun linked =>
-        .field linked .links :: .field linked .mailbox ::
-          if isNormal reason then [] else [.field linked .signal]) ++
+        .field linked .links ::
+          (Footprint.signal linked reason false (state.process linked).trapExit).writes) ++
       process.monitors.flatMap fun (_, watcher) =>
         [.field watcher .mailbox, .field watcher .monitoring, .field watcher .aliases] }
 
@@ -931,9 +949,10 @@ every step of the process reads. -/
       else if (state.processes target).isSome then
         { reads := [.alive target, .field processId .links, .field target .links]
           writes := [.field processId .links, .field target .links] }
-      else
+      else if process.trapExit then
         { reads := [.alive target, .field processId .trapExit, .field processId .mailbox]
           writes := [.field processId .mailbox] }
+      else { reads := [.alive target, .field processId .trapExit], writes := [] }
   | .unlink target =>
       { reads := [.alive target, .field processId .links, .field target .links]
         writes := [.field processId .links, .field target .links] }
@@ -941,8 +960,9 @@ every step of the process reads. -/
       if target = processId && isNormal reason && !process.trapExit then
         { reads := [.field processId .trapExit], writes := [.field processId .signal] }
       else
-        { reads := .field processId .trapExit :: Loc.signaled target
-          writes := [.field target .signal, .field target .mailbox] }
+        let signaled := Footprint.signal target reason
+          (isKill reason) (state.process target).trapExit
+        { reads := .field processId .trapExit :: signaled.reads, writes := signaled.writes }
   | .trapExit _ => { reads := [.field processId .trapExit], writes := [.field processId .trapExit] }
   | .alive target => { reads := [.alive target], writes := [] }
   | .sendAlias alias _ =>

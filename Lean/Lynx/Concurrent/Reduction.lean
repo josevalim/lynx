@@ -2518,51 +2518,6 @@ private theorem Agree.same {first second : State} {processId : PID} {field : Fie
   | none => exact Field.same_refl _ _
   | some same => exact same
 
-/-- What signaling a process writes. -/
-private def signalWrites (target : PID) (reason : Term) (untrappable : Bool) : List Loc :=
-  .field target .mailbox :: if untrappable || !isNormal reason then [.field target .signal] else []
-
-private theorem signalWrites_subset {target : PID} {reason : Term} {untrappable : Bool} :
-    ∀ loc ∈ signalWrites target reason untrappable, loc ∈ Loc.signaled target := by
-  intro loc mem
-  simp only [signalWrites, List.mem_cons] at mem
-  rcases mem with rfl | mem
-  · simp [Loc.signaled]
-  · split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem
-    subst mem; simp [Loc.signaled]
-
-private theorem frames_signal {state : State} {target sender : PID} {reason : Term}
-    {untrappable : Bool} :
-    Frames (Loc.signaled target) (signalWrites target reason untrappable)
-      (·.signal target sender reason untrappable) state := by
-  intro other agree
-  have trapExit : (other.process target).trapExit = (state.process target).trapExit :=
-    (Agree.same (agree (.field target .trapExit) (by simp [Loc.signaled]))).symm
-  have kill : ∀ reason', (untrappable || !isNormal reason) = true →
-      Frames (Loc.signaled target) (signalWrites target reason untrappable)
-        (·.kill target reason') state := fun reason' signaled =>
-    frames_kill.mono (by simp [Loc.signaled]) (by simp [signalWrites, signaled])
-      fun loc mem _ => signalWrites_subset loc mem
-  have deliver := (frames_deliver (state := state) (processId := target)
-    (message := .tuple #[.atom "EXIT", .pid sender, reason])).mono
-    (reads' := Loc.signaled target) (writes' := signalWrites target reason untrappable)
-    (by simp [Loc.signaled]) (by simp [signalWrites]) fun loc mem _ => signalWrites_subset loc mem
-  dsimp only at deliver ⊢
-  unfold State.signal
-  rw [trapExit]
-  split
-  · exact kill _ (by simp_all) other agree
-  · split
-    · exact deliver other agree
-    · split
-      · refine ⟨fun loc _ => Agree.refl other loc, fun loc mem => ?_⟩
-        simp only [signalWrites, List.mem_cons] at mem
-        rcases mem with rfl | mem
-        · exact agree _ (by simp [Loc.signaled])
-        · split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem
-          subst mem; exact agree _ (by simp [Loc.signaled])
-      · exact kill _ (by simp_all) other agree
-
 private theorem Frames.id {state : State} : Frames [] [] (fun state => state) state :=
   fun _ _ => ⟨fun loc _ => Agree.refl _ loc, fun _ mem => absurd mem List.not_mem_nil⟩
 
@@ -2643,13 +2598,84 @@ private theorem frames_cancelTimers {state : State} {processId : PID} {some : Bo
     simp only [kept]
     exact Agree.refl other loc
 
+/-- Signaling a process, given whether it traps exits. -/
+private theorem frames_signal {state : State} {target sender : PID} {reason : Term}
+    {untrappable trapping : Bool} (trapped : (state.process target).trapExit = trapping) :
+    Frames (Footprint.signal target reason untrappable trapping).reads
+      (Footprint.signal target reason untrappable trapping).writes
+      (·.signal target sender reason untrappable) state := by
+  unfold Footprint.signal
+  cases untrappable
+  · simp only [Bool.false_eq_true, ite_false]
+    have trapExit : ∀ other : State, (∀ loc ∈ [Loc.field target .trapExit], Agree state other loc) →
+        (other.process target).trapExit = trapping := fun other agree => by
+      rw [← trapped]
+      have := Agree.same (agree (.field target .trapExit) (by simp))
+      simp only [Field.same] at this
+      exact this.symm
+    cases trapping
+    · simp only [Bool.false_eq_true, ite_false]
+      split
+      · rename_i normal
+        refine Frames.congr (change' := fun state => state)
+          (Frames.id.mono (by simp) (by simp) (by simp)) fun other agree => ?_
+        have trapping := trapExit other fun loc mem => agree loc (by simp at mem; simp [mem])
+        simp [State.signal, trapping, normal]
+      · rename_i abnormal
+        refine Frames.congr ((frames_kill (processId := target) (reason := reason)).mono
+          (by simp) (by simp) (by simp)) fun other agree => ?_
+        have trapping := trapExit other fun loc mem => agree loc (by simp at mem; simp [mem])
+        simp [State.signal, trapping, abnormal]
+    · simp only [ite_true]
+      refine Frames.congr ((frames_deliver (processId := target)
+        (message := .tuple #[.atom "EXIT", .pid sender, reason])).mono
+          (by simp) (by simp) (by simp)) fun other agree => ?_
+      have trapping := trapExit other fun loc mem => agree loc (by simp at mem; simp [mem])
+      simp [State.signal, trapping]
+  · simp only [ite_true]
+    exact Frames.congr (frames_kill (processId := target) (reason := .atom "killed"))
+      fun other _ => by simp [State.signal]
+
+/-- Signaling a process that is not live changes nothing. -/
+private theorem signal_dead {state : State} {target sender : PID} {reason : Term}
+    {untrappable : Bool} (dead : state.processes target = none) :
+    state.signal target sender reason untrappable = state := by
+  have modified : ∀ change : ProcessState → ProcessState, state.modify target change = state :=
+    fun change => by simp [State.modify, dead]
+  unfold State.signal State.kill State.deliver
+  simp only [State.process, dead, Option.getD_none]
+  split <;> simp [modified]
+
+/-- Changes of each item that hold for states agreeing with a base on some
+locations, which they never write, compose. -/
+private theorem Frames.foldlAgree {items : List γ} {step : State → γ → State}
+    {reads writes : γ → List Loc} {fixed : List Loc} {base : State}
+    (frames : ∀ item ∈ items, ∀ state, (∀ loc ∈ fixed, Agree base state loc) →
+      Frames (reads item) (writes item) (step · item) state)
+    (disjoint : ∀ item ∈ items, ∀ loc ∈ fixed, loc ∉ writes item) {state : State}
+    (agree : ∀ loc ∈ fixed, Agree base state loc) :
+    Frames (fixed ++ items.flatMap reads) (items.flatMap writes)
+      (fun state => items.foldl step state) state := by
+  induction items generalizing state with
+  | nil => exact Frames.id.mono (by simp) (by simp) (by simp)
+  | cons item rest ih =>
+    simp only [List.foldl_cons, List.flatMap_cons]
+    have current := frames item (by simp) state agree
+    refine (Frames.comp (second := fun state => rest.foldl step state) current
+      fun other agreeOther => ih (fun item mem => frames item (by simp [mem]))
+        (fun item mem => disjoint item (by simp [mem])) fun loc mem => ?_).mono
+      (by intro loc; simp only [List.mem_append]; grind) (by simp) fun loc mem out => absurd mem out
+    have stays := (current other fun loc mem => agreeOther loc (by simp [mem])).1 loc
+      (disjoint item (by simp) loc mem)
+    exact (agree loc mem).trans ((agreeOther loc (by simp [mem])).trans stays.symm)
+
 /-- What a process exiting reads and writes, as `State.exitFootprint` states. -/
 private theorem frames_terminate {state : State} {processId : PID} {reason : Term} :
     Frames (state.exitFootprint processId reason).reads (state.exitFootprint processId reason).writes
       (·.terminate processId reason) state := by
   let first := fun state : State => { state.update processId none with
     timers := state.timers.filter (·.destination != processId) }
-  let linked := fun (state : State) (linked : PID) =>
+  let notify := fun (state : State) (linked : PID) =>
     (state.modify linked fun other => { other with links := other.links.erase processId }).signal
       linked processId reason false
   let watched := fun (state : State) (entry : List Nat × PID) =>
@@ -2667,11 +2693,77 @@ private theorem frames_terminate {state : State} {processId : PID} {reason : Ter
       (reads := []) (state := state) frames_update fun other agree => frames_cancelTimers
         ((any_timersTo (agree _ (by simp))).symm)
     exact this.mono (by simp) (by simp) fun loc mem out => absurd mem out
-  have linkedFrames : ∀ linked' ∈ (state.process processId).links, ∀ state,
-      Frames (([.alive linked', .field linked' .links]) ++ Loc.signaled linked')
-        ([.field linked' .links] ++ signalWrites linked' reason false) (linked · linked') state :=
-    fun linked' _ state => Frames.comp
-      (frames_modify (reads := [.links]) (writes := [.links]) (by changes)) fun _ _ => frames_signal
+  -- Signals reach linked processes after the exiting one has gone, and each
+  -- linked process traps exits as before.
+  let fixed : List Loc := .alive processId ::
+    (state.process processId).links.map fun linked => .field linked .trapExit
+  have signalReads : ∀ linked : PID,
+      .alive linked ∈ (Footprint.signal linked reason false (state.process linked).trapExit).reads ∧
+      .field linked .trapExit ∈
+        (Footprint.signal linked reason false (state.process linked).trapExit).reads ∧
+      ∀ loc ∈ (Footprint.signal linked reason false (state.process linked).trapExit).writes,
+        loc ∈ (Footprint.signal linked reason false (state.process linked).trapExit).reads :=
+    fun linked => by
+      unfold Footprint.signal
+      simp only [Bool.false_eq_true, ite_false]
+      split <;> (try split) <;> simp
+  have linkedFrames : ∀ linked' ∈ (state.process processId).links, ∀ current,
+      (∀ loc ∈ fixed, Agree (first state) current loc) →
+      Frames (.field linked' .links :: (Footprint.signal linked' reason false (state.process linked').trapExit).reads)
+        (.field linked' .links :: (Footprint.signal linked' reason false (state.process linked').trapExit).writes) (notify · linked') current := by
+    intro linked' member current agree
+    cases live : current.processes linked' with
+    | none =>
+      -- A process that is not live is left alone.
+      refine Frames.congr (change' := fun state => state)
+        (Frames.id.mono (by simp) (by simp) fun loc mem _ => ?_) fun other agreeOther => ?_
+      · simp only [List.mem_cons] at mem ⊢
+        rcases mem with rfl | mem
+        · exact .inl rfl
+        · exact .inr ((signalReads linked').2.2 loc mem)
+      have alive := agreeOther (.alive linked') (by simp [(signalReads linked').1])
+      simp only [Agree, live, Option.isSome_none] at alive
+      have dead : other.processes linked' = none := by
+        cases found : other.processes linked'
+        · rfl
+        · simp [found] at alive
+      show (other.modify linked' _).signal linked' processId reason false = other
+      simp [State.modify, dead, signal_dead]
+    | some record =>
+      have ne : linked' ≠ processId := by
+        rintro rfl
+        have := agree (.alive linked') (by simp [fixed])
+        simp [Agree, first, State.update, live] at this
+      have trapped : ∀ other : State, Agree current other (.field linked' .trapExit) →
+          ((other.modify linked' fun other => { other with links := other.links.erase processId }).process
+            linked').trapExit = (state.process linked').trapExit := by
+        intro other agreeOther
+        have kept : ((other.modify linked' fun other =>
+            { other with links := other.links.erase processId }).process linked').trapExit =
+            (other.process linked').trapExit := by
+          unfold State.modify State.process
+          split <;> simp_all [State.update]
+        have before := Agree.same (agree (.field linked' .trapExit) (by simp [fixed, member]))
+        have after := Agree.same agreeOther
+        simp only [Field.same] at before after
+        rw [kept, ← after, ← before]
+        simp [first, State.process, State.update, ne]
+      refine (Frames.comp (frames_modify (processId := linked') (reads := [.links])
+        (writes := [.links]) (change := fun other => { other with links := other.links.erase processId })
+        (by changes)) fun other agreeOther => frames_signal (trapped other
+          (agreeOther _ (by simp [(signalReads linked').2.1])))).mono ?_ ?_ ?_
+      · intro loc; simp only [List.mem_append, List.mem_cons, List.mem_map, List.not_mem_nil,
+          or_false]; grind
+      · intro loc; simp
+      · intro loc mem out; simp only [List.mem_cons, List.mem_append, List.mem_map] at mem out ⊢
+        grind
+  have disjoint : ∀ linked' ∈ (state.process processId).links, ∀ loc ∈ fixed,
+      loc ∉ .field linked' .links :: (Footprint.signal linked' reason false (state.process linked').trapExit).writes := by
+    intro linked' _ loc mem
+    simp only [fixed, List.mem_cons, List.mem_map] at mem
+    unfold Footprint.signal
+    simp only [Bool.false_eq_true, ite_false]
+    rcases mem with rfl | ⟨_, _, rfl⟩ <;> split <;> (try split) <;> simp
   have watchedFrames : ∀ entry ∈ (state.process processId).monitors, ∀ state,
       Frames ([.alive entry.2, .field entry.2 .mailbox] ++
           [.alive entry.2, .field entry.2 .monitoring, .field entry.2 .aliases])
@@ -2679,14 +2771,25 @@ private theorem frames_terminate {state : State} {processId : PID} {reason : Ter
         (watched · entry) state :=
     fun entry _ state => Frames.comp frames_deliver fun _ _ =>
       frames_modify (reads := [.monitoring, .aliases]) (writes := [.monitoring, .aliases]) (by changes)
-  have composed := Frames.comp (Frames.comp firstFrames fun _ _ => Frames.foldl linkedFrames)
+  have composed := Frames.comp (Frames.comp firstFrames fun other agreeOther =>
+    Frames.foldlAgree linkedFrames disjoint fun loc mem => by
+      by_cases written : loc ∈ Loc.process processId ++
+          if state.timers.any (·.destination == processId) then [.timers, .timersTo processId] else []
+      · exact (firstFrames other fun loc' mem' =>
+          agreeOther loc' (List.mem_append_left _ mem')).2 loc written
+      · exact ((firstFrames.keeps written).trans
+          (agreeOther loc (List.mem_append_right _ (List.mem_append_left _ mem)))).trans
+          ((firstFrames other fun loc' mem' =>
+            agreeOther loc' (List.mem_append_left _ mem')).1 loc written).symm)
     fun _ _ => Frames.foldl watchedFrames
   refine Frames.congr (composed.mono ?_ ?_ ?_) fun other agree => ?_
   all_goals try
     intro loc
-    simp only [State.exitFootprint, List.mem_append, List.mem_cons, List.mem_flatMap, Loc.signaled,
-      signalWrites, List.not_mem_nil, or_false, Bool.false_or]
-    split <;> simp only [List.mem_cons, List.not_mem_nil, or_false, Bool.not_eq_true'] <;> grind
+    have trapped := fun linked => (signalReads linked).2.1
+    have alive : Loc.alive processId ∈ Loc.process processId := by simp [Loc.process]
+    simp only [State.exitFootprint, List.mem_append, List.mem_cons, List.mem_flatMap, List.mem_map,
+      List.not_mem_nil, or_false, fixed]
+    split <;> simp only [List.mem_cons, List.not_mem_nil, or_false] <;> grind
   have links : (other.process processId).links = (state.process processId).links :=
     (Agree.same (agree (.field processId .links)
       (by simp [State.exitFootprint, Loc.process, Field.mem_all]))).symm
@@ -2993,7 +3096,7 @@ private theorem RequestFrames.mono {reads writes reads' writes' : List Loc} {sta
 local macro "locs" : tactic => `(tactic| (
   intro loc
   simp only [List.mem_append, List.mem_cons, List.mem_flatMap, List.not_mem_nil, or_false,
-    Loc.signaled, Loc.process, List.mem_map, signalWrites, monitorWrites]
+    Loc.process, List.mem_map, monitorWrites]
   grind [Field.mem_all]))
 
 private theorem frames_request {state : State} {processId : PID} {process : ProcessState}
@@ -3098,22 +3201,22 @@ private theorem frames_request {state : State} {processId : PID} {process : Proc
       cases trap : process.trapExit
       · refine ⟨Frames.congr (change' := fun state => state) (Frames.id.mono ?_ ?_ ?_)
           fun other agree => ?_, fun other agree => ?_⟩
-        all_goals try (simp only [Request.footprint, self, alive]; locs)
+        all_goals try (simp only [Request.footprint, self, alive, trap]; locs)
         all_goals
           have dead := none other (alive' other fun loc mem => agree loc (by
-            simp at mem; subst mem; simp [Request.footprint, self, alive]))
+            simp at mem; subst mem; simp [Request.footprint, self, alive, trap]))
           have trapped := trapExit other fun loc mem => agree loc (by
-            simp at mem; subst mem; simp [Request.footprint, self, alive])
+            simp at mem; subst mem; simp [Request.footprint, self, alive, trap])
           simp [State.request, self, dead, trapped, trap, none state alive, record]
       · refine ⟨Frames.congr (frames_deliver (processId := processId)
           (message := .tuple #[.atom "EXIT", .pid target, .atom "noproc"]) |>.mono ?_ ?_ ?_)
           fun other agree => ?_, fun other agree => ?_⟩
-        all_goals try (simp only [Request.footprint, self, alive]; locs)
+        all_goals try (simp only [Request.footprint, self, alive, trap, ite_true]; locs)
         all_goals
           have dead := none other (alive' other fun loc mem => agree loc (by
-            simp at mem; subst mem; simp [Request.footprint, self, alive]))
+            simp at mem; subst mem; simp [Request.footprint, self, alive, trap]))
           have trapped := trapExit other fun loc mem => agree loc (by
-            simp at mem; subst mem; simp [Request.footprint, self, alive])
+            simp at mem; subst mem; simp [Request.footprint, self, alive, trap])
           simp [State.request, self, dead, trapped, trap, none state alive, record]
     · have some : ∀ other : State, (other.processes target).isSome = true →
           ∃ process, other.processes target = some process := fun other =>
@@ -3142,7 +3245,6 @@ private theorem frames_request {state : State} {processId : PID} {process : Proc
         (other.process processId).trapExit = process.trapExit := fun other agree => by
       have := Agree.same (agree (.field processId .trapExit) (by simp))
       simp only [Field.same] at this; rw [← this, record]
-    generalize untrappable_eq : (match reason with | .atom "kill" => true | _ => false) = untrappable
     by_cases own : (target = processId && isNormal reason && !process.trapExit) = true
     · refine ⟨Frames.congr (frames_kill (processId := processId) (reason := reason) |>.mono ?_ ?_ ?_)
         fun other agree => ?_,
@@ -3155,10 +3257,16 @@ private theorem frames_request {state : State} {processId : PID} {process : Proc
         obtain ⟨⟨rfl, normal⟩, trap⟩ := own
         simp [State.request, normal, trap, trapped, record]
     · refine ⟨Frames.congr (frames_signal (target := target) (sender := processId) (reason := reason)
-        (untrappable := untrappable) |>.mono ?_ ?_ ?_)
+        (untrappable := isKill reason) rfl |>.mono ?_ ?_ fun loc mem out =>
+          absurd (by simpa [Request.footprint, own] using mem) out)
         fun other agree => ?_,
         fun other agree => ?_⟩
-      all_goals try (simp only [Request.footprint, own, ite_false, Bool.false_eq_true]; locs)
+      · intro loc mem
+        simp only [Request.footprint, own, ite_false, Bool.false_eq_true, List.mem_cons,
+          List.mem_append] at mem ⊢
+        simp [mem]
+      · intro loc mem
+        simpa [Request.footprint, own] using mem
       all_goals
         have trapped := trapExit other fun loc mem => agree loc (by
           simp at mem; subst mem; simp [Request.footprint, own])
@@ -3169,7 +3277,6 @@ private theorem frames_request {state : State} {processId : PID} {process : Proc
             !(state.process processId).trapExit) = false := by
           rw [record]; simpa using own
         simp only [State.request, cond, cond', Bool.false_eq_true, ite_false]
-        try (subst untrappable_eq; rfl)
   | trapExit enabled =>
     refine ⟨(frames_modify (reads := []) (writes := [.trapExit]) (by changes)).mono ?_ ?_ ?_,
       fun other agree => ?_⟩
