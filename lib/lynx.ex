@@ -128,11 +128,6 @@ defmodule Lynx do
             Lynx.concurrent (Lynx.apply «law:ensures/1» table depth x) schedule =
               .ok Lynx.Term.true
 
-  A precondition at these levels is assumed in the same form, with its own
-  bound. Start such a proof with `refine ⟨bound, fun depth deep => ?_⟩`. When
-  the code makes no dynamic calls, or only calls pure functions, any depth
-  works and the bound is `0`.
-
   Both `Lynx.sequential` and `Lynx.concurrent` start from a fresh runtime: a single
   process, with an empty process dictionary, and an empty mailbox. The
   precondition and the expectation each start from this runtime separately,
@@ -220,11 +215,9 @@ defmodule Lynx do
   Erlang semantics.
 
   Anonymous functions are translated to definitions named after the compiler's
-  name and the number of captures and arguments, such as `«-make/1-fun-0-/2»`,
-  and captures of other modules' functions to wrappers such as
-  `«lists:reverse/1»`. Each table entry has equations named after its function,
-  such as `Erlang.program.«example:-make/1-fun-0-/1».pure` and `.call`, which
-  state what calling it returns.
+  name, such as `«-make/1-fun-0-/2»`. Each table entry has equations named
+  after its function, such as `Erlang.program.«example:-make/1-fun-0-/1».pure`
+  and `.call`, which state what calling it returns.
 
   This has several consequences for laws:
 
@@ -250,12 +243,15 @@ defmodule Lynx do
       function for every input. Check the property against the data the law
       uses instead, such as `Enum.all?(list, &is_boolean(fun.(&1)))`.
 
-    * Invocations are bounded by the call depth. Pure functions consume no
-      depth, and neither do calls in sequence, such as `Enum.map/2` invoking
-      `fun` once per element. A function that itself invokes function values
-      consumes one level for the invocations it makes. Exceeding the depth
-      raises `Lynx.Exception.exhausted`, so the bound a proof chooses must
-      cover the deepest nesting of invocations, which may grow with the input.
+    * Applying closures, dynamic calls, and `receive` loops are bounded by
+      the depth. Pure functions consume no depth, and neither do calls in sequence,
+      such as `Enum.map/2` invoking `fun` once per element. A function that itself
+      invokes function values consumes one level for the invocations it makes.
+      Each receive also consumes one level, for its clauses and the code after
+      it, so recursion through a receive terminates, and a receive loop consumes
+      one level per iteration. Exceeding the depth raises `Lynx.Exception.exhausted`,
+      so the bound a proof chooses must cover the deepest nesting of invocations
+      and receives, which may grow with the input.
 
   ### Guidelines
 
@@ -361,8 +357,12 @@ defmodule Lynx do
 
   The predicate accepts the outcomes the law allows, and `cbv` evaluates the
   check. Writing the depth as `depth + 1` lets evaluation take the level the
-  spawned function consumes, whatever the remaining depth. The final comparison of `n * 2` with itself depends on `n`, which
-  `simp` decides (`==` compares numbers as rationals, hence `Rat.lt_irrefl`).
+  spawned function consumes, and the level the receive of its reply consumes,
+  whatever the remaining depth. Evaluation takes longer as the bound grows,
+  so choose the smallest bound that covers the program. The final comparison
+  of `n * 2` with itself depends on `n`, which `simp` decides (`==` compares
+  numbers as rationals, hence `Rat.lt_irrefl`).
+
   A few things to keep in mind:
 
     * Reduce the input to the shape the program needs, as `obtain` does above,

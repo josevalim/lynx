@@ -620,6 +620,9 @@ public structure Dispatcher where
   call : Term → Array Term → Result Term
   /-- The function value named `Module:Name/Arity`, when the program has one. -/
   resolve : Term → Term → Nat → Option Term := fun _ _ _ => none
+  /-- The dispatcher one call depth down, which receives run with, or `none`
+  once the depth is exhausted. Recursion through a receive decreases it. -/
+  inner : Option Dispatcher := none
 
 end Lynx
 
