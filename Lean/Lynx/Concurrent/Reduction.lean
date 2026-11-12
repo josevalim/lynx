@@ -818,13 +818,6 @@ private theorem erase_update_ne {state : State} {processId other : PID}
   refine State.ext' rfl (by simp) fun candidate => ?_
   simp only [erase_processes, State.update]
   by_cases first : candidate = other <;> by_cases second : candidate = processId <;> simp_all
-
-private theorem erase_update_self {state : State} {processId : PID} :
-    (state.update processId none).erase processId = (state.erase processId).update processId none := by
-  refine State.ext' rfl (by simp) fun candidate => ?_
-  simp only [erase_processes, State.update]
-  by_cases first : candidate = processId <;> simp_all
-
 private theorem erase_modify {state : State} {processId other : PID}
     {change : ProcessState → ProcessState} (oblivious : Oblivious change) :
     (state.modify other change).erase processId = (state.erase processId).modify other change := by
