@@ -297,6 +297,11 @@ defmodule Lynx do
       `unfold` followed by selective simplification can avoid expensive
       generation of simplification equations.
 
+    * Simplify the hypotheses a step needs, as in `simp [...] at valid ⊢`,
+      rather than with `simp_all`. It simplifies every hypothesis in context,
+      including the facts a long proof establishes with `have`, which can make
+      each use cost seconds.
+
     * Use `options: [maxHeartbeats: 1_000_000]` on a laws group when a proof
       needs a larger Lean elaboration budget. It does not weaken kernel checking.
       First look for repeated expansion or unnecessary case splits. Measure
@@ -344,7 +349,7 @@ defmodule Lynx do
   carried by messages and arithmetic:
 
       obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
-        cases x <;> simp_all [«law:requires/1», Erlang.erlang.«is_integer/1»]
+        cases x <;> simp [«law:requires/1», Erlang.erlang.«is_integer/1»] at requires ⊢
       refine ⟨1, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       have checked := Lynx.concurrent_of_check

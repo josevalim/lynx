@@ -202,7 +202,7 @@ defmodule ServerProofsTest do
           | case2 x rest ih =>
             have validRest : «is_integer_list/1» rest = .ok (.atom "true") := by
               simp only [«is_integer_list/1»] at valid
-              cases x <;> simp_all [Erlang.erlang.«is_integer/1»]
+              cases x <;> simp [Erlang.erlang.«is_integer/1»] at valid <;> exact valid
             have delivered : (state.deliver [1] (Term.tuple #[.atom "request", x])).processes [1] =
                 some { process with
                   mailbox := process.mailbox ++ [(Term.tuple #[.atom "request", x])] } := by
@@ -225,7 +225,7 @@ defmodule ServerProofsTest do
                   Erlang.erlang.«send/2», Transition.apply, rootCalm]
               rw [step, advanced]
           | case3 ys notNil notCons =>
-            cases ys <;> simp_all [«is_integer_list/1»]
+            cases ys <;> simp [«is_integer_list/1»] at valid notNil notCons
         -- The server answers a request, then the root collects the reply, in three steps each.
         have replies_phase : ∀ (K : Term → Result) (zs : Term)
               (valid : «is_integer_list/1» zs = .ok (.atom "true")) (state : State)
@@ -264,7 +264,7 @@ defmodule ServerProofsTest do
               by simp [«collect/1», len, doubled]⟩
           | case2 x rest ih =>
             obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
-              cases x <;> simp_all [«is_integer_list/1», Erlang.erlang.«is_integer/1»]
+              cases x <;> simp [«is_integer_list/1», Erlang.erlang.«is_integer/1»] at valid ⊢
             have validRest : «is_integer_list/1» rest = .ok (.atom "true") := by
               simpa [«is_integer_list/1», Erlang.erlang.«is_integer/1»] using valid
             have three : ∃ state3 : State,
@@ -303,7 +303,7 @@ defmodule ServerProofsTest do
               Config.advance_add, advanced, advanced']
             rfl
           | case3 zs notNil notCons =>
-            cases zs <;> simp_all [«is_integer_list/1»]
+            cases zs <;> simp [«is_integer_list/1»] at valid notNil notCons
         have double_ok : ∀ (xs : Term) (valid : «is_integer_list/1» xs = .ok (.atom "true")),
             «double/1» xs = .ok (doubled xs) := by
           intro xs valid
@@ -311,12 +311,12 @@ defmodule ServerProofsTest do
           | case1 => rfl
           | case2 x rest ih =>
             obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
-              cases x <;> simp_all [«is_integer_list/1», Erlang.erlang.«is_integer/1»]
+              cases x <;> simp [«is_integer_list/1», Erlang.erlang.«is_integer/1»] at valid ⊢
             have validRest : «is_integer_list/1» rest = .ok (.atom "true") := by
               simpa [«is_integer_list/1», Erlang.erlang.«is_integer/1»] using valid
             simp [«double/1», ih validRest, doubled]
           | case3 xs notNil notCons =>
-            cases xs <;> simp_all [«is_integer_list/1»]
+            cases xs <;> simp [«is_integer_list/1»] at valid notNil notCons
         have valid : «is_integer_list/1» xs = .ok (.atom "true") := requires
         -- Spawn the server.
         have start : ∃ state : State, state.processes [] = some { children := 1 } ∧
