@@ -525,8 +525,8 @@ theorem Run.invariant {invariant : Config α → Prop}
 /-! ### Exhaustive exploration
 
 For a closed program, every run can be enumerated: `Config.successors` lists
-each step, and `check` follows them, taking environment reads first as
-`Config.reduced` describes. Proving `check` by evaluation establishes a
+each step, and `check` follows them, taking environment reads and writes first
+as `Config.reduced` describes. Proving `check` by evaluation establishes a
 property for every schedule (see `Lynx.concurrent_of_check`). -/
 
 /-- Every way to split a list around one element. -/
@@ -733,22 +733,23 @@ theorem Config.terminal_of_successors_eq_nil {config : Config α}
         · exact .raised idle
         · exact .returned idle
 
-/-- Whether a process is about to read its environment, without a pending exit
-signal. Steps of other processes cannot change what it reads, and it changes
-nothing they observe, so it can step before them. -/
-@[expose] def Task.reads (state : State) (processId : PID) (task : Task α) : Bool :=
+/-- Whether a process is about to read or replace its environment, its
+dictionary and reference counter, without a pending exit signal. Steps of other
+processes neither read nor change it, as dictionaries cannot be inspected from
+other processes, so it can step before them. -/
+@[expose] def Task.internal (state : State) (processId : PID) (task : Task α) : Bool :=
   (state.process processId).signal.isNone &&
     match task.computation with
-    | .get _ => true
+    | .get _ | .set .. => true
     | _ => false
 
-/-- The steps `check` follows: only the first process about to read its
-environment when there is one, as every other order of its read reaches the
-same configurations, and otherwise every step. -/
+/-- The steps `check` follows: only the first process about to read or replace
+its environment when there is one, as every run can take that step first and
+end the same way, and otherwise every step. -/
 @[expose] def Config.reduced (config : Config α) : List (Event × Config α) :=
   match config with
   | .running state tasks finished exhausted =>
-      match (splits tasks).find? (fun (_, (processId, task), _) => task.reads state processId) with
+      match (splits tasks).find? (fun (_, (processId, task), _) => task.internal state processId) with
       | some (before, (processId, task), after) =>
           (task.transitions state processId).map fun transition =>
             (transition.event, transition.apply before after finished exhausted)
@@ -757,7 +758,8 @@ same configurations, and otherwise every step. -/
 
 /-- Whether every run from the configuration ends in an accepted outcome,
 following at most `depth` steps along each run. Runs that differ only in when
-a process reads its environment are followed once, see `Config.reduced`. -/
+a process reads or replaces its environment are followed once, see
+`Config.reduced`. -/
 @[expose] def check (accept : Outcome α → Bool) : Nat → Config α → Bool
   | 0, _ => false
   | depth + 1, config =>
