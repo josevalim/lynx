@@ -359,7 +359,7 @@ the root nor blocks the remaining children, in any run. -/
 theorem terminated_root_discards_late_messages :
     Lynx.always (Result.schedule {} («send/2» noFunctions (.pid []) (.atom "late"))
       (fun _ => .ok Term.nil)) (.ok Term.nil) :=
-  always_of_check _ (fun | .ok .nil => true | _ => false) 16 (by cbv)
+  always_of_check _ (fun | .ok .nil => true | _ => false) 16 (fun _ => by cbv)
     fun result accepted => by split at accepted <;> simp_all
 
 /-- Child exceptions do not become exceptions in the unlinked parent. -/
@@ -408,7 +408,7 @@ theorem waiting_schedule_choice_falls_back :
 scheduler choices, not only for the schedules listed above. -/
 
 theorem handshake_every_run : Lynx.always handshake (.ok (.atom "done")) :=
-  always_of_check handshake (fun | .ok (.atom "done") => true | _ => false) 32 (by cbv)
+  always_of_check handshake (fun | .ok (.atom "done") => true | _ => false) 32 (fun _ => by cbv)
     fun result accepted => by split at accepted <;> simp_all
 
 theorem handshake_every_schedule (choices : List ScheduleChoice) :

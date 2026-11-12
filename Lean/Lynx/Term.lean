@@ -59,21 +59,22 @@ public theorem concurrent_reaches (computation : Result α) (choices : List Sche
       Concurrent.Terminal last (concurrent computation choices) :=
   Result.run_reaches computation {} choices
 
-/-- Every run of a computation from a fresh runtime ends with the outcome. Runs
-end once no step remains, and no run goes on forever
-(`Lynx.Concurrent.Config.terminates`). Concurrent laws are stated this way: over
-every interleaving of the processes and every step of their timers, which the
-runner's schedules need not reach. -/
+/-- Every run of a computation from a fresh runtime ends with the outcome,
+whatever time elapses before timers are canceled. Runs end once no step
+remains, and no run goes on forever (`Lynx.Concurrent.Config.terminates`).
+Concurrent laws are stated this way: over every interleaving of the processes
+and every step of their timers, which the runner's schedules need not reach. -/
 public def always (computation : Result α) (outcome : Outcome α) : Prop :=
-  ∀ events last result, Concurrent.Run (.start {} computation) events last →
-    Concurrent.Terminal last result → result = outcome
+  ∀ elapsed events last result,
+    Concurrent.Run (.start {} computation elapsed) events last →
+      Concurrent.Terminal last result → result = outcome
 
 /-- The runner follows one run, so it ends with the outcome of every run. -/
 public theorem concurrent_of_always {computation : Result α} {outcome : Outcome α}
     (always : always computation outcome) (choices : List ScheduleChoice) :
     concurrent computation choices = outcome := by
   obtain ⟨_, _, run, final⟩ := concurrent_reaches computation choices
-  exact always _ _ _ run final
+  exact always _ _ _ _ run final
 
 /-- Whether an outcome is `ok true`, the outcome laws expect. -/
 @[expose] public def Outcome.isTrue : Outcome Term → Bool
@@ -91,41 +92,50 @@ public theorem Outcome.eq_of_isTrue {outcome : Outcome Term} (accepted : outcome
 outcome of every run. -/
 public theorem always_of_invariant (computation : Result α)
     (invariant : Concurrent.Config α → Prop) {outcome : Outcome α}
-    (initial : invariant (.start {} computation))
+    (initial : ∀ elapsed, invariant (.start {} computation elapsed))
     (preserved : ∀ first event next, invariant first → Concurrent.Step first event next →
       invariant next)
     (terminal : ∀ config result, invariant config → Concurrent.Terminal config result →
       result = outcome) :
     always computation outcome :=
-  fun _ last result run final => terminal last result (run.invariant preserved initial) final
+  fun elapsed _ last result run final =>
+    terminal last result (run.invariant preserved (initial elapsed)) final
 
 /-- Exploring every run of a closed program establishes its outcome. Prove
-`checked` by evaluation, with a depth bounding the steps of each run, and an
-`accept` that only accepts the outcome, such as `Lynx.Outcome.isTrue`. -/
+`checked` by evaluation for an unknown elapsed time, with a depth bounding the
+steps of each run, and an `accept` that only accepts the outcome, such as
+`Lynx.Outcome.isTrue`. -/
 public theorem always_of_check (computation : Result α) (accept : Outcome α → Bool)
-    (depth : Nat) (checked : Concurrent.check accept depth (.start {} computation) = true)
+    (depth : Nat)
+    (checked : ∀ elapsed, Concurrent.check accept depth (.start {} computation elapsed) = true)
     {outcome : Outcome α} (accepted : ∀ result, accept result = true → result = outcome) :
     always computation outcome :=
-  fun _ _ result run final => accepted result (Concurrent.check_sound checked run final)
+  fun elapsed _ _ result run final =>
+    accepted result (Concurrent.check_sound (checked elapsed) run final)
 
 /-- Without races, one run to a terminal configuration determines the outcome of
 every run: steps of different processes commute, so all runs end alike. -/
-public theorem always_of_raceFree (computation : Result α)
-    (raceFree : (Concurrent.Config.start {} computation).RaceFree)
-    {events : List Concurrent.Event} {last : Concurrent.Config α} {outcome : Outcome α}
-    (run : Concurrent.Run (.start {} computation) events last)
-    (terminal : Concurrent.Terminal last outcome) : always computation outcome :=
-  fun _ _ _ run' terminal' => raceFree.outcome_eq run terminal run' terminal'
+public theorem always_of_raceFree (computation : Result α) {outcome : Outcome α}
+    (raceFree : ∀ elapsed, (Concurrent.Config.start {} computation elapsed).RaceFree)
+    (run : ∀ elapsed, ∃ events last, Concurrent.Run (.start {} computation elapsed) events last ∧
+      Concurrent.Terminal last outcome) : always computation outcome :=
+  fun elapsed _ _ _ run' terminal' =>
+    let ⟨_, _, run, terminal⟩ := run elapsed
+    (raceFree elapsed).outcome_eq run terminal run' terminal'
 
 /-- Without races, taking the first available steps until none remain evaluates
 the outcome of every run. -/
-public theorem always_advance (computation : Result α)
-    (raceFree : (Concurrent.Config.start {} computation).RaceFree) (steps : Nat)
-    (stuck : ((Concurrent.Config.start {} computation).advance steps).successors.isEmpty) :
-    always computation ((Concurrent.Config.start {} computation).advance steps).outcome := by
-  obtain ⟨_, run⟩ := Concurrent.Config.run_advance steps (.start {} computation)
-  exact always_of_raceFree computation raceFree run
-    (Concurrent.Config.terminal_of_successors_eq_nil (List.isEmpty_iff.mp stuck))
+public theorem always_advance (computation : Result α) (steps : Nat) {outcome : Outcome α}
+    (raceFree : ∀ elapsed, (Concurrent.Config.start {} computation elapsed).RaceFree)
+    (advanced : ∀ elapsed,
+      ((Concurrent.Config.start {} computation elapsed).advance steps).successors.isEmpty ∧
+        ((Concurrent.Config.start {} computation elapsed).advance steps).outcome = outcome) :
+    always computation outcome := by
+  refine always_of_raceFree computation raceFree fun elapsed => ?_
+  obtain ⟨stuck, reached⟩ := advanced elapsed
+  obtain ⟨_, run⟩ := Concurrent.Config.run_advance steps (.start {} computation elapsed)
+  exact ⟨_, _, run, reached ▸
+    Concurrent.Config.terminal_of_successors_eq_nil (List.isEmpty_iff.mp stuck)⟩
 
 @[simp] public theorem concurrent_ok (value : α) (choices : List ScheduleChoice) :
     concurrent (.ok value) choices = .ok value := by

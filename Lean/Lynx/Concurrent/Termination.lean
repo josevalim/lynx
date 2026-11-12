@@ -186,11 +186,8 @@ private theorem transition_follows {state : State} {processId : PID} {task : Tas
       · split <;> simp only [List.mem_singleton, forall_eq, List.not_mem_nil] <;>
           first | exact Follows.receive | exact fun _ => Follows.receive | simp
     | request query next =>
-      simp only [List.mem_map]
-      rintro _ ⟨reply, -, rfl⟩ entry mem
-      simp only [List.mem_singleton] at mem
-      subst mem
-      exact .request
+      simp only [List.mem_singleton, forall_eq]
+      exact Follows.request
 
 /-- Each step of a running configuration lowers its measure. -/
 private theorem step_measure {state : State} {tasks : List (PID × Task α)}

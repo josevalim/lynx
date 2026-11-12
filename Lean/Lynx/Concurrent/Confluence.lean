@@ -96,6 +96,7 @@ other or with a spawn. -/
 /-! ### Effects on the shared state -/
 
 private theorem State.ext {first second : State} (timers : first.timers = second.timers)
+    (elapsed : first.elapsed = second.elapsed)
     (equal : first.processes = second.processes) : first = second := by
   cases first; cases second; simp_all
 
@@ -130,7 +131,8 @@ private def Effect.apply (processId : PID) (state : State) : Effect → State
 /-- Prove states equal by comparing every process record. -/
 local macro "state_ext" : tactic =>
   `(tactic| (apply State.ext (by simp [State.update, State.alter, State.modify, State.deliver,
-    State.store, State.spawn, Effect.apply]); funext candidate; simp only [State.update, State.alter, State.modify, State.deliver, State.store, State.spawn, State.process, Effect.apply]; (repeat' split) <;> simp_all))
+    State.store, State.spawn, Effect.apply]) (by simp [State.update, State.alter, State.modify,
+    State.deliver, State.store, State.spawn, Effect.apply]); funext candidate; simp only [State.update, State.alter, State.modify, State.deliver, State.store, State.spawn, State.process, Effect.apply]; (repeat' split) <;> simp_all))
 
 /-- Which effects a step's event announces. -/
 private def Effect.Matches (processId : PID) (process : ProcessState) : Effect → Event → Prop
@@ -320,7 +322,8 @@ private theorem Effect.apply_comm {state : State} {first second : PID} {effect o
     simp only [reduceCtorEq, Effect.send.injEq, Effect.spawn.injEq, Effect.take.injEq,
       false_imp_iff, implies_true, forall_eq', and_imp, forall_apply_eq_imp_iff₂]
       at sends sendSpawn spawnSend spawned spawned' taken taken' <;>
-    apply State.ext (by simp [Effect.apply, State.alter, State.update]) <;> funext candidate <;>
+    apply State.ext (by simp [Effect.apply, State.alter, State.update])
+      (by simp [Effect.apply, State.alter, State.update]) <;> funext candidate <;>
     simp only [Effect.apply, State.alter, State.update] <;>
     (repeat' split) <;> (try subst_vars) <;>
     first
@@ -695,13 +698,15 @@ private theorem unique_stuck (last : Config α) : ∀ (length : Nat) (config : C
 /-- Without races, every run of a computation that reaches a terminal
 configuration reaches the same one, so all have the same outcome. -/
 theorem Config.RaceFree.outcome_eq {env : Environment} {computation : Result α}
-    (raceFree : (Config.start env computation).RaceFree) {events events' : List Event}
+    {elapsed : PID → Nat → Nat}
+    (raceFree : (Config.start env computation elapsed).RaceFree) {events events' : List Event}
     {last last' : Config α} {outcome outcome' : Outcome α}
-    (run : Run (.start env computation) events last) (terminal : Terminal last outcome)
-    (run' : Run (.start env computation) events' last') (terminal' : Terminal last' outcome') :
+    (run : Run (.start env computation elapsed) events last) (terminal : Terminal last outcome)
+    (run' : Run (.start env computation elapsed) events' last')
+    (terminal' : Terminal last' outcome') :
     outcome' = outcome := by
   obtain ⟨-, unique⟩ := unique_stuck last events.length _ events
-    (show Wellformed (Config.start env computation) from trivial) raceFree run rfl terminal.stuck
+    (show Wellformed (Config.start env computation elapsed) from trivial) raceFree run rfl terminal.stuck
   obtain ⟨rfl, -⟩ := unique _ _ run' terminal'.stuck
   rw [← terminal.outcome_eq, ← terminal'.outcome_eq]
 
@@ -888,7 +893,7 @@ private theorem children_unchanged {state : State} {before after : List (PID × 
 
 /-- Every process of a configuration talks along the process tree, in a calm state. -/
 private def Talking (talk : PID → PID → Prop) : Config α → Prop
-  | .start env computation => computation.Talks talk env.currentPid 0
+  | .start env computation _ => computation.Talks talk env.currentPid 0
   | .running state tasks _ _ => Calm state ∧ state.timers = [] ∧ ∀ entry ∈ tasks,
       entry.2.computation.Talks talk entry.1 (state.process entry.1).children
 
@@ -974,7 +979,8 @@ private theorem talking_unraced {talk : PID → PID → Prop} (single : Single t
 single sender for each receiver, has no races. -/
 theorem Config.RaceFree.of_talks {talk : PID → PID → Prop} (single : Single talk)
     {env : Environment} {computation : Result α}
-    (talks : computation.Talks talk env.currentPid 0) : (Config.start env computation).RaceFree := by
+    {elapsed : PID → Nat → Nat} (talks : computation.Talks talk env.currentPid 0) :
+    (Config.start env computation elapsed).RaceFree := by
   intro events reached run
   have preserved : ∀ {first last : Config α} {events : List Event}, Run first events last →
       Wellformed first ∧ Talking talk first → Wellformed last ∧ Talking talk last := by

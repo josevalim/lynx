@@ -49,6 +49,8 @@ structure ProcessState where
   /-- The reason of an exit signal the process has yet to act on. The process
   exits with it at its next step, as signals arrive asynchronously. -/
   signal : Option Term := none
+  /-- Number of timers the process canceled before they expired. -/
+  cancels : Nat := 0
 deriving Repr, Inhabited
 
 /-- A timer that sends a message to a process. Elapsed time is not modeled: the
@@ -70,6 +72,10 @@ structure State where
   processes : PID → Option ProcessState := fun _ => none
   /-- Timers that have yet to deliver their message, oldest first. -/
   timers : List Timer := []
+  /-- The milliseconds elapsed when a process cancels a timer, by how many
+  timers it canceled before. Elapsed time is not modeled: a run starts with any
+  of these, and nothing changes them. -/
+  elapsed : PID → Nat → Nat := fun _ _ => 0
 
 /-- Replace the record of one process. -/
 @[expose] def State.update (state : State) (processId : PID) (process : Option ProcessState) :
@@ -242,32 +248,24 @@ process that does not exist delivers its `DOWN` message at once. -/
   | .cancelTimer reference =>
       -- Only a timer yet to expire is canceled: an expired one, whose message
       -- may still be on its way, and one whose destination exited report `false`.
+      -- It reports the milliseconds left, from the time elapsed when it is canceled.
       match state.timers.find? fun timer => timer.reference == reference && !timer.expired with
       | some timer =>
-          (.integer timer.duration,
-            { state with timers := state.timers.filter (·.reference != reference) })
+          let process := state.process processId
+          (.integer (timer.duration - state.elapsed processId process.cancels),
+            { state with timers := state.timers.filter (·.reference != reference) }.modify
+              processId fun process => { process with cancels := process.cancels + 1 })
       | none => (.atom "false", state)
 
-/-- Every reply a request may get, starting with the one `State.request`
-gives. Canceling a timer reports the milliseconds left, which may be any number
-up to its duration, as elapsed time is not modeled. -/
-@[expose] def replies : Request → Term → List Term
-  | .cancelTimer _, .integer (.ofNat duration) =>
-      (List.range (duration + 1)).reverse.map fun left => .integer (.ofNat left)
-  | _, reply => [reply]
-
-theorem mem_replies (query : Request) (reply : Term) : reply ∈ replies query reply := by
-  unfold replies
-  split
-  · simpa using ⟨_, Nat.lt_succ_self _, rfl⟩
-  · simp
-
-/-- The runtime of a single process continuing from its environment. -/
-@[expose] def State.initial (env : Environment) : State :=
+/-- The runtime of a single process continuing from its environment, with the
+time elapsed when timers are canceled. -/
+@[expose] def State.initial (env : Environment) (elapsed : PID → Nat → Nat := fun _ _ => 0) :
+    State :=
   { processes := fun candidate =>
       if candidate = env.currentPid then
         some { pdict := env.pdict, refCounter := env.refCounter }
-      else none }
+      else none
+    elapsed }
 
 /-- A process without links or monitors exits without changing other
 processes, when no timer is pending. -/
@@ -319,6 +317,32 @@ theorem State.terminate_eq_update {state : State} {processId : PID} {reason : Te
   simp only [State.spawnWith, State.spawn, State.monitor]
   repeat' split
   all_goals simp
+
+/-! Steps keep the time elapsed when timers are canceled. -/
+
+@[simp] theorem State.elapsed_update {state : State} {processId : PID}
+    {process : Option ProcessState} : (state.update processId process).elapsed = state.elapsed := rfl
+
+@[simp] theorem State.elapsed_modify {state : State} {processId : PID}
+    {change : ProcessState → ProcessState} :
+    (state.modify processId change).elapsed = state.elapsed := by
+  unfold State.modify; split <;> rfl
+
+@[simp] theorem State.elapsed_deliver {state : State} {processId : PID} {message : Term} :
+    (state.deliver processId message).elapsed = state.elapsed := by
+  unfold State.deliver; split <;> rfl
+
+@[simp] theorem State.elapsed_kill {state : State} {processId : PID} {reason : Term} :
+    (state.kill processId reason).elapsed = state.elapsed := by
+  simp [State.kill]
+
+@[simp] theorem State.elapsed_signal {state : State} {target sender : PID} {reason : Term}
+    {untrappable : Bool} :
+    (state.signal target sender reason untrappable).elapsed = state.elapsed := by
+  unfold State.signal; split <;> (try split) <;> (try split) <;> simp
+
+@[simp] theorem State.elapsed_store {state : State} {processId : PID} {env : Environment} :
+    (state.store processId env).elapsed = state.elapsed := rfl
 
 /-- Select the oldest matching message, preserving all unmatched messages.
 Returns the message, the selector's bindings, and the remaining mailbox. -/
@@ -470,9 +494,8 @@ a positive-timeout receive without a match, one otherwise. -/
             | .finite => [{ timedOut with expired := true }]
     | .request query next =>
         let (reply, answered) := state.request processId query
-        (replies query reply).map fun reply =>
-          { event := .request processId query reply, state := answered
-            tasks := [(processId, ⟨next reply, finish⟩)] }
+        [{ event := .request processId query reply, state := answered
+           tasks := [(processId, ⟨next reply, finish⟩)] }]
 
 /-- Whether a computation starts with a process request, which hands it to the scheduler. -/
 @[expose] def isRequest : Result α → Bool
@@ -482,8 +505,10 @@ a positive-timeout receive without a match, one otherwise. -/
 /-- A state of a run. -/
 inductive Config (α : Type) : Type 1 where
   /-- Before its first process request, a computation reads and replaces its
-  environment directly. -/
+  environment directly. The run then starts with the time elapsed when timers
+  are canceled, which can be any. -/
   | start (env : Environment) (computation : Result α)
+      (elapsed : PID → Nat → Nat := fun _ _ => 0)
   /-- Live processes in tree order, the root's result once it ends, and whether
   some process did not return. -/
   | running (state : State) (tasks : List (PID × Task α))
@@ -498,12 +523,14 @@ inductive Config (α : Type) : Type 1 where
 /-- Any live process may take its step. The runner keeps running the current
 process after an environment access, which is one of these interleavings. -/
 inductive Step {α : Type} : Config α → Event → Config α → Prop where
-  | get : Step (.start env (.get next)) (.internal env.currentPid) (.start env (next env))
-  | set : Step (.start env (.set updated next)) (.internal env.currentPid) (.start updated next)
+  | get : Step (.start env (.get next) elapsed) (.internal env.currentPid)
+      (.start env (next env) elapsed)
+  | set : Step (.start env (.set updated next) elapsed) (.internal env.currentPid)
+      (.start updated next elapsed)
   /-- The first request starts the scheduler, with the current process as the root. -/
   | enter (request : isRequest computation = true) :
-      Step (.start env computation) (.internal env.currentPid)
-        (.running (State.initial env) [(env.currentPid, Task.root computation)] none false)
+      Step (.start env computation elapsed) (.internal env.currentPid)
+        (.running (State.initial env elapsed) [(env.currentPid, Task.root computation)] none false)
   | run (split : tasks = before ++ (processId, task) :: after)
       (possible : transition ∈ task.transitions state processId) :
       Step (.running state tasks finished exhausted) transition.event
@@ -520,8 +547,8 @@ inductive Run {α : Type} : Config α → List Event → Config α → Prop wher
 
 /-- A configuration without steps, and the outcome the runner reports for it. -/
 inductive Terminal {α : Type} : Config α → Outcome α → Prop where
-  | ok : Terminal (.start env (.ok value)) (.ok value)
-  | error : Terminal (.start env (.error exception)) (.error exception)
+  | ok : Terminal (.start env (.ok value) elapsed) (.ok value)
+  | error : Terminal (.start env (.error exception) elapsed) (.error exception)
   /-- Some process did not return, and no other process or timer can step. -/
   | exhausted (blocked : ∀ processId task, (processId, task) ∈ tasks →
         task.transitions state processId = []) (idle : state.timers = []) :
@@ -581,14 +608,14 @@ theorem eq_of_mem_splits {tasks before after : List γ} {item : γ}
 
 /-- Every step of a configuration, with its event. -/
 @[expose] def Config.successors : Config α → List (Event × Config α)
-  | .start env computation =>
+  | .start env computation elapsed =>
       match computation with
-      | .get next => [(.internal env.currentPid, .start env (next env))]
-      | .set updated next => [(.internal env.currentPid, .start updated next)]
+      | .get next => [(.internal env.currentPid, .start env (next env) elapsed)]
+      | .set updated next => [(.internal env.currentPid, .start updated next elapsed)]
       | computation =>
           if isRequest computation then
-            [(.internal env.currentPid,
-              .running (State.initial env) [(env.currentPid, Task.root computation)] none false)]
+            [(.internal env.currentPid, .running (State.initial env elapsed)
+              [(env.currentPid, Task.root computation)] none false)]
           else []
   | .running state tasks finished exhausted =>
       let steps := (splits tasks).flatMap fun (before, (processId, task), after) =>
@@ -634,9 +661,9 @@ theorem Step.mem_successors {first next : Config α} {event : Event}
 
 /-- The outcome of a configuration without steps. -/
 @[expose] def Config.outcome : Config α → Outcome α
-  | .start _ (.ok value) => .ok value
-  | .start _ (.error exception) => .error exception
-  | .start _ _ => .deadlock
+  | .start _ (.ok value) _ => .ok value
+  | .start _ (.error exception) _ => .error exception
+  | .start .. => .deadlock
   | .running _ _ _ true => .error .exhausted
   | .running _ [] (some (.ok value, _)) false => .ok value
   | .running _ [] (some (.error exception, _)) false => .error exception
@@ -665,7 +692,7 @@ theorem Terminal.successors_eq_nil {config : Config α} {outcome : Outcome α}
 theorem Step.of_mem_successors {first next : Config α} {event : Event}
     (mem : (event, next) ∈ first.successors) : Step first event next := by
   cases first with
-  | start env computation =>
+  | start env computation elapsed =>
     cases computation <;> simp only [Config.successors, isRequest, List.mem_singleton,
       Prod.mk.injEq, Bool.false_eq_true, ↓reduceIte, List.not_mem_nil] at mem
     all_goals first
@@ -733,7 +760,7 @@ theorem Config.run_advance (steps : Nat) (config : Config α) :
 theorem Config.terminal_of_successors_eq_nil {config : Config α}
     (stuck : config.successors = []) : Terminal config config.outcome := by
   cases config with
-  | start env computation =>
+  | start env computation elapsed =>
     cases computation with
     | ok => exact .ok
     | error => exact .error
@@ -781,13 +808,14 @@ footprints do not conflict commute, so `check` follows one of their orders. -/
 /-- A field of a process record. -/
 inductive Field where
   | pdict | mailbox | refCounter | children | links | monitors | monitoring | aliases | trapExit
-  | signal
+  | signal | cancels
 deriving Repr
 
 /-- The position of a field, to compare fields in evaluation. -/
 @[expose] def Field.index : Field → Nat
   | .pdict => 0 | .mailbox => 1 | .refCounter => 2 | .children => 3 | .links => 4
   | .monitors => 5 | .monitoring => 6 | .aliases => 7 | .trapExit => 8 | .signal => 9
+  | .cancels => 10
 
 instance : BEq Field := ⟨fun first second => first.index == second.index⟩
 
@@ -801,7 +829,7 @@ instance : DecidableEq Field := fun first second => decidable_of_iff (first == s
 /-- Every field. -/
 @[expose] def Field.all : List Field :=
   [.pdict, .mailbox, .refCounter, .children, .links, .monitors, .monitoring, .aliases, .trapExit,
-    .signal]
+    .signal, .cancels]
 
 theorem Field.mem_all (field : Field) : field ∈ Field.all := by
   cases field <;> simp [Field.all]
@@ -814,6 +842,8 @@ inductive Loc where
   | timersTo (processId : PID)
   /-- All timers, in order. -/
   | timers
+  /-- The time elapsed when timers are canceled, which no step changes. -/
+  | elapsed
 deriving Repr
 
 /-- Compare locations in evaluation. -/
@@ -822,6 +852,7 @@ deriving Repr
   | .alive processId, .alive processId' => processId == processId'
   | .timersTo processId, .timersTo processId' => processId == processId'
   | .timers, .timers => true
+  | .elapsed, .elapsed => true
   | _, _ => false
 
 instance : BEq Loc := ⟨Loc.beq⟩
@@ -923,7 +954,8 @@ every step of the process reads. -/
         if (state.processes destination).isSome then [.timers, .timersTo destination] else []
       { reads := .alive destination :: timers, writes := .field processId .refCounter :: timers }
   | .cancelTimer reference =>
-      { reads := [.timers], writes := .timers :: state.timersWith reference }
+      { reads := [.timers, .elapsed, .field processId .cancels]
+        writes := .timers :: .field processId .cancels :: state.timersWith reference }
 
 /-- What the next step of a live process reads and writes, besides what every
 step of it reads, or nothing for steps treated as conflicting with every other

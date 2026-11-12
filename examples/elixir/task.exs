@@ -106,7 +106,7 @@ defmodule TaskProofsTest do
       exact Lynx.always_of_check
         (Lynx.apply «double_in_task_doubles:ensures/1» Erlang.program.fun_table (depth + 4) (.integer n))
         Lynx.Outcome.isTrue 300
-        (by cbv; simp [Rat.lt_irrefl])
+        (fun _ => by cbv; simp [Rat.lt_irrefl])
         fun _ => Lynx.Outcome.eq_of_isTrue
       """
 
@@ -126,7 +126,7 @@ defmodule TaskProofsTest do
       exact Lynx.always_of_check
         (Lynx.apply «double_or_timeout_doubles:ensures/1» Erlang.program.fun_table (depth + 4) (.integer n))
         Lynx.Outcome.isTrue 300
-        (by cbv; repeat (simp only [Int.lt_irrefl, ite_false, ite_true]; cbv))
+        (fun _ => by cbv; repeat (simp only [Int.lt_irrefl, ite_false, ite_true]; cbv))
         fun _ => Lynx.Outcome.eq_of_isTrue
       """
 
@@ -147,7 +147,7 @@ defmodule TaskProofsTest do
       exact Lynx.always_of_check
         (Lynx.apply «ignore_drains_reply:ensures/0» Erlang.program.fun_table (depth + 4))
         Lynx.Outcome.isTrue 300
-        (by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv)
+        (fun _ => by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv)
         fun _ => Lynx.Outcome.eq_of_isTrue
       """
   end
@@ -184,7 +184,7 @@ defmodule TaskProofsTest do
       exact Lynx.always_of_check
         (Lynx.apply «await_drains_reply:ensures/0» Erlang.program.fun_table (depth + 4))
         Lynx.Outcome.isTrue 300
-        (by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv)
+        (fun _ => by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv)
         fun _ => Lynx.Outcome.eq_of_isTrue
       """
   end

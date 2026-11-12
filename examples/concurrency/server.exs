@@ -319,11 +319,15 @@ defmodule ServerProofsTest do
           | case3 xs notNil notCons =>
             cases xs <;> simp [«is_integer_list/1»] at valid notNil notCons
         have valid : «is_integer_list/1» xs = .ok (.atom "true") := requires
+        -- Without races, one run determines the outcome of every run, whatever
+        -- time elapses before timers are canceled.
+        refine always_advance _ (3 + len xs + 3 * len xs + 2)
+          (fun _ => Config.RaceFree.of_talks single (root_talks _ xs)) fun elapsed => ?_
         -- Spawn the server.
         have start : ∃ state : State, state.timers = [] ∧ state.processes [] = some { children := 1 } ∧
             state.processes [1] = some {} ∧
             (Config.start {} (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table
-              (depth + len xs + 1) xs)).advance 3 =
+              (depth + len xs + 1) xs) elapsed).advance 3 =
               .running state
                 [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) (.pid [1]) xs >>=
                     fun _ => «collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) xs >>=
@@ -359,7 +363,8 @@ defmodule ServerProofsTest do
           (by rw [others [] (by simp), rootFound]) rfl serverFound' (by simp) rfl (by simp)
           ⟨rfl, rfl⟩ (by simp) idle'
         have total : (Config.start {}
-            (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table (depth + len xs + 1) xs)).advance
+            (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table (depth + len xs + 1) xs)
+              elapsed).advance
               (3 + len xs + 3 * len xs + 2) =
             (Config.running state''
               [([], ⟨Result.ofExcept («double/1» xs) >>=
@@ -392,12 +397,8 @@ defmodule ServerProofsTest do
           simp [double_ok xs valid, Erlang.erlang.«==/2», Config.advance, Config.successors,
             splits, Task.transitions, Task.child, «serve/2», Transition.apply, Lynx.Term.true,
             rootCalm'', rootExit, serverCalmAfter, serverExit, idle'']
-        -- Without races, this run determines the outcome of every run.
-        have every := always_advance _ (Config.RaceFree.of_talks single (root_talks _ xs))
-          (3 + len xs + 3 * len xs + 2)
-          (by rw [total, finished]; simp [Config.successors, splits, idle''])
-        rw [total, finished] at every
-        exact every
+        rw [total, finished]
+        exact ⟨by simp [Config.successors, splits, idle''], rfl⟩
       """
   end
 
