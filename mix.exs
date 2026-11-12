@@ -6,6 +6,7 @@ defmodule Lynx.MixProject do
       app: :lynx,
       version: "0.1.0",
       elixir: "~> 1.18",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: [],
       test_ignore_filters: ["test/fixtures/translations/regenerate.exs"],
@@ -17,6 +18,11 @@ defmodule Lynx.MixProject do
       ]
     ]
   end
+
+  # Fixtures are regenerated with `mix run`, so development also compiles the
+  # test support modules.
+  defp elixirc_paths(:prod), do: ["lib"]
+  defp elixirc_paths(_), do: ["lib", "test/support"]
 
   defp build_lean(_args) do
     lean_dir = Path.join(__DIR__, "Lean")

@@ -1583,6 +1583,235 @@ defmodule Lynx.CoreToLeanjTest do
     end
   end
 
+  describe "protocols" do
+    test "protocol functions call the implementation impl_for!/1 selects" do
+      assert %{{:size, 1} => %{translation: %{"params" => [param], "body" => body}}} =
+               translate_protocol(Lynx.Support.Size, [{:size, 1}])
+
+      assert %{
+               "kind" => "bind",
+               "vars" => [impl],
+               "computation" => %{
+                 "kind" => "local_call",
+                 "name" => "impl_for!",
+                 "args" => [^param]
+               },
+               "body" => %{
+                 "kind" => "match",
+                 "expressions" => [impl],
+                 "cases" => [
+                   integer,
+                   list,
+                   point,
+                   map,
+                   %{
+                     "patterns" => [other],
+                     "body" => %{
+                       "kind" => "raise",
+                       "reason" => %{
+                         "kind" => "tuple",
+                         "elements" => [%{"kind" => "atom", "value" => "case_clause"}, other]
+                       }
+                     }
+                   }
+                 ]
+               }
+             } = body
+
+      for {clause, impl} <- [
+            {integer, "Elixir.Lynx.Support.Size.Integer"},
+            {list, "Elixir.Lynx.Support.Size.List"},
+            {point, "Elixir.Lynx.Support.Size.Lynx.Support.Point"},
+            {map, "Elixir.Lynx.Support.Size.Map"}
+          ] do
+        assert %{
+                 "patterns" => [%{"kind" => "atom", "value" => ^impl}],
+                 "body" => %{
+                   "kind" => "remote_call",
+                   "module" => ^impl,
+                   "name" => "size",
+                   "args" => [^param]
+                 }
+               } = clause
+      end
+    end
+
+    test "impl_for/1 matches built-in constructors and structs among maps" do
+      assert %{{:impl_for, 1} => %{translation: %{"params" => [param], "body" => body}}} =
+               translate_protocol(Lynx.Support.Size, [{:impl_for, 1}])
+
+      assert %{
+               "kind" => "match",
+               "expressions" => [^param],
+               "cases" => [
+                 %{"patterns" => [%{"kind" => "nil"}], "body" => empty},
+                 %{"patterns" => [%{"kind" => "cons"}], "body" => list},
+                 %{
+                   "guard" => %{"kind" => "remote_call", "name" => "is_map", "args" => [^param]},
+                   "body" => %{
+                     "kind" => "match",
+                     "expressions" => [^param],
+                     "cases" => [
+                       %{
+                         "patterns" => [
+                           %{
+                             "kind" => "map",
+                             "entries" => [
+                               %{
+                                 "key" => %{"kind" => "atom", "value" => "__struct__"},
+                                 "value" => %{
+                                   "kind" => "atom",
+                                   "value" => "Elixir.Lynx.Support.Point"
+                                 }
+                               }
+                             ]
+                           }
+                         ],
+                         "body" => point
+                       },
+                       %{
+                         "patterns" => [
+                           %{
+                             "kind" => "map",
+                             "entries" => [
+                               %{
+                                 "key" => %{"kind" => "atom", "value" => "__struct__"},
+                                 "value" => struct
+                               }
+                             ]
+                           }
+                         ],
+                         "guard" => %{
+                           "kind" => "remote_call",
+                           "name" => "is_atom",
+                           "args" => [struct]
+                         },
+                         "body" => other_struct
+                       },
+                       %{"patterns" => [%{"kind" => "var"}], "body" => map}
+                     ]
+                   }
+                 },
+                 %{
+                   "guard" => %{
+                     "kind" => "remote_call",
+                     "name" => "is_integer",
+                     "args" => [^param]
+                   },
+                   "body" => integer
+                 },
+                 %{"patterns" => [%{"kind" => "var"}], "body" => other}
+               ]
+             } = body
+
+      for {body, impl} <- [
+            {empty, "Elixir.Lynx.Support.Size.List"},
+            {list, "Elixir.Lynx.Support.Size.List"},
+            {point, "Elixir.Lynx.Support.Size.Lynx.Support.Point"},
+            {other_struct, "nil"},
+            {map, "Elixir.Lynx.Support.Size.Map"},
+            {integer, "Elixir.Lynx.Support.Size.Integer"},
+            {other, "nil"}
+          ] do
+        assert %{"kind" => "return", "values" => [%{"kind" => "atom", "value" => ^impl}]} = body
+      end
+    end
+
+    test "impl_for!/1 raises Protocol.UndefinedError without an implementation" do
+      assert %{{:impl_for!, 1} => %{translation: %{"params" => [param], "body" => body}}} =
+               translate_protocol(Lynx.Support.Size, [{:impl_for!, 1}])
+
+      assert %{
+               "kind" => "bind",
+               "vars" => [impl],
+               "computation" => %{
+                 "kind" => "local_call",
+                 "name" => "impl_for",
+                 "args" => [^param]
+               },
+               "body" => %{
+                 "kind" => "match",
+                 "expressions" => [impl],
+                 "cases" => [
+                   %{
+                     "patterns" => [%{"kind" => "atom", "value" => "nil"}],
+                     "body" => %{"kind" => "raise", "class" => "error", "reason" => error}
+                   },
+                   %{"patterns" => [found], "body" => %{"kind" => "return", "values" => [found]}}
+                 ]
+               }
+             } = body
+
+      assert %{
+               "kind" => "map",
+               "entries" => [
+                 %{
+                   "key" => %{"kind" => "atom", "value" => "__struct__"},
+                   "value" => %{"kind" => "atom", "value" => "Elixir.Protocol.UndefinedError"}
+                 },
+                 %{
+                   "key" => %{"kind" => "atom", "value" => "__exception__"},
+                   "value" => %{"kind" => "atom", "value" => "true"}
+                 },
+                 %{
+                   "key" => %{"kind" => "atom", "value" => "protocol"},
+                   "value" => %{"kind" => "atom", "value" => "Elixir.Lynx.Support.Size"}
+                 },
+                 %{"key" => %{"kind" => "atom", "value" => "value"}, "value" => ^param},
+                 %{
+                   "key" => %{"kind" => "atom", "value" => "description"},
+                   "value" => %{"kind" => "bitstring", "bytes" => [], "last_bits" => 0}
+                 }
+               ]
+             } = error
+    end
+
+    test "falls back to the implementation for Any" do
+      assert %{
+               {:impl_for!, 1} => %{
+                 translation: %{
+                   "params" => [param],
+                   "body" => %{"kind" => "local_call", "name" => "impl_for", "args" => [param]}
+                 }
+               },
+               {:impl_for, 1} => %{
+                 translation: %{"body" => %{"kind" => "match", "cases" => cases}}
+               }
+             } = translate_protocol(Lynx.Support.Describe, [{:impl_for!, 1}])
+
+      assert [
+               %{"guard" => %{"name" => "is_atom"}},
+               %{
+                 "guard" => %{"name" => "is_map"},
+                 "body" => %{"cases" => [_tagged, %{"body" => other_struct}, %{"body" => map}]}
+               },
+               %{"patterns" => [%{"kind" => "var"}], "body" => other}
+             ] = cases
+
+      for body <- [other_struct, map, other] do
+        assert %{
+                 "kind" => "return",
+                 "values" => [%{"kind" => "atom", "value" => "Elixir.Lynx.Support.Describe.Any"}]
+               } = body
+      end
+    end
+
+    test "keeps other protocol definitions" do
+      definitions = protocol_definitions(:code.which(Lynx.Support.Size))
+
+      assert %{{:__protocol__, 1} => {:function, _}, {:behaviour_info, 1} => {:function, _}} =
+               definitions
+    end
+
+    test "rejects protocols that are not consolidated" do
+      beam = Path.join(:code.lib_dir(:lynx), "ebin/Elixir.Lynx.Support.Size.beam")
+
+      assert {:error, _anno,
+              "cannot translate protocol Elixir.Lynx.Support.Size because it is not consolidated"} =
+               protocol_definitions(String.to_charlist(beam))
+    end
+  end
+
   test "returns annotated binary reasons for unsupported Core during translation" do
     anno = [{:file, ~c"example.erl"}, {7, 3}]
     body = :cerl.ann_c_primop(anno, :cerl.c_atom(:unsupported), [])
@@ -1690,6 +1919,25 @@ defmodule Lynx.CoreToLeanjTest do
              core_translate(:example, definitions, [{:entry, 1}], callback)
 
     {laws, functions}
+  end
+
+  defp protocol_definitions(beam) do
+    {:ok, {module, [debug_info: {:debug_info_v1, backend, data}]}} =
+      :beam_lib.chunks(beam, [:debug_info])
+
+    {:ok, core} = backend.debug_info(:core_v1, module, data, [])
+    :lynx_core_to_leanj.to_definitions(core)
+  end
+
+  # Translates protocol functions, treating calls to other modules as pure.
+  defp translate_protocol(protocol, roots) do
+    definitions = protocol_definitions(:code.which(protocol))
+    callback = fn calls, _, _, _, _, funs -> {{:pure, false}, funs, calls} end
+
+    assert {:ok, functions, _, _, _, _} =
+             core_translate(protocol, definitions, roots, callback)
+
+    functions
   end
 
   defp definitions(defs) do

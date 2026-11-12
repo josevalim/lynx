@@ -36,9 +36,13 @@ module_name(Module) ->
 -spec to_definitions(cerl:c_module()) ->
     #{{atom(), arity()} => {function, cerl:c_fun()} | {law, map()}} |
     {error, list(), binary()}.
-to_definitions(#c_module{defs = Defs, attrs = Attrs}) ->
+to_definitions(#c_module{name = #c_literal{val = Module}, defs = Defs, attrs = Attrs}) ->
     try
-        definitions(Defs ++ Attrs, #{})
+        Definitions = definitions(Defs ++ Attrs, #{}),
+        case [Key || {#c_literal{val = '__protocol__'} = Key, _} <- Attrs] of
+            [] -> Definitions;
+            _ -> protocol_definitions(Module, Definitions)
+        end
     catch
         throw:{error, Core, Reason} -> {error, cerl:get_ann(Core), Reason}
     end.
@@ -103,6 +107,141 @@ attribute_proof(#c_literal{val = [Proof]} = Core) when is_binary(Proof) ->
     end,
     #{~"source" => Proof, ~"indentation" => 0, ~"span" => ProofSpan};
 attribute_proof(Core) -> core_error(Core, ~"proof must be a binary").
+
+%% Consolidated protocols dispatch through tuples of function values, which
+%% proofs could only follow through the program's function table. Instead,
+%% impl_for/1 returns the implementation module, and each protocol function
+%% matches it to call that implementation directly, so implementations can be
+%% cut off individually. Other definitions are kept, since some protocols
+%% define their own functions, and only reachable ones are translated.
+protocol_definitions(Protocol, #{{'__protocol__', 1} := {function, Info}} = Definitions) ->
+    Types = case protocol_info(Info, impls) of
+        {consolidated, Consolidated} -> Consolidated;
+        _ -> core_error(Info, <<"cannot translate protocol ", (atom_to_binary(Protocol))/binary,
+                                " because it is not consolidated">>)
+    end,
+    Impls = [protocol_impl(Protocol, Type) || Type <- Types],
+    Dispatches = #{Function => {function, protocol_dispatch(Function, Impls, protocol_fun(Definitions, Function, Info))}
+                   || Function <- protocol_info(Info, functions)},
+    maps:merge(Definitions, Dispatches#{
+        {impl_for, 1} => {function, impl_for(Protocol, Types, protocol_fun(Definitions, {impl_for, 1}, Info))},
+        {'impl_for!', 1} => {function, impl_for_bang(Protocol, Types, protocol_fun(Definitions, {'impl_for!', 1}, Info))}
+    }).
+
+%% The literal __protocol__/1 returns for the given key.
+protocol_info(#c_fun{body = Body} = Fun, Key) ->
+    Clauses = case Body of
+        #c_case{clauses = CaseClauses} -> CaseClauses;
+        _ -> []
+    end,
+    Values = [cerl:concrete(Literal) || #c_clause{pats = [#c_literal{val = Pat}], body = Value} <- Clauses,
+                                        Pat =:= Key,
+                                        Literal <- [cerl:fold_literal(Value)],
+                                        cerl:is_literal(Literal)],
+    case Values of
+        [Value] -> Value;
+        _ -> core_error(Fun, <<"cannot find ", (atom_to_binary(Key))/binary, " in __protocol__/1">>)
+    end.
+
+%% The generated definitions keep the parameters and annotations of the originals.
+protocol_fun(Definitions, {Name, Arity}, Info) ->
+    case Definitions of
+        #{{Name, Arity} := {function, #c_fun{} = Fun}} -> Fun;
+        _ -> core_error(Info, <<"cannot find protocol function ", (atom_to_binary(Name))/binary,
+                                "/", (integer_to_binary(Arity))/binary>>)
+    end.
+
+%% Mirrors Protocol.__concat__/2.
+protocol_impl(Protocol, Type) ->
+    Suffix = case atom_to_binary(Type) of
+        <<"Elixir.", Rest/binary>> -> Rest;
+        Rest -> Rest
+    end,
+    binary_to_atom(<<(atom_to_binary(Protocol))/binary, ".", Suffix/binary>>).
+
+%% Built-in types and their guards, in the order consolidation checks them.
+protocol_built_ins() ->
+    [{'Elixir.Tuple', is_tuple}, {'Elixir.Atom', is_atom}, {'Elixir.List', is_list},
+     {'Elixir.Map', is_map}, {'Elixir.BitString', is_bitstring}, {'Elixir.Integer', is_integer},
+     {'Elixir.Float', is_float}, {'Elixir.Function', is_function}, {'Elixir.PID', is_pid},
+     {'Elixir.Port', is_port}, {'Elixir.Reference', is_reference}].
+
+%% Built-in types are disjoint, so each implemented one is matched by its
+%% constructor, which lists have two of. Structs are matched among maps, so
+%% they select their own implementation, or the fallback, but never the one
+%% for maps.
+impl_for(Protocol, Types, #c_fun{anno = Anno, vars = [Data]} = Fun) ->
+    Atom = fun(Value) -> cerl:ann_c_atom(Anno, Value) end,
+    Impl = fun(Type) -> Atom(protocol_impl(Protocol, Type)) end,
+    Fallback = case lists:member('Elixir.Any', Types) of
+        true -> Impl('Elixir.Any');
+        false -> Atom(nil)
+    end,
+    Other = cerl:ann_c_var(Anno, 'Other'),
+    Guarded = fun(Name, Arg, Pattern, Body) ->
+        cerl:ann_c_clause(Anno, [Pattern], cerl:ann_c_call(Anno, Atom(erlang), Atom(Name), [Arg]), Body)
+    end,
+    StructPattern = fun(Value) ->
+        cerl:ann_c_map_pattern(Anno, [cerl:ann_c_map_pair(Anno, Atom(exact), Atom('__struct__'), Value)])
+    end,
+    BuiltIns = protocol_built_ins(),
+    Structs = [Type || Type <- Types, Type =/= 'Elixir.Any', not lists:keymember(Type, 1, BuiltIns)],
+    MapImpl = case lists:member('Elixir.Map', Types) of
+        true -> Impl('Elixir.Map');
+        false -> Fallback
+    end,
+    Struct = cerl:ann_c_var(Anno, 'Struct'),
+    Map = cerl:ann_c_var(Anno, 'Map'),
+    MapBody = cerl:ann_c_case(Anno, Data,
+        [cerl:ann_c_clause(Anno, [StructPattern(Atom(Type))], Impl(Type)) || Type <- Structs] ++
+        [Guarded(is_atom, Struct, StructPattern(Struct), Fallback), cerl:ann_c_clause(Anno, [Map], MapImpl)]),
+    Clauses = lists:flatmap(fun
+        ({'Elixir.Map', is_map}) when Structs =/= []; MapImpl =/= Fallback ->
+            [Guarded(is_map, Data, Other, MapBody)];
+        ({'Elixir.List' = Type, is_list}) ->
+            [cerl:ann_c_clause(Anno, [Pattern], Impl(Type))
+             || lists:member(Type, Types),
+                Pattern <- [cerl:ann_c_nil(Anno),
+                            cerl:ann_c_cons(Anno, cerl:ann_c_var(Anno, '_Head'), cerl:ann_c_var(Anno, '_Tail'))]];
+        ({Type, Name}) ->
+            [Guarded(Name, Data, Other, Impl(Type)) || Type =/= 'Elixir.Map', lists:member(Type, Types)]
+    end, BuiltIns),
+    Fun#c_fun{body = cerl:ann_c_case(Anno, Data, Clauses ++ [cerl:ann_c_clause(Anno, [Other], Fallback)])}.
+
+%% Without a fallback, values without an implementation raise
+%% Protocol.UndefinedError, built here as its exception/1 would.
+impl_for_bang(Protocol, Types, #c_fun{anno = Anno, vars = [Data]} = Fun) ->
+    ImplFor = cerl:ann_c_apply(Anno, cerl:ann_c_fname(Anno, impl_for, 1), [Data]),
+    Body = case lists:member('Elixir.Any', Types) of
+        true ->
+            ImplFor;
+        false ->
+            Impl = cerl:ann_c_var(Anno, 'Impl'),
+            Fields = [{'__struct__', cerl:ann_c_atom(Anno, 'Elixir.Protocol.UndefinedError')},
+                      {'__exception__', cerl:ann_c_atom(Anno, true)},
+                      {protocol, cerl:ann_c_atom(Anno, Protocol)},
+                      {value, Data},
+                      {description, cerl:ann_abstract(Anno, <<>>)}],
+            Error = cerl:ann_c_map(Anno, [cerl:ann_c_map_pair(Anno, cerl:ann_c_atom(Anno, assoc), cerl:ann_c_atom(Anno, Key), Value)
+                                          || {Key, Value} <- Fields]),
+            Raise = cerl:ann_c_call(Anno, cerl:ann_c_atom(Anno, erlang), cerl:ann_c_atom(Anno, error), [Error]),
+            cerl:ann_c_case(Anno, ImplFor,
+                            [cerl:ann_c_clause(Anno, [cerl:ann_c_atom(Anno, nil)], Raise),
+                             cerl:ann_c_clause(Anno, [Impl], Impl)])
+    end,
+    Fun#c_fun{body = Body}.
+
+protocol_dispatch({Name, _Arity}, Impls, #c_fun{anno = Anno, vars = [Data | _] = Vars} = Fun) ->
+    ImplFor = cerl:ann_c_apply(Anno, cerl:ann_c_fname(Anno, 'impl_for!', 1), [Data]),
+    Impl = cerl:ann_c_var(Anno, 'Impl'),
+    Clauses =
+        [cerl:ann_c_clause(Anno, [cerl:ann_c_atom(Anno, Module)],
+                           cerl:ann_c_call(Anno, cerl:ann_c_atom(Anno, Module), cerl:ann_c_atom(Anno, Name), Vars))
+         || Module <- Impls] ++
+        [cerl:ann_c_clause(Anno, [Impl],
+                           cerl:ann_c_primop(Anno, cerl:ann_c_atom(Anno, match_fail),
+                                             [cerl:ann_c_tuple(Anno, [cerl:ann_c_atom(Anno, case_clause), Impl])]))],
+    Fun#c_fun{body = cerl:ann_c_case(Anno, ImplFor, Clauses)}.
 
 -spec fun_table(map(), map()) -> [map()].
 fun_table(Funs, Modules) ->
