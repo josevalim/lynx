@@ -1395,29 +1395,45 @@ defmodule STTDescrProofsTest do
       · exact leaf k x y h
       · exact node n lit c u d h
 
-    macro "int_ok" : tactic => `(tactic| (apply Exists.intro; simp only [Erlang.erlang.«+/2_integers», bsl_six,
-      bsr_two, bxor_int, band_int, Lynx.Except.ok_bind, pure, Except.pure]; try rfl))
-
     theorem node_new {okc oku okd : Term → Prop} (lit c u d : Term) (leaf : IsLeaf lit) (hc : Bdd okc c) (hu : Bdd oku u) (hd : Bdd okd d) :
         ∃ h : Int, Elixir.Module.Types.Descr.«bdd_node_new/4» lit c u d = .ok (.tuple #[.integer h, lit, c, u, d]) := by
       obtain ⟨k, x, y, rfl⟩ := leaf
       have hash : IntOk (Elixir.Module.Types.Descr.«bdd_compute_hash/4» (.tuple #[.integer k, x, y]) c u d) := by
         unfold Elixir.Module.Types.Descr.«bdd_compute_hash/4»
         refine IntOk.bind ?_ fun _ => ?_
-        · int_ok
+        · apply Exists.intro
+          simp only [band_int]
+          try rfl
         refine IntOk.bind ?_ fun _ => ?_
-        · refine hash_ok hc ?_ ?_ ?_ ?_ <;> (intros; subst_vars; int_ok)
+        · refine hash_ok hc ?_ ?_ ?_ ?_ <;>
+            (intros; subst_vars; apply Exists.intro
+             simp only [band_int, pure, Except.pure]
+             try rfl)
         refine IntOk.bind ?_ fun _ => ?_
-        · int_ok
+        · apply Exists.intro
+          simp only [Erlang.erlang.«+/2_integers», bsl_six, bsr_two, bxor_int, Lynx.Except.ok_bind]
+          try rfl
         refine IntOk.bind ?_ fun _ => ?_
-        · refine hash_ok hu ?_ ?_ ?_ ?_ <;> (intros; subst_vars; int_ok)
+        · refine hash_ok hu ?_ ?_ ?_ ?_ <;>
+            (intros; subst_vars; apply Exists.intro
+             simp only [band_int, pure, Except.pure]
+             try rfl)
         refine IntOk.bind ?_ fun _ => ?_
-        · int_ok
+        · apply Exists.intro
+          simp only [Erlang.erlang.«+/2_integers», bsl_six, bsr_two, bxor_int, Lynx.Except.ok_bind]
+          try rfl
         refine IntOk.bind ?_ fun _ => ?_
-        · refine hash_ok hd ?_ ?_ ?_ ?_ <;> (intros; subst_vars; int_ok)
+        · refine hash_ok hd ?_ ?_ ?_ ?_ <;>
+            (intros; subst_vars; apply Exists.intro
+             simp only [band_int, pure, Except.pure]
+             try rfl)
         refine IntOk.bind ?_ fun _ => ?_
-        · int_ok
-        int_ok
+        · apply Exists.intro
+          simp only [Erlang.erlang.«+/2_integers», bsl_six, bsr_two, bxor_int, Lynx.Except.ok_bind]
+          try rfl
+        apply Exists.intro
+        simp only [band_int]
+        try rfl
       obtain ⟨h, run⟩ := hash
       exact ⟨h, by simp [Elixir.Module.Types.Descr.«bdd_node_new/4», run]⟩
 
@@ -17446,19 +17462,6 @@ defmodule STTDescrProofsTest do
       simp at e₀ e₁ e₂
       exact ⟨e₀, e₁, e₂⟩
 
-    /-- Reduces `opt_map_union/3` on two leaves that are not all maps to its clause for two leaves. -/
-    macro "map_union_leaves" n₁:ident n₂:ident : tactic => `(tactic| (
-      unfold Elixir.Module.Types.Descr.«opt_map_union/3»
-      split
-      · rename_i heq; exact (leaf_not_top $n₁ heq).elim
-      · rename_i heq _; exact (leaf_not_top $n₂ heq).elim
-      rotate_left
-      · rename_i _ _ h; exact (h _ _ _ _ _ _ rfl rfl).elim
-      rename_i _ _ heq₁ heq₂
-      obtain ⟨e₁, e₂, e₃⟩ := tuple3_eq heq₁
-      obtain ⟨e₄, e₅, e₆⟩ := tuple3_eq heq₂
-      subst e₁ e₂ e₃ e₄ e₅ e₆))
-
     end Elixir.STTDescrProofsTest
     """
 
@@ -28926,15 +28929,6 @@ defmodule STTDescrProofsTest do
           | (cases dl₂ <;> simp [Erlang.erlang.«is_atom/1», Lynx.Except.andAlso, fieldsTerm, Term.list] <;> done)
           | (cases dl₁ <;> cases dl₂ <;> simp [Erlang.erlang.«is_atom/1», Lynx.Except.andAlso, fieldsTerm, Term.list])
 
-    /-- Reduces `opt_map_union/3` on two leaves that are not all maps to its clause for two leaves. -/
-    macro "map_union_leaves" n₁:ident n₂:ident ne:ident : tactic => `(tactic| (
-      unfold Elixir.Module.Types.Descr.«opt_map_union/3»
-      split
-      · rename_i heq; exact (leaf_not_top $n₁ heq).elim
-      · rename_i heq _; exact (leaf_not_top $n₂ heq).elim
-      simp only [leaf_guard]
-      rw [ite_eq_right (by simpa using $ne)]))
-
     /-- Optimized unions of map types hold the maps of either. -/
     theorem opt_map_union_sem (ef : EF nd E V den tl K) {m : Nat} (hm : K ≤ m) {x y : Term} (hx : MField E x) (hy : MField E y)
         (S : List (Term × Term)) :
@@ -28978,7 +28972,12 @@ defmodule STTDescrProofsTest do
         rcases opt_bdd_seen_map S (.atom "map_union") (.tuple #[.integer k₁, b₁, fieldsTerm l₁])
           (.tuple #[.integer k₂, b₂, fieldsTerm l₂]) with seen | ⟨S', ok⟩
         · refine ⟨r₀, ?_, f₀, sem₀⟩
-          map_union_leaves n₁ n₂ same
+          unfold Elixir.Module.Types.Descr.«opt_map_union/3»
+          split
+          · rename_i heq; exact (leaf_not_top n₁ heq).elim
+          · rename_i heq _; exact (leaf_not_top n₂ heq).elim
+          simp only [leaf_guard]
+          rw [ite_eq_right (by simpa using same)]
           simp [seen, run₀]
         have d₁ := fun w => denMF_leaf ef (k := k₁) s₁ g₁ w
         have d₂ := fun w => denMF_leaf ef (k := k₂) s₂ g₂ w
@@ -28986,7 +28985,12 @@ defmodule STTDescrProofsTest do
         by_cases atoms : ¬∃ t₁ t₂ : String, b₁ = .atom t₁ ∧ b₂ = .atom t₂
         · refine ⟨r₀, ?_, f₀, sem₀⟩
           rw [← run₀, map_union_bdd (not_top_of_ok w₁ mlit_not) (not_top_of_ok w₂ mlit_not)]
-          map_union_leaves n₁ n₂ same
+          unfold Elixir.Module.Types.Descr.«opt_map_union/3»
+          split
+          · rename_i heq; exact (leaf_not_top n₁ heq).elim
+          · rename_i heq _; exact (leaf_not_top n₂ heq).elim
+          simp only [leaf_guard]
+          rw [ite_eq_right (by simpa using same)]
           simp [ok, atoms_guard g₁ g₂ atoms]
         obtain ⟨t₁, t₂, rfl, rfl⟩ := Classical.not_not.mp atoms
         replace g₁ := g₁.of_atom
@@ -28996,7 +29000,12 @@ defmodule STTDescrProofsTest do
         · obtain ⟨len, sem⟩ := sem
           obtain ⟨k, hk, key⟩ := leaf_new_key t₁ g₁ (l.map fun e => .tuple #[e.1, e.2])
           refine ⟨.tuple #[.integer k, .atom t₁, fieldsTerm l], ?_, leaf_field (TagV.atom g₁) sl key, fun w => ?_⟩
-          · map_union_leaves n₁ n₂ same
+          · unfold Elixir.Module.Types.Descr.«opt_map_union/3»
+            split
+            · rename_i heq; exact (leaf_not_top n₁ heq).elim
+            · rename_i heq _; exact (leaf_not_top n₂ heq).elim
+            simp only [leaf_guard]
+            rw [ite_eq_right (by simpa using same)]
             have hk' : Elixir.Module.Types.Descr.«bdd_leaf_new/2» (.atom t₁) (fieldsTerm l) =
                 .ok (.tuple #[.integer k, .atom t₁, fieldsTerm l]) := hk
             simp [ok, run, Erlang.erlang.«is_atom/1», Lynx.Except.andAlso, rf, rs, hk']
@@ -29004,20 +29013,35 @@ defmodule STTDescrProofsTest do
             rw [Bool.or_eq_true, denMF_leaf ef sl (TagV.atom g₁) w, d₁, d₂]
             exact sem w
         · refine ⟨_, ?_, hy, fun w => ?_⟩
-          · map_union_leaves n₁ n₂ same
+          · unfold Elixir.Module.Types.Descr.«opt_map_union/3»
+            split
+            · rename_i heq; exact (leaf_not_top n₁ heq).elim
+            · rename_i heq _; exact (leaf_not_top n₂ heq).elim
+            simp only [leaf_guard]
+            rw [ite_eq_right (by simpa using same)]
             simp [ok, run, Erlang.erlang.«is_atom/1», Lynx.Except.andAlso]
           · apply Bool.eq_iff_iff.mpr
             rw [Bool.or_eq_true, d₁, d₂]
             exact ⟨Or.inr, fun h => h.elim (sub w) id⟩
         · refine ⟨_, ?_, hx, fun w => ?_⟩
-          · map_union_leaves n₁ n₂ same
+          · unfold Elixir.Module.Types.Descr.«opt_map_union/3»
+            split
+            · rename_i heq; exact (leaf_not_top n₁ heq).elim
+            · rename_i heq _; exact (leaf_not_top n₂ heq).elim
+            simp only [leaf_guard]
+            rw [ite_eq_right (by simpa using same)]
             simp [ok, run, Erlang.erlang.«is_atom/1», Lynx.Except.andAlso]
           · apply Bool.eq_iff_iff.mpr
             rw [Bool.or_eq_true, d₁, d₂]
             exact ⟨Or.inl, fun h => h.elim id (sub w)⟩
         · obtain ⟨r, hr, okr, semr⟩ := union_ok w₁ w₂
           refine ⟨r, ?_, Or.inr (okr _ w₁ w₂), fun w => ?_⟩
-          · map_union_leaves n₁ n₂ same
+          · unfold Elixir.Module.Types.Descr.«opt_map_union/3»
+            split
+            · rename_i heq; exact (leaf_not_top n₁ heq).elim
+            · rename_i heq _; exact (leaf_not_top n₂ heq).elim
+            simp only [leaf_guard]
+            rw [ite_eq_right (by simpa using same)]
             simp [ok, run, Erlang.erlang.«is_atom/1», Lynx.Except.andAlso, hr]
           · rw [denMF_bdd (okr _ w₁ w₂), denMF_bdd w₁, denMF_bdd w₂, semr _ (valM_resp w)]
       · refine ⟨r₀, ?_, f₀, sem₀⟩
@@ -49247,24 +49271,22 @@ defmodule STTDescrProofsTest do
     section
     variable {I : Term} {κ : Term → Term}
 
-    local notation "P" => Pre κ (KdK I κ)
-
     theorem ukm3 (n : Nat) :
         (∀ T1 T2 T3 M H2 H3 HdM D, T1.length + T2.length + T3.length + 2 ≤ n →
-          P M T1 (H2 :: T2) (H3 :: T3) → HdOK κ M HdM (H2 :: T2 ++ H3 :: T3) →
+          (Pre κ (KdK I κ)) M T1 (H2 :: T2) (H3 :: T3) → HdOK κ M HdM (H2 :: T2 ++ H3 :: T3) →
           ∃ R, Erlang.lists.«ukeymerge3_1/11» I (Term.list T1) D HdM (κ H2) H2 (Term.list T2) (Term.list M)
             (κ H3) H3 (Term.list T3) = .ok (Term.list R) ∧ Res κ M T1 (H2 :: T2) (H3 :: T3) R) ∧
         (∀ H1 T1 T2 H3 T3 M HdM D, T1.length + T2.length + T3.length + 2 ≤ n →
-          P M (H1 :: T1) T2 (H3 :: T3) → (∀ y ∈ T2, Above κ M y) → HdOK κ M HdM (H3 :: T3) →
+          (Pre κ (KdK I κ)) M (H1 :: T1) T2 (H3 :: T3) → (∀ y ∈ T2, Above κ M y) → HdOK κ M HdM (H3 :: T3) →
           ∃ R, Erlang.lists.«ukeymerge3_2/11» I (κ H1) (Term.list T1) H1 (Term.list T2) HdM D (Term.list M)
             (κ H3) H3 (Term.list T3) = .ok (Term.list R) ∧ Res κ M (H1 :: T1) T2 (H3 :: T3) R) ∧
         (∀ H1 T1 H2 T2 T3 M, T1.length + T2.length + T3.length + 2 ≤ n →
-          P M (H1 :: T1) (H2 :: T2) T3 → (∀ y ∈ H2 :: T2, Above κ M y) → (∀ y ∈ T3, Above κ M y) →
+          (Pre κ (KdK I κ)) M (H1 :: T1) (H2 :: T2) T3 → (∀ y ∈ H2 :: T2, Above κ M y) → (∀ y ∈ T3, Above κ M y) →
           (Term.compare (κ H1) (κ H2)).isLE →
           ∃ R, Erlang.lists.«ukeymerge3_12_3/9» I (κ H1) (Term.list T1) H1 (κ H2) H2 (Term.list T2)
             (Term.list M) (Term.list T3) = .ok (Term.list R) ∧ Res κ M (H1 :: T1) (H2 :: T2) T3 R) ∧
         (∀ H1 T1 H2 T2 T3 M, T1.length + T2.length + T3.length + 2 ≤ n →
-          P M (H1 :: T1) (H2 :: T2) T3 → (∀ y ∈ H2 :: T2, Above κ M y) → (∀ y ∈ T3, Above κ M y) →
+          (Pre κ (KdK I κ)) M (H1 :: T1) (H2 :: T2) T3 → (∀ y ∈ H2 :: T2, Above κ M y) → (∀ y ∈ T3, Above κ M y) →
           Term.compare (κ H2) (κ H1) = .lt →
           ∃ R, Erlang.lists.«ukeymerge3_21_3/9» I (κ H1) (Term.list T1) H1 (κ H2) H2 (Term.list T2)
             (Term.list M) (Term.list T3) = .ok (Term.list R) ∧ Res κ M (H1 :: T1) (H2 :: T2) T3 R) := by
@@ -49528,13 +49550,11 @@ defmodule STTDescrProofsTest do
     section
     variable {I : Term} {κ : Term → Term}
 
-    local notation "P" => PreD κ (KdK I κ)
-
     theorem rkm2 (n : Nat) :
-        (∀ T1 H2 T2 M, 2 * (T1.length + T2.length + 1) + 1 ≤ n → P M T1 (H2 :: T2) [] →
+        (∀ T1 H2 T2 M, 2 * (T1.length + T2.length + 1) + 1 ≤ n → (PreD κ (KdK I κ)) M T1 (H2 :: T2) [] →
           ∃ R, Erlang.lists.«rukeymerge2_1/6» I (Term.list T1) (κ H2) (Term.list T2) (Term.list M) H2 =
             .ok (Term.list R) ∧ ResD κ M T1 (H2 :: T2) [] R) ∧
-        (∀ H1 T1 H2M T2 M, 2 * (T1.length + T2.length + 2) ≤ n → P M (H1 :: T1) (H2M :: T2) [] →
+        (∀ H1 T1 H2M T2 M, 2 * (T1.length + T2.length + 2) ≤ n → (PreD κ (KdK I κ)) M (H1 :: T1) (H2M :: T2) [] →
           (Term.compare (κ H1) (κ H2M)).isLE = true →
           ∃ R, Erlang.lists.«rukeymerge2_2/8» I (Term.list T1) (κ H1) (Term.list T2) (Term.list M)
             (κ H2M) H2M H1 = .ok (Term.list R) ∧ ResD κ M (H1 :: T1) (H2M :: T2) [] R) := by
@@ -49599,23 +49619,23 @@ defmodule STTDescrProofsTest do
 
     theorem rkm3 (n : Nat) :
         (∀ T1 H2 T2 H3 T3 M D1 D2, 2 * (T1.length + T2.length + T3.length + 2) + 1 ≤ n →
-          P M T1 (H2 :: T2) (H3 :: T3) →
+          (PreD κ (KdK I κ)) M T1 (H2 :: T2) (H3 :: T3) →
           ∃ R, Erlang.lists.«rukeymerge3_1/11» I (Term.list T1) D1 D2 (κ H2) H2 (Term.list T2) (Term.list M)
             (κ H3) H3 (Term.list T3) = .ok (Term.list R) ∧ ResD κ M T1 (H2 :: T2) (H3 :: T3) R) ∧
         (∀ H1 T1 H2M T2 H3 T3 M, 2 * (T1.length + T2.length + T3.length + 3) ≤ n →
-          P M (H1 :: T1) (H2M :: T2) (H3 :: T3) → (Term.compare (κ H1) (κ H2M)).isLE = true →
+          (PreD κ (KdK I κ)) M (H1 :: T1) (H2M :: T2) (H3 :: T3) → (Term.compare (κ H1) (κ H2M)).isLE = true →
           Term.compare (κ H3) (κ H2M) = .lt →
           ∃ R, Erlang.lists.«rukeymerge3_2/11» I (κ H1) H1 (Term.list T1) (Term.list T2) H2M (κ H2M)
             (Term.list M) (κ H3) H3 (Term.list T3) = .ok (Term.list R) ∧
             ResD κ M (H1 :: T1) (H2M :: T2) (H3 :: T3) R) ∧
         (∀ H1 T1 H2 T2 H3M T3 M, 2 * (T1.length + T2.length + T3.length + 3) ≤ n →
-          P M (H1 :: T1) (H2 :: T2) (H3M :: T3) → (Term.compare (κ H1) (κ H2)).isLE = true →
+          (PreD κ (KdK I κ)) M (H1 :: T1) (H2 :: T2) (H3M :: T3) → (Term.compare (κ H1) (κ H2)).isLE = true →
           (Term.compare (κ H2) (κ H3M)).isLE = true →
           ∃ R, Erlang.lists.«rukeymerge3_12_3/11» I (κ H1) H1 (Term.list T1) (κ H2) H2 (Term.list T2)
             (Term.list M) (κ H3M) H3M (Term.list T3) = .ok (Term.list R) ∧
             ResD κ M (H1 :: T1) (H2 :: T2) (H3M :: T3) R) ∧
         (∀ H1 T1 H2 T2 H3M T3 M, 2 * (T1.length + T2.length + T3.length + 3) ≤ n →
-          P M (H1 :: T1) (H2 :: T2) (H3M :: T3) → Term.compare (κ H2) (κ H1) = .lt →
+          (PreD κ (KdK I κ)) M (H1 :: T1) (H2 :: T2) (H3M :: T3) → Term.compare (κ H2) (κ H1) = .lt →
           (Term.compare (κ H1) (κ H3M)).isLE = true →
           ∃ R, Erlang.lists.«rukeymerge3_21_3/11» I (κ H1) H1 (Term.list T1) (κ H2) H2 (Term.list T2)
             (Term.list M) (κ H3M) H3M (Term.list T3) = .ok (Term.list R) ∧
@@ -50085,10 +50105,8 @@ defmodule STTDescrProofsTest do
     section
     variable {I : Term} {κ : Term → Term}
 
-    local notation "K" => KdK I κ
-
     theorem uks1_end (X Y : Term) (R : List Term) (Rs : List (List Term)) (sc : SD κ (Y :: X :: R))
-        (kc : ∀ x ∈ Y :: X :: R, K x) (rs : RunsD (κ := κ) K Rs) :
+        (kc : ∀ x ∈ Y :: X :: R, (KdK I κ) x) (rs : RunsD (κ := κ) (KdK I κ) Rs) :
         ∃ Res, Erlang.lists.«ukeysplit_1/8» I X (κ X) Y (κ Y) (Term.list []) (Term.list R)
           (Term.list (Rs.map Term.list)) = .ok (Term.list Res) ∧ SA κ Res ∧
           Eqv κ Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ []) := by
@@ -50103,7 +50121,7 @@ defmodule STTDescrProofsTest do
       exact ⟨Res, by simpa using run, sr, by simpa using er⟩
 
     theorem uks11_end (X Y S : Term) (R : List Term) (Rs : List (List Term)) (sc : SD κ (Y :: X :: R))
-        (kc : ∀ x ∈ Y :: X :: R, K x) (ks : K S) (rs : RunsD (κ := κ) K Rs) :
+        (kc : ∀ x ∈ Y :: X :: R, (KdK I κ) x) (ks : (KdK I κ) S) (rs : RunsD (κ := κ) (KdK I κ) Rs) :
         ∃ Res, Erlang.lists.«ukeysplit_1_1/10» I X (κ X) Y (κ Y) (Term.list []) (Term.list R)
           (Term.list (Rs.map Term.list)) S (κ S) = .ok (Term.list Res) ∧ SA κ Res ∧
           Eqv κ Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ [S]) := by
@@ -50119,13 +50137,13 @@ defmodule STTDescrProofsTest do
       exact ⟨Res, by simpa using run, sr, by simpa using er⟩
 
     theorem uks1 (n : Nat) :
-        (∀ X Y L R Rs, L.length ≤ n → SD κ (Y :: X :: R) → (∀ x ∈ Y :: X :: R, K x) →
-          RunsD (κ := κ) K Rs → (∀ x ∈ L, K x) →
+        (∀ X Y L R Rs, L.length ≤ n → SD κ (Y :: X :: R) → (∀ x ∈ Y :: X :: R, (KdK I κ) x) →
+          RunsD (κ := κ) (KdK I κ) Rs → (∀ x ∈ L, (KdK I κ) x) →
           ∃ Res, Erlang.lists.«ukeysplit_1/8» I X (κ X) Y (κ Y) (Term.list L) (Term.list R)
             (Term.list (Rs.map Term.list)) = .ok (Term.list Res) ∧ SA κ Res ∧
             Eqv κ Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ L)) ∧
-        (∀ X Y L R Rs S, L.length ≤ n → SD κ (Y :: X :: R) → (∀ x ∈ Y :: X :: R, K x) →
-          Term.compare (κ S) (κ X) = .lt → K S → RunsD (κ := κ) K Rs → (∀ x ∈ L, K x) →
+        (∀ X Y L R Rs S, L.length ≤ n → SD κ (Y :: X :: R) → (∀ x ∈ Y :: X :: R, (KdK I κ) x) →
+          Term.compare (κ S) (κ X) = .lt → (KdK I κ) S → RunsD (κ := κ) (KdK I κ) Rs → (∀ x ∈ L, (KdK I κ) x) →
           ∃ Res, Erlang.lists.«ukeysplit_1_1/10» I X (κ X) Y (κ Y) (Term.list L) (Term.list R)
             (Term.list (Rs.map Term.list)) S (κ S) = .ok (Term.list Res) ∧ SA κ Res ∧
             Eqv κ Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ S :: L)) := by
@@ -50148,7 +50166,7 @@ defmodule STTDescrProofsTest do
         | nil => exact uks1_end X Y R Rs sc kc rs
         | cons Z L =>
         have kz := kl Z (by simp)
-        have kl' : ∀ x ∈ L, K x := fun x hx => kl x (by simp [hx])
+        have kl' : ∀ x ∈ L, (KdK I κ) x := fun x hx => kl x (by simp [hx])
         have len' : L.length ≤ n := by simp at len; omega
         have sc' := SD_cons.1 sc
         have yx : Term.compare (κ X) (κ Y) = .lt := c_lt_of_gt (sc'.1 X (by simp))
@@ -50231,7 +50249,7 @@ defmodule STTDescrProofsTest do
         | nil => exact uks11_end X Y S R Rs sc kc ks rs
         | cons Z L =>
         have kz := kl Z (by simp)
-        have kl' : ∀ x ∈ L, K x := fun x hx => kl x (by simp [hx])
+        have kl' : ∀ x ∈ L, (KdK I κ) x := fun x hx => kl x (by simp [hx])
         have len' : L.length ≤ n := by simp at len; omega
         have sc' := SD_cons.1 sc
         have yx : Term.compare (κ X) (κ Y) = .lt := c_lt_of_gt (sc'.1 X (by simp))
@@ -50297,7 +50315,7 @@ defmodule STTDescrProofsTest do
           exact ⟨Res, by simpa using run, sr, er.trans (by simpa using this)⟩
         have l2' := not_islt l2
         simp only [l2', Bool.false_eq_true, ↓reduceIte]
-        have rs' : RunsD (κ := κ) K ((Y :: X :: R) :: Rs) := by
+        have rs' : RunsD (κ := κ) (KdK I κ) ((Y :: X :: R) :: Rs) := by
           intro r hr
           simp only [List.mem_cons] at hr
           rcases hr with rfl | hr
@@ -50340,10 +50358,8 @@ defmodule STTDescrProofsTest do
     section
     variable {I : Term} {κ : Term → Term}
 
-    local notation "K" => KdK I κ
-
-    theorem uks2 (n : Nat) : ∀ Y L R, L.length ≤ n → SA κ (Y :: R) → R ≠ [] → (∀ x ∈ Y :: R, K x) →
-        (∀ x ∈ L, K x) →
+    theorem uks2 (n : Nat) : ∀ Y L R, L.length ≤ n → SA κ (Y :: R) → R ≠ [] → (∀ x ∈ Y :: R, (KdK I κ) x) →
+        (∀ x ∈ L, (KdK I κ) x) →
         ∃ Res, Erlang.lists.«ukeysplit_2/5» I Y (κ Y) (Term.list L) (Term.list R) = .ok (Term.list Res) ∧
           SA κ Res ∧ Eqv κ Res ((Y :: R) ++ L) := by
       induction n with
@@ -50362,7 +50378,7 @@ defmodule STTDescrProofsTest do
         exact ⟨Y :: R, by simp, sr, by simpa using Eqv.refl (Y :: R)⟩
       | cons Z L =>
       have kz := kl Z (by simp)
-      have kl' : ∀ x ∈ L, K x := fun x hx => kl x (by simp [hx])
+      have kl' : ∀ x ∈ L, (KdK I κ) x := fun x hx => kl x (by simp [hx])
       have len' : L.length ≤ n := by simp at len; omega
       have sr' := SA_cons.1 sr
       rw [Erlang.lists.«ukeysplit_2/5».eq_def]
@@ -50409,7 +50425,7 @@ defmodule STTDescrProofsTest do
         have := SA.lt_all sr zy y hy; rw [c_swap, this]; simp)
       exact ⟨Res, by simpa using run, s, er.trans (by simpa using this.symm)⟩
 
-    theorem uksort1 (n : Nat) : ∀ X L, L.length ≤ n → K X → (∀ x ∈ L, K x) →
+    theorem uksort1 (n : Nat) : ∀ X L, L.length ≤ n → (KdK I κ) X → (∀ x ∈ L, (KdK I κ) x) →
         ∃ Res, Erlang.lists.«ukeysort_1/4» I X (κ X) (Term.list L) = .ok (Term.list Res) ∧
           SA κ Res ∧ Eqv κ Res (X :: L) := by
       induction n with
@@ -50428,7 +50444,7 @@ defmodule STTDescrProofsTest do
         exact ⟨[X], by simp, by simp [SA], Eqv.refl _⟩
       | cons Z L =>
       have kz := kl Z (by simp)
-      have kl' : ∀ x ∈ L, K x := fun x hx => kl x (by simp [hx])
+      have kl' : ∀ x ∈ L, (KdK I κ) x := fun x hx => kl x (by simp [hx])
       rw [Erlang.lists.«ukeysort_1/4».eq_def]
       simp only [kz.1, Lynx.Except.ok_bind, eq_ok, lt_ok, g_if]
       by_cases e1 : Term.compare (κ X) (κ Z) = .eq
@@ -50603,22 +50619,18 @@ defmodule STTDescrProofsTest do
     namespace Elixir.STTDescrProofsTest.USort
     open Lynx
 
-    local notation "ι" => fun x : Term => x
-
     /-- Elements of `usort/1` never equal a cons, the head sentinel of `umergel/3`. -/
     def KdU (x : Term) : Prop := ∀ a b, Term.compare x (.cons a b) ≠ .eq
 
-    local notation "P" => Pre ι KdU
-
     theorem um2 (n : Nat) :
-        (∀ T1 T2 M H2 HdM, T1.length + T2.length + 1 ≤ n → Pre ι KdU M T1 (H2 :: T2) [] →
-          HdOK ι M HdM (H2 :: T2) →
+        (∀ T1 T2 M H2 HdM, T1.length + T2.length + 1 ≤ n → Pre (fun x : Term => x) KdU M T1 (H2 :: T2) [] →
+          HdOK (fun x : Term => x) M HdM (H2 :: T2) →
           ∃ R, Erlang.lists.«umerge2_1/5» (Term.list T1) (Term.list T2) (Term.list M) HdM H2 =
-            .ok (Term.list R) ∧ Res ι M T1 (H2 :: T2) [] R) ∧
-        (∀ T1 H1 T2 M, T1.length + 1 + T2.length ≤ n → Pre ι KdU M (H1 :: T1) T2 [] →
-          (∀ y ∈ T2, Above ι M y) →
+            .ok (Term.list R) ∧ Res (fun x : Term => x) M T1 (H2 :: T2) [] R) ∧
+        (∀ T1 H1 T2 M, T1.length + 1 + T2.length ≤ n → Pre (fun x : Term => x) KdU M (H1 :: T1) T2 [] →
+          (∀ y ∈ T2, Above (fun x : Term => x) M y) →
           ∃ R, Erlang.lists.«umerge2_2/4» (Term.list T1) (Term.list T2) (Term.list M) H1 =
-            .ok (Term.list R) ∧ Res ι M (H1 :: T1) T2 [] R) := by
+            .ok (Term.list R) ∧ Res (fun x : Term => x) M (H1 :: T1) T2 [] R) := by
       induction n with
       | zero => exact ⟨fun _ _ _ _ _ h => by omega, fun _ _ _ _ h => by omega⟩
       | succ n ih =>
@@ -50678,23 +50690,23 @@ defmodule STTDescrProofsTest do
 
     theorem um3 (n : Nat) :
         (∀ T1 T2 T3 M H2 H3 HdM, T1.length + T2.length + T3.length + 2 ≤ n →
-          P M T1 (H2 :: T2) (H3 :: T3) → HdOK ι M HdM (H2 :: T2 ++ H3 :: T3) →
+          (Pre (fun x : Term => x) KdU) M T1 (H2 :: T2) (H3 :: T3) → HdOK (fun x : Term => x) M HdM (H2 :: T2 ++ H3 :: T3) →
           ∃ R, Erlang.lists.«umerge3_1/7» (Term.list T1) HdM (Term.list T2) H2 (Term.list M)
-            (Term.list T3) H3 = .ok (Term.list R) ∧ Res ι M T1 (H2 :: T2) (H3 :: T3) R) ∧
+            (Term.list T3) H3 = .ok (Term.list R) ∧ Res (fun x : Term => x) M T1 (H2 :: T2) (H3 :: T3) R) ∧
         (∀ H1 T1 T2 H3 T3 M HdM, T1.length + T2.length + T3.length + 2 ≤ n →
-          P M (H1 :: T1) T2 (H3 :: T3) → (∀ y ∈ T2, Above ι M y) → HdOK ι M HdM (H3 :: T3) →
+          (Pre (fun x : Term => x) KdU) M (H1 :: T1) T2 (H3 :: T3) → (∀ y ∈ T2, Above (fun x : Term => x) M y) → HdOK (fun x : Term => x) M HdM (H3 :: T3) →
           ∃ R, Erlang.lists.«umerge3_2/7» (Term.list T1) H1 (Term.list T2) HdM (Term.list M)
-            (Term.list T3) H3 = .ok (Term.list R) ∧ Res ι M (H1 :: T1) T2 (H3 :: T3) R) ∧
+            (Term.list T3) H3 = .ok (Term.list R) ∧ Res (fun x : Term => x) M (H1 :: T1) T2 (H3 :: T3) R) ∧
         (∀ H1 T1 H2 T2 T3 M, T1.length + T2.length + T3.length + 2 ≤ n →
-          P M (H1 :: T1) (H2 :: T2) T3 → (∀ y ∈ H2 :: T2, Above ι M y) → (∀ y ∈ T3, Above ι M y) →
+          (Pre (fun x : Term => x) KdU) M (H1 :: T1) (H2 :: T2) T3 → (∀ y ∈ H2 :: T2, Above (fun x : Term => x) M y) → (∀ y ∈ T3, Above (fun x : Term => x) M y) →
           (Term.compare H1 H2).isLE →
           ∃ R, Erlang.lists.«umerge3_12_3/6» (Term.list T1) H1 (Term.list T2) H2
-            (Term.list M) (Term.list T3) = .ok (Term.list R) ∧ Res ι M (H1 :: T1) (H2 :: T2) T3 R) ∧
+            (Term.list M) (Term.list T3) = .ok (Term.list R) ∧ Res (fun x : Term => x) M (H1 :: T1) (H2 :: T2) T3 R) ∧
         (∀ H1 T1 H2 T2 T3 M, T1.length + T2.length + T3.length + 2 ≤ n →
-          P M (H1 :: T1) (H2 :: T2) T3 → (∀ y ∈ H2 :: T2, Above ι M y) → (∀ y ∈ T3, Above ι M y) →
+          (Pre (fun x : Term => x) KdU) M (H1 :: T1) (H2 :: T2) T3 → (∀ y ∈ H2 :: T2, Above (fun x : Term => x) M y) → (∀ y ∈ T3, Above (fun x : Term => x) M y) →
           Term.compare H2 H1 = .lt →
           ∃ R, Erlang.lists.«umerge3_21_3/6» (Term.list T1) H1 (Term.list T2) H2
-            (Term.list M) (Term.list T3) = .ok (Term.list R) ∧ Res ι M (H1 :: T1) (H2 :: T2) T3 R) := by
+            (Term.list M) (Term.list T3) = .ok (Term.list R) ∧ Res (fun x : Term => x) M (H1 :: T1) (H2 :: T2) T3 R) := by
       induction n with
       | zero => refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> omega
       | succ n ih =>
@@ -50749,7 +50761,7 @@ defmodule STTDescrProofsTest do
               exact ⟨R, by simpa using run, tr R res⟩
             simp only [c13, Bool.false_eq_true, ↓reduceIte]
             have c31 := not_le_lt c13
-            have b2 : ∀ y ∈ H2 :: T2, Above ι M y := above_all p.sb (by
+            have b2 : ∀ y ∈ H2 :: T2, Above (fun x : Term => x) M y := above_all p.sb (by
               cases e : Term.compare H1 H2
               · exact above_lt a1 e
               · exact fun m hm => c_lt_eq (a1 m hm) e
@@ -50925,16 +50937,13 @@ defmodule STTDescrProofsTest do
     namespace Elixir.STTDescrProofsTest.USort
     open Lynx
 
-    local notation "ι" => fun x : Term => x
-    local notation "P" => PreD ι KdU
-
     theorem rm2 (n : Nat) :
-        (∀ T1 H2 T2 M, 2 * (T1.length + T2.length + 1) + 1 ≤ n → P M T1 (H2 :: T2) [] →
+        (∀ T1 H2 T2 M, 2 * (T1.length + T2.length + 1) + 1 ≤ n → (PreD (fun x : Term => x) KdU) M T1 (H2 :: T2) [] →
           ∃ R, Erlang.lists.«rumerge2_1/4» (Term.list T1) (Term.list T2) (Term.list M) H2 =
-            .ok (Term.list R) ∧ ResD ι M T1 (H2 :: T2) [] R) ∧
-        (∀ H1 T1 H2M T2 M, 2 * (T1.length + T2.length + 2) ≤ n → P M (H1 :: T1) (H2M :: T2) [] →
+            .ok (Term.list R) ∧ ResD (fun x : Term => x) M T1 (H2 :: T2) [] R) ∧
+        (∀ H1 T1 H2M T2 M, 2 * (T1.length + T2.length + 2) ≤ n → (PreD (fun x : Term => x) KdU) M (H1 :: T1) (H2M :: T2) [] →
           (Term.compare H1 H2M).isLE = true →
-          ∃ R, Erlang.lists.«rumerge2_2/5» (Term.list T1) (Term.list T2) (Term.list M) H2M H1 = .ok (Term.list R) ∧ ResD ι M (H1 :: T1) (H2M :: T2) [] R) := by
+          ∃ R, Erlang.lists.«rumerge2_2/5» (Term.list T1) (Term.list T2) (Term.list M) H2M H1 = .ok (Term.list R) ∧ ResD (fun x : Term => x) M (H1 :: T1) (H2M :: T2) [] R) := by
       induction n with
       | zero => refine ⟨?_, ?_⟩ <;> intros <;> omega
       | succ n ih =>
@@ -50994,27 +51003,27 @@ defmodule STTDescrProofsTest do
 
     theorem rm3 (n : Nat) :
         (∀ T1 H2 T2 H3 T3 M, 2 * (T1.length + T2.length + T3.length + 2) + 1 ≤ n →
-          P M T1 (H2 :: T2) (H3 :: T3) →
+          (PreD (fun x : Term => x) KdU) M T1 (H2 :: T2) (H3 :: T3) →
           ∃ R, Erlang.lists.«rumerge3_1/6» (Term.list T1) (Term.list T2) H2 (Term.list M)
-            (Term.list T3) H3 = .ok (Term.list R) ∧ ResD ι M T1 (H2 :: T2) (H3 :: T3) R) ∧
+            (Term.list T3) H3 = .ok (Term.list R) ∧ ResD (fun x : Term => x) M T1 (H2 :: T2) (H3 :: T3) R) ∧
         (∀ H1 T1 H2M T2 H3 T3 M, 2 * (T1.length + T2.length + T3.length + 3) ≤ n →
-          P M (H1 :: T1) (H2M :: T2) (H3 :: T3) → (Term.compare H1 H2M).isLE = true →
+          (PreD (fun x : Term => x) KdU) M (H1 :: T1) (H2M :: T2) (H3 :: T3) → (Term.compare H1 H2M).isLE = true →
           Term.compare H3 H2M = .lt →
           ∃ R, Erlang.lists.«rumerge3_2/7» (Term.list T1) (Term.list T2) H2M
             (Term.list M) (Term.list T3) H3 H1 = .ok (Term.list R) ∧
-            ResD ι M (H1 :: T1) (H2M :: T2) (H3 :: T3) R) ∧
+            ResD (fun x : Term => x) M (H1 :: T1) (H2M :: T2) (H3 :: T3) R) ∧
         (∀ H1 T1 H2 T2 H3M T3 M, 2 * (T1.length + T2.length + T3.length + 3) ≤ n →
-          P M (H1 :: T1) (H2 :: T2) (H3M :: T3) → (Term.compare H1 H2).isLE = true →
+          (PreD (fun x : Term => x) KdU) M (H1 :: T1) (H2 :: T2) (H3M :: T3) → (Term.compare H1 H2).isLE = true →
           (Term.compare H2 H3M).isLE = true →
           ∃ R, Erlang.lists.«rumerge3_12_3/7» (Term.list T1) (Term.list T2) H2
             (Term.list M) (Term.list T3) H3M H1 = .ok (Term.list R) ∧
-            ResD ι M (H1 :: T1) (H2 :: T2) (H3M :: T3) R) ∧
+            ResD (fun x : Term => x) M (H1 :: T1) (H2 :: T2) (H3M :: T3) R) ∧
         (∀ H1 T1 H2 T2 H3M T3 M, 2 * (T1.length + T2.length + T3.length + 3) ≤ n →
-          P M (H1 :: T1) (H2 :: T2) (H3M :: T3) → Term.compare H2 H1 = .lt →
+          (PreD (fun x : Term => x) KdU) M (H1 :: T1) (H2 :: T2) (H3M :: T3) → Term.compare H2 H1 = .lt →
           (Term.compare H1 H3M).isLE = true →
           ∃ R, Erlang.lists.«rumerge3_21_3/7» (Term.list T1) (Term.list T2) H2
             (Term.list M) (Term.list T3) H3M H1 = .ok (Term.list R) ∧
-            ResD ι M (H1 :: T1) (H2 :: T2) (H3M :: T3) R) := by
+            ResD (fun x : Term => x) M (H1 :: T1) (H2 :: T2) (H3M :: T3) R) := by
       induction n with
       | zero => refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> omega
       | succ n ih =>
@@ -51197,8 +51206,6 @@ defmodule STTDescrProofsTest do
     namespace Elixir.STTDescrProofsTest.USort
     open Lynx
 
-    local notation "ι" => fun x : Term => x
-
     section
     variable {κ : Term → Term} {Kd : Term → Prop}
 
@@ -51247,13 +51254,13 @@ defmodule STTDescrProofsTest do
 
     theorem um_mergel (n : Nat) :
         (∀ asc Rs Acc, 4 * (Rs.length + Acc.length) + 2 * min Acc.length 1 ≤ n →
-          1 ≤ Rs.length + Acc.length → RunsA (κ := ι) KdU Rs → RunsD (κ := ι) KdU Acc →
+          1 ≤ Rs.length + Acc.length → RunsA (κ := (fun x : Term => x)) KdU Rs → RunsD (κ := (fun x : Term => x)) KdU Acc →
           ∃ R, Erlang.lists.«umergel/3» (Term.list (Rs.map Term.list)) (Term.list (Acc.map Term.list))
-            (modeT asc) = .ok (Term.list R) ∧ SA ι R ∧ Eqv ι R (ucontent asc Rs Acc)) ∧
+            (modeT asc) = .ok (Term.list R) ∧ SA (fun x : Term => x) R ∧ Eqv (fun x : Term => x) R (ucontent asc Rs Acc)) ∧
         (∀ asc Rs Acc, 4 * (Rs.length + Acc.length) + 2 * min Acc.length 1 + 1 ≤ n →
-          1 ≤ Rs.length + Acc.length → RunsD (κ := ι) KdU Rs → RunsA (κ := ι) KdU Acc →
+          1 ≤ Rs.length + Acc.length → RunsD (κ := (fun x : Term => x)) KdU Rs → RunsA (κ := (fun x : Term => x)) KdU Acc →
           ∃ R, Erlang.lists.«rumergel/3» (Term.list (Rs.map Term.list)) (Term.list (Acc.map Term.list))
-            (modeT asc) = .ok (Term.list R) ∧ SA ι R ∧ Eqv ι R (rcontent asc Rs Acc)) := by
+            (modeT asc) = .ok (Term.list R) ∧ SA (fun x : Term => x) R ∧ Eqv (fun x : Term => x) R (rcontent asc Rs Acc)) := by
       induction n with
       | zero => refine ⟨?_, ?_⟩ <;> intros <;> omega
       | succ n ih =>
@@ -51279,7 +51286,7 @@ defmodule STTDescrProofsTest do
           cases Acc with
           | nil =>
             refine ⟨h :: t, by simp, sl, ?_⟩
-            cases asc <;> simpa [ucontent] using Eqv.refl (κ := ι) (h :: t)
+            cases asc <;> simpa [ucontent] using Eqv.refl (κ := (fun x : Term => x)) (h :: t)
           | cons A Acc =>
             obtain ⟨na, _, _⟩ := rd A (by simp)
             obtain ⟨a, A', rfl⟩ := List.exists_cons_of_ne_nil na
@@ -51292,7 +51299,7 @@ defmodule STTDescrProofsTest do
               (runsD_cons ⟨by simp, SD_reverse.2 sl, fun x hx => kl x (List.mem_reverse.1 hx)⟩ rd)
               (by simp [RunsA])
             refine ⟨R, by simpa using run, sr, er.trans ?_⟩
-            have rv' := eqv_reverse (κ := ι) sl.ne
+            have rv' := eqv_reverse (κ := (fun x : Term => x)) sl.ne
             rw [List.reverse_cons] at rv'
             cases asc
             · simp only [rcontent, ucontent, Bool.false_eq_true, ↓reduceIte, List.reverse_nil,
@@ -51337,7 +51344,7 @@ defmodule STTDescrProofsTest do
           obtain ⟨n1, s1, k1⟩ := ra r1 (by simp)
           obtain ⟨n2, s2, k2⟩ := ra r2 (by simp)
           obtain ⟨n3, s3, k3⟩ := ra r3 (by simp)
-          have rl : RunsA (κ := ι) KdU L := fun r hr => ra r (by simp [hr])
+          have rl : RunsA (κ := (fun x : Term => x)) KdU L := fun r hr => ra r (by simp [hr])
           obtain ⟨h1, t1, rfl⟩ := List.exists_cons_of_ne_nil n1
           obtain ⟨h2, t2, rfl⟩ := List.exists_cons_of_ne_nil n2
           obtain ⟨h3, t3, rfl⟩ := List.exists_cons_of_ne_nil n3
@@ -51398,7 +51405,7 @@ defmodule STTDescrProofsTest do
             (runsA_cons ⟨by simp, SA_reverse.2 sl, fun x hx => kl x (List.mem_reverse.1 hx)⟩ ra)
             (by simp [RunsD])
           refine ⟨R, by simpa using run, sr, er.trans ?_⟩
-          have rv' := eqv_reverse (κ := ι) sl.ne
+          have rv' := eqv_reverse (κ := (fun x : Term => x)) sl.ne
           rw [List.reverse_cons] at rv'
           cases asc
           · simp only [rcontent, ucontent, Bool.false_eq_true, ↓reduceIte, List.reverse_cons,
@@ -51442,7 +51449,7 @@ defmodule STTDescrProofsTest do
           obtain ⟨n1, s1, k1⟩ := rd r1 (by simp)
           obtain ⟨n2, s2, k2⟩ := rd r2 (by simp)
           obtain ⟨n3, s3, k3⟩ := rd r3 (by simp)
-          have rl : RunsD (κ := ι) KdU L := fun r hr => rd r (by simp [hr])
+          have rl : RunsD (κ := (fun x : Term => x)) KdU L := fun r hr => rd r (by simp [hr])
           obtain ⟨h1, t1, rfl⟩ := List.exists_cons_of_ne_nil n1
           obtain ⟨h2, t2, rfl⟩ := List.exists_cons_of_ne_nil n2
           obtain ⟨h3, t3, rfl⟩ := List.exists_cons_of_ne_nil n3
@@ -51479,8 +51486,6 @@ defmodule STTDescrProofsTest do
     namespace Elixir.STTDescrProofsTest.USort
     open Lynx
 
-    local notation "ι" => fun x : Term => x
-
     theorem isgt_lt {a b : Term} (h : (Term.compare a b).isGT = true) : Term.compare b a = .lt := by
       cases e : Term.compare a b <;> simp_all [c_lt_of_gt]
 
@@ -51504,11 +51509,11 @@ defmodule STTDescrProofsTest do
       · exact absurd h e
       · exact c_lt_of_gt h
 
-    theorem us1_end (X Y : Term) (R : List Term) (Rs : List (List Term)) (sc : SD ι (Y :: X :: R))
-        (kc : ∀ x ∈ Y :: X :: R, KdU x) (rs : RunsD (κ := ι) KdU Rs) :
+    theorem us1_end (X Y : Term) (R : List Term) (Rs : List (List Term)) (sc : SD (fun x : Term => x) (Y :: X :: R))
+        (kc : ∀ x ∈ Y :: X :: R, KdU x) (rs : RunsD (κ := (fun x : Term => x)) KdU Rs) :
         ∃ Res, Erlang.lists.«usplit_1/5» X Y (Term.list []) (Term.list R)
-          (Term.list (Rs.map Term.list)) = .ok (Term.list Res) ∧ SA ι Res ∧
-          Eqv ι Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ []) := by
+          (Term.list (Rs.map Term.list)) = .ok (Term.list Res) ∧ SA (fun x : Term => x) Res ∧
+          Eqv (fun x : Term => x) Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ []) := by
       rw [Erlang.lists.«usplit_1/5».eq_def]
       cases R <;>
       · obtain ⟨Res, run, sr, er⟩ := (um_mergel (4 * (Rs.length + 2) + 1)).2 true
@@ -51516,11 +51521,11 @@ defmodule STTDescrProofsTest do
           (by simp [RunsA])
         exact ⟨Res, by simpa [modeT] using run, sr, by simpa [rcontent] using er⟩
 
-    theorem us11_end (X Y S : Term) (R : List Term) (Rs : List (List Term)) (sc : SD ι (Y :: X :: R))
-        (kc : ∀ x ∈ Y :: X :: R, KdU x) (ks : KdU S) (rs : RunsD (κ := ι) KdU Rs) :
+    theorem us11_end (X Y S : Term) (R : List Term) (Rs : List (List Term)) (sc : SD (fun x : Term => x) (Y :: X :: R))
+        (kc : ∀ x ∈ Y :: X :: R, KdU x) (ks : KdU S) (rs : RunsD (κ := (fun x : Term => x)) KdU Rs) :
         ∃ Res, Erlang.lists.«usplit_1_1/6» X Y (Term.list []) (Term.list R)
-          (Term.list (Rs.map Term.list)) S = .ok (Term.list Res) ∧ SA ι Res ∧
-          Eqv ι Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ [S]) := by
+          (Term.list (Rs.map Term.list)) S = .ok (Term.list Res) ∧ SA (fun x : Term => x) Res ∧
+          Eqv (fun x : Term => x) Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ [S]) := by
       rw [Erlang.lists.«usplit_1_1/6».eq_def]
       obtain ⟨Res, run, sr, er⟩ := (um_mergel (4 * (Rs.length + 3) + 1)).2 true
         ([S] :: (Y :: X :: R) :: Rs) [] (by simp; omega) (by simp)
@@ -51529,16 +51534,16 @@ defmodule STTDescrProofsTest do
       exact ⟨Res, by simpa [modeT] using run, sr, by simpa [rcontent] using er⟩
 
     theorem us1 (n : Nat) :
-        (∀ X Y L R Rs, L.length ≤ n → SD ι (Y :: X :: R) → (∀ x ∈ Y :: X :: R, KdU x) →
-          RunsD (κ := ι) KdU Rs → (∀ x ∈ L, KdU x) →
+        (∀ X Y L R Rs, L.length ≤ n → SD (fun x : Term => x) (Y :: X :: R) → (∀ x ∈ Y :: X :: R, KdU x) →
+          RunsD (κ := (fun x : Term => x)) KdU Rs → (∀ x ∈ L, KdU x) →
           ∃ Res, Erlang.lists.«usplit_1/5» X Y (Term.list L) (Term.list R)
-            (Term.list (Rs.map Term.list)) = .ok (Term.list Res) ∧ SA ι Res ∧
-            Eqv ι Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ L)) ∧
-        (∀ X Y L R Rs S, L.length ≤ n → SD ι (Y :: X :: R) → (∀ x ∈ Y :: X :: R, KdU x) →
-          Term.compare S X = .lt → KdU S → RunsD (κ := ι) KdU Rs → (∀ x ∈ L, KdU x) →
+            (Term.list (Rs.map Term.list)) = .ok (Term.list Res) ∧ SA (fun x : Term => x) Res ∧
+            Eqv (fun x : Term => x) Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ L)) ∧
+        (∀ X Y L R Rs S, L.length ≤ n → SD (fun x : Term => x) (Y :: X :: R) → (∀ x ∈ Y :: X :: R, KdU x) →
+          Term.compare S X = .lt → KdU S → RunsD (κ := (fun x : Term => x)) KdU Rs → (∀ x ∈ L, KdU x) →
           ∃ Res, Erlang.lists.«usplit_1_1/6» X Y (Term.list L) (Term.list R)
-            (Term.list (Rs.map Term.list)) S = .ok (Term.list Res) ∧ SA ι Res ∧
-            Eqv ι Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ S :: L)) := by
+            (Term.list (Rs.map Term.list)) S = .ok (Term.list Res) ∧ SA (fun x : Term => x) Res ∧
+            Eqv (fun x : Term => x) Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ S :: L)) := by
       induction n with
       | zero =>
         refine ⟨?_, ?_⟩
@@ -51567,18 +51572,18 @@ defmodule STTDescrProofsTest do
         by_cases g1 : (Term.compare Z Y).isGT = true
         · simp only [g1, ↓reduceIte]
           have l1 := isgt_lt g1
-          have gz := SD.gt_all (κ := ι) sc (c_gt_of_lt l1)
+          have gz := SD.gt_all (κ := (fun x : Term => x)) sc (c_gt_of_lt l1)
           obtain ⟨Res, run, sr, er⟩ := ih1 Y Z L (X :: R) Rs len' (SD_cons.2 ⟨gz, sc⟩)
             (fun x hx => by simp only [List.mem_cons] at hx; rcases hx with rfl | hx; exact kz; exact kc x (by simpa using hx))
             rs kl'
-          have := ins_mid (κ := ι) (P := Rs.reverse.flatten) (A := []) (B := Y :: X :: R) (L := L) (z := Z)
+          have := ins_mid (κ := (fun x : Term => x)) (P := Rs.reverse.flatten) (A := []) (B := Y :: X :: R) (L := L) (z := Z)
             (fun y hy => by have := gz y (by simpa using hy); rw [c_swap, this]; simp)
           exact ⟨Res, by simpa using run, sr, er.trans (by simpa using this)⟩
         simp only [g1, Bool.false_eq_true, ↓reduceIte]
         by_cases e1 : Term.compare Z Y = .eq
         · simp only [e1, ↓reduceIte]
           obtain ⟨Res, run, sr, er⟩ := ih1 X Y L R Rs len' sc kc rs kl'
-          have dd := drop_at (κ := ι) (P := Rs.reverse.flatten ++ Y :: X :: R) (L := L) (y := Y) (z := Z)
+          have dd := drop_at (κ := (fun x : Term => x)) (P := Rs.reverse.flatten ++ Y :: X :: R) (L := L) (y := Y) (z := Z)
             (by simp) (c_eq_symm e1)
           exact ⟨Res, run, sr, er.trans (by simpa using dd)⟩
         simp only [e1, ↓reduceIte]
@@ -51587,7 +51592,7 @@ defmodule STTDescrProofsTest do
         by_cases g2 : (Term.compare Z X).isGT = true
         · simp only [g2, ↓reduceIte]
           have l2 := isgt_lt g2
-          have gzx := SD.gt_all (κ := ι) sc'.2 (c_gt_of_lt l2)
+          have gzx := SD.gt_all (κ := (fun x : Term => x)) sc'.2 (c_gt_of_lt l2)
           obtain ⟨Res, run, sr, er⟩ := ih1 Z Y L (X :: R) Rs len'
             (SD_cons.2 ⟨fun w hw => by
                 simp only [List.mem_cons] at hw
@@ -51601,7 +51606,7 @@ defmodule STTDescrProofsTest do
               · exact kz
               · exact kc x (by simp [hx]))
             rs kl'
-          have := ins_mid (κ := ι) (P := Rs.reverse.flatten) (A := [Y]) (B := X :: R) (L := L) (z := Z)
+          have := ins_mid (κ := (fun x : Term => x)) (P := Rs.reverse.flatten) (A := [Y]) (B := X :: R) (L := L) (z := Z)
             (fun y hy => by
               simp only [List.cons_append, List.nil_append, List.mem_cons] at hy
               rcases hy with rfl | hy
@@ -51612,7 +51617,7 @@ defmodule STTDescrProofsTest do
         by_cases e2 : Term.compare Z X = .eq
         · simp only [e2, ↓reduceIte]
           obtain ⟨Res, run, sr, er⟩ := ih1 X Y L R Rs len' sc kc rs kl'
-          have dd := drop_at (κ := ι) (P := Rs.reverse.flatten ++ Y :: X :: R) (L := L) (y := X) (z := Z)
+          have dd := drop_at (κ := (fun x : Term => x)) (P := Rs.reverse.flatten ++ Y :: X :: R) (L := L) (y := X) (z := Z)
             (by simp) (c_eq_symm e2)
           exact ⟨Res, run, sr, er.trans (by simpa using dd)⟩
         simp only [e2, ↓reduceIte]
@@ -51647,11 +51652,11 @@ defmodule STTDescrProofsTest do
         by_cases g1 : (Term.compare Z Y).isGT = true
         · simp only [g1, ↓reduceIte]
           have l1 := isgt_lt g1
-          have gz := SD.gt_all (κ := ι) sc (c_gt_of_lt l1)
+          have gz := SD.gt_all (κ := (fun x : Term => x)) sc (c_gt_of_lt l1)
           obtain ⟨Res, run, sr, er⟩ := ih2 Y Z L (X :: R) Rs S len' (SD_cons.2 ⟨gz, sc⟩)
             (fun x hx => by simp only [List.mem_cons] at hx; rcases hx with rfl | hx; exact kz; exact kc x (by simpa using hx))
             sy ks rs kl'
-          have := ins_mid (κ := ι) (P := Rs.reverse.flatten) (A := []) (B := Y :: X :: R ++ [S]) (L := L)
+          have := ins_mid (κ := (fun x : Term => x)) (P := Rs.reverse.flatten) (A := []) (B := Y :: X :: R ++ [S]) (L := L)
             (z := Z) (fun y hy => by
               simp only [List.nil_append, List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hy
               rcases hy with hy | rfl
@@ -51662,7 +51667,7 @@ defmodule STTDescrProofsTest do
         by_cases e1 : Term.compare Z Y = .eq
         · simp only [e1, ↓reduceIte]
           obtain ⟨Res, run, sr, er⟩ := ih2 X Y L R Rs S len' sc kc sx ks rs kl'
-          have dd := drop_at (κ := ι) (P := Rs.reverse.flatten ++ Y :: X :: R ++ [S]) (L := L) (y := Y)
+          have dd := drop_at (κ := (fun x : Term => x)) (P := Rs.reverse.flatten ++ Y :: X :: R ++ [S]) (L := L) (y := Y)
             (z := Z) (by simp) (c_eq_symm e1)
           exact ⟨Res, run, sr, er.trans (by simpa using dd)⟩
         simp only [e1, ↓reduceIte]
@@ -51671,7 +51676,7 @@ defmodule STTDescrProofsTest do
         by_cases g2 : (Term.compare Z X).isGT = true
         · simp only [g2, ↓reduceIte]
           have l2 := isgt_lt g2
-          have gzx := SD.gt_all (κ := ι) sc'.2 (c_gt_of_lt l2)
+          have gzx := SD.gt_all (κ := (fun x : Term => x)) sc'.2 (c_gt_of_lt l2)
           obtain ⟨Res, run, sr, er⟩ := ih2 Z Y L (X :: R) Rs S len'
             (SD_cons.2 ⟨fun w hw => by
                 simp only [List.mem_cons] at hw
@@ -51685,7 +51690,7 @@ defmodule STTDescrProofsTest do
               · exact kz
               · exact kc x (by simp [hx]))
             (c_lt_trans sx l2) ks rs kl'
-          have := ins_mid (κ := ι) (P := Rs.reverse.flatten) (A := [Y]) (B := X :: R ++ [S]) (L := L) (z := Z)
+          have := ins_mid (κ := (fun x : Term => x)) (P := Rs.reverse.flatten) (A := [Y]) (B := X :: R ++ [S]) (L := L) (z := Z)
             (fun y hy => by
               simp only [List.cons_append, List.nil_append, List.mem_cons, List.mem_append,
                 List.not_mem_nil, or_false] at hy
@@ -51699,11 +51704,11 @@ defmodule STTDescrProofsTest do
         by_cases e2 : Term.compare Z X = .eq
         · simp only [e2, ↓reduceIte]
           obtain ⟨Res, run, sr, er⟩ := ih2 X Y L R Rs S len' sc kc sx ks rs kl'
-          have dd := drop_at (κ := ι) (P := Rs.reverse.flatten ++ Y :: X :: R ++ [S]) (L := L) (y := X)
+          have dd := drop_at (κ := (fun x : Term => x)) (P := Rs.reverse.flatten ++ Y :: X :: R ++ [S]) (L := L) (y := X)
             (z := Z) (by simp) (c_eq_symm e2)
           exact ⟨Res, run, sr, er.trans (by simpa using dd)⟩
         simp only [e2, ↓reduceIte]
-        have rs' : RunsD (κ := ι) KdU ((Y :: X :: R) :: Rs) := runsD_cons ⟨by simp, sc, kc⟩ rs
+        have rs' : RunsD (κ := (fun x : Term => x)) KdU ((Y :: X :: R) :: Rs) := runsD_cons ⟨by simp, sc, kc⟩ rs
         by_cases g3 : (Term.compare Z S).isGT = true
         · simp only [g3, ↓reduceIte]
           have l3 := isgt_lt g3
@@ -51711,7 +51716,7 @@ defmodule STTDescrProofsTest do
             (by simp [SD]; exact c_gt_of_lt l3)
             (fun x hx => by simp only [List.mem_cons, List.not_mem_nil, or_false] at hx; rcases hx with rfl | rfl; exact kz; exact ks)
             rs' kl'
-          have := ins_mid (κ := ι) (P := Rs.reverse.flatten ++ Y :: X :: R) (A := []) (B := [S]) (L := L)
+          have := ins_mid (κ := (fun x : Term => x)) (P := Rs.reverse.flatten ++ Y :: X :: R) (A := []) (B := [S]) (L := L)
             (z := Z) (fun y hy => by
               simp only [List.nil_append, List.mem_cons, List.not_mem_nil, or_false] at hy
               subst hy; rw [l3]; simp)
@@ -51720,7 +51725,7 @@ defmodule STTDescrProofsTest do
         by_cases e3 : Term.compare Z S = .eq
         · simp only [e3, ↓reduceIte]
           obtain ⟨Res, run, sr, er⟩ := ih2 X Y L R Rs S len' sc kc sx ks rs kl'
-          have dd := drop_at (κ := ι) (P := Rs.reverse.flatten ++ Y :: X :: R ++ [S]) (L := L) (y := S)
+          have dd := drop_at (κ := (fun x : Term => x)) (P := Rs.reverse.flatten ++ Y :: X :: R ++ [S]) (L := L) (y := S)
             (z := Z) (by simp) (c_eq_symm e3)
           exact ⟨Res, run, sr, er.trans (by simpa using dd)⟩
         simp only [e3, ↓reduceIte]
@@ -51738,13 +51743,11 @@ defmodule STTDescrProofsTest do
     namespace Elixir.STTDescrProofsTest.USort
     open Lynx
 
-    local notation "ι" => fun x : Term => x
-
-    theorem us2_end (X Y : Term) (R : List Term) (Rs : List (List Term)) (sc : SA ι (Y :: X :: R))
-        (kc : ∀ x ∈ Y :: X :: R, KdU x) (rs : RunsA (κ := ι) KdU Rs) :
+    theorem us2_end (X Y : Term) (R : List Term) (Rs : List (List Term)) (sc : SA (fun x : Term => x) (Y :: X :: R))
+        (kc : ∀ x ∈ Y :: X :: R, KdU x) (rs : RunsA (κ := (fun x : Term => x)) KdU Rs) :
         ∃ Res, Erlang.lists.«usplit_2/5» X Y (Term.list []) (Term.list R)
-          (Term.list (Rs.map Term.list)) = .ok (Term.list Res) ∧ SA ι Res ∧
-          Eqv ι Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ []) := by
+          (Term.list (Rs.map Term.list)) = .ok (Term.list Res) ∧ SA (fun x : Term => x) Res ∧
+          Eqv (fun x : Term => x) Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ []) := by
       rw [Erlang.lists.«usplit_2/5».eq_def]
       cases R <;>
       · obtain ⟨Res, run, sr, er⟩ := (um_mergel (4 * (Rs.length + 2))).1 false
@@ -51752,11 +51755,11 @@ defmodule STTDescrProofsTest do
           (by simp [RunsD])
         exact ⟨Res, by simpa [modeT] using run, sr, by simpa [ucontent] using er⟩
 
-    theorem us21_end (X Y S : Term) (R : List Term) (Rs : List (List Term)) (sc : SA ι (Y :: X :: R))
-        (kc : ∀ x ∈ Y :: X :: R, KdU x) (ks : KdU S) (rs : RunsA (κ := ι) KdU Rs) :
+    theorem us21_end (X Y S : Term) (R : List Term) (Rs : List (List Term)) (sc : SA (fun x : Term => x) (Y :: X :: R))
+        (kc : ∀ x ∈ Y :: X :: R, KdU x) (ks : KdU S) (rs : RunsA (κ := (fun x : Term => x)) KdU Rs) :
         ∃ Res, Erlang.lists.«usplit_2_1/6» X Y (Term.list []) (Term.list R)
-          (Term.list (Rs.map Term.list)) S = .ok (Term.list Res) ∧ SA ι Res ∧
-          Eqv ι Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ [S]) := by
+          (Term.list (Rs.map Term.list)) S = .ok (Term.list Res) ∧ SA (fun x : Term => x) Res ∧
+          Eqv (fun x : Term => x) Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ [S]) := by
       rw [Erlang.lists.«usplit_2_1/6».eq_def]
       obtain ⟨Res, run, sr, er⟩ := (um_mergel (4 * (Rs.length + 3))).1 false
         ([S] :: (Y :: X :: R) :: Rs) [] (by simp; omega) (by simp)
@@ -51765,16 +51768,16 @@ defmodule STTDescrProofsTest do
       exact ⟨Res, by simpa [modeT] using run, sr, by simpa [ucontent] using er⟩
 
     theorem us2 (n : Nat) :
-        (∀ X Y L R Rs, L.length ≤ n → SA ι (Y :: X :: R) → (∀ x ∈ Y :: X :: R, KdU x) →
-          RunsA (κ := ι) KdU Rs → (∀ x ∈ L, KdU x) →
+        (∀ X Y L R Rs, L.length ≤ n → SA (fun x : Term => x) (Y :: X :: R) → (∀ x ∈ Y :: X :: R, KdU x) →
+          RunsA (κ := (fun x : Term => x)) KdU Rs → (∀ x ∈ L, KdU x) →
           ∃ Res, Erlang.lists.«usplit_2/5» X Y (Term.list L) (Term.list R)
-            (Term.list (Rs.map Term.list)) = .ok (Term.list Res) ∧ SA ι Res ∧
-            Eqv ι Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ L)) ∧
-        (∀ X Y L R Rs S, L.length ≤ n → SA ι (Y :: X :: R) → (∀ x ∈ Y :: X :: R, KdU x) →
-          Term.compare X S = .lt → KdU S → RunsA (κ := ι) KdU Rs → (∀ x ∈ L, KdU x) →
+            (Term.list (Rs.map Term.list)) = .ok (Term.list Res) ∧ SA (fun x : Term => x) Res ∧
+            Eqv (fun x : Term => x) Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ L)) ∧
+        (∀ X Y L R Rs S, L.length ≤ n → SA (fun x : Term => x) (Y :: X :: R) → (∀ x ∈ Y :: X :: R, KdU x) →
+          Term.compare X S = .lt → KdU S → RunsA (κ := (fun x : Term => x)) KdU Rs → (∀ x ∈ L, KdU x) →
           ∃ Res, Erlang.lists.«usplit_2_1/6» X Y (Term.list L) (Term.list R)
-            (Term.list (Rs.map Term.list)) S = .ok (Term.list Res) ∧ SA ι Res ∧
-            Eqv ι Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ S :: L)) := by
+            (Term.list (Rs.map Term.list)) S = .ok (Term.list Res) ∧ SA (fun x : Term => x) Res ∧
+            Eqv (fun x : Term => x) Res (Rs.reverse.flatten ++ (Y :: X :: R) ++ S :: L)) := by
       induction n with
       | zero =>
         refine ⟨?_, ?_⟩
@@ -51803,18 +51806,18 @@ defmodule STTDescrProofsTest do
         by_cases g1 : (Term.compare Z Y).isLT = true
         · simp only [g1, ↓reduceIte]
           have l1 := islt_lt g1
-          have lz := SA.lt_all (κ := ι) sc l1
+          have lz := SA.lt_all (κ := (fun x : Term => x)) sc l1
           obtain ⟨Res, run, sr, er⟩ := ih1 Y Z L (X :: R) Rs len' (SA_cons.2 ⟨lz, sc⟩)
             (fun x hx => by simp only [List.mem_cons] at hx; rcases hx with rfl | hx; exact kz; exact kc x (by simpa using hx))
             rs kl'
-          have := ins_mid (κ := ι) (P := Rs.reverse.flatten) (A := []) (B := Y :: X :: R) (L := L) (z := Z)
+          have := ins_mid (κ := (fun x : Term => x)) (P := Rs.reverse.flatten) (A := []) (B := Y :: X :: R) (L := L) (z := Z)
             (fun y hy => by have := lz y (by simpa using hy); rw [c_swap, this]; simp)
           exact ⟨Res, by simpa using run, sr, er.trans (by simpa using this)⟩
         simp only [g1, Bool.false_eq_true, ↓reduceIte]
         by_cases e1 : Term.compare Z Y = .eq
         · simp only [e1, ↓reduceIte]
           obtain ⟨Res, run, sr, er⟩ := ih1 X Y L R Rs len' sc kc rs kl'
-          have dd := drop_at (κ := ι) (P := Rs.reverse.flatten ++ Y :: X :: R) (L := L) (y := Y) (z := Z)
+          have dd := drop_at (κ := (fun x : Term => x)) (P := Rs.reverse.flatten ++ Y :: X :: R) (L := L) (y := Y) (z := Z)
             (by simp) (c_eq_symm e1)
           exact ⟨Res, run, sr, er.trans (by simpa using dd)⟩
         simp only [e1, ↓reduceIte]
@@ -51823,7 +51826,7 @@ defmodule STTDescrProofsTest do
         by_cases g2 : (Term.compare Z X).isLT = true
         · simp only [g2, ↓reduceIte]
           have l2 := islt_lt g2
-          have lzx := SA.lt_all (κ := ι) sc'.2 l2
+          have lzx := SA.lt_all (κ := (fun x : Term => x)) sc'.2 l2
           obtain ⟨Res, run, sr, er⟩ := ih1 Z Y L (X :: R) Rs len'
             (SA_cons.2 ⟨fun w hw => by
                 simp only [List.mem_cons] at hw
@@ -51837,7 +51840,7 @@ defmodule STTDescrProofsTest do
               · exact kz
               · exact kc x (by simp [hx]))
             rs kl'
-          have := ins_mid (κ := ι) (P := Rs.reverse.flatten) (A := [Y]) (B := X :: R) (L := L) (z := Z)
+          have := ins_mid (κ := (fun x : Term => x)) (P := Rs.reverse.flatten) (A := [Y]) (B := X :: R) (L := L) (z := Z)
             (fun y hy => by
               simp only [List.cons_append, List.nil_append, List.mem_cons] at hy
               rcases hy with rfl | hy
@@ -51848,7 +51851,7 @@ defmodule STTDescrProofsTest do
         by_cases e2 : Term.compare Z X = .eq
         · simp only [e2, ↓reduceIte]
           obtain ⟨Res, run, sr, er⟩ := ih1 X Y L R Rs len' sc kc rs kl'
-          have dd := drop_at (κ := ι) (P := Rs.reverse.flatten ++ Y :: X :: R) (L := L) (y := X) (z := Z)
+          have dd := drop_at (κ := (fun x : Term => x)) (P := Rs.reverse.flatten ++ Y :: X :: R) (L := L) (y := X) (z := Z)
             (by simp) (c_eq_symm e2)
           exact ⟨Res, run, sr, er.trans (by simpa using dd)⟩
         simp only [e2, ↓reduceIte]
@@ -51883,11 +51886,11 @@ defmodule STTDescrProofsTest do
         by_cases g1 : (Term.compare Z Y).isLT = true
         · simp only [g1, ↓reduceIte]
           have l1 := islt_lt g1
-          have lz := SA.lt_all (κ := ι) sc l1
+          have lz := SA.lt_all (κ := (fun x : Term => x)) sc l1
           obtain ⟨Res, run, sr, er⟩ := ih2 Y Z L (X :: R) Rs S len' (SA_cons.2 ⟨lz, sc⟩)
             (fun x hx => by simp only [List.mem_cons] at hx; rcases hx with rfl | hx; exact kz; exact kc x (by simpa using hx))
             ys ks rs kl'
-          have := ins_mid (κ := ι) (P := Rs.reverse.flatten) (A := []) (B := Y :: X :: R ++ [S]) (L := L)
+          have := ins_mid (κ := (fun x : Term => x)) (P := Rs.reverse.flatten) (A := []) (B := Y :: X :: R ++ [S]) (L := L)
             (z := Z) (fun y hy => by
               simp only [List.nil_append, List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hy
               rcases hy with hy | rfl
@@ -51898,7 +51901,7 @@ defmodule STTDescrProofsTest do
         by_cases e1 : Term.compare Z Y = .eq
         · simp only [e1, ↓reduceIte]
           obtain ⟨Res, run, sr, er⟩ := ih2 X Y L R Rs S len' sc kc xs ks rs kl'
-          have dd := drop_at (κ := ι) (P := Rs.reverse.flatten ++ Y :: X :: R ++ [S]) (L := L) (y := Y)
+          have dd := drop_at (κ := (fun x : Term => x)) (P := Rs.reverse.flatten ++ Y :: X :: R ++ [S]) (L := L) (y := Y)
             (z := Z) (by simp) (c_eq_symm e1)
           exact ⟨Res, run, sr, er.trans (by simpa using dd)⟩
         simp only [e1, ↓reduceIte]
@@ -51907,7 +51910,7 @@ defmodule STTDescrProofsTest do
         by_cases g2 : (Term.compare Z X).isLT = true
         · simp only [g2, ↓reduceIte]
           have l2 := islt_lt g2
-          have lzx := SA.lt_all (κ := ι) sc'.2 l2
+          have lzx := SA.lt_all (κ := (fun x : Term => x)) sc'.2 l2
           obtain ⟨Res, run, sr, er⟩ := ih2 Z Y L (X :: R) Rs S len'
             (SA_cons.2 ⟨fun w hw => by
                 simp only [List.mem_cons] at hw
@@ -51921,7 +51924,7 @@ defmodule STTDescrProofsTest do
               · exact kz
               · exact kc x (by simp [hx]))
             (c_lt_trans l2 xs) ks rs kl'
-          have := ins_mid (κ := ι) (P := Rs.reverse.flatten) (A := [Y]) (B := X :: R ++ [S]) (L := L) (z := Z)
+          have := ins_mid (κ := (fun x : Term => x)) (P := Rs.reverse.flatten) (A := [Y]) (B := X :: R ++ [S]) (L := L) (z := Z)
             (fun y hy => by
               simp only [List.cons_append, List.nil_append, List.mem_cons, List.mem_append,
                 List.not_mem_nil, or_false] at hy
@@ -51935,11 +51938,11 @@ defmodule STTDescrProofsTest do
         by_cases e2 : Term.compare Z X = .eq
         · simp only [e2, ↓reduceIte]
           obtain ⟨Res, run, sr, er⟩ := ih2 X Y L R Rs S len' sc kc xs ks rs kl'
-          have dd := drop_at (κ := ι) (P := Rs.reverse.flatten ++ Y :: X :: R ++ [S]) (L := L) (y := X)
+          have dd := drop_at (κ := (fun x : Term => x)) (P := Rs.reverse.flatten ++ Y :: X :: R ++ [S]) (L := L) (y := X)
             (z := Z) (by simp) (c_eq_symm e2)
           exact ⟨Res, run, sr, er.trans (by simpa using dd)⟩
         simp only [e2, ↓reduceIte]
-        have rs' : RunsA (κ := ι) KdU ((Y :: X :: R) :: Rs) := runsA_cons ⟨by simp, sc, kc⟩ rs
+        have rs' : RunsA (κ := (fun x : Term => x)) KdU ((Y :: X :: R) :: Rs) := runsA_cons ⟨by simp, sc, kc⟩ rs
         by_cases g3 : (Term.compare Z S).isLT = true
         · simp only [g3, ↓reduceIte]
           have l3 := islt_lt g3
@@ -51947,7 +51950,7 @@ defmodule STTDescrProofsTest do
             (by simp [SA]; exact l3)
             (fun x hx => by simp only [List.mem_cons, List.not_mem_nil, or_false] at hx; rcases hx with rfl | rfl; exact kz; exact ks)
             rs' kl'
-          have := ins_mid (κ := ι) (P := Rs.reverse.flatten ++ Y :: X :: R) (A := []) (B := [S]) (L := L)
+          have := ins_mid (κ := (fun x : Term => x)) (P := Rs.reverse.flatten ++ Y :: X :: R) (A := []) (B := [S]) (L := L)
             (z := Z) (fun y hy => by
               simp only [List.nil_append, List.mem_cons, List.not_mem_nil, or_false] at hy
               subst hy; rw [c_swap, l3]; simp)
@@ -51956,7 +51959,7 @@ defmodule STTDescrProofsTest do
         by_cases e3 : Term.compare Z S = .eq
         · simp only [e3, ↓reduceIte]
           obtain ⟨Res, run, sr, er⟩ := ih2 X Y L R Rs S len' sc kc xs ks rs kl'
-          have dd := drop_at (κ := ι) (P := Rs.reverse.flatten ++ Y :: X :: R ++ [S]) (L := L) (y := S)
+          have dd := drop_at (κ := (fun x : Term => x)) (P := Rs.reverse.flatten ++ Y :: X :: R ++ [S]) (L := L) (y := S)
             (z := Z) (by simp) (c_eq_symm e3)
           exact ⟨Res, run, sr, er.trans (by simpa using dd)⟩
         simp only [e3, ↓reduceIte]
@@ -51974,11 +51977,9 @@ defmodule STTDescrProofsTest do
     namespace Elixir.STTDescrProofsTest.USort
     open Lynx
 
-    local notation "ι" => fun x : Term => x
-
     theorem usort1 (n : Nat) : ∀ X L, L.length ≤ n → KdU X → (∀ x ∈ L, KdU x) →
         ∃ Res, Erlang.lists.«usort_1/2» X (Term.list L) = .ok (Term.list Res) ∧
-          SA ι Res ∧ Eqv ι Res (X :: L) := by
+          SA (fun x : Term => x) Res ∧ Eqv (fun x : Term => x) Res (X :: L) := by
       induction n with
       | zero =>
         intro X L len _ _
@@ -52001,10 +52002,10 @@ defmodule STTDescrProofsTest do
       by_cases e1 : Term.compare X Z = .eq
       · simp only [e1, ↓reduceIte]
         obtain ⟨Res, run, s, er⟩ := ih X L (by simp at len; omega) kx kl'
-        exact ⟨Res, run, s, er.trans (drop_at (κ := ι) (P := [X]) (y := X) (by simp) e1)⟩
+        exact ⟨Res, run, s, er.trans (drop_at (κ := (fun x : Term => x)) (P := [X]) (y := X) (by simp) e1)⟩
       simp only [e1, ↓reduceIte]
-      have swap : Eqv ι ([Z, X] ++ L) (X :: Z :: L) := by
-        have := eqv_move (κ := ι) (A := [X]) (B := L) (x := Z) (fun y hy => by
+      have swap : Eqv (fun x : Term => x) ([Z, X] ++ L) (X :: Z :: L) := by
+        have := eqv_move (κ := (fun x : Term => x)) (A := [X]) (B := L) (x := Z) (fun y hy => by
           simp at hy; subst hy; exact e1)
         simpa using this.symm
       by_cases l1 : (Term.compare X Z).isLT = true
@@ -52025,7 +52026,7 @@ defmodule STTDescrProofsTest do
     /-- `lists:usort/1` returns the strictly sorted list of the first element of each class of equal
     terms, for terms that never compare equal to a cons cell. -/
     theorem usort_spec (L : List Term) (kl : ∀ x ∈ L, KdU x) :
-        ∃ R, Erlang.lists.«usort/1» (Term.list L) = .ok (Term.list R) ∧ SA ι R ∧ Eqv ι R L := by
+        ∃ R, Erlang.lists.«usort/1» (Term.list L) = .ok (Term.list R) ∧ SA (fun x : Term => x) R ∧ Eqv (fun x : Term => x) R L := by
       rw [Erlang.lists.«usort/1».eq_def]
       match L with
       | [] => exact ⟨[], by simp, by simp, Eqv.refl _⟩
@@ -52039,12 +52040,12 @@ defmodule STTDescrProofsTest do
       · simp only [l, ↓reduceIte]
         have xy := islt_lt l
         have xy' : Term.compare X Y ≠ .eq := by simp [xy]
-        have swap : ∀ T, Eqv ι (Y :: X :: T) (X :: Y :: T) := fun T => by
-          have := eqv_move (κ := ι) (A := [Y]) (B := T) (x := X)
+        have swap : ∀ T, Eqv (fun x : Term => x) (Y :: X :: T) (X :: Y :: T) := fun T => by
+          have := eqv_move (κ := (fun x : Term => x)) (A := [Y]) (B := T) (x := X)
             (by simp only [List.mem_cons, List.not_mem_nil, or_false, forall_eq]; exact fun h => xy' (c_eq_symm h))
           simpa using this
         match T with
-        | [] => exact ⟨[X, Y], by simp, small2 (κ := ι) xy, Eqv.refl _⟩
+        | [] => exact ⟨[X, Y], by simp, small2 (κ := (fun x : Term => x)) xy, Eqv.refl _⟩
         | [Z] =>
           simp only []
           by_cases l2 : (Term.compare Y Z).isLT = true
@@ -52053,20 +52054,20 @@ defmodule STTDescrProofsTest do
           simp only [l2, Bool.false_eq_true, ↓reduceIte]
           by_cases e2 : Term.compare Y Z = .eq
           · simp only [e2, ↓reduceIte]
-            exact ⟨[X, Y], by simp, small2 (κ := ι) xy, drop_at (κ := ι) (P := [X, Y]) (L := []) (y := Y) (by simp) e2⟩
+            exact ⟨[X, Y], by simp, small2 (κ := (fun x : Term => x)) xy, drop_at (κ := (fun x : Term => x)) (P := [X, Y]) (L := []) (y := Y) (by simp) e2⟩
           simp only [e2, ↓reduceIte]
           have zy := gt_of_ne (not_islt' l2) e2
           by_cases l3 : (Term.compare Z X).isLT = true
           · simp only [l3, ↓reduceIte]
-            have s := small3 (κ := ι) (islt_lt l3) xy
+            have s := small3 (κ := (fun x : Term => x)) (islt_lt l3) xy
             exact ⟨[Z, X, Y], by simp, s, eqv_perm (List.perm_append_singleton Z [X, Y]).symm s.ne⟩
           simp only [l3, Bool.false_eq_true, ↓reduceIte]
           by_cases e3 : Term.compare Z X = .eq
           · simp only [e3, ↓reduceIte]
-            exact ⟨[X, Y], by simp, small2 (κ := ι) xy,
-              drop_at (κ := ι) (P := [X, Y]) (L := []) (y := X) (by simp) (c_eq_symm e3)⟩
+            exact ⟨[X, Y], by simp, small2 (κ := (fun x : Term => x)) xy,
+              drop_at (κ := (fun x : Term => x)) (P := [X, Y]) (L := []) (y := X) (by simp) (c_eq_symm e3)⟩
           simp only [e3, ↓reduceIte]
-          have s := small3 (κ := ι) (gt_of_ne (not_islt' l3) e3) zy
+          have s := small3 (κ := (fun x : Term => x)) (gt_of_ne (not_islt' l3) e3) zy
           exact ⟨[X, Z, Y], by simp, s, eqv_perm (.cons X (.swap Y Z [])) s.ne⟩
         | Z :: W :: T' =>
           simp only []
@@ -52080,12 +52081,12 @@ defmodule STTDescrProofsTest do
       · simp only [g, ↓reduceIte]
         have yx := isgt_lt g
         have xy' : Term.compare X Y ≠ .eq := by intro e; simp [e] at g
-        have swap : ∀ T, Eqv ι (Y :: X :: T) (X :: Y :: T) := fun T => by
-          have := eqv_move (κ := ι) (A := [Y]) (B := T) (x := X)
+        have swap : ∀ T, Eqv (fun x : Term => x) (Y :: X :: T) (X :: Y :: T) := fun T => by
+          have := eqv_move (κ := (fun x : Term => x)) (A := [Y]) (B := T) (x := X)
             (by simp only [List.mem_cons, List.not_mem_nil, or_false, forall_eq]; exact fun h => xy' (c_eq_symm h))
           simpa using this
         match T with
-        | [] => exact ⟨[Y, X], by simp, small2 (κ := ι) yx, swap []⟩
+        | [] => exact ⟨[Y, X], by simp, small2 (κ := (fun x : Term => x)) yx, swap []⟩
         | [Z] =>
           simp only []
           by_cases l2 : (Term.compare X Z).isLT = true
@@ -52094,21 +52095,21 @@ defmodule STTDescrProofsTest do
           simp only [l2, Bool.false_eq_true, ↓reduceIte]
           by_cases e2 : Term.compare X Z = .eq
           · simp only [e2, ↓reduceIte]
-            exact ⟨[Y, X], by simp, small2 (κ := ι) yx,
-              (swap []).trans (drop_at (κ := ι) (P := [X, Y]) (L := []) (y := X) (by simp) e2)⟩
+            exact ⟨[Y, X], by simp, small2 (κ := (fun x : Term => x)) yx,
+              (swap []).trans (drop_at (κ := (fun x : Term => x)) (P := [X, Y]) (L := []) (y := X) (by simp) e2)⟩
           simp only [e2, ↓reduceIte]
           have zx := gt_of_ne (not_islt' l2) e2
           by_cases l3 : (Term.compare Z Y).isLT = true
           · simp only [l3, ↓reduceIte]
-            have s := small3 (κ := ι) (islt_lt l3) yx
+            have s := small3 (κ := (fun x : Term => x)) (islt_lt l3) yx
             exact ⟨[Z, Y, X], by simp, s, eqv_perm (List.reverse_perm [X, Y, Z]) s.ne⟩
           simp only [l3, Bool.false_eq_true, ↓reduceIte]
           by_cases e3 : Term.compare Z Y = .eq
           · simp only [e3, ↓reduceIte]
-            exact ⟨[Y, X], by simp, small2 (κ := ι) yx,
-              (swap []).trans (drop_at (κ := ι) (P := [X, Y]) (L := []) (y := Y) (by simp) (c_eq_symm e3))⟩
+            exact ⟨[Y, X], by simp, small2 (κ := (fun x : Term => x)) yx,
+              (swap []).trans (drop_at (κ := (fun x : Term => x)) (P := [X, Y]) (L := []) (y := Y) (by simp) (c_eq_symm e3))⟩
           simp only [e3, ↓reduceIte]
-          have s := small3 (κ := ι) (gt_of_ne (not_islt' l3) e3) zx
+          have s := small3 (κ := (fun x : Term => x)) (gt_of_ne (not_islt' l3) e3) zx
           exact ⟨[Y, Z, X], by simp, s, eqv_perm (List.perm_append_singleton X [Y, Z]) s.ne⟩
         | Z :: W :: T' =>
           simp only []
@@ -52121,7 +52122,7 @@ defmodule STTDescrProofsTest do
       have e : Term.compare X Y = .eq := by
         cases h : Term.compare X Y <;> simp_all
       obtain ⟨R, run, s, er⟩ := usort1 T.length X T (by omega) kx kt
-      exact ⟨R, run, s, er.trans (drop_at (κ := ι) (P := [X]) (y := X) (by simp) e)⟩
+      exact ⟨R, run, s, er.trans (drop_at (κ := (fun x : Term => x)) (P := [X]) (y := X) (by simp) e)⟩
 
     end Elixir.STTDescrProofsTest.USort
     """
