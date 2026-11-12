@@ -5,7 +5,10 @@ public import Lynx.Concurrent
 /-! `check` follows a process about to read its environment before any other
 step. Reading changes nothing other processes observe, and their steps cannot
 change what it reads, so every run can take the read first and reach the same
-terminal configuration. This module proves that `check` is sound. -/
+terminal configuration. Elsewhere it follows steps with sleep sets: steps whose
+footprints do not conflict commute, so a run that takes a sleeping step first
+reaches what a run explored before does. This module proves that `check` is
+sound. -/
 
 public section
 
@@ -2223,48 +2226,1820 @@ private theorem receive_first {first last : Config α} {events : List Event} {ou
         selected' (kept.holds holds)
       exact ⟨_ :: events', .step (.timer (timer_of_take holds possible)) run'⟩
 
+/-! ### Footprints
+
+A step reads and writes some locations of the state: fields of processes,
+whether processes are alive, and the timers. Steps of different processes whose
+footprints do not conflict commute. -/
+
+/-- Whether two records agree on a field. -/
+private def Field.same : Field → ProcessState → ProcessState → Prop
+  | .pdict, first, second => first.pdict = second.pdict
+  | .mailbox, first, second => first.mailbox = second.mailbox
+  | .refCounter, first, second => first.refCounter = second.refCounter
+  | .children, first, second => first.children = second.children
+  | .links, first, second => first.links = second.links
+  | .monitors, first, second => first.monitors = second.monitors
+  | .monitoring, first, second => first.monitoring = second.monitoring
+  | .aliases, first, second => first.aliases = second.aliases
+  | .trapExit, first, second => first.trapExit = second.trapExit
+  | .signal, first, second => first.signal = second.signal
+
+private theorem Field.same_refl (field : Field) (process : ProcessState) :
+    field.same process process := by
+  cases field <;> rfl
+
+private theorem Field.same_symm {field : Field} {first second : ProcessState}
+    (same : field.same first second) : field.same second first := by
+  cases field <;> exact same.symm
+
+private theorem Field.same_trans {field : Field} {first second third : ProcessState}
+    (left : field.same first second) (right : field.same second third) : field.same first third := by
+  cases field <;> exact left.trans right
+
+/-- Records agreeing on every field are equal. -/
+private theorem ProcessState.ext_fields {first second : ProcessState}
+    (same : ∀ field : Field, field.same first second) : first = second := by
+  have := same Field.pdict; have := same Field.mailbox; have := same Field.refCounter
+  have := same Field.children; have := same Field.links; have := same Field.monitors
+  have := same Field.monitoring; have := same Field.aliases; have := same Field.trapExit
+  have := same Field.signal
+  cases first; cases second; simp_all [Field.same]
+
+/-- Whether two states agree at a location. -/
+private def Agree (first second : State) : Loc → Prop
+  | .field processId field =>
+      Option.Rel field.same (first.processes processId) (second.processes processId)
+  | .alive processId => (first.processes processId).isSome = (second.processes processId).isSome
+  | .timersTo processId =>
+      first.timers.filter (·.destination == processId) = second.timers.filter (·.destination == processId)
+  | .timers => first.timers = second.timers
+
+private theorem Agree.refl (state : State) (loc : Loc) : Agree state state loc := by
+  cases loc with
+  | field processId field =>
+    simp only [Agree]
+    cases found : state.processes processId
+    · exact .none
+    · exact .some (Field.same_refl _ _)
+  | alive => rfl
+  | timersTo => rfl
+  | timers => rfl
+
+private theorem Agree.symm {first second : State} {loc : Loc} (agree : Agree first second loc) :
+    Agree second first loc := by
+  cases loc with
+  | field processId field =>
+    simp only [Agree] at *
+    generalize first.processes processId = a at agree
+    generalize second.processes processId = b at agree
+    cases agree with
+    | none => exact .none
+    | some same => exact .some (Field.same_symm same)
+  | alive => exact Eq.symm agree
+  | timersTo => exact Eq.symm agree
+  | timers => exact Eq.symm agree
+
+private theorem Agree.trans {first second third : State} {loc : Loc}
+    (left : Agree first second loc) (right : Agree second third loc) : Agree first third loc := by
+  cases loc with
+  | field processId field =>
+    simp only [Agree] at *
+    generalize first.processes processId = a at left
+    generalize second.processes processId = b at left right
+    generalize third.processes processId = c at right
+    cases left with
+    | none => exact right
+    | some same => cases right with | some same' => exact .some (Field.same_trans same same')
+  | alive => exact Eq.trans left right
+  | timersTo => exact Eq.trans left right
+  | timers => exact Eq.trans left right
+
+/-- States agreeing at every location are equal. -/
+private theorem State.ext_agree {first second : State} (agree : ∀ loc, Agree first second loc) :
+    first = second := by
+  refine State.ext' (agree .timers) fun processId => ?_
+  have fields := fun field => agree (.field processId field)
+  have alive := agree (.alive processId)
+  simp only [Agree] at fields alive
+  cases found : first.processes processId with
+  | none => cases found' : second.processes processId <;> simp_all
+  | some process =>
+    cases found' : second.processes processId with
+    | none => simp_all
+    | some process' =>
+      congr 1
+      exact ProcessState.ext_fields fun field => by
+        have := fields field; rw [found, found'] at this; cases this; assumption
+
+/-- A change of a state that, from states agreeing with this one on some
+locations, writes only some other locations, with values that depend only on
+the first ones. -/
+private def Frames (reads writes : List Loc) (change : State → State) (state : State) : Prop :=
+  ∀ other, (∀ loc ∈ reads, Agree state other loc) →
+    (∀ loc, loc ∉ writes → Agree (change other) other loc) ∧
+    ∀ loc ∈ writes, Agree (change state) (change other) loc
+
+private theorem Frames.keeps {reads writes : List Loc} {change : State → State} {state : State}
+    (frames : Frames reads writes change state) {loc : Loc} (out : loc ∉ writes) :
+    Agree (change state) state loc :=
+  (frames state fun loc _ => Agree.refl state loc).1 loc out
+
+/-- Reading and writing more keeps a frame, when the new writes are read. -/
+private theorem Frames.mono {reads writes reads' writes' : List Loc} {change : State → State}
+    {state : State} (frames : Frames reads writes change state) (moreReads : reads ⊆ reads')
+    (moreWrites : writes ⊆ writes') (read : ∀ loc ∈ writes', loc ∉ writes → loc ∈ reads') :
+    Frames reads' writes' change state := by
+  intro other agree
+  obtain ⟨keeps, determined⟩ := frames other fun loc mem => agree loc (moreReads mem)
+  refine ⟨fun loc out => keeps loc fun mem => out (moreWrites mem), fun loc mem => ?_⟩
+  by_cases written : loc ∈ writes
+  · exact determined loc written
+  · exact ((frames.keeps written).trans (agree loc (read loc mem written))).trans
+      (keeps loc written).symm
+
+/-- One change after another. -/
+private theorem Frames.comp {reads writes reads' writes' : List Loc} {first second : State → State}
+    {state : State} (frames : Frames reads writes first state)
+    (frames' : ∀ other, (∀ loc ∈ reads ++ reads', Agree state other loc) →
+      Frames reads' writes' second (first other)) :
+    Frames (reads ++ reads') (writes ++ writes') (second ∘ first) state := by
+  intro other agree
+  obtain ⟨keeps, determined⟩ := frames other fun loc mem => agree loc (by simp [mem])
+  have middle : ∀ loc ∈ reads', Agree (first state) (first other) loc := by
+    intro loc mem
+    by_cases written : loc ∈ writes
+    · exact determined loc written
+    · exact ((frames.keeps written).trans (agree loc (by simp [mem]))).trans (keeps loc written).symm
+  obtain ⟨keeps', determined'⟩ := frames' state (fun loc _ => Agree.refl state loc) (first other)
+    middle
+  obtain ⟨keepsOther, -⟩ := frames' other agree (first other) fun loc _ => Agree.refl _ loc
+  refine ⟨fun loc out => ?_, fun loc mem => ?_⟩
+  · simp only [List.mem_append, not_or] at out
+    exact (keepsOther loc out.2).trans (keeps loc out.1)
+  · simp only [List.mem_append] at mem
+    by_cases written' : loc ∈ writes'
+    · exact determined' loc written'
+    · rcases mem with written | written
+      · exact ((keeps' loc written' |> fun _ =>
+          ((frames' state (fun loc _ => Agree.refl state loc)).keeps written')).trans
+            (determined loc written)).trans (keepsOther loc written').symm
+      · exact absurd written written'
+
+/-- A change of records that writes only some fields, with values that depend
+only on some other fields. -/
+private def Changes (reads writes : List Field) (change : ProcessState → ProcessState) : Prop :=
+  (∀ process field, field ∉ writes → field.same (change process) process) ∧
+  ∀ process process', (∀ field ∈ reads, field.same process process') →
+    ∀ field ∈ writes, field.same (change process) (change process')
+
+/-- Prove that a record update changes only the fields it lists. -/
+local macro "changes" : tactic => `(tactic| (
+  refine ⟨fun process field out => ?_, fun process process' same field mem => ?_⟩ <;>
+    cases field <;> simp_all [Field.same]))
+
+private theorem agree_process {first second : State} {processId : PID} {field : Field}
+    {process process' : ProcessState} (found : first.processes processId = some process)
+    (found' : second.processes processId = some process') :
+    Agree first second (.field processId field) ↔ field.same process process' := by
+  simp only [Agree, found, found']
+  exact ⟨fun | .some same => same, .some⟩
+
+private theorem frames_update {state : State} {processId : PID} {process : Option ProcessState} :
+    Frames [] (Loc.process processId) (·.update processId process) state := by
+  intro other _
+  refine ⟨fun loc out => ?_, fun loc mem => ?_⟩
+  · cases loc with
+    | field candidate field =>
+      have ne : candidate ≠ processId := by
+        rintro rfl; exact out (by simp [Loc.process, Field.mem_all])
+      simp only [Agree, State.update, ne, ite_false]; exact (Agree.refl other (.field _ _))
+    | alive candidate =>
+      have ne : candidate ≠ processId := by rintro rfl; exact out (by simp [Loc.process])
+      simp [Agree, State.update, ne]
+    | timersTo => rfl
+    | timers => rfl
+  · simp only [Loc.process, List.mem_cons, List.mem_map] at mem
+    rcases mem with rfl | ⟨field, -, rfl⟩
+    · simp [Agree, State.update]
+    · simp only [Agree, State.update, ite_true]
+      cases process
+      · exact .none
+      · exact .some (Field.same_refl _ _)
+
+private theorem frames_modify {state : State} {processId : PID}
+    {change : ProcessState → ProcessState} {reads writes : List Field}
+    (changes : Changes reads writes change) :
+    Frames (.alive processId :: reads.map (.field processId)) (writes.map (.field processId))
+      (·.modify processId change) state := by
+  intro other agree
+  have alive := agree (.alive processId) (by simp)
+  refine ⟨fun loc out => ?_, fun loc mem => ?_⟩
+  · dsimp only
+    unfold State.modify
+    split
+    · rename_i process found
+      cases loc with
+      | field candidate field =>
+        by_cases same : candidate = processId
+        · subst same
+          have : field ∉ writes := fun mem => out (by simp [mem])
+          simp only [Agree, State.update, ite_true, found]
+          exact .some (changes.1 process field this)
+        · simp only [Agree, State.update, same, ite_false]; exact Agree.refl other (.field _ _)
+      | alive candidate => simp only [Agree, State.update]; split <;> simp_all
+      | timersTo => rfl
+      | timers => rfl
+    · exact Agree.refl other loc
+  · simp only [List.mem_map] at mem
+    obtain ⟨field, mem, rfl⟩ := mem
+    dsimp only
+    unfold State.modify
+    cases found : state.processes processId with
+    | none =>
+      have : other.processes processId = none := by
+        simp only [Agree, found, Option.isSome_none] at alive
+        cases h : other.processes processId <;> simp_all
+      simp [Agree, found, this]
+    | some process =>
+      obtain ⟨process', found'⟩ : ∃ process', other.processes processId = some process' := by
+        simp only [Agree, found, Option.isSome_some] at alive
+        exact Option.isSome_iff_exists.mp alive.symm
+      simp only [found, found', Agree, State.update, ite_true]
+      refine .some (changes.2 process process' (fun field mem => ?_) field mem)
+      exact (agree_process found found').mp (agree _ (by simp [mem]))
+
+private theorem frames_deliver {state : State} {processId : PID} {message : Term} :
+    Frames [.alive processId, .field processId .mailbox] [.field processId .mailbox]
+      (·.deliver processId message) state := by
+  have equal : ∀ state : State, state.deliver processId message = state.modify processId
+      fun process => { process with mailbox := process.mailbox ++ [message] } := by
+    intro state; unfold State.deliver State.modify; split <;> rfl
+  simp only [equal]
+  exact frames_modify (reads := [.mailbox]) (writes := [.mailbox]) (by changes)
+
+private theorem frames_kill {state : State} {processId : PID} {reason : Term} :
+    Frames [.alive processId, .field processId .signal] [.field processId .signal]
+      (·.kill processId reason) state :=
+  frames_modify (reads := [.signal]) (writes := [.signal]) (by changes)
+
+/-- States agreeing on a field of a process agree on the field of its record. -/
+private theorem Agree.same {first second : State} {processId : PID} {field : Field}
+    (agree : Agree first second (.field processId field)) :
+    field.same (first.process processId) (second.process processId) := by
+  simp only [Agree, State.process] at *
+  generalize first.processes processId = a at agree
+  generalize second.processes processId = b at agree
+  cases agree with
+  | none => exact Field.same_refl _ _
+  | some same => exact same
+
+/-- What signaling a process writes. -/
+private def signalWrites (target : PID) (reason : Term) (untrappable : Bool) : List Loc :=
+  .field target .mailbox :: if untrappable || !isNormal reason then [.field target .signal] else []
+
+private theorem signalWrites_subset {target : PID} {reason : Term} {untrappable : Bool} :
+    ∀ loc ∈ signalWrites target reason untrappable, loc ∈ Loc.signaled target := by
+  intro loc mem
+  simp only [signalWrites, List.mem_cons] at mem
+  rcases mem with rfl | mem
+  · simp [Loc.signaled]
+  · split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem
+    subst mem; simp [Loc.signaled]
+
+private theorem frames_signal {state : State} {target sender : PID} {reason : Term}
+    {untrappable : Bool} :
+    Frames (Loc.signaled target) (signalWrites target reason untrappable)
+      (·.signal target sender reason untrappable) state := by
+  intro other agree
+  have trapExit : (other.process target).trapExit = (state.process target).trapExit :=
+    (Agree.same (agree (.field target .trapExit) (by simp [Loc.signaled]))).symm
+  have kill : ∀ reason', (untrappable || !isNormal reason) = true →
+      Frames (Loc.signaled target) (signalWrites target reason untrappable)
+        (·.kill target reason') state := fun reason' signaled =>
+    frames_kill.mono (by simp [Loc.signaled]) (by simp [signalWrites, signaled])
+      fun loc mem _ => signalWrites_subset loc mem
+  have deliver := (frames_deliver (state := state) (processId := target)
+    (message := .tuple #[.atom "EXIT", .pid sender, reason])).mono
+    (reads' := Loc.signaled target) (writes' := signalWrites target reason untrappable)
+    (by simp [Loc.signaled]) (by simp [signalWrites]) fun loc mem _ => signalWrites_subset loc mem
+  dsimp only at deliver ⊢
+  unfold State.signal
+  rw [trapExit]
+  split
+  · exact kill _ (by simp_all) other agree
+  · split
+    · exact deliver other agree
+    · split
+      · refine ⟨fun loc _ => Agree.refl other loc, fun loc mem => ?_⟩
+        simp only [signalWrites, List.mem_cons] at mem
+        rcases mem with rfl | mem
+        · exact agree _ (by simp [Loc.signaled])
+        · split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem
+          subst mem; exact agree _ (by simp [Loc.signaled])
+      · exact kill _ (by simp_all) other agree
+
+private theorem Frames.id {state : State} : Frames [] [] (fun state => state) state :=
+  fun _ _ => ⟨fun loc _ => Agree.refl _ loc, fun _ mem => absurd mem List.not_mem_nil⟩
+
+/-- A change that agrees with a framed one on states agreeing with this one. -/
+private theorem Frames.congr {reads writes : List Loc} {change change' : State → State}
+    {state : State} (frames : Frames reads writes change' state)
+    (equal : ∀ other, (∀ loc ∈ reads, Agree state other loc) → change other = change' other) :
+    Frames reads writes change state := by
+  intro other agree
+  rw [equal other agree, equal state (fun loc _ => Agree.refl state loc)]
+  exact frames other agree
+
+private theorem Frames.foldl {items : List γ} {step : State → γ → State}
+    {reads writes : γ → List Loc}
+    (frames : ∀ item ∈ items, ∀ state, Frames (reads item) (writes item) (step · item) state)
+    {state : State} :
+    Frames (items.flatMap reads) (items.flatMap writes) (fun state => items.foldl step state)
+      state := by
+  induction items generalizing state with
+  | nil => exact Frames.id
+  | cons item rest ih =>
+    simp only [List.foldl_cons, List.flatMap_cons]
+    exact Frames.comp (second := fun state => rest.foldl step state) (frames item (by simp) state)
+      fun _ _ => ih fun item mem => frames item (by simp [mem])
+
+/-- Whether some timer sends to a process. -/
+private theorem any_timersTo {first second : State} {processId : PID}
+    (agree : Agree first second (.timersTo processId)) :
+    first.timers.any (·.destination == processId) = second.timers.any (·.destination == processId) := by
+  have any : ∀ timers : List Timer, timers.any (·.destination == processId) =
+      !(timers.filter (·.destination == processId)).isEmpty := by
+    intro timers
+    induction timers with
+    | nil => rfl
+    | cons timer rest ih => simp only [List.any_cons, List.filter_cons, ih]; split <;> simp_all
+  simp only [Agree] at agree
+  rw [any, any, agree]
+
+/-- Cancel the timers sending to a process. -/
+private theorem frames_cancelTimers {state : State} {processId : PID} {some : Bool}
+    (decided : state.timers.any (·.destination == processId) = some) :
+    Frames (.timersTo processId :: if some then [.timers] else [])
+      (if some then [.timers, .timersTo processId] else [])
+      (fun state => { state with timers := state.timers.filter (·.destination != processId) })
+      state := by
+  intro other agree
+  have timersTo := agree (.timersTo processId) (by simp)
+  simp only [Agree] at timersTo
+  subst decided
+  split
+  · rename_i some
+    refine ⟨fun loc out => ?_, fun loc mem => ?_⟩
+    · cases loc with
+      | timersTo candidate =>
+        have ne : candidate ≠ processId := by rintro rfl; simp at out
+        simp only [Agree, List.filter_filter]
+        congr 1; funext timer
+        by_cases equal : timer.destination = candidate <;> simp [equal, ne]
+      | timers => simp at out
+      | field => exact Agree.refl other (.field _ _)
+      | alive => exact Agree.refl other (.alive _)
+    · have timers : state.timers = other.timers := agree .timers (by simp [some])
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at mem
+      rcases mem with rfl | rfl
+      · simp only [Agree, timers]
+      · simp only [Agree, timers]
+  · rename_i none
+    have empty : state.timers.filter (·.destination == processId) = [] := by
+      simpa [List.filter_eq_nil_iff] using none
+    have kept : other.timers.filter (·.destination != processId) = other.timers := by
+      rw [List.filter_eq_self]
+      intro timer mem
+      have : timer ∉ other.timers.filter (·.destination == processId) := by
+        rw [← timersTo, empty]; simp
+      simpa [mem] using this
+    refine ⟨fun loc _ => ?_, fun loc mem => absurd mem List.not_mem_nil⟩
+    simp only [kept]
+    exact Agree.refl other loc
+
+/-- What a process exiting reads and writes, as `State.exitFootprint` states. -/
+private theorem frames_terminate {state : State} {processId : PID} {reason : Term} :
+    Frames (state.exitFootprint processId reason).reads (state.exitFootprint processId reason).writes
+      (·.terminate processId reason) state := by
+  let first := fun state : State => { state.update processId none with
+    timers := state.timers.filter (·.destination != processId) }
+  let linked := fun (state : State) (linked : PID) =>
+    (state.modify linked fun other => { other with links := other.links.erase processId }).signal
+      linked processId reason false
+  let watched := fun (state : State) (entry : List Nat × PID) =>
+    (state.deliver entry.2 (.tuple #[.atom "DOWN", .reference entry.1, .atom "process",
+      .pid processId, reason])).modify entry.2 fun other =>
+        { other with monitoring := other.monitoring.filter (·.1 != entry.1)
+                     aliases := other.aliases.erase entry.1 }
+  have firstFrames : Frames (.timersTo processId ::
+        if state.timers.any (·.destination == processId) then [.timers] else [])
+      (Loc.process processId ++
+        if state.timers.any (·.destination == processId) then [.timers, .timersTo processId] else [])
+      first state := by
+    have := Frames.comp (first := (·.update processId none))
+      (second := fun state => { state with timers := state.timers.filter (·.destination != processId) })
+      (reads := []) (state := state) frames_update fun other agree => frames_cancelTimers
+        ((any_timersTo (agree _ (by simp))).symm)
+    exact this.mono (by simp) (by simp) fun loc mem out => absurd mem out
+  have linkedFrames : ∀ linked' ∈ (state.process processId).links, ∀ state,
+      Frames (([.alive linked', .field linked' .links]) ++ Loc.signaled linked')
+        ([.field linked' .links] ++ signalWrites linked' reason false) (linked · linked') state :=
+    fun linked' _ state => Frames.comp
+      (frames_modify (reads := [.links]) (writes := [.links]) (by changes)) fun _ _ => frames_signal
+  have watchedFrames : ∀ entry ∈ (state.process processId).monitors, ∀ state,
+      Frames ([.alive entry.2, .field entry.2 .mailbox] ++
+          [.alive entry.2, .field entry.2 .monitoring, .field entry.2 .aliases])
+        ([.field entry.2 .mailbox] ++ [.field entry.2 .monitoring, .field entry.2 .aliases])
+        (watched · entry) state :=
+    fun entry _ state => Frames.comp frames_deliver fun _ _ =>
+      frames_modify (reads := [.monitoring, .aliases]) (writes := [.monitoring, .aliases]) (by changes)
+  have composed := Frames.comp (Frames.comp firstFrames fun _ _ => Frames.foldl linkedFrames)
+    fun _ _ => Frames.foldl watchedFrames
+  refine Frames.congr (composed.mono ?_ ?_ ?_) fun other agree => ?_
+  all_goals try
+    intro loc
+    simp only [State.exitFootprint, List.mem_append, List.mem_cons, List.mem_flatMap, Loc.signaled,
+      signalWrites, List.not_mem_nil, or_false, Bool.false_or]
+    split <;> simp only [List.mem_cons, List.not_mem_nil, or_false, Bool.not_eq_true'] <;> grind
+  have links : (other.process processId).links = (state.process processId).links :=
+    (Agree.same (agree (.field processId .links)
+      (by simp [State.exitFootprint, Loc.process, Field.mem_all]))).symm
+  have monitors : (other.process processId).monitors = (state.process processId).monitors :=
+    (Agree.same (agree (.field processId .monitors)
+      (by simp [State.exitFootprint, Loc.process, Field.mem_all]))).symm
+  simp only [State.terminate, links, monitors]
+  rfl
+
+@[simp] private theorem isSome_modify {state : State} {processId other : PID}
+    {change : ProcessState → ProcessState} :
+    ((state.modify processId change).processes other).isSome = (state.processes other).isSome := by
+  unfold State.modify
+  split
+  · simp only [State.update]; split <;> simp_all
+  · rfl
+
+/-- What starting a monitor reads and writes. -/
+private def monitorWrites (processId target : PID) (alias live : Bool) : List Loc :=
+  .field processId .refCounter :: if live then
+      [.field target .monitors, .field processId .monitoring] ++
+        if alias then [.field processId .aliases] else []
+    else [.field processId .mailbox]
+
+private theorem frames_monitor {state : State} {processId target : PID} {alias live : Bool}
+    (decided : (state.processes target).isSome = live) :
+    Frames (.alive processId :: .alive target :: monitorWrites processId target alias live)
+      (monitorWrites processId target alias live)
+      (fun state => (state.monitor processId target alias).2) state := by
+  let reference := processId ++ [(state.process processId).refCounter + 1]
+  let count := fun state : State => state.modify processId fun process =>
+    { process with refCounter := process.refCounter + 1 }
+  have counted : Frames [.alive processId, .field processId .refCounter]
+      [.field processId .refCounter] count state :=
+    frames_modify (reads := [.refCounter]) (writes := [.refCounter]) (by changes)
+  have equal : ∀ other : State,
+      (∀ loc ∈ .alive processId :: .alive target :: monitorWrites processId target alias live,
+        Agree state other loc) →
+      (other.monitor processId target alias).2 = if live then
+        ((count other).modify target fun watched =>
+          { watched with monitors := watched.monitors ++ [(reference, processId)] }).modify processId
+            fun process =>
+              { process with monitoring := process.monitoring ++ [(reference, target)]
+                             aliases := if alias then process.aliases ++ [reference] else process.aliases }
+      else (count other).deliver processId (.tuple #[.atom "DOWN", .reference reference,
+        .atom "process", .pid target, .atom "noproc"]) := by
+    intro other agree
+    have counter : (other.process processId).refCounter = (state.process processId).refCounter :=
+      (Agree.same (agree (.field processId .refCounter) (by simp [monitorWrites]))).symm
+    have alive : (other.processes target).isSome = live :=
+      decided ▸ (agree (.alive target) (by simp)).symm
+    have alive' : ((count other).processes target).isSome = live := by simp [count, alive]
+    simp only [count] at alive'
+    simp only [State.monitor, counter]
+    cases live
+    · simp only [Bool.false_eq_true, ite_false]
+      split
+      · rename_i found; simp [found] at alive'
+      · rfl
+    · simp only [ite_true]
+      split
+      · rfl
+      · rename_i found; simp [found] at alive'
+  refine Frames.congr ?_ equal
+  cases live
+  · exact (Frames.comp counted fun _ _ => frames_deliver).mono (by simp [monitorWrites])
+      (by simp [monitorWrites]) (by simp [monitorWrites])
+  · cases alias
+    · exact (Frames.comp counted fun _ _ => Frames.comp
+        (frames_modify (reads := [.monitors]) (writes := [.monitors]) (by changes)) fun _ _ =>
+          frames_modify (reads := [.monitoring]) (writes := [.monitoring]) (by changes)).mono
+        (by simp [monitorWrites]) (by simp [monitorWrites]) (by simp [monitorWrites])
+    · exact (Frames.comp counted fun _ _ => Frames.comp
+        (frames_modify (reads := [.monitors]) (writes := [.monitors]) (by changes)) fun _ _ =>
+          frames_modify (reads := [.monitoring, .aliases]) (writes := [.monitoring, .aliases])
+            (by changes)).mono
+        (by simp [monitorWrites]) (by simp [monitorWrites]) (by simp [monitorWrites])
+
+@[simp] private theorem isSome_deliver {state : State} {processId other : PID} {message : Term} :
+    ((state.deliver processId message).processes other).isSome = (state.processes other).isSome := by
+  unfold State.deliver
+  split
+  · simp only [State.update]; split <;> simp_all
+  · rfl
+
+@[simp] private theorem isSome_monitor {state : State} {processId other target : PID}
+    {alias : Bool} :
+    ((state.monitor processId target alias).2.processes other).isSome =
+      (state.processes other).isSome := by
+  simp only [State.monitor]; split <;> simp
+
+/-- What spawning a child writes. -/
+private def spawnWrites (processId : PID) (children : Nat) (options : SpawnOptions) : List Loc :=
+  .field processId .children :: Loc.process (processId ++ [children + 1]) ++
+    (if options.link then [.field processId .links] else []) ++
+    if options.monitor then [.field processId .refCounter, .field processId .monitoring] else []
+
+private theorem frames_spawnWith {state : State} {processId : PID} {options : SpawnOptions}
+    {process : ProcessState} (found : state.processes processId = some process) :
+    Frames (.alive processId :: .field processId .refCounter ::
+        spawnWrites processId process.children options)
+      (spawnWrites processId process.children options)
+      (fun state => (state.spawnWith processId options).2) state := by
+  obtain ⟨doLink, doMonitor⟩ := options
+  let child := processId ++ [process.children + 1]
+  let count := fun state : State => state.modify processId fun process =>
+    { process with children := process.children + 1 }
+  let linkChild := fun state : State =>
+    (state.modify processId fun process =>
+      { process with links := insertOnce child process.links }).modify child fun other =>
+        { other with links := [processId] }
+  have counted : Frames [.alive processId, .field processId .children]
+      [.field processId .children] count state :=
+    frames_modify (reads := [.children]) (writes := [.children]) (by changes)
+  have created := Frames.comp counted fun _ _ =>
+    frames_update (processId := child) (process := some {})
+  have linked : ∀ state, Frames ([.alive processId, .field processId .links] ++ [.alive child])
+      ([.field processId .links] ++ [.field child .links]) linkChild state := fun _ =>
+    Frames.comp (frames_modify (reads := [.links]) (writes := [.links]) (by changes))
+      fun _ _ => frames_modify (reads := []) (writes := [.links]) (by changes)
+  have alive : ∀ other, ((linkChild ((count other).update child (some {}))).processes child).isSome :=
+    fun other => by simp [linkChild, State.update]
+  have alive' : ∀ other, (((count other).update child (some {})).processes child).isSome :=
+    fun other => by simp [State.update]
+  refine Frames.congr (change' := fun state =>
+      let state := (count state).update child (some {})
+      let state := if doLink then linkChild state else state
+      if doMonitor then (state.monitor processId child false).2 else state) ?_
+    fun other agree => ?_
+  · cases doLink <;> cases doMonitor <;>
+      simp only [ite_true, ite_false, Bool.false_eq_true]
+    · refine created.mono ?_ ?_ ?_
+      all_goals intro loc; simp only [spawnWrites, List.mem_append, List.mem_cons,
+        Loc.process, List.mem_map, List.not_mem_nil, or_false, ite_false,
+        Bool.false_eq_true, child]; grind [Field.mem_all]
+    · refine (Frames.comp created fun other _ => frames_monitor (alive' other)).mono ?_ ?_ ?_
+      all_goals intro loc; simp only [spawnWrites, monitorWrites, List.mem_append, List.mem_cons,
+        Loc.process, List.mem_map, List.not_mem_nil, or_false, ite_true, ite_false,
+        Bool.false_eq_true, child]; grind [Field.mem_all]
+    · refine (Frames.comp created fun _ _ => linked _).mono ?_ ?_ ?_
+      all_goals intro loc; simp only [spawnWrites, List.mem_append, List.mem_cons,
+        Loc.process, List.mem_map, List.not_mem_nil, or_false, ite_true, ite_false,
+        Bool.false_eq_true, child]; grind [Field.mem_all]
+    · refine (Frames.comp (Frames.comp created fun _ _ => linked _) fun other _ =>
+        frames_monitor (alive other)).mono ?_ ?_ ?_
+      all_goals intro loc; simp only [spawnWrites, monitorWrites, List.mem_append, List.mem_cons,
+        Loc.process, List.mem_map, List.not_mem_nil, or_false, ite_true, ite_false,
+        Bool.false_eq_true, child]; grind [Field.mem_all]
+  · have children : (other.process processId).children = process.children := by
+      have := (Agree.same (agree (.field processId .children) (by simp [spawnWrites]))).symm
+      simpa [State.process, found] using this
+    obtain ⟨process', found'⟩ : ∃ process', other.processes processId = some process' := by
+      have := agree (.alive processId) (by simp)
+      simp only [Agree, found, Option.isSome_some] at this
+      exact Option.isSome_iff_exists.mp this.symm
+    have spawned : (other.spawn processId).2 = (count other).update child (some {}) := by
+      simp only [State.spawn, count, State.modify, found', child, ← children]
+      simp [State.process, found']
+    have spawnedPid : (other.spawn processId).1 = child := by
+      simp [State.spawn, child, children]
+    simp only [State.spawnWith, spawnedPid, spawned]
+    rfl
+
+/-- A change of the timers that keeps the timers sending to other processes. -/
+private theorem frames_timers {state : State} {change : List Timer → List Timer}
+    {destinations : List PID}
+    (keeps : ∀ processId ∉ destinations,
+      (change state.timers).filter (·.destination == processId) =
+        state.timers.filter (·.destination == processId)) :
+    Frames [.timers] (.timers :: destinations.map .timersTo)
+      (fun state => { state with timers := change state.timers }) state := by
+  intro other agree
+  have timers : state.timers = other.timers := agree .timers (by simp)
+  refine ⟨fun loc out => ?_, fun loc mem => ?_⟩
+  · cases loc with
+    | timersTo processId =>
+      have : processId ∉ destinations := fun mem => out (by simp [mem])
+      simp only [Agree]; rw [← timers]; exact keeps processId this
+    | timers => simp at out
+    | field => exact Agree.refl other (.field _ _)
+    | alive => exact Agree.refl other (.alive _)
+  · simp only [List.mem_cons, List.mem_map] at mem
+    rcases mem with rfl | ⟨_, _, rfl⟩ <;> simp only [Agree, timers]
+
+/-- The timers sending to processes, for timers with a reference. -/
+private theorem timersWith_eq {state : State} {reference : List Nat} :
+    state.timersWith reference =
+      ((state.timers.filter (·.reference == reference)).map (·.destination)).map .timersTo := by
+  simp only [State.timersWith]
+  induction state.timers with
+  | nil => rfl
+  | cons timer rest ih => simp only [List.filterMap_cons, List.filter_cons]; split <;> simp_all
+
+/-- Changing only timers with a reference, keeping their destinations, keeps
+the timers sending to other processes. -/
+private theorem keeps_reference {timers : List Timer} {reference : List Nat} {processId : PID}
+    {change : Timer → Option Timer}
+    (other : ∀ timer ∈ timers, timer.reference = reference → timer.destination ≠ processId)
+    (kept : ∀ timer, timer.reference ≠ reference → change timer = some timer)
+    (destination : ∀ timer changed, change timer = some changed →
+      changed.destination = timer.destination) :
+    (timers.filterMap change).filter (·.destination == processId) =
+      timers.filter (·.destination == processId) := by
+  induction timers with
+  | nil => rfl
+  | cons timer rest ih =>
+    have rest' := ih fun timer mem => other timer (List.mem_cons_of_mem _ mem)
+    by_cases same : timer.reference = reference
+    · have ne := other timer List.mem_cons_self same
+      cases found : change timer with
+      | none => simp [found, ne, rest']
+      | some changed =>
+        simp [found, ne, rest', destination _ _ found]
+    · simp [kept timer same, List.filter_cons, rest']
+
+private theorem not_mem_destinations {timers : List Timer} {reference : List Nat}
+    {processId : PID}
+    (out : processId ∉ (timers.filter (·.reference == reference)).map (·.destination)) :
+    ∀ timer ∈ timers, timer.reference = reference → timer.destination ≠ processId :=
+  fun timer mem same equal => out (List.mem_map.mpr ⟨timer, by simp [mem, same], equal⟩)
+
+/-- Removing the timers with a reference keeps the timers sending to other processes. -/
+private theorem keeps_filter_reference {timers : List Timer} {reference : List Nat}
+    {processId : PID}
+    (out : processId ∉ (timers.filter (·.reference == reference)).map (·.destination)) :
+    (timers.filter (·.reference != reference)).filter (·.destination == processId) =
+      timers.filter (·.destination == processId) := by
+  have equal : timers.filter (·.reference != reference) =
+      timers.filterMap fun other => if other.reference != reference then some other else none := by
+    clear out
+    induction timers with
+    | nil => rfl
+    | cons head rest ih => simp only [List.filter_cons, List.filterMap_cons, ih]; split <;> rfl
+  rw [equal]
+  exact keeps_reference (not_mem_destinations out) (fun other ne => by simp [ne])
+    fun other changed found => by split at found <;> simp at found; subst found; rfl
+
+/-- The state after a timer step. -/
+private def State.timerNext (state : State) (timer : Timer) : State :=
+  if timer.expired then
+    { state.deliver timer.destination timer.message with
+      timers := state.timers.filter (·.reference != timer.reference) }
+  else
+    { state with timers := state.timers.map fun other =>
+        if other.reference == timer.reference then { other with expired := true } else other }
+
+private theorem frames_timer {state : State} {timer : Timer} :
+    Frames ((timer.footprint state).reads ++ (timer.footprint state).writes)
+      (timer.footprint state).writes (·.timerNext timer) state := by
+  have expire := frames_timers (state := state) (destinations :=
+      (state.timers.filter (·.reference == timer.reference)).map (·.destination))
+    (change := List.map fun other =>
+      if other.reference == timer.reference then { other with expired := true } else other)
+    fun processId out => by
+      have equal : ∀ timers : List Timer, timers.map (fun other =>
+          if other.reference == timer.reference then { other with expired := true } else other) =
+          timers.filterMap fun other => some
+            (if other.reference == timer.reference then { other with expired := true } else other) :=
+        fun timers => by induction timers <;> simp_all
+      rw [equal]
+      exact keeps_reference (not_mem_destinations out) (fun other ne => by simp [ne])
+        fun other changed found => by
+          simp only [Option.some.injEq] at found; subst found; split <;> rfl
+  have filter : ∀ other : State, other.timers = state.timers → Frames [.timers]
+      (.timers :: ((state.timers.filter (·.reference == timer.reference)).map (·.destination)).map
+        .timersTo)
+      (fun state => { state with timers := state.timers.filter (·.reference != timer.reference) })
+      other := fun other timers => frames_timers (state := other)
+    (change := List.filter (·.reference != timer.reference))
+    fun processId out => by
+      rw [timers]; exact keeps_filter_reference out
+  unfold Timer.footprint
+  split
+  · rename_i expired
+    have composed := Frames.comp (first := (·.deliver timer.destination timer.message))
+      (state := state) frames_deliver fun other agree => filter _ (by
+        rw [State.timers_deliver]; exact (agree .timers (by simp)).symm)
+    refine (Frames.congr composed fun other _ => by simp [State.timerNext, expired]).mono
+      ?_ ?_ ?_
+    all_goals intro loc; simp only [List.mem_append, List.mem_cons, timersWith_eq, List.mem_map,
+      List.not_mem_nil, or_false]; grind
+  · rename_i expired
+    refine (Frames.congr expire fun other _ => by simp [State.timerNext, expired]).mono ?_ ?_ ?_
+    all_goals intro loc; simp only [List.mem_append, List.mem_cons, timersWith_eq, List.mem_map,
+      List.not_mem_nil, or_false]; grind
+
+/-- A request frames the state and its reply depends only on what it reads. -/
+private def RequestFrames (reads writes : List Loc) (state : State) (processId : PID)
+    (query : Request) : Prop :=
+  Frames reads writes (fun state => (state.request processId query).2) state ∧
+    ∀ other, (∀ loc ∈ reads, Agree state other loc) →
+      (other.request processId query).1 = (state.request processId query).1
+
+private theorem RequestFrames.mono {reads writes reads' writes' : List Loc} {state : State}
+    {processId : PID} {query : Request} (frames : RequestFrames reads writes state processId query)
+    (moreReads : reads ⊆ reads') (moreWrites : writes ⊆ writes')
+    (read : ∀ loc ∈ writes', loc ∉ writes → loc ∈ reads') :
+    RequestFrames reads' writes' state processId query :=
+  ⟨frames.1.mono moreReads moreWrites read, fun other agree =>
+    frames.2 other fun loc mem => agree loc (moreReads mem)⟩
+
+/-- Prove that one list of locations is included in another. -/
+local macro "locs" : tactic => `(tactic| (
+  intro loc
+  simp only [List.mem_append, List.mem_cons, List.mem_flatMap, List.not_mem_nil, or_false,
+    Loc.signaled, Loc.process, List.mem_map, signalWrites, monitorWrites]
+  grind [Field.mem_all]))
+
+private theorem frames_request {state : State} {processId : PID} {process : ProcessState}
+    {query : Request} (found : state.processes processId = some process) :
+    RequestFrames (.alive processId :: .field processId .refCounter ::
+        (Request.footprint state processId process query).reads ++
+          (Request.footprint state processId process query).writes)
+      (Request.footprint state processId process query).writes state processId query := by
+  have record : state.process processId = process := by simp [State.process, found]
+  cases query with
+  | monitor target alias =>
+    have frames := frames_monitor (state := state) (processId := processId) (target := target)
+      (alias := alias) rfl
+    refine ⟨Frames.congr (frames.mono ?_ ?_ ?_) fun _ _ => rfl, fun other agree => ?_⟩
+    · simp only [Request.footprint, monitorWrites]; locs
+    · simp only [Request.footprint, monitorWrites]; locs
+    · simp only [Request.footprint, monitorWrites]; locs
+    · have counter := Agree.same (agree (.field processId .refCounter) (by simp))
+      simp only [Field.same] at counter
+      have reference : ∀ state : State, (state.monitor processId target alias).1 =
+          processId ++ [(state.process processId).refCounter + 1] := fun state => by
+        simp only [State.monitor]; split <;> rfl
+      change Term.reference (other.monitor processId target alias).1 =
+        Term.reference (state.monitor processId target alias).1
+      rw [reference, reference, counter]
+  | demonitor reference flush =>
+    have monitoring : ∀ other : State,
+        (∀ loc ∈ [Loc.field processId .monitoring], Agree state other loc) →
+        (other.process processId).monitoring = process.monitoring := fun other agree => by
+      have := Agree.same (agree (.field processId .monitoring) (by simp))
+      simp only [Field.same] at this; rw [← this, record]
+    generalize erase_eq : (flush && !process.monitoring.any (·.1 == reference)) = erase
+    let watched := fun (state : State) (entry : List Nat × PID) =>
+      if entry.1 == reference then
+        state.modify entry.2 fun watched =>
+          { watched with monitors := watched.monitors.filter (·.1 != reference) }
+      else state
+    have unwatched : ∀ state : State, Frames
+        (process.monitoring.flatMap fun (found, target) =>
+          if found == reference then [.alive target, .field target .monitors] else [])
+        (process.monitoring.flatMap fun (found, target) =>
+          if found == reference then [.field target .monitors] else [])
+        (fun state => process.monitoring.foldl watched state) state := fun state =>
+      Frames.foldl fun entry _ state => by
+        obtain ⟨found, target⟩ := entry
+        show Frames (if found == reference then [.alive target, .field target .monitors] else [])
+          (if found == reference then [.field target .monitors] else []) (watched · (found, target))
+          state
+        by_cases same : found = reference
+        · simp only [same, beq_self_eq_true, ite_true]
+          exact Frames.congr (frames_modify (processId := target) (reads := [.monitors])
+            (writes := [.monitors]) (change := fun watched =>
+              { watched with monitors := watched.monitors.filter (·.1 != reference) })
+            (by changes)) fun other _ => by simp [watched]
+        · have differ : (found == reference) = false := by simpa using same
+          simp only [differ, Bool.false_eq_true, ite_false]
+          exact Frames.congr Frames.id fun other _ => by
+            simp only [watched, differ, Bool.false_eq_true, ite_false]
+    have own : ∀ state : State, Frames
+        (.alive processId :: ([Field.monitoring, Field.aliases] ++
+          if erase then [Field.mailbox] else []).map (.field processId))
+        (([Field.monitoring, Field.aliases] ++ if erase then [Field.mailbox] else []).map
+          (.field processId))
+        (fun state => state.modify processId fun process =>
+          { process with
+              monitoring := process.monitoring.filter (·.1 != reference)
+              aliases := process.aliases.erase reference
+              mailbox := if erase then process.mailbox.eraseP (isMonitorMessage reference)
+                else process.mailbox }) state := fun state => by
+      cases erase
+      · exact frames_modify (by changes)
+      · exact frames_modify (by changes)
+    refine ⟨Frames.congr ((Frames.comp (unwatched state) fun _ _ => own _).mono ?_ ?_ ?_)
+        fun other agree => ?_, fun other agree => ?_⟩
+    all_goals try (
+      simp only [Request.footprint, erase_eq]
+      intro loc
+      cases erase <;> simp only [List.mem_append, List.mem_cons, List.mem_flatMap, List.not_mem_nil,
+        or_false, ite_true, ite_false, Bool.false_eq_true, List.map_cons,
+        List.map_nil, List.append_nil, List.cons_append, List.nil_append] <;> grind)
+    all_goals
+      have same := monitoring other fun loc mem => agree loc (by
+        simp at mem; subst mem; simp [Request.footprint])
+      simp only [State.request, same, record, erase_eq]
+      try rfl
+  | link target =>
+    by_cases self : target = processId
+    · subst self
+      refine ⟨Frames.congr (Frames.id.mono ?_ ?_ ?_) fun other _ => ?_, fun other _ => ?_⟩
+      all_goals first | (simp only [Request.footprint]; locs) | simp [State.request]
+    obtain ⟨live, alive⟩ : ∃ live, (state.processes target).isSome = live := ⟨_, rfl⟩
+    have alive' : ∀ other : State, (∀ loc ∈ [Loc.alive target], Agree state other loc) →
+        (other.processes target).isSome = live := fun other agree =>
+      alive ▸ (agree (.alive target) (by simp)).symm
+    cases live
+    · have trapExit : ∀ other : State, (∀ loc ∈ [Loc.field processId .trapExit], Agree state other loc) →
+          (other.process processId).trapExit = process.trapExit := fun other agree => by
+        have := Agree.same (agree (.field processId .trapExit) (by simp))
+        simp only [Field.same] at this; rw [← this, record]
+      have none : ∀ other : State, (other.processes target).isSome = false →
+          other.processes target = none := fun other => by simp
+      cases trap : process.trapExit
+      · refine ⟨Frames.congr (change' := fun state => state) (Frames.id.mono ?_ ?_ ?_)
+          fun other agree => ?_, fun other agree => ?_⟩
+        all_goals try (simp only [Request.footprint, self, alive]; locs)
+        all_goals
+          have dead := none other (alive' other fun loc mem => agree loc (by
+            simp at mem; subst mem; simp [Request.footprint, self, alive]))
+          have trapped := trapExit other fun loc mem => agree loc (by
+            simp at mem; subst mem; simp [Request.footprint, self, alive])
+          simp [State.request, self, dead, trapped, trap, none state alive, record]
+      · refine ⟨Frames.congr (frames_deliver (processId := processId)
+          (message := .tuple #[.atom "EXIT", .pid target, .atom "noproc"]) |>.mono ?_ ?_ ?_)
+          fun other agree => ?_, fun other agree => ?_⟩
+        all_goals try (simp only [Request.footprint, self, alive]; locs)
+        all_goals
+          have dead := none other (alive' other fun loc mem => agree loc (by
+            simp at mem; subst mem; simp [Request.footprint, self, alive]))
+          have trapped := trapExit other fun loc mem => agree loc (by
+            simp at mem; subst mem; simp [Request.footprint, self, alive])
+          simp [State.request, self, dead, trapped, trap, none state alive, record]
+    · have some : ∀ other : State, (other.processes target).isSome = true →
+          ∃ process, other.processes target = some process := fun other =>
+        Option.isSome_iff_exists.mp
+      refine ⟨Frames.congr ((Frames.comp (frames_modify (reads := [.links]) (writes := [.links])
+          (processId := processId)
+          (change := fun process => { process with links := insertOnce target process.links })
+          (by changes)) fun _ _ =>
+            frames_modify (reads := [.links]) (writes := [.links]) (processId := target)
+              (change := fun other => { other with links := insertOnce processId other.links })
+              (by changes)).mono ?_ ?_ ?_)
+          fun other agree => ?_, fun other agree => ?_⟩
+      all_goals try (simp only [Request.footprint, self, alive]; locs)
+      all_goals
+        obtain ⟨_, live⟩ := some other (alive' other fun loc mem => agree loc (by
+          simp at mem; subst mem; simp [Request.footprint, self, alive]))
+        obtain ⟨_, live'⟩ := some state alive
+        simp [State.request, self, live, live']
+  | unlink target =>
+    refine ⟨(Frames.comp (frames_modify (reads := [.links]) (writes := [.links]) (by changes))
+      fun _ _ => frames_modify (reads := [.links]) (writes := [.links]) (by changes)).mono
+        ?_ ?_ ?_, fun _ _ => rfl⟩
+    all_goals simp only [Request.footprint]; locs
+  | exit target reason =>
+    have trapExit : ∀ other : State, (∀ loc ∈ [Loc.field processId .trapExit], Agree state other loc) →
+        (other.process processId).trapExit = process.trapExit := fun other agree => by
+      have := Agree.same (agree (.field processId .trapExit) (by simp))
+      simp only [Field.same] at this; rw [← this, record]
+    generalize untrappable_eq : (match reason with | .atom "kill" => true | _ => false) = untrappable
+    by_cases own : (target = processId && isNormal reason && !process.trapExit) = true
+    · refine ⟨Frames.congr (frames_kill (processId := processId) (reason := reason) |>.mono ?_ ?_ ?_)
+        fun other agree => ?_,
+        fun other agree => ?_⟩
+      all_goals try (simp only [Request.footprint, own, ite_true]; locs)
+      all_goals
+        have trapped := trapExit other fun loc mem => agree loc (by
+          simp at mem; subst mem; simp [Request.footprint, own])
+        simp only [Bool.and_eq_true, Bool.not_eq_true', decide_eq_true_eq] at own
+        obtain ⟨⟨rfl, normal⟩, trap⟩ := own
+        simp [State.request, normal, trap, trapped, record]
+    · refine ⟨Frames.congr (frames_signal (target := target) (sender := processId) (reason := reason)
+        (untrappable := untrappable) |>.mono ?_ ?_ ?_)
+        fun other agree => ?_,
+        fun other agree => ?_⟩
+      all_goals try (simp only [Request.footprint, own, ite_false, Bool.false_eq_true]; locs)
+      all_goals
+        have trapped := trapExit other fun loc mem => agree loc (by
+          simp at mem; subst mem; simp [Request.footprint, own])
+        have cond : (decide (target = processId) && isNormal reason &&
+            !(other.process processId).trapExit) = false := by
+          rw [trapped]; simpa using own
+        have cond' : (decide (target = processId) && isNormal reason &&
+            !(state.process processId).trapExit) = false := by
+          rw [record]; simpa using own
+        simp only [State.request, cond, cond', Bool.false_eq_true, ite_false]
+        try (subst untrappable_eq; rfl)
+  | trapExit enabled =>
+    refine ⟨(frames_modify (reads := []) (writes := [.trapExit]) (by changes)).mono ?_ ?_ ?_,
+      fun other agree => ?_⟩
+    all_goals try (simp only [Request.footprint]; locs)
+    have trapExit := Agree.same (agree (.field processId .trapExit) (by simp [Request.footprint]))
+    simp only [Field.same] at trapExit
+    simp [State.request, trapExit]
+  | alive target =>
+    refine ⟨Frames.id.mono ?_ ?_ ?_, fun other agree => ?_⟩
+    all_goals try (simp only [Request.footprint]; locs)
+    have alive := agree (.alive target) (by simp [Request.footprint])
+    simp only [Agree] at alive
+    simp [State.request, alive]
+  | sendAlias alias message =>
+    have aliases : ∀ other : State, (∀ loc ∈ [Loc.field alias.dropLast .aliases], Agree state other loc) →
+        (other.process alias.dropLast).aliases = (state.process alias.dropLast).aliases :=
+      fun other agree => by
+        have := Agree.same (agree (.field alias.dropLast .aliases) (by simp))
+        simp only [Field.same] at this; rw [this]
+    by_cases active : (state.process alias.dropLast).aliases.contains alias = true
+    · refine ⟨Frames.congr (frames_deliver (processId := alias.dropLast) (message := message)
+        |>.mono ?_ ?_ ?_) fun other agree => ?_, fun other agree => ?_⟩
+      all_goals try (simp only [Request.footprint]; locs)
+      all_goals
+        have same := aliases other fun loc mem => agree loc (by
+          simp at mem; subst mem; simp [Request.footprint])
+        simp only [State.request, same, active, ite_true]
+    · refine ⟨Frames.congr (Frames.id.mono ?_ ?_ ?_) fun other agree => ?_,
+        fun other agree => ?_⟩
+      all_goals try (simp only [Request.footprint]; locs)
+      all_goals
+        have same := aliases other fun loc mem => agree loc (by
+          simp at mem; subst mem; simp [Request.footprint])
+        simp only [Bool.not_eq_true] at active
+        simp only [State.request, same, active, Bool.false_eq_true, ite_false]
+  | startTimer destination message duration =>
+    let timer : Timer :=
+      { reference := processId ++ [process.refCounter + 1], destination, message, duration }
+    have counter : ∀ other : State,
+        (∀ loc ∈ [Loc.field processId .refCounter], Agree state other loc) →
+        (other.process processId).refCounter = process.refCounter := fun other agree => by
+      have := Agree.same (agree (.field processId .refCounter) (by simp))
+      simp only [Field.same] at this; rw [← this, record]
+    have count := frames_modify (processId := processId) (reads := [.refCounter])
+      (writes := [.refCounter]) (state := state)
+      (change := fun process => { process with refCounter := process.refCounter + 1 }) (by changes)
+    obtain ⟨live, alive⟩ : ∃ live, (state.processes destination).isSome = live := ⟨_, rfl⟩
+    have alive' : ∀ other : State, (∀ loc ∈ [Loc.alive destination], Agree state other loc) →
+        (other.processes destination).isSome = live := fun other agree =>
+      alive ▸ (agree (.alive destination) (by simp)).symm
+    cases live
+    · refine ⟨Frames.congr (count.mono ?_ ?_ ?_) fun other agree => ?_, fun other agree => ?_⟩
+      all_goals try (simp only [Request.footprint, alive]; locs)
+      all_goals
+        have counted := counter other fun loc mem => agree loc (by simp at mem; simp [mem])
+        have dead := alive' other fun loc mem => agree loc (by
+          simp at mem; subst mem; simp [Request.footprint])
+        simp [State.request, counted, dead, record]
+    · refine ⟨Frames.congr ((Frames.comp count fun _ _ => frames_timers (destinations := [destination])
+          (change := (· ++ [timer])) fun processId out => by
+            simp only [List.mem_singleton] at out
+            simp [List.filter_append, timer, Ne.symm out]).mono ?_ ?_ ?_) fun other agree => ?_,
+        fun other agree => ?_⟩
+      all_goals try (simp only [Request.footprint, alive]; locs)
+      all_goals
+        have counted := counter other fun loc mem => agree loc (by simp at mem; simp [mem])
+        have live := alive' other fun loc mem => agree loc (by
+          simp at mem; subst mem; simp [Request.footprint])
+        simp [State.request, counted, live, record, timer]
+  | cancelTimer reference =>
+    have timers : ∀ other : State, (∀ loc ∈ [Loc.timers], Agree state other loc) →
+        other.timers = state.timers := fun other agree => (agree .timers (by simp)).symm
+    cases found' : state.timers.find? fun timer => timer.reference == reference && !timer.expired with
+    | none =>
+      refine ⟨Frames.congr (Frames.id.mono ?_ ?_ ?_) fun other agree => ?_, fun other agree => ?_⟩
+      all_goals try (simp only [Request.footprint]; locs)
+      all_goals
+        have same := timers other fun loc mem => agree loc (by
+          simp at mem; subst mem; simp [Request.footprint])
+        simp [State.request, same, found']
+    | some timer =>
+      refine ⟨Frames.congr ((frames_timers (state := state)
+          (destinations := (state.timers.filter (·.reference == reference)).map (·.destination))
+          (change := List.filter (·.reference != reference))
+          fun processId out => keeps_filter_reference out).mono ?_ ?_ ?_)
+          fun other agree => ?_, fun other agree => ?_⟩
+      all_goals try (simp only [Request.footprint, timersWith_eq]; locs)
+      all_goals
+        have same := timers other fun loc mem => agree loc (by
+          simp at mem; subst mem; simp [Request.footprint])
+        simp [State.request, same, found']
+
+/-- Steps of a process from states agreeing on what it reads: the same events,
+processes and outcomes, writing the same values and keeping the rest. -/
+private def Similar (writes : List Loc) (other : State) (transition transition' : Transition α) :
+    Prop :=
+  transition'.event = transition.event ∧ transition'.tasks = transition.tasks ∧
+    transition'.finished = transition.finished ∧ transition'.exhausted = transition.exhausted ∧
+    (∀ loc, loc ∉ writes → Agree transition'.state other loc) ∧
+    ∀ loc ∈ writes, Agree transition.state transition'.state loc
+
+private theorem similar_of_frames {reads writes : List Loc} {change : State → State}
+    {state other : State} {transition transition' : Transition α}
+    (frames : Frames reads writes change state) (agree : ∀ loc ∈ reads, Agree state other loc)
+    (before : transition.state = change state) (after : transition'.state = change other)
+    (event : transition'.event = transition.event) (tasks : transition'.tasks = transition.tasks)
+    (finished : transition'.finished = transition.finished)
+    (exhausted : transition'.exhausted = transition.exhausted) :
+    Similar writes other transition transition' := by
+  obtain ⟨keeps, determined⟩ := frames other agree
+  exact ⟨event, tasks, finished, exhausted, fun loc out => after ▸ keeps loc out,
+    fun loc mem => before ▸ after ▸ determined loc mem⟩
+
+/-- Lists related elementwise. -/
+private inductive Related (relation : γ → δ → Prop) : List γ → List δ → Prop
+  | nil : Related relation [] []
+  | cons {first : γ} {second : δ} {rest : List γ} {rest' : List δ} :
+      relation first second → Related relation rest rest' →
+        Related relation (first :: rest) (second :: rest')
+
+private theorem Related.get {relation : γ → δ → Prop} {first : List γ} {second : List δ}
+    (related : Related relation first second) {index : Nat} {item' : δ}
+    (found : second[index]? = some item') : ∃ item, first[index]? = some item ∧ relation item item' := by
+  induction related generalizing index with
+  | nil => simp at found
+  | cons head _ ih =>
+    cases index with
+    | zero => simp at found; subst found; exact ⟨_, rfl, head⟩
+    | succ index => exact ih (by simpa using found)
+
+private theorem Related.get' {relation : γ → δ → Prop} {first : List γ} {second : List δ}
+    (related : Related relation first second) {index : Nat} {item : γ}
+    (found : first[index]? = some item) : ∃ item', second[index]? = some item' ∧ relation item item' := by
+  induction related generalizing index with
+  | nil => simp at found
+  | cons head _ ih =>
+    cases index with
+    | zero => simp at found; subst found; exact ⟨_, rfl, head⟩
+    | succ index => exact ih (by simpa using found)
+
+private theorem related_map {items : List γ} {first second : γ → δ} {relation : δ → δ → Prop}
+    (related : ∀ item ∈ items, relation (first item) (second item)) :
+    Related relation (items.map first) (items.map second) := by
+  induction items with
+  | nil => exact .nil
+  | cons item rest ih =>
+    exact .cons (related item (by simp)) (ih fun item mem => related item (by simp [mem]))
+
+private theorem related_single {relation : γ → δ → Prop} {first : γ} {second : δ}
+    (related : relation first second) : Related relation [first] [second] :=
+  .cons related .nil
+
+private theorem spawnWith_fst {state : State} {processId : PID} {options : SpawnOptions} :
+    (state.spawnWith processId options).1 =
+      processId ++ [(state.process processId).children + 1] := rfl
+
+/-- What every step of a live process reads. -/
+private def baseReads (processId : PID) : List Loc :=
+  [.alive processId, .field processId .signal, .field processId .pdict, .field processId .refCounter]
+
+/-- Steps of a process with a footprint, from states agreeing on what it reads,
+are similar. -/
+private theorem transitions_similar {state other : State} {processId : PID} {task : Task α}
+    {footprint : Footprint} (found : task.footprint state processId = some footprint)
+    (agree : ∀ loc ∈ footprint.reads ++ footprint.writes, Agree state other loc) :
+    Related (Similar footprint.writes other) (task.transitions state processId)
+      (task.transitions other processId) := by
+  obtain ⟨computation, finish⟩ := task
+  unfold Task.footprint at found
+  cases live : state.processes processId with
+  | none => simp [live] at found
+  | some process =>
+  simp only [live, Option.map_eq_some_iff] at found
+  obtain ⟨step, stepped, rfl⟩ := found
+  have agree' : ∀ loc, loc ∈ baseReads processId ∨ loc ∈ step.reads ∨ loc ∈ step.writes →
+      Agree state other loc := fun loc mem => agree loc (by
+    simp only [baseReads, List.mem_cons, List.not_mem_nil, or_false] at mem
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false]
+    rcases mem with (h | h | h | h) | h | h <;> simp [h])
+  have base : ∀ loc ∈ baseReads processId, Agree state other loc := fun loc mem =>
+    agree' loc (.inl mem)
+  have record : state.process processId = process := by simp [State.process, live]
+  have signal : (other.process processId).signal = process.signal := by
+    have := Agree.same (base (.field processId .signal) (by simp [baseReads]))
+    simp only [Field.same] at this; rw [← this, record]
+  have view : other.view processId = state.view processId := by
+    have pdict := Agree.same (base (.field processId .pdict) (by simp [baseReads]))
+    have counter := Agree.same (base (.field processId .refCounter) (by simp [baseReads]))
+    simp only [Field.same] at pdict counter
+    simp [State.view, pdict, counter]
+  have exit : ∀ reason, step = state.exitFootprint processId reason →
+      Frames (baseReads processId ++ step.reads ++ step.writes) step.writes
+        (·.terminate processId reason) state := fun reason equal => by
+    subst equal; exact frames_terminate.mono (by simp) (by simp) fun loc mem out => absurd mem out
+  have within : ∀ {reads}, reads ⊆ baseReads processId ++ step.reads ++ step.writes →
+      ∀ loc ∈ reads, Agree state other loc := fun sub loc mem => agree' loc (by
+    have := sub mem; simp only [List.mem_append] at this; rcases this with (h | h) | h <;> simp [h])
+  unfold Task.stepFootprint at stepped
+  simp only [Task.transitions, signal, record, view]
+  cases found : process.signal with
+  | some reason =>
+    simp only [found, Option.some.injEq] at stepped
+    exact related_single (similar_of_frames (exit reason stepped.symm) (within (by simp)) rfl rfl
+      rfl rfl rfl rfl)
+  | none =>
+  simp only [found] at stepped
+  cases computation with
+  | ok value =>
+    simp only [Option.some.injEq] at stepped
+    exact related_single (similar_of_frames (exit _ stepped.symm) (within (by simp)) rfl rfl
+      rfl rfl rfl rfl)
+  | error exception =>
+    cases exception with
+    | exhausted =>
+      simp only [Option.some.injEq] at stepped
+      subst stepped
+      exact related_single (similar_of_frames frames_update (within (by simp)) rfl rfl
+        rfl rfl rfl rfl)
+    | _ =>
+      simp only [Option.some.injEq] at stepped
+      exact related_single (similar_of_frames (exit _ stepped.symm) (within (by simp)) rfl rfl
+        rfl rfl rfl rfl)
+  | get next =>
+    simp only [Option.some.injEq] at stepped
+    subst stepped
+    exact related_single (similar_of_frames Frames.id (within (by simp)) rfl rfl
+      rfl rfl rfl rfl)
+  | set updated next => simp at stepped
+  | schedule options child next =>
+    simp only [Option.some.injEq] at stepped
+    have children : (other.process processId).children = process.children := by
+      have := Agree.same (agree' (.field processId .children) (by subst stepped; simp))
+      simp only [Field.same] at this; rw [← this, record]
+    have spawned : (other.spawnWith processId options).1 = (state.spawnWith processId options).1 := by
+      simp only [spawnWith_fst, children, record]
+    have frames : Frames (baseReads processId ++ step.reads ++ step.writes) step.writes
+        (fun state => (state.spawnWith processId options).2) state := by
+      subst stepped
+      refine (frames_spawnWith live).mono ?_ ?_ ?_
+      all_goals obtain ⟨doLink, doMonitor⟩ := options
+      all_goals cases doLink <;> cases doMonitor <;> intro loc <;>
+        simp only [spawnWrites, baseReads, List.mem_append, List.mem_cons, Loc.process,
+          List.mem_map, List.not_mem_nil, or_false, ite_true, ite_false, Bool.false_eq_true,
+          List.cons_append, List.nil_append, List.append_nil] <;> grind
+    simp only [spawned]
+    exact related_single (similar_of_frames frames (within (by simp)) rfl rfl rfl rfl rfl rfl)
+  | send destination message next =>
+    simp only [Option.some.injEq] at stepped
+    subst stepped
+    exact related_single (similar_of_frames frames_deliver (within (by simp)) rfl rfl
+      rfl rfl rfl rfl)
+  | receive timeout select next =>
+    cases unmatched : selectMessage (select (state.view processId)) process.mailbox with
+    | some => simp [unmatched] at stepped
+    | none =>
+      simp only [unmatched, Option.some.injEq] at stepped
+      subst stepped
+      have mailbox : (other.process processId).mailbox = process.mailbox := by
+        have := Agree.same (agree' (.field processId .mailbox) (by simp))
+        simp only [Field.same] at this; rw [← this, record]
+      simp only [mailbox, unmatched]
+      cases timeout with
+      | infinity => exact .nil
+      | _ => exact related_single (similar_of_frames Frames.id (within (by simp)) rfl rfl
+          rfl rfl rfl rfl)
+  | request query next =>
+    simp only [Option.some.injEq] at stepped
+    subst stepped
+    have frames := frames_request (query := query) live
+    have reads := within (reads := .alive processId :: .field processId .refCounter ::
+      (Request.footprint state processId process query).reads ++
+        (Request.footprint state processId process query).writes) (by
+      intro loc mem; simp only [List.mem_cons, List.mem_append] at mem
+      simp only [baseReads, List.mem_append, List.mem_cons]; grind)
+    dsimp only
+    rw [frames.2 other reads]
+    exact related_map fun reply _ => similar_of_frames frames.1 reads rfl rfl rfl rfl rfl rfl
+
+/-- What a timer step observes. -/
+private def Timer.event (timer : Timer) : Event :=
+  if timer.expired then .arrive timer.destination timer.message else .expire timer.reference
+
+private theorem timerSteps_eq {state : State} :
+    state.timerSteps = state.timers.map fun timer => (timer.event, state.timerNext timer) := by
+  simp only [State.timerSteps]
+  congr 1; funext timer
+  simp only [Timer.event, State.timerNext]
+  split <;> rfl
+
+/-- The steps of a running configuration, by key. -/
+private theorem mem_steps {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key : Key}
+    {event : Event} {next : Config α} :
+    (key, event, next) ∈ (Config.running state tasks finished exhausted).steps ↔
+      (∃ before processId task after transition index,
+        tasks = before ++ (processId, task) :: after ∧
+        (task.transitions state processId)[index]? = some transition ∧
+        key = .process processId index ∧ event = transition.event ∧
+        next = transition.apply before after finished exhausted) ∨
+      ∃ timer index, state.timers[index]? = some timer ∧ key = .timer index ∧
+        event = timer.event ∧ next = .running (state.timerNext timer) tasks finished exhausted := by
+  have processes : (key, event, next) ∈ ((splits tasks).flatMap fun (before, (processId, task), after) =>
+      (task.transitions state processId).zipIdx.map fun (transition, index) =>
+        ((Key.process processId index : Key), transition.event,
+          transition.apply before after finished exhausted)) ↔
+      ∃ before processId task after transition index,
+        tasks = before ++ (processId, task) :: after ∧
+        (task.transitions state processId)[index]? = some transition ∧
+        key = .process processId index ∧ event = transition.event ∧
+        next = transition.apply before after finished exhausted := by
+    simp only [List.mem_flatMap, List.mem_map, Prod.exists, Prod.mk.injEq]
+    constructor
+    · rintro ⟨before, processId, task, after, split, transition, index, mem, rfl, rfl, rfl⟩
+      exact ⟨before, processId, task, after, transition, index, eq_of_mem_splits split,
+        List.mem_zipIdx_iff_getElem?.mp mem, rfl, rfl, rfl⟩
+    · rintro ⟨before, processId, task, after, transition, index, rfl, found, rfl, rfl, rfl⟩
+      exact ⟨before, processId, task, after, mem_splits, transition, index,
+        List.mem_zipIdx_iff_getElem?.mpr found, rfl, rfl, rfl⟩
+  have timers : (key, event, next) ∈ (state.timerSteps.zipIdx.map fun ((event, after), index) =>
+      ((Key.timer index : Key), event, Config.running after tasks finished exhausted)) ↔
+      ∃ timer index, state.timers[index]? = some timer ∧ key = .timer index ∧
+        event = timer.event ∧ next = .running (state.timerNext timer) tasks finished exhausted := by
+    simp only [List.mem_map, Prod.exists, Prod.mk.injEq, timerSteps_eq]
+    constructor
+    · rintro ⟨event', after, index, mem, rfl, rfl, rfl⟩
+      rw [List.mem_zipIdx_iff_getElem?, List.getElem?_map] at mem
+      obtain ⟨timer, found, equal⟩ := Option.map_eq_some_iff.mp mem
+      simp only [Prod.mk.injEq] at equal
+      obtain ⟨rfl, rfl⟩ := equal
+      exact ⟨timer, index, found, rfl, rfl, rfl⟩
+    · rintro ⟨timer, index, found, rfl, rfl, rfl⟩
+      exact ⟨_, _, index, by rw [List.mem_zipIdx_iff_getElem?, List.getElem?_map, found]; rfl,
+        rfl, rfl, rfl⟩
+  simp only [Config.steps]
+  split
+  · rename_i empty
+    rw [processes]
+    simp [empty]
+  · rw [List.mem_append, processes, timers]
+
+/-- A configuration reaches another. -/
+private def Reaches (first last : Config α) : Prop := ∃ events, Run first events last
+
+private theorem Reaches.step {first next last : Config α} {event : Event}
+    (step : Step first event next) (reaches : Reaches next last) : Reaches first last :=
+  let ⟨events, run⟩ := reaches; ⟨event :: events, .step step run⟩
+
+/-- `explore` follows a step from which the run continues, with a sleep set
+that excludes the run: steps asleep before it cannot start the run, and of
+the steps it follows first, none starts it. -/
+private theorem explore_sound {visit : List Key → Config α → Bool}
+    {independent : Key → Key → Bool} {sleep : List Key} {steps : List (Key × Event × Config α)}
+    {last : Config α} {goal : Prop}
+    (visited : ∀ key event next, (key, event, next) ∈ steps → ∀ sleep', visit sleep' next = true →
+      Reaches next last →
+      (∀ key' ∈ sleep', ∀ event' next', (key', event', next') ∈ next.steps → ¬Reaches next' last) →
+      goal)
+    (diamond : ∀ key event next, (key, event, next) ∈ steps → ∀ key', independent key' key = true →
+      ∀ event' next', (key', event', next') ∈ next.steps →
+        ∃ next'', (key', event', next'') ∈ steps ∧ Step next'' event next')
+    (unique : ∀ key event event' next next', (key, event, next) ∈ steps →
+      (key, event', next') ∈ steps → next = next')
+    (asleep : ∀ key ∈ sleep, ∀ event next, (key, event, next) ∈ steps → ¬Reaches next last)
+    (first : ∃ key event next, (key, event, next) ∈ steps ∧ Reaches next last)
+    (explored : explore visit independent sleep [] steps = true) : goal := by
+  suffices ∀ (earlier rest : List (Key × Event × Config α)) (done : List Key), steps = earlier ++ rest →
+      (∀ key ∈ done, ∃ event next, (key, event, next) ∈ earlier) →
+      (∀ key event next, (key, event, next) ∈ earlier → key ∉ sleep → ¬Reaches next last) →
+      explore visit independent sleep done rest = true → goal from
+    this [] steps [] rfl (by simp) (by simp) explored
+  intro earlier rest
+  induction rest generalizing earlier with
+  | nil =>
+    intro done equal _ unreached _
+    obtain ⟨key, event, next, mem, reaches⟩ := first
+    simp only [List.append_nil] at equal
+    subst equal
+    by_cases slept : key ∈ sleep
+    · exact absurd reaches (asleep key slept event next mem)
+    · exact absurd reaches (unreached key event next mem slept)
+  | cons step rest ih =>
+    obtain ⟨key, event, next⟩ := step
+    intro done equal found unreached explored
+    have mem : (key, event, next) ∈ steps := by rw [equal]; simp
+    have extend : steps = (earlier ++ [(key, event, next)]) ++ rest := by rw [equal]; simp
+    simp only [explore] at explored
+    split at explored
+    · rename_i slept
+      refine ih _ done extend (fun key mem => ?_) (fun key' event' next' mem' out => ?_) explored
+      · obtain ⟨event, next, mem⟩ := found key mem; exact ⟨event, next, by simp [mem]⟩
+      · simp only [List.mem_append, List.mem_singleton, Prod.mk.injEq] at mem'
+        rcases mem' with mem' | ⟨rfl, rfl, rfl⟩
+        · exact unreached _ _ _ mem' out
+        · exact absurd (List.elem_iff.mp slept) out
+    · rename_i awake
+      simp only [Bool.and_eq_true] at explored
+      by_cases reaches : Reaches next last
+      · refine visited key event next mem _ explored.1 reaches fun key' slept event' next' mem' => ?_
+        simp only [List.mem_filter, List.mem_append] at slept
+        obtain ⟨slept | finished, independent'⟩ := slept
+        · intro reaches'
+          obtain ⟨next'', mem'', step⟩ := diamond key event next mem key' independent' event' next' mem'
+          exact asleep key' slept event' next'' mem'' (Reaches.step step reaches')
+        · intro reaches'
+          obtain ⟨next'', mem'', step⟩ := diamond key event next mem key' independent' event' next' mem'
+          obtain ⟨event₀, next₀, mem₀⟩ := found key' finished
+          have same := unique key' event₀ event' next₀ next'' (by rw [equal]; simp [mem₀]) mem''
+          subst same
+          have awake' : key' ∉ sleep := fun slept => by
+            obtain ⟨event₁, next₁, mem₁⟩ := found key' finished
+            exact asleep key' slept event₁ next₁ (by rw [equal]; simp [mem₁])
+              (unique key' event₁ event₀ next₁ next₀ (by rw [equal]; simp [mem₁])
+                (by rw [equal]; simp [mem₀]) ▸ Reaches.step step reaches')
+          exact unreached key' event₀ next₀ mem₀ awake' (Reaches.step step reaches')
+      · refine ih _ _ extend (fun key' mem' => ?_) (fun key' event' next' mem' out => ?_)
+          explored.2
+        · simp only [List.mem_append, List.mem_singleton] at mem'
+          rcases mem' with mem' | rfl
+          · obtain ⟨event, next, mem⟩ := found key' mem'; exact ⟨event, next, by simp [mem]⟩
+          · exact ⟨event, next, by simp⟩
+        · simp only [List.mem_append, List.mem_singleton, Prod.mk.injEq] at mem'
+          rcases mem' with mem' | ⟨rfl, rfl, rfl⟩
+          · exact unreached _ _ _ mem' out
+          · exact reaches
+
+/-! ### Commuting steps -/
+
+/-- Entries with distinct keys split a list around a key in one way. -/
+private theorem split_unique {entries before after before' after' : List (PID × γ)} {key : PID}
+    {item item' : γ} (distinct : entries.Pairwise fun first second => first.1 ≠ second.1)
+    (split : entries = before ++ (key, item) :: after)
+    (split' : entries = before' ++ (key, item') :: after') :
+    before = before' ∧ item = item' ∧ after = after' := by
+  subst split
+  rcases split_order split' with ⟨rfl, same, rfl⟩ | ⟨middle, rfl, rfl⟩ | ⟨middle, rfl, rfl⟩
+  · simp only [Prod.mk.injEq, true_and] at same; exact ⟨rfl, same, rfl⟩
+  · exact absurd rfl (pairwise_between (relation := fun first second : PID × γ => first.1 ≠ second.1)
+      (first := (key, item)) (second := (key, item')) (by simpa using distinct))
+  · exact absurd rfl (pairwise_between (relation := fun first second : PID × γ => first.1 ≠ second.1)
+      (first := (key, item')) (second := (key, item)) (by simpa using distinct))
+
+private theorem lookup_eq {entries : List (PID × γ)} {key : PID} {item : γ}
+    (distinct : entries.Pairwise fun first second => first.1 ≠ second.1)
+    (mem : (key, item) ∈ entries) : entries.lookup key = some item := by
+  induction entries with
+  | nil => simp at mem
+  | cons head rest ih =>
+    obtain ⟨key', item'⟩ := head
+    simp only [List.pairwise_cons] at distinct
+    simp only [List.mem_cons, Prod.mk.injEq] at mem
+    rcases mem with ⟨rfl, rfl⟩ | mem
+    · simp [List.lookup]
+    · have ne : key ≠ key' := fun equal => distinct.1 (key, item) mem equal.symm
+      simp [List.lookup, beq_false_of_ne ne, ih distinct.2 mem]
+
+private theorem mem_of_lookup {entries : List (PID × γ)} {key : PID} {item : γ}
+    (found : entries.lookup key = some item) : (key, item) ∈ entries := by
+  induction entries with
+  | nil => simp [List.lookup] at found
+  | cons head rest ih =>
+    obtain ⟨key', item'⟩ := head
+    simp only [List.lookup] at found
+    split at found
+    · rename_i same; simp only [beq_iff_eq] at same; subst same
+      simp only [Option.some.injEq] at found; subst found; simp
+    · exact List.mem_cons_of_mem _ (ih found)
+
+/-- Footprints of commuting steps do not conflict. -/
+private theorem independent_footprints {state : State} {tasks : List (PID × Task α)}
+    {first second : Key} (independent : Key.independent state tasks first second = true) :
+    ∃ footprint footprint', first.footprint state tasks = some footprint ∧
+      second.footprint state tasks = some footprint' ∧
+      (∀ loc ∈ footprint.writes, loc ∉ footprint'.reads ++ footprint'.writes) ∧
+      (∀ loc ∈ footprint'.writes, loc ∉ footprint.reads ++ footprint.writes) := by
+  simp only [Key.independent, Bool.and_eq_true] at independent
+  obtain ⟨-, independent⟩ := independent
+  split at independent
+  · rename_i footprint footprint' found found'
+    simp only [Bool.not_eq_true'] at independent
+    simp [Footprint.conflicts] at independent
+    obtain ⟨written, written'⟩ := independent
+    refine ⟨footprint, footprint', found, found', fun loc mem out => ?_, fun loc mem out => ?_⟩ <;>
+      simp only [List.mem_append] at out
+    · rcases out with out | out
+      · exact (written loc mem).1 out
+      · exact (written loc mem).2 out
+    · rcases out with out | out
+      · exact written' loc mem out
+      · exact (written loc out).2 mem
+  · simp at independent
+
+private theorem distinct_keys {state : State} {tasks : List (PID × Task α)} {first second : Key}
+    (independent : Key.independent state tasks first second = true) :
+    match first, second with
+    | .process first _, .process second _ => first ≠ second
+    | .timer _, .timer _ => False
+    | _, _ => True := by
+  simp only [Key.independent, Bool.and_eq_true] at independent
+  obtain ⟨distinct, -⟩ := independent
+  split <;> simp_all
+
+private theorem process_footprint {state : State} {tasks : List (PID × Task α)} {processId : PID}
+    {index : Nat} {footprint : Footprint}
+    (found : (Key.process processId index).footprint state tasks = some footprint) :
+    ∃ task, tasks.lookup processId = some task ∧ task.footprint state processId = some footprint := by
+  simp only [Key.footprint, Option.bind_eq_some_iff] at found
+  exact found
+
+/-- A change keeping what it does not write agrees on locations it does not write. -/
+private theorem agree_unwritten {state changed : State} {writes locs : List Loc}
+    (keeps : ∀ loc, loc ∉ writes → Agree changed state loc) (disjoint : ∀ loc ∈ writes, loc ∉ locs) :
+    ∀ loc ∈ locs, Agree state changed loc :=
+  fun loc mem => (keeps loc fun written => disjoint loc written mem).symm
+
+/-- Two changes writing disjoint locations, each applied before and after the
+other, reach the same state. -/
+private theorem commute_agree {state first second firstSecond secondFirst : State}
+    {writes writes' : List Loc} (disjoint : ∀ loc ∈ writes, loc ∉ writes')
+    (keepsFirst : ∀ loc, loc ∉ writes → Agree first state loc)
+    (keepsSecond : ∀ loc, loc ∉ writes' → Agree second state loc)
+    (keepsSecondAfter : ∀ loc, loc ∉ writes' → Agree firstSecond first loc)
+    (sameSecond : ∀ loc ∈ writes', Agree second firstSecond loc)
+    (keepsFirstAfter : ∀ loc, loc ∉ writes → Agree secondFirst second loc)
+    (sameFirst : ∀ loc ∈ writes, Agree first secondFirst loc) :
+    secondFirst = firstSecond := by
+  apply State.ext_agree
+  intro loc
+  by_cases written : loc ∈ writes
+  · exact (sameFirst loc written).symm.trans (keepsSecondAfter loc (disjoint loc written)).symm
+  · by_cases written' : loc ∈ writes'
+    · exact (keepsFirstAfter loc written).trans (sameSecond loc written')
+    · exact (keepsFirstAfter loc written).trans ((keepsSecond loc written').trans
+        ((keepsFirst loc written).symm.trans (keepsSecondAfter loc written').symm))
+
+/-- What a step of a process with a footprint keeps. -/
+private theorem keeps_of_footprint {state : State} {processId : PID} {task : Task α}
+    {footprint : Footprint} (found : task.footprint state processId = some footprint)
+    {transition : Transition α} {index : Nat}
+    (possible : (task.transitions state processId)[index]? = some transition) :
+    ∀ loc, loc ∉ footprint.writes → Agree transition.state state loc := by
+  obtain ⟨transition', found', similar⟩ :=
+    (transitions_similar found (other := state) fun loc _ => Agree.refl state loc).get' possible
+  rw [possible, Option.some.injEq] at found'
+  subst found'
+  exact similar.2.2.2.2.1
+
+private theorem timer_footprint {state : State} {tasks : List (PID × Task α)} {index : Nat}
+    {footprint : Footprint} (found : (Key.timer index).footprint state tasks = some footprint) :
+    ∃ timer, state.timers[index]? = some timer ∧ footprint = timer.footprint state := by
+  simp only [Key.footprint, Option.map_eq_some_iff] at found
+  obtain ⟨timer, found, rfl⟩ := found
+  exact ⟨timer, found, rfl⟩
+
+private theorem timers_read {timer : Timer} {state : State} : .timers ∈ (timer.footprint state).reads := by
+  unfold Timer.footprint; split <;> simp
+
+private theorem timer_step {state : State} {timer : Timer} {index : Nat}
+    (found : state.timers[index]? = some timer) :
+    (timer.event, state.timerNext timer) ∈ state.timerSteps := by
+  rw [timerSteps_eq, List.mem_map]
+  exact ⟨timer, List.mem_of_getElem? found, rfl⟩
+
+private theorem orElse_comm {first second : Option γ} {rest : Option γ}
+    (none : first = none ∨ second = none) :
+    (first.orElse fun _ => second.orElse fun _ => rest) =
+      second.orElse fun _ => first.orElse fun _ => rest := by
+  rcases none with rfl | rfl
+  · cases second <;> rfl
+  · cases first <;> rfl
+
+/-- Steps whose footprints do not conflict commute: when one step follows
+another, it can also be taken first, followed by the other. -/
+private theorem diamond {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {event event' : Event} {next next' : Config α}
+    (wellformed : Wellformed (Config.running state tasks finished exhausted))
+    (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
+    (independent : Key.independent state tasks key' key = true)
+    (mem' : (key', event', next') ∈ next.steps) :
+    ∃ next'', (key', event', next'') ∈ (Config.running state tasks finished exhausted).steps ∧
+      Step next'' event next' := by
+  have keys := distinct_keys independent
+  obtain ⟨footprint', footprint, found', found, disjoint', disjoint⟩ :=
+    independent_footprints independent
+  have wellformed₀ := wellformed
+  obtain ⟨distinct, fresh, -, quiet⟩ := wellformed
+  rw [mem_steps] at mem
+  rcases mem with ⟨before, processId, task, after, transition, index, split, possible, rfl, rfl, rfl⟩ |
+    ⟨timer, index, timerFound, rfl, rfl, rfl⟩
+  · obtain ⟨task₀, lookup, taskFootprint⟩ := process_footprint found
+    rw [lookup_eq (item := task) distinct (by rw [split]; simp), Option.some.injEq] at lookup
+    subst lookup
+    have keeps := keeps_of_footprint taskFootprint possible
+    have stepped : Step (Config.running state tasks finished exhausted) transition.event
+        (transition.apply before after finished exhausted) :=
+      Step.run split (List.mem_of_getElem? possible)
+    have wellformed₁ := Step.wellformed stepped wellformed₀
+    simp only [Transition.apply] at mem' wellformed₁
+    rw [mem_steps] at mem'
+    rcases mem' with ⟨before', processId', task', after', transition', index', split', possible',
+      rfl, rfl, rfl⟩ | ⟨timer', index', timerFound', rfl, rfl, rfl⟩
+    · simp only at keys
+      obtain ⟨task₁, lookup₁, footprintFound₁⟩ := process_footprint found'
+      have mem₁ := mem_of_lookup lookup₁
+      obtain ⟨-, origin, -, spawned⟩ := transition_tasks (List.mem_of_getElem? possible)
+      -- The other process was there before the step.
+      have outside : (processId', task') ∈ before ∨ (processId', task') ∈ after := by
+        have : (processId', task') ∈ before ++ transition.tasks ++ after := by rw [split']; simp
+        simp only [List.mem_append] at this
+        rcases this with (inBefore | inNew) | inAfter
+        · exact .inl inBefore
+        · exfalso
+          rcases origin _ inNew with same | ⟨child, spawn, same⟩
+          · exact keys same
+          · obtain ⟨childPid, -⟩ := spawned child spawn
+            simp only at same
+            have := fresh (processId, task) (by rw [split]; simp) (processId', task₁) mem₁
+              ((state.process processId).children + 1) [] (by simp [same, childPid])
+            simp only at this
+            omega
+        · exact .inr inAfter
+      rw [lookup_eq (item := task') distinct (by rw [split]; rcases outside with h | h <;> simp [h]),
+        Option.some.injEq] at lookup₁
+      subst lookup₁
+      have agreeOther : ∀ loc ∈ footprint'.reads ++ footprint'.writes,
+          Agree state transition.state loc := agree_unwritten keeps disjoint
+      obtain ⟨transition₀, possible₀, similar₀⟩ :=
+        (transitions_similar footprintFound₁ agreeOther).get possible'
+      obtain ⟨event₀, tasks₀, finished₀, exhausted₀, keepsAfter₀, same₀⟩ := similar₀
+      have keeps₀ := keeps_of_footprint footprintFound₁ possible₀
+      have agreeFirst : ∀ loc ∈ footprint.reads ++ footprint.writes,
+          Agree state transition₀.state loc := agree_unwritten keeps₀ disjoint'
+      obtain ⟨transition₃, possible₃, similar₃⟩ :=
+        (transitions_similar taskFootprint agreeFirst).get' possible
+      obtain ⟨event₃, tasks₃, finished₃, exhausted₃, keeps₃, same₃⟩ := similar₃
+      have states : transition₃.state = transition'.state :=
+        commute_agree (fun loc mem out => disjoint loc mem (by simp [out])) keeps keeps₀
+          keepsAfter₀ same₀ keeps₃ same₃
+      have quietFirst := (transition_frame (List.mem_of_getElem? possible)).2.2
+      have quietSecond := (transition_frame (List.mem_of_getElem? possible₀)).2.2
+      have finishedComm : (transition₃.finished.orElse fun _ =>
+            transition₀.finished.orElse fun _ => finished) =
+          transition'.finished.orElse fun _ => transition.finished.orElse fun _ => finished := by
+        rw [finished₃, finished₀]
+        apply orElse_comm
+        have quiet' : task.Quiet ∨ task'.Quiet := by
+          rcases outside with inBefore | inAfter
+          · obtain ⟨front, middle, rfl⟩ := List.append_of_mem inBefore
+            have := pairwise_between (relation := fun first second : PID × Task α =>
+              first.2.Quiet ∨ second.2.Quiet) (first := (processId', task'))
+              (second := (processId, task)) (by rw [split] at quiet; simpa using quiet)
+            exact this.symm
+          · obtain ⟨middle, back, rfl⟩ := List.append_of_mem inAfter
+            exact pairwise_between (relation := fun first second : PID × Task α =>
+              first.2.Quiet ∨ second.2.Quiet) (first := (processId, task))
+              (second := (processId', task')) (by rw [split] at quiet; simpa using quiet)
+        rcases quiet' with quiet' | quiet'
+        · exact .inl (quietFirst quiet')
+        · exact .inr (quietSecond quiet')
+      have exhaustedComm : ((exhausted || transition₀.exhausted) || transition₃.exhausted) =
+          ((exhausted || transition.exhausted) || transition'.exhausted) := by
+        rw [exhausted₃, exhausted₀]
+        cases exhausted <;> cases transition.exhausted <;> cases transition₀.exhausted <;> rfl
+      rcases outside with inBefore | inAfter
+      · obtain ⟨front, middle, rfl⟩ := List.append_of_mem inBefore
+        obtain ⟨rfl, -, rfl⟩ := split_unique wellformed₁.1
+          (show front ++ (processId', task') :: middle ++ transition.tasks ++ after =
+            front ++ (processId', task') :: (middle ++ transition.tasks ++ after) by simp)
+          split'
+        refine ⟨transition₀.apply front (middle ++ (processId, task) :: after) finished exhausted,
+          mem_steps.mpr (.inl ⟨front, processId', task', middle ++ (processId, task) :: after,
+            transition₀, index', by rw [split]; simp, possible₀, rfl, event₀, rfl⟩), ?_⟩
+        have step := Step.run (state := transition₀.state)
+          (finished := transition₀.finished.orElse fun _ => finished)
+          (exhausted := exhausted || transition₀.exhausted)
+          (before := front ++ transition₀.tasks ++ middle) (after := after)
+          (tasks := front ++ transition₀.tasks ++ (middle ++ (processId, task) :: after))
+          (by simp) (List.mem_of_getElem? possible₃)
+        simp only [Transition.apply] at step ⊢
+        rw [event₃, states, finishedComm, exhaustedComm, tasks₃] at step
+        rw [tasks₀]
+        simpa using step
+      · obtain ⟨middle, back, rfl⟩ := List.append_of_mem inAfter
+        obtain ⟨rfl, -, rfl⟩ := split_unique wellformed₁.1
+          (show before ++ transition.tasks ++ (middle ++ (processId', task') :: back) =
+            (before ++ transition.tasks ++ middle) ++ (processId', task') :: back by simp)
+          split'
+        refine ⟨transition₀.apply (before ++ (processId, task) :: middle) back finished exhausted,
+          mem_steps.mpr (.inl ⟨before ++ (processId, task) :: middle, processId', task', back,
+            transition₀, index', by rw [split]; simp, possible₀, rfl, event₀, rfl⟩), ?_⟩
+        have step := Step.run (state := transition₀.state)
+          (finished := transition₀.finished.orElse fun _ => finished)
+          (exhausted := exhausted || transition₀.exhausted)
+          (before := before) (after := middle ++ transition₀.tasks ++ back)
+          (tasks := before ++ (processId, task) :: middle ++ transition₀.tasks ++ back)
+          (by simp) (List.mem_of_getElem? possible₃)
+        simp only [Transition.apply] at step ⊢
+        rw [event₃, states, finishedComm, exhaustedComm, tasks₃] at step
+        rw [tasks₀]
+        simpa using step
+    · obtain ⟨timer, timerFound, rfl⟩ := timer_footprint found'
+      have timers : transition.state.timers = state.timers :=
+        keeps .timers fun written => disjoint .timers written (by simp [timers_read])
+      rw [timers, timerFound, Option.some.injEq] at timerFound'
+      subst timerFound'
+      have timerFrames := frames_timer (state := state) (timer := timer)
+      have keepsTimer : ∀ {loc}, loc ∉ (timer.footprint state).writes →
+          Agree (state.timerNext timer) state loc := fun out => timerFrames.keeps out
+      have agreeTimer : ∀ loc ∈ (timer.footprint state).reads ++ (timer.footprint state).writes,
+          Agree state transition.state loc := agree_unwritten keeps disjoint
+      have agreeProcess : ∀ loc ∈ footprint.reads ++ footprint.writes,
+          Agree state (state.timerNext timer) loc :=
+        agree_unwritten (fun loc out => keepsTimer out) disjoint'
+      obtain ⟨transition₃, possible₃, similar⟩ :=
+        (transitions_similar taskFootprint agreeProcess).get' possible
+      obtain ⟨event₃, tasks₃, finished₃, exhausted₃, keeps₃, same₃⟩ := similar
+      obtain ⟨keepsAfter, sameAfter⟩ := timerFrames transition.state agreeTimer
+      refine ⟨.running (state.timerNext timer) tasks finished exhausted,
+        mem_steps.mpr (.inr ⟨timer, index', timerFound, rfl, rfl, rfl⟩), ?_⟩
+      have step := Step.run (finished := finished) (exhausted := exhausted) split
+        (List.mem_of_getElem? possible₃)
+      have equal : transition₃.apply before after finished exhausted =
+          .running (transition.state.timerNext timer) (before ++ transition.tasks ++ after)
+            (transition.finished.orElse fun _ => finished) (exhausted || transition.exhausted) := by
+        simp only [Transition.apply, tasks₃, finished₃, exhausted₃]
+        rw [commute_agree (fun loc mem out => disjoint loc mem (by simp [out])) keeps
+          (fun loc out => keepsTimer out) keepsAfter sameAfter keeps₃ same₃]
+      rw [event₃, equal] at step
+      exact step
+  · rcases key' with ⟨processId', index'⟩ | index'
+    · obtain ⟨timer₀, timerFound₀, rfl⟩ := timer_footprint found
+      rw [timerFound, Option.some.injEq] at timerFound₀
+      subst timerFound₀
+      obtain ⟨task, lookup, taskFootprint⟩ := process_footprint found'
+      rw [mem_steps] at mem'
+      rcases mem' with ⟨before, processId, task', after, transition', index'', split, possible',
+        same, rfl, rfl⟩ | ⟨_, _, _, same, _, _⟩
+      · simp only [Key.process.injEq] at same
+        obtain ⟨rfl, rfl⟩ := same
+        rw [lookup_eq (item := task') distinct (by rw [split]; simp), Option.some.injEq] at lookup
+        subst lookup
+        have timerFrames := frames_timer (state := state) (timer := timer)
+        have keepsTimer : ∀ {loc}, loc ∉ (timer.footprint state).writes →
+            Agree (state.timerNext timer) state loc := fun out => timerFrames.keeps out
+        have agreeProcess : ∀ loc ∈ footprint'.reads ++ footprint'.writes,
+            Agree state (state.timerNext timer) loc :=
+          agree_unwritten (fun loc out => keepsTimer out) disjoint
+        obtain ⟨transition, possible, similar⟩ :=
+          (transitions_similar taskFootprint agreeProcess).get possible'
+        obtain ⟨event₁, tasks₁, finished₁, exhausted₁, keeps₁, same₁⟩ := similar
+        have keeps := keeps_of_footprint taskFootprint possible
+        have agreeTimer : ∀ loc ∈ (timer.footprint state).reads ++ (timer.footprint state).writes,
+            Agree state transition.state loc := agree_unwritten keeps disjoint'
+        obtain ⟨keepsAfter, sameAfter⟩ := timerFrames transition.state agreeTimer
+        have timers : transition.state.timers = state.timers :=
+          keeps .timers fun written => disjoint' .timers written (by simp [timers_read])
+        refine ⟨transition.apply before after finished exhausted, mem_steps.mpr
+          (.inl ⟨before, processId', task', after, transition, index', split, possible, rfl,
+            event₁, rfl⟩), ?_⟩
+        have step := Step.timer (tasks := before ++ transition.tasks ++ after)
+          (finished := transition.finished.orElse fun _ => finished)
+          (exhausted := exhausted || transition.exhausted)
+          (timer_step (state := transition.state) (index := index) (by rw [timers]; exact timerFound))
+        simp only [Transition.apply]
+        rw [commute_agree (fun loc mem out => disjoint' loc mem (by simp [out])) keeps
+          (fun loc out => keepsTimer out) keepsAfter sameAfter keeps₁ same₁]
+        simp only [tasks₁, finished₁, exhausted₁]
+        exact step
+      · cases same
+    · simp at keys
+
+/-- Keys name steps: a configuration has at most one step with a key. -/
+private theorem steps_unique {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key : Key}
+    {event event' : Event} {next next' : Config α}
+    (wellformed : Wellformed (Config.running state tasks finished exhausted))
+    (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
+    (mem' : (key, event', next') ∈ (Config.running state tasks finished exhausted).steps) :
+    next = next' := by
+  rw [mem_steps] at mem mem'
+  rcases mem with ⟨before, processId, task, after, transition, index, split, found, rfl, rfl, rfl⟩ |
+    ⟨timer, index, found, rfl, rfl, rfl⟩ <;>
+  rcases mem' with ⟨before', processId', task', after', transition', index', split', found', same,
+    rfl, rfl⟩ | ⟨timer', index', found', same, rfl, rfl⟩
+  · simp only [Key.process.injEq] at same
+    obtain ⟨rfl, rfl⟩ := same
+    obtain ⟨rfl, rfl, rfl⟩ := split_unique wellformed.1 split split'
+    rw [found, Option.some.injEq] at found'
+    subst found'
+    rfl
+  · cases same
+  · cases same
+  · simp only [Key.timer.injEq] at same
+    subst same
+    rw [found, Option.some.injEq] at found'
+    subst found'
+    rfl
+
+private theorem Step.of_mem_steps {config next : Config α} {key : Key} {event : Event}
+    (mem : (key, event, next) ∈ config.steps) : Step config event next := by
+  cases config with
+  | start => simp [Config.steps] at mem
+  | running state tasks finished exhausted =>
+    rw [mem_steps] at mem
+    rcases mem with ⟨before, processId, task, after, transition, index, split, found, -, rfl, rfl⟩ |
+      ⟨timer, index, found, -, rfl, rfl⟩
+    · exact .run split (List.mem_of_getElem? found)
+    · exact .timer (timer_step found)
+
+private theorem Step.keyed {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {event : Event}
+    {next : Config α} (step : Step (.running state tasks finished exhausted) event next) :
+    ∃ key, (key, event, next) ∈ (Config.running state tasks finished exhausted).steps := by
+  cases step with
+  | run split possible =>
+    obtain ⟨index, bound, found⟩ := List.getElem_of_mem possible
+    exact ⟨_, mem_steps.mpr (.inl ⟨_, _, _, _, _, index, split, by simp [bound, found], rfl, rfl,
+      rfl⟩)⟩
+  | timer possible =>
+    rw [timerSteps_eq, List.mem_map] at possible
+    obtain ⟨timer, mem, equal⟩ := possible
+    simp only [Prod.mk.injEq] at equal
+    obtain ⟨rfl, rfl⟩ := equal
+    obtain ⟨index, bound, found⟩ := List.getElem_of_mem mem
+    exact ⟨_, mem_steps.mpr (.inr ⟨timer, index, by simp [bound, found], rfl, rfl, rfl⟩)⟩
+
 /-! ### Soundness -/
 
-/-- One level of `check` where it follows every step. -/
-private theorem check_successors {accept : Outcome α → Bool} {depth : Nat} {config last : Config α}
-    {events : List Event} {outcome : Outcome α}
-    (ih : ∀ {first last : Config α} {events : List Event} {outcome : Outcome α},
-      Wellformed first → check accept depth first = true → Run first events last →
-      Terminal last outcome → accept outcome = true)
-    (wellformed : Wellformed config) (reduced : config.reduced = config.successors)
-    (checked : check accept (depth + 1) config = true) (run : Run config events last)
-    (terminal : Terminal last outcome) : accept outcome = true := by
-  unfold check at checked
-  rw [reduced] at checked
-  cases run with
-  | refl =>
-    simp only [terminal.successors_eq_nil, terminal.outcome_eq] at checked
-    exact checked
-  | step step rest =>
-    have mem := step.mem_successors
-    split at checked
-    · rename_i empty; simp [empty] at mem
-    · simp only [List.all_eq_true, Prod.forall] at checked
-      exact ih (Step.wellformed step wellformed) (checked _ _ mem) rest terminal
-
 private theorem check_wellformed {accept : Outcome α → Bool} :
-    ∀ {depth : Nat} {first last : Config α} {events : List Event} {outcome : Outcome α},
-      Wellformed first → check accept depth first = true → Run first events last →
-      Terminal last outcome → accept outcome = true := by
+    ∀ {depth : Nat} {sleep : List Key} {first last : Config α} {events : List Event}
+      {outcome : Outcome α},
+      Wellformed first → checkFrom accept depth sleep first = true → Run first events last →
+      Terminal last outcome →
+      (∀ key ∈ sleep, ∀ event next, (key, event, next) ∈ first.steps → ¬Reaches next last) →
+      accept outcome = true := by
   intro depth
   induction depth with
-  | zero => intro _ _ _ _ _ checked; simp [check] at checked
+  | zero => intro _ _ _ _ _ _ checked; simp [checkFrom] at checked
   | succ depth ih =>
-    intro first last events outcome wellformed checked run terminal
+    intro sleep first last events outcome wellformed checked run terminal asleep
+    -- Every step from a configuration, with nothing asleep.
+    have every : ∀ {config : Config α}, Wellformed config →
+        (match config.successors with
+          | [] => accept config.outcome
+          | successors => successors.all fun (_, next) => checkFrom accept depth [] next) = true →
+        Run config events last → accept outcome = true := by
+      intro config wellformed checked run
+      cases run with
+      | refl =>
+        simp only [terminal.successors_eq_nil, terminal.outcome_eq] at checked
+        exact checked
+      | step step rest =>
+        have mem := step.mem_successors
+        split at checked
+        · rename_i empty; simp [empty] at mem
+        · simp only [List.all_eq_true, Prod.forall] at checked
+          exact ih (Step.wellformed step wellformed) (checked _ _ mem) rest terminal
+            (by simp)
     cases first with
     | start env computation =>
-      exact check_successors ih wellformed rfl checked run terminal
+      unfold checkFrom at checked
+      exact every wellformed checked run
     | running state tasks finished exhausted =>
+      unfold checkFrom at checked
       cases found : (splits tasks).find? (fun (_, (processId, task), _) =>
           task.independent state processId) with
       | none =>
-        exact check_successors ih wellformed (by simp [Config.reduced, found]) checked run terminal
+        simp only [found] at checked
+        cases run with
+        | refl =>
+          have noSteps : (Config.running state tasks finished exhausted).steps = [] := by
+            apply List.eq_nil_iff_forall_not_mem.mpr
+            rintro ⟨key, event, next⟩ mem
+            have := (Step.of_mem_steps mem).mem_successors
+            rw [terminal.successors_eq_nil] at this
+            simp at this
+          simp only [noSteps, terminal.outcome_eq] at checked
+          exact checked
+        | step step rest =>
+          obtain ⟨key, mem⟩ := Step.keyed step
+          cases steps : (Config.running state tasks finished exhausted).steps with
+          | nil => rw [steps] at mem; simp at mem
+          | cons entry rest' =>
+            simp only [steps] at checked
+            rw [← steps] at checked
+            exact explore_sound (goal := accept outcome = true)
+              (fun key event next mem sleep' visited reaches asleep' =>
+                let ⟨_, run'⟩ := reaches
+                ih (Step.wellformed (Step.of_mem_steps mem) wellformed) visited run' terminal
+                  asleep')
+              (fun key event next mem key' independent event' next' mem' =>
+                diamond wellformed mem independent mem')
+              (fun key event event' next next' mem mem' => steps_unique wellformed mem mem')
+              asleep ⟨key, _, _, mem, _, rest⟩ checked
       | some split =>
+        simp only [found] at checked
         obtain ⟨before, ⟨processId, ⟨computation, finish⟩⟩, after⟩ := split
         have reads := List.find?_some found
         have split := eq_of_mem_splits (List.mem_of_find?_eq_some found)
@@ -2281,10 +4056,9 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
           have step : Step (.running state tasks finished exhausted) readStep.event
               (readStep.apply before after finished exhausted) :=
             Step.run split (by rw [possible]; exact List.mem_singleton_self _)
-          unfold check at checked
           simp only [Config.reduced, found, possible, List.map_cons, List.map_nil] at checked
           simp only [List.all_cons, List.all_nil, Bool.and_true] at checked
-          refine ih (events := events') (Step.wellformed step wellformed) checked ?_ terminal
+          refine ih (events := events') (Step.wellformed step wellformed) checked ?_ terminal (by simp)
           simpa [Transition.apply, readStep] using run'
         | set updated next =>
           simp only [Task.independent, Bool.and_true, Option.isNone_iff_eq_none] at reads
@@ -2300,10 +4074,9 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
           have step : Step (.running state tasks finished exhausted) writeStep.event
               (writeStep.apply before after finished exhausted) :=
             Step.run split (by rw [possible]; exact List.mem_singleton_self _)
-          unfold check at checked
           simp only [Config.reduced, found, possible, List.map_cons, List.map_nil] at checked
           simp only [List.all_cons, List.all_nil, Bool.and_true] at checked
-          refine ih (events := events') (Step.wellformed step wellformed) checked ?_ terminal'
+          refine ih (events := events') (Step.wellformed step wellformed) checked ?_ terminal' (by simp)
           simpa [Transition.apply, writeStep] using run'
         | receive timeout select next =>
           simp only [Task.independent, Bool.and_eq_true, Option.isNone_iff_eq_none,
@@ -2325,10 +4098,9 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
             simp [Task.transitions, process, signal, selected]
           have step := Step.run (finished := finished) (exhausted := exhausted) split
             (by rw [possible]; exact List.mem_singleton_self _)
-          unfold check at checked
           simp only [Config.reduced, found, possible, List.map_cons, List.map_nil] at checked
           simp only [List.all_cons, List.all_nil, Bool.and_true] at checked
-          refine ih (events := events') (Step.wellformed step wellformed) checked ?_ terminal
+          refine ih (events := events') (Step.wellformed step wellformed) checked ?_ terminal (by simp)
           simpa [Transition.apply] using run'
         | _ => simp [Task.independent] at reads
 
@@ -2338,6 +4110,7 @@ theorem check_sound {accept : Outcome α → Bool} {depth : Nat} {env : Environm
     (checked : check accept depth (.start env computation) = true)
     (run : Run (.start env computation) events last) (terminal : Terminal last outcome) :
     accept outcome = true :=
-  check_wellformed (show Wellformed (Config.start env computation) from trivial) checked run terminal
+  check_wellformed (show Wellformed (Config.start env computation) from trivial) checked run
+    terminal (by simp)
 
 end Lynx.Concurrent

@@ -549,8 +549,10 @@ theorem Run.invariant {invariant : Config α → Prop}
 
 For a closed program, every run can be enumerated: `Config.successors` lists
 each step, and `check` follows them, taking independent steps first, such as
-environment reads and writes, as `Config.reduced` describes. Proving `check` by evaluation establishes a
-property for every schedule (see `Lynx.concurrent_of_check`). -/
+environment reads and writes, as `Config.reduced` describes, and following one
+order of steps that commute, as `explore` describes. Proving `check` by
+evaluation establishes a property for every schedule (see
+`Lynx.concurrent_of_check`). -/
 
 /-- Every way to split a list around one element. -/
 @[expose] def splits : List γ → List (List γ × γ × List γ)
@@ -769,6 +771,285 @@ only append to. -/
         (selectMessage (select (state.view processId)) (state.process processId).mailbox).isSome
     | _ => false
 
+/-! ### Footprints
+
+A step reads and writes some locations of the state: fields of processes,
+whether processes are alive, and the timers. Steps of different processes whose
+footprints do not conflict commute, so `check` follows one of their orders. -/
+
+/-- A field of a process record. -/
+inductive Field where
+  | pdict | mailbox | refCounter | children | links | monitors | monitoring | aliases | trapExit
+  | signal
+deriving Repr
+
+/-- The position of a field, to compare fields in evaluation. -/
+@[expose] def Field.index : Field → Nat
+  | .pdict => 0 | .mailbox => 1 | .refCounter => 2 | .children => 3 | .links => 4
+  | .monitors => 5 | .monitoring => 6 | .aliases => 7 | .trapExit => 8 | .signal => 9
+
+instance : BEq Field := ⟨fun first second => first.index == second.index⟩
+
+instance : LawfulBEq Field where
+  eq_of_beq {first second} equal := by
+    cases first <;> cases second <;> simp_all [BEq.beq, Field.index]
+  rfl {field} := by cases field <;> simp [BEq.beq]
+
+instance : DecidableEq Field := fun first second => decidable_of_iff (first == second) beq_iff_eq
+
+/-- Every field. -/
+@[expose] def Field.all : List Field :=
+  [.pdict, .mailbox, .refCounter, .children, .links, .monitors, .monitoring, .aliases, .trapExit,
+    .signal]
+
+theorem Field.mem_all (field : Field) : field ∈ Field.all := by
+  cases field <;> simp [Field.all]
+
+/-- A location of the state. -/
+inductive Loc where
+  | field (processId : PID) (field : Field)
+  | alive (processId : PID)
+  /-- The timers sending to a process, in order. -/
+  | timersTo (processId : PID)
+  /-- All timers, in order. -/
+  | timers
+deriving Repr
+
+/-- Compare locations in evaluation. -/
+@[expose] def Loc.beq : Loc → Loc → Bool
+  | .field processId name, .field processId' name' => processId == processId' && name == name'
+  | .alive processId, .alive processId' => processId == processId'
+  | .timersTo processId, .timersTo processId' => processId == processId'
+  | .timers, .timers => true
+  | _, _ => false
+
+instance : BEq Loc := ⟨Loc.beq⟩
+
+instance : LawfulBEq Loc where
+  eq_of_beq {first second} equal := by
+    change Loc.beq first second = true at equal
+    cases first <;> cases second <;> simp_all [Loc.beq]
+  rfl {loc} := by
+    change Loc.beq loc loc = true
+    cases loc <;> simp [Loc.beq]
+
+instance : DecidableEq Loc := fun first second => decidable_of_iff (first == second) beq_iff_eq
+
+/-- Every location of a process. -/
+@[expose] def Loc.process (processId : PID) : List Loc :=
+  .alive processId :: Field.all.map (.field processId)
+
+/-- What signaling a process reads. -/
+@[expose] def Loc.signaled (target : PID) : List Loc :=
+  [.alive target, .field target .trapExit, .field target .signal, .field target .mailbox]
+
+/-- The locations a step reads and those it writes. -/
+structure Footprint where
+  reads : List Loc
+  writes : List Loc
+
+/-- Whether one of two steps writes what the other reads or writes. -/
+@[expose] def Footprint.conflicts (first second : Footprint) : Bool :=
+  first.writes.any (fun loc => second.reads.contains loc || second.writes.contains loc) ||
+    second.writes.any fun loc => first.reads.contains loc
+
+/-- The timers sending to processes, for timers with a reference. -/
+@[expose] def State.timersWith (state : State) (reference : List Nat) : List Loc :=
+  state.timers.filterMap fun timer =>
+    if timer.reference == reference then some (.timersTo timer.destination) else none
+
+/-- What a process exiting reads and writes, besides its own record: linked
+processes receive exit signals, watchers `DOWN` messages, and timers sending to
+it are canceled. -/
+@[expose] def State.exitFootprint (state : State) (processId : PID) (reason : Term) : Footprint :=
+  let process := state.process processId
+  let timers : List Loc :=
+    if state.timers.any (·.destination == processId) then [.timers, .timersTo processId] else []
+  { reads := Loc.process processId ++ .timersTo processId :: timers ++
+      process.links.flatMap (fun linked => .field linked .links :: Loc.signaled linked) ++
+      process.monitors.flatMap fun (_, watcher) =>
+        [.alive watcher, .field watcher .mailbox, .field watcher .monitoring, .field watcher .aliases]
+    writes := Loc.process processId ++ timers ++
+      process.links.flatMap (fun linked =>
+        .field linked .links :: .field linked .mailbox ::
+          if isNormal reason then [] else [.field linked .signal]) ++
+      process.monitors.flatMap fun (_, watcher) =>
+        [.field watcher .mailbox, .field watcher .monitoring, .field watcher .aliases] }
+
+/-- What answering a request of a live process reads and writes, besides what
+every step of the process reads. -/
+@[expose] def Request.footprint (state : State) (processId : PID) (process : ProcessState) :
+    Request → Footprint
+  | .monitor target alias =>
+      let changed : List Loc := if (state.processes target).isSome then
+          [.field target .monitors, .field processId .monitoring] ++
+            if alias then [.field processId .aliases] else []
+        else [.field processId .mailbox]
+      { reads := .alive target :: changed, writes := .field processId .refCounter :: changed }
+  | .demonitor reference flush =>
+      let own : List Loc := [.field processId .monitoring, .field processId .aliases] ++
+        if flush && !process.monitoring.any (·.1 == reference) then [.field processId .mailbox]
+        else []
+      { reads := own ++ process.monitoring.flatMap fun (found, target) =>
+          if found == reference then [.alive target, .field target .monitors] else []
+        writes := own ++ process.monitoring.flatMap fun (found, target) =>
+          if found == reference then [.field target .monitors] else [] }
+  | .link target =>
+      if target = processId then { reads := [], writes := [] }
+      else if (state.processes target).isSome then
+        { reads := [.alive target, .field processId .links, .field target .links]
+          writes := [.field processId .links, .field target .links] }
+      else
+        { reads := [.alive target, .field processId .trapExit, .field processId .mailbox]
+          writes := [.field processId .mailbox] }
+  | .unlink target =>
+      { reads := [.alive target, .field processId .links, .field target .links]
+        writes := [.field processId .links, .field target .links] }
+  | .exit target reason =>
+      if target = processId && isNormal reason && !process.trapExit then
+        { reads := [.field processId .trapExit], writes := [.field processId .signal] }
+      else
+        { reads := .field processId .trapExit :: Loc.signaled target
+          writes := [.field target .signal, .field target .mailbox] }
+  | .trapExit _ => { reads := [.field processId .trapExit], writes := [.field processId .trapExit] }
+  | .alive target => { reads := [.alive target], writes := [] }
+  | .sendAlias alias _ =>
+      let owner := alias.dropLast
+      { reads := [.alive owner, .field owner .aliases, .field owner .mailbox]
+        writes := [.field owner .mailbox] }
+  | .startTimer destination _ _ =>
+      let timers : List Loc :=
+        if (state.processes destination).isSome then [.timers, .timersTo destination] else []
+      { reads := .alive destination :: timers, writes := .field processId .refCounter :: timers }
+  | .cancelTimer reference =>
+      { reads := [.timers], writes := .timers :: state.timersWith reference }
+
+/-- What the next step of a live process reads and writes, besides what every
+step of it reads, or nothing for steps treated as conflicting with every other
+step. -/
+@[expose] def Task.stepFootprint (state : State) (processId : PID) (process : ProcessState)
+    (task : Task α) : Option Footprint :=
+  match process.signal with
+  | some reason => some (state.exitFootprint processId reason)
+  | none =>
+  match task.computation with
+  | .ok _ => some (state.exitFootprint processId (.atom "normal"))
+  | .error .exhausted => some { reads := [], writes := Loc.process processId }
+  | .error exception => some (state.exitFootprint processId (exitReason exception))
+  | .get _ => some { reads := [], writes := [] }
+  | Result.schedule options _ _ =>
+      let linked : List Loc := if options.link then [.field processId .links] else []
+      let monitored : List Loc := if options.monitor then [.field processId .monitoring] else []
+      some { reads := .field processId .children :: linked ++ monitored
+             writes := .field processId .children ::
+               Loc.process (processId ++ [process.children + 1]) ++ linked ++
+               if options.monitor then .field processId .refCounter :: monitored else [] }
+  | .send destination _ _ =>
+      some { reads := [.alive destination, .field destination .mailbox]
+             writes := [.field destination .mailbox] }
+  | .receive _ select _ =>
+      match selectMessage (select (state.view processId)) process.mailbox with
+      | some _ => none
+      | none => some { reads := [.field processId .mailbox], writes := [] }
+  | .request query _ => some (Request.footprint state processId process query)
+  | _ => none
+
+/-- What the next step of a process reads and writes, or nothing for steps
+treated as conflicting with every other step, such as steps of a process that
+is not live. Every step reads the pending signal and what the process observes. -/
+@[expose] def Task.footprint (state : State) (processId : PID) (task : Task α) : Option Footprint :=
+  match state.processes processId with
+  | none => none
+  | some process => (task.stepFootprint state processId process).map fun footprint =>
+      { footprint with reads := [.alive processId, .field processId .signal,
+          .field processId .pdict, .field processId .refCounter] ++ footprint.reads }
+
+/-- What a step of a timer reads and writes. -/
+@[expose] def Timer.footprint (timer : Timer) (state : State) : Footprint :=
+  if timer.expired then
+    { reads := [.timers, .alive timer.destination, .field timer.destination .mailbox]
+      writes := .timers :: .field timer.destination .mailbox :: state.timersWith timer.reference }
+  else { reads := [.timers], writes := .timers :: state.timersWith timer.reference }
+
+/-- Names a step across configurations: the step of a process by its place among
+the process's steps, or the step of a timer by the timer's place. -/
+inductive Key where
+  | process (processId : PID) (index : Nat)
+  | timer (index : Nat)
+deriving Repr
+
+/-- Compare keys in evaluation. -/
+@[expose] def Key.beq : Key → Key → Bool
+  | .process processId index, .process processId' index' =>
+      processId == processId' && index == index'
+  | .timer index, .timer index' => index == index'
+  | _, _ => false
+
+instance : BEq Key := ⟨Key.beq⟩
+
+instance : LawfulBEq Key where
+  eq_of_beq {first second} equal := by
+    change Key.beq first second = true at equal
+    cases first <;> cases second <;> simp_all [Key.beq]
+  rfl {key} := by
+    change Key.beq key key = true
+    cases key <;> simp [Key.beq]
+
+instance : DecidableEq Key := fun first second => decidable_of_iff (first == second) beq_iff_eq
+
+/-- Every step of a running configuration, with its key, in the order of
+`Config.successors`. -/
+@[expose] def Config.steps : Config α → List (Key × Event × Config α)
+  | .running state tasks finished exhausted =>
+      let steps := (splits tasks).flatMap fun (before, (processId, task), after) =>
+        (task.transitions state processId).zipIdx.map fun (transition, index) =>
+          (.process processId index, transition.event,
+            transition.apply before after finished exhausted)
+      match state.timers with
+      | [] => steps
+      | _ :: _ => steps ++ state.timerSteps.zipIdx.map fun ((event, after), index) =>
+          (.timer index, event, .running after tasks finished exhausted)
+  | .start .. => []
+
+/-- What the step with a key reads and writes. -/
+@[expose] def Key.footprint (state : State) (tasks : List (PID × Task α)) : Key → Option Footprint
+  | .process processId _ => (tasks.lookup processId).bind (·.footprint state processId)
+  | .timer index => state.timers[index]?.map (·.footprint state)
+
+/-- Whether the steps with two keys commute: they belong to different processes
+or timers, and their footprints do not conflict. -/
+@[expose] def Key.independent (state : State) (tasks : List (PID × Task α)) (first second : Key) :
+    Bool :=
+  let distinct := match first, second with
+    | .process first _, .process second _ => first != second
+    | .timer _, .timer _ => false
+    | _, _ => true
+  distinct && match first.footprint state tasks, second.footprint state tasks with
+    | some first, some second => !first.conflicts second
+    | _, _ => false
+
+/-- Follow every step not asleep. Each step is followed with the sleeping steps
+and the steps followed before it that commute with it asleep: runs taking those
+first are covered elsewhere. -/
+@[expose] def explore (visit : List Key → Config α → Bool) (independent : Key → Key → Bool)
+    (sleep : List Key) : List Key → List (Key × Event × Config α) → Bool
+  | _, [] => true
+  | done, (key, _, next) :: rest =>
+      if sleep.contains key then explore visit independent sleep done rest
+      else visit ((sleep ++ done).filter (independent · key)) next &&
+        explore visit independent sleep (done ++ [key]) rest
+
+/-- The first rejected run that `explore` finds. -/
+@[expose] def exploreFind (visit : List Key → Config α → Option (List Event × β))
+    (independent : Key → Key → Bool) (sleep : List Key) :
+    List Key → List (Key × Event × Config α) → Option (List Event × β)
+  | _, [] => none
+  | done, (key, event, next) :: rest =>
+      if sleep.contains key then exploreFind visit independent sleep done rest
+      else match visit ((sleep ++ done).filter (independent · key)) next with
+        | some (events, failure) => some (event :: events, failure)
+        | none => exploreFind visit independent sleep (done ++ [key]) rest
+
 /-- The steps `check` follows: only the first process whose next step is
 independent when there is one, as every run can take that step first and end
 the same way, and otherwise every step. -/
@@ -783,14 +1064,32 @@ the same way, and otherwise every step. -/
   | _ => config.successors
 
 /-- Whether every run from the configuration ends in an accepted outcome,
-following at most `depth` steps along each run. Runs that differ only in when a
-process takes an independent step are followed once, see `Config.reduced`. -/
-@[expose] def check (accept : Outcome α → Bool) : Nat → Config α → Bool
-  | 0, _ => false
-  | depth + 1, config =>
-      match config.reduced with
-      | [] => accept config.outcome
-      | successors => successors.all fun (_, next) => check accept depth next
+following at most `depth` steps along each run, where runs taking a sleeping
+step first are covered elsewhere. Runs that differ only in when a process takes
+an independent step are followed once, see `Config.reduced`, and of runs that
+differ only in the order of steps that commute, see `Key.independent`, one is
+followed, see `explore`. -/
+@[expose] def checkFrom (accept : Outcome α → Bool) : Nat → List Key → Config α → Bool
+  | 0, _, _ => false
+  | depth + 1, sleep, config =>
+      match config with
+      | .running state tasks _ _ =>
+          match (splits tasks).find? (fun (_, (processId, task), _) =>
+              task.independent state processId) with
+          | some _ => config.reduced.all fun (_, next) => checkFrom accept depth [] next
+          | none =>
+              match config.steps with
+              | [] => accept config.outcome
+              | steps => explore (checkFrom accept depth) (Key.independent state tasks) sleep [] steps
+      | config =>
+          match config.successors with
+          | [] => accept config.outcome
+          | successors => successors.all fun (_, next) => checkFrom accept depth [] next
+
+/-- Whether every run from the configuration ends in an accepted outcome,
+following at most `depth` steps along each run. -/
+@[expose] def check (accept : Outcome α → Bool) (depth : Nat) (config : Config α) : Bool :=
+  checkFrom accept depth [] config
 
 /-- How a run that `check` rejects fails. -/
 inductive Failure (α : Type) where
@@ -799,25 +1098,78 @@ inductive Failure (α : Type) where
   /-- The run takes more steps than the depth allows. -/
   | unfinished : Failure α
 
+/-- The first run that `checkFrom` rejects. -/
+@[expose] def counterexampleFrom (accept : Outcome α → Bool) :
+    Nat → List Key → Config α → Option (List Event × Failure α)
+  | 0, _, _ => some ([], .unfinished)
+  | depth + 1, sleep, config =>
+      let rejected := if accept config.outcome then none else some ([], .rejected config.outcome)
+      let all (successors : List (Event × Config α)) := successors.findSome? fun (event, next) =>
+        (counterexampleFrom accept depth [] next).map fun (events, failure) =>
+          (event :: events, failure)
+      match config with
+      | .running state tasks _ _ =>
+          match (splits tasks).find? (fun (_, (processId, task), _) =>
+              task.independent state processId) with
+          | some _ => all config.reduced
+          | none =>
+              match config.steps with
+              | [] => rejected
+              | steps => exploreFind (counterexampleFrom accept depth) (Key.independent state tasks)
+                  sleep [] steps
+      | config =>
+          match config.successors with
+          | [] => rejected
+          | successors => all successors
+
 /-- The first run that `check` rejects, as the events of its steps and how it
 fails. Evaluating it is a fast way to find why a check fails. -/
-@[expose] def counterexample (accept : Outcome α → Bool) :
-    Nat → Config α → Option (List Event × Failure α)
-  | 0, _ => some ([], .unfinished)
-  | depth + 1, config =>
-      match config.reduced with
-      | [] => if accept config.outcome then none else some ([], .rejected config.outcome)
-      | successors => successors.findSome? fun (event, next) =>
-          (counterexample accept depth next).map fun (events, failure) => (event :: events, failure)
+@[expose] def counterexample (accept : Outcome α → Bool) (depth : Nat) (config : Config α) :
+    Option (List Event × Failure α) :=
+  counterexampleFrom accept depth [] config
+
+theorem explore_eq_true_iff {visit : List Key → Config α → Bool}
+    {find : List Key → Config α → Option (List Event × β)} {independent : Key → Key → Bool}
+    (same : ∀ sleep next, visit sleep next = true ↔ find sleep next = none)
+    (sleep done : List Key) (steps : List (Key × Event × Config α)) :
+    explore visit independent sleep done steps = true ↔
+      exploreFind find independent sleep done steps = none := by
+  induction steps generalizing done with
+  | nil => simp [explore, exploreFind]
+  | cons step rest ih =>
+    obtain ⟨key, event, next⟩ := step
+    simp only [explore, exploreFind]
+    split
+    · exact ih done
+    · rw [Bool.and_eq_true, same, ih]
+      split <;> simp_all
+
+theorem checkFrom_eq_true_iff (accept : Outcome α → Bool) (depth : Nat) (sleep : List Key)
+    (config : Config α) :
+    checkFrom accept depth sleep config = true ↔ counterexampleFrom accept depth sleep config = none := by
+  induction depth generalizing sleep config with
+  | zero => simp [checkFrom, counterexampleFrom]
+  | succ depth ih =>
+    simp only [checkFrom, counterexampleFrom]
+    have all : ∀ successors : List (Event × Config α),
+        (successors.all fun (_, next) => checkFrom accept depth [] next) = true ↔
+          (successors.findSome? fun (event, next) =>
+            (counterexampleFrom accept depth [] next).map fun (events, failure) =>
+              (event :: events, failure)) = none := by
+      intro successors
+      simp only [List.all_eq_true, List.findSome?_eq_none_iff, Option.map_eq_none_iff, ih]
+    split
+    · split
+      · exact all _
+      · split
+        · split <;> simp_all
+        · exact explore_eq_true_iff (fun sleep next => ih sleep next) _ _ _
+    · split
+      · split <;> simp_all
+      · exact all _
 
 theorem check_eq_true_iff (accept : Outcome α → Bool) (depth : Nat) (config : Config α) :
-    check accept depth config = true ↔ counterexample accept depth config = none := by
-  induction depth generalizing config with
-  | zero => simp [check, counterexample]
-  | succ depth ih =>
-    simp only [check, counterexample]
-    split
-    · split <;> simp_all
-    · simp only [List.all_eq_true, List.findSome?_eq_none_iff, Option.map_eq_none_iff, ih]
+    check accept depth config = true ↔ counterexample accept depth config = none :=
+  checkFrom_eq_true_iff accept depth [] config
 
 end Lynx.Concurrent
