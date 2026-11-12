@@ -104,8 +104,6 @@ example : Lynx.Dispatcher → Lynx.Term → Array Lynx.Term → Lynx.Result := L
 example : Lynx.Result → Lynx.Environment → Lynx.Outcome Lynx.Term × Lynx.Environment :=
   Lynx.Result.run
 example : Lynx.Result → Lynx.Outcome Lynx.Term := fun computation => Lynx.sequential computation
-example : Lynx.Result → List Lynx.ScheduleChoice → Lynx.Outcome Lynx.Term :=
-  fun computation schedule => Lynx.concurrent computation schedule
 example : Lynx.Dispatcher → Lynx.Term → Lynx.Term → Lynx.Result := Erlang.erlang.«apply/2»
 example : Lynx.Dispatcher → Lynx.Term → Lynx.Term → Except Lynx.Exception Lynx.Term :=
   Erlang.erlang.«apply/2»
@@ -120,20 +118,12 @@ example : Lynx.Result → Lynx.Environment → List Lynx.ScheduleChoice →
     Lynx.Outcome Lynx.Term × Lynx.Environment :=
   fun computation env choices => computation.run env choices
 
--- Every schedule is a run of the transition system, available through ordinary imports.
-example (computation : Lynx.Result) (choices : List Lynx.ScheduleChoice) :
-    ∃ events last, Lynx.Concurrent.Run (.start {} computation) events last ∧
-      Lynx.Concurrent.Terminal last (Lynx.concurrent computation choices) :=
-  Lynx.concurrent_reaches computation choices
-
--- Concurrent laws hold for every run, so for every schedule, and checking proves them.
+-- Concurrent laws hold for every run, and checking proves them.
 example (computation : Lynx.Result) (depth : Nat)
     (checked : ∀ elapsed,
-      Lynx.Concurrent.check Lynx.Outcome.isTrue depth (.start {} computation elapsed) = true)
-    (choices : List Lynx.ScheduleChoice) :
-    Lynx.concurrent computation choices = .ok Lynx.Term.true :=
-  Lynx.concurrent_of_always
-    (Lynx.always_of_check computation _ depth checked fun _ => Lynx.Outcome.eq_of_isTrue) choices
+      Lynx.Concurrent.check Lynx.Outcome.isTrue depth (.start {} computation elapsed) = true) :
+    Lynx.concurrent computation (.ok Lynx.Term.true) :=
+  Lynx.concurrent_of_check computation _ depth checked fun _ => Lynx.Outcome.eq_of_isTrue
 
 -- No run goes on forever.
 example : WellFounded fun next first : Lynx.Concurrent.Config Lynx.Term =>
@@ -725,7 +715,6 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.timerAbsolute",
   "Lynx.Term.true",
   "Lynx.Term.tuple",
-  "Lynx.always",
   "Lynx.apply",
   "Lynx.concurrent",
   "Lynx.instBEqTerm",

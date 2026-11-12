@@ -487,16 +487,16 @@ theorem completed_nested_processes_are_removed :
   cbv
 
 theorem spawn_rejects_invalid_fun :
-    Lynx.concurrent («spawn/1» (Dispatcher.ofTable functions 100) (.atom "not_a_fun")) [] =
+    Lynx.sequential («spawn/1» (Dispatcher.ofTable functions 100) (.atom "not_a_fun")) =
       .error (.error (.atom "badarg")) ∧
-    Lynx.concurrent («spawn/1» (Dispatcher.ofTable functions 100) (fn "identity" 1)) [] =
+    Lynx.sequential («spawn/1» (Dispatcher.ofTable functions 100) (fn "identity" 1)) =
       .error (.error (.atom "badarg")) := by
   repeat' apply And.intro
   all_goals cbv
 
 /-- A function value that names no table entry fails in the child, as calling it would. -/
 theorem spawn_unknown_fun_fails_in_child :
-    Lynx.concurrent («spawn/1» (Dispatcher.ofTable functions 100) (fn "missing" 0)) [] =
+    Lynx.sequential («spawn/1» (Dispatcher.ofTable functions 100) (fn "missing" 0)) =
       .ok (.pid [1]) := by
   cbv
 

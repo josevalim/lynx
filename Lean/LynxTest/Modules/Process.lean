@@ -199,8 +199,8 @@ private def timeoutRace : Result := do
 
 /-- Blocking consumes a choice: the same program can receive or time out first. -/
 theorem timeout_is_a_scheduler_choice :
-    Lynx.concurrent timeoutRace [.current, .swap [1]] = .ok (.atom "wanted") ∧
-    Lynx.concurrent timeoutRace [.current, .timeout []] = .ok (.atom "timeout") := by cbv
+    (timeoutRace.run {} [.current, .swap [1]]).1 = .ok (.atom "wanted") ∧
+    (timeoutRace.run {} [.current, .timeout []]).1 = .ok (.atom "timeout") := by cbv
 
 /-- Timer choices target waiting children as well as the root process. -/
 theorem timeout_can_expire_child :
@@ -212,7 +212,7 @@ theorem timeout_can_expire_child :
 
 /-- A timeout choice cannot discard a matching message already in the queue. -/
 theorem queued_match_precedes_timeout_choice :
-    Lynx.concurrent (queued [.atom "wanted"] (receiveTimed (.integer 10))) [.timeout []] =
+    ((queued [.atom "wanted"] (receiveTimed (.integer 10))).run {} [.timeout []]).1 =
       .ok (.atom "wanted") := by cbv
 
 /-- Timeout exceptions and bodies remain covered by the receiving caller's handler. -/
@@ -299,9 +299,9 @@ private def interleavedSends : Result := do
 /-- Only the choice after the first send changes: the child runs between the
 parent's two sends, despite the parent winning the spawn decision. -/
 theorem send_is_a_scheduling_boundary :
-    Lynx.concurrent interleavedSends [.current, .current] =
+    (interleavedSends.run {} [.current, .current]).1 =
       .ok (.tuple #[.atom "first", .atom "second", .atom "child"]) ∧
-    Lynx.concurrent interleavedSends [.current, .swap [1]] =
+    (interleavedSends.run {} [.current, .swap [1]]).1 =
       .ok (.tuple #[.atom "first", .atom "child", .atom "second"]) := by
   cbv
 
@@ -314,15 +314,15 @@ private def twoSenders : Result := do
 
 /-- With three processes, swap can select either worker at the same boundary. -/
 theorem swap_selects_the_named_process :
-    Lynx.concurrent twoSenders [.current, .swap [1]] =
+    (twoSenders.run {} [.current, .swap [1]]).1 =
       .ok (.tuple #[.atom "left", .atom "right"]) ∧
-    Lynx.concurrent twoSenders [.current, .swap [2]] =
+    (twoSenders.run {} [.current, .swap [2]]).1 =
       .ok (.tuple #[.atom "right", .atom "left"]) := by
   cbv
 
 /-- An unavailable PID choice must not strand runnable processes. -/
 theorem invalid_schedule_falls_back :
-    Lynx.concurrent interleavedSends [.swap [999]] =
+    (interleavedSends.run {} [.swap [999]]).1 =
       .ok (.tuple #[.atom "first", .atom "second", .atom "child"]) := by cbv
 
 /-- Empty receive blocks, rather than raising or returning a fabricated value. -/
@@ -357,9 +357,9 @@ theorem terminated_child_is_not_revived :
 /-- Root termination also closes its mailbox: a late message neither revives
 the root nor blocks the remaining children, in any run. -/
 theorem terminated_root_discards_late_messages :
-    Lynx.always (Result.schedule {} («send/2» noFunctions (.pid []) (.atom "late"))
+    Lynx.concurrent (Result.schedule {} («send/2» noFunctions (.pid []) (.atom "late"))
       (fun _ => .ok Term.nil)) (.ok Term.nil) :=
-  always_of_check _ (fun | .ok .nil => true | _ => false) 16 (fun _ => by cbv)
+  concurrent_of_check _ (fun | .ok .nil => true | _ => false) 16 (fun _ => by cbv)
     fun result accepted => by split at accepted <;> simp_all
 
 /-- Child exceptions do not become exceptions in the unlinked parent. -/
@@ -380,7 +380,7 @@ private def isolatedDictionaries : Result := do
   pure (.tuple #[own, reply])
 
 theorem suspended_processes_keep_their_dictionaries :
-    Lynx.concurrent isolatedDictionaries [.swap [1]] =
+    (isolatedDictionaries.run {} [.swap [1]]).1 =
       .ok (.tuple #[.atom "parent", .atom "child"]) := by cbv
 
 private def receiveBoundary : Result := do
@@ -394,9 +394,8 @@ private def receiveBoundary : Result := do
   receiveAny
 
 theorem successful_receive_is_a_scheduling_boundary :
-    Lynx.concurrent receiveBoundary [] = .ok (.atom "parent") ∧
-    Lynx.concurrent receiveBoundary
-      [.current, .current, .current, .swap [1]] = .ok (.atom "child") := by
+    (receiveBoundary.run {} []).1 = .ok (.atom "parent") ∧
+    (receiveBoundary.run {} [.current, .current, .current, .swap [1]]).1 = .ok (.atom "child") := by
   cbv
 
 /-- Selecting a blocked process falls back without discarding its continuation. -/
@@ -407,13 +406,9 @@ theorem waiting_schedule_choice_falls_back :
 /-! Exploring every interleaving proves outcomes for every run, and so for all
 scheduler choices, not only for the schedules listed above. -/
 
-theorem handshake_every_run : Lynx.always handshake (.ok (.atom "done")) :=
-  always_of_check handshake (fun | .ok (.atom "done") => true | _ => false) 32 (fun _ => by cbv)
+theorem handshake_every_run : Lynx.concurrent handshake (.ok (.atom "done")) :=
+  concurrent_of_check handshake (fun | .ok (.atom "done") => true | _ => false) 32 (fun _ => by cbv)
     fun result accepted => by split at accepted <;> simp_all
-
-theorem handshake_every_schedule (choices : List ScheduleChoice) :
-    Lynx.concurrent handshake choices = .ok (.atom "done") :=
-  concurrent_of_always handshake_every_run choices
 
 /-- Both delivery orders are possible, and no other outcome is. -/
 theorem two_senders_every_run {events : List Concurrent.Event} {last : Concurrent.Config Term}

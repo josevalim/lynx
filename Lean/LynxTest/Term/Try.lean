@@ -107,19 +107,19 @@ private def call (depth : Nat) : Result :=
   (Dispatcher.ofTable failingTable depth).call (.function "test" "fail" 0 #[]) #[]
 
 theorem dispatched_exception_is_caught :
-    Lynx.concurrent (Result.tryWith (call 100)
-      Result.ok (fun exception => .ok exception.reason)) [] =
+    Lynx.sequential (Result.tryWith (call 100)
+      Result.ok (fun exception => .ok exception.reason)) =
       .ok (.atom "dispatched") := by cbv
 
 theorem dispatched_success_body_exception_escapes :
-    Lynx.concurrent (Result.tryWith (.ok Term.nil)
+    Lynx.sequential (Result.tryWith (.ok Term.nil)
       (fun _ => call 100)
-      (fun _ => .ok (Term.atom "caught"))) [] =
+      (fun _ => .ok (Term.atom "caught"))) =
       .error (.throw (.atom "dispatched")) := by cbv
 
 theorem exhaustion_is_not_caught :
-    Lynx.concurrent (Result.tryWith (call 0)
-      Result.ok (fun _ => .ok (Term.atom "caught"))) [] =
+    Lynx.sequential (Result.tryWith (call 0)
+      Result.ok (fun _ => .ok (Term.atom "caught"))) =
       .error .exhausted := by cbv
 
 theorem blocking_is_not_caught :

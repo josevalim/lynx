@@ -103,7 +103,7 @@ defmodule TaskProofsTest do
       refine ⟨4, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       -- Evaluate every interleaving; only the final comparison depends on n.
-      exact Lynx.always_of_check
+      exact Lynx.concurrent_of_check
         (Lynx.apply «double_in_task_doubles:ensures/1» Erlang.program.fun_table (depth + 4) (.integer n))
         Lynx.Outcome.isTrue 300
         (fun _ => by cbv; simp [Rat.lt_irrefl])
@@ -123,7 +123,7 @@ defmodule TaskProofsTest do
       -- The timeout may expire before or after the reply arrives. When the
       -- reply wins, the owner compares n * 2 with itself while the task is
       -- still running, so evaluation resumes after simp decides it.
-      exact Lynx.always_of_check
+      exact Lynx.concurrent_of_check
         (Lynx.apply «double_or_timeout_doubles:ensures/1» Erlang.program.fun_table (depth + 4) (.integer n))
         Lynx.Outcome.isTrue 300
         (fun _ => by cbv; repeat (simp only [Int.lt_irrefl, ite_false, ite_true]; cbv))
@@ -144,7 +144,7 @@ defmodule TaskProofsTest do
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       -- lynx_counterexample reports a failing schedule quickly, before cbv
       -- evaluates every interleaving, which takes more than its default steps.
-      exact Lynx.always_of_check
+      exact Lynx.concurrent_of_check
         (Lynx.apply «ignore_drains_reply:ensures/0» Erlang.program.fun_table (depth + 4))
         Lynx.Outcome.isTrue 300
         (fun _ => by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv)
@@ -181,7 +181,7 @@ defmodule TaskProofsTest do
       -- through :erlang.apply/2, each one level down.
       refine ⟨4, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
-      exact Lynx.always_of_check
+      exact Lynx.concurrent_of_check
         (Lynx.apply «await_drains_reply:ensures/0» Erlang.program.fun_table (depth + 4))
         Lynx.Outcome.isTrue 300
         (fun _ => by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv)
