@@ -48,42 +48,8 @@ defmodule TaskProofsTest do
     result in [{:ok, :reply}, nil] and empty?
   end
 
-  # Starts a task as Task.async/1 does, without Task.Supervised: the owner
-  # monitors the process with an alias and sends it the alias to reply to.
-  defp async(fun) do
-    owner = self()
-
-    pid =
-      spawn_link(fn ->
-        receive do
-          alias -> send(alias, {alias, fun.()})
-        end
-      end)
-
-    alias = :erlang.monitor(:process, pid, alias: :demonitor)
-    send(pid, alias)
-    %Task{pid: pid, ref: alias, owner: owner, mfa: {:erlang, :apply, 2}}
-  end
-
-  # Once the task exits, no other process can send to the owner.
-  defp wait_exit(%Task{pid: pid}) do
-    monitor = Process.monitor(pid)
-
-    receive do
-      {:DOWN, ^monitor, _, _, _} -> :ok
-    end
-  end
-
-  defp empty_inbox? do
-    receive do
-      _ -> false
-    after
-      0 -> true
-    end
-  end
-
   def await_leaves_no_reply do
-    task = async(fn -> :reply end)
+    task = Task.async(fn -> :reply end)
 
     result =
       try do
@@ -92,8 +58,21 @@ defmodule TaskProofsTest do
         :exit, {:timeout, _} -> :timeout
       end
 
-    wait_exit(task)
-    result in [:reply, :timeout] and empty_inbox?()
+    # Once the task exits, no other process can send to the owner.
+    monitor = Process.monitor(task.pid)
+
+    receive do
+      {:DOWN, ^monitor, _, _, _} -> :ok
+    end
+
+    empty? =
+      receive do
+        _ -> false
+      after
+        0 -> true
+      end
+
+    result in [:reply, :timeout] and empty?
   end
 
   laws "Task" do
@@ -180,6 +159,15 @@ defmodule TaskProofsTest do
   end
 
   laws "Task.await" do
+    # Task.Supervised runs the task with apply(:erlang, :apply, [fun, []]).
+    dynamic &:erlang.apply/2
+
+    # The task does not raise, so its crash report is unreachable.
+    cutoff &Task.Supervised.get_running/1
+    cutoff &Task.Supervised.format_report/1
+    cutoff &:proc_lib.get_label/1
+    cutoff &:logger.error/2
+
     # The owner awaits its own task, so it never reports another owner.
     cutoff &Task.invalid_owner_error/1
     cutoff &ArgumentError.exception/1
@@ -195,12 +183,12 @@ defmodule TaskProofsTest do
     law await_drains_reply,
       expects: await_leaves_no_reply(),
       proof: ~LEAN"""
-      -- The task is spawned, receives the alias, and applies its function,
-      -- each one level down.
-      refine ⟨3, fun depth deep => ?_⟩
+      -- The task is spawned, receives its work, and applies its function
+      -- through :erlang.apply/2, each one level down.
+      refine ⟨4, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       have checked := Lynx.concurrent_of_check
-        (Lynx.apply «await_drains_reply:ensures/0» Erlang.program.fun_table (depth + 3))
+        (Lynx.apply «await_drains_reply:ensures/0» Erlang.program.fun_table (depth + 4))
         (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
         (by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv) schedule
       split at checked
