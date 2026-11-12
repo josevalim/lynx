@@ -68,6 +68,26 @@ example : Concurrent.check answered 4 (.start {} race) = true := by
   lynx_counterexample
   cbv
 
+/-- Laws state checks from some call depth on, which the search takes to be zero. -/
+private def deep (depth : Nat) : Result := do
+  let self ← «self/0» (Dispatcher.ofTable functions depth)
+  let _ ← «spawn/1» (Dispatcher.ofTable functions depth) (.function "test" "greet" 0 #[self])
+  poll
+
+/--
+error: Found a schedule where the program returns timeout:
+  1. <0> spawns <0.1>
+  2. <0> times out waiting for a message
+  3. <0> exits with normal
+  4. <0.1> sends hello to <0>
+  5. <0.1> exits with normal
+where depth = 0
+-/
+#guard_msgs in
+example (depth : Nat) : Concurrent.check hello 32 (.start {} (deep (depth + 1))) = true := by
+  lynx_counterexample
+  sorry
+
 /-- error: lynx_counterexample runs closed programs, but this one depends on [message] -/
 #guard_msgs in
 example (message : Term) :
