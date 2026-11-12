@@ -19,5 +19,6 @@ import LynxTest.Modules.Conversions
 import LynxTest.Modules.Hashing
 import LynxTest.Modules.Process
 import LynxTest.Modules.Signals
+import LynxTest.Modules.Timers
 import LynxTest.Counterexample
 import LynxTest.Purity

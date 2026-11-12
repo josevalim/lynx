@@ -169,6 +169,11 @@ private theorem unchanged_fields (process : ProcessState) (mailbox : List Term)
     Unchanged process { process with mailbox, links, monitors, monitoring, aliases } :=
   ⟨rfl, rfl, rfl, id⟩
 
+/-- Records of other processes keep their fields when their timer changes. -/
+private theorem unchanged_timer (process : ProcessState) (timer : Option Timer) :
+    Unchanged process { process with timer } :=
+  ⟨rfl, rfl, rfl, id⟩
+
 /-- Unfold a compound operation on a kept record. -/
 syntax "keeps_chain" : tactic
 macro_rules
@@ -181,6 +186,7 @@ macro_rules
       | (apply Keeps.update (by assumption))
       | (apply Keeps.modify (.inl (by assumption)))
       | (apply Keeps.modify (.inr fun process => unchanged_fields process _ _ _ _ _))
+      | (apply Keeps.modify (.inr fun process => unchanged_timer process _))
       | refine Keeps.foldl ?_ (fun current item kept => ?_)
       | split))
 
@@ -207,9 +213,8 @@ private theorem keeps_spawnWith {state : State} {processId other : PID} {options
   have child : processId ≠ other ++ [(state.process other).children + 1] := by
     simpa [State.spawnWith, State.spawn] using fresh
   simp only [State.spawnWith, State.spawn]
-  split
-  · exact keeps_monitor ne (by keeps_chain)
-  · keeps_chain
+  repeat' (first | (apply keeps_monitor ne) | (apply Keeps.modify (.inl child)) | split)
+  all_goals keeps_chain
 
 /-! ### Children of the stepping process -/
 
@@ -345,10 +350,9 @@ private theorem spawnWith_children {state : State} {processId : PID} {options : 
       (state.spawnWith processId options).2 := by
     intro other
     simp only [State.spawnWith]
-    split
-    · apply KeepsChildren.monitor
-      children_chain
-    · children_chain
+    repeat' (first | (apply KeepsChildren.monitor) |
+      (refine KeepsChildren.modify (by intro _; rfl) ?_) | split)
+    all_goals children_chain
   refine ⟨rfl, (kept processId).1.trans spawned, (kept processId).2 ?_, (kept _).2 ?_⟩
   · simp [State.spawn, State.update, fresh]
   · simp [State.spawn, State.update, State.spawnWith]
@@ -426,8 +430,8 @@ private theorem transition_frame {state : State} {processId : PID} {task : Task 
           exact ⟨fun _ _ _ => Keeps.refl _ _,
             .inr (.inl ⟨_, rfl, KeepsChildren.refl _ _, id⟩), fun _ => rfl⟩
     | request query next =>
-      simp only [Task.transitions, signal, List.mem_singleton] at possible
-      subst possible
+      simp only [Task.transitions, signal, List.mem_map] at possible
+      obtain ⟨_, _, rfl⟩ := possible
       exact ⟨fun other ne _ => keeps_request ne,
         .inr (.inl ⟨_, rfl, keepsChildren_request, id⟩), fun _ => rfl⟩
   · simp only [Task.transitions, signal, List.mem_singleton] at possible
@@ -523,6 +527,8 @@ private theorem transition_tasks {state : State} {processId : PID} {task : Task 
     · simp only [List.mem_singleton] at possible; subst possible; cases spawn
     · split at possible <;> (try split at possible) <;> (try split at possible) <;>
         simp_all
+      -- A request may get several replies, none of them a spawn.
+      all_goals obtain ⟨_, _, rfl⟩ := possible; cases spawn
   · refine ⟨by simp [single], by simp [single], .inl (Nat.le_of_eq kept.1.symm), fun child spawn => ?_⟩
     obtain ⟨computation, finish⟩ := task
     simp only [Task.transitions] at possible
@@ -530,6 +536,8 @@ private theorem transition_tasks {state : State} {processId : PID} {task : Task 
     · simp only [List.mem_singleton] at possible; subst possible; cases spawn
     · split at possible <;> (try split at possible) <;> (try split at possible) <;>
         simp_all
+      -- A request may get several replies, none of them a spawn.
+      all_goals obtain ⟨_, _, rfl⟩ := possible; cases spawn
   · refine ⟨?_, ?_, .inl (by omega), fun other spawn => ?_⟩
     · rw [pair, childPid]
       simp

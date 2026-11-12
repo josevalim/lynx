@@ -434,7 +434,11 @@ private theorem findTimeout_isSome {state : State} {accept : PID → Bool} {pool
       split at possible
       · simp_all
       · cases timeout <;> simp_all
-    | ok | get | set | schedule | send | request => simp_all [Task.transitions]
+    | ok | get | set | schedule | send => simp_all [Task.transitions]
+    | request =>
+      simp only [Task.transitions, signal, List.mem_map] at possible
+      obtain ⟨_, _, rfl⟩ := possible
+      simp at expired
     | error exception => cases exception <;> simp_all [Task.transitions]
 
 private theorem step_isSome_of_findReady {state : State} {accept : PID → Bool}
@@ -654,6 +658,12 @@ private theorem step_sound {pool : Pool α} {state : State} {chosen : PID} {expi
       | error exception =>
         cases exception <;> simp only [Option.some.injEq] at stepped <;> subst stepped <;>
           simp [Task.transitions, signal, leaves]
+      | request query next =>
+        -- The runner takes the first reply.
+        simp only [Option.some.injEq] at stepped
+        subst stepped
+        exact ⟨_, by simpa [Task.transitions, signal] using ⟨_, mem_replies _ _, rfl⟩,
+          by simp, by simp [leaves], rfl, rfl, rfl⟩
       | _ =>
         simp only [Option.some.injEq] at stepped
         subst stepped
