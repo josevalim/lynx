@@ -743,6 +743,403 @@ private theorem Step.wellformed {first next : Config α} {event : Event}
     rw [(timerSteps_keeps possible parent.1).2.1.1]
     exact fresh parent member descendant member' index rest extended
 
+/-! ### Erasing what a process keeps
+
+Other processes neither read nor change the dictionary and reference counter a
+process keeps in its environment, so their steps commute with erasing them. -/
+
+/-- A record without what its process keeps in its environment. -/
+private def ProcessState.erase (process : ProcessState) : ProcessState :=
+  { process with pdict := [], refCounter := 0 }
+
+/-- A state without what one process keeps in its environment. -/
+private def State.erase (state : State) (processId : PID) : State :=
+  { state with processes := fun candidate =>
+      if candidate = processId then (state.processes candidate).map ProcessState.erase
+      else state.processes candidate }
+
+private theorem State.ext' {first second : State} (timers : first.timers = second.timers)
+    (equal : ∀ candidate, first.processes candidate = second.processes candidate) :
+    first = second := by
+  cases first; cases second; simp_all; funext candidate; exact equal candidate
+
+@[simp] private theorem erase_timers {state : State} {processId : PID} :
+    (state.erase processId).timers = state.timers := rfl
+
+private theorem erase_processes {state : State} {processId candidate : PID} :
+    (state.erase processId).processes candidate =
+      if candidate = processId then (state.processes candidate).map ProcessState.erase
+      else state.processes candidate := rfl
+
+private theorem erase_process_ne {state : State} {processId other : PID} (ne : other ≠ processId) :
+    (state.erase processId).process other = state.process other := by
+  simp [State.process, erase_processes, ne]
+
+private theorem erase_view_ne {state : State} {processId other : PID} (ne : other ≠ processId) :
+    (state.erase processId).view other = state.view other := by
+  simp [State.view, erase_process_ne ne]
+
+/-- Erasing keeps every field other than the environment. -/
+private theorem erase_process_fields {state : State} {processId other : PID} :
+    ((state.erase processId).process other).mailbox = (state.process other).mailbox ∧
+    ((state.erase processId).process other).links = (state.process other).links ∧
+    ((state.erase processId).process other).monitors = (state.process other).monitors ∧
+    ((state.erase processId).process other).monitoring = (state.process other).monitoring ∧
+    ((state.erase processId).process other).aliases = (state.process other).aliases ∧
+    ((state.erase processId).process other).trapExit = (state.process other).trapExit ∧
+    ((state.erase processId).process other).signal = (state.process other).signal ∧
+    ((state.erase processId).process other).children = (state.process other).children := by
+  by_cases equal : other = processId
+  · subst equal
+    simp only [State.process, erase_processes, ite_true]
+    cases state.processes other <;> simp [ProcessState.erase]
+  · simp [erase_process_ne equal]
+
+private theorem erase_isSome {state : State} {processId other : PID} :
+    ((state.erase processId).processes other).isSome = (state.processes other).isSome := by
+  simp only [erase_processes]; split <;> simp
+
+/-- A change of a record commutes with erasing its environment. -/
+private def Oblivious (change : ProcessState → ProcessState) : Prop :=
+  ∀ process, (change process).erase = change process.erase
+
+private theorem erase_update_ne {state : State} {processId other : PID}
+    {process : Option ProcessState} (ne : other ≠ processId) :
+    (state.update other process).erase processId = (state.erase processId).update other process := by
+  refine State.ext' rfl fun candidate => ?_
+  simp only [erase_processes, State.update]
+  by_cases first : candidate = other <;> by_cases second : candidate = processId <;> simp_all
+
+private theorem erase_update_self {state : State} {processId : PID} :
+    (state.update processId none).erase processId = (state.erase processId).update processId none := by
+  refine State.ext' rfl fun candidate => ?_
+  simp only [erase_processes, State.update]
+  by_cases first : candidate = processId <;> simp_all
+
+private theorem erase_modify {state : State} {processId other : PID}
+    {change : ProcessState → ProcessState} (oblivious : Oblivious change) :
+    (state.modify other change).erase processId = (state.erase processId).modify other change := by
+  refine State.ext' (by simp) fun candidate => ?_
+  unfold State.modify
+  rw [erase_processes]
+  by_cases same : other = processId
+  · subst same
+    cases found : state.processes other with
+    | none => simp [erase_processes, found]
+    | some process =>
+      simp only [erase_processes, found, ite_true, Option.map_some, State.update]
+      by_cases equal : candidate = other <;> simp_all [oblivious process]
+  · cases found : state.processes other with
+    | none => simp [erase_processes, found, same]
+    | some process =>
+      simp only [erase_processes, found, same, ite_false, State.update]
+      by_cases equal : candidate = other <;> by_cases equal' : candidate = processId <;> simp_all
+
+private theorem erase_deliver {state : State} {processId other : PID} {message : Term} :
+    (state.deliver other message).erase processId = (state.erase processId).deliver other message := by
+  have : state.deliver other message = state.modify other fun process =>
+      { process with mailbox := process.mailbox ++ [message] } := by
+    unfold State.deliver State.modify; split <;> rfl
+  have : (state.erase processId).deliver other message = (state.erase processId).modify other
+      fun process => { process with mailbox := process.mailbox ++ [message] } := by
+    unfold State.deliver State.modify; split <;> rfl
+  rw [‹state.deliver other message = _›, this]
+  exact erase_modify (by intro _; rfl)
+
+private theorem erase_kill {state : State} {processId other : PID} {reason : Term} :
+    (state.kill other reason).erase processId = (state.erase processId).kill other reason :=
+  erase_modify (by intro _; rfl)
+
+private theorem erase_signal {state : State} {processId target sender : PID} {reason : Term}
+    {untrappable : Bool} :
+    (state.signal target sender reason untrappable).erase processId =
+      (state.erase processId).signal target sender reason untrappable := by
+  have trapExit := (erase_process_fields (state := state) (processId := processId)
+    (other := target)).2.2.2.2.2.1
+  unfold State.signal
+  rw [trapExit]
+  split
+  · exact erase_kill
+  · split
+    · exact erase_deliver
+    · split
+      · rfl
+      · exact erase_kill
+
+private theorem erase_foldl {items : List γ} {step : State → γ → State} {processId : PID}
+    (each : ∀ state item, (step state item).erase processId = step (state.erase processId) item)
+    (state : State) :
+    (items.foldl step state).erase processId = items.foldl step (state.erase processId) := by
+  induction items generalizing state with
+  | nil => rfl
+  | cons item rest ih => simp only [List.foldl_cons, ih, each]
+
+private theorem erase_modify_ne {state : State} {processId other : PID}
+    {change : ProcessState → ProcessState} (ne : other ≠ processId) :
+    (state.modify other change).erase processId = (state.erase processId).modify other change := by
+  refine State.ext' (by simp) fun candidate => ?_
+  unfold State.modify
+  cases found : state.processes other with
+  | none => simp [erase_processes, found, ne]
+  | some process =>
+    simp only [erase_processes, found, ne, ite_false, State.update]
+    by_cases equal : candidate = other <;> by_cases equal' : candidate = processId <;> simp_all
+
+private theorem erase_with_timers {state : State} {processId : PID} {timers : List Timer} :
+    ({ state with timers } : State).erase processId = { state.erase processId with timers } := rfl
+
+private theorem erase_terminate {state : State} {processId other : PID} {reason : Term}
+    (ne : other ≠ processId) :
+    (state.terminate other reason).erase processId =
+      (state.erase processId).terminate other reason := by
+  simp only [State.terminate, erase_process_ne ne]
+  rw [erase_foldl fun current item => by rw [erase_modify (by intro _; rfl), erase_deliver]]
+  rw [erase_foldl fun current item => by rw [erase_signal, erase_modify (by intro _; rfl)]]
+  rw [erase_with_timers, erase_update_ne ne]
+  rfl
+
+private theorem erase_monitor {state : State} {processId other target : PID} {alias : Bool}
+    (ne : other ≠ processId) :
+    (state.erase processId).monitor other target alias =
+      ((state.monitor other target alias).1, (state.monitor other target alias).2.erase processId) := by
+  simp only [State.monitor, erase_process_ne ne]
+  rw [← erase_modify_ne (change := fun process =>
+    { process with refCounter := process.refCounter + 1 }) ne]
+  generalize (state.modify other fun process =>
+    { process with refCounter := process.refCounter + 1 }) = counted
+  rw [erase_processes]
+  by_cases same : target = processId
+  · subst same
+    cases found : counted.processes target with
+    | none => simp [erase_deliver]
+    | some watched =>
+      simp only [ite_true, Option.map_some]
+      rw [erase_modify_ne ne, erase_modify (by intro _; rfl)]
+  · cases found : counted.processes target with
+    | none => simp [same, erase_deliver]
+    | some watched =>
+      simp only [same, ite_false]
+      rw [erase_modify_ne ne, erase_modify (by intro _; rfl)]
+
+/-- Erasing keeps whether a process is alive. -/
+private theorem erase_processes_none {state : State} {processId target : PID} :
+    (state.erase processId).processes target = none ↔ state.processes target = none := by
+  rw [erase_processes]; split <;> simp
+
+private theorem erase_processes_some {state : State} {processId target : PID}
+    {process : ProcessState} (found : state.processes target = some process) :
+    ∃ erased, (state.erase processId).processes target = some erased := by
+  rw [erase_processes]; split <;> simp [found]
+
+private theorem erase_request {state : State} {processId other : PID} {query : Request}
+    (ne : other ≠ processId) :
+    (state.erase processId).request other query =
+      ((state.request other query).1, (state.request other query).2.erase processId) := by
+  cases query with
+  | monitor target alias =>
+    simp only [State.request, erase_monitor ne]
+  | demonitor reference flush =>
+    simp only [State.request, erase_process_ne ne]
+    rw [erase_modify_ne ne, erase_foldl fun current item => by
+      obtain ⟨found, target⟩ := item
+      dsimp only
+      split
+      · exact erase_modify (by intro _; rfl)
+      · rfl]
+  | link target =>
+    simp only [State.request]
+    split
+    · rfl
+    · cases found : state.processes target with
+      | none =>
+        simp only [erase_processes_none.mpr found, erase_process_ne ne]
+        split
+        · simp [erase_deliver]
+        · rfl
+      | some process =>
+        obtain ⟨erased, found'⟩ := erase_processes_some (processId := processId) found
+        simp only [found']
+        rw [erase_modify (by intro _; rfl), erase_modify_ne ne]
+  | unlink target =>
+    simp only [State.request]
+    rw [erase_modify (by intro _; rfl), erase_modify_ne ne]
+  | exit target reason =>
+    simp only [State.request, erase_process_ne ne]
+    split
+    · simp [erase_kill]
+    · simp [erase_signal]
+  | trapExit enabled =>
+    simp only [State.request, erase_process_ne ne, erase_modify_ne ne]
+  | alive target =>
+    simp only [State.request]
+    cases found : state.processes target with
+    | none => simp [erase_processes_none.mpr found]
+    | some process =>
+      obtain ⟨erased, found'⟩ := erase_processes_some (processId := processId) found
+      simp [found']
+  | sendAlias alias message =>
+    simp only [State.request, (erase_process_fields (state := state) (processId := processId)
+      (other := alias.dropLast)).2.2.2.2.1]
+    split
+    · simp [erase_deliver]
+    · rfl
+  | startTimer destination message duration =>
+    simp only [State.request, erase_process_ne ne, ← erase_modify_ne (change := fun process =>
+      { process with refCounter := process.refCounter + 1 }) ne]
+    generalize (state.modify other fun process =>
+      { process with refCounter := process.refCounter + 1 }) = counted
+    rw [erase_isSome]
+    split <;> rfl
+  | cancelTimer reference =>
+    simp only [State.request, erase_timers]
+    split <;> rfl
+
+private theorem erase_spawnWith {state : State} {processId other : PID} {options : SpawnOptions}
+    (ne : other ≠ processId)
+    (fresh : other ++ [(state.process other).children + 1] ≠ processId) :
+    (state.erase processId).spawnWith other options =
+      ((state.spawnWith other options).1, (state.spawnWith other options).2.erase processId) := by
+  obtain ⟨link, monitor⟩ := options
+  simp only [State.spawnWith, State.spawn, erase_process_ne ne]
+  rw [← erase_update_ne ne, ← erase_update_ne fresh]
+  cases link <;> cases monitor <;>
+    simp only [Bool.false_eq_true, ite_false, ite_true]
+  · rw [erase_monitor ne]
+  · rw [← erase_modify_ne ne, ← erase_modify (by intro _; rfl)]
+  · rw [← erase_modify_ne ne, ← erase_modify (by intro _; rfl), erase_monitor ne]
+
+private theorem erase_timerSteps {state : State} {processId : PID} :
+    (state.erase processId).timerSteps =
+      state.timerSteps.map fun (event, next) => (event, next.erase processId) := by
+  simp only [State.timerSteps, erase_timers, List.map_map]
+  apply List.map_congr_left
+  intro timer _
+  simp only [Function.comp_apply]
+  split
+  · rw [← erase_deliver]; rfl
+  · rfl
+
+/-- Steps of other processes commute with erasing what a process keeps. -/
+private theorem transitions_erase {state : State} {processId other : PID} {task : Task α}
+    (ne : other ≠ processId)
+    (fresh : other ++ [(state.process other).children + 1] ≠ processId) :
+    task.transitions (state.erase processId) other =
+      (task.transitions state other).map fun transition =>
+        { transition with state := transition.state.erase processId } := by
+  obtain ⟨computation, finish⟩ := task
+  simp only [Task.transitions, erase_view_ne ne, erase_process_ne ne]
+  split
+  · simp [erase_terminate ne]
+  · cases computation with
+    | ok => simp [erase_terminate ne]
+    | error exception => cases exception <;> simp [erase_terminate ne, erase_update_ne ne]
+    | get => simp
+    | set updated next =>
+      simp [State.store, erase_update_ne ne, erase_process_ne ne]
+    | schedule options child next =>
+      simp only [erase_spawnWith ne fresh, List.map_cons, List.map_nil]
+    | send destination message next => simp [erase_deliver]
+    | receive timeout select next =>
+      dsimp only
+      split
+      · simp [erase_update_ne ne]
+      · cases timeout <;> simp
+    | request query next =>
+      simp only [erase_request ne, List.map_map]
+      rfl
+
+/-- Storing the environment of a live process only changes what erasing removes. -/
+private theorem erase_store {state : State} {processId : PID} {env : Environment}
+    (live : (state.processes processId).isSome) :
+    (state.store processId env).erase processId = state.erase processId := by
+  refine State.ext' rfl fun candidate => ?_
+  simp only [erase_processes, State.store, State.update, State.process]
+  by_cases same : candidate = processId
+  · subst same
+    obtain ⟨process, found⟩ := Option.isSome_iff_exists.mp live
+    simp [found, ProcessState.erase]
+  · simp [same]
+
+/-- States that agree but for what a process keeps are equal once it stores the same. -/
+private theorem eq_store_of_erase {first second : State} {processId : PID} {env : Environment}
+    (equal : second.erase processId = first.erase processId)
+    (live : (first.processes processId).isSome)
+    (pdict : (second.process processId).pdict = env.pdict)
+    (refCounter : (second.process processId).refCounter = env.refCounter) :
+    second = first.store processId env := by
+  have timers : second.timers = first.timers := by
+    simpa using congrArg State.timers equal
+  refine State.ext' timers fun candidate => ?_
+  have atCandidate := congrArg (fun state : State => state.processes candidate) equal
+  simp only [erase_processes] at atCandidate
+  simp only [State.store, State.update]
+  by_cases same : candidate = processId
+  · subst same
+    simp only [ite_true] at atCandidate ⊢
+    obtain ⟨process, found⟩ := Option.isSome_iff_exists.mp live
+    cases found' : second.processes candidate with
+    | none => simp [found, found'] at atCandidate
+    | some process' =>
+      simp only [found, found', Option.map_some, Option.some.injEq] at atCandidate
+      simp only [State.process, found, found', Option.getD_some] at pdict refCounter ⊢
+      cases process; cases process'
+      simp only [ProcessState.erase, ProcessState.mk.injEq] at atCandidate
+      simp_all
+  · simpa [same] using atCandidate
+
+/-- Exiting forgets what the process kept. -/
+private theorem terminate_erase {state : State} {processId : PID} {reason : Term} :
+    (state.erase processId).terminate processId reason = state.terminate processId reason := by
+  have fields := erase_process_fields (state := state) (processId := processId) (other := processId)
+  have removed : (state.erase processId).update processId none = state.update processId none := by
+    refine State.ext' rfl fun candidate => ?_
+    simp only [erase_processes, State.update]
+    split <;> simp_all
+  simp only [State.terminate, fields.2.1, fields.2.2.1, removed, erase_timers]
+
+/-- A step of another process from a state that agrees but for what a process
+keeps has a step that agrees, with the same event and processes. -/
+private theorem transition_of_erase {first second : State} {processId other : PID} {task : Task α}
+    {transition : Transition α} (ne : other ≠ processId)
+    (fresh : other ++ [(first.process other).children + 1] ≠ processId)
+    (equal : second.erase processId = first.erase processId)
+    (possible : transition ∈ task.transitions first other) :
+    ∃ moved ∈ task.transitions second other, moved.event = transition.event ∧
+      moved.tasks = transition.tasks ∧ moved.finished = transition.finished ∧
+      moved.exhausted = transition.exhausted ∧
+      moved.state.erase processId = transition.state.erase processId := by
+  have children : (second.process other).children = (first.process other).children := by
+    rw [← erase_process_ne (state := second) ne, ← erase_process_ne (state := first) ne, equal]
+  have lists := (transitions_erase (task := task) ne fresh).symm.trans
+    ((congrArg (task.transitions · other) equal).symm.trans
+      (transitions_erase (task := task) ne (by rw [children]; exact fresh)))
+  have mem : { transition with state := transition.state.erase processId } ∈
+      (task.transitions second other).map fun transition =>
+        { transition with state := transition.state.erase processId } := by
+    rw [← lists]; exact List.mem_map_of_mem possible
+  obtain ⟨moved, possible', same⟩ := List.mem_map.mp mem
+  cases moved; cases transition
+  simp only [Transition.mk.injEq] at same
+  obtain ⟨rfl, stateEq, rfl, rfl, -, rfl⟩ := same
+  exact ⟨_, possible', rfl, rfl, rfl, rfl, stateEq⟩
+
+/-- A timer step from a state that agrees but for what a process keeps has a
+step that agrees, with the same event. -/
+private theorem timer_of_erase {first second next : State} {processId : PID} {event : Event}
+    (equal : second.erase processId = first.erase processId)
+    (possible : (event, next) ∈ first.timerSteps) :
+    ∃ next', (event, next') ∈ second.timerSteps ∧ next'.erase processId = next.erase processId := by
+  have lists := (erase_timerSteps (state := first) (processId := processId)).symm.trans
+    ((congrArg State.timerSteps equal).symm.trans erase_timerSteps)
+  have mem : (event, next.erase processId) ∈ second.timerSteps.map fun (event, next) =>
+      (event, next.erase processId) := by
+    rw [← lists]; exact List.mem_map_of_mem (f := fun (event, next) => (event, next.erase processId))
+      possible
+  obtain ⟨⟨event', next'⟩, possible', same⟩ := List.mem_map.mp mem
+  simp only [Prod.mk.injEq] at same
+  obtain ⟨rfl, same⟩ := same
+  exact ⟨next', possible', same⟩
+
 /-! ### Reading the environment first -/
 
 /-- The read of a process about to read its environment, from any state where
@@ -1027,6 +1424,282 @@ private theorem read_first {first last : Config α} {events : List Event} {outco
               (processId, ⟨read (state.view processId), finish⟩) :: after) (by simp) possible) ?_⟩
             simpa using run'
 
+/-! ### Writing the environment first -/
+
+/-- Another process is distinct, and does not spawn a process with the same PID. -/
+private theorem other_distinct {state : State} {before after before' after' : List (PID × Task α)}
+    {processId other : PID} {task task' : Task α}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool}
+    (wellformed : Wellformed (.running state (before ++ (processId, task) :: after) finished exhausted))
+    (split : before ++ (processId, task) :: after = before' ++ (other, task') :: after')
+    (ne : before ≠ before') :
+    other ≠ processId ∧ other ++ [(state.process other).children + 1] ≠ processId := by
+  obtain ⟨distinct, fresh, -, -⟩ := wellformed
+  have member : (other, task') ∈ before ++ (processId, task) :: after := by rw [split]; simp
+  refine ⟨fun equal => ?_, fun equal => ?_⟩
+  · rcases split_order split with ⟨same, -, -⟩ | ⟨middle, -, rfl⟩ | ⟨middle, rfl, -⟩
+    · exact ne same
+    · exact pairwise_between (relation := fun first second : PID × Task α => first.1 ≠ second.1)
+        (first := (processId, task)) (second := (other, task')) (by simpa using distinct) equal.symm
+    · exact pairwise_between (relation := fun first second : PID × Task α => first.1 ≠ second.1)
+        (first := (other, task')) (second := (processId, task)) (by simpa using distinct) equal
+  · have := fresh (other, task') member (processId, task) (by simp) _ [] equal.symm
+    dsimp only at this
+    omega
+
+/-- Configurations that differ only in the environment their root returned
+with reach terminal configurations with the same outcomes. -/
+private theorem run_finished {first last : Config α} {events : List Event} {outcome : Outcome α}
+    (run : Run first events last) (terminal : Terminal last outcome) :
+    ∀ {state tasks finished finished' exhausted},
+      first = .running state tasks finished exhausted →
+      finished'.map Prod.fst = finished.map Prod.fst →
+      ∃ events' last', Run (Config.running state tasks finished' exhausted) events' last' ∧
+        Terminal last' outcome := by
+  induction run with
+  | @refl config =>
+    intro state tasks finished finished' exhausted equal same
+    subst equal
+    refine ⟨[], _, .refl, ?_⟩
+    cases terminal with
+    | exhausted blocked idle => exact .exhausted blocked idle
+    | returned idle =>
+      rcases finished' with _ | ⟨result, env⟩ <;> simp at same
+      subst same; exact .returned idle
+    | raised idle =>
+      rcases finished' with _ | ⟨result, env⟩ <;> simp at same
+      subst same; exact .raised idle
+    | deadlock blocked pending idle =>
+      exact .deadlock blocked (fun nil => by simpa [pending nil] using same) idle
+  | step step rest ih =>
+    intro state tasks finished finished' exhausted equal same
+    subst equal
+    cases step with
+    | @run _ _ _ _ _ transition _ _ _ split possible =>
+      obtain ⟨events', last', run', terminal'⟩ := ih terminal (state := transition.state)
+        (finished' := transition.finished.orElse fun _ => finished') rfl
+        (by cases transition.finished <;> simp [same])
+      exact ⟨_, last', .step (.run split possible) run', terminal'⟩
+    | timer possible =>
+      obtain ⟨events', last', run', terminal'⟩ := ih terminal (finished' := finished') rfl same
+      exact ⟨_, last', .step (.timer possible) run', terminal'⟩
+
+/-- Erasing keeps pending signals. -/
+private theorem signal_of_erase {first second : State} {processId : PID}
+    (equal : second.erase processId = first.erase processId) :
+    (second.process processId).signal = (first.process processId).signal := by
+  rw [← (erase_process_fields (state := second) (processId := processId)
+      (other := processId)).2.2.2.2.2.2.1,
+    ← (erase_process_fields (state := first) (processId := processId)
+      (other := processId)).2.2.2.2.2.2.1, equal]
+
+/-- Configurations that differ in what a process with a pending exit signal was
+about to do, and in what it keeps, reach terminal configurations with the same
+outcomes: the process exits the same way from both. -/
+private theorem run_signaled {first last : Config α} {events : List Event} {outcome : Outcome α}
+    (run : Run first events last) (terminal : Terminal last outcome) :
+    ∀ {state state' : State} {before after : List (PID × Task α)} {processId : PID} {β : Type}
+      {computation computation' : Result β} {finish : Except Exception β → Option (Except Exception α)}
+      {finished : Option (Except Exception α × Environment)} {exhausted : Bool},
+      first = .running state (before ++ (processId, ⟨computation, finish⟩) :: after) finished
+        exhausted →
+      Wellformed first → (state.process processId).signal.isSome →
+      state'.erase processId = state.erase processId →
+      ∃ events' last', Run (Config.running state' (before ++ (processId, ⟨computation', finish⟩) ::
+        after) finished exhausted) events' last' ∧ Terminal last' outcome := by
+  induction run with
+  | @refl config =>
+    intro state state' before after processId β computation computation' finish finished exhausted
+      equal _ pending _
+    subst equal
+    obtain ⟨reason, signal⟩ := Option.isSome_iff_exists.mp pending
+    exact (not_terminal (Step.run (transition :=
+      { event := .exit processId reason, state := state.terminate processId reason, tasks := []
+        finished := (finish (.error (.exit reason))).map (·, state.view processId) })
+      rfl (by simp [Task.transitions, signal])) terminal).elim
+  | step step rest ih =>
+    intro state state' before after processId β computation computation' finish finished exhausted
+      equal wellformed pending same
+    subst equal
+    cases step with
+    | @run tasks before' stepping task' after' transition _ _ _ split' possible =>
+      by_cases sameProcess : before = before'
+      · -- The process exits the same way from both, forgetting what it kept.
+        subst sameProcess
+        have equal := List.append_cancel_left split'
+        simp only [List.cons.injEq, Prod.mk.injEq] at equal
+        obtain ⟨⟨rfl, rfl⟩, rfl⟩ := equal
+        obtain ⟨reason, signal⟩ := Option.isSome_iff_exists.mp pending
+        simp only [Task.transitions, signal, List.mem_singleton] at possible
+        subst possible
+        have terminated : state'.terminate processId reason = state.terminate processId reason := by
+          rw [← terminate_erase, same, terminate_erase]
+        obtain ⟨events', last', run', terminal'⟩ := run_finished rest terminal
+          (state := state.terminate processId reason) (tasks := before ++ after)
+          (finished := ((finish (.error (.exit reason))).map (·, state.view processId)).orElse
+            fun _ => finished) (exhausted := exhausted)
+          (finished' := ((finish (.error (.exit reason))).map (·, state'.view processId)).orElse
+            fun _ => finished) (by simp [Transition.apply])
+          (by cases finish (.error (.exit reason)) <;> simp [Option.orElse])
+        refine ⟨.exit processId reason :: events', last', .step (Step.run (transition :=
+          { event := .exit processId reason, state := state'.terminate processId reason, tasks := []
+            finished := (finish (.error (.exit reason))).map (·, state'.view processId) })
+          rfl (by simp [Task.transitions, signal_of_erase same, signal])) ?_, terminal'⟩
+        simpa [Transition.apply, terminated] using run'
+      · -- Another process steps the same way from both.
+        obtain ⟨kept, order⟩ := other_step wellformed split' sameProcess possible
+        obtain ⟨ne, fresh⟩ := other_distinct wellformed split' sameProcess
+        obtain ⟨moved, possible', event, tasks, finishedEq, exhaustedEq, erased⟩ :=
+          transition_of_erase ne fresh same possible
+        have wellformed' := Step.wellformed (.run split' possible) wellformed
+        have pending' := kept.process.2.2.2 pending
+        rcases order with ⟨middle, rfl, rfl⟩ | ⟨middle, rfl, rfl⟩
+        · obtain ⟨events', last', run', terminal'⟩ := ih terminal (state := transition.state)
+            (state' := moved.state) (before := before) (after := middle ++ transition.tasks ++ after')
+            (computation := computation) (computation' := computation') (finish := finish)
+            (finished := transition.finished.orElse fun _ => finished)
+            (exhausted := exhausted || transition.exhausted)
+            (by simp [Transition.apply]) wellformed' pending' erased
+          refine ⟨moved.event :: events', last', .step (Step.run (before := before ++ (processId, ⟨computation', finish⟩) ::
+            middle) (after := after') (by simp) possible') ?_, terminal'⟩
+          simpa [Transition.apply, tasks, finishedEq, exhaustedEq] using run'
+        · obtain ⟨events', last', run', terminal'⟩ := ih terminal (state := transition.state)
+            (state' := moved.state) (before := before' ++ transition.tasks ++ middle) (after := after)
+            (computation := computation) (computation' := computation') (finish := finish)
+            (finished := transition.finished.orElse fun _ => finished)
+            (exhausted := exhausted || transition.exhausted)
+            (by simp [Transition.apply]) wellformed' pending' erased
+          refine ⟨moved.event :: events', last', .step (Step.run (before := before') (after := middle ++
+            (processId, ⟨computation', finish⟩) :: after) (by simp) possible') ?_, terminal'⟩
+          simpa [Transition.apply, tasks, finishedEq, exhaustedEq] using run'
+    | timer possible =>
+      obtain ⟨next', possible', erased⟩ := timer_of_erase same possible
+      obtain ⟨-, -, signal⟩ := timerSteps_keeps possible processId
+      obtain ⟨events', last', run', terminal'⟩ := ih terminal rfl
+        (Step.wellformed (.timer possible) wellformed) (by rw [signal]; exact pending) erased
+      exact ⟨_, last', .step (.timer possible') run', terminal'⟩
+
+/-- What a process stores is what it then keeps. -/
+private theorem store_process {state : State} {processId : PID} {env : Environment} :
+    ((state.store processId env).process processId).pdict = env.pdict ∧
+      ((state.store processId env).process processId).refCounter = env.refCounter := by
+  simp [State.store, State.process, State.update]
+
+/-- Every run where a process is about to replace its environment can replace
+it first, reaching a terminal configuration with the same outcome. -/
+private theorem write_first {first last : Config α} {events : List Event} {outcome : Outcome α}
+    (run : Run first events last) (terminal : Terminal last outcome) :
+    ∀ {state : State} {before after : List (PID × Task α)} {processId : PID} {β : Type}
+      {updated : Environment} {next : Result β}
+      {finish : Except Exception β → Option (Except Exception α)}
+      {finished : Option (Except Exception α × Environment)} {exhausted : Bool},
+      first = .running state (before ++ (processId, ⟨.set updated next, finish⟩) :: after) finished
+        exhausted →
+      Wellformed first → (state.process processId).signal = none →
+      ∃ events' last', Run (Config.running (state.store processId updated)
+        (before ++ (processId, ⟨next, finish⟩) :: after) finished exhausted) events' last' ∧
+        Terminal last' outcome := by
+  induction run with
+  | @refl config =>
+    intro state before after processId β updated next finish finished exhausted equal _ signal
+    subst equal
+    exact (not_terminal (Step.run (transition :=
+      { event := .internal processId, state := state.store processId updated
+        tasks := [(processId, ⟨next, finish⟩)] })
+      rfl (by simp [Task.transitions, signal])) terminal).elim
+  | step step rest ih =>
+    intro state before after processId β updated next finish finished exhausted equal wellformed
+      signal
+    subst equal
+    have live : (state.processes processId).isSome :=
+      wellformed.2.2.1 (processId, ⟨.set updated next, finish⟩) (by simp)
+    cases step with
+    | @run tasks before' stepping task' after' transition _ _ _ split' possible =>
+      by_cases sameProcess : before = before'
+      · -- The writing process steps: it writes.
+        subst sameProcess
+        have equal := List.append_cancel_left split'
+        simp only [List.cons.injEq, Prod.mk.injEq] at equal
+        obtain ⟨⟨rfl, rfl⟩, rfl⟩ := equal
+        simp only [Task.transitions, signal, List.mem_singleton] at possible
+        subst possible
+        exact ⟨_, _, by simpa [Transition.apply] using rest, terminal⟩
+      · obtain ⟨kept, order⟩ := other_step wellformed split' sameProcess possible
+        obtain ⟨ne, fresh⟩ := other_distinct wellformed split' sameProcess
+        obtain ⟨moved, possible', event, tasks, finishedEq, exhaustedEq, erased⟩ :=
+          transition_of_erase (second := state.store processId updated) ne fresh
+            (erase_store live) possible
+        -- The step keeps what the writing process keeps, from either state.
+        have keptWritten : Keeps processId (state.store processId updated) moved.state := by
+          obtain ⟨frame, -, -⟩ := transition_frame possible'
+          obtain ⟨-, -, -, spawned⟩ := transition_tasks possible'
+          refine frame processId (Ne.symm ne) fun child spawn equal => fresh ?_
+          rw [equal, (spawned child (event ▸ spawn)).1]
+          simp [State.store, State.process, State.update, ne]
+        have wellformed' := Step.wellformed (.run split' possible) wellformed
+        cases signal' : (transition.state.process processId).signal with
+        | none =>
+          have stored : moved.state = transition.state.store processId updated :=
+            eq_store_of_erase erased (kept.live live)
+              (keptWritten.process.1.trans store_process.1)
+              (keptWritten.process.2.1.trans store_process.2)
+          rcases order with ⟨middle, rfl, rfl⟩ | ⟨middle, rfl, rfl⟩
+          · obtain ⟨events', last', run', terminal'⟩ := ih terminal (state := transition.state)
+              (before := before) (after := middle ++ transition.tasks ++ after')
+              (updated := updated) (next := next) (finish := finish)
+              (finished := transition.finished.orElse fun _ => finished)
+              (exhausted := exhausted || transition.exhausted)
+              (by simp [Transition.apply]) wellformed' signal'
+            refine ⟨moved.event :: events', last', .step (Step.run (before := before ++
+              (processId, ⟨next, finish⟩) :: middle) (after := after') (by simp) possible') ?_,
+              terminal'⟩
+            simpa [Transition.apply, tasks, finishedEq, exhaustedEq, stored] using run'
+          · obtain ⟨events', last', run', terminal'⟩ := ih terminal (state := transition.state)
+              (before := before' ++ transition.tasks ++ middle) (after := after)
+              (updated := updated) (next := next) (finish := finish)
+              (finished := transition.finished.orElse fun _ => finished)
+              (exhausted := exhausted || transition.exhausted)
+              (by simp [Transition.apply]) wellformed' signal'
+            refine ⟨moved.event :: events', last', .step (Step.run (before := before')
+              (after := middle ++ (processId, ⟨next, finish⟩) :: after) (by simp) possible') ?_,
+              terminal'⟩
+            simpa [Transition.apply, tasks, finishedEq, exhaustedEq, stored] using run'
+        | some reason =>
+          -- The process now exits, whether or not it wrote first.
+          rcases order with ⟨middle, rfl, rfl⟩ | ⟨middle, rfl, rfl⟩
+          · obtain ⟨events', last', run', terminal'⟩ := run_signaled rest terminal
+              (state := transition.state) (state' := moved.state) (before := before)
+              (after := middle ++ transition.tasks ++ after') (computation := .set updated next)
+              (computation' := next) (finish := finish)
+              (finished := transition.finished.orElse fun _ => finished)
+              (exhausted := exhausted || transition.exhausted)
+              (by simp [Transition.apply]) wellformed' (by simp [signal']) erased
+            refine ⟨moved.event :: events', last', .step (Step.run (before := before ++
+              (processId, ⟨next, finish⟩) :: middle) (after := after') (by simp) possible') ?_,
+              terminal'⟩
+            simpa [Transition.apply, tasks, finishedEq, exhaustedEq] using run'
+          · obtain ⟨events', last', run', terminal'⟩ := run_signaled rest terminal
+              (state := transition.state) (state' := moved.state)
+              (before := before' ++ transition.tasks ++ middle) (after := after)
+              (computation := .set updated next) (computation' := next) (finish := finish)
+              (finished := transition.finished.orElse fun _ => finished)
+              (exhausted := exhausted || transition.exhausted)
+              (by simp [Transition.apply]) wellformed' (by simp [signal']) erased
+            refine ⟨moved.event :: events', last', .step (Step.run (before := before')
+              (after := middle ++ (processId, ⟨next, finish⟩) :: after) (by simp) possible') ?_,
+              terminal'⟩
+            simpa [Transition.apply, tasks, finishedEq, exhaustedEq] using run'
+    | timer possible =>
+      obtain ⟨next', possible', erased⟩ := timer_of_erase
+        (second := state.store processId updated) (erase_store live) possible
+      obtain ⟨kept, -, timerSignal⟩ := timerSteps_keeps possible processId
+      obtain ⟨kept', -, -⟩ := timerSteps_keeps possible' processId
+      have stored := eq_store_of_erase erased (kept.live live)
+        (kept'.process.1.trans store_process.1) (kept'.process.2.1.trans store_process.2)
+      obtain ⟨events', last', run', terminal'⟩ := ih terminal rfl
+        (Step.wellformed (.timer possible) wellformed) (by rw [timerSignal]; exact signal)
+      exact ⟨_ :: events', last', .step (.timer possible') (stored ▸ run'), terminal'⟩
+
 /-! ### Soundness -/
 
 /-- One level of `check` where it follows every step. -/
@@ -1065,7 +1738,7 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
       exact check_successors ih wellformed rfl checked run terminal
     | running state tasks finished exhausted =>
       cases found : (splits tasks).find? (fun (_, (processId, task), _) =>
-          task.reads state processId) with
+          task.internal state processId) with
       | none =>
         exact check_successors ih wellformed (by simp [Config.reduced, found]) checked run terminal
       | some split =>
@@ -1074,7 +1747,7 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
         have split := eq_of_mem_splits (List.mem_of_find?_eq_some found)
         cases computation with
         | get read =>
-          simp only [Task.reads, Bool.and_true, Option.isNone_iff_eq_none] at reads
+          simp only [Task.internal, Bool.and_true, Option.isNone_iff_eq_none] at reads
           -- Every run can read first.
           obtain ⟨events', run'⟩ := read_first run terminal rfl wellformed split reads
           have possible := read_transitions (finish := finish) (read := read) (state := state)
@@ -1090,7 +1763,26 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
           simp only [List.all_cons, List.all_nil, Bool.and_true] at checked
           refine ih (events := events') (Step.wellformed step wellformed) checked ?_ terminal
           simpa [Transition.apply, readStep] using run'
-        | _ => simp [Task.reads] at reads
+        | set updated next =>
+          simp only [Task.internal, Bool.and_true, Option.isNone_iff_eq_none] at reads
+          -- Every run can write first, ending the same way.
+          obtain ⟨events', last', run', terminal'⟩ :=
+            write_first run terminal (by rw [split]) (split ▸ wellformed) reads
+          let writeStep : Transition α :=
+            { event := .internal processId, state := state.store processId updated
+              tasks := [(processId, ⟨next, finish⟩)] }
+          have possible : (⟨.set updated next, finish⟩ : Task α).transitions state processId =
+              [writeStep] := by
+            simp [Task.transitions, reads, writeStep]
+          have step : Step (.running state tasks finished exhausted) writeStep.event
+              (writeStep.apply before after finished exhausted) :=
+            Step.run split (by rw [possible]; exact List.mem_singleton_self _)
+          unfold check at checked
+          simp only [Config.reduced, found, possible, List.map_cons, List.map_nil] at checked
+          simp only [List.all_cons, List.all_nil, Bool.and_true] at checked
+          refine ih (events := events') (Step.wellformed step wellformed) checked ?_ terminal'
+          simpa [Transition.apply, writeStep] using run'
+        | _ => simp [Task.internal] at reads
 
 /-- `check` accepts the outcome of every run of a computation. -/
 theorem check_sound {accept : Outcome α → Bool} {depth : Nat} {env : Environment}
