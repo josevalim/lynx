@@ -1,9 +1,9 @@
 # LYNX_DEBUG=lean LYNX_CACHE=0 mix run examples/concurrency/server.exs
 #
 # A client spawns a server, sends it every element of a list, and collects the
-# replies. The law holds for every schedule. The proof shows that the program
+# replies. The law holds for every run. The proof shows that the program
 # has no races, since each process only talks to the other, so one run
-# determines the outcome of every schedule, then evaluates that run for any
+# determines the outcome of every run, then evaluates that run for any
 # input list with Lynx.Concurrent.Config.advance.
 ExUnit.start()
 
@@ -392,11 +392,12 @@ defmodule ServerProofsTest do
           simp [double_ok xs valid, Erlang.erlang.«==/2», Config.advance, Config.successors,
             splits, Task.transitions, Task.child, «serve/2», Transition.apply, Lynx.Term.true,
             rootCalm'', rootExit, serverCalmAfter, serverExit, idle'']
-        -- Without races, this run determines the outcome of every schedule.
-        rw [concurrent_eq_advance _ (Config.RaceFree.of_talks single (root_talks _ xs)) _
-          (by rw [total, finished]; simp [Config.successors, splits, idle'']) schedule, total,
-          finished]
-        rfl
+        -- Without races, this run determines the outcome of every run.
+        have every := always_advance _ (Config.RaceFree.of_talks single (root_talks _ xs))
+          (3 + len xs + 3 * len xs + 2)
+          (by rw [total, finished]; simp [Config.successors, splits, idle''])
+        rw [total, finished] at every
+        exact every
       """
   end
 

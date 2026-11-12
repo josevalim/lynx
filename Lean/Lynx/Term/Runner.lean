@@ -2,6 +2,7 @@ module
 
 public import Lynx.Term.Dispatch
 public import Lynx.Concurrent
+public import Lynx.Concurrent.Termination
 
 /-! Finite local-process execution. Sends insert directly into the destination
 mailbox; message transit, remote processes, links, and monitors are not
@@ -289,64 +290,6 @@ private def stop (root : PID) (state : State) (pool : Pool α) (finished : Finis
 
 private instance : WellFoundedRelation (Pool α) := ⟨Progress, wf⟩
 
-/-- The steps pending timers have left: an armed one expires and then
-delivers, and an expired one only delivers. -/
-private def timerWeight (state : State) : Nat :=
-  (state.timers.map fun timer => if timer.expired then 1 else 2).sum
-
-private theorem sum_filter_lt {items : List γ} {weight : γ → Nat} {keep : γ → Bool} {item : γ}
-    (mem : item ∈ items) (dropped : keep item = false) (positive : 0 < weight item) :
-    ((items.filter keep).map weight).sum < (items.map weight).sum := by
-  induction items with
-  | nil => simp at mem
-  | cons head rest ih =>
-    simp only [List.mem_cons] at mem
-    rcases mem with rfl | mem
-    · have : ((rest.filter keep).map weight).sum ≤ (rest.map weight).sum := by
-        clear ih; induction rest with
-        | nil => simp
-        | cons next tail ih => simp only [List.filter_cons]; split <;> simp <;> omega
-      simp [dropped]; omega
-    · have := ih mem
-      simp only [List.filter_cons]; split <;> simp <;> omega
-
-private theorem sum_map_lt {items : List γ} {weight : γ → Nat} {change : γ → γ} {item : γ}
-    (mem : item ∈ items) (smaller : weight (change item) < weight item)
-    (le : ∀ other, weight (change other) ≤ weight other) :
-    (items.map (weight ∘ change)).sum < (items.map weight).sum := by
-  induction items with
-  | nil => simp at mem
-  | cons head rest ih =>
-    simp only [List.mem_cons] at mem
-    have bound : (rest.map (weight ∘ change)).sum ≤ (rest.map weight).sum := by
-      clear ih mem
-      induction rest with
-      | nil => simp
-      | cons next tail ih =>
-        simp only [List.map_cons, List.sum_cons, Function.comp_apply]
-        have := le next
-        omega
-    simp only [List.map_cons, List.sum_cons, Function.comp_apply]
-    rcases mem with rfl | mem
-    · omega
-    · have := ih mem
-      have := le head
-      omega
-
-/-- Each timer step leaves fewer steps to the timers. -/
-private theorem timerWeight_lt {state next : State} {event : Event}
-    (possible : (event, next) ∈ state.timerSteps) : timerWeight next < timerWeight state := by
-  simp only [State.timerSteps, List.mem_map] at possible
-  obtain ⟨timer, mem, step⟩ := possible
-  split at step <;> simp only [Prod.mk.injEq] at step <;> obtain ⟨-, rfl⟩ := step
-  · rename_i expired
-    exact sum_filter_lt mem (by simp) (by split <;> simp)
-  · rename_i armed
-    simp only [timerWeight, List.map_map]
-    refine sum_map_lt mem (by simp [armed]) fun other => ?_
-    by_cases same : (other.reference == timer.reference) = true <;>
-      cases expired : other.expired <;> simp [same, expired]
-
 /-- A process that does not return ends; the others keep running, and the
 outcome is then `Exception.exhausted`. When no process can step, the oldest
 pending timer does. -/
@@ -369,9 +312,9 @@ private def execute (root : PID) (state : State) (pool : Pool α) (finished : Fi
         else (ScheduleChoice.current, choices)
       execute root advance.state advance.next finished (exhausted || advance.exhausted) processId
         preferred choices
-termination_by (pool, timerWeight state)
+termination_by (pool, state.timerWeight)
 decreasing_by
-  · exact Prod.Lex.right _ (timerWeight_lt (by rw [_found]; exact List.mem_cons_self))
+  · exact Prod.Lex.right _ (State.timerWeight_lt (by rw [_found]; exact List.mem_cons_self))
   · exact Prod.Lex.left _ _ advance.decreases
 
 /-- Local computations execute structurally; concurrent execution decreases
@@ -768,7 +711,7 @@ private theorem execute_reaches (root : PID) (pool : Pool α) :
   | _ pool ih =>
   intro state
   -- Timers step when no process can, with the same processes.
-  induction weight : timerWeight state using Nat.strongRecOn generalizing state with
+  induction weight : state.timerWeight using Nat.strongRecOn generalizing state with
   | _ weight timerIh =>
   intro finished exhausted current preferred choices
   rw [execute]
@@ -784,7 +727,7 @@ private theorem execute_reaches (root : PID) (pool : Pool α) :
       · rename_i event next rest found
         have possible : (event, next) ∈ state.timerSteps := by
           rw [found]; exact List.mem_cons_self
-        obtain ⟨events, last, run, terminal⟩ := timerIh _ (weight ▸ timerWeight_lt possible) next
+        obtain ⟨events, last, run, terminal⟩ := timerIh _ (weight ▸ State.timerWeight_lt possible) next
           rfl finished exhausted current .current remaining
         exact ⟨event :: events, last, .step (.timer possible) run, terminal⟩
     · simp_all

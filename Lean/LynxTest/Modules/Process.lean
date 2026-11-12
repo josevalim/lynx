@@ -355,16 +355,12 @@ theorem terminated_child_is_not_revived :
       (.ok (.atom "ignored"), {}) := by cbv
 
 /-- Root termination also closes its mailbox: a late message neither revives
-the root nor blocks the remaining children, under any schedule. -/
-theorem terminated_root_discards_late_messages (choices : List ScheduleChoice) :
-    Lynx.concurrent (Result.schedule {} («send/2» noFunctions (.pid []) (.atom "late"))
-      (fun _ => .ok Term.nil)) choices = .ok Term.nil := by
-  have checked := concurrent_of_check (Result.schedule {} («send/2» noFunctions (.pid [])
-    (.atom "late")) (fun _ => .ok Term.nil)) (fun | .ok .nil => true | _ => false) 16 (by cbv)
-    choices
-  split at checked
-  · assumption
-  · contradiction
+the root nor blocks the remaining children, in any run. -/
+theorem terminated_root_discards_late_messages :
+    Lynx.always (Result.schedule {} («send/2» noFunctions (.pid []) (.atom "late"))
+      (fun _ => .ok Term.nil)) (.ok Term.nil) :=
+  always_of_check _ (fun | .ok .nil => true | _ => false) 16 (by cbv)
+    fun result accepted => by split at accepted <;> simp_all
 
 /-- Child exceptions do not become exceptions in the unlinked parent. -/
 theorem child_exception_is_isolated :
@@ -408,29 +404,30 @@ theorem waiting_schedule_choice_falls_back :
     Result.run handshake {} [.swap [1], .swap []] =
       (.ok (.atom "done"), {}) := by cbv
 
-/-! Exploring every interleaving proves outcomes for all scheduler choices,
-not only for the schedules listed above. -/
+/-! Exploring every interleaving proves outcomes for every run, and so for all
+scheduler choices, not only for the schedules listed above. -/
+
+theorem handshake_every_run : Lynx.always handshake (.ok (.atom "done")) :=
+  always_of_check handshake (fun | .ok (.atom "done") => true | _ => false) 32 (by cbv)
+    fun result accepted => by split at accepted <;> simp_all
 
 theorem handshake_every_schedule (choices : List ScheduleChoice) :
-    Lynx.concurrent handshake choices = .ok (.atom "done") := by
-  have checked := concurrent_of_check handshake
-    (fun | .ok (.atom "done") => true | _ => false) 32 (by cbv) choices
-  split at checked
-  · assumption
-  · contradiction
+    Lynx.concurrent handshake choices = .ok (.atom "done") :=
+  concurrent_of_always handshake_every_run choices
 
 /-- Both delivery orders are possible, and no other outcome is. -/
-theorem two_senders_every_schedule (choices : List ScheduleChoice) :
-    Lynx.concurrent twoSenders choices = .ok (.tuple #[.atom "left", .atom "right"]) ∨
-    Lynx.concurrent twoSenders choices = .ok (.tuple #[.atom "right", .atom "left"]) := by
-  have checked := concurrent_of_check twoSenders
-    (fun
+theorem two_senders_every_run {events : List Concurrent.Event} {last : Concurrent.Config Term}
+    {outcome : Outcome Term} (run : Concurrent.Run (.start {} twoSenders) events last)
+    (terminal : Concurrent.Terminal last outcome) :
+    outcome = .ok (.tuple #[.atom "left", .atom "right"]) ∨
+    outcome = .ok (.tuple #[.atom "right", .atom "left"]) := by
+  have checked := Concurrent.check_sound (accept := fun
       | .ok (.tuple ⟨[.atom "left", .atom "right"]⟩) => true
       | .ok (.tuple ⟨[.atom "right", .atom "left"]⟩) => true
-      | _ => false) 32 (by cbv) choices
+      | _ => false) (depth := 32) (by cbv) run terminal
   split at checked
-  · exact .inl ‹_›
-  · exact .inr ‹_›
+  · exact .inl rfl
+  · exact .inr rfl
   · contradiction
 
 /-- Exploration reaches both delivery orders, so a single order is not provable. -/
