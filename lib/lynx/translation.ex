@@ -183,15 +183,25 @@ defmodule Lynx.Translation do
   end
 
   # Implementations calling their own protocol would form a module cycle
-  # through it, so they call local copies of its dispatch instead.
+  # through it, so they call local copies of its dispatch instead. Cut off
+  # functions of the protocol are not copied, so calling them reaches the cutoff.
   defp dispatch_locally(translation, name, %{protocol: protocol} = module)
        when protocol != nil do
-    {data, translation} = fetch_module!(translation, protocol, fn -> [file: module.file] end)
+    cut = for {^protocol, function, arity} <- translation.cutoffs, do: {function, arity}
 
-    definitions =
-      :lynx_core_to_leanj.dispatch_locally(module.definitions, protocol, data.definitions)
+    {module, translation} =
+      if :lynx_core_to_leanj.protocol_calls(module.definitions, protocol) -- cut == [] do
+        {module, translation}
+      else
+        {data, translation} = fetch_module!(translation, protocol, fn -> [file: module.file] end)
 
-    module = %{module | definitions: definitions, protocol: nil}
+        definitions =
+          :lynx_core_to_leanj.dispatch_locally(module.definitions, protocol, data.definitions, cut)
+
+        {%{module | definitions: definitions}, translation}
+      end
+
+    module = %{module | protocol: nil}
     {module, put_in(translation.modules[name], module)}
   end
 

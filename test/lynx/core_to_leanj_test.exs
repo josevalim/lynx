@@ -1822,7 +1822,8 @@ defmodule Lynx.CoreToLeanjTest do
         :lynx_core_to_leanj.dispatch_locally(
           :lynx_core_to_leanj.to_definitions(depth),
           Lynx.Support.Depth,
-          protocol_definitions(:code.which(Lynx.Support.Depth))
+          protocol_definitions(:code.which(Lynx.Support.Depth)),
+          []
         )
 
       callback = fn calls, module, function, arity, _, funs ->
@@ -1871,6 +1872,34 @@ defmodule Lynx.CoreToLeanjTest do
                  }
                }
              } = functions[{:"Lynx.Support.Depth.depth", 1}].translation
+    end
+
+    test "implementations call cut off functions of their protocol" do
+      depth = beam_core(:code.which(Lynx.Support.Depth.List))
+      definitions = :lynx_core_to_leanj.to_definitions(depth)
+
+      assert :lynx_core_to_leanj.protocol_calls(definitions, Lynx.Support.Depth) == [{:depth, 1}]
+
+      definitions =
+        :lynx_core_to_leanj.dispatch_locally(
+          definitions,
+          Lynx.Support.Depth,
+          protocol_definitions(:code.which(Lynx.Support.Depth)),
+          [{:"impl_for!", 1}]
+        )
+
+      callback = fn calls, module, function, arity, _, funs ->
+        if module == Lynx.Support.Depth.List,
+          do: :local,
+          else: {{:pure, false}, funs, [{module, function, arity} | calls]}
+      end
+
+      assert {:ok, functions, _, _, _, calls} =
+               core_translate(Lynx.Support.Depth.List, definitions, [{:depth, 1}], callback)
+
+      # Only the cut off impl_for!/1 calls impl_for/1, so it is not reached.
+      assert Enum.sort(Map.keys(functions)) == [{:"Lynx.Support.Depth.depth", 1}, {:depth, 1}]
+      assert {Lynx.Support.Depth, :"impl_for!", 1} in calls
     end
   end
 
