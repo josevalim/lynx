@@ -144,14 +144,6 @@ inductive ReceiveTimeout where
   | finite
 deriving Repr, Inhabited
 
-/-- A timer that sends a message to a process when it fires. Elapsed time is
-not modeled, so the duration is only what canceling it reports. -/
-structure Timer where
-  destination : PID
-  message : Term
-  duration : Nat
-deriving Repr
-
 /-- How a spawn relates the parent to its child. -/
 structure SpawnOptions where
   /-- Link the parent and the child. -/
@@ -159,8 +151,6 @@ structure SpawnOptions where
   /-- Monitor the child, allocating the monitor's reference from the parent's
   counter. -/
   monitor : Bool := false
-  /-- Arm the child as a timer, in the same step. -/
-  timer : Option Timer := none
 deriving Repr, Inhabited
 
 /-- A request about other processes, which the scheduler answers with a term. -/
@@ -186,9 +176,9 @@ inductive Request where
   /-- Send to an alias, discarding the message once the alias is inactive.
   Replies the message. -/
   | sendAlias (alias : List Nat) (message : Term)
-  /-- Expire the requester's timer, replying `{Destination, Message}` for the
-  timer to send, or `false` once it was canceled. -/
-  | fireTimer
+  /-- Start a timer sending a message to a process, replying its reference. A
+  timer for a process that is not alive never fires. -/
+  | startTimer (destination : PID) (message : Term) (duration : Nat)
   /-- Cancel a timer by its reference. Replies its duration, or `false` once it
   expired, was canceled, or its destination exited. An expired timer's message
   may still be on its way. -/

@@ -12,7 +12,8 @@ import all Init.Data.List.Basic
 import all Init.Data.List.Control
 import all Init.Data.Ord.String
 
-/-! Timers, which fire when the scheduler chooses. -/
+/-! Timers, which the scheduler expires and whose messages it delivers in later
+steps of its choosing. -/
 
 namespace LynxTest.Modules.Timers
 open Lynx Erlang.erlang
@@ -29,11 +30,13 @@ private def receiveOrTimeout : Result :=
     | none => .ok (.atom "timeout")
 
 private def functions : Term.FunTable := [
-  { module := "test", name := "returns", arity := 0, entry := .effectful fun _ _ _ => .ok .nil }]
+  { module := "test", name := "returns", arity := 0, entry := .effectful fun _ _ _ => .ok .nil },
+  { module := "test", name := "waits", arity := 0, entry := .effectful fun _ _ _ => receiveAny }]
 
 private def dispatcher : Dispatcher := Dispatcher.ofTable functions 1
 
 private def returns : Term := .function "test" "returns" 0 #[]
+private def waits : Term := .function "test" "waits" 0 #[]
 
 /-- Accept any of the given results, for proofs over every schedule. -/
 private def oneOf (expected : List Term) : Outcome Term → Bool
@@ -102,7 +105,8 @@ theorem cancel_twice :
       let _ ← «cancel_timer/1» dispatcher timer
       «cancel_timer/1» dispatcher timer)) = true := by cbv
 
-/-- Timers of a process that exited report `false`, as OTP cancels them. -/
+/-- Timers of a process that exited report `false`, as OTP cancels them, whether
+it exited before or after the timer started. -/
 theorem cancel_after_destination_exits :
     Concurrent.check (oneOf [.atom "false"]) 32 (.start {} (do
       let spawned ← «spawn_monitor/1» dispatcher returns
@@ -110,6 +114,17 @@ theorem cancel_after_destination_exits :
       match spawned with
       | .tuple ⟨[pid, _]⟩ => do
           let timer ← «send_after/3» dispatcher (.integer 10) pid tick
+          «cancel_timer/1» dispatcher timer
+      | _ => .ok .nil)) = true := by cbv
+
+theorem cancel_after_destination_exits_later :
+    Concurrent.check (oneOf [.atom "false"]) 32 (.start {} (do
+      let spawned ← «spawn_monitor/1» dispatcher waits
+      match spawned with
+      | .tuple ⟨[pid, _]⟩ => do
+          let timer ← «send_after/3» dispatcher (.integer 10) pid tick
+          let _ ← «exit/2» dispatcher pid (.atom "kill")
+          let _ ← receiveAny
           «cancel_timer/1» dispatcher timer
       | _ => .ok .nil)) = true := by cbv
 

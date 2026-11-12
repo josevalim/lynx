@@ -75,7 +75,9 @@ defmodule TaskProofsTest do
     result in [:reply, :timeout] and empty?
   end
 
-  laws "Task" do
+  # Evaluating every schedule of double_or_timeout_doubles/1 with a symbolic
+  # integer takes more than the default heartbeats.
+  laws "Task", options: [maxHeartbeats: 400_000] do
     # Task.Supervised runs the task with apply(:erlang, :apply, [fun, []]).
     dynamic &:erlang.apply/2
 

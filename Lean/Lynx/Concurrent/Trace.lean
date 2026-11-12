@@ -99,7 +99,8 @@ private def showRequest (processId : PID) (reply : Term) : Request → String
       s!"{showPid processId} checks whether {showPid target} is alive: {showTerm reply}"
   | .sendAlias alias message =>
       s!"{showPid processId} sends {showTerm message} to alias {showReference alias}"
-  | .fireTimer => s!"timer {showPid processId} expires, getting {showTerm reply}"
+  | .startTimer destination message _ =>
+      s!"{showPid processId} starts timer {showTerm reply} sending {showTerm message} to {showPid destination}"
   | .cancelTimer reference =>
       s!"{showPid processId} cancels timer {showReference reference}, getting {showTerm reply}"
 
@@ -114,6 +115,9 @@ private def showEvent : Event → Option String
   | .timeout processId => some s!"{showPid processId} times out waiting for a message"
   | .exit processId reason => some s!"{showPid processId} exits with {showTerm reason}"
   | .request processId query reply => some (showRequest processId reply query)
+  | .expire reference => some s!"timer {showReference reference} expires"
+  | .arrive receiver message =>
+      some s!"timer message {showTerm message} arrives at {showPid receiver}"
 
 private def showException : Exception → String
   | .error reason => s!"raises error {showTerm reason}"

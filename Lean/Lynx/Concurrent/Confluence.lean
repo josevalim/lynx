@@ -34,23 +34,23 @@ open Lynx
       ∃ parent, second = .spawn parent receiver)
 
 /-- Whether the next step of a process only changes its own record, sends to a
-PID, or spawns without linking, monitoring, or arming a timer. Requests to the
-scheduler, a pending exit signal, and the exit of a linked or monitored process
-act on other processes, so they are not plain. -/
+PID, or spawns without linking or monitoring, while no timer is pending.
+Requests to the scheduler, a pending exit signal, the exit of a linked or
+monitored process, and timers act on other processes, so they are not plain. -/
 @[expose] def Task.plain (state : State) (processId : PID) (task : Task α) : Bool :=
-  (state.process processId).signal.isNone &&
+  (state.process processId).signal.isNone && state.timers.isEmpty &&
     match task.computation with
     | .request .. => false
-    | .schedule options .. => !options.link && !options.monitor && options.timer.isNone
+    | .schedule options .. => !options.link && !options.monitor
     | .ok _ | .error _ =>
         (state.process processId).links.isEmpty && (state.process processId).monitors.isEmpty
     | _ => true
 
-/-- Each process has at most one step, as requests may have several replies, and
-no two processes can take steps that may not commute. -/
+/-- No timer is pending, each process has at most one step, as requests may have
+several replies, and no two processes can take steps that may not commute. -/
 @[expose] def Config.Unraced : Config α → Prop
   | .start .. => True
-  | .running state tasks _ _ =>
+  | .running state tasks _ _ => state.timers = [] ∧
       (∀ processId task, (processId, task) ∈ tasks →
         ∀ transition ∈ task.transitions state processId,
         ∀ next ∈ task.transitions state processId, transition = next) ∧
@@ -95,14 +95,14 @@ other or with a spawn. -/
 
 /-! ### Effects on the shared state -/
 
-private theorem State.ext {first second : State} (equal : first.processes = second.processes) :
-    first = second := by
+private theorem State.ext {first second : State} (timers : first.timers = second.timers)
+    (equal : first.processes = second.processes) : first = second := by
   cases first; cases second; simp_all
 
 /-- Change the record of a process, when it is live. -/
 private def State.alter (state : State) (processId : PID)
     (change : ProcessState → ProcessState) : State :=
-  { processes := fun candidate =>
+  { state with processes := fun candidate =>
       if candidate = processId then (state.processes processId).map change
       else state.processes candidate }
 
@@ -150,7 +150,8 @@ private theorem selectMessage_index {select : Term → Option β} {mailbox : Lis
 
 /-- Prove states equal by comparing every process record. -/
 local macro "state_ext" : tactic =>
-  `(tactic| (apply State.ext; funext candidate; simp only [State.update, State.alter, State.modify, State.deliver, State.store, State.spawn, State.process, Effect.apply]; (repeat' split) <;> simp_all))
+  `(tactic| (apply State.ext (by simp [State.update, State.alter, State.modify, State.deliver,
+    State.store, State.spawn, Effect.apply]); funext candidate; simp only [State.update, State.alter, State.modify, State.deliver, State.store, State.spawn, State.process, Effect.apply]; (repeat' split) <;> simp_all))
 
 /-- Which effects a step's event announces. -/
 private def Effect.Matches (processId : PID) (process : ProcessState) : Effect → Event → Prop
@@ -166,12 +167,18 @@ private def Effect.Matches (processId : PID) (process : ProcessState) : Effect �
     state.process processId = process := by
   simp [State.process, live]
 
-/-- A process without links or monitors exits without notifying others. -/
+/-- A process without links or monitors exits without notifying others, and
+without timers to cancel. -/
 private theorem terminate_quiet {state : State} {processId : PID} {process : ProcessState}
     {reason : Term} (live : state.processes processId = some process)
-    (links : process.links = []) (monitors : process.monitors = []) :
+    (links : process.links = []) (monitors : process.monitors = []) (idle : state.timers = []) :
     state.terminate processId reason = state.update processId none := by
-  simp [State.terminate, live, links, monitors]
+  simp [State.terminate, live, links, monitors, idle, State.update]
+
+/-- Effects change process records, not timers. -/
+private theorem Effect.apply_timers {effect : Effect} {processId : PID} {state : State} :
+    (effect.apply processId state).timers = state.timers := by
+  cases effect <;> rfl
 
 /-- Each plain step of a live process has an effect on the shared state, and the
 same step remains available, with the same effect, after other processes append
@@ -183,7 +190,7 @@ private theorem transition_effect {state : State} {processId : PID} {process : P
     (possible : transition ∈ task.transitions state processId) :
     ∃ effect : Effect, effect.Matches processId process transition.event ∧
       transition.state = effect.apply processId state ∧
-      ∀ other extra,
+      ∀ other extra, other.timers = [] →
         other.processes processId = some { process with mailbox := process.mailbox ++ extra } →
         (transition.event = .timeout processId → extra = []) →
         ∃ moved ∈ task.transitions other processId,
@@ -193,7 +200,8 @@ private theorem transition_effect {state : State} {processId : PID} {process : P
   obtain ⟨computation, finish⟩ := task
   simp only [Task.plain, State.process_of_processes live, Bool.and_eq_true,
     Option.isNone_iff_eq_none] at plain
-  obtain ⟨signal, plain⟩ := plain
+  obtain ⟨⟨signal, idle⟩, plain⟩ := plain
+  simp only [List.isEmpty_iff] at idle
   have signal' : (state.process processId).signal = none := by simp [live, signal]
   have moved_signal : ∀ (other : State) extra,
       other.processes processId = some { process with mailbox := process.mailbox ++ extra } →
@@ -211,12 +219,12 @@ private theorem transition_effect {state : State} {processId : PID} {process : P
     obtain ⟨links, monitors⟩ := plain
     simp only [Task.transitions, signal', List.mem_singleton] at possible
     subst possible
-    refine ⟨.exit, by simp [Effect.Matches, Event.destination], terminate_quiet live links monitors,
+    refine ⟨.exit, by simp [Effect.Matches, Event.destination], terminate_quiet live links monitors idle,
       ?_⟩
-    intro other extra moved _
+    intro other extra idle' moved _
     simp only [Task.transitions, moved_signal other extra moved, List.mem_singleton,
       exists_eq_left, moved_view other extra moved]
-    and_intros <;> first | exact terminate_quiet moved links monitors | rfl | trivial
+    and_intros <;> first | exact terminate_quiet moved links monitors idle' | rfl | trivial
   | error exception =>
     simp only [List.isEmpty_iff, Bool.and_eq_true] at plain
     obtain ⟨links, monitors⟩ := plain
@@ -224,22 +232,22 @@ private theorem transition_effect {state : State} {processId : PID} {process : P
       subst possible
     case exhausted =>
       refine ⟨.exit, by simp [Effect.Matches, Event.destination], rfl, ?_⟩
-      intro other extra moved _
+      intro other extra idle' moved _
       simp only [Task.transitions, moved_signal other extra moved, List.mem_singleton,
         exists_eq_left]
       and_intros <;> first | rfl | trivial
     all_goals
       refine ⟨.exit, by simp [Effect.Matches, Event.destination],
-        terminate_quiet live links monitors, ?_⟩
-      intro other extra moved _
+        terminate_quiet live links monitors idle, ?_⟩
+      intro other extra idle' moved _
       simp only [Task.transitions, moved_signal other extra moved, List.mem_singleton,
         exists_eq_left, moved_view other extra moved]
-      and_intros <;> first | exact terminate_quiet moved links monitors | rfl | trivial
+      and_intros <;> first | exact terminate_quiet moved links monitors idle' | rfl | trivial
   | get next =>
     simp only [Task.transitions, signal', List.mem_singleton] at possible
     subst possible
     refine ⟨.stay, by simp [Effect.Matches, Event.destination], rfl, ?_⟩
-    intro other extra moved _
+    intro other extra idle' moved _
     simp only [Task.transitions, moved_signal other extra moved, List.mem_singleton,
       exists_eq_left, moved_view other extra moved]
     and_intros <;> first | rfl | trivial
@@ -248,23 +256,23 @@ private theorem transition_effect {state : State} {processId : PID} {process : P
     subst possible
     refine ⟨.store updated.pdict updated.refCounter, by simp [Effect.Matches, Event.destination],
       by state_ext, ?_⟩
-    intro other extra moved _
+    intro other extra idle' moved _
     simp only [Task.transitions, moved_signal other extra moved, List.mem_singleton,
       exists_eq_left]
     and_intros <;> first | rfl | trivial | state_ext
   | schedule options child next =>
     simp only [Bool.and_eq_true, Bool.not_eq_true'] at plain
-    obtain ⟨⟨noLink, noMonitor⟩, noTimer⟩ := plain
+    obtain ⟨noLink, noMonitor⟩ := plain
     simp only [Task.transitions, signal', List.mem_singleton] at possible
     subst possible
     have spawnWith : ∀ (current : State), current.spawnWith processId options =
         current.spawn processId := by
       intro current
-      simp [State.spawnWith, noLink, noMonitor, Option.isNone_iff_eq_none.mp noTimer]
+      simp [State.spawnWith, noLink, noMonitor]
     refine ⟨.spawn (processId ++ [process.children + 1]),
       by simp [Effect.Matches, spawnWith, State.spawn, live], ?_, ?_⟩
     · rw [spawnWith]; state_ext
-    intro other extra moved _
+    intro other extra idle' moved _
     simp only [Task.transitions, moved_signal other extra moved, List.mem_singleton,
       exists_eq_left]
     and_intros <;> first
@@ -279,7 +287,7 @@ private theorem transition_effect {state : State} {processId : PID} {process : P
       simp only [State.deliver]
       split <;> state_ext
     refine ⟨.send receiver message, by simp [Effect.Matches], deliver state, ?_⟩
-    intro other extra moved _
+    intro other extra idle' moved _
     simp only [Task.transitions, moved_signal other extra moved, List.mem_singleton,
       exists_eq_left]
     and_intros <;> first | exact deliver other | rfl | trivial
@@ -292,7 +300,7 @@ private theorem transition_effect {state : State} {processId : PID} {process : P
       simp only [State.view, State.process_of_processes live] at selected
       obtain ⟨index, bound, rfl, extend⟩ := selectMessage_index selected
       refine ⟨.take index, by simp [Effect.Matches, Event.destination, bound], by state_ext, ?_⟩
-      intro other extra moved _
+      intro other extra idle' moved _
       simp only [Task.transitions, State.view,
         State.process_of_processes moved, signal, extend, List.mem_singleton, exists_eq_left,
         and_true]
@@ -305,7 +313,7 @@ private theorem transition_effect {state : State} {processId : PID} {process : P
         simp only [List.mem_singleton] at possible
         subst possible
         refine ⟨.stay, by simp [Effect.Matches, Event.destination], rfl, ?_⟩
-        intro other extra moved timedOut
+        intro other extra idle' moved timedOut
         obtain rfl := timedOut rfl
         have same : other.process processId = state.process processId := by simp [moved, live]
         simp only [Task.transitions, State.view, same, signal'] at unmatched ⊢
@@ -333,7 +341,7 @@ private theorem Effect.apply_comm {state : State} {first second : PID} {effect o
     simp only [reduceCtorEq, Effect.send.injEq, Effect.spawn.injEq, Effect.take.injEq,
       false_imp_iff, implies_true, forall_eq', and_imp, forall_apply_eq_imp_iff₂]
       at sends sendSpawn spawnSend spawned spawned' taken taken' <;>
-    apply State.ext <;> funext candidate <;>
+    apply State.ext (by simp [Effect.apply, State.alter, State.update]) <;> funext candidate <;>
     simp only [Effect.apply, State.alter, State.update] <;>
     (repeat' split) <;> (try subst_vars) <;>
     first
@@ -399,6 +407,9 @@ private theorem diamond {state : State} {before middle after : List (PID × Task
       (first := (first, task)) (second := (second, other)) quietPairs
   obtain ⟨process, found⟩ := Option.isSome_iff_exists.mp (live (first, task) (by simp))
   obtain ⟨process', found'⟩ := Option.isSome_iff_exists.mp (live (second, other) (by simp))
+  have idle : state.timers = [] := by
+    simp only [Task.plain, Bool.and_eq_true, List.isEmpty_iff] at plain
+    exact plain.1.2
   obtain ⟨effect, matched, stateEq, stable⟩ := transition_effect found plain possible
   obtain ⟨effect', matched', stateEq', stable'⟩ := transition_effect found' plain' possible'
   have quietFinished := (transition_frame possible).2.2
@@ -450,11 +461,13 @@ private theorem diamond {state : State} {before middle after : List (PID × Task
     exact Effect.apply_other found' (Ne.symm distinct)
       fun child spawned => (childFresh child spawned).1.symm
   obtain ⟨transition', possibleAfter, stateAfter, eventAfter, tasksAfter, finishedAfter,
-    exhaustedAfter⟩ := stable next.state (effect'.delivered first) firstAfter
+    exhaustedAfter⟩ := stable next.state (effect'.delivered first)
+      (by rw [stateEq', Effect.apply_timers]; exact idle) firstAfter
       (fun timedOut => delivered effect' process' second first next.event transition.event
         matched' unraced.2 timedOut)
   obtain ⟨next', possibleAfter', stateAfter', eventAfter', tasksAfter', finishedAfter',
-    exhaustedAfter'⟩ := stable' transition.state (effect.delivered second) secondAfter
+    exhaustedAfter'⟩ := stable' transition.state (effect.delivered second)
+      (by rw [stateEq, Effect.apply_timers]; exact idle) secondAfter
       (fun timedOut => delivered effect process first second transition.event next.event
         matched unraced.1 timedOut)
   refine ⟨next', possibleAfter', transition', possibleAfter, ?_⟩
@@ -543,7 +556,7 @@ private theorem close_ordered {state : State} {before middle after : List (PID �
       Step (transition.apply before (middle ++ (second, other) :: after) finished exhausted)
         event last ∧
       Step (next.apply (before ++ (first, task) :: middle) after finished exhausted) event' last := by
-  obtain ⟨plain, plain', races, races'⟩ := unraced.2 _ _ _ _ _ _ _ rfl _ possible _ possible'
+  obtain ⟨plain, plain', races, races'⟩ := unraced.2.2 _ _ _ _ _ _ _ rfl _ possible _ possible'
   obtain ⟨next', possibleAfter', transition', possibleAfter, equal⟩ :=
     diamond wellformed possible possible' plain plain' ⟨races, races'⟩
   refine ⟨next'.event, transition'.event, next'.apply (before ++ transition.tasks ++ middle) after
@@ -569,7 +582,7 @@ private theorem local_confluence_run {state : State} {tasks before after before'
     ⟨middle, rfl, rfl⟩
   · simp only [Prod.mk.injEq] at same
     obtain ⟨rfl, rfl⟩ := same
-    exact .inl (by rw [unraced.1 _ _ (by simp [split]) _ possible _ possible'])
+    exact .inl (by rw [unraced.2.1 _ _ (by simp [split]) _ possible _ possible'])
   · have tasks : tasks = before ++ (processId, task) :: middle ++ (processId', task') :: after' := by
       rw [split]; simp
     rw [tasks] at wellformed unraced
@@ -601,6 +614,8 @@ private theorem local_confluence {config first second : Config α} {event event'
   | run split possible =>
     cases step' with
     | run split' possible' => exact local_confluence_run wellformed unraced split possible split' possible'
+    | timer possible' => simp [unraced.1, State.timerSteps] at possible'
+  | timer possible => simp [unraced.1, State.timerSteps] at possible
 
 private theorem Config.RaceFree.step {config next : Config α} {event : Event}
     (raceFree : config.RaceFree) (step : Step config event next) : next.RaceFree :=
@@ -720,13 +735,13 @@ private def Calm (state : State) : Prop :=
 
 /-- A talking process in a calm state takes plain steps. -/
 private theorem talks_plain {talk : PID → PID → Prop} {state : State} {processId : PID}
-    {task : Task α} {children : Nat} (calm : Calm state)
+    {task : Task α} {children : Nat} (calm : Calm state) (idle : state.timers = [])
     (talks : task.computation.Talks talk processId children) :
     task.plain state processId = true := by
   obtain ⟨links, monitors, signal⟩ := calm processId
   obtain ⟨computation, finish⟩ := task
   dsimp only at talks
-  cases talks <;> simp [Task.plain, links, monitors, signal]
+  cases talks <;> simp [Task.plain, links, monitors, signal, idle]
 
 /-- Plain effects keep the state calm. -/
 private theorem Effect.calm {effect : Effect} {processId : PID} {state : State}
@@ -895,7 +910,7 @@ private theorem children_unchanged {state : State} {before after : List (PID × 
 /-- Every process of a configuration talks along the process tree, in a calm state. -/
 private def Talking (talk : PID → PID → Prop) : Config α → Prop
   | .start env computation => computation.Talks talk env.currentPid 0
-  | .running state tasks _ _ => Calm state ∧ ∀ entry ∈ tasks,
+  | .running state tasks _ _ => Calm state ∧ state.timers = [] ∧ ∀ entry ∈ tasks,
       entry.2.computation.Talks talk entry.1 (state.process entry.1).children
 
 private theorem talking_apply {talk : PID → PID → Prop} {state : State}
@@ -906,12 +921,13 @@ private theorem talking_apply {talk : PID → PID → Prop} {state : State}
     (talking : Talking talk (.running state (before ++ (processId, task) :: after) finished exhausted))
     (possible : transition ∈ task.transitions state processId) :
     Talking talk (transition.apply before after finished exhausted) := by
-  obtain ⟨calm, talks⟩ := talking
+  obtain ⟨calm, idle, talks⟩ := talking
   have selfTalks := talks (processId, task) (by simp)
   obtain ⟨process, found⟩ :=
     Option.isSome_iff_exists.mp (wellformed.2.2.1 (processId, task) (by simp))
-  obtain ⟨effect, -, stateEq, -⟩ := transition_effect found (talks_plain calm selfTalks) possible
-  refine ⟨by rw [stateEq]; exact Effect.calm calm, ?_⟩
+  obtain ⟨effect, -, stateEq, -⟩ :=
+    transition_effect found (talks_plain calm idle selfTalks) possible
+  refine ⟨by rw [stateEq]; exact Effect.calm calm, by rw [stateEq, Effect.apply_timers]; exact idle, ?_⟩
   intro entry mem
   simp only [List.mem_append] at mem
   rcases mem with (mem | mem) | mem
@@ -934,7 +950,7 @@ private theorem Step.talking {talk : PID → PID → Prop} {first next : Config 
     | set same next => simpa [Talking, same] using next
   | enter =>
     simp only [Talking] at talking
-    refine ⟨fun processId => ?_, ?_⟩
+    refine ⟨fun processId => ?_, rfl, ?_⟩
     · simp only [State.initial, State.process]
       split <;> simp
     · intro entry mem
@@ -944,6 +960,7 @@ private theorem Step.talking {talk : PID → PID → Prop} {first next : Config 
   | run split possible =>
     subst split
     exact talking_apply wellformed talking possible
+  | timer possible => simp [talking.2.1, State.timerSteps] at possible
 
 /-- Talking processes of a well-formed configuration do not race. -/
 private theorem talking_unraced {talk : PID → PID → Prop} (single : Single talk)
@@ -956,7 +973,7 @@ private theorem talking_unraced {talk : PID → PID → Prop} (single : Single t
     (possible' : next ∈ other.transitions state second) :
     ¬ transition.event.Races next.event := by
   obtain ⟨-, fresh, -, -⟩ := wellformed
-  obtain ⟨calm, talks⟩ := talking
+  obtain ⟨calm, -, talks⟩ := talking
   obtain ⟨destinations, -, -⟩ := talks_event (calm first).2.2 (talks _ member) possible
   obtain ⟨destinations', timeouts', spawns'⟩ :=
     talks_event (calm second).2.2 (talks _ member') possible'
@@ -991,17 +1008,19 @@ theorem Config.RaceFree.of_talks {talk : PID → PID → Prop} (single : Single 
   cases reached with
   | start => trivial
   | running state tasks finished exhausted =>
-    refine ⟨fun processId task member _ possible _ possible' =>
-      transitions_subsingleton (talks_plain talking.1 (talking.2 _ member)) possible possible', ?_⟩
+    obtain ⟨calm, idle, talks⟩ := talking
+    refine ⟨idle, fun processId task member _ possible _ possible' =>
+      transitions_subsingleton (talks_plain calm idle (talks _ member)) possible possible', ?_⟩
     intro before first task after second other rest split transition possible next possible'
     have distinct : first ≠ second :=
       pairwise_between (relation := fun first second : PID × Task α => first.1 ≠ second.1)
         (first := (first, task)) (second := (second, other)) (split ▸ wellformed.1)
     have member : (first, task) ∈ tasks := by simp [split]
     have member' : (second, other) ∈ tasks := by simp [split]
-    exact ⟨talks_plain talking.1 (talking.2 _ member), talks_plain talking.1 (talking.2 _ member'),
-      talking_unraced single wellformed talking member member' distinct possible possible',
-      talking_unraced single wellformed talking member' member (Ne.symm distinct) possible'
-        possible⟩
+    exact ⟨talks_plain calm idle (talks _ member), talks_plain calm idle (talks _ member'),
+      talking_unraced single wellformed ⟨calm, idle, talks⟩ member member' distinct possible
+        possible',
+      talking_unraced single wellformed ⟨calm, idle, talks⟩ member' member (Ne.symm distinct)
+        possible' possible⟩
 
 end Lynx.Concurrent
