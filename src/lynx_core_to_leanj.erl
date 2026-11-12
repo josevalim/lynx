@@ -1,6 +1,7 @@
 -module(lynx_core_to_leanj).
 
--export([module_name/1, to_definitions/1, called_protocol/1, dispatch_locally/3, translate/9,
+-export([module_name/1, to_definitions/1, called_protocol/1, protocol_calls/2,
+         dispatch_locally/4, translate/9,
          fun_table/2, join_purity/2, with_purity/2]).
 
 %% Purity levels, ordered by what running a definition requires: `pure` needs
@@ -261,13 +262,27 @@ called_protocol(#c_module{defs = Defs, attrs = Attrs}) ->
         [] -> nil
     end.
 
+%% The functions of a protocol an implementation calls.
+-spec protocol_calls(map(), module()) -> [{atom(), arity()}].
+protocol_calls(Definitions, Protocol) ->
+    lists:usort(lists:append([cerl_trees:fold(fun
+        (#c_call{module = #c_literal{val = Module}, name = #c_literal{val = Name}, args = Args}, Found)
+                when Module =:= Protocol ->
+            [{Name, length(Args)} | Found];
+        (_, Found) ->
+            Found
+    end, [], Fun) || {function, Fun} <- maps:values(Definitions)])).
+
 %% Implementations calling their own protocol, such as streams of streams,
 %% would form a module cycle through it. Instead, they call local copies of
 %% the protocol's dispatch, which call the implementation's own functions
-%% locally and other implementations directly.
--spec dispatch_locally(map(), module(), map()) -> map().
-dispatch_locally(Definitions, Protocol, #{{'__protocol__', 1} := {function, Info}} = ProtocolDefinitions) ->
-    Functions = [{impl_for, 1}, {'impl_for!', 1} | protocol_info(Info, functions)],
+%% locally and other implementations directly. Functions of the protocol that
+%% are cut off are not copied, and calls to them stay calls to the protocol.
+-spec dispatch_locally(map(), module(), map(), [{atom(), arity()}]) -> map().
+dispatch_locally(Definitions, Protocol, #{{'__protocol__', 1} := {function, Info}} = ProtocolDefinitions,
+                 Cut) ->
+    Functions = [Function || Function <- [{impl_for, 1}, {'impl_for!', 1} | protocol_info(Info, functions)],
+                             not lists:member(Function, Cut)],
     Prefix = case atom_to_binary(Protocol) of
         <<"Elixir.", Rest/binary>> -> Rest;
         Name -> Name
@@ -277,6 +292,13 @@ dispatch_locally(Definitions, Protocol, #{{'__protocol__', 1} := {function, Info
     Rename = fun
         (#c_var{name = {_, _} = Function} = Var) when is_map_key(Function, Local) ->
             Var#c_var{name = map_get(Function, Local)};
+        (#c_apply{anno = Anno, op = #c_var{name = {Name, Arity} = Function}, args = Args} = Node) ->
+            case lists:member(Function, Cut) of
+                true when length(Args) =:= Arity ->
+                    cerl:ann_c_call(Anno, cerl:ann_c_atom(Anno, Protocol), cerl:ann_c_atom(Anno, Name), Args);
+                _ ->
+                    Node
+            end;
         (Node) ->
             Node
     end,
