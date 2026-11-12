@@ -452,6 +452,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Dispatcher.badfun",
   "Lynx.Dispatcher.call",
   "Lynx.Dispatcher.find",
+  "Lynx.Dispatcher.inner",
   "Lynx.Dispatcher.lookup",
   "Lynx.Dispatcher.mk",
   "Lynx.Dispatcher.named",

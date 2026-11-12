@@ -84,7 +84,8 @@ Function tables carry entry metadata: module, name, body, captures, args, purity
 The decoder builds typed callables, which receive the dispatcher unless they are pure.
 Each entry also generates checked application equations through
 `Lynx.Dispatcher.ofTable`. Pure entries preserve the call depth; other entries run
-with the dispatcher one level down.
+with the dispatcher one level down. Receives also run one level down, from the
+dispatcher's `inner` level, and do not return once the depth is exhausted.
 Files are elaborated in the supplied dependency order against their declared imports.
 Verified files are exported to temporary modules for importing by later files.
 Each file's definitions live in its module namespace.
@@ -1152,6 +1153,9 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       | _ => $ok ($atom "badarg")))
   | "receive" => do
     fields j ["kind", "message", "cases", "timeout", "after", "span"]
+    -- Receives run one call depth down, so recursion through them terminates.
+    let outer ← requireDispatcher "receive messages"
+    modify fun s => { s with dispatcher := some ⟨dispatcherId.raw⟩ }
     let message ← param map info (← field j "message")
     let clauses ← (← arr j "cases").mapM (fun c => refineGuardClause c #[] true)
     let termType : TSyntax `term := ⟨(mkIdent ``Lynx.Term).raw⟩
@@ -1247,7 +1251,13 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let computation := Unhygienic.run `($receive $timeout $selector (fun
       | $someId $selected:ident => $continuation
       | $noneId => $afterBody))
-    pure computation
+    modify fun s => { s with dispatcher := some outer }
+    let dispatcherMk := mkIdent ``Lynx.Dispatcher.mk
+    let error := mkIdent ``Lynx.Result.error
+    let exhausted := mkIdent ``Lynx.Exception.exhausted
+    pure (Unhygienic.run `(match $outer:term with
+      | $dispatcherMk _ _ _ ($someId $dispatcherId:ident) => $computation
+      | _ => $error $exhausted))
   | "match" => do
     fields j ["kind", "expressions", "cases", "span"]
     if let some grouped ← groupMapCases j then return ← term map info false grouped

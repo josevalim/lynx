@@ -96,16 +96,18 @@ defmodule ServerProofsTest do
       requires: is_integer_list(xs),
       expects: double_all(xs) == double(xs),
       proof: ~LEAN"""
-      -- Spawning the server calls its function one level down.
-      refine ⟨1, fun depth deep => ?_⟩
+      -- The root receives once per element, and so does the server it spawns
+      -- one level down.
+      refine ⟨ServerProof.len xs + 1, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
+      rw [← Nat.add_assoc]
       open Lynx Lynx.Concurrent ServerProof in
       · have serve_talks : ∀ (d : Dispatcher) (xs : Term),
             («serve/2» d (.pid []) xs).Talks talk [1] 0 := by
           intro d xs
-          induction xs using «serve/2».induct with
+          induction d, xs using «serve/2».induct with
           | case1 => simp [«serve/2»]; exact .ok
-          | case2 _ rest ih =>
+          | case2 _ rest _ _ _ _ ih =>
             rw [«serve/2»]
             simp only [Result.receiveWith, ReceiveTimeout.ofTerm, Result.ok_bind]
             refine .receive fun reply => ?_
@@ -119,7 +121,11 @@ defmodule ServerProofsTest do
                 simp only [Result.ofExcept, Result.ok_bind, Erlang.erlang.«send/2»,
                   Result.send_bind]
                 exact .send (.inr ⟨rfl, rfl⟩) ih
-          | case3 => simp [«serve/2»]; exact .error
+          | case3 d _ _ deeper =>
+            rcases d with ⟨_, _, _, _ | inner⟩
+            · simp [«serve/2»]; exact .error
+            · exact absurd rfl (deeper _ _ _ inner)
+          | case4 => simp [«serve/2»]; exact .error
         have request_talks : ∀ (d : Dispatcher) (xs : Term) (next : Term → Result)
               (talks : ∀ value, (next value).Talks talk [] 1),
             («request/2» d (.pid [1]) xs >>= next).Talks talk [] 1 := by
@@ -139,9 +145,9 @@ defmodule ServerProofsTest do
               (talks : ∀ value, (next value).Talks talk [] 1),
             («collect/1» d xs >>= next).Talks talk [] 1 := by
           intro d xs next talks
-          induction xs using «collect/1».induct generalizing next with
+          induction d, xs using «collect/1».induct generalizing next with
           | case1 => simpa [«collect/1»] using talks _
-          | case2 _ rest ih =>
+          | case2 _ rest _ _ _ _ ih =>
             rw [«collect/1»]
             simp only [Result.receiveWith, ReceiveTimeout.ofTerm, Result.ok_bind,
               Result.receive_bind]
@@ -151,16 +157,20 @@ defmodule ServerProofsTest do
             | some y =>
               simp only [bind_assoc, Result.pure_eq_ok, Result.ok_bind]
               exact ih _ fun _ => talks _
-          | case3 _ notNil notCons =>
+          | case3 d _ _ deeper =>
+            rcases d with ⟨_, _, _, _ | inner⟩
+            · simp [«collect/1»]; exact .error
+            · exact absurd rfl (deeper _ _ _ inner)
+          | case4 _ _ notNil notCons =>
             rw [«collect/1»]
             · simp only [Result.error_bind]; exact .error
             · exact notNil
             · exact notCons
         -- No races: the root only sends to its child, which only replies to the root.
-        have root_talks : ∀ (xs : Term),
-            (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table (depth + 1) xs).Talks
+        have root_talks : ∀ (k : Nat) (xs : Term),
+            (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table (k + 1) xs).Talks
               talk [] 0 := by
-          intro xs
+          intro k xs
           simp only [Lynx.apply_eq, «double_all_doubles:ensures/1», «double_all/1»,
             Erlang.erlang.«self/0», Erlang.erlang.«spawn/1», bind_assoc, Result.ok_bind,
             Result.pure_eq_ok, Result.schedule_bind]
@@ -182,7 +192,7 @@ defmodule ServerProofsTest do
                 some { process with mailbox := process.mailbox ++ requests ys } ∧
               (∀ other, other ≠ [1] → state'.processes other = state.processes other) ∧
               (Config.running state
-                  [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) (.pid [1])
+                  [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) (.pid [1])
                     ys >>= R, some⟩), ([1], server)] none false).advance (len ys) =
                 .running state' [([], ⟨R (.atom "ok"), some⟩), ([1], server)] none false := by
           intro R server ys valid state process found rootCalm
@@ -205,10 +215,10 @@ defmodule ServerProofsTest do
               simp [State.deliver, found, State.update, distinct]
             · rw [show len (.cons x rest) = 1 + len rest by simp [len]; omega, Config.advance_add]
               have step : (Config.running state
-                  [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) (.pid [1])
+                  [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) (.pid [1])
                     (.cons x rest) >>= R, some⟩), ([1], server)] none false).advance 1 =
                   .running (state.deliver [1] (Term.tuple #[.atom "request", x]))
-                    [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) (.pid [1])
+                    [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) (.pid [1])
                       rest >>= R, some⟩), ([1], server)] none false := by
                 rw [«request/2»]
                 simp [Config.advance, Config.successors, splits, Task.transitions,
@@ -230,9 +240,9 @@ defmodule ServerProofsTest do
               (state'.process []).links = [] ∧ (state'.process []).monitors = [] ∧
               (state'.process [1]).links = [] ∧ (state'.process [1]).monitors = [] ∧
               (Config.running state
-                  [([], ⟨«collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) zs >>= K,
-                    some⟩),
-                   ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table depth)
+                  [([], ⟨«collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + len zs + 1)) zs >>=
+                    K, some⟩),
+                   ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len zs))
                      (.pid []) zs))]
                   none false).advance (3 * len zs) =
                 .running state' [([], ⟨K (doubled zs), some⟩),
@@ -241,7 +251,9 @@ defmodule ServerProofsTest do
                   none false := by
           intro K zs valid state root server rootFound rootEmpty serverFound serverMailbox rootCalm
             serverCalm rootAlone serverAlone
-          induction zs using «collect/1».induct generalizing K state root server with
+          -- collect/1 and serve/2 also recurse on their dispatcher, so induct on
+          -- the list alone, as request/2 does.
+          induction zs using «request/2».induct generalizing K state root server with
           | case1 =>
             exact ⟨state, by simp [State.process, rootFound, rootCalm],
               by simp [State.process, serverFound, serverCalm],
@@ -259,23 +271,25 @@ defmodule ServerProofsTest do
                 state3.processes [] = some { root with mailbox := [] } ∧
                 state3.processes [1] = some { server with mailbox := requests rest } ∧
                 (Config.running state
-                  [([], ⟨«collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1))
-                    (.cons (.integer n) rest) >>= K, some⟩),
-                   ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table depth) (.pid [])
-                     (.cons (.integer n) rest)))] none false).advance 3 =
+                  [([], ⟨«collect/1» (Dispatcher.ofTable Erlang.program.fun_table
+                    (depth + len (.cons (.integer n) rest) + 1)) (.cons (.integer n) rest) >>= K, some⟩),
+                   ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table
+                     (depth + len (.cons (.integer n) rest))) (.pid []) (.cons (.integer n) rest)))]
+                  none false).advance 3 =
                   .running state3
-                    [([], ⟨«collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) rest >>=
+                    [([], ⟨«collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + len rest + 1)) rest >>=
                       fun r => K (.cons (.integer (n * 2)) r), some⟩),
-                     ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table depth) (.pid [])
-                       rest))] none false := by
+                     ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len rest))
+                       (.pid []) rest))] none false := by
               refine ⟨?state3, ?_, ?_, ?advanced⟩
               case advanced =>
-                rw [«collect/1», «serve/2»]
+                rw [«collect/1».eq_def _ (.cons (.integer n) rest),
+                  «serve/2».eq_def _ _ (.cons (.integer n) rest)]
                 simp [Config.advance, Config.successors, splits, Task.transitions, Task.child,
                   Result.receiveWith, ReceiveTimeout.ofTerm, State.view, State.process, rootFound,
                   serverFound, rootEmpty, serverMailbox, requests, selectMessage,
                   Erlang.erlang.«send/2», Transition.apply, State.update, State.deliver, rootCalm,
-                  serverCalm]
+                  serverCalm, len, Dispatcher.ofTable, Dispatcher.step]
                 rfl
               all_goals simp [rootCalm, serverCalm]
             obtain ⟨state3, found, found', advanced⟩ := three
@@ -307,14 +321,14 @@ defmodule ServerProofsTest do
         -- Spawn the server.
         have start : ∃ state : State, state.processes [] = some { children := 1 } ∧
             state.processes [1] = some {} ∧
-            (Config.start {} (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table (depth + 1)
-              xs)).advance 3 =
+            (Config.start {} (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table
+              (depth + len xs + 1) xs)).advance 3 =
               .running state
-                [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) (.pid [1]) xs >>=
-                    fun _ => «collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) xs >>=
+                [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) (.pid [1]) xs >>=
+                    fun _ => «collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) xs >>=
                       fun collected => Result.ofExcept («double/1» xs) >>=
                         fun expected => Result.ofExcept (Erlang.erlang.«==/2» collected expected), some⟩),
-                 ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table depth)
+                 ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs))
                    (.pid []) xs))]
                 none false := by
           refine ⟨?state, ?_, ?_, ?advanced⟩
@@ -330,10 +344,10 @@ defmodule ServerProofsTest do
         obtain ⟨state, rootFound, serverFound, started⟩ := start
         -- Send every request.
         obtain ⟨state', serverFound', others, requested⟩ := requests_phase
-          (fun _ => «collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + 1)) xs >>=
+          (fun _ => «collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) xs >>=
             fun collected => Result.ofExcept («double/1» xs) >>=
               fun expected => Result.ofExcept (Erlang.erlang.«==/2» collected expected))
-          (Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table depth) (.pid []) xs))
+          (Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs)) (.pid []) xs))
           xs valid state _ serverFound (by simp [State.process, rootFound])
         -- Answer every request.
         obtain ⟨state'', rootCalm'', serverCalm'', rootLinks'', rootMonitors'', serverLinks'',
@@ -344,7 +358,7 @@ defmodule ServerProofsTest do
           (by rw [others [] (by simp), rootFound]) rfl serverFound' (by simp) rfl (by simp)
           ⟨rfl, rfl⟩ (by simp)
         have total : (Config.start {}
-            (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table (depth + 1) xs)).advance
+            (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table (depth + len xs + 1) xs)).advance
               (3 + len xs + 3 * len xs + 2) =
             (Config.running state''
               [([], ⟨Result.ofExcept («double/1» xs) >>=
@@ -377,7 +391,7 @@ defmodule ServerProofsTest do
             splits, Task.transitions, Task.child, «serve/2», Transition.apply, Lynx.Term.true,
             rootCalm'', rootExit, serverCalmAfter, serverExit]
         -- Without races, this run determines the outcome of every schedule.
-        rw [concurrent_eq_advance _ (Config.RaceFree.of_talks single (root_talks xs)) _
+        rw [concurrent_eq_advance _ (Config.RaceFree.of_talks single (root_talks _ xs)) _
           (by rw [total, finished]; rfl) schedule, total, finished]
         rfl
       """

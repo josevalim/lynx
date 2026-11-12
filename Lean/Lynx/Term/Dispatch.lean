@@ -68,12 +68,13 @@ calls of other programs effectful, so they do not return there either. -/
       | some inner => body inner captures arguments
       | none => .error .exhausted
   resolve := named table
+  inner := inner
 
 /-- Dispatch through an immutable program table. The depth bounds nested calls
-through entries that dispatch further, including in spawned children, but not
-calls to pure entries; exceeding it does not return. The lemmas below describe
-how it calls table entries, and its body is exposed so closed programs can be
-evaluated. -/
+through entries that dispatch further, including in spawned children, and
+nested receives, which run with `inner`, but not calls to pure entries;
+exceeding it does not return. The lemmas below describe how it calls table
+entries, and its body is exposed so closed programs can be evaluated. -/
 @[expose] def ofTable (table : FunTable) : Nat → Dispatcher
   | 0 => step table none
   | depth + 1 => step table (some (ofTable table depth))

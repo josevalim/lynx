@@ -119,12 +119,13 @@ defmodule TaskProofsTest do
       proof: ~LEAN"""
       obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
         cases x <;> simp_all [«double_in_task_doubles:requires/1», Erlang.erlang.«is_integer/1»]
-      -- Tasks run their function a few levels down, well within this bound.
-      refine ⟨100, fun depth deep => ?_⟩
+      -- The task is spawned, receives its work, and applies its function
+      -- through :erlang.apply/2, each one level down.
+      refine ⟨4, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       -- Evaluate every interleaving; only the final comparison depends on n.
       have checked := Lynx.concurrent_of_check
-        (Lynx.apply «double_in_task_doubles:ensures/1» Erlang.program.fun_table (depth + 100) (.integer n))
+        (Lynx.apply «double_in_task_doubles:ensures/1» Erlang.program.fun_table (depth + 4) (.integer n))
         (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
         (by cbv; simp [Rat.lt_irrefl]) schedule
       split at checked
@@ -138,14 +139,15 @@ defmodule TaskProofsTest do
       proof: ~LEAN"""
       obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
         cases x <;> simp_all [«double_or_timeout_doubles:requires/1», Erlang.erlang.«is_integer/1»]
-      -- Tasks run their function a few levels down, well within this bound.
-      refine ⟨100, fun depth deep => ?_⟩
+      -- The task is spawned, receives its work, and applies its function
+      -- through :erlang.apply/2, each one level down.
+      refine ⟨4, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       -- The timeout may expire before or after the reply arrives. When the
       -- reply wins, the owner compares n * 2 with itself while the task is
       -- still running, so evaluation resumes after simp decides it.
       have checked := Lynx.concurrent_of_check
-        (Lynx.apply «double_or_timeout_doubles:ensures/1» Erlang.program.fun_table (depth + 100) (.integer n))
+        (Lynx.apply «double_or_timeout_doubles:ensures/1» Erlang.program.fun_table (depth + 4) (.integer n))
         (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
         (by cbv; repeat (simp only [Int.lt_irrefl, ite_false, ite_true]; cbv)) schedule
       split at checked
@@ -161,13 +163,14 @@ defmodule TaskProofsTest do
     law ignore_drains_reply,
       expects: ignore_leaves_no_reply(),
       proof: ~LEAN"""
-      -- Tasks run their function a few levels down, well within this bound.
-      refine ⟨100, fun depth deep => ?_⟩
+      -- The task is spawned, receives its work, and applies its function
+      -- through :erlang.apply/2, each one level down.
+      refine ⟨4, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       -- lynx_counterexample reports a failing schedule quickly, before cbv
       -- evaluates every interleaving, which takes more than its default steps.
       have checked := Lynx.concurrent_of_check
-        (Lynx.apply «ignore_drains_reply:ensures/0» Erlang.program.fun_table (depth + 100))
+        (Lynx.apply «ignore_drains_reply:ensures/0» Erlang.program.fun_table (depth + 4))
         (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
         (by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv) schedule
       split at checked
@@ -192,11 +195,12 @@ defmodule TaskProofsTest do
     law await_drains_reply,
       expects: await_leaves_no_reply(),
       proof: ~LEAN"""
-      -- The task runs a few levels down, well within this bound.
-      refine ⟨100, fun depth deep => ?_⟩
+      -- The task is spawned, receives the alias, and applies its function,
+      -- each one level down.
+      refine ⟨3, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       have checked := Lynx.concurrent_of_check
-        (Lynx.apply «await_drains_reply:ensures/0» Erlang.program.fun_table (depth + 100))
+        (Lynx.apply «await_drains_reply:ensures/0» Erlang.program.fun_table (depth + 3))
         (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
         (by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv) schedule
       split at checked
