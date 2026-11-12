@@ -2,6 +2,7 @@ module
 
 public import Lynx
 import Lynx.Runner.Elab
+public import Elixir.Lynx.Support.Depth
 public import Elixir.Lynx.Support.Describe
 public import Elixir.Lynx.Support.Size
 public import Lynx.Modules.Erlang.erlang
@@ -20,6 +21,9 @@ def «size/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
 def «describe/2» (_0 : Lynx.Term) (_1 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   Elixir.Lynx.Support.Describe.«describe/2» _0 _1
 
+def «depth/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
+  Elixir.Lynx.Support.Depth.«depth/1» _0
+
 def «size_list_requires/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term := do
   let _1 ← Erlang.erlang.«length/1» _0
   Erlang.erlang.«>=/2» _1 (Lynx.Term.integer 0)
@@ -28,6 +32,9 @@ def «size_undefined_requires/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.
   Erlang.erlang.«is_float/1» _0
 
 def «describe_fallback_requires/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
+  Erlang.erlang.«is_integer/1» _0
+
+def «depth_nested_requires/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=
   Erlang.erlang.«is_integer/1» _0
 
 def «size_list_ensures/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term := do
@@ -54,10 +61,10 @@ def «size_undefined_ensures/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.T
           lynxBody lynxNext)
         (fun lynxMatchNext =>
           match _5, _4, _3 with
-          | Lynx.Term.atom "error", lynxMap75, _9 =>
+          | Lynx.Term.atom "error", lynxMap83, _9 =>
             match
               (Lynx.Term.getMapKeys [Lynx.Term.atom "__struct__", Lynx.Term.atom "value"]
-                lynxMap75) with
+                lynxMap83) with
             | [Lynx.Term.atom "Elixir.Protocol.UndefinedError", _8] =>
               Lynx.Except.guard (Erlang.erlang.«=:=/2» _8 _0)
                 (fun _ => pure (Lynx.Term.atom "true")) lynxMatchNext
@@ -70,6 +77,10 @@ def «size_undefined_ensures/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.T
 def «describe_fallback_ensures/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term := do
   let _1 ← «describe/2» _0 (Lynx.Term.atom "prefix")
   Erlang.erlang.«=:=/2» _1 (Lynx.Term.tuple #[Lynx.Term.atom "prefix", Lynx.Term.atom "any"])
+
+def «depth_nested_ensures/1» (_0 : Lynx.Term) : Except Lynx.Exception Lynx.Term := do
+  let _1 ← «depth/1» (Lynx.Term.list [Lynx.Term.list [_0]])
+  Erlang.erlang.«=:=/2» _1 (Lynx.Term.integer 2)
 
 end
 

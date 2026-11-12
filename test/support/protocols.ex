@@ -43,3 +43,18 @@ defmodule Lynx.Support.Tagged do
   @derive Lynx.Support.Describe
   defstruct [:tag]
 end
+
+# Lists call the protocol for their elements, which dispatches locally
+# instead of through the protocol module.
+defprotocol Lynx.Support.Depth do
+  def depth(data)
+end
+
+defimpl Lynx.Support.Depth, for: List do
+  def depth([]), do: 1
+  def depth([head | tail]), do: max(Lynx.Support.Depth.depth(head) + 1, depth(tail))
+end
+
+defimpl Lynx.Support.Depth, for: Integer do
+  def depth(_integer), do: 0
+end

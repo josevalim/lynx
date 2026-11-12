@@ -119,6 +119,7 @@ defmodule Lynx.Translation do
   @doc "Translates the requested functions and their local and remote callees."
   def translate(%__MODULE__{stack: stack} = translation, name, names) do
     {module, translation} = fetch_module!(translation, name, fn -> [] end)
+    {module, translation} = dispatch_locally(translation, name, module)
 
     for {function, arity} <- names do
       validate_function!(module, name, function, arity, fn -> [file: module.file] end)
@@ -177,6 +178,21 @@ defmodule Lynx.Translation do
                 [description: String.replace(reason, "\n", "\n    ")]
     end
   end
+
+  # Implementations calling their own protocol would form a module cycle
+  # through it, so they call local copies of its dispatch instead.
+  defp dispatch_locally(translation, name, %{protocol: protocol} = module)
+       when protocol != nil do
+    {data, translation} = fetch_module!(translation, protocol, fn -> [file: module.file] end)
+
+    definitions =
+      :lynx_core_to_leanj.dispatch_locally(module.definitions, protocol, data.definitions)
+
+    module = %{module | definitions: definitions, protocol: nil}
+    {module, put_in(translation.modules[name], module)}
+  end
+
+  defp dispatch_locally(translation, _name, module), do: {module, translation}
 
   defp remote_call(
          %__MODULE__{stack: [caller | _]} = translation,
@@ -370,7 +386,14 @@ defmodule Lynx.Translation do
         raise CompileError, source_location(span_anno, file) ++ [description: reason]
 
       definitions ->
-        %{definitions: definitions, translations: %{}, literals: %{}, laws: %{}, file: file}
+        %{
+          definitions: definitions,
+          protocol: :lynx_core_to_leanj.called_protocol(core),
+          translations: %{},
+          literals: %{},
+          laws: %{},
+          file: file
+        }
     end
   end
 

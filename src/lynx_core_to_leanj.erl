@@ -1,7 +1,7 @@
 -module(lynx_core_to_leanj).
 
--export([module_name/1, to_definitions/1, translate/9, fun_table/2, join_purity/2,
-         with_purity/2]).
+-export([module_name/1, to_definitions/1, called_protocol/1, dispatch_locally/3, translate/9,
+         fun_table/2, join_purity/2, with_purity/2]).
 
 %% Purity levels, ordered by what running a definition requires: `pure` needs
 %% nothing, `apply` needs a dispatcher to call function values, `sequential`
@@ -242,6 +242,63 @@ protocol_dispatch({Name, _Arity}, Impls, #c_fun{anno = Anno, vars = [Data | _] =
                            cerl:ann_c_primop(Anno, cerl:ann_c_atom(Anno, match_fail),
                                              [cerl:ann_c_tuple(Anno, [cerl:ann_c_atom(Anno, case_clause), Impl])]))],
     Fun#c_fun{body = cerl:ann_c_case(Anno, ImplFor, Clauses)}.
+
+%% The protocol an implementation calls, which then dispatches locally.
+-spec called_protocol(cerl:c_module()) -> module() | nil.
+called_protocol(#c_module{defs = Defs, attrs = Attrs}) ->
+    Protocols = [Protocol || {#c_literal{val = '__impl__'}, Value} <- Attrs,
+                             {protocol, Protocol} <- lists:flatten([cerl:concrete(Value)])],
+    Called = fun(Protocol) ->
+        lists:any(fun({_, Fun}) ->
+            cerl_trees:fold(fun
+                (#c_call{module = #c_literal{val = Module}}, _) when Module =:= Protocol -> true;
+                (_, Found) -> Found
+            end, false, Fun)
+        end, Defs)
+    end,
+    case [Protocol || Protocol <- Protocols, Called(Protocol)] of
+        [Protocol] -> Protocol;
+        [] -> nil
+    end.
+
+%% Implementations calling their own protocol, such as streams of streams,
+%% would form a module cycle through it. Instead, they call local copies of
+%% the protocol's dispatch, which call the implementation's own functions
+%% locally and other implementations directly.
+-spec dispatch_locally(map(), module(), map()) -> map().
+dispatch_locally(Definitions, Protocol, #{{'__protocol__', 1} := {function, Info}} = ProtocolDefinitions) ->
+    Functions = [{impl_for, 1}, {'impl_for!', 1} | protocol_info(Info, functions)],
+    Prefix = case atom_to_binary(Protocol) of
+        <<"Elixir.", Rest/binary>> -> Rest;
+        Name -> Name
+    end,
+    Local = maps:from_list([{Function, {binary_to_atom(<<Prefix/binary, ".", (atom_to_binary(Name))/binary>>), Arity}}
+                            || {Name, Arity} = Function <- Functions]),
+    Rename = fun
+        (#c_var{name = {_, _} = Function} = Var) when is_map_key(Function, Local) ->
+            Var#c_var{name = map_get(Function, Local)};
+        (Node) ->
+            Node
+    end,
+    Redirect = fun
+        (#c_call{anno = Anno, module = #c_literal{val = Module}, name = #c_literal{val = Name}, args = Args} = Node)
+                when Module =:= Protocol ->
+            case Local of
+                #{{Name, length(Args)} := {LocalName, Arity}} ->
+                    cerl:ann_c_apply(Anno, cerl:ann_c_fname(Anno, LocalName, Arity), Args);
+                #{} ->
+                    Node
+            end;
+        (Node) ->
+            Node
+    end,
+    Redirected = maps:map(fun
+        (_, {function, Fun}) -> {function, cerl_trees:map(Redirect, Fun)};
+        (_, Definition) -> Definition
+    end, Definitions),
+    maps:merge(Redirected, #{LocalName => {function, cerl_trees:map(Rename, Fun)}
+                             || Function := LocalName <- Local,
+                                #{Function := {function, Fun}} <- [ProtocolDefinitions]}).
 
 -spec fun_table(map(), map()) -> [map()].
 fun_table(Funs, Modules) ->
