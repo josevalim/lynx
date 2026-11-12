@@ -4,8 +4,8 @@
 # a monitor alias. Awaiting without a timeout returns the task's result under
 # every schedule, and awaiting with one either returns it or times out. The
 # input is an arbitrary integer, but the processes take the same steps for
-# every value, so the proofs evaluate every interleaving. Ignoring a task
-# leaves its reply out of the owner's inbox.
+# every value, so the proofs evaluate every interleaving. Ignoring a task, or
+# awaiting one until it times out, leaves its reply out of the owner's inbox.
 ExUnit.start()
 
 defmodule TaskProofsTest do
@@ -46,6 +46,54 @@ defmodule TaskProofsTest do
       end
 
     result in [{:ok, :reply}, nil] and empty?
+  end
+
+  # Starts a task as Task.async/1 does, without Task.Supervised: the owner
+  # monitors the process with an alias and sends it the alias to reply to.
+  defp async(fun) do
+    owner = self()
+
+    pid =
+      spawn_link(fn ->
+        receive do
+          alias -> send(alias, {alias, fun.()})
+        end
+      end)
+
+    alias = :erlang.monitor(:process, pid, alias: :demonitor)
+    send(pid, alias)
+    %Task{pid: pid, ref: alias, owner: owner, mfa: {:erlang, :apply, 2}}
+  end
+
+  # Once the task exits, no other process can send to the owner.
+  defp wait_exit(%Task{pid: pid}) do
+    monitor = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^monitor, _, _, _} -> :ok
+    end
+  end
+
+  defp empty_inbox? do
+    receive do
+      _ -> false
+    after
+      0 -> true
+    end
+  end
+
+  def await_leaves_no_reply do
+    task = async(fn -> :reply end)
+
+    result =
+      try do
+        Task.await(task, 100)
+      catch
+        :exit, {:timeout, _} -> :timeout
+      end
+
+    wait_exit(task)
+    result in [:reply, :timeout] and empty_inbox?()
   end
 
   laws "Task" do
@@ -120,6 +168,35 @@ defmodule TaskProofsTest do
       -- evaluates every interleaving, which takes more than its default steps.
       have checked := Lynx.concurrent_of_check
         (Lynx.apply «ignore_drains_reply:ensures/0» Erlang.program.fun_table (depth + 100))
+        (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
+        (by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv) schedule
+      split at checked
+      · assumption
+      · contradiction
+      """
+  end
+
+  laws "Task.await" do
+    # The owner awaits its own task, so it never reports another owner.
+    cutoff &Task.invalid_owner_error/1
+    cutoff &ArgumentError.exception/1
+
+    # Tasks are maps, so task.pid never reports a non-map.
+    cutoff &:elixir_erl_pass.no_parens_remote/2
+
+    # Task.await/2 must not leave the reply in the mailbox when it times out.
+    # On Elixir main (9636fee) with OTP 29.1.2 this fails: the reply may arrive
+    # at the alias after the timeout and before demonitor/2 deactivates it,
+    # and demonitor/2 only flushes DOWN-shaped messages. It holds once
+    # Task.await/2 flushes the reply after demonitor/2.
+    law await_drains_reply,
+      expects: await_leaves_no_reply(),
+      proof: ~LEAN"""
+      -- The task runs a few levels down, well within this bound.
+      refine ⟨100, fun depth deep => ?_⟩
+      obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
+      have checked := Lynx.concurrent_of_check
+        (Lynx.apply «await_drains_reply:ensures/0» Erlang.program.fun_table (depth + 100))
         (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
         (by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv) schedule
       split at checked
