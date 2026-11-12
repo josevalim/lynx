@@ -131,8 +131,9 @@ open Lean Meta Elab Tactic
 
 /-- Fail with a schedule that `Lynx.Concurrent.check` rejects, when there is one,
 and otherwise leave the goal unchanged for a tactic such as `cbv` to prove. The
-goal must be `Lynx.Concurrent.check accept depth config = true` for a closed
-program returning a term. The search runs the program in Lean's interpreter,
+goal must be `Lynx.Concurrent.check accept depth config = true` for a program
+returning a term, closed except for natural numbers, such as a law's call depth,
+which the search takes to be zero. The search runs the program in Lean's interpreter,
 which finds a failing schedule much faster than the kernel evaluates `check`. It
 is only a diagnostic: the kernel never relies on it. -/
 syntax (name := counterexampleTactic) "lynx_counterexample" : tactic
@@ -141,6 +142,11 @@ syntax (name := counterexampleTactic) "lynx_counterexample" : tactic
   let goal ← instantiateMVars (← getMainTarget)
   let expected := "lynx_counterexample expects a goal `Lynx.Concurrent.check accept depth config = true`"
   let some (_, check, _) := goal.eq? | throwError expected
+  -- Laws hold from some call depth on, so the search runs at the smallest
+  -- depth, taking every natural number in the check to be zero.
+  let naturals ← (collectFVars {} check).fvarIds.filterM fun fvar =>
+    return (← fvar.getType).isConstOf ``Nat
+  let check := check.replaceFVars (naturals.map mkFVar) (naturals.map fun _ => mkNatLit 0)
   let_expr Lynx.Concurrent.check result accept depth config := check | throwError expected
   unless ← isDefEq result (mkConst ``Lynx.Term) do
     throwError "lynx_counterexample expects a program returning a term, not {result}"
@@ -159,7 +165,10 @@ syntax (name := counterexampleTactic) "lynx_counterexample" : tactic
     -- The program is ordinary code, imported for evaluation by the runner.
     try unsafe evalConst (Option String) name (checkMeta := false)
     catch error => throwError "lynx_counterexample could not run the program: {error.toMessageData}"
-  if let some message := found then throwError message
+  if let some message := found then
+    if naturals.isEmpty then throwError message
+    let names ← naturals.mapM fun fvar => return s!"{← fvar.getUserName} = 0"
+    throwError "{message}\nwhere {", ".intercalate names.toList}"
 
 end Counterexample
 
