@@ -1,9 +1,10 @@
 -module(protocols).
--export([size/1, describe/2,
+-export([size/1, describe/2, depth/1,
          size_list_requires/1, size_list_ensures/1,
          size_struct_ensures/0,
          size_undefined_requires/1, size_undefined_ensures/1,
-         describe_fallback_requires/1, describe_fallback_ensures/1]).
+         describe_fallback_requires/1, describe_fallback_ensures/1,
+         depth_nested_requires/1, depth_nested_ensures/1]).
 
 %% Protocols in test/support are consolidated with the project. Each protocol
 %% function selects the implementation module with impl_for!/1 and calls it
@@ -50,8 +51,25 @@ simp [«describe_fallback_ensures/1», «describe/2», Elixir.Lynx.Support.Descr
   Elixir.Lynx.Support.Describe.Any.«describe/2», Erlang.erlang.«=:=/2»]
 """.
 
+%% Lists call the protocol for their elements, which dispatches through a
+%% local copy of the protocol's dispatch, so they recurse without calling
+%% back into the protocol module.
+-law #{name => {depth_nested, [value]}, requires => depth_nested_requires, ensures => depth_nested_ensures}.
+-proof ~"""
+cases value <;> simp [«depth_nested_requires/1», Erlang.erlang.«is_integer/1»] at requires
+simp [«depth_nested_ensures/1», «depth/1», Elixir.Lynx.Support.Depth.«depth/1»,
+  Elixir.Lynx.Support.Depth.«impl_for!/1», Elixir.Lynx.Support.Depth.«impl_for/1»,
+  Elixir.Lynx.Support.Depth.List.«depth/1»,
+  Elixir.Lynx.Support.Depth.List.«Lynx.Support.Depth.depth/1»,
+  Elixir.Lynx.Support.Depth.List.«Lynx.Support.Depth.impl_for!/1»,
+  Elixir.Lynx.Support.Depth.List.«Lynx.Support.Depth.impl_for/1»,
+  Elixir.Lynx.Support.Depth.Integer.«depth/1», Erlang.erlang.«max/2», Erlang.erlang.«=:=/2»]
+decide
+""".
+
 size(Data) -> 'Elixir.Lynx.Support.Size':size(Data).
 describe(Data, Prefix) -> 'Elixir.Lynx.Support.Describe':describe(Data, Prefix).
+depth(Data) -> 'Elixir.Lynx.Support.Depth':depth(Data).
 
 size_list_requires(List) -> length(List) >= 0.
 size_list_ensures(List) -> size(List) =:= length(List).
@@ -68,3 +86,6 @@ size_undefined_ensures(Value) ->
 
 describe_fallback_requires(Value) -> is_integer(Value).
 describe_fallback_ensures(Value) -> describe(Value, prefix) =:= {prefix, any}.
+
+depth_nested_requires(Value) -> is_integer(Value).
+depth_nested_ensures(Value) -> depth([[Value]]) =:= 2.

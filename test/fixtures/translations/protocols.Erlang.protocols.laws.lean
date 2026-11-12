@@ -45,4 +45,17 @@ theorem «describe_fallback/1» (value : Lynx.Term)
     Elixir.Lynx.Support.Describe.«impl_for!/1», Elixir.Lynx.Support.Describe.«impl_for/1»,
     Elixir.Lynx.Support.Describe.Any.«describe/2», Erlang.erlang.«=:=/2»]
 
+theorem «depth_nested/1» (value : Lynx.Term)
+    (requires : «depth_nested_requires/1» value = Except.ok Lynx.Term.true) :
+    «depth_nested_ensures/1» value = Except.ok Lynx.Term.true := by
+  cases value <;> simp [«depth_nested_requires/1», Erlang.erlang.«is_integer/1»] at requires
+  simp [«depth_nested_ensures/1», «depth/1», Elixir.Lynx.Support.Depth.«depth/1»,
+    Elixir.Lynx.Support.Depth.«impl_for!/1», Elixir.Lynx.Support.Depth.«impl_for/1»,
+    Elixir.Lynx.Support.Depth.List.«depth/1»,
+    Elixir.Lynx.Support.Depth.List.«Lynx.Support.Depth.depth/1»,
+    Elixir.Lynx.Support.Depth.List.«Lynx.Support.Depth.impl_for!/1»,
+    Elixir.Lynx.Support.Depth.List.«Lynx.Support.Depth.impl_for/1»,
+    Elixir.Lynx.Support.Depth.Integer.«depth/1», Erlang.erlang.«max/2», Erlang.erlang.«=:=/2»]
+  decide
+
 end Erlang.protocols.laws

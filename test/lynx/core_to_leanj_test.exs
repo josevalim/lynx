@@ -1810,6 +1810,68 @@ defmodule Lynx.CoreToLeanjTest do
               "cannot translate protocol Elixir.Lynx.Support.Size because it is not consolidated"} =
                protocol_definitions(String.to_charlist(beam))
     end
+
+    test "implementations calling their protocol dispatch through local copies" do
+      depth = beam_core(:code.which(Lynx.Support.Depth.List))
+      assert :lynx_core_to_leanj.called_protocol(depth) == Lynx.Support.Depth
+
+      assert :lynx_core_to_leanj.called_protocol(beam_core(:code.which(Lynx.Support.Size.List))) ==
+               nil
+
+      definitions =
+        :lynx_core_to_leanj.dispatch_locally(
+          :lynx_core_to_leanj.to_definitions(depth),
+          Lynx.Support.Depth,
+          protocol_definitions(:code.which(Lynx.Support.Depth))
+        )
+
+      callback = fn calls, module, function, arity, _, funs ->
+        if module == Lynx.Support.Depth.List,
+          do: :local,
+          else: {{:pure, false}, funs, [{module, function, arity} | calls]}
+      end
+
+      assert {:ok, functions, _, _, _, calls} =
+               core_translate(Lynx.Support.Depth.List, definitions, [{:depth, 1}], callback)
+
+      assert Enum.sort(Map.keys(functions)) == [
+               {:"Lynx.Support.Depth.depth", 1},
+               {:"Lynx.Support.Depth.impl_for", 1},
+               {:"Lynx.Support.Depth.impl_for!", 1},
+               {:depth, 1}
+             ]
+
+      assert Enum.uniq(for {module, _, _} <- calls, do: module) -- [:erlang] ==
+               [Lynx.Support.Depth.Integer]
+
+      assert %{
+               "body" => %{
+                 "kind" => "bind",
+                 "computation" => %{
+                   "kind" => "local_call",
+                   "name" => "Lynx.Support.Depth.impl_for!"
+                 },
+                 "body" => %{
+                   "kind" => "match",
+                   "cases" => [
+                     %{
+                       "patterns" => [%{"value" => "Elixir.Lynx.Support.Depth.Integer"}],
+                       "body" => %{
+                         "kind" => "remote_call",
+                         "module" => "Elixir.Lynx.Support.Depth.Integer",
+                         "name" => "depth"
+                       }
+                     },
+                     %{
+                       "patterns" => [%{"value" => "Elixir.Lynx.Support.Depth.List"}],
+                       "body" => %{"kind" => "local_call", "name" => "depth"}
+                     },
+                     %{"body" => %{"kind" => "raise"}}
+                   ]
+                 }
+               }
+             } = functions[{:"Lynx.Support.Depth.depth", 1}].translation
+    end
   end
 
   test "returns annotated binary reasons for unsupported Core during translation" do
@@ -1921,13 +1983,15 @@ defmodule Lynx.CoreToLeanjTest do
     {laws, functions}
   end
 
-  defp protocol_definitions(beam) do
+  defp beam_core(beam) do
     {:ok, {module, [debug_info: {:debug_info_v1, backend, data}]}} =
       :beam_lib.chunks(beam, [:debug_info])
 
     {:ok, core} = backend.debug_info(:core_v1, module, data, [])
-    :lynx_core_to_leanj.to_definitions(core)
+    core
   end
+
+  defp protocol_definitions(beam), do: :lynx_core_to_leanj.to_definitions(beam_core(beam))
 
   # Translates protocol functions, treating calls to other modules as pure.
   defp translate_protocol(protocol, roots) do
