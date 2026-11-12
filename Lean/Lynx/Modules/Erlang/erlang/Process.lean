@@ -28,6 +28,40 @@ found. -/
   | .atom "info" :: rest => (demonitorOptions rest).map fun (flush, _) => (flush, Bool.true)
   | _ :: _ => none
 
+/-- Whether `send_after/4` options request an absolute time. The last `abs`
+option wins, as in OTP. -/
+@[expose] def timerAbsolute (absolute : Bool := Bool.false) : List Term → Option Bool
+  | [] => some absolute
+  | .tuple ⟨[.atom "abs", .atom "false"]⟩ :: rest => timerAbsolute Bool.false rest
+  | .tuple ⟨[.atom "abs", .atom "true"]⟩ :: rest => timerAbsolute Bool.true rest
+  | _ :: _ => none
+
+/-- The process running a timer. Its receive expires when the scheduler
+chooses, as elapsed time is not modeled. Unless the timer was canceled, it then
+sends the timer's message, in a later step than the expiry. -/
+@[expose] def timerProcess : Result :=
+  .receive .finite (fun _ _ => (none : Option Unit)) fun _ => .request .fireTimer fun
+    | .tuple ⟨[.pid destination, message]⟩ => .send destination message (.ok (.atom "ok"))
+    | _ => .ok (.atom "ok")
+
+/-- Start a timer sending `message` to a local PID, replying its reference: the
+PID of the process running it, extended with 0. OTP rejects negative times and
+those outside 64 bits, and accepts others while they end before its monotonic
+clock does, centuries after it starts. Times up to 2^32 - 1 milliseconds are
+modeled as accepted; longer ones and registered names do not return. -/
+@[expose] def sendAfter (time destination message : Term) : Result :=
+  match time with
+  | .integer duration =>
+      if duration < 0 || duration ≥ 2 ^ 63 then .error (.error (.atom "badarg")) else
+      match destination with
+      | .pid target =>
+          if duration > 4294967295 then .error .exhausted else
+          .schedule { timer := some ⟨target, message, duration.toNat⟩ } timerProcess fun timer =>
+            .ok (.reference (timer ++ [0]))
+      | .atom _ => .error .exhausted
+      | _ => .error (.error (.atom "badarg"))
+  | _ => .error (.error (.atom "badarg"))
+
 end Lynx.Term
 
 namespace Erlang.erlang
@@ -137,6 +171,27 @@ its `DOWN` message. `info` returns whether the monitor was still active. -/
   | .reference id, some (flush, info) =>
       .request (.demonitor id flush) fun found => .ok (if info = true then found else .atom "true")
   | _, _ => .error (.error (.atom "badarg"))
+
+/-- Send `message` once a timer of `time` milliseconds fires, replying the
+timer's reference. When it fires is the scheduler's choice. -/
+@[expose] def «send_after/3» (_ : Dispatcher) (time destination message : Term) : Result :=
+  Term.sendAfter time destination message
+
+/-- Like `send_after/3`. Absolute times are not modeled and do not return. -/
+@[expose] def «send_after/4» (_ : Dispatcher) (time destination message options : Term) : Result :=
+  match (Term.properList? options).bind (Term.timerAbsolute Bool.false) with
+  | some false => Term.sendAfter time destination message
+  | some true => .error .exhausted
+  | none => .error (.error (.atom "badarg"))
+
+/-- Cancel a timer, replying the milliseconds left, any number up to its
+duration as elapsed time is not modeled, or `false` once it expired, was
+canceled, or its destination exited. An expired timer's message may still be
+on its way. Timers paused by the debugger are not modeled. -/
+@[expose] def «cancel_timer/1» (_ : Dispatcher) (reference : Term) : Result :=
+  match reference with
+  | .reference id => .request (.cancelTimer id) .ok
+  | _ => .error (.error (.atom "badarg"))
 
 /-- Link to a process. Linking to a process that does not exist raises
 `noproc`, unless the caller traps exits and receives an `EXIT` message. -/

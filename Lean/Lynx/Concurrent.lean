@@ -48,6 +48,8 @@ structure ProcessState where
   /-- The reason of an exit signal the process has yet to act on. The process
   exits with it at its next step, as signals arrive asynchronously. -/
   signal : Option Term := none
+  /-- The timer the process runs, until it fires or is canceled. -/
+  timer : Option Timer := none
 deriving Repr, Inhabited
 
 /-- The runtime shared by all processes of a run. -/
@@ -212,6 +214,40 @@ process that does not exist delivers its `DOWN` message at once. -/
       let owner := alias.dropLast
       if (state.process owner).aliases.contains alias then (message, state.deliver owner message)
       else (message, state)
+  | .fireTimer =>
+      -- The timer sends its message in a later step, so canceling may reply
+      -- `false` before the message arrives, as in OTP.
+      match (state.process processId).timer with
+      | some timer =>
+          (.tuple #[.pid timer.destination, timer.message],
+            state.modify processId fun process => { process with timer := none })
+      | none => (.atom "false", state)
+  | .cancelTimer reference =>
+      -- A timer's reference extends the PID of the process running it with 0,
+      -- which no allocated reference ends with. OTP cancels the timers of a
+      -- process when it exits, so they then report `false` too.
+      let owner := reference.dropLast
+      match reference.getLast?, (state.process owner).timer with
+      | some 0, some timer =>
+          let disarmed := (state.modify owner fun process => { process with timer := none }).kill
+            owner (.atom "normal")
+          if (state.processes timer.destination).isSome then (.integer timer.duration, disarmed)
+          else (.atom "false", disarmed)
+      | _, _ => (.atom "false", state)
+
+/-- Every reply a request may get, starting with the one `State.request`
+gives. Canceling a timer reports the milliseconds left, which may be any number
+up to its duration, as elapsed time is not modeled. -/
+@[expose] def replies : Request → Term → List Term
+  | .cancelTimer _, .integer (.ofNat duration) =>
+      (List.range (duration + 1)).reverse.map fun left => .integer (.ofNat left)
+  | _, reply => [reply]
+
+theorem mem_replies (query : Request) (reply : Term) : reply ∈ replies query reply := by
+  unfold replies
+  split
+  · simpa using ⟨_, Nat.lt_succ_self _, rfl⟩
+  · simp
 
 /-- The runtime of a single process continuing from its environment. -/
 @[expose] def State.initial (env : Environment) : State :=
@@ -227,7 +263,7 @@ process that does not exist delivers its `DOWN` message at once. -/
   (childPid, (state.update processId (some { process with children := process.children + 1 })).update
     childPid (some {}))
 
-/-- Spawn a child, linking or monitoring it in the same step. -/
+/-- Spawn a child, linking, monitoring, or arming it in the same step. -/
 @[expose] def State.spawnWith (state : State) (processId : PID) (options : SpawnOptions) :
     PID × State :=
   let (child, state) := state.spawn processId
@@ -237,6 +273,9 @@ process that does not exist delivers its `DOWN` message at once. -/
           { other with links := [processId] }
     else state
   let state := if options.monitor then (state.monitor processId child false).2 else state
+  let state := match options.timer with
+    | some timer => state.modify child fun other => { other with timer := some timer }
+    | none => state
   (child, state)
 
 /-- Select the oldest matching message, preserving all unmatched messages.
@@ -348,8 +387,9 @@ a positive-timeout receive without a match, one otherwise. -/
             | .finite => [{ timedOut with expired := true }]
     | .request query next =>
         let (reply, answered) := state.request processId query
-        [{ event := .request processId query reply, state := answered
-           tasks := [(processId, ⟨next reply, finish⟩)] }]
+        (replies query reply).map fun reply =>
+          { event := .request processId query reply, state := answered
+            tasks := [(processId, ⟨next reply, finish⟩)] }
 
 /-- Whether a computation starts with a process request, which hands it to the scheduler. -/
 @[expose] def isRequest : Result α → Bool

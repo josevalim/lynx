@@ -99,6 +99,9 @@ private def showRequest (processId : PID) (reply : Term) : Request → String
       s!"{showPid processId} checks whether {showPid target} is alive: {showTerm reply}"
   | .sendAlias alias message =>
       s!"{showPid processId} sends {showTerm message} to alias {showReference alias}"
+  | .fireTimer => s!"timer {showPid processId} expires, getting {showTerm reply}"
+  | .cancelTimer reference =>
+      s!"{showPid processId} cancels timer {showReference reference}, getting {showTerm reply}"
 
 /-- One step of a run, or `none` for environment accesses, which other
 processes cannot observe. -/

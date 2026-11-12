@@ -34,26 +34,31 @@ open Lynx
       ∃ parent, second = .spawn parent receiver)
 
 /-- Whether the next step of a process only changes its own record, sends to a
-PID, or spawns without linking or monitoring. Requests to the scheduler, a
-pending exit signal, and the exit of a linked or monitored process act on
-other processes, so they are not plain. -/
+PID, or spawns without linking, monitoring, or arming a timer. Requests to the
+scheduler, a pending exit signal, and the exit of a linked or monitored process
+act on other processes, so they are not plain. -/
 @[expose] def Task.plain (state : State) (processId : PID) (task : Task α) : Bool :=
   (state.process processId).signal.isNone &&
     match task.computation with
     | .request .. => false
-    | .schedule options .. => !options.link && !options.monitor
+    | .schedule options .. => !options.link && !options.monitor && options.timer.isNone
     | .ok _ | .error _ =>
         (state.process processId).links.isEmpty && (state.process processId).monitors.isEmpty
     | _ => true
 
-/-- No two processes can take steps that may not commute. -/
+/-- Each process has at most one step, as requests may have several replies, and
+no two processes can take steps that may not commute. -/
 @[expose] def Config.Unraced : Config α → Prop
   | .start .. => True
-  | .running state tasks _ _ => ∀ before first task after second other rest,
-      tasks = before ++ (first, task) :: after ++ (second, other) :: rest →
-      ∀ transition ∈ task.transitions state first, ∀ next ∈ other.transitions state second,
-        task.plain state first ∧ other.plain state second ∧
-        ¬ transition.event.Races next.event ∧ ¬ next.event.Races transition.event
+  | .running state tasks _ _ =>
+      (∀ processId task, (processId, task) ∈ tasks →
+        ∀ transition ∈ task.transitions state processId,
+        ∀ next ∈ task.transitions state processId, transition = next) ∧
+      ∀ before first task after second other rest,
+        tasks = before ++ (first, task) :: after ++ (second, other) :: rest →
+        ∀ transition ∈ task.transitions state first, ∀ next ∈ other.transitions state second,
+          task.plain state first ∧ other.plain state second ∧
+          ¬ transition.event.Races next.event ∧ ¬ next.event.Races transition.event
 
 /-- No configuration reachable from this one has racing steps. -/
 @[expose] def Config.RaceFree (config : Config α) : Prop :=
@@ -249,13 +254,13 @@ private theorem transition_effect {state : State} {processId : PID} {process : P
     and_intros <;> first | rfl | trivial | state_ext
   | schedule options child next =>
     simp only [Bool.and_eq_true, Bool.not_eq_true'] at plain
-    obtain ⟨noLink, noMonitor⟩ := plain
+    obtain ⟨⟨noLink, noMonitor⟩, noTimer⟩ := plain
     simp only [Task.transitions, signal', List.mem_singleton] at possible
     subst possible
     have spawnWith : ∀ (current : State), current.spawnWith processId options =
         current.spawn processId := by
       intro current
-      simp [State.spawnWith, noLink, noMonitor]
+      simp [State.spawnWith, noLink, noMonitor, Option.isNone_iff_eq_none.mp noTimer]
     refine ⟨.spawn (processId ++ [process.children + 1]),
       by simp [Effect.Matches, spawnWith, State.spawn, live], ?_, ?_⟩
     · rw [spawnWith]; state_ext
@@ -509,9 +514,10 @@ private theorem Terminal.stuck {config : Config α} {outcome : Outcome α}
   rw [terminal.successors_eq_nil] at this
   simp at this
 
-/-- A process has at most one step in a given state. -/
+/-- A plain process has at most one step in a given state. -/
 private theorem transitions_subsingleton {state : State} {processId : PID} {task : Task α}
-    {first second : Transition α} (possible : first ∈ task.transitions state processId)
+    {first second : Transition α} (plain : task.plain state processId = true)
+    (possible : first ∈ task.transitions state processId)
     (possible' : second ∈ task.transitions state processId) : first = second := by
   obtain ⟨computation, finish⟩ := task
   rcases signal : (state.process processId).signal with _ | reason
@@ -520,7 +526,7 @@ private theorem transitions_subsingleton {state : State} {processId : PID} {task
     | receive timeout select next =>
       simp only [Task.transitions, signal] at possible possible'
       split at possible <;> (try cases timeout) <;> simp_all
-    | _ => simp_all [Task.transitions]
+    | _ => simp_all [Task.transitions, Task.plain]
   · simp_all [Task.transitions]
 
 /-- Steps of an earlier and a later process close in one step each. -/
@@ -537,7 +543,7 @@ private theorem close_ordered {state : State} {before middle after : List (PID �
       Step (transition.apply before (middle ++ (second, other) :: after) finished exhausted)
         event last ∧
       Step (next.apply (before ++ (first, task) :: middle) after finished exhausted) event' last := by
-  obtain ⟨plain, plain', races, races'⟩ := unraced _ _ _ _ _ _ _ rfl _ possible _ possible'
+  obtain ⟨plain, plain', races, races'⟩ := unraced.2 _ _ _ _ _ _ _ rfl _ possible _ possible'
   obtain ⟨next', possibleAfter', transition', possibleAfter, equal⟩ :=
     diamond wellformed possible possible' plain plain' ⟨races, races'⟩
   refine ⟨next'.event, transition'.event, next'.apply (before ++ transition.tasks ++ middle) after
@@ -563,7 +569,7 @@ private theorem local_confluence_run {state : State} {tasks before after before'
     ⟨middle, rfl, rfl⟩
   · simp only [Prod.mk.injEq] at same
     obtain ⟨rfl, rfl⟩ := same
-    exact .inl (by rw [transitions_subsingleton possible possible'])
+    exact .inl (by rw [unraced.1 _ _ (by simp [split]) _ possible _ possible'])
   · have tasks : tasks = before ++ (processId, task) :: middle ++ (processId', task') :: after' := by
       rw [split]; simp
     rw [tasks] at wellformed unraced
@@ -985,6 +991,8 @@ theorem Config.RaceFree.of_talks {talk : PID → PID → Prop} (single : Single 
   cases reached with
   | start => trivial
   | running state tasks finished exhausted =>
+    refine ⟨fun processId task member _ possible _ possible' =>
+      transitions_subsingleton (talks_plain talking.1 (talking.2 _ member)) possible possible', ?_⟩
     intro before first task after second other rest split transition possible next possible'
     have distinct : first ≠ second :=
       pairwise_between (relation := fun first second : PID × Task α => first.1 ≠ second.1)
