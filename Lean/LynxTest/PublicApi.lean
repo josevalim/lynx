@@ -128,7 +128,8 @@ example (computation : Lynx.Result) (choices : List Lynx.ScheduleChoice) :
 
 -- Concurrent laws hold for every run, so for every schedule, and checking proves them.
 example (computation : Lynx.Result) (depth : Nat)
-    (checked : Lynx.Concurrent.check Lynx.Outcome.isTrue depth (.start {} computation) = true)
+    (checked : ∀ elapsed,
+      Lynx.Concurrent.check Lynx.Outcome.isTrue depth (.start {} computation elapsed) = true)
     (choices : List Lynx.ScheduleChoice) :
     Lynx.concurrent computation choices = .ok Lynx.Term.true :=
   Lynx.concurrent_of_always
@@ -395,6 +396,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Field",
   "Lynx.Concurrent.Field.aliases",
   "Lynx.Concurrent.Field.all",
+  "Lynx.Concurrent.Field.cancels",
   "Lynx.Concurrent.Field.children",
   "Lynx.Concurrent.Field.index",
   "Lynx.Concurrent.Field.links",
@@ -419,6 +421,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Loc",
   "Lynx.Concurrent.Loc.alive",
   "Lynx.Concurrent.Loc.beq",
+  "Lynx.Concurrent.Loc.elapsed",
   "Lynx.Concurrent.Loc.field",
   "Lynx.Concurrent.Loc.process",
   "Lynx.Concurrent.Loc.signaled",
@@ -426,6 +429,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Loc.timersTo",
   "Lynx.Concurrent.ProcessState",
   "Lynx.Concurrent.ProcessState.aliases",
+  "Lynx.Concurrent.ProcessState.cancels",
   "Lynx.Concurrent.ProcessState.children",
   "Lynx.Concurrent.ProcessState.links",
   "Lynx.Concurrent.ProcessState.mailbox",
@@ -441,6 +445,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Single",
   "Lynx.Concurrent.State",
   "Lynx.Concurrent.State.deliver",
+  "Lynx.Concurrent.State.elapsed",
   "Lynx.Concurrent.State.exitFootprint",
   "Lynx.Concurrent.State.initial",
   "Lynx.Concurrent.State.kill",
@@ -516,7 +521,6 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.isMonitorMessage",
   "Lynx.Concurrent.isNormal",
   "Lynx.Concurrent.isRequest",
-  "Lynx.Concurrent.replies",
   "Lynx.Concurrent.report",
   "Lynx.Concurrent.selectMessage",
   "Lynx.Concurrent.splits",

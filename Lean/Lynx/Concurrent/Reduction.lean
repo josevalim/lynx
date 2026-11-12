@@ -449,8 +449,8 @@ private theorem transition_frame {state : State} {processId : PID} {task : Task 
           exact ⟨fun _ _ _ => Keeps.refl _ _,
             .inr (.inl ⟨_, rfl, KeepsChildren.refl _ _, id⟩), fun _ => rfl⟩
     | request query next =>
-      simp only [Task.transitions, signal, List.mem_map] at possible
-      obtain ⟨_, _, rfl⟩ := possible
+      simp only [Task.transitions, signal, List.mem_singleton] at possible
+      subst possible
       exact ⟨fun other ne _ => keeps_request ne,
         .inr (.inl ⟨_, rfl, keepsChildren_request, id⟩), fun _ => rfl⟩
   · simp only [Task.transitions, signal, List.mem_singleton] at possible
@@ -764,12 +764,16 @@ private def State.erase (state : State) (processId : PID) : State :=
       else state.processes candidate }
 
 private theorem State.ext' {first second : State} (timers : first.timers = second.timers)
+    (elapsed : first.elapsed = second.elapsed)
     (equal : ∀ candidate, first.processes candidate = second.processes candidate) :
     first = second := by
   cases first; cases second; simp_all; funext candidate; exact equal candidate
 
 @[simp] private theorem erase_timers {state : State} {processId : PID} :
     (state.erase processId).timers = state.timers := rfl
+
+@[simp] private theorem erase_elapsed {state : State} {processId : PID} :
+    (state.erase processId).elapsed = state.elapsed := rfl
 
 private theorem erase_processes {state : State} {processId candidate : PID} :
     (state.erase processId).processes candidate =
@@ -811,20 +815,20 @@ private def Oblivious (change : ProcessState → ProcessState) : Prop :=
 private theorem erase_update_ne {state : State} {processId other : PID}
     {process : Option ProcessState} (ne : other ≠ processId) :
     (state.update other process).erase processId = (state.erase processId).update other process := by
-  refine State.ext' rfl fun candidate => ?_
+  refine State.ext' rfl (by simp) fun candidate => ?_
   simp only [erase_processes, State.update]
   by_cases first : candidate = other <;> by_cases second : candidate = processId <;> simp_all
 
 private theorem erase_update_self {state : State} {processId : PID} :
     (state.update processId none).erase processId = (state.erase processId).update processId none := by
-  refine State.ext' rfl fun candidate => ?_
+  refine State.ext' rfl (by simp) fun candidate => ?_
   simp only [erase_processes, State.update]
   by_cases first : candidate = processId <;> simp_all
 
 private theorem erase_modify {state : State} {processId other : PID}
     {change : ProcessState → ProcessState} (oblivious : Oblivious change) :
     (state.modify other change).erase processId = (state.erase processId).modify other change := by
-  refine State.ext' (by simp) fun candidate => ?_
+  refine State.ext' (by simp) (by simp) fun candidate => ?_
   unfold State.modify
   rw [erase_processes]
   by_cases same : other = processId
@@ -882,7 +886,7 @@ private theorem erase_foldl {items : List γ} {step : State → γ → State} {p
 private theorem erase_modify_ne {state : State} {processId other : PID}
     {change : ProcessState → ProcessState} (ne : other ≠ processId) :
     (state.modify other change).erase processId = (state.erase processId).modify other change := by
-  refine State.ext' (by simp) fun candidate => ?_
+  refine State.ext' (by simp) (by simp) fun candidate => ?_
   unfold State.modify
   cases found : state.processes other with
   | none => simp [erase_processes, found, ne]
@@ -996,8 +1000,12 @@ private theorem erase_request {state : State} {processId other : PID} {query : R
     rw [erase_isSome]
     split <;> rfl
   | cancelTimer reference =>
-    simp only [State.request, erase_timers]
-    split <;> rfl
+    simp only [State.request, erase_timers, erase_elapsed, erase_process_ne ne]
+    split
+    · simp only [Prod.mk.injEq, true_and]
+      exact (erase_modify_ne (state := { state with
+        timers := state.timers.filter (·.reference != reference) }) ne).symm
+    · rfl
 
 private theorem erase_spawnWith {state : State} {processId other : PID} {options : SpawnOptions}
     (ne : other ≠ processId)
@@ -1050,14 +1058,14 @@ private theorem transitions_erase {state : State} {processId other : PID} {task 
       · simp [erase_update_ne ne]
       · cases timeout <;> simp
     | request query next =>
-      simp only [erase_request ne, List.map_map]
+      simp only [erase_request ne]
       rfl
 
 /-- Storing the environment of a live process only changes what erasing removes. -/
 private theorem erase_store {state : State} {processId : PID} {env : Environment}
     (live : (state.processes processId).isSome) :
     (state.store processId env).erase processId = state.erase processId := by
-  refine State.ext' rfl fun candidate => ?_
+  refine State.ext' rfl (by simp) fun candidate => ?_
   simp only [erase_processes, State.store, State.update, State.process]
   by_cases same : candidate = processId
   · subst same
@@ -1074,7 +1082,9 @@ private theorem eq_store_of_erase {first second : State} {processId : PID} {env 
     second = first.store processId env := by
   have timers : second.timers = first.timers := by
     simpa using congrArg State.timers equal
-  refine State.ext' timers fun candidate => ?_
+  have elapsed : second.elapsed = first.elapsed := by
+    simpa using congrArg State.elapsed equal
+  refine State.ext' timers elapsed fun candidate => ?_
   have atCandidate := congrArg (fun state : State => state.processes candidate) equal
   simp only [erase_processes] at atCandidate
   simp only [State.store, State.update]
@@ -1097,7 +1107,7 @@ private theorem terminate_erase {state : State} {processId : PID} {reason : Term
     (state.erase processId).terminate processId reason = state.terminate processId reason := by
   have fields := erase_process_fields (state := state) (processId := processId) (other := processId)
   have removed : (state.erase processId).update processId none = state.update processId none := by
-    refine State.ext' rfl fun candidate => ?_
+    refine State.ext' rfl (by simp) fun candidate => ?_
     simp only [erase_processes, State.update]
     split <;> simp_all
   simp only [State.terminate, fields.2.1, fields.2.2.1, removed, erase_timers]
@@ -1723,6 +1733,9 @@ private def State.take (state : State) (processId : PID) (index : Nat) : State :
 @[simp] private theorem take_timers {state : State} {processId : PID} {index : Nat} :
     (state.take processId index).timers = state.timers := rfl
 
+@[simp] private theorem take_elapsed {state : State} {processId : PID} {index : Nat} :
+    (state.take processId index).elapsed = state.elapsed := rfl
+
 private theorem take_processes {state : State} {processId candidate : PID} {index : Nat} :
     (state.take processId index).processes candidate =
       if candidate = processId then (state.processes candidate).map (·.take index)
@@ -1774,7 +1787,7 @@ private theorem take_update_ne {state : State} {processId other : PID} {index : 
     {process : Option ProcessState} (ne : other ≠ processId) :
     (state.update other process).take processId index =
       (state.take processId index).update other process := by
-  refine State.ext' rfl fun candidate => ?_
+  refine State.ext' rfl (by simp) fun candidate => ?_
   simp only [take_processes, State.update]
   by_cases first : candidate = other <;> by_cases second : candidate = processId <;> simp_all
 
@@ -1783,7 +1796,7 @@ private theorem take_modify {state : State} {processId other : PID} {index : Nat
     (oblivious : ∀ process, (change process).take index = change (process.take index)) :
     (state.modify other change).take processId index =
       (state.take processId index).modify other change := by
-  refine State.ext' (by simp) fun candidate => ?_
+  refine State.ext' (by simp) (by simp) fun candidate => ?_
   unfold State.modify
   rw [take_processes]
   by_cases same : other = processId
@@ -1803,7 +1816,7 @@ private theorem take_modify_ne {state : State} {processId other : PID} {index : 
     {change : ProcessState → ProcessState} (ne : other ≠ processId) :
     (state.modify other change).take processId index =
       (state.take processId index).modify other change := by
-  refine State.ext' (by simp) fun candidate => ?_
+  refine State.ext' (by simp) (by simp) fun candidate => ?_
   unfold State.modify
   cases found : state.processes other with
   | none => simp [take_processes, found, ne]
@@ -1834,7 +1847,7 @@ private theorem take_deliver {state : State} {processId other : PID} {index : Na
   rw [‹state.deliver other message = _›, this]
   by_cases same : other = processId
   · subst same
-    refine State.ext' (by simp) fun candidate => ?_
+    refine State.ext' (by simp) (by simp) fun candidate => ?_
     unfold State.modify
     simp only [Holds, State.process] at holds
     cases found : state.processes other with
@@ -1993,8 +2006,12 @@ private theorem take_request {state : State} {processId other : PID} {index : Na
     rw [take_isSome]
     split <;> rfl
   | cancelTimer reference =>
-    simp only [State.request, take_timers]
-    split <;> rfl
+    simp only [State.request, take_timers, take_elapsed, take_process_ne ne]
+    split
+    · simp only [Prod.mk.injEq, true_and]
+      exact (take_modify_ne (state := { state with
+        timers := state.timers.filter (·.reference != reference) }) ne).symm
+    · rfl
 
 private theorem take_spawnWith {state : State} {processId other : PID} {index : Nat}
     {options : SpawnOptions} (ne : other ≠ processId)
@@ -2056,7 +2073,7 @@ private theorem transitions_take {state : State} {processId other : PID} {index 
       · simp [take_update_ne ne]
       · cases timeout <;> simp
     | request query next =>
-      simp only [take_request ne holds, List.map_map]
+      simp only [take_request ne holds]
       rfl
 
 /-- Exiting forgets the messages of the process. -/
@@ -2065,7 +2082,7 @@ private theorem terminate_take {state : State} {processId : PID} {index : Nat} {
   have fields := take_process_fields (state := state) (processId := processId) (index := index)
     (other := processId)
   have removed : (state.take processId index).update processId none = state.update processId none := by
-    refine State.ext' rfl fun candidate => ?_
+    refine State.ext' rfl (by simp) fun candidate => ?_
     simp only [take_processes, State.update]
     split <;> simp_all
   simp only [State.terminate, fields.1, fields.2.1, removed, take_timers]
@@ -2107,7 +2124,7 @@ private theorem take_received {state : State} {processId : PID} {index : Nat}
     {process : ProcessState} (found : state.processes processId = some process) :
     state.update processId (some { process with mailbox := process.mailbox.eraseIdx index }) =
       state.take processId index := by
-  refine State.ext' rfl fun candidate => ?_
+  refine State.ext' rfl (by simp) fun candidate => ?_
   simp only [take_processes, State.update]
   split <;> simp_all [ProcessState.take]
 
@@ -2244,6 +2261,7 @@ private def Field.same : Field → ProcessState → ProcessState → Prop
   | .aliases, first, second => first.aliases = second.aliases
   | .trapExit, first, second => first.trapExit = second.trapExit
   | .signal, first, second => first.signal = second.signal
+  | .cancels, first, second => first.cancels = second.cancels
 
 private theorem Field.same_refl (field : Field) (process : ProcessState) :
     field.same process process := by
@@ -2263,7 +2281,7 @@ private theorem ProcessState.ext_fields {first second : ProcessState}
   have := same Field.pdict; have := same Field.mailbox; have := same Field.refCounter
   have := same Field.children; have := same Field.links; have := same Field.monitors
   have := same Field.monitoring; have := same Field.aliases; have := same Field.trapExit
-  have := same Field.signal
+  have := same Field.signal; have := same Field.cancels
   cases first; cases second; simp_all [Field.same]
 
 /-- Whether two states agree at a location. -/
@@ -2274,6 +2292,7 @@ private def Agree (first second : State) : Loc → Prop
   | .timersTo processId =>
       first.timers.filter (·.destination == processId) = second.timers.filter (·.destination == processId)
   | .timers => first.timers = second.timers
+  | .elapsed => first.elapsed = second.elapsed
 
 private theorem Agree.refl (state : State) (loc : Loc) : Agree state state loc := by
   cases loc with
@@ -2285,6 +2304,7 @@ private theorem Agree.refl (state : State) (loc : Loc) : Agree state state loc :
   | alive => rfl
   | timersTo => rfl
   | timers => rfl
+  | elapsed => rfl
 
 private theorem Agree.symm {first second : State} {loc : Loc} (agree : Agree first second loc) :
     Agree second first loc := by
@@ -2299,6 +2319,7 @@ private theorem Agree.symm {first second : State} {loc : Loc} (agree : Agree fir
   | alive => exact Eq.symm agree
   | timersTo => exact Eq.symm agree
   | timers => exact Eq.symm agree
+  | elapsed => exact Eq.symm agree
 
 private theorem Agree.trans {first second third : State} {loc : Loc}
     (left : Agree first second loc) (right : Agree second third loc) : Agree first third loc := by
@@ -2314,11 +2335,12 @@ private theorem Agree.trans {first second third : State} {loc : Loc}
   | alive => exact Eq.trans left right
   | timersTo => exact Eq.trans left right
   | timers => exact Eq.trans left right
+  | elapsed => exact Eq.trans left right
 
 /-- States agreeing at every location are equal. -/
 private theorem State.ext_agree {first second : State} (agree : ∀ loc, Agree first second loc) :
     first = second := by
-  refine State.ext' (agree .timers) fun processId => ?_
+  refine State.ext' (agree .timers) (agree .elapsed) fun processId => ?_
   have fields := fun field => agree (.field processId field)
   have alive := agree (.alive processId)
   simp only [Agree] at fields alive
@@ -2419,6 +2441,7 @@ private theorem frames_update {state : State} {processId : PID} {process : Optio
       simp [Agree, State.update, ne]
     | timersTo => rfl
     | timers => rfl
+    | elapsed => simp [Agree]
   · simp only [Loc.process, List.mem_cons, List.mem_map] at mem
     rcases mem with rfl | ⟨field, -, rfl⟩
     · simp [Agree, State.update]
@@ -2450,6 +2473,7 @@ private theorem frames_modify {state : State} {processId : PID}
       | alive candidate => simp only [Agree, State.update]; split <;> simp_all
       | timersTo => rfl
       | timers => rfl
+      | elapsed => simp [Agree]
     · exact Agree.refl other loc
   · simp only [List.mem_map] at mem
     obtain ⟨field, mem, rfl⟩ := mem
@@ -2600,6 +2624,7 @@ private theorem frames_cancelTimers {state : State} {processId : PID} {some : Bo
       | timers => simp at out
       | field => exact Agree.refl other (.field _ _)
       | alive => exact Agree.refl other (.alive _)
+      | elapsed => simp [Agree]
     · have timers : state.timers = other.timers := agree .timers (by simp [some])
       simp only [List.mem_cons, List.not_mem_nil, or_false] at mem
       rcases mem with rfl | rfl
@@ -2843,6 +2868,7 @@ private theorem frames_timers {state : State} {change : List Timer → List Time
     | timers => simp at out
     | field => exact Agree.refl other (.field _ _)
     | alive => exact Agree.refl other (.alive _)
+    | elapsed => simp [Agree]
   · simp only [List.mem_cons, List.mem_map] at mem
     rcases mem with rfl | ⟨_, _, rfl⟩ <;> simp only [Agree, timers]
 
@@ -3225,16 +3251,29 @@ private theorem frames_request {state : State} {processId : PID} {process : Proc
           simp at mem; subst mem; simp [Request.footprint])
         simp [State.request, same, found']
     | some timer =>
-      refine ⟨Frames.congr ((frames_timers (state := state)
+      have cancels : ∀ other : State,
+          (∀ loc ∈ [Loc.elapsed, Loc.field processId .cancels], Agree state other loc) →
+          other.elapsed processId (other.process processId).cancels =
+            state.elapsed processId (state.process processId).cancels := fun other agree => by
+        have elapsed : state.elapsed = other.elapsed := agree .elapsed (by simp)
+        have counted := Agree.same (agree (.field processId .cancels) (by simp))
+        simp only [Field.same] at counted
+        rw [elapsed, counted]
+      refine ⟨Frames.congr ((Frames.comp (frames_timers (state := state)
           (destinations := (state.timers.filter (·.reference == reference)).map (·.destination))
           (change := List.filter (·.reference != reference))
-          fun processId out => keeps_filter_reference out).mono ?_ ?_ ?_)
+          fun processId out => keeps_filter_reference out) fun _ _ =>
+            frames_modify (processId := processId) (reads := [.cancels]) (writes := [.cancels])
+              (change := fun process => { process with cancels := process.cancels + 1 })
+              (by changes)).mono ?_ ?_ ?_)
           fun other agree => ?_, fun other agree => ?_⟩
       all_goals try (simp only [Request.footprint, timersWith_eq]; locs)
       all_goals
         have same := timers other fun loc mem => agree loc (by
           simp at mem; subst mem; simp [Request.footprint])
-        simp [State.request, same, found']
+        have counted := cancels other fun loc mem => agree loc (by
+          simp at mem; rcases mem with rfl | rfl <;> simp [Request.footprint])
+        simp [State.request, same, found', counted]
 
 /-- Steps of a process from states agreeing on what it reads: the same events,
 processes and outcomes, writing the same values and keeping the rest. -/
@@ -3283,14 +3322,6 @@ private theorem Related.get' {relation : γ → δ → Prop} {first : List γ} {
     cases index with
     | zero => simp at found; subst found; exact ⟨_, rfl, head⟩
     | succ index => exact ih (by simpa using found)
-
-private theorem related_map {items : List γ} {first second : γ → δ} {relation : δ → δ → Prop}
-    (related : ∀ item ∈ items, relation (first item) (second item)) :
-    Related relation (items.map first) (items.map second) := by
-  induction items with
-  | nil => exact .nil
-  | cons item rest ih =>
-    exact .cons (related item (by simp)) (ih fun item mem => related item (by simp [mem]))
 
 private theorem related_single {relation : γ → δ → Prop} {first : γ} {second : δ}
     (related : relation first second) : Related relation [first] [second] :=
@@ -3420,7 +3451,7 @@ private theorem transitions_similar {state other : State} {processId : PID} {tas
       simp only [baseReads, List.mem_append, List.mem_cons]; grind)
     dsimp only
     rw [frames.2 other reads]
-    exact related_map fun reply _ => similar_of_frames frames.1 reads rfl rfl rfl rfl rfl rfl
+    exact related_single (similar_of_frames frames.1 reads rfl rfl rfl rfl rfl rfl)
 
 /-- What a timer step observes. -/
 private def Timer.event (timer : Timer) : Event :=
@@ -4106,11 +4137,11 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
 
 /-- `check` accepts the outcome of every run of a computation. -/
 theorem check_sound {accept : Outcome α → Bool} {depth : Nat} {env : Environment}
-    {computation : Result α} {last : Config α} {events : List Event} {outcome : Outcome α}
-    (checked : check accept depth (.start env computation) = true)
-    (run : Run (.start env computation) events last) (terminal : Terminal last outcome) :
+    {computation : Result α} {elapsed : PID → Nat → Nat} {last : Config α} {events : List Event}
+    {outcome : Outcome α} (checked : check accept depth (.start env computation elapsed) = true)
+    (run : Run (.start env computation elapsed) events last) (terminal : Terminal last outcome) :
     accept outcome = true :=
-  check_wellformed (show Wellformed (Config.start env computation) from trivial) checked run
+  check_wellformed (show Wellformed (Config.start env computation elapsed) from trivial) checked run
     terminal (by simp)
 
 end Lynx.Concurrent

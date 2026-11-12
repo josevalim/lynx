@@ -133,7 +133,8 @@ open Lean Meta Elab Tactic
 and otherwise leave the goal unchanged for a tactic such as `cbv` to prove. The
 goal must be `Lynx.Concurrent.check accept depth config = true` for a program
 returning a term, closed except for natural numbers, such as a law's call depth,
-which the search takes to be zero. The search runs the program in Lean's interpreter,
+which the search takes to be zero, and the time elapsed when timers are canceled,
+which it takes to be none and then enough for every canceled timer to have none left. The search runs the program in Lean's interpreter,
 which finds a failing run much faster than the kernel evaluates `check`. It
 is only a diagnostic: the kernel never relies on it. -/
 syntax (name := counterexampleTactic) "lynx_counterexample" : tactic
@@ -147,28 +148,42 @@ syntax (name := counterexampleTactic) "lynx_counterexample" : tactic
   let naturals ← (collectFVars {} check).fvarIds.filterM fun fvar =>
     return (← fvar.getType).isConstOf ``Nat
   let check := check.replaceFVars (naturals.map mkFVar) (naturals.map fun _ => mkNatLit 0)
-  let_expr Lynx.Concurrent.check result accept depth config := check | throwError expected
-  unless ← isDefEq result (mkConst ``Lynx.Term) do
-    throwError "lynx_counterexample expects a program returning a term, not {result}"
-  let fvars := (collectFVars {} check).fvarIds
-  unless fvars.isEmpty do
-    let names ← fvars.mapM (·.getUserName)
-    throwError "lynx_counterexample runs closed programs, but this one depends on {names.toList}"
-  if check.hasMVar then
-    throwError "lynx_counterexample runs closed programs, but this one has metavariables"
-  let name ← mkAuxDeclName `_lynx_counterexample
-  let report := mkApp3 (mkConst ``Lynx.Concurrent.report) accept depth config
-  let found ← withoutModifyingEnv do
-    addAndCompile (.defnDecl {
-      name, levelParams := [], type := ← mkAppM ``Option #[mkConst ``String], value := report
-      hints := .opaque, safety := .safe })
-    -- The program is ordinary code, imported for evaluation by the runner.
-    try unsafe evalConst (Option String) name (checkMeta := false)
-    catch error => throwError "lynx_counterexample could not run the program: {error.toMessageData}"
-  if let some message := found then
-    if naturals.isEmpty then throwError message
-    let names ← naturals.mapM fun fvar => return s!"{← fvar.getUserName} = 0"
-    throwError "{message}\nwhere {", ".intercalate names.toList}"
+  -- The time elapsed when timers are canceled can be any. The search tries
+  -- none elapsed, and enough elapsed that every canceled timer has none left.
+  let elapsedType ← mkArrow (mkConst ``Lynx.PID) (← mkArrow (mkConst ``Nat) (mkConst ``Nat))
+  let elapsed ← (collectFVars {} check).fvarIds.filterM fun fvar => do
+    isDefEq (← fvar.getType) elapsedType
+  let constant (milliseconds : Nat) : Expr :=
+    mkLambda `_ .default (mkConst ``Lynx.PID) (mkLambda `_ .default (mkConst ``Nat)
+      (mkNatLit milliseconds))
+  let attempts := if elapsed.isEmpty then [0] else [0, 4294967295]
+  for milliseconds in attempts do
+    let check := check.replaceFVars (elapsed.map mkFVar)
+      (elapsed.map fun _ => constant milliseconds)
+    let_expr Lynx.Concurrent.check result accept depth config := check | throwError expected
+    unless ← isDefEq result (mkConst ``Lynx.Term) do
+      throwError "lynx_counterexample expects a program returning a term, not {result}"
+    let fvars := (collectFVars {} check).fvarIds
+    unless fvars.isEmpty do
+      let names ← fvars.mapM (·.getUserName)
+      throwError "lynx_counterexample runs closed programs, but this one depends on {names.toList}"
+    if check.hasMVar then
+      throwError "lynx_counterexample runs closed programs, but this one has metavariables"
+    let name ← mkAuxDeclName `_lynx_counterexample
+    let report := mkApp3 (mkConst ``Lynx.Concurrent.report) accept depth config
+    let found ← withoutModifyingEnv do
+      addAndCompile (.defnDecl {
+        name, levelParams := [], type := ← mkAppM ``Option #[mkConst ``String], value := report
+        hints := .opaque, safety := .safe })
+      -- The program is ordinary code, imported for evaluation by the runner.
+      try unsafe evalConst (Option String) name (checkMeta := false)
+      catch error => throwError "lynx_counterexample could not run the program: {error.toMessageData}"
+    if let some message := found then
+      let mut names ← naturals.mapM fun fvar => return s!"{← fvar.getUserName} = 0"
+      names := names ++ (← elapsed.mapM fun fvar =>
+        return s!"{← fvar.getUserName} = fun _ _ => {milliseconds}")
+      if names.isEmpty then throwError message
+      throwError "{message}\nwhere {", ".intercalate names.toList}"
 
 end Counterexample
 

@@ -56,40 +56,39 @@ theorem timer_delivers :
       let _ ← startTick
       receiveAny)) = true := by cbv
 
-/-- Results of canceling the timer and then waiting for its message: either
-it was canceled with some milliseconds left, so the message never arrives, or
-it expired, so its message arrives. -/
-private def canceled : List Term :=
-  .tuple #[.atom "false", tick] ::
-    (List.range 11).map fun left => .tuple #[.integer (.ofNat left), .atom "timeout"]
+/-- Cancel the timer and then wait for its message. -/
+private def cancelThenWait : Result := do
+  let timer ← startTick
+  let canceled ← «cancel_timer/1» dispatcher timer
+  let message ← match canceled with
+    | .atom "false" => receiveAny
+    | _ => receiveOrTimeout
+  .ok (.tuple #[canceled, message])
 
-theorem cancel_stops_or_message_arrives :
-    Concurrent.check (oneOf canceled) 64 (.start {} (do
-      let timer ← startTick
-      let canceled ← «cancel_timer/1» dispatcher timer
-      let message ← match canceled with
-        | .atom "false" => receiveAny
-        | _ => receiveOrTimeout
-      .ok (.tuple #[canceled, message]))) = true := by cbv
+/-- Either the timer was canceled with some milliseconds left, so its message
+never arrives, or it expired, so its message arrives, whatever time elapsed
+before canceling it. Evaluation never needs the milliseconds left. -/
+theorem cancel_stops_or_message_arrives (elapsed : PID → Nat → Nat) :
+    Concurrent.check (fun
+      | .ok (.tuple ⟨[.atom "false", .atom "tick"]⟩) => true
+      | .ok (.tuple ⟨[.integer _, .atom "timeout"]⟩) => true
+      | _ => false) 64 (.start {} cancelThenWait elapsed) = true := by cbv
 
-/-- The milliseconds left may be none, before the timer expires. -/
+/-- The milliseconds left are the duration less the time elapsed. -/
+theorem cancel_reports_time_left :
+    Concurrent.check (oneOf [.tuple #[.atom "false", tick], .tuple #[.integer 6, .atom "timeout"]])
+      64 (.start {} cancelThenWait fun _ _ => 4) = true := by cbv
+
+/-- No time may be left, when the timer is about to expire. -/
 theorem cancel_reports_no_time_left :
-    (match Concurrent.counterexample (oneOf (canceled.erase (.tuple #[.integer 0, .atom "timeout"])))
-        64 (.start {} (do
-        let timer ← startTick
-        let canceled ← «cancel_timer/1» dispatcher timer
-        let message ← match canceled with
-          | .atom "false" => receiveAny
-          | _ => receiveOrTimeout
-        .ok (.tuple #[canceled, message]))) with
-      | some (_, .rejected (.ok result)) =>
-          Term.exactCompare result (.tuple #[.integer 0, .atom "timeout"]) == .eq
-      | _ => false) = true := by cbv
+    Concurrent.check (oneOf [.tuple #[.atom "false", tick], .tuple #[.integer 0, .atom "timeout"]])
+      64 (.start {} cancelThenWait fun _ _ => 10) = true := by cbv
 
 /-- Replying `false` does not mean the message arrived: it may still be on its
 way, so waiting with a timeout may miss it. -/
 theorem cancel_false_before_delivery :
-    (match Concurrent.counterexample (oneOf canceled) 64 (.start {} (do
+    (match Concurrent.counterexample (oneOf [.tuple #[.atom "false", tick],
+        .tuple #[.integer 10, .atom "timeout"]]) 64 (.start {} (do
           let timer ← startTick
           let canceled ← «cancel_timer/1» dispatcher timer
           let message ← receiveOrTimeout

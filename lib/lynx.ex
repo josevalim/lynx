@@ -118,7 +118,8 @@ defmodule Lynx do
 
     * Concurrent code is stated through `Lynx.always`, which holds when every
       run of the code ends with the outcome: every interleaving of its
-      processes and every point at which its timers fire. Runs always end
+      processes, every point at which its timers fire, and every time left
+      that canceling a timer may report. Runs always end
       (`Lynx.Concurrent.Config.terminates`). Both the precondition and the
       expectation must hold in every run:
 
@@ -171,7 +172,9 @@ defmodule Lynx do
 
     * Receive timeouts and timers do not measure wall-clock time. Positive
       timeouts may expire, and timers may fire, at any point of a run, so laws
-      cover every order, including ones elapsed time would rule out.
+      cover every order, including ones elapsed time would rule out. Canceling
+      a timer reports its duration less an unknown elapsed time, and laws
+      cover every elapsed time.
 
     * Exception stack traces are not recorded and are represented by `[]`.
 
@@ -353,11 +356,13 @@ defmodule Lynx do
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       exact Lynx.always_of_check
         (Lynx.apply «law:ensures/1» Erlang.program.fun_table (depth + 1) (.integer n))
-        Lynx.Outcome.isTrue 300 (by cbv; simp [Rat.lt_irrefl])
+        Lynx.Outcome.isTrue 300 (fun _ => by cbv; simp [Rat.lt_irrefl])
         fun _ => Lynx.Outcome.eq_of_isTrue
 
   `Lynx.Outcome.isTrue` accepts the outcome the law expects, and `cbv`
-  evaluates the check. Writing the depth as `depth + 1` lets evaluation take the level the
+  evaluates the check for an unknown time elapsed before timers are canceled.
+  Programs that only compare the time left `:erlang.cancel_timer/1` reports
+  with `false` evaluate without knowing it. Writing the depth as `depth + 1` lets evaluation take the level the
   spawned function consumes, and the level the receive of its reply consumes,
   whatever the remaining depth. Evaluation takes longer as the bound grows,
   so choose the smallest bound that covers the program. The final comparison
