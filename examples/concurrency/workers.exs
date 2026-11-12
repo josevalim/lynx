@@ -1,9 +1,9 @@
 # LYNX_DEBUG=lean LYNX_CACHE=0 mix run examples/concurrency/workers.exs
 #
 # Two workers race to report to their parent, so the parent receives their
-# results in either order. The sum is the same under every schedule. The
+# results in either order. The sum is the same in every run. The
 # program has no inputs, so the proof evaluates every interleaving with
-# Lynx.concurrent_of_check.
+# Lynx.always_of_check.
 ExUnit.start()
 
 defmodule WorkersProofsTest do
@@ -32,12 +32,11 @@ defmodule WorkersProofsTest do
       refine ⟨2, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       -- Evaluate every interleaving: the workers report in either order.
-      have checked := Lynx.concurrent_of_check
+      exact Lynx.always_of_check
         (Lynx.apply «sum_workers_is_three:ensures/0» Erlang.program.fun_table (depth + 2))
-        (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 64 (by cbv) schedule
-      split at checked
-      · assumption
-      · contradiction
+        Lynx.Outcome.isTrue 64
+        (by cbv)
+        fun _ => Lynx.Outcome.eq_of_isTrue
       """
   end
 end

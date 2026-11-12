@@ -129,12 +129,12 @@ namespace Lynx.Concurrent
 section Counterexample
 open Lean Meta Elab Tactic
 
-/-- Fail with a schedule that `Lynx.Concurrent.check` rejects, when there is one,
+/-- Fail with a run that `Lynx.Concurrent.check` rejects, when there is one,
 and otherwise leave the goal unchanged for a tactic such as `cbv` to prove. The
 goal must be `Lynx.Concurrent.check accept depth config = true` for a program
 returning a term, closed except for natural numbers, such as a law's call depth,
 which the search takes to be zero. The search runs the program in Lean's interpreter,
-which finds a failing schedule much faster than the kernel evaluates `check`. It
+which finds a failing run much faster than the kernel evaluates `check`. It
 is only a diagnostic: the kernel never relies on it. -/
 syntax (name := counterexampleTactic) "lynx_counterexample" : tactic
 

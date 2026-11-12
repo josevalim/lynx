@@ -1,8 +1,8 @@
 # LYNX_DEBUG=lean LYNX_CACHE=0 mix run examples/elixir/task.exs
 #
 # Task.async/1 and Task.await/2 compute in a linked process and reply through
-# a monitor alias. Awaiting without a timeout returns the task's result under
-# every schedule, and awaiting with one either returns it or times out. The
+# a monitor alias. Awaiting without a timeout returns the task's result in
+# every run, and awaiting with one either returns it or times out. The
 # input is an arbitrary integer, but the processes take the same steps for
 # every value, so the proofs evaluate every interleaving. Ignoring a task, or
 # awaiting one until it times out, leaves its reply out of the owner's inbox.
@@ -103,13 +103,11 @@ defmodule TaskProofsTest do
       refine ⟨4, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       -- Evaluate every interleaving; only the final comparison depends on n.
-      have checked := Lynx.concurrent_of_check
+      exact Lynx.always_of_check
         (Lynx.apply «double_in_task_doubles:ensures/1» Erlang.program.fun_table (depth + 4) (.integer n))
-        (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
-        (by cbv; simp [Rat.lt_irrefl]) schedule
-      split at checked
-      · assumption
-      · contradiction
+        Lynx.Outcome.isTrue 300
+        (by cbv; simp [Rat.lt_irrefl])
+        fun _ => Lynx.Outcome.eq_of_isTrue
       """
 
     law double_or_timeout_doubles(x),
@@ -125,13 +123,11 @@ defmodule TaskProofsTest do
       -- The timeout may expire before or after the reply arrives. When the
       -- reply wins, the owner compares n * 2 with itself while the task is
       -- still running, so evaluation resumes after simp decides it.
-      have checked := Lynx.concurrent_of_check
+      exact Lynx.always_of_check
         (Lynx.apply «double_or_timeout_doubles:ensures/1» Erlang.program.fun_table (depth + 4) (.integer n))
-        (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
-        (by cbv; repeat (simp only [Int.lt_irrefl, ite_false, ite_true]; cbv)) schedule
-      split at checked
-      · assumption
-      · contradiction
+        Lynx.Outcome.isTrue 300
+        (by cbv; repeat (simp only [Int.lt_irrefl, ite_false, ite_true]; cbv))
+        fun _ => Lynx.Outcome.eq_of_isTrue
       """
 
     # Task.ignore/1 must not leave the reply in the mailbox. On Elixir main
@@ -148,13 +144,11 @@ defmodule TaskProofsTest do
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       -- lynx_counterexample reports a failing schedule quickly, before cbv
       -- evaluates every interleaving, which takes more than its default steps.
-      have checked := Lynx.concurrent_of_check
+      exact Lynx.always_of_check
         (Lynx.apply «ignore_drains_reply:ensures/0» Erlang.program.fun_table (depth + 4))
-        (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
-        (by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv) schedule
-      split at checked
-      · assumption
-      · contradiction
+        Lynx.Outcome.isTrue 300
+        (by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv)
+        fun _ => Lynx.Outcome.eq_of_isTrue
       """
   end
 
@@ -187,13 +181,11 @@ defmodule TaskProofsTest do
       -- through :erlang.apply/2, each one level down.
       refine ⟨4, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
-      have checked := Lynx.concurrent_of_check
+      exact Lynx.always_of_check
         (Lynx.apply «await_drains_reply:ensures/0» Erlang.program.fun_table (depth + 4))
-        (fun | .ok (Lynx.Term.atom "true") => true | _ => false) 300
-        (by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv) schedule
-      split at checked
-      · assumption
-      · contradiction
+        Lynx.Outcome.isTrue 300
+        (by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv)
+        fun _ => Lynx.Outcome.eq_of_isTrue
       """
   end
 end

@@ -126,11 +126,18 @@ example (computation : Lynx.Result) (choices : List Lynx.ScheduleChoice) :
       Lynx.Concurrent.Terminal last (Lynx.concurrent computation choices) :=
   Lynx.concurrent_reaches computation choices
 
-example (computation : Lynx.Result) (accept : Lynx.Outcome Lynx.Term → Bool) (depth : Nat)
-    (checked : Lynx.Concurrent.check accept depth (.start {} computation) = true)
+-- Concurrent laws hold for every run, so for every schedule, and checking proves them.
+example (computation : Lynx.Result) (depth : Nat)
+    (checked : Lynx.Concurrent.check Lynx.Outcome.isTrue depth (.start {} computation) = true)
     (choices : List Lynx.ScheduleChoice) :
-    accept (Lynx.concurrent computation choices) = true :=
-  Lynx.concurrent_of_check computation accept depth checked choices
+    Lynx.concurrent computation choices = .ok Lynx.Term.true :=
+  Lynx.concurrent_of_always
+    (Lynx.always_of_check computation _ depth checked fun _ => Lynx.Outcome.eq_of_isTrue) choices
+
+-- No run goes on forever.
+example : WellFounded fun next first : Lynx.Concurrent.Config Lynx.Term =>
+    ∃ event, Lynx.Concurrent.Step first event next :=
+  Lynx.Concurrent.Config.terminates
 
 example : List Lynx.Term → Lynx.Term → List Lynx.Term := Lynx.Term.getMapKeys
 
@@ -449,6 +456,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.State.store",
   "Lynx.Concurrent.State.terminate",
   "Lynx.Concurrent.State.timerSteps",
+  "Lynx.Concurrent.State.timerWeight",
   "Lynx.Concurrent.State.timers",
   "Lynx.Concurrent.State.timersWith",
   "Lynx.Concurrent.State.update",
@@ -555,6 +563,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Outcome",
   "Lynx.Outcome.deadlock",
   "Lynx.Outcome.error",
+  "Lynx.Outcome.isTrue",
   "Lynx.Outcome.ok",
   "Lynx.PID",
   "Lynx.ReceiveTimeout",
@@ -711,6 +720,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.timerAbsolute",
   "Lynx.Term.true",
   "Lynx.Term.tuple",
+  "Lynx.always",
   "Lynx.apply",
   "Lynx.concurrent",
   "Lynx.instBEqTerm",
