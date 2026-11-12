@@ -122,7 +122,7 @@ defmodule Lynx.Translation do
   @doc "Translates the requested functions and their local and remote callees."
   def translate(%__MODULE__{stack: stack} = translation, name, names) do
     {module, translation} = fetch_module!(translation, name, fn -> [] end)
-    {module, translation} = dispatch_locally(translation, name, module)
+    {dispatch, translation} = local_dispatch(translation, module)
 
     for {function, arity} <- names do
       validate_function!(module, name, function, arity, fn -> [file: module.file] end)
@@ -158,7 +158,8 @@ defmodule Lynx.Translation do
            funs,
            suffixed,
            translation.dynamic,
-           context
+           context,
+           dispatch
          ) do
       {:ok, functions, literals, laws, funs, translation} ->
         updated = %{
@@ -185,27 +186,18 @@ defmodule Lynx.Translation do
   # Implementations calling their own protocol would form a module cycle
   # through it, so they call local copies of its dispatch instead. Cut off
   # functions of the protocol are not copied, so calling them reaches the cutoff.
-  defp dispatch_locally(translation, name, %{protocol: protocol} = module)
-       when protocol != nil do
+  defp local_dispatch(translation, %{protocol: {protocol, calls}} = module) do
     cut = for {^protocol, function, arity} <- translation.cutoffs, do: {function, arity}
 
-    {module, translation} =
-      if :lynx_core_to_leanj.protocol_calls(module.definitions, protocol) -- cut == [] do
-        {module, translation}
-      else
-        {data, translation} = fetch_module!(translation, protocol, fn -> [file: module.file] end)
-
-        definitions =
-          :lynx_core_to_leanj.dispatch_locally(module.definitions, protocol, data.definitions, cut)
-
-        {%{module | definitions: definitions}, translation}
-      end
-
-    module = %{module | protocol: nil}
-    {module, put_in(translation.modules[name], module)}
+    if calls -- cut == [] do
+      {:none, translation}
+    else
+      {data, translation} = fetch_module!(translation, protocol, fn -> [file: module.file] end)
+      {{protocol, data.definitions, cut}, translation}
+    end
   end
 
-  defp dispatch_locally(translation, _name, module), do: {module, translation}
+  defp local_dispatch(translation, _module), do: {:none, translation}
 
   defp remote_call(
          %__MODULE__{stack: [caller | _]} = translation,
