@@ -422,7 +422,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Task.child",
   "Lynx.Concurrent.Task.computation",
   "Lynx.Concurrent.Task.finish",
-  "Lynx.Concurrent.Task.internal",
+  "Lynx.Concurrent.Task.independent",
   "Lynx.Concurrent.Task.mk",
   "Lynx.Concurrent.Task.plain",
   "Lynx.Concurrent.Task.root",

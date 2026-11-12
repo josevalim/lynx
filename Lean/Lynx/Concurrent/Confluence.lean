@@ -127,27 +127,6 @@ private def Effect.apply (processId : PID) (state : State) : Effect → State
   | .take index => state.alter processId fun process =>
       { process with mailbox := process.mailbox.eraseIdx index }
 
-private theorem selectMessage_index {select : Term → Option β} {mailbox : List Term}
-    {message : Term} {value : β} {remaining : List Term}
-    (selected : selectMessage select mailbox = some (message, value, remaining)) :
-    ∃ index < mailbox.length, remaining = mailbox.eraseIdx index ∧
-      ∀ extra, selectMessage select (mailbox ++ extra) = some (message, value, remaining ++ extra) := by
-  induction mailbox generalizing remaining with
-  | nil => simp [selectMessage] at selected
-  | cons head rest ih =>
-    simp only [selectMessage] at selected
-    split at selected
-    · rename_i matched
-      simp only [Option.some.injEq, Prod.mk.injEq] at selected
-      obtain ⟨rfl, rfl, rfl⟩ := selected
-      exact ⟨0, by simp, by simp, fun extra => by simp [selectMessage, matched]⟩
-    · rename_i unmatched
-      simp only [Option.map_eq_some_iff, Prod.mk.injEq, Prod.exists] at selected
-      obtain ⟨_, _, remaining', found, rfl, rfl, rfl⟩ := selected
-      obtain ⟨index, bound, rfl, extend⟩ := ih found
-      exact ⟨index + 1, by simp [bound], by simp, fun extra => by
-        simp [selectMessage, unmatched, extend]⟩
-
 /-- Prove states equal by comparing every process record. -/
 local macro "state_ext" : tactic =>
   `(tactic| (apply State.ext (by simp [State.update, State.alter, State.modify, State.deliver,
