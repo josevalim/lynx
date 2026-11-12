@@ -116,7 +116,7 @@ defmodule Lynx do
           ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
             Lynx.sequential (Lynx.apply «law:ensures/1» table depth x) = .ok Lynx.Term.true
 
-    * Concurrent code is stated through `Lynx.always`, which holds when every
+    * Concurrent code is stated through `Lynx.concurrent`, which holds when every
       run of the code ends with the outcome: every interleaving of its
       processes, every point at which its timers fire, and every time left
       that canceling a timer may report. Runs always end
@@ -124,11 +124,11 @@ defmodule Lynx do
       expectation must hold in every run:
 
           (requires : ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
-            Lynx.always (Lynx.apply «law:requires/1» table depth x) (.ok Lynx.Term.true)) :
+            Lynx.concurrent (Lynx.apply «law:requires/1» table depth x) (.ok Lynx.Term.true)) :
           ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
-            Lynx.always (Lynx.apply «law:ensures/1» table depth x) (.ok Lynx.Term.true)
+            Lynx.concurrent (Lynx.apply «law:ensures/1» table depth x) (.ok Lynx.Term.true)
 
-  Both `Lynx.sequential` and `Lynx.always` start from a fresh runtime: a single
+  Both `Lynx.sequential` and `Lynx.concurrent` start from a fresh runtime: a single
   process, with an empty process dictionary, and an empty mailbox. The
   precondition and the expectation each start from this runtime separately,
   so nothing stored or sent by one is visible to the other. Laws over sequential
@@ -327,7 +327,7 @@ defmodule Lynx do
       only sends to itself, its ancestors, or its own children, each receiver
       has a single sender, no receive has a timeout, and no process links,
       monitors, or makes requests; `Lynx.Concurrent.Config.RaceFree.of_talks`
-      turns it into race freedom. `Lynx.always_advance` then evaluates
+      turns it into race freedom. `Lynx.concurrent_of_advance` then evaluates
       the outcome of every run with `Lynx.Concurrent.Config.advance`,
       which takes the first available step, and `Config.advance_add` splits the
       run into phases that proofs can take by induction. See
@@ -338,7 +338,7 @@ defmodule Lynx do
       `examples/concurrency/workers.exs`, where two workers race.
 
     * Other programs are proven with an invariant preserved by every step,
-      through `Lynx.always_of_invariant`.
+      through `Lynx.concurrent_of_invariant`.
 
   PIDs are paths from the process that runs the law, which is `[]`: a process's
   n-th child extends its PID with `n`, so `[1]` is its first child. References
@@ -346,7 +346,7 @@ defmodule Lynx do
   does not depend on the schedule, while both remain opaque to the program.
 
   `Lynx.Concurrent.check` explores the runs of a program, up to a depth
-  bounding the steps along each run, and `Lynx.always_of_check` turns its
+  bounding the steps along each run, and `Lynx.concurrent_of_check` turns its
   result into the law. For example, for a law over an integer `x` that is only
   carried by messages and arithmetic:
 
@@ -354,7 +354,7 @@ defmodule Lynx do
         cases x <;> simp [«law:requires/1», Erlang.erlang.«is_integer/1»] at requires ⊢
       refine ⟨1, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
-      exact Lynx.always_of_check
+      exact Lynx.concurrent_of_check
         (Lynx.apply «law:ensures/1» Erlang.program.fun_table (depth + 1) (.integer n))
         Lynx.Outcome.isTrue 300 (fun _ => by cbv; simp [Rat.lt_irrefl])
         fun _ => Lynx.Outcome.eq_of_isTrue

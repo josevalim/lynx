@@ -53,7 +53,7 @@ and a proof object. Helpers are ordinary translated computations called with the
 parameters. Each helper carries its level, which selects how it is stated to return true.
 Helpers returning `Except` are stated directly as `= .ok true`. Other helpers are stated
 through `Lynx.sequential`, except concurrent ones, which are stated through
-`Lynx.always`: every run of the helper ends with `ok true`. An absent requires helper
+`Lynx.concurrent`: every run of the helper ends with `ok true`. An absent requires helper
 means no assumption. Helpers that are not pure
 are called through `Lynx.apply helper table depth`, which passes them the dispatcher of the
 program's function table up to a call depth; an optional table names it, and it defaults
@@ -1569,12 +1569,12 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
       proofSources := s.proofSources.push (name.getId, source) }
     let ok := mkIdent ``Lynx.Outcome.ok
     let run := mkIdent ``Lynx.sequential
-    let everyRun := mkIdent ``Lynx.always
+    let everyRun := mkIdent ``Lynx.concurrent
     let trueTerm := mkIdent ``Lynx.Term.true
     let hypothesis := mkIdent `requires
     -- Each helper is stated as strongly as its purity allows: directly when it
     -- returns `Except`, through `Lynx.sequential` when it needs an environment,
-    -- and through `Lynx.always`, over every run, when it is concurrent.
+    -- and through `Lynx.concurrent`, over every run, when it is concurrent.
     let exceptOk := mkIdent ``Except.ok
     let natType := mkIdent ``Nat
     -- Helpers that are not pure return `true` from some depth on, so a law holds
@@ -1587,7 +1587,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
       Unhygienic.run `($computation = $exceptOk $trueTerm)
     let runs (computation : TSyntax `term) : TSyntax `term :=
       Unhygienic.run `($run $computation = $ok $trueTerm)
-    let always (computation : TSyntax `term) : TSyntax `term :=
+    let everyRunEnds (computation : TSyntax `term) : TSyntax `term :=
       Unhygienic.run `($everyRun $computation ($ok $trueTerm))
     -- A precondition is assumed directly only when it makes no runtime requests:
     -- it then returns `Except`, so the statement is equivalent to running it.
@@ -1595,14 +1595,14 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
       | none => binders
       | some (requires, level) =>
         let statement := match level with
-          | "concurrent" => eventually level (always requires)
+          | "concurrent" => eventually level (everyRunEnds requires)
           | "sequential" => eventually level (runs requires)
           | _ => eventually level (direct requires)
         binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $statement)))
     -- A direct expectation implies it holds when run, in every run.
     let goal := match ensuresPurity with
       | "pure" | "apply" => eventually ensuresPurity (direct ensures)
-      | "concurrent" => eventually ensuresPurity (always ensures)
+      | "concurrent" => eventually ensuresPurity (everyRunEnds ensures)
       | _ => eventually ensuresPurity (runs ensures)
     pure (Unhygienic.run `(theorem $name $binders:bracketedBinder* : $goal := $proof))
   | "def" => do
@@ -1775,9 +1775,9 @@ private def comparisonDescription (type : Expr) : MetaM (Option String) := do
       pure (mkAppN outcome.getAppFn
         (args.set! 1 (← Meta.withTransparency .all <| Meta.whnf args[1]!)))
     else pure outcome
-  -- Laws state their helpers through `Lynx.sequential` or `Lynx.always`; show the
+  -- Laws state their helpers through `Lynx.sequential` or `Lynx.concurrent`; show the
   -- computation they run.
-  let (actual, expected) ← if type.isAppOfArity ``Lynx.always 3 then
+  let (actual, expected) ← if type.isAppOfArity ``Lynx.concurrent 3 then
       let args := type.getAppArgs
       pure (← normalizeComputation args[1]!, ← reduceOutcome args[2]!)
     else

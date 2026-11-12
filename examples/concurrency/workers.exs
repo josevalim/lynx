@@ -3,7 +3,7 @@
 # Two workers race to report to their parent, so the parent receives their
 # results in either order. The sum is the same in every run. The
 # program has no inputs, so the proof evaluates every interleaving with
-# Lynx.always_of_check.
+# Lynx.concurrent_of_check.
 ExUnit.start()
 
 defmodule WorkersProofsTest do
@@ -32,7 +32,7 @@ defmodule WorkersProofsTest do
       refine ⟨2, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       -- Evaluate every interleaving: the workers report in either order.
-      exact Lynx.always_of_check
+      exact Lynx.concurrent_of_check
         (Lynx.apply «sum_workers_is_three:ensures/0» Erlang.program.fun_table (depth + 2))
         Lynx.Outcome.isTrue 64
         (fun _ => by cbv)

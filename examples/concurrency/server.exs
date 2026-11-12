@@ -321,7 +321,7 @@ defmodule ServerProofsTest do
         have valid : «is_integer_list/1» xs = .ok (.atom "true") := requires
         -- Without races, one run determines the outcome of every run, whatever
         -- time elapses before timers are canceled.
-        refine always_advance _ (3 + len xs + 3 * len xs + 2)
+        refine concurrent_of_advance _ (3 + len xs + 3 * len xs + 2)
           (fun _ => Config.RaceFree.of_talks single (root_talks _ xs)) fun elapsed => ?_
         -- Spawn the server.
         have start : ∃ state : State, state.timers = [] ∧ state.processes [] = some { children := 1 } ∧

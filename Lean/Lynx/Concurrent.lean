@@ -7,7 +7,7 @@ public import Lynx.Term.DataTypes
 `Lynx.Result.run` executes one interleaving chosen by its scheduler choices.
 This module describes every interleaving instead: a `Step` advances one
 process or timer, and a `Run` collects the `Event`s of consecutive steps as a
-trace. Concurrent laws are stated over these runs (`Lynx.always`). The
+trace. Concurrent laws are stated over these runs (`Lynx.concurrent`). The
 runner's soundness theorems show that each run with any scheduler choices is a
 `Run` ending in a `Terminal` configuration with the same outcome, so what holds
 for every run holds for every schedule.
