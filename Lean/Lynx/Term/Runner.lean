@@ -289,14 +289,77 @@ private def stop (root : PID) (state : State) (pool : Pool α) (finished : Finis
 
 private instance : WellFoundedRelation (Pool α) := ⟨Progress, wf⟩
 
+/-- The steps pending timers have left: an armed one expires and then
+delivers, and an expired one only delivers. -/
+private def timerWeight (state : State) : Nat :=
+  (state.timers.map fun timer => if timer.expired then 1 else 2).sum
+
+private theorem sum_filter_lt {items : List γ} {weight : γ → Nat} {keep : γ → Bool} {item : γ}
+    (mem : item ∈ items) (dropped : keep item = false) (positive : 0 < weight item) :
+    ((items.filter keep).map weight).sum < (items.map weight).sum := by
+  induction items with
+  | nil => simp at mem
+  | cons head rest ih =>
+    simp only [List.mem_cons] at mem
+    rcases mem with rfl | mem
+    · have : ((rest.filter keep).map weight).sum ≤ (rest.map weight).sum := by
+        clear ih; induction rest with
+        | nil => simp
+        | cons next tail ih => simp only [List.filter_cons]; split <;> simp <;> omega
+      simp [dropped]; omega
+    · have := ih mem
+      simp only [List.filter_cons]; split <;> simp <;> omega
+
+private theorem sum_map_lt {items : List γ} {weight : γ → Nat} {change : γ → γ} {item : γ}
+    (mem : item ∈ items) (smaller : weight (change item) < weight item)
+    (le : ∀ other, weight (change other) ≤ weight other) :
+    (items.map (weight ∘ change)).sum < (items.map weight).sum := by
+  induction items with
+  | nil => simp at mem
+  | cons head rest ih =>
+    simp only [List.mem_cons] at mem
+    have bound : (rest.map (weight ∘ change)).sum ≤ (rest.map weight).sum := by
+      clear ih mem
+      induction rest with
+      | nil => simp
+      | cons next tail ih =>
+        simp only [List.map_cons, List.sum_cons, Function.comp_apply]
+        have := le next
+        omega
+    simp only [List.map_cons, List.sum_cons, Function.comp_apply]
+    rcases mem with rfl | mem
+    · omega
+    · have := ih mem
+      have := le head
+      omega
+
+/-- Each timer step leaves fewer steps to the timers. -/
+private theorem timerWeight_lt {state next : State} {event : Event}
+    (possible : (event, next) ∈ state.timerSteps) : timerWeight next < timerWeight state := by
+  simp only [State.timerSteps, List.mem_map] at possible
+  obtain ⟨timer, mem, step⟩ := possible
+  split at step <;> simp only [Prod.mk.injEq] at step <;> obtain ⟨-, rfl⟩ := step
+  · rename_i expired
+    exact sum_filter_lt mem (by simp) (by split <;> simp)
+  · rename_i armed
+    simp only [timerWeight, List.map_map]
+    refine sum_map_lt mem (by simp [armed]) fun other => ?_
+    by_cases same : (other.reference == timer.reference) = true <;>
+      cases expired : other.expired <;> simp [same, expired]
+
 /-- A process that does not return ends; the others keep running, and the
-outcome is then `Exception.exhausted`. -/
+outcome is then `Exception.exhausted`. When no process can step, the oldest
+pending timer does. -/
 private def execute (root : PID) (state : State) (pool : Pool α) (finished : Finished α)
     (exhausted : Bool) (current : PID) (preferred : ScheduleChoice)
     (choices : List ScheduleChoice) : Outcome α × Environment :=
   let (choices, chosen) := choose pool state current preferred choices
   match chosen with
-  | none => stop root state pool finished exhausted
+  | none =>
+    match _found : state.timerSteps with
+    | [] => stop root state pool finished exhausted
+    | (_, next) :: _ =>
+      execute root next pool finished exhausted current .current choices
   | some (processId, expire) =>
     match step pool state processId expire with
     | none => stop root state pool finished exhausted
@@ -306,8 +369,10 @@ private def execute (root : PID) (state : State) (pool : Pool α) (finished : Fi
         else (ScheduleChoice.current, choices)
       execute root advance.state advance.next finished (exhausted || advance.exhausted) processId
         preferred choices
-termination_by pool
-decreasing_by exact advance.decreases
+termination_by (pool, timerWeight state)
+decreasing_by
+  · exact Prod.Lex.right _ (timerWeight_lt (by rw [_found]; exact List.mem_cons_self))
+  · exact Prod.Lex.left _ _ advance.decreases
 
 /-- Local computations execute structurally; concurrent execution decreases
 through the process tree, without an execution budget. -/
@@ -672,27 +737,27 @@ private theorem step_sound {pool : Pool α} {state : State} {chosen : PID} {expi
 private theorem stop_terminal {root : PID} {state : State} {pool : Pool α} {finished : Finished α}
     {exhausted : Bool}
     (blocked : ∀ processId task, (processId, task) ∈ leaves pool →
-      task.transitions state processId = []) :
+      task.transitions state processId = []) (idle : state.timers = []) :
     Concurrent.Terminal (.running state (leaves pool) finished exhausted)
       (stop root state pool finished exhausted).1 := by
   unfold stop
   cases exhausted with
-  | true => exact .exhausted blocked
+  | true => exact .exhausted blocked idle
   | false =>
   have deadlock (pending : isEmpty pool = false ∨ finished = none) :
       Concurrent.Terminal (.running state (leaves pool) finished false) .deadlock :=
-    .deadlock blocked fun nil => by
+    .deadlock blocked (fun nil => by
       rcases pending with pending | pending
       · simp [← isEmpty_iff, pending] at nil
-      · exact pending
+      · exact pending) idle
   cases empty : isEmpty pool with
   | false => rcases finished with _ | ⟨_ | _, _⟩ <;> exact deadlock (.inl empty)
   | true =>
     have nil := (isEmpty_iff pool).mp empty
     rcases finished with _ | ⟨_ | _, _⟩
     · exact deadlock (.inr rfl)
-    · simp only [Bool.false_eq_true, ↓reduceIte]; rw [nil]; exact .raised
-    · simp only [Bool.false_eq_true, ↓reduceIte]; rw [nil]; exact .returned
+    · simp only [Bool.false_eq_true, ↓reduceIte]; rw [nil]; exact .raised idle
+    · simp only [Bool.false_eq_true, ↓reduceIte]; rw [nil]; exact .returned idle
 
 private theorem execute_reaches (root : PID) (pool : Pool α) :
     ∀ state finished exhausted current preferred choices,
@@ -701,13 +766,28 @@ private theorem execute_reaches (root : PID) (pool : Pool α) :
           (execute root state pool finished exhausted current preferred choices).1 := by
   induction pool using (wf (α := α)).induction with
   | _ pool ih =>
-  intro state finished exhausted current preferred choices
+  intro state
+  -- Timers step when no process can, with the same processes.
+  induction weight : timerWeight state using Nat.strongRecOn generalizing state with
+  | _ weight timerIh =>
+  intro finished exhausted current preferred choices
   rw [execute]
   generalize chose : choose pool state current preferred choices = chosen
   obtain ⟨remaining, chosen⟩ := chosen
   simp only
   cases chosen with
-  | none => exact ⟨[], _, .refl, stop_terminal (choose_none chose)⟩
+  | none =>
+    split
+    · split
+      · rename_i found
+        exact ⟨[], _, .refl, stop_terminal (choose_none chose) (by simpa using found)⟩
+      · rename_i event next rest found
+        have possible : (event, next) ∈ state.timerSteps := by
+          rw [found]; exact List.mem_cons_self
+        obtain ⟨events, last, run, terminal⟩ := timerIh _ (weight ▸ timerWeight_lt possible) next
+          rfl finished exhausted current .current remaining
+        exact ⟨event :: events, last, .step (.timer possible) run, terminal⟩
+    · simp_all
   | some chosen =>
   obtain ⟨processId, expire⟩ := chosen
   simp only

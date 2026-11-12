@@ -48,19 +48,32 @@ structure ProcessState where
   /-- The reason of an exit signal the process has yet to act on. The process
   exits with it at its next step, as signals arrive asynchronously. -/
   signal : Option Term := none
-  /-- The timer the process runs, until it fires or is canceled. -/
-  timer : Option Timer := none
 deriving Repr, Inhabited
+
+/-- A timer that sends a message to a process. Elapsed time is not modeled: the
+scheduler expires it at any point and later delivers its message, so its
+duration is only what canceling it reports. -/
+structure Timer where
+  /-- The reference `send_after` replies, allocated by the process starting it. -/
+  reference : List Nat
+  destination : PID
+  message : Term
+  duration : Nat
+  /-- Whether it expired, so its message is on its way and canceling it fails. -/
+  expired : Bool := false
+deriving Repr
 
 /-- The runtime shared by all processes of a run. -/
 structure State where
   /-- Live processes. Terminated and unknown PIDs have no state. -/
   processes : PID → Option ProcessState := fun _ => none
+  /-- Timers that have yet to deliver their message, oldest first. -/
+  timers : List Timer := []
 
 /-- Replace the record of one process. -/
 @[expose] def State.update (state : State) (processId : PID) (process : Option ProcessState) :
     State :=
-  { processes := fun candidate =>
+  { state with processes := fun candidate =>
       if candidate = processId then process else state.processes candidate }
 
 /-- The record of a process, empty when it is not live. -/
@@ -125,10 +138,12 @@ exits, ignoring the reason `normal`. -/
   else state.kill target reason
 
 /-- A process exits: each linked process receives an exit signal, and each
-monitoring process a `DOWN` message, which ends its monitor and alias. -/
+monitoring process a `DOWN` message, which ends its monitor and alias. Timers
+sending to it are canceled, as OTP does. -/
 @[expose] def State.terminate (state : State) (processId : PID) (reason : Term) : State :=
   let process := state.process processId
-  let state := state.update processId none
+  let state := { state.update processId none with
+    timers := state.timers.filter (·.destination != processId) }
   let state := process.links.foldl (fun state linked =>
     (state.modify linked fun other => { other with links := other.links.erase processId }).signal
       linked processId reason false) state
@@ -214,26 +229,23 @@ process that does not exist delivers its `DOWN` message at once. -/
       let owner := alias.dropLast
       if (state.process owner).aliases.contains alias then (message, state.deliver owner message)
       else (message, state)
-  | .fireTimer =>
-      -- The timer sends its message in a later step, so canceling may reply
-      -- `false` before the message arrives, as in OTP.
-      match (state.process processId).timer with
-      | some timer =>
-          (.tuple #[.pid timer.destination, timer.message],
-            state.modify processId fun process => { process with timer := none })
-      | none => (.atom "false", state)
+  | .startTimer destination message duration =>
+      -- The reference comes from the requester's own counter, like `make_ref`.
+      -- OTP destroys a timer for a process that is not alive at once.
+      let reference := processId ++ [(state.process processId).refCounter + 1]
+      let state := state.modify processId fun process =>
+        { process with refCounter := process.refCounter + 1 }
+      (.reference reference, if (state.processes destination).isSome then
+        { state with timers := state.timers ++ [{ reference, destination, message, duration }] }
+        else state)
   | .cancelTimer reference =>
-      -- A timer's reference extends the PID of the process running it with 0,
-      -- which no allocated reference ends with. OTP cancels the timers of a
-      -- process when it exits, so they then report `false` too.
-      let owner := reference.dropLast
-      match reference.getLast?, (state.process owner).timer with
-      | some 0, some timer =>
-          let disarmed := (state.modify owner fun process => { process with timer := none }).kill
-            owner (.atom "normal")
-          if (state.processes timer.destination).isSome then (.integer timer.duration, disarmed)
-          else (.atom "false", disarmed)
-      | _, _ => (.atom "false", state)
+      -- Only a timer yet to expire is canceled: an expired one, whose message
+      -- may still be on its way, and one whose destination exited report `false`.
+      match state.timers.find? fun timer => timer.reference == reference && !timer.expired with
+      | some timer =>
+          (.integer timer.duration,
+            { state with timers := state.timers.filter (·.reference != reference) })
+      | none => (.atom "false", state)
 
 /-- Every reply a request may get, starting with the one `State.request`
 gives. Canceling a timer reports the milliseconds left, which may be any number
@@ -256,6 +268,14 @@ theorem mem_replies (query : Request) (reply : Term) : reply ∈ replies query r
         some { pdict := env.pdict, refCounter := env.refCounter }
       else none }
 
+/-- A process without links or monitors exits without changing other
+processes, when no timer is pending. -/
+theorem State.terminate_eq_update {state : State} {processId : PID} {reason : Term}
+    (links : (state.process processId).links = [])
+    (monitors : (state.process processId).monitors = []) (idle : state.timers = []) :
+    state.terminate processId reason = state.update processId none := by
+  simp [State.terminate, links, monitors, idle, State.update]
+
 /-- Allocate the next child of a process, which starts with an empty record. -/
 @[expose] def State.spawn (state : State) (processId : PID) : PID × State :=
   let process := state.process processId
@@ -263,7 +283,7 @@ theorem mem_replies (query : Request) (reply : Term) : reply ∈ replies query r
   (childPid, (state.update processId (some { process with children := process.children + 1 })).update
     childPid (some {}))
 
-/-- Spawn a child, linking, monitoring, or arming it in the same step. -/
+/-- Spawn a child, linking or monitoring it in the same step. -/
 @[expose] def State.spawnWith (state : State) (processId : PID) (options : SpawnOptions) :
     PID × State :=
   let (child, state) := state.spawn processId
@@ -273,10 +293,31 @@ theorem mem_replies (query : Request) (reply : Term) : reply ∈ replies query r
           { other with links := [processId] }
     else state
   let state := if options.monitor then (state.monitor processId child false).2 else state
-  let state := match options.timer with
-    | some timer => state.modify child fun other => { other with timer := some timer }
-    | none => state
   (child, state)
+
+/-! Process operations keep the timers. -/
+
+@[simp] theorem State.timers_update {state : State} {processId : PID}
+    {process : Option ProcessState} : (state.update processId process).timers = state.timers := rfl
+
+@[simp] theorem State.timers_modify {state : State} {processId : PID}
+    {change : ProcessState → ProcessState} : (state.modify processId change).timers = state.timers := by
+  unfold State.modify; split <;> rfl
+
+@[simp] theorem State.timers_deliver {state : State} {processId : PID} {message : Term} :
+    (state.deliver processId message).timers = state.timers := by
+  unfold State.deliver; split <;> rfl
+
+@[simp] theorem State.timers_store {state : State} {processId : PID} {env : Environment} :
+    (state.store processId env).timers = state.timers := rfl
+
+@[simp] theorem State.timers_initial {env : Environment} : (State.initial env).timers = [] := rfl
+
+@[simp] theorem State.timers_spawnWith {state : State} {processId : PID} {options : SpawnOptions} :
+    (state.spawnWith processId options).2.timers = state.timers := by
+  simp only [State.spawnWith, State.spawn, State.monitor]
+  repeat' split
+  all_goals simp
 
 /-- Select the oldest matching message, preserving all unmatched messages.
 Returns the message, the selector's bindings, and the remaining mailbox. -/
@@ -318,7 +359,25 @@ inductive Event where
   | exit (processId : PID) (reason : Term) : Event
   /-- The scheduler answers a request about other processes. -/
   | request (processId : PID) (query : Request) (reply : Term) : Event
+  /-- A timer expires, so its message is on its way. -/
+  | expire (reference : List Nat) : Event
+  /-- The message of an expired timer arrives in the receiver's mailbox. -/
+  | arrive (receiver : PID) (message : Term) : Event
 deriving Repr
+
+/-- Every step of the timers: an armed one expires, or the message of an
+expired one arrives. Either may happen at any point, as elapsed time is not
+modeled. -/
+@[expose] def State.timerSteps (state : State) : List (Event × State) :=
+  state.timers.map fun timer =>
+    if timer.expired then
+      (.arrive timer.destination timer.message,
+        { state.deliver timer.destination timer.message with
+          timers := state.timers.filter (·.reference != timer.reference) })
+    else
+      (.expire timer.reference,
+        { state with timers := state.timers.map fun other =>
+            if other.reference == timer.reference then { other with expired := true } else other })
 
 /-- One possible step of one process, and the processes that replace it. -/
 structure Transition (α : Type) : Type 1 where
@@ -425,6 +484,10 @@ inductive Step {α : Type} : Config α → Event → Config α → Prop where
       (possible : transition ∈ task.transitions state processId) :
       Step (.running state tasks finished exhausted) transition.event
         (transition.apply before after finished exhausted)
+  /-- A timer expires, or the message of an expired one arrives. -/
+  | timer (possible : (event, after) ∈ state.timerSteps) :
+      Step (.running state tasks finished exhausted) event
+        (.running after tasks finished exhausted)
 
 /-- Consecutive steps and the trace of their events. -/
 inductive Run {α : Type} : Config α → List Event → Config α → Prop where
@@ -435,17 +498,19 @@ inductive Run {α : Type} : Config α → List Event → Config α → Prop wher
 inductive Terminal {α : Type} : Config α → Outcome α → Prop where
   | ok : Terminal (.start env (.ok value)) (.ok value)
   | error : Terminal (.start env (.error exception)) (.error exception)
-  /-- Some process did not return, and no other process can step. -/
+  /-- Some process did not return, and no other process or timer can step. -/
   | exhausted (blocked : ∀ processId task, (processId, task) ∈ tasks →
-        task.transitions state processId = []) :
+        task.transitions state processId = []) (idle : state.timers = []) :
       Terminal (.running state tasks finished true) (.error .exhausted)
-  | returned : Terminal (.running state [] (some (.ok value, env)) false) (.ok value)
-  | raised : Terminal (.running state [] (some (.error exception, env)) false)
-      (.error exception)
-  /-- Every process is blocked, or the root never produced a result. -/
+  | returned (idle : state.timers = []) :
+      Terminal (.running state [] (some (.ok value, env)) false) (.ok value)
+  | raised (idle : state.timers = []) :
+      Terminal (.running state [] (some (.error exception, env)) false) (.error exception)
+  /-- Every process is blocked and no timer is pending, or the root never
+  produced a result. -/
   | deadlock (blocked : ∀ processId task, (processId, task) ∈ tasks →
         task.transitions state processId = [])
-      (pending : tasks = [] → finished = none) :
+      (pending : tasks = [] → finished = none) (idle : state.timers = []) :
       Terminal (.running state tasks finished false) .deadlock
 
 /-- A property preserved by every step holds after every run. -/
@@ -500,9 +565,25 @@ theorem eq_of_mem_splits {tasks before after : List γ} {item : γ}
               .running (State.initial env) [(env.currentPid, Task.root computation)] none false)]
           else []
   | .running state tasks finished exhausted =>
-      (splits tasks).flatMap fun (before, (processId, task), after) =>
+      let steps := (splits tasks).flatMap fun (before, (processId, task), after) =>
         (task.transitions state processId).map fun transition =>
           (transition.event, transition.apply before after finished exhausted)
+      -- Evaluation skips timer steps when there are no timers, as usual.
+      match state.timers with
+      | [] => steps
+      | _ :: _ => steps ++
+          state.timerSteps.map fun (event, after) => (event, .running after tasks finished exhausted)
+
+/-- The steps of the processes, then those of the timers. -/
+theorem Config.successors_running {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} :
+    (Config.running state tasks finished exhausted).successors =
+      (splits tasks).flatMap (fun (before, (processId, task), after) =>
+        (task.transitions state processId).map fun transition =>
+          (transition.event, transition.apply before after finished exhausted)) ++
+      state.timerSteps.map fun (event, after) => (event, .running after tasks finished exhausted) := by
+  simp only [Config.successors]
+  split <;> simp_all [State.timerSteps]
 
 theorem Step.mem_successors {first next : Config α} {event : Event}
     (step : Step first event next) : (event, next) ∈ first.successors := by
@@ -513,8 +594,17 @@ theorem Step.mem_successors {first next : Config α} {event : Event}
     cases computation <;> simp_all [isRequest, Config.successors]
   | run split possible =>
     subst split
-    simp only [Config.successors, List.mem_flatMap, Prod.exists, List.mem_map]
-    exact ⟨_, _, _, _, mem_splits, _, possible, rfl⟩
+    simp only [Config.successors_running, List.mem_append, List.mem_flatMap, Prod.exists,
+      List.mem_map]
+    exact .inl ⟨_, _, _, _, mem_splits, _, possible, rfl⟩
+  | timer possible =>
+    simp only [Config.successors_running, List.mem_append, List.mem_map, Prod.exists]
+    exact .inr ⟨_, _, possible, rfl⟩
+
+/-- Without timers, there are no timer steps. -/
+@[simp] theorem State.timerSteps_eq_nil {state : State} :
+    state.timerSteps = [] ↔ state.timers = [] := by
+  simp [State.timerSteps]
 
 /-- The outcome of a configuration without steps. -/
 @[expose] def Config.outcome : Config α → Outcome α
@@ -538,11 +628,13 @@ theorem Terminal.outcome_eq {config : Config α} {outcome : Outcome α}
 theorem Terminal.successors_eq_nil {config : Config α} {outcome : Outcome α}
     (terminal : Terminal config outcome) : config.successors = [] := by
   cases terminal with
-  | deadlock blocked | exhausted blocked =>
-    simp only [Config.successors, List.flatMap_eq_nil_iff, Prod.forall]
+  | deadlock blocked _ idle | exhausted blocked idle =>
+    simp only [Config.successors_running, List.append_eq_nil_iff, List.flatMap_eq_nil_iff,
+      Prod.forall, List.map_eq_nil_iff, State.timerSteps_eq_nil, idle, and_true]
     intro before processId task after mem
     simp [blocked processId task (by rw [eq_of_mem_splits mem]; simp)]
-  | _ => simp [Config.successors, splits, isRequest]
+  | returned idle | raised idle => simp [Config.successors_running, splits, idle]
+  | _ => simp [Config.successors, isRequest]
 
 theorem Step.of_mem_successors {first next : Config α} {event : Event}
     (mem : (event, next) ∈ first.successors) : Step first event next := by
@@ -554,9 +646,12 @@ theorem Step.of_mem_successors {first next : Config α} {event : Event}
       | (obtain ⟨rfl, rfl⟩ := mem; first | exact .get | exact .set | exact .enter rfl)
       | (simp at mem)
   | running state tasks finished exhausted =>
-    simp only [Config.successors, List.mem_flatMap, List.mem_map, Prod.exists, Prod.mk.injEq] at mem
-    obtain ⟨before, processId, task, after, split, transition, possible, rfl, rfl⟩ := mem
-    exact .run (eq_of_mem_splits split) possible
+    simp only [Config.successors_running, List.mem_append, List.mem_flatMap, List.mem_map,
+      Prod.exists, Prod.mk.injEq] at mem
+    rcases mem with ⟨before, processId, task, after, split, transition, possible, rfl, rfl⟩ |
+      ⟨event, after, possible, rfl, rfl⟩
+    · exact .run (eq_of_mem_splits split) possible
+    · exact .timer possible
 
 /-! ### Deterministic evaluation
 
@@ -618,23 +713,25 @@ theorem Config.terminal_of_successors_eq_nil {config : Config α}
     | error => exact .error
     | _ => simp [Config.successors, isRequest] at stuck
   | running state tasks finished exhausted =>
+    simp only [Config.successors_running, List.append_eq_nil_iff, List.map_eq_nil_iff,
+      State.timerSteps_eq_nil] at stuck
+    obtain ⟨stuck, idle⟩ := stuck
     have blocked : ∀ processId task, (processId, task) ∈ tasks →
         task.transitions state processId = [] := by
       intro processId task mem
       obtain ⟨before, after, rfl⟩ := List.append_of_mem mem
-      simp only [Config.successors, List.flatMap_eq_nil_iff, List.map_eq_nil_iff,
-        Prod.forall] at stuck
+      simp only [List.flatMap_eq_nil_iff, List.map_eq_nil_iff, Prod.forall] at stuck
       exact stuck _ _ _ _ mem_splits
     cases exhausted with
-    | true => exact .exhausted blocked
+    | true => exact .exhausted blocked idle
     | false =>
       cases tasks with
-      | cons => exact .deadlock blocked (by simp)
+      | cons => exact .deadlock blocked (by simp) idle
       | nil =>
         rcases finished with _ | ⟨_ | _, _⟩
-        · exact .deadlock blocked (fun _ => rfl)
-        · exact .raised
-        · exact .returned
+        · exact .deadlock blocked (fun _ => rfl) idle
+        · exact .raised idle
+        · exact .returned idle
 
 /-- Whether a process is about to read its environment, without a pending exit
 signal. Steps of other processes cannot change what it reads, and it changes

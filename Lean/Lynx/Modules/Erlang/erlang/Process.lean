@@ -36,19 +36,11 @@ option wins, as in OTP. -/
   | .tuple ⟨[.atom "abs", .atom "true"]⟩ :: rest => timerAbsolute Bool.true rest
   | _ :: _ => none
 
-/-- The process running a timer. Its receive expires when the scheduler
-chooses, as elapsed time is not modeled. Unless the timer was canceled, it then
-sends the timer's message, in a later step than the expiry. -/
-@[expose] def timerProcess : Result :=
-  .receive .finite (fun _ _ => (none : Option Unit)) fun _ => .request .fireTimer fun
-    | .tuple ⟨[.pid destination, message]⟩ => .send destination message (.ok (.atom "ok"))
-    | _ => .ok (.atom "ok")
-
-/-- Start a timer sending `message` to a local PID, replying its reference: the
-PID of the process running it, extended with 0. OTP rejects negative times and
-those outside 64 bits, and accepts others while they end before its monotonic
-clock does, centuries after it starts. Times up to 2^32 - 1 milliseconds are
-modeled as accepted; longer ones and registered names do not return. -/
+/-- Start a timer sending `message` to a local PID, replying its reference.
+OTP rejects negative times and those outside 64 bits, and accepts others while
+they end before its monotonic clock does, centuries after it starts. Times up
+to 2^32 - 1 milliseconds are modeled as accepted; longer ones and registered
+names do not return. -/
 @[expose] def sendAfter (time destination message : Term) : Result :=
   match time with
   | .integer duration =>
@@ -56,8 +48,7 @@ modeled as accepted; longer ones and registered names do not return. -/
       match destination with
       | .pid target =>
           if duration > 4294967295 then .error .exhausted else
-          .schedule { timer := some ⟨target, message, duration.toNat⟩ } timerProcess fun timer =>
-            .ok (.reference (timer ++ [0]))
+          .request (.startTimer target message duration.toNat) .ok
       | .atom _ => .error .exhausted
       | _ => .error (.error (.atom "badarg"))
   | _ => .error (.error (.atom "badarg"))
@@ -172,8 +163,9 @@ its `DOWN` message. `info` returns whether the monitor was still active. -/
       .request (.demonitor id flush) fun found => .ok (if info = true then found else .atom "true")
   | _, _ => .error (.error (.atom "badarg"))
 
-/-- Send `message` once a timer of `time` milliseconds fires, replying the
-timer's reference. When it fires is the scheduler's choice. -/
+/-- Send `message` once a timer of `time` milliseconds expires, replying the
+timer's reference. When it expires, and when its message then arrives, are the
+scheduler's choices. -/
 @[expose] def «send_after/3» (_ : Dispatcher) (time destination message : Term) : Result :=
   Term.sendAfter time destination message
 

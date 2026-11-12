@@ -187,18 +187,18 @@ defmodule ServerProofsTest do
         have requests_phase : ∀ (R : Term → Result) (server : Concurrent.Task Term) (ys : Term)
               (valid : «is_integer_list/1» ys = .ok (.atom "true")) (state : State)
               (process : ProcessState) (found : state.processes [1] = some process)
-              (rootCalm : (state.process []).signal = none),
-            ∃ state' : State, state'.processes [1] =
+              (rootCalm : (state.process []).signal = none) (idle : state.timers = []),
+            ∃ state' : State, state'.timers = [] ∧ state'.processes [1] =
                 some { process with mailbox := process.mailbox ++ requests ys } ∧
               (∀ other, other ≠ [1] → state'.processes other = state.processes other) ∧
               (Config.running state
                   [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) (.pid [1])
                     ys >>= R, some⟩), ([1], server)] none false).advance (len ys) =
                 .running state' [([], ⟨R (.atom "ok"), some⟩), ([1], server)] none false := by
-          intro R server ys valid state process found rootCalm
+          intro R server ys valid state process found rootCalm idle
           induction ys using «request/2».induct generalizing state process with
           | case1 =>
-            exact ⟨state, by simp [found, requests], fun _ _ => rfl, by simp [«request/2», len]⟩
+            exact ⟨state, idle, by simp [found, requests], fun _ _ => rfl, by simp [«request/2», len]⟩
           | case2 x rest ih =>
             have validRest : «is_integer_list/1» rest = .ok (.atom "true") := by
               simp only [«is_integer_list/1»] at valid
@@ -207,10 +207,11 @@ defmodule ServerProofsTest do
                 some { process with
                   mailbox := process.mailbox ++ [(Term.tuple #[.atom "request", x])] } := by
               simp [State.deliver, found, State.update]
-            obtain ⟨state', found', others, advanced⟩ :=
+            obtain ⟨state', idle', found', others, advanced⟩ :=
               ih validRest (state.deliver [1] (Term.tuple #[.atom "request", x])) _ delivered
                 (by simpa [State.deliver, found, State.update, State.process] using rootCalm)
-            refine ⟨state', by simp [found', requests], fun other distinct => ?_, ?_⟩
+                (by simpa using idle)
+            refine ⟨state', idle', by simp [found', requests], fun other distinct => ?_, ?_⟩
             · rw [others other distinct]
               simp [State.deliver, found, State.update, distinct]
             · rw [show len (.cons x rest) = 1 + len rest by simp [len]; omega, Config.advance_add]
@@ -222,7 +223,7 @@ defmodule ServerProofsTest do
                       rest >>= R, some⟩), ([1], server)] none false := by
                 rw [«request/2»]
                 simp [Config.advance, Config.successors, splits, Task.transitions,
-                  Erlang.erlang.«send/2», Transition.apply, rootCalm]
+                  Erlang.erlang.«send/2», Transition.apply, rootCalm, idle]
               rw [step, advanced]
           | case3 ys notNil notCons =>
             cases ys <;> simp [«is_integer_list/1»] at valid notNil notCons
@@ -234,8 +235,8 @@ defmodule ServerProofsTest do
               (serverMailbox : server.mailbox = requests zs)
               (rootCalm : root.signal = none) (serverCalm : server.signal = none)
               (rootAlone : root.links = [] ∧ root.monitors = [])
-              (serverAlone : server.links = [] ∧ server.monitors = []),
-            ∃ state' : State,
+              (serverAlone : server.links = [] ∧ server.monitors = []) (idle : state.timers = []),
+            ∃ state' : State, state'.timers = [] ∧
               (state'.process []).signal = none ∧ (state'.process [1]).signal = none ∧
               (state'.process []).links = [] ∧ (state'.process []).monitors = [] ∧
               (state'.process [1]).links = [] ∧ (state'.process [1]).monitors = [] ∧
@@ -250,12 +251,12 @@ defmodule ServerProofsTest do
                     (.pid []) .nil))]
                   none false := by
           intro K zs valid state root server rootFound rootEmpty serverFound serverMailbox rootCalm
-            serverCalm rootAlone serverAlone
+            serverCalm rootAlone serverAlone idle
           -- collect/1 and serve/2 also recurse on their dispatcher, so induct on
           -- the list alone, as request/2 does.
           induction zs using «request/2».induct generalizing K state root server with
           | case1 =>
-            exact ⟨state, by simp [State.process, rootFound, rootCalm],
+            exact ⟨state, idle, by simp [State.process, rootFound, rootCalm],
               by simp [State.process, serverFound, serverCalm],
               by simp [State.process, rootFound, rootAlone.1],
               by simp [State.process, rootFound, rootAlone.2],
@@ -267,7 +268,7 @@ defmodule ServerProofsTest do
               cases x <;> simp [«is_integer_list/1», Erlang.erlang.«is_integer/1»] at valid ⊢
             have validRest : «is_integer_list/1» rest = .ok (.atom "true") := by
               simpa [«is_integer_list/1», Erlang.erlang.«is_integer/1»] using valid
-            have three : ∃ state3 : State,
+            have three : ∃ state3 : State, state3.timers = [] ∧
                 state3.processes [] = some { root with mailbox := [] } ∧
                 state3.processes [1] = some { server with mailbox := requests rest } ∧
                 (Config.running state
@@ -281,7 +282,7 @@ defmodule ServerProofsTest do
                       fun r => K (.cons (.integer (n * 2)) r), some⟩),
                      ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len rest))
                        (.pid []) rest))] none false := by
-              refine ⟨?state3, ?_, ?_, ?advanced⟩
+              refine ⟨?state3, ?_, ?_, ?_, ?advanced⟩
               case advanced =>
                 rw [«collect/1».eq_def _ (.cons (.integer n) rest),
                   «serve/2».eq_def _ _ (.cons (.integer n) rest)]
@@ -289,15 +290,15 @@ defmodule ServerProofsTest do
                   Result.receiveWith, ReceiveTimeout.ofTerm, State.view, State.process, rootFound,
                   serverFound, rootEmpty, serverMailbox, requests, selectMessage,
                   Erlang.erlang.«send/2», Transition.apply, State.update, State.deliver, rootCalm,
-                  serverCalm, len, Dispatcher.ofTable, Dispatcher.step]
+                  serverCalm, len, Dispatcher.ofTable, Dispatcher.step, idle]
                 rfl
               all_goals simp [rootCalm, serverCalm]
-            obtain ⟨state3, found, found', advanced⟩ := three
-            obtain ⟨state', rootCalm', serverCalm', alone⟩ :=
+            obtain ⟨state3, idle3, found, found', advanced⟩ := three
+            obtain ⟨state', idle', rootCalm', serverCalm', alone⟩ :=
               ih (fun r => K (.cons (.integer (n * 2)) r)) validRest state3 _ _ found rfl found' rfl
-                rootCalm serverCalm rootAlone serverAlone
+                rootCalm serverCalm rootAlone serverAlone idle3
             obtain ⟨rootLinks', rootMonitors', serverLinks', serverMonitors', advanced'⟩ := alone
-            refine ⟨state', rootCalm', serverCalm', rootLinks', rootMonitors', serverLinks',
+            refine ⟨state', idle', rootCalm', serverCalm', rootLinks', rootMonitors', serverLinks',
               serverMonitors', ?_⟩
             rw [show 3 * len (.cons (.integer n) rest) = 3 + 3 * len rest by simp [len]; omega,
               Config.advance_add, advanced, advanced']
@@ -319,7 +320,7 @@ defmodule ServerProofsTest do
             cases xs <;> simp [«is_integer_list/1»] at valid notNil notCons
         have valid : «is_integer_list/1» xs = .ok (.atom "true") := requires
         -- Spawn the server.
-        have start : ∃ state : State, state.processes [] = some { children := 1 } ∧
+        have start : ∃ state : State, state.timers = [] ∧ state.processes [] = some { children := 1 } ∧
             state.processes [1] = some {} ∧
             (Config.start {} (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table
               (depth + len xs + 1) xs)).advance 3 =
@@ -331,7 +332,7 @@ defmodule ServerProofsTest do
                  ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs))
                    (.pid []) xs))]
                 none false := by
-          refine ⟨?state, ?_, ?_, ?advanced⟩
+          refine ⟨?state, ?_, ?_, ?_, ?advanced⟩
           case advanced =>
             simp [Lynx.apply_eq, «double_all_doubles:ensures/1», «double_all/1»,
               Erlang.erlang.«self/0», Erlang.erlang.«spawn/1», get, getThe, MonadStateOf.get,
@@ -341,22 +342,22 @@ defmodule ServerProofsTest do
               Erlang.program.«Elixir.ServerProofsTest:-double_all/1-fun-0-/0».call, «-double_all/1-fun-0-/2», Transition.apply]
             rfl
           all_goals simp
-        obtain ⟨state, rootFound, serverFound, started⟩ := start
+        obtain ⟨state, idle, rootFound, serverFound, started⟩ := start
         -- Send every request.
-        obtain ⟨state', serverFound', others, requested⟩ := requests_phase
+        obtain ⟨state', idle', serverFound', others, requested⟩ := requests_phase
           (fun _ => «collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) xs >>=
             fun collected => Result.ofExcept («double/1» xs) >>=
               fun expected => Result.ofExcept (Erlang.erlang.«==/2» collected expected))
           (Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs)) (.pid []) xs))
-          xs valid state _ serverFound (by simp [State.process, rootFound])
+          xs valid state _ serverFound (by simp [State.process, rootFound]) idle
         -- Answer every request.
-        obtain ⟨state'', rootCalm'', serverCalm'', rootLinks'', rootMonitors'', serverLinks'',
+        obtain ⟨state'', idle'', rootCalm'', serverCalm'', rootLinks'', rootMonitors'', serverLinks'',
           serverMonitors'', replied⟩ := replies_phase
           (fun collected => Result.ofExcept («double/1» xs) >>=
               fun expected => Result.ofExcept (Erlang.erlang.«==/2» collected expected))
           xs valid state' { children := 1 } _
           (by rw [others [] (by simp), rootFound]) rfl serverFound' (by simp) rfl (by simp)
-          ⟨rfl, rfl⟩ (by simp)
+          ⟨rfl, rfl⟩ (by simp) idle'
         have total : (Config.start {}
             (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table (depth + len xs + 1) xs)).advance
               (3 + len xs + 3 * len xs + 2) =
@@ -370,14 +371,15 @@ defmodule ServerProofsTest do
           exact congrArg (Config.advance 2) replied
         -- Neither process is linked or monitored, so each exit only removes it.
         have rootExit : state''.terminate [] (.atom "normal") = state''.update [] none := by
-          simp [State.terminate, rootLinks'', rootMonitors'']
+          exact State.terminate_eq_update rootLinks'' rootMonitors'' idle''
         have serverRecord : (state''.update [] none).process [1] = state''.process [1] := by
           simp [State.process, State.update]
         have serverCalmAfter : ((state''.update [] none).process [1]).signal = none := by
           rw [serverRecord]; exact serverCalm''
         have serverExit : (state''.update [] none).terminate [1] (.atom "normal") =
             (state''.update [] none).update [1] none := by
-          simp [State.terminate, serverRecord, serverLinks'', serverMonitors'']
+          exact State.terminate_eq_update (by rw [serverRecord]; exact serverLinks'')
+            (by rw [serverRecord]; exact serverMonitors'') (by simpa using idle'')
         -- The root compares the doubled list with itself, then both processes exit.
         have finished : (Config.running state''
               [([], ⟨Result.ofExcept («double/1» xs) >>=
@@ -389,10 +391,11 @@ defmodule ServerProofsTest do
               (some (.ok Lynx.Term.true, state''.view [])) false := by
           simp [double_ok xs valid, Erlang.erlang.«==/2», Config.advance, Config.successors,
             splits, Task.transitions, Task.child, «serve/2», Transition.apply, Lynx.Term.true,
-            rootCalm'', rootExit, serverCalmAfter, serverExit]
+            rootCalm'', rootExit, serverCalmAfter, serverExit, idle'']
         -- Without races, this run determines the outcome of every schedule.
         rw [concurrent_eq_advance _ (Config.RaceFree.of_talks single (root_talks _ xs)) _
-          (by rw [total, finished]; rfl) schedule, total, finished]
+          (by rw [total, finished]; simp [Config.successors, splits, idle'']) schedule, total,
+          finished]
         rfl
       """
   end

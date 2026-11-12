@@ -169,11 +169,6 @@ private theorem unchanged_fields (process : ProcessState) (mailbox : List Term)
     Unchanged process { process with mailbox, links, monitors, monitoring, aliases } :=
   ⟨rfl, rfl, rfl, id⟩
 
-/-- Records of other processes keep their fields when their timer changes. -/
-private theorem unchanged_timer (process : ProcessState) (timer : Option Timer) :
-    Unchanged process { process with timer } :=
-  ⟨rfl, rfl, rfl, id⟩
-
 /-- Unfold a compound operation on a kept record. -/
 syntax "keeps_chain" : tactic
 macro_rules
@@ -186,7 +181,6 @@ macro_rules
       | (apply Keeps.update (by assumption))
       | (apply Keeps.modify (.inl (by assumption)))
       | (apply Keeps.modify (.inr fun process => unchanged_fields process _ _ _ _ _))
-      | (apply Keeps.modify (.inr fun process => unchanged_timer process _))
       | refine Keeps.foldl ?_ (fun current item kept => ?_)
       | split))
 
@@ -328,6 +322,26 @@ private theorem keepsChildren_request {state : State} {processId other : PID} {q
   cases query with
   | monitor target alias => exact KeepsChildren.monitor (KeepsChildren.refl _ _)
   | _ => simp only [State.request]; children_chain
+
+/-- Timers only deliver messages, so they keep every record otherwise,
+including pending signals. -/
+private theorem timerSteps_keeps {state after : State} {event : Event}
+    (possible : (event, after) ∈ state.timerSteps) (processId : PID) :
+    Keeps processId state after ∧ KeepsChildren processId state after ∧
+      (after.process processId).signal = (state.process processId).signal := by
+  simp only [State.timerSteps, List.mem_map] at possible
+  obtain ⟨timer, -, step⟩ := possible
+  split at step <;> simp only [Prod.mk.injEq] at step <;> obtain ⟨-, rfl⟩ := step
+  · refine ⟨keeps_deliver, KeepsChildren.deliver (KeepsChildren.refl _ _), ?_⟩
+    show ((state.deliver _ _).process processId).signal = _
+    unfold State.deliver
+    split
+    · rw [State.process_update]
+      split
+      · subst processId; simp_all [State.process]
+      · rfl
+    · rfl
+  · exact ⟨Keeps.refl _ _, KeepsChildren.refl _ _, rfl⟩
 
 /-! ### Transitions -/
 
@@ -722,6 +736,12 @@ private theorem Step.wellformed {first next : Config α} {event : Event}
   | run split possible =>
     subst split
     exact wellformed_apply wellformed possible
+  | timer possible =>
+    obtain ⟨distinct, fresh, live, quiet⟩ := wellformed
+    refine ⟨distinct, fun parent member descendant member' index rest extended => ?_,
+      fun entry member => (timerSteps_keeps possible entry.1).2.1.2 (live entry member), quiet⟩
+    rw [(timerSteps_keeps possible parent.1).2.1.1]
+    exact fresh parent member descendant member' index rest extended
 
 /-! ### Reading the environment first -/
 
@@ -861,6 +881,16 @@ private theorem twins_run {processId : PID} {first last : Config α} {events : L
     · cases step <;> simp [Twins] at twins
     cases step with
     | get | set | enter => simp [Twins] at twins
+    | @timer _ next state tasks finished exhausted possible =>
+      -- A timer steps the same way from both.
+      obtain ⟨rfl, rfl, rfl, pending, before, after, β, finish, computation, computation',
+        split, rfl⟩ := twins
+      obtain ⟨events', run'⟩ := ih terminal (Step.wellformed (.timer possible) wellformed)
+        (other := .running next (before ++ (processId, ⟨computation', finish⟩) :: after) finished'
+          exhausted')
+        ⟨rfl, rfl, rfl, (timerSteps_keeps possible processId).1.process.2.2.2 pending, before,
+          after, β, finish, computation, computation', split, rfl⟩
+      exact ⟨_, .step (.timer possible) run'⟩
     | @run tasks before' stepping task' after' transition state finished exhausted split'
         possible =>
       obtain ⟨rfl, rfl, rfl, pending, before, after, β, finish, computation, computation',
@@ -921,6 +951,16 @@ private theorem read_first {first last : Config α} {events : List Event} {outco
       signal
     subst equal
     cases step with
+    | @timer _ next state tasks finished exhausted possible =>
+      -- A timer keeps what the process reads, and the read follows it.
+      obtain ⟨kept, -, same⟩ := timerSteps_keeps possible processId
+      obtain ⟨events', run'⟩ := ih terminal (state := next) (tasks := tasks) (finished := finished)
+        (exhausted := exhausted) (before := before) (after := after) (read := read)
+        (finish := finish) rfl (Step.wellformed (.timer possible) wellformed) split
+        (by rw [same, signal])
+      have view : next.view processId = state.view processId := by
+        simp only [State.view, kept.process.1, kept.process.2.1]
+      exact ⟨_, .step (.timer possible) (by simpa [view] using run')⟩
     | @run tasks before' stepping task' after' transition state finished exhausted split'
         possible =>
       subst split
