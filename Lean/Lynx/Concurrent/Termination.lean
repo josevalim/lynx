@@ -128,6 +128,19 @@ theorem State.weight_bounce {state : State} {envelope : Envelope} {rest : List E
     simp only [State.weight, State.emit, weight_enqueue, split, List.map_append, List.map_cons,
       List.sum_append, List.sum_cons, List.map_nil, List.sum_nil, Envelope.weight, signal] <;> omega
 
+theorem mem_firstOfEach {seen : List (List Nat)} {timers : List Timer} {timer : Timer}
+    (mem : timer ∈ firstOfEach seen timers) : timer ∈ timers := by
+  induction timers generalizing seen with
+  | nil => simp [firstOfEach] at mem
+  | cons head rest ih =>
+    simp only [firstOfEach] at mem
+    split at mem
+    · exact List.mem_cons_of_mem _ (ih mem)
+    · simp only [List.mem_cons] at mem
+      rcases mem with rfl | mem
+      · exact List.mem_cons_self
+      · exact List.mem_cons_of_mem _ (ih mem)
+
 /-- A timer firing lowers the weight. -/
 theorem State.weight_fire {state : State} {timer : Timer} (mem : timer ∈ state.timers) :
     (state.fire timer).weight < state.weight := by
@@ -265,7 +278,7 @@ private theorem deliveries_tasks {state : State} {processId : PID} {task : Task 
       ((transition.tasks = [(processId, task)] ∧
         transition.state = ({ state with inTransit := rest }.receive envelope).1) ∨
        transition.tasks = []) := by
-  simp only [Task.deliveries, List.mem_filterMap] at possible
+  simp only [Task.deliveries, Task.delivery, List.mem_filterMap] at possible
   obtain ⟨⟨envelope, rest⟩, mem, found⟩ := possible
   refine ⟨envelope, rest, mem, ?_⟩
   split at found
@@ -315,7 +328,7 @@ private theorem step_measure {state : State} {tasks : List (PID × Task α)}
       exact ⟨_, _, _, _, rfl, .right _ (State.weight_bounce mem)⟩
   · simp only [Prod.mk.injEq] at same
     obtain ⟨-, rfl⟩ := same
-    exact ⟨_, _, _, _, rfl, .right _ (State.weight_fire mem)⟩
+    exact ⟨_, _, _, _, rfl, .right _ (State.weight_fire (mem_firstOfEach mem))⟩
 
 private theorem running_acc :
     ∀ (state : State) (tasks : List (PID × Task α))

@@ -392,6 +392,18 @@ time elapsed when timers are canceled. -/
     else state
   (child, state)
 
+/-- The first timer of each reference, skipping references already seen. -/
+@[expose] def firstOfEach (seen : List (List Nat)) : List Timer → List Timer
+  | [] => []
+  | timer :: rest =>
+      if seen.contains timer.reference then firstOfEach seen rest
+      else timer :: firstOfEach (timer.reference :: seen) rest
+
+/-- The timers that can fire: the first of each reference. References are
+unique unless a process resets its own reference counter, and firing a timer
+ends every timer with its reference, as canceling it does. -/
+@[expose] def State.firing (state : State) : List Timer := firstOfEach [] state.timers
+
 /-- Fire a timer: its message is in transit. -/
 @[expose] def State.fire (state : State) (timer : Timer) : State :=
   { state with timers := state.timers.filter (·.reference != timer.reference) }.emit clock
@@ -537,16 +549,20 @@ positive-timeout receive without a match, one otherwise. -/
             [Task.ended finish (.request processId query reply) answered processId reason
               (.error (.exit reason))]
 
+/-- A signal reaching a process, with the other signals in transit. -/
+@[expose] def Task.delivery (state : State) (processId : PID) (task : Task α) (envelope : Envelope)
+    (rest : List Envelope) : Transition α :=
+  let (received, exits) := { state with inTransit := rest }.receive envelope
+  match exits with
+  | none => { event := .deliver envelope, state := received, tasks := [(processId, task)] }
+  | some reason => Task.ended task.finish (.deliver envelope) received processId reason
+      (.error (.exit reason))
+
 /-- The signals that can reach a process next, and what each does. -/
 @[expose] def Task.deliveries (state : State) (processId : PID) (task : Task α) :
     List (Transition α) :=
   (deliverable state.inTransit).filterMap fun (envelope, rest) =>
-    if envelope.target != processId then none else
-    let (received, exits) := { state with inTransit := rest }.receive envelope
-    some <| match exits with
-      | none => { event := .deliver envelope, state := received, tasks := [(processId, task)] }
-      | some reason => Task.ended task.finish (.deliver envelope) received processId reason
-          (.error (.exit reason))
+    if envelope.target != processId then none else some (task.delivery state processId envelope rest)
 
 /-- Every step of a process: its own, and the signals it takes. -/
 @[expose] def Task.transitions (state : State) (processId : PID) (task : Task α) :
@@ -620,7 +636,7 @@ signal reaching a process that is not live, or a timer firing. -/
         if (tasks.lookup envelope.target).isSome then none
         else some (.bounce envelope,
           .running ({ state with inTransit := rest }.bounce envelope) tasks finished exhausted)) ++
-      state.timers.map fun timer =>
+      state.firing.map fun timer =>
         (.fire timer.reference, .running (state.fire timer) tasks finished exhausted)
 
 /-- A step of a configuration. -/
