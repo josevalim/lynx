@@ -456,6 +456,7 @@ run_cmd LynxTest.ProofAudit.checkModule `Lynx.Term.Runner
 run_cmd do
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Termination
+  LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Footprint
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Reduction
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Term.DataTypes
 
