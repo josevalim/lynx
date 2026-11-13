@@ -326,7 +326,7 @@ defmodule Lynx do
 
     * Programs without races, whose processes only talk along their process
       tree with a single sender for each receiver, are proven by evaluating a
-      single run: `Lynx.Concurrent.Config.RaceFree.of_talks` shows every run
+      single run: `Lynx.Concurrent.RaceFree.of_talks` shows every run
       ends alike, and `Lynx.concurrent_of_advance` evaluates one with
       `Lynx.Concurrent.Config.advance`. See `examples/concurrency/server.exs`,
       which does so for any input list.

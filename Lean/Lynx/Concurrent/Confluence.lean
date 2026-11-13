@@ -7,10 +7,10 @@ import all Lynx.Concurrent.Footprint
 /-! Programs without races reach the same terminal configuration under every
 interleaving, so one run determines the outcome of every run.
 
-`Config.RaceFree` asks that any two different steps of a reachable
+`RaceFree` asks that any two different steps of a reachable
 configuration meet again after one step each. Then any two runs that reach a
-terminal configuration reach the same one (`Config.RaceFree.outcome_eq`), and
-every run reaches one, since runs end (`Config.terminates`). `Config.RaceFree.of_talks` establishes it for
+terminal configuration reach the same one (`RaceFree.outcome_eq`), and
+every run reaches one, since runs end (`Config.terminates`). `RaceFree.of_talks` establishes it for
 processes that only talk along their process tree, each receiver hearing from
 a single sender. -/
 
@@ -325,7 +325,7 @@ private theorem arrive_sorted {source target : PID} {inTransit : List Envelope}
 
 /-- Any two different steps of a configuration reachable from this one meet
 again after one step each. -/
-@[expose] public def Config.RaceFree (config : Config α) : Prop :=
+@[expose] public def RaceFree (config : Config α) : Prop :=
   ∀ events reached, Run config events reached →
     ∀ key key' event event' next next', key ≠ key' →
       (key, event, next) ∈ reached.steps → (key', event', next') ∈ reached.steps →
@@ -350,7 +350,7 @@ private theorem start_unique {env : Environment} {computation : Result α} {elap
 /-- Different steps of a well-formed configuration without races meet again
 after one step each. -/
 private theorem local_confluence {config first second : Config α} {event event' : Event}
-    (wellformed : Wellformed config) (raceFree : config.RaceFree)
+    (wellformed : Wellformed config) (raceFree : RaceFree config)
     (step : Step config event first) (step' : Step config event' second) :
     first = second ∨ ∃ joined, (∃ step, Step first step joined) ∧ ∃ step, Step second step joined := by
   cases config with
@@ -363,8 +363,8 @@ private theorem local_confluence {config first second : Config α} {event event'
       exact .inl (steps_unique wellformed mem mem').2
     · exact .inr (raceFree [] _ .refl key key' event event' first second same mem mem')
 
-private theorem Config.RaceFree.step {config next : Config α} {event : Event}
-    (raceFree : config.RaceFree) (step : Step config event next) : next.RaceFree :=
+private theorem RaceFree.step {config next : Config α} {event : Event}
+    (raceFree : RaceFree config) (step : Step config event next) : RaceFree next :=
   fun _ _ run => raceFree _ _ (.step step run)
 
 /-- When every run is bounded, some run gets stuck. -/
@@ -398,7 +398,7 @@ private theorem Run.cons_inv {first last : Config α} {event : Event} {events : 
 /-- Every run is at most as long as a stuck run, and every stuck run ends in the
 same configuration after the same number of steps. -/
 private theorem unique_stuck (last : Config α) : ∀ (length : Nat) (config : Config α)
-    (events : List Event), Wellformed config → config.RaceFree → Run config events last →
+    (events : List Event), Wellformed config → RaceFree config → Run config events last →
       events.length = length → Stuck last →
       (∀ events' reached, Run config events' reached → events'.length ≤ length) ∧
         ∀ events' last', Run config events' last' → Stuck last' →
@@ -461,9 +461,9 @@ private theorem unique_stuck (last : Config α) : ∀ (length : Nat) (config : C
 
 /-- Without races, every run of a computation that reaches a terminal
 configuration reaches the same one, so all have the same outcome. -/
-public theorem Config.RaceFree.outcome_eq {env : Environment} {computation : Result α}
+public theorem RaceFree.outcome_eq {env : Environment} {computation : Result α}
     {elapsed : PID → Nat → Nat}
-    (raceFree : (Config.start env computation elapsed).RaceFree) {events events' : List Event}
+    (raceFree : RaceFree (Config.start env computation elapsed)) {events events' : List Event}
     {last last' : Config α} {outcome outcome' : Outcome α}
     (run : Run (.start env computation elapsed) events last) (terminal : Terminal last outcome)
     (run' : Run (.start env computation elapsed) events' last')
@@ -1672,10 +1672,10 @@ private theorem talking_joins {talk : PID → PID → Prop} (single : Single tal
 
 /-- A computation whose processes only talk along the process tree, with a
 single sender for each receiver, has no races. -/
-public theorem Config.RaceFree.of_talks {talk : PID → PID → Prop} (single : Single talk)
+public theorem RaceFree.of_talks {talk : PID → PID → Prop} (single : Single talk)
     {env : Environment} {computation : Result α} {elapsed : PID → Nat → Nat}
     (talks : computation.Talks talk env.currentPid 0) :
-    (Config.start env computation elapsed).RaceFree := by
+    RaceFree (Config.start env computation elapsed) := by
   intro events reached run key key' event event' next next' distinct mem mem'
   have preserved : ∀ {first last : Config α} {events : List Event}, Run first events last →
       Wellformed first ∧ Talking talk first → Wellformed last ∧ Talking talk last := by
