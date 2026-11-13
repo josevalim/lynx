@@ -335,10 +335,9 @@ canceled, and linked and watching processes get signals. -/
 @[expose] def ProcessState.env (process : ProcessState) : ProcessState :=
   { pdict := process.pdict, refCounter := process.refCounter }
 
-/-- What a process ending observes: whom it signals, and what the root reports. -/
+/-- What a process ending observes: whom it signals. -/
 @[expose] def ProcessState.ending (process : ProcessState) : ProcessState :=
-  { pdict := process.pdict, refCounter := process.refCounter, links := process.links
-    monitors := process.monitors }
+  { links := process.links, monitors := process.monitors }
 
 /-- The message a receive selects, if any. -/
 @[expose] def selected (select : Term → Option β) (mailbox : List Term) : List Term :=
@@ -1369,7 +1368,7 @@ private def Answers (effect : Effect) (state other : State) (processId : PID)
     match answer.2.2 with
     | none => answer'.2.1 = effect.apply other
     | some reason => answer.2.1 = state ∧ answer'.2.1 = other ∧
-        other.view processId = state.view processId ∧ other.terminate processId reason = effect.apply other
+        other.terminate processId reason = effect.apply other
 
 private theorem any_eq_filter {items : List γ} {condition : γ → Bool} :
     (!(items.filter condition).isEmpty) = items.any condition := by
@@ -1461,34 +1460,30 @@ private theorem request_matches {state other : State} {processId : PID} {query :
         (by split <;> simp [Observes.and, Observes.record])
       simp only [ProcessState.mk.injEq, true_and, and_true] at trapping
       have ends : ∀ exit, (isKill reason || !(state.process target).trapExit) = true →
-          other.view target = state.view target ∧
           other.terminate target exit = (Effect.ending target (state.process target) exit).apply other := by
         intro exit condition
         rw [ite_eq_left condition] at agree
         have ending := (agree.right : (Observes.record target ProcessState.ending).Agree state other).record
-        refine ⟨State.view_eq ?_, by rw [← Effect.apply_ending, Effect.ending_congr ending.2]⟩
-        have := ending.2
-        simp only [ProcessState.ending, ProcessState.mk.injEq] at this
-        simp [ProcessState.env, this]
+        rw [← Effect.apply_ending, Effect.ending_congr ending.2]
       simp only [State.request, ↓reduceIte, trapping.2, State.exitSignal, Bool.false_and,
         Bool.false_eq_true, Bool.not_false, Bool.true_and]
       cases kill : isKill reason
       · cases trap : (state.process target).trapExit
         · have condition : (isKill reason || !(state.process target).trapExit) = true := by
             simp [kill, trap]
-          obtain ⟨view, ending⟩ := ends reason condition
+          have ending := ends reason condition
           simp only [↓reduceIte, Bool.false_eq_true, Bool.not_false, Bool.and_true]
-          cases normal : isNormal reason <;> exact .some ⟨rfl, rfl, rfl, rfl, view, ending⟩
+          cases normal : isNormal reason <;> exact .some ⟨rfl, rfl, rfl, rfl, ending⟩
         · have condition : (isKill reason || !(state.process target).trapExit) = false := by
             simp [kill, trap]
           simp only [Bool.false_eq_true, ↓reduceIte, Bool.not_true, Bool.and_false]
           exact .some ⟨rfl, rfl, by simp [State.append_eq]⟩
       · have condition : (isKill reason || !(state.process target).trapExit) = true := by simp [kill]
-        obtain ⟨view, ending⟩ := ends (.atom "killed") condition
+        have ending := ends (.atom "killed") condition
         have normal : isNormal reason = false := by
           unfold isKill at kill; unfold isNormal; split <;> simp_all
         simp only [↓reduceIte, normal, Bool.false_and, Bool.false_eq_true]
-        exact .some ⟨rfl, rfl, rfl, rfl, view, ending⟩
+        exact .some ⟨rfl, rfl, rfl, rfl, ending⟩
     · simp only [requestFootprint, State.request, self, ↓reduceIte]
       exact .some ⟨rfl, rfl, by simp⟩
   | trapExit enabled =>
@@ -1659,7 +1654,7 @@ private theorem own_matches {state other : State} {processId : PID} {task : Task
       cases exit' with
       | none => exact related_single ⟨rfl, rfl, rfl, rfl, settled⟩
       | some reason =>
-        obtain ⟨rfl, rfl, view, ending⟩ := settled
+        obtain ⟨rfl, rfl, ending⟩ := settled
         exact related_single ⟨rfl, rfl, rfl, rfl, ending⟩
 
 /-- A process's own step observes the process. -/
@@ -1716,5 +1711,266 @@ private theorem own_state {state : State} {processId : PID} {task : Task α} {tr
   simp only [List.getElem?_eq_getElem bound, Option.some.injEq] at found
   subst found
   exact matched.2.2.2.2
+
+end Lynx.Concurrent
+
+namespace Lynx.Concurrent
+
+open Lynx
+
+/-! ### What steps observe and change of other processes -/
+
+/-- A process's own step observes other processes only through whether they are live. -/
+private theorem Task.footprint_observes_others {state : State} {processId : PID} {task : Task α} :
+    ∀ entry ∈ (task.footprint state processId).observes.records,
+      entry.1 = processId ∨ entry.2 = ProcessState.live := by
+  obtain ⟨computation, finish⟩ := task
+  cases computation with
+  | error exception =>
+    cases exception <;> simp [Task.footprint, Footprint.ending, Observes.record]
+  | request query next =>
+    cases query <;> simp only [Task.footprint, requestFootprint] <;> (repeat' split) <;>
+      simp [Observes.record, Observes.and]
+  | _ => simp [Task.footprint, Footprint.ending, Footprint.spawn, Observes.record]
+
+/-- A process's own step changes its own record, and the record of a child it spawns. -/
+private theorem Task.footprint_changes {state : State} {processId : PID} {task : Task α} :
+    ∀ entry ∈ (task.footprint state processId).effect.records,
+      entry.1 = processId ∨ entry.1 = processId ++ [(state.process processId).children + 1] := by
+  obtain ⟨computation, finish⟩ := task
+  cases computation with
+  | error exception =>
+    cases exception <;> simp [Task.footprint, Footprint.ending, Effect.ending]
+  | request query next =>
+    cases query <;> simp only [Task.footprint, requestFootprint] <;> (repeat' split) <;>
+      simp [Effect.andThen, Effect.change, Effect.send, Effect.ending]
+  | receive timeout select next =>
+    simp only [Task.footprint]
+    split <;> simp [Effect.change]
+  | send destination message next =>
+    simp only [Task.footprint]
+    split <;> simp [Effect.change, Effect.send]
+  | _ => simp [Task.footprint, Footprint.ending, Footprint.spawn, Effect.change, Effect.ending]
+
+/-- A signal arriving changes the receiver's record only. -/
+private theorem Footprint.delivery_changes {state : State} {envelope : Envelope} :
+    ∀ entry ∈ (Footprint.delivery state envelope).effect.records, entry.1 = envelope.target := by
+  obtain ⟨source, target, signal⟩ := envelope
+  unfold Footprint.delivery
+  cases signal <;> simp only <;> (try split) <;>
+    simp [Effect.andThen, Effect.change, Effect.ending]
+
+/-- A signal arriving observes the receiver's record only. -/
+private theorem Footprint.delivery_observes_target {state : State} {envelope : Envelope} :
+    ∀ entry ∈ (Footprint.delivery state envelope).observes.records, entry.1 = envelope.target := by
+  obtain ⟨source, target, signal⟩ := envelope
+  unfold Footprint.delivery
+  cases signal <;> simp only <;> (try split) <;> simp [Observes.and, Observes.record]
+
+end Lynx.Concurrent
+
+namespace Lynx.Concurrent
+
+open Lynx
+
+/-! ### Steps that stay in the process's own record -/
+
+/-- Whether a process's next step only reads or replaces its environment, or
+receives a message already queued. Its effects stay in its own record. -/
+@[expose] def Task.local (state : State) (processId : PID) : Task α → Bool
+  | ⟨computation, _⟩ =>
+    match computation with
+    | .get _ | .set .. => true
+    | .receive _ select _ =>
+        (selectMessage (select (state.view processId)) (state.process processId).mailbox).isSome
+    | _ => false
+
+/-- A signal changes a mailbox only by appending to it, and what it appends
+and the rest of the record do not depend on the mailbox or the environment. -/
+private theorem ProcessState.receive_split {process : ProcessState} {source : PID} {signal : Signal} :
+    let core := ({ process with mailbox := [] } : ProcessState).receive source signal
+    process.receive source signal = { core with mailbox := process.mailbox ++ core.mailbox } ∧
+      core.pdict = process.pdict ∧ core.refCounter = process.refCounter := by
+  cases process
+  cases signal <;> simp only [ProcessState.receive, ProcessState.append] <;> (repeat' split) <;>
+    simp_all
+
+private theorem selectMessage_append {select : Term → Option β} {mailbox extra : List Term}
+    (matched : (selectMessage select mailbox).isSome) :
+    selected select (mailbox ++ extra) = selected select mailbox ∧
+      remaining select (mailbox ++ extra) = remaining select mailbox ++ extra ∧
+      (selectMessage select (mailbox ++ extra)).isSome := by
+  obtain ⟨⟨message, value, rest⟩, found⟩ := Option.isSome_iff_exists.mp matched
+  obtain ⟨-, -, -, extend⟩ := selectMessage_index found
+  simp [selected, remaining, found, extend]
+
+/-- A local step: what it observes of its process, how it changes the record,
+and the records it applies to. -/
+private structure LocalShape (view : ProcessState → ProcessState) (change : ProcessState → ProcessState)
+    (ready : ProcessState → Prop) : Prop where
+  receive : ∀ process source signal, ready process →
+    ready (process.receive source signal) ∧ view (process.receive source signal) = view process ∧
+      change (process.receive source signal) = (change process).receive source signal
+  fields : ∀ process, ∃ pdict refCounter mailbox, change process = { process with pdict, refCounter, mailbox }
+  links : ∀ process links, change { process with links } = { change process with links }
+
+private theorem Task.local_shape {state : State} {processId : PID} {task : Task α}
+    (isLocal : task.local state processId = true) :
+    ∃ view change ready, (task.footprint state processId).observes = .record processId view ∧
+      (∀ current : State, (task.footprint state processId).effect.apply current =
+        current.modify processId change) ∧
+      (∀ entry ∈ (task.footprint state processId).effect.records, entry.1 = processId) ∧
+      ready (state.process processId) ∧ LocalShape view change ready ∧
+      ∀ current : State, current.view processId = state.view processId →
+        ready (current.process processId) → task.local current processId = true := by
+  obtain ⟨computation, finish⟩ := task
+  cases computation with
+  | get next =>
+    refine ⟨ProcessState.env, id, fun _ => True, rfl, fun current => ?_, by simp [Task.footprint],
+      trivial, ⟨fun process source signal _ => ?_, fun process => ⟨process.pdict, process.refCounter,
+        process.mailbox, rfl⟩, fun _ _ => rfl⟩, fun _ _ _ => rfl⟩
+    · simp only [Task.footprint, Effect.apply_empty]
+      cases found : current.processes processId with
+      | none => rw [State.modify_of_none found]
+      | some record => rw [State.modify_of_some found]; exact (State.update_self found).symm
+    · obtain ⟨split, pdict, refCounter⟩ := ProcessState.receive_split (process := process)
+        (source := source) (signal := signal)
+      refine ⟨trivial, ?_, rfl⟩
+      rw [split]
+      simp [ProcessState.env, pdict, refCounter]
+  | set updated next =>
+    let change : ProcessState → ProcessState := fun process =>
+      { process with pdict := updated.pdict, refCounter := max process.refCounter updated.refCounter }
+    refine ⟨ProcessState.live, change, fun _ => True, rfl,
+      fun current => by simp only [Task.footprint, Effect.apply_change]; rfl,
+      by simp [Task.footprint, Effect.change],
+      trivial, ⟨fun process source signal _ => ⟨trivial, rfl, ?_⟩,
+        fun process => ⟨_, _, process.mailbox, rfl⟩, fun _ _ => rfl⟩, fun _ _ _ => rfl⟩
+    cases process
+    cases signal <;> simp only [change, ProcessState.receive, ProcessState.append] <;>
+      (repeat' split) <;> simp_all
+  | receive timeout select next =>
+    simp only [Task.local] at isLocal
+    let choose := select (state.view processId)
+    let view : ProcessState → ProcessState := fun process =>
+      { pdict := process.pdict, refCounter := process.refCounter, mailbox := selected choose process.mailbox }
+    let change : ProcessState → ProcessState := fun process =>
+      { process with mailbox := remaining choose process.mailbox }
+    refine ⟨view, change, fun process => (selectMessage choose process.mailbox).isSome, rfl,
+      fun current => ?_, ?_, isLocal,
+      ⟨fun process source signal ready => ?_, fun process => ⟨_, _, _, rfl⟩, fun _ _ => rfl⟩,
+      fun current same ready => by simp only [Task.local, same]; exact ready⟩
+    · simp only [Task.footprint]
+      split
+      · simp only [Effect.apply_change]; rfl
+      · simp_all [choose]
+    · simp only [Task.footprint]
+      split <;> simp [Effect.change]
+    · obtain ⟨split, pdict, refCounter⟩ := ProcessState.receive_split (process := process)
+        (source := source) (signal := signal)
+      obtain ⟨same, rest, matched⟩ := selectMessage_append (extra := (({ process with mailbox := [] } :
+        ProcessState).receive source signal).mailbox) ready
+      refine ⟨by rw [split]; exact matched, ?_, ?_⟩
+      · rw [split]
+        simp only [view, pdict, refCounter, same]
+      · obtain ⟨split', -, -⟩ := ProcessState.receive_split
+          (process := change process) (source := source) (signal := signal)
+        rw [split, split']
+        simp only [change, rest, List.append_assoc]
+  | _ => simp [Task.local] at isLocal
+
+end Lynx.Concurrent
+
+namespace Lynx.Concurrent
+
+open Lynx
+
+/-- A local step continues the process, with the same report. -/
+private theorem Task.local_own {state : State} {processId : PID} {task : Task α}
+    (isLocal : task.local state processId = true) :
+    ∃ transition computation, task.own state processId = [transition] ∧
+      transition.tasks = [(processId, ⟨computation, task.finish⟩)] ∧ transition.finished = none ∧
+      transition.exhausted = false := by
+  obtain ⟨computation, finish⟩ := task
+  cases computation with
+  | get next => exact ⟨_, _, rfl, rfl, rfl, rfl⟩
+  | set updated next => exact ⟨_, _, rfl, rfl, rfl, rfl⟩
+  | receive timeout select next =>
+    simp only [Task.local] at isLocal
+    obtain ⟨⟨message, value, rest⟩, found⟩ := Option.isSome_iff_exists.mp isLocal
+    simp only [Task.own, found]
+    exact ⟨_, _, rfl, rfl, rfl, rfl⟩
+  | _ => simp [Task.local] at isLocal
+
+end Lynx.Concurrent
+
+namespace Lynx.Concurrent
+
+open Lynx
+
+/-- A process ends the same way after a change of its record that keeps whom it signals. -/
+private theorem State.terminate_modify {state : State} {processId : PID} {reason : Term}
+    {change : ProcessState → ProcessState}
+    (keeps : ∀ process, (change process).ending = process.ending) :
+    (state.modify processId change).terminate processId reason = state.terminate processId reason := by
+  rw [← Effect.apply_ending, ← Effect.apply_ending, Effect.ending_modify]
+  cases found : state.processes processId with
+  | none => simp [State.modify_of_none found]
+  | some process =>
+    rw [State.modify_of_some found]
+    have : ((state.update processId (some (change process))).process processId) = change process := by
+      simp [State.process, State.update]
+    rw [this, Effect.ending_congr (keeps process)]
+    simp [State.process, found]
+
+/-- A signal ending a process does so the same way after a local step, which
+keeps whether it traps exits and whom it is linked to. -/
+private theorem local_absorbed {state : State} {processId source : PID} {signal : Signal}
+    {change : ProcessState → ProcessState}
+    (fields : ∀ process, ∃ pdict refCounter mailbox,
+      change process = { process with pdict, refCounter, mailbox })
+    (linksChange : ∀ process links, change { process with links } = { change process with links })
+    (ends : (state.receive ⟨source, processId, signal⟩).2.isSome) :
+    ((state.modify processId change).receive ⟨source, processId, signal⟩).2 =
+        (state.receive ⟨source, processId, signal⟩).2 ∧
+      ((state.modify processId change).receive ⟨source, processId, signal⟩).1.terminate processId
+          ((state.receive ⟨source, processId, signal⟩).2.getD .nil) =
+        (state.receive ⟨source, processId, signal⟩).1.terminate processId
+          ((state.receive ⟨source, processId, signal⟩).2.getD .nil) := by
+  cases signal with
+  | exit reason linked =>
+    simp only [State.receive] at ends ⊢
+    have process : ((state.modify processId change).process processId).links =
+          (state.process processId).links ∧
+        ((state.modify processId change).process processId).trapExit =
+          (state.process processId).trapExit := by
+      cases found : state.processes processId with
+      | none => simp [State.modify_of_none found]
+      | some record =>
+        obtain ⟨pdict, refCounter, mailbox, changed⟩ := fields record
+        simp [State.modify_of_some found, State.process, State.update, found, changed]
+    have same : exits ((state.modify processId change).process processId) source reason linked =
+        exits (state.process processId) source reason linked := by
+      unfold exits; rw [process.1, process.2]
+    rw [State.exitSignal_snd] at ends
+    obtain ⟨exit, exiting⟩ := Option.isSome_iff_exists.mp ends
+    refine ⟨by rw [State.exitSignal_snd, State.exitSignal_snd, same], ?_⟩
+    rw [State.exitSignal_fst_exits (by rw [same]; exact exiting), State.exitSignal_fst_exits exiting]
+    have keeps : ∀ process, (change process).ending = process.ending := by
+      intro process
+      obtain ⟨pdict, refCounter, mailbox, changed⟩ := fields process
+      simp [changed, ProcessState.ending]
+    split
+    · rw [State.modify_modify]
+      have swapped : ((fun process : ProcessState =>
+            { process with links := process.links.erase source }) ∘ change) =
+          change ∘ fun process => { process with links := process.links.erase source } := by
+        funext process
+        obtain ⟨pdict, refCounter, mailbox, changed⟩ := fields process
+        have erased := linksChange process (process.links.erase source)
+        simp only [Function.comp_apply, erased, changed]
+      rw [swapped, ← State.modify_modify, State.terminate_modify keeps]
+    · exact State.terminate_modify keeps
+  | _ => simp [State.receive_eq] at ends
 
 end Lynx.Concurrent
