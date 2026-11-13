@@ -123,7 +123,8 @@ defmodule ServerProofsTest do
           deliverableFrom (before ++ requests xs) seen tail := by
       induction xs using requests.induct generalizing before with
       | case1 x rest ih =>
-        simp only [requests, List.cons_append, deliverableFrom, contains, ↓reduceIte]
+        simp only [requests, List.cons_append, deliverableFrom, Kernel.contains_eq, Kernel.append_eq,
+          contains, ↓reduceIte]
         rw [ih]; simp
       | case2 xs notCons =>
         cases xs <;> simp_all [requests]

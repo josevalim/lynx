@@ -343,7 +343,7 @@ private theorem Calm.spawn {talk : PID → PID → Prop} {state : State} {proces
   refine ⟨fun other => ?_, by simp [equal, State.spawn, State.update, calm.idle],
     by simpa [equal, State.spawn, State.update] using calm.sorted, fun envelope mem => ?_⟩
   · rw [equal]
-    simp only [State.spawn, State.process_update']
+    simp only [State.spawn, State.process_update', Kernel.append_eq]
     split
     · simp
     · split
@@ -529,7 +529,7 @@ private theorem talking_apply {talk : PID → PID → Prop} {state : State}
       (transition.state.process entry.1).children = (state.process entry.1).children) :
     Talking talk (transition.apply before after finished exhausted) := by
   refine ⟨calm, fun entry mem => ?_⟩
-  simp only [List.mem_append] at mem
+  simp only [Kernel.append_eq, List.mem_append] at mem
   rcases mem with (mem | mem) | mem
   · rw [others entry (by simp [mem])]
     exact talks entry (by simp [mem])
@@ -708,7 +708,8 @@ private theorem own_shape {talk : PID → PID → Prop} {state : State} {process
   cases talks with
   | ok =>
     refine ⟨⟨_, rfl⟩, rfl, fun other different _ => ?_, .inl fun inTransit => ?_, .inr (.inl rfl)⟩
-    · simp only [Task.footprint, Footprint.ending, Effect.ending]
+    · simp only [Task.footprint, Footprint.ending, Effect.ending, Kernel.filter_eq,
+        Kernel.foldl_eq]
       exact record_cons_ne different
     · simp [Task.footprint, Footprint.ending, Effect.ending, alone.1, alone.2]
   | error =>
@@ -716,7 +717,8 @@ private theorem own_shape {talk : PID → PID → Prop} {state : State} {process
     cases exception
     all_goals first
       | refine ⟨⟨_, rfl⟩, rfl, fun other different _ => ?_, .inl fun inTransit => ?_, .inr (.inl rfl)⟩
-        · simp only [Task.footprint, Footprint.ending, Effect.ending]
+        · simp only [Task.footprint, Footprint.ending, Effect.ending, Kernel.filter_eq,
+            Kernel.foldl_eq]
           exact record_cons_ne different
         · simp [Task.footprint, Footprint.ending, Effect.ending, alone.1, alone.2]
       | refine ⟨⟨_, rfl⟩, rfl, fun other different _ => ?_, .inl fun inTransit => rfl, .inr (.inl rfl)⟩
@@ -783,11 +785,11 @@ private theorem own_shape {talk : PID → PID → Prop} {state : State} {process
       simp [ProcessState.append, selectedEq]
   | schedule =>
     refine ⟨⟨_, rfl⟩, rfl, fun other different notChild => ?_, .inl fun _ => rfl, .inr (.inr ?_)⟩
-    · simp only [Task.footprint, Footprint.spawn]
+    · simp only [Task.footprint, Footprint.spawn, Kernel.append_eq]
       rw [record_cons_ne different, record_cons_ne notChild]
       rfl
     · intro process message _
-      simp only [Task.footprint, Footprint.spawn, record_cons_self]
+      simp only [Task.footprint, Footprint.spawn, record_cons_self, Kernel.append_eq]
       exact ⟨rfl, rfl, fun view same => by
         simp only [Observes.record, Observes.mk.injEq, List.cons.injEq, Prod.mk.injEq,
           true_and, and_true] at same
@@ -822,7 +824,7 @@ private theorem bounce_message {envelope : Envelope} {message : Term}
 private theorem oldest_enqueue {source target : PID} {inTransit : List Envelope} {oldestFound : Envelope}
     (sorted : Sorted inTransit) (found : inTransit.find? (Envelope.between source target) = some oldestFound)
     (envelope : Envelope) : oldest source target (enqueue envelope inTransit) = oldest source target inTransit := by
-  simp only [oldest]
+  simp only [oldest, Kernel.find?_eq]
   by_cases same : envelope.pair = (source, target)
   · rw [find?_enqueue_same same sorted found, found]
   · rw [find?_enqueue_other same]
@@ -830,7 +832,7 @@ private theorem oldest_enqueue {source target : PID} {inTransit : List Envelope}
 private theorem oldest_arrive {source target source' target' : PID}
     (distinct : (source, target) ≠ (source', target')) (inTransit : List Envelope) :
     oldest source target (arrive source' target' inTransit) = oldest source target inTransit := by
-  simp only [oldest]; rw [find?_arrive_other distinct]
+  simp only [oldest, Kernel.find?_eq]; rw [find?_arrive_other distinct]
 
 /-- The child a live process spawns next is not live yet. -/
 private theorem child_dead {state : State} {tasks : List (PID × Task α)}
@@ -1058,7 +1060,7 @@ private theorem own_signal {talk : PID → PID → Prop} {state : State} {tasks 
 private theorem terminate_alone {state : State} {processId : PID} {reason : Term}
     (links : (state.process processId).links = []) (monitors : (state.process processId).monitors = [])
     (idle : state.timers = []) : state.terminate processId reason = state.update processId none := by
-  simp only [State.terminate, links, monitors, List.foldl_nil]
+  simp only [State.terminate, links, monitors, List.foldl_nil, Kernel.filter_eq, Kernel.foldl_eq]
   exact State.ext' rfl (by simp [State.update, idle]) rfl rfl
 
 /-- A process that returns or raises next ends the same way from any state
@@ -1133,17 +1135,19 @@ private theorem deliver_ends {talk : PID → PID → Prop} {state : State} {task
       { event := .deliver envelope, state := received, tasks := [(processId, task)] } := by
     simp [Task.delivery, State.receive, signal, target, received]
   have receivedLinks : (received.process processId).links = [] := by
-    simp only [received, State.append, State.process_modify', ↓reduceIte]
+    simp only [received, State.append, State.process_modify', ↓reduceIte, Kernel.append_eq]
     cases found : state.processes processId <;> simp_all [State.process]
   have receivedMonitors : (received.process processId).monitors = [] := by
-    simp only [received, State.append, State.process_modify', ↓reduceIte]
+    simp only [received, State.append, State.process_modify', ↓reduceIte, Kernel.append_eq]
     cases found : state.processes processId <;> simp_all [State.process]
   have receivedIdle : received.timers = [] := by simp [received, State.append, calm.idle]
   have same : received.update processId none = { state.update processId none with inTransit := rest } := by
     refine State.ext' (funext fun other => ?_) ?_ ?_ ?_
     rotate_left
-    all_goals try (simp only [received, State.append, State.modify, State.update]; split <;> rfl)
-    simp only [State.processes_update, received, State.append, State.processes_modify]
+    all_goals try (simp only [received, State.append, State.modify, State.update,
+        Kernel.append_eq]; split <;> rfl)
+    simp only [State.processes_update, received, State.append, State.processes_modify,
+        Kernel.append_eq]
     split <;> simp_all
   have dead := lookup_split (wellformed.1)
   refine ⟨.running { state.update processId none with inTransit := rest } (before ++ after)
@@ -1154,7 +1158,8 @@ private theorem deliver_ends {talk : PID → PID → Prop} {state : State} {task
     simp [State.bounce, signal]
   · rw [delivery]
     refine Step.of_mem_steps (key := .own processId 0) ?_
-    have split : (before, (processId, task), after) ∈ splits (before ++ [(processId, task)] ++ after) := by
+    have split : (before, (processId, task), after) ∈
+        splits (Kernel.append (Kernel.append before [(processId, task)]) after) := by
       simpa using (mem_splits (before := before) (item := (processId, task)) (after := after))
     refine mem_steps.mpr (.inl ⟨before, processId, task, after, _, split,
       mem_keyed.mpr (.inl ⟨0, rfl, by rw [own received receivedLinks receivedMonitors receivedIdle]; rfl⟩),
@@ -1178,7 +1183,7 @@ private theorem footprint_cases {talk : PID → PID → Prop} {state : State} {t
       footprint = Footprint.bounce envelope) := by
   cases key with
   | own processId index =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.length_eq] at found
     split at found
     · rename_i task lookup
       split at found
@@ -1190,7 +1195,7 @@ private theorem footprint_cases {talk : PID → PID → Prop} {state : State} {t
       · simp at found
     · simp at found
   | deliver source target =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
     split at found
     · rename_i task envelope lookup oldestFound
       simp only [Option.some.injEq] at found
@@ -1199,7 +1204,7 @@ private theorem footprint_cases {talk : PID → PID → Prop} {state : State} {t
       exact .inr (.inl ⟨envelope, message, task, rfl, signal, lookup, oldestFound, found.symm⟩)
     · simp at found
   | bounce source target =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
     split at found
     · rename_i envelope lookup oldestFound
       simp only [Option.some.injEq] at found

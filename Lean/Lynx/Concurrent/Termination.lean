@@ -84,7 +84,7 @@ theorem mem_deliverableFrom {before : List Envelope} {seen : List (PID × PID)}
   induction inTransit generalizing before seen with
   | nil => simp [deliverableFrom] at mem
   | cons head tail ih =>
-    simp only [deliverableFrom] at mem
+    simp only [deliverableFrom, Kernel.append_eq, Kernel.contains_eq] at mem
     split at mem
     · obtain ⟨pre, post, rfl, rfl⟩ := ih mem
       exact ⟨head :: pre, post, rfl, by simp⟩
@@ -133,7 +133,7 @@ theorem mem_firstOfEach {seen : List (List Nat)} {timers : List Timer} {timer : 
   induction timers generalizing seen with
   | nil => simp [firstOfEach] at mem
   | cons head rest ih =>
-    simp only [firstOfEach] at mem
+    simp only [firstOfEach, Kernel.contains_eq] at mem
     split at mem
     · exact List.mem_cons_of_mem _ (ih mem)
     · simp only [List.mem_cons] at mem
@@ -147,7 +147,8 @@ theorem State.weight_fire {state : State} {timer : Timer} (mem : timer ∈ state
   have shorter : (state.timers.filter (·.reference != timer.reference)).length <
       state.timers.length :=
     List.length_filter_lt_length_iff_exists.mpr ⟨timer, mem, by simp⟩
-  simp only [State.weight, State.fire, State.emit, weight_enqueue, Envelope.weight]
+  simp only [State.weight, State.fire, State.emit, weight_enqueue, Envelope.weight,
+      Kernel.filter_eq]
   omega
 
 /-- A computation and what follows it: the continuation of its request, or a
@@ -313,7 +314,8 @@ private theorem step_measure {state : State} {tasks : List (PID × Task α)}
         exact own_follows possible item mem
     · obtain ⟨envelope, rest, mem, (⟨tasks', state'⟩ | tasks')⟩ := deliveries_tasks possible
       · refine ⟨_, _, _, _, rfl, ?_⟩
-        have first : (before ++ transition.tasks ++ after).map entry = tasks.map entry := by
+        have first : (Kernel.append (Kernel.append before transition.tasks) after).map entry =
+            tasks.map entry := by
           simp [tasks_eq, tasks']
         simp only [measure, first]
         exact .right _ (state' ▸ State.weight_receive mem)

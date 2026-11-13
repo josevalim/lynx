@@ -3,6 +3,7 @@ module
 public import Lynx.Concurrent
 public import Lynx.Concurrent.Termination
 public import Lynx.Concurrent.Footprint
+public import Lynx.Concurrent.Kernel
 import all Lynx.Concurrent.Footprint
 
 /-! Reductions of `Lynx.Concurrent.check`: the steps of a configuration named by
@@ -121,7 +122,8 @@ private theorem State.Keeps.exitSignal {state changed : State} {target source : 
 private theorem State.keeps_request {state : State} {processId : PID} {query : Request} {reply : Term}
     {after : State} {exits : Option Term} (answered : state.request processId query = some (reply, after, exits)) :
     state.Keeps after := by
-  cases query <;> simp only [State.request] at answered
+  cases query <;> simp only [State.request, Kernel.any_eq, Kernel.append_eq, Kernel.contains_eq,
+      Kernel.erase_eq, Kernel.eraseP_eq, Kernel.filter_eq, Kernel.find?_eq] at answered
   all_goals
     repeat' (first
       | (simp only [Option.some.injEq, Prod.mk.injEq] at answered; obtain ⟨-, rfl, -⟩ := answered)
@@ -155,7 +157,7 @@ private theorem foldl_processes {items : List γ} {step : State → γ → State
 private theorem State.processes_terminate {state : State} {processId : PID} {reason : Term} :
     (state.terminate processId reason).processes = (state.update processId none).processes := by
   unfold State.terminate
-  dsimp only
+  simp only [Kernel.foldl_eq]
   rw [foldl_processes (fun _ item => by cases item; rfl),
     foldl_processes (step := fun state linked => state.emit processId linked (.exit reason true))
       (fun _ _ => rfl)]
@@ -172,7 +174,7 @@ private theorem State.spawnWith_facts {state : State} {processId : PID} {options
       ((state.spawnWith processId options).2.processes other).isSome = (state.processes other).isSome ∧
       ((state.spawnWith processId options).2.process other).children = (state.process other).children := by
   have kept : (state.spawn processId).2.Keeps (state.spawnWith processId options).2 := by
-    simp only [State.spawnWith]
+    simp only [State.spawnWith, Kernel.append_eq]
     split <;> split <;> first
       | exact State.Keeps.refl _
       | (refine State.Keeps.modify ?_ ?_; refine State.Keeps.modify ?_ ?_; refine State.Keeps.allocate ?_
@@ -184,18 +186,18 @@ private theorem State.spawnWith_facts {state : State} {processId : PID} {options
       | (refine State.Keeps.modify ?_ ?_; refine State.keeps_modify ?_
          all_goals intro; rfl)
   have first : (state.spawnWith processId options).1 = (state.spawn processId).1 := by
-    simp only [State.spawnWith]
+    simp only [State.spawnWith, Kernel.append_eq]
   have distinct : processId ++ [(state.process processId).children + 1] ≠ processId := by
     intro equal; have := congrArg List.length equal; simp at this
   rw [first]
-  refine ⟨rfl, ?_, ?_, ?_, fun other notParent notChild => ?_⟩
+  refine ⟨by simp [State.spawn], ?_, ?_, ?_, fun other notParent notChild => ?_⟩
   · rw [(kept _).1]; simp [State.spawn, State.processes_update]
   · rw [(kept _).1]; simp [State.spawn, State.processes_update]
   · rw [(kept _).2]
     simp only [State.process] at distinct ⊢
     simp [State.spawn, State.process, State.processes_update, distinct.symm]
   · rw [(kept _).1, (kept _).2]
-    simp only [State.spawn, State.process] at notChild
+    simp only [State.spawn, State.process, Kernel.append_eq] at notChild
     simp [State.spawn, State.process, State.processes_update, notParent, notChild]
 
 private theorem State.keeps_inTransit {state : State} {inTransit : List Envelope} :
@@ -436,7 +438,7 @@ private theorem wellformed_apply {state : State} {before after : List (PID × Ta
       (transition.state.process entry.1).children = (state.process entry.1).children :=
     fun entry mem => frame entry.1 (others entry mem) fun child spawn =>
       child_new child spawn entry (old entry mem)
-  simp only [Transition.apply, Wellformed]
+  simp only [Transition.apply, Wellformed, Kernel.append_eq]
   refine ⟨pairwise_replace distinct inner ?_ ?_, ?_, ?live, ?quiet, ?owned⟩
   case owned =>
     intro candidate alive
@@ -620,14 +622,18 @@ instance : DecidableEq Key := fun first second => decidable_of_iff (first == sec
 
 /-- The steps of a process, each with its key. -/
 @[expose] def Task.keyed (state : State) (processId : PID) (task : Task α) : List (Key × Transition α) :=
-  (task.own state processId).zipIdx.map (fun (transition, index) => (.own processId index, transition)) ++
-  (deliverable state.inTransit).filterMap fun (envelope, rest) =>
-    if envelope.target != processId then none
-    else some (.deliver envelope.source processId, task.delivery state processId envelope rest)
+  Kernel.append
+    (Kernel.map (fun (transition, index) => (.own processId index, transition))
+      (task.own state processId).zipIdx)
+    (Kernel.filterMap (fun (envelope, rest) =>
+      if envelope.target != processId then none
+      else some (.deliver envelope.source processId, task.delivery state processId envelope rest))
+      (deliverable state.inTransit))
 
 private theorem Task.keyed_snd (state : State) (processId : PID) (task : Task α) :
     (task.keyed state processId).map Prod.snd = task.transitions state processId := by
-  simp only [Task.keyed, Task.transitions, Task.deliveries, List.map_append, List.map_map]
+  simp only [Task.keyed, Task.transitions, Task.deliveries, List.map_append, List.map_map,
+      Kernel.append_eq, Kernel.map_eq, Kernel.filterMap_eq]
   congr 1
   · simp [Function.comp_def]
   · rw [List.map_filterMap]
@@ -639,15 +645,19 @@ private theorem Task.keyed_snd (state : State) (processId : PID) (task : Task α
 @[expose] def Config.steps : Config α → List (Key × Event × Config α)
   | .start .. => []
   | .running state tasks finished exhausted =>
-      (splits tasks).flatMap (fun (before, (processId, task), after) =>
-        (task.keyed state processId).map fun (key, transition) =>
-          (key, transition.event, transition.apply before after finished exhausted)) ++
-      (deliverable state.inTransit).filterMap (fun (envelope, rest) =>
-        if (tasks.lookup envelope.target).isSome then none
-        else some (.bounce envelope.source envelope.target, .bounce envelope,
-          .running ({ state with inTransit := rest }.bounce envelope) tasks finished exhausted)) ++
-      state.firing.map fun timer =>
-        (.fire timer.reference, .fire timer.reference, .running (state.fire timer) tasks finished exhausted)
+      Kernel.append
+        (Kernel.append
+          (Kernel.flatMap (fun (before, (processId, task), after) =>
+            Kernel.map (fun (key, transition) =>
+              (key, transition.event, transition.apply before after finished exhausted))
+              (task.keyed state processId)) (splits tasks))
+          (Kernel.filterMap (fun (envelope, rest) =>
+            if (Kernel.lookup envelope.target tasks).isSome then none
+            else some (.bounce envelope.source envelope.target, .bounce envelope,
+              .running ({ state with inTransit := rest }.bounce envelope) tasks finished exhausted))
+            (deliverable state.inTransit)))
+        (Kernel.map (fun timer => (.fire timer.reference, .fire timer.reference,
+          .running (state.fire timer) tasks finished exhausted)) state.firing)
 
 /-- Without their keys, the steps of a running configuration are its successors. -/
 private theorem Config.steps_running {state : State} {tasks : List (PID × Task α)}
@@ -655,7 +665,8 @@ private theorem Config.steps_running {state : State} {tasks : List (PID × Task 
     (Config.running state tasks finished exhausted).steps.map (fun step => (step.2.1, step.2.2)) =
       (Config.running state tasks finished exhausted).successors := by
   simp only [Config.steps, Config.successors, List.map_append, List.map_flatMap, List.map_map,
-    List.map_filterMap]
+    List.map_filterMap, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
+    Kernel.lookup_eq]
   congr 1
   · congr 1
     · congr 1
@@ -716,7 +727,7 @@ private theorem deliverableFrom_pairs {before : List Envelope} {seen : List (PID
   induction inTransit generalizing before seen with
   | nil => simp [deliverableFrom]
   | cons head rest ih =>
-    simp only [deliverableFrom]
+    simp only [deliverableFrom, Kernel.append_eq, Kernel.contains_eq]
     split
     · exact ih
     · rename_i fresh
@@ -759,7 +770,7 @@ private theorem firstOfEach_unique {seen : List (List Nat)} {timers : List Timer
     | nil => intro seen timer mem; simp [firstOfEach] at mem
     | cons head rest ih =>
       intro seen timer mem
-      simp only [firstOfEach] at mem
+      simp only [firstOfEach, Kernel.contains_eq] at mem
       split at mem
       · exact ih mem
       · rename_i notSeen
@@ -770,7 +781,7 @@ private theorem firstOfEach_unique {seen : List (List Nat)} {timers : List Timer
   induction timers generalizing seen with
   | nil => simp [firstOfEach] at mem
   | cons head rest ih =>
-    simp only [firstOfEach] at mem mem'
+    simp only [firstOfEach, Kernel.contains_eq] at mem mem'
     split at mem
     · rename_i seenHead
       simp only [seenHead, ↓reduceIte] at mem'
@@ -791,7 +802,7 @@ private theorem mem_keyed {state : State} {processId : PID} {task : Task α} {ke
         envelope.target = processId ∧ key = .deliver envelope.source processId ∧
         transition = task.delivery state processId envelope rest) := by
   simp only [Task.keyed, List.mem_append, List.mem_map, List.mem_filterMap, Prod.mk.injEq,
-    Prod.exists]
+    Prod.exists, Kernel.append_eq, Kernel.map_eq, Kernel.filterMap_eq]
   apply or_congr
   · constructor
     · rintro ⟨transition', index, mem, rfl, rfl⟩
@@ -823,7 +834,8 @@ private theorem mem_steps {state : State} {tasks : List (PID × Task α)}
       (∃ timer ∈ state.firing, key = .fire timer.reference ∧ event = .fire timer.reference ∧
         next = .running (state.fire timer) tasks finished exhausted) := by
   simp only [Config.steps, List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap,
-    Prod.exists, Prod.mk.injEq]
+    Prod.exists, Prod.mk.injEq, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq,
+    Kernel.filterMap_eq, Kernel.lookup_eq]
   rw [or_assoc]
   apply or_congr
   · constructor
@@ -897,21 +909,24 @@ private theorem steps_unique {state : State} {tasks : List (PID × Task α)}
 @[expose] def Config.footprint : Config α → Key → Option Footprint
   | .start .., _ => none
   | .running state tasks _ _, .own processId index =>
-      match tasks.lookup processId with
+      match Kernel.lookup processId tasks with
       | some task =>
-          if index < (task.own state processId).length then some (task.footprint state processId)
+          if index < Kernel.length (task.own state processId) then
+            some (task.footprint state processId)
           else none
       | none => none
   | .running state tasks _ _, .deliver source target =>
-      match tasks.lookup target, state.inTransit.find? (Envelope.between source target) with
+      match Kernel.lookup target tasks,
+          Kernel.find? (Envelope.between source target) state.inTransit with
       | some _, some envelope => some (Footprint.delivery state envelope)
       | _, _ => none
   | .running state tasks _ _, .bounce source target =>
-      match tasks.lookup target, state.inTransit.find? (Envelope.between source target) with
+      match Kernel.lookup target tasks,
+          Kernel.find? (Envelope.between source target) state.inTransit with
       | none, some envelope => some (Footprint.bounce envelope)
       | _, _ => none
   | .running state _ _ _, .fire reference =>
-      match state.timers.find? (·.reference == reference) with
+      match Kernel.find? (·.reference == reference) state.timers with
       | some timer => some (Footprint.fire timer)
       | none => none
 
@@ -975,9 +990,9 @@ live, which decides whether the signal is delivered or bounced. -/
   if live then
     match envelope.signal with
     | .down reference _ => state.allocated target reference &&
-        !(state.process target).monitoring.any (·.1 == reference)
+        !Kernel.any (state.process target).monitoring (·.1 == reference)
     | .aliasMessage alias _ => state.allocated target alias &&
-        !(state.process target).aliases.contains alias
+        !Kernel.contains (state.process target).aliases alias
     | _ => false
   else
     state.settled target && match envelope.signal with
@@ -988,9 +1003,11 @@ live, which decides whether the signal is delivered or bounced. -/
 @[expose] def Config.inert : Config α → Option Key
   | .start .. => none
   | .running state tasks _ _ =>
-      ((deliverable state.inTransit).find? fun (envelope, _) =>
-        envelope.inert state (tasks.lookup envelope.target).isSome).map fun (envelope, _) =>
-          if (tasks.lookup envelope.target).isSome then .deliver envelope.source envelope.target
+      (Kernel.find? (fun (envelope, _) =>
+        envelope.inert state (Kernel.lookup envelope.target tasks).isSome)
+        (deliverable state.inTransit)).map fun (envelope, _) =>
+          if (Kernel.lookup envelope.target tasks).isSome then
+            .deliver envelope.source envelope.target
           else .bounce envelope.source envelope.target
 
 /-- A step every run can take first, if there is one: a process reading or replacing its
@@ -1000,8 +1017,8 @@ or a signal that does nothing when it arrives and never will (`Envelope.inert`).
 @[expose] def Config.forced : Config α → Option Key
   | .start .. => none
   | config@(.running state tasks _ _) =>
-      ((tasks.find? fun (processId, task) => task.local state processId).map fun (processId, _) =>
-        .own processId 0).orElse fun _ => config.inert
+      ((Kernel.find? (fun (processId, task) => task.local state processId) tasks).map
+        fun (processId, _) => .own processId 0).orElse fun _ => config.inert
 
 /-- Replace the process with a PID by others. -/
 private def replace (processId : PID) (replacement : List (PID × Task α))
@@ -1282,7 +1299,7 @@ private theorem own_moves {state : State} {tasks : List (PID × Task α)}
     simp [Task.transitions, possibleOwn]
   obtain ⟨frame, inner, entries, grows, spawned, -, -, stays, -⟩ := transition_facts possible live
   refine ⟨rfl, rfl, ?_, ?_, fun _ found => by cases found; rfl, ?_, ?_, ?_, ?_, ?_⟩
-  · simp only [Transition.apply, Move.config, Move.tasks]
+  · simp only [Transition.apply, Move.config, Move.tasks, Kernel.append_eq]
     rw [own_state live possibleOwn, equal, replace_split (equal ▸ wellformed.1)]
   · intro state' tasks' finished' exhausted' wellformed' agree supports
     simp only [Supports, lookup_of_mem wellformed.1 mem] at supports
@@ -1294,7 +1311,8 @@ private theorem own_moves {state : State} {tasks : List (PID × Task α)}
     · exact mem_keyed.mpr (.inl ⟨index, rfl, found'⟩)
     · exact matched.1.symm
     · obtain ⟨-, tasks, finished, exhausted, state⟩ := matched
-      simp only [Transition.apply, Move.config, Move.tasks, state, tasks, finished, exhausted]
+      simp only [Transition.apply, Move.config, Move.tasks, state, tasks, finished, exhausted,
+          Kernel.append_eq]
       rw [equal', replace_split (equal' ▸ wellformed'.1)]
   · intro entry added
     rcases entries entry added with same | ⟨child, spawn, same⟩
@@ -1327,7 +1345,7 @@ private theorem Footprint.delivery_observes {state : State} {envelope : Envelope
     (envelope.target, ProcessState.live) ∈ (Footprint.delivery state envelope).observes.records := by
   obtain ⟨source, target, signal⟩ := envelope
   unfold Footprint.delivery
-  cases signal <;> simp only [Observes.and] <;> (try split) <;> simp
+  cases signal <;> simp only [Observes.and, Kernel.append_eq] <;> (try split) <;> simp
 
 /-- A signal arriving leaves the receiver, or ends it. -/
 private theorem delivery_shape {state : State} {processId : PID} {task : Task α} {envelope : Envelope}
@@ -1372,7 +1390,7 @@ private theorem deliver_moves {state : State} {tasks : List (PID × Task α)}
     (task := task) (envelope := envelope) (rest := rest)
   refine ⟨rfl, rfl, ?_, ?_, (fun _ owner => by split at owner <;> simp_all [Key.process]), ?_, ?_, ?_, ?_,
     fun nonempty => absurd rfl nonempty⟩
-  · simp only [Transition.apply, Move.config, Move.tasks, stateEq, noExhaust]
+  · simp only [Transition.apply, Move.config, Move.tasks, stateEq, noExhaust, Kernel.append_eq]
     rcases shape with ⟨tasksEq, finishedEq, -⟩ | ⟨tasksEq, -, -⟩
     · simp [tasksEq, finishedEq, equal]
     · simp only [tasksEq, List.isEmpty_nil, ↓reduceIte, List.append_nil]
@@ -1408,7 +1426,7 @@ private theorem deliver_moves {state : State} {tasks : List (PID × Task α)}
       obtain ⟨-, noExhaust', shape'⟩ := delivery_shape (state := state) (processId := processId)
         (task := task') (envelope := envelope) (rest := rest)
       simp only [Transition.apply, Move.config, Move.tasks, stateMatch, tasksMatch, finishedMatch,
-        exhaustedMatch, noExhaust', noExhaust]
+        exhaustedMatch, noExhaust', noExhaust, Kernel.append_eq]
       rcases shape' with ⟨tasksEq', finishedEq', -⟩ | ⟨tasksEq', -, -⟩
       · have : (task.delivery state processId envelope rest).tasks.isEmpty = false := by
           rw [← exitsSame task', tasksEq']; rfl
@@ -1488,7 +1506,7 @@ private theorem fire_moves {state : State} {tasks : List (PID × Task α)}
 private theorem oldest_iff {source target : PID} {inTransit : List Envelope} {envelope : Envelope} :
     oldest source target inTransit = [envelope] ↔
       inTransit.find? (Envelope.between source target) = some envelope := by
-  simp only [oldest]
+  simp only [oldest, Kernel.find?_eq]
   cases inTransit.find? (Envelope.between source target) <;> simp
 
 private theorem between_of_find {source target : PID} {inTransit : List Envelope} {envelope : Envelope}
@@ -1514,24 +1532,27 @@ private theorem moves {state : State} {tasks : List (PID × Task α)}
     rcases keyed with ⟨index, rfl, own⟩ | ⟨envelope, rest, delivered, target, rfl, rfl⟩
     · have bound : index < (task.own state processId).length := by
         have := List.getElem?_eq_some_iff.mp own; exact this.1
-      simp only [Config.footprint, lookup, bound, ↓reduceIte, Option.some.injEq] at found
+      simp only [Config.footprint, lookup, bound, ↓reduceIte, Option.some.injEq, Kernel.lookup_eq,
+          Kernel.length_eq] at found
       subst found
       exact ⟨_, own_moves wellformed split own⟩
     · have oldestFound := oldest_iff.mp (mem_deliverable_iff.mp delivered).1
       rw [target] at oldestFound
-      simp only [Config.footprint, lookup, oldestFound, Option.some.injEq] at found
+      simp only [Config.footprint, lookup, oldestFound, Option.some.injEq, Kernel.lookup_eq,
+          Kernel.find?_eq] at found
       subst found
       exact ⟨_, deliver_moves wellformed split delivered target⟩
   · have oldestFound := oldest_iff.mp (mem_deliverable_iff.mp delivered).1
     have missing : tasks.lookup envelope.target = none := by simpa using dead
-    simp only [Config.footprint, missing, oldestFound, Option.some.injEq] at found
+    simp only [Config.footprint, missing, oldestFound, Option.some.injEq, Kernel.lookup_eq,
+        Kernel.find?_eq] at found
     subst found
     exact ⟨_, bounce_moves delivered⟩
   · have timerFound : state.timers.find? (·.reference == timer.reference) = some timer := by
       have := mem_firing_iff.mp firing
-      simp only [firstTimer] at this
+      simp only [firstTimer, Kernel.find?_eq] at this
       cases equal : state.timers.find? (·.reference == timer.reference) <;> simp_all
-    simp only [Config.footprint, timerFound, Option.some.injEq] at found
+    simp only [Config.footprint, timerFound, Option.some.injEq, Kernel.find?_eq] at found
     subst found
     exact ⟨_, fire_moves firing⟩
 
@@ -1543,7 +1564,7 @@ private theorem enabled {state : State} {tasks : List (PID × Task α)}
     ∃ event next, (key, event, next) ∈ (Config.running state tasks finished exhausted).steps := by
   cases key with
   | own processId index =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.length_eq] at found
     split at found
     · rename_i task lookup
       split at found
@@ -1554,7 +1575,7 @@ private theorem enabled {state : State} {tasks : List (PID × Task α)}
       · simp at found
     · simp at found
   | deliver source target =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
     split at found
     · rename_i task envelope lookup oldestFound
       obtain ⟨before, after, equal⟩ := split_of_lookup lookup
@@ -1566,7 +1587,7 @@ private theorem enabled {state : State} {tasks : List (PID × Task α)}
         rfl, rfl⟩)⟩
     · simp at found
   | bounce source target =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
     split at found
     · rename_i envelope lookup oldestFound
       obtain ⟨rfl, rfl⟩ := between_of_find oldestFound
@@ -1575,7 +1596,7 @@ private theorem enabled {state : State} {tasks : List (PID × Task α)}
       exact ⟨_, _, mem_steps.mpr (.inr (.inl ⟨envelope, _, delivered, by simp [lookup], rfl, rfl, rfl⟩))⟩
     · simp at found
   | fire reference =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.find?_eq] at found
     split at found
     · rename_i timer timerFound
       have same : timer.reference = reference := by simpa using List.find?_some timerFound
@@ -1600,11 +1621,11 @@ private theorem task_of_footprint {state : State} {tasks : List (PID × Task α)
   cases key with
   | own processId' index =>
     cases process
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.length_eq] at found
     split at found <;> simp_all
   | deliver source target =>
     cases process
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
     split at found <;> simp_all
   | _ => cases process
 
@@ -1613,7 +1634,7 @@ private theorem missing_of_footprint {state : State} {tasks : List (PID × Task 
     {footprint : Footprint}
     (found : (Config.running state tasks finished exhausted).footprint (.bounce source target) =
       some footprint) : tasks.lookup target = none := by
-  simp only [Config.footprint] at found
+  simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
   split at found
   · assumption
   · simp at found
@@ -1623,7 +1644,7 @@ private theorem index_of_footprint {state : State} {tasks : List (PID × Task α
     {index : Nat} {footprint : Footprint}
     (found : (Config.running state tasks finished exhausted).footprint (.own processId index) =
       some footprint) : index = 0 := by
-  simp only [Config.footprint] at found
+  simp only [Config.footprint, Kernel.lookup_eq, Kernel.length_eq] at found
   split at found
   · split at found
     · rename_i bound
@@ -2031,7 +2052,7 @@ private theorem footprint_observes_others {state : State} {tasks : List (PID × 
   intro entry mem
   cases key with
   | own processId index =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.length_eq] at found
     split at found
     · split at found
       · simp only [Option.some.injEq] at found
@@ -2042,7 +2063,7 @@ private theorem footprint_observes_others {state : State} {tasks : List (PID × 
       · simp at found
     · simp at found
   | deliver source target =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
     split at found
     · rename_i envelope _ oldestFound
       simp only [Option.some.injEq] at found
@@ -2051,7 +2072,7 @@ private theorem footprint_observes_others {state : State} {tasks : List (PID × 
       exact .inl (by simp [Key.watched, Footprint.delivery_observes_target entry mem])
     · simp at found
   | bounce source target =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
     split at found
     · simp only [Option.some.injEq] at found
       subst found
@@ -2059,7 +2080,7 @@ private theorem footprint_observes_others {state : State} {tasks : List (PID × 
       exact .inr (by rw [mem])
     · simp at found
   | fire reference =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.find?_eq] at found
     split at found
     · simp only [Option.some.injEq] at found
       subst found
@@ -2075,7 +2096,7 @@ private theorem footprint_changes_others {state : State} {tasks : List (PID × T
   intro entry mem
   cases key with
   | own processId index =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.length_eq] at found
     split at found
     · rename_i task lookup
       split at found
@@ -2093,7 +2114,7 @@ private theorem footprint_changes_others {state : State} {tasks : List (PID × T
       · simp at found
     · simp at found
   | deliver source target =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
     split at found
     · rename_i envelope _ oldestFound
       simp only [Option.some.injEq] at found
@@ -2102,14 +2123,14 @@ private theorem footprint_changes_others {state : State} {tasks : List (PID × T
       exact .inl (by simp [Key.watched, Footprint.delivery_changes entry mem])
     · simp at found
   | bounce source target =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
     split at found
     · simp only [Option.some.injEq] at found
       subst found
       simp [Footprint.bounce] at mem
     · simp at found
   | fire reference =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.find?_eq] at found
     split at found
     · simp only [Option.some.injEq] at found
       subst found
@@ -2134,10 +2155,10 @@ private theorem delivery_survived {state : State} {envelope : Envelope} {rest : 
     simp only [State.receive, State.exitSignal_snd] at survives
     have survives' : (state.exitSignal target source reason linked).2 = none := by
       rw [State.exitSignal_snd]; exact survives
-    simp only [Footprint.delivery, survives']
+    simp only [Footprint.delivery, survives', Kernel.filter_eq]
     refine ⟨fun entry mem => ?_, by first | trivial | rfl⟩
     simp only [Observes.and, List.cons_append, List.nil_append, Observes.record, List.mem_cons,
-      List.not_mem_nil, or_false] at mem
+      List.not_mem_nil, or_false, Kernel.append_eq] at mem
     rcases mem with rfl | rfl <;> intro process pdict refCounter mailbox <;> rfl
   | _ =>
     refine ⟨fun entry mem => ?_, rfl⟩
@@ -2185,13 +2206,13 @@ private theorem footprint_of_mem {state : State} {tasks : List (PID × Task α)}
     exact ⟨Footprint.bounce envelope, by simp [Config.footprint, missing, oldestFound]⟩
   · have timerFound : state.timers.find? (·.reference == timer.reference) = some timer := by
       have := mem_firing_iff.mp firing
-      simp only [firstTimer] at this
+      simp only [firstTimer, Kernel.find?_eq] at this
       cases equal : state.timers.find? (·.reference == timer.reference) <;> simp_all
     exact ⟨Footprint.fire timer, by simp [Config.footprint, timerFound]⟩
 
 private theorem Effect.record_id {effect : Effect} {processId : PID}
     (outside : ∀ entry ∈ effect.records, entry.1 ≠ processId) : effect.record processId = id := by
-  simp only [Effect.record]
+  simp only [Effect.record, Kernel.find?_eq]
   cases found : effect.records.find? (·.1 == processId) with
   | none => rfl
   | some entry =>
@@ -2225,7 +2246,7 @@ private theorem footprint_at {state : State} {tasks : List (PID × Task α)}
     | deliver source target =>
       simp only [Key.watched, Option.some.injEq] at watched
       subst watched
-      simp only [Config.footprint] at found
+      simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
       split at found
       · rename_i envelope _ oldestFound
         simp only [Option.some.injEq] at found
@@ -2268,7 +2289,7 @@ private theorem local_square {state : State} {tasks : List (PID × Task α)}
   have live := live_of_lookup wellformed present
   obtain ⟨footprint, foundOwn⟩ := footprint_of_mem wellformed mem
   have ownFootprint : footprint = task.footprint state processId := by
-    simp only [Config.footprint, found] at foundOwn
+    simp only [Config.footprint, found, Kernel.lookup_eq, Kernel.length_eq] at foundOwn
     split at foundOwn
     · simp only [Option.some.injEq] at foundOwn; exact foundOwn.symm
     · simp at foundOwn
@@ -2311,7 +2332,7 @@ private theorem local_square {state : State} {tasks : List (PID × Task α)}
         equalTarget)
       rw [effect, Effect.record_andThen]
       simp only [Effect.record, Effect.change, List.find?_nil, List.find?_cons, equalTarget,
-        beq_self_eq_true, Function.comp_apply, id, Option.map_some]
+        beq_self_eq_true, Function.comp_apply, id, Option.map_some, Kernel.find?_eq]
       exact congrArg some (shape.receive process _ _ isReady).2.1
   have commutes : (task.footprint state processId).effect.apply (footprint'.effect.apply state) =
       footprint'.effect.apply ((task.footprint state processId).effect.apply state) := by
@@ -2324,7 +2345,8 @@ private theorem local_square {state : State} {tasks : List (PID × Task α)}
         equalTarget)
       rw [effect, Effect.record_andThen]
       simp only [Effect.record, Effect.change, List.find?_nil, List.find?_cons, equalTarget,
-        beq_self_eq_true, Function.comp_apply, id, Option.map_some, Option.some.injEq]
+        beq_self_eq_true, Function.comp_apply, id, Option.map_some, Option.some.injEq,
+            Kernel.find?_eq]
       exact (shape.receive process _ _ isReady).2.2.symm
   have pair : Pair state tasks finished exhausted (.own processId 0) key
       (task.footprint state processId) footprint' move move' :=
@@ -2406,7 +2428,8 @@ private theorem local_absorbs {state : State} {tasks : List (PID × Task α)}
       ({ state with inTransit := arrive envelopeSource envelopeTarget state.inTransit } : State).modify
         envelopeTarget change := by
     unfold State.modify; split <;> rename_i found' <;> simp [found', State.update]
-  simp only [Transition.apply, stateEq, tasksEq, finishedEq, exhaustedEq, Bool.or_false]
+  simp only [Transition.apply, stateEq, tasksEq, finishedEq, exhaustedEq, Bool.or_false,
+      Kernel.append_eq]
   refine mem_steps.mpr (.inl ⟨before, envelopeTarget, ⟨computation, task.finish⟩, after, _,
     by simpa using mem_splits, mem_keyed.mpr (.inr ⟨⟨envelopeSource, envelopeTarget, signal⟩,
       arrive envelopeSource envelopeTarget (state.modify envelopeTarget change).inTransit,
@@ -2415,7 +2438,7 @@ private theorem local_absorbs {state : State} {tasks : List (PID × Task α)}
   obtain ⟨exits, terminated⟩ := absorbed
   obtain ⟨reason, exiting⟩ := Option.isSome_iff_exists.mp ends
   simp only [Task.delivery, modified, exits, exiting, Option.getD_some] at terminated ⊢
-  simp only [Task.ended, Transition.apply, terminated]
+  simp only [Task.ended, Transition.apply, terminated, Kernel.append_eq]
   rfl
 
 
@@ -2452,7 +2475,7 @@ private theorem local_persists {state : State} {tasks : List (PID × Task α)}
         equalTarget)
       rw [effect, Effect.record_andThen]
       simp only [Effect.record, Effect.change, List.find?_nil, List.find?_cons, equalTarget,
-        beq_self_eq_true, Function.comp_apply, id, Option.map_some]
+        beq_self_eq_true, Function.comp_apply, id, Option.map_some, Kernel.find?_eq]
       obtain ⟨split, pdict, refCounter⟩ := ProcessState.receive_split (process := process)
         (source := envelope.source) (signal := envelope.signal)
       refine ⟨_, rfl, ?_, ?_, (shape.receive process _ _ isReady).1⟩ <;> rw [split]
@@ -2757,7 +2780,7 @@ private theorem arrive_enqueue {source target : PID} {envelope : Envelope} :
     · simp [arrive, enqueue, between_false other]
     · simp at found
   | head :: rest, sorted, condition => by
-    simp only [arrive, enqueue]
+    simp only [arrive, enqueue, Kernel.eraseP_eq]
     by_cases before : envelope.before head
     · simp only [before, ↓reduceIte]
       by_cases same : envelope.pair = (source, target)
@@ -2794,7 +2817,8 @@ private theorem arrive_enqueue {source target : PID} {envelope : Envelope} :
           · exact .inl other
           · refine .inr ?_
             simpa [List.find?_cons, between] using found
-        exact congrArg (head :: ·) (arrive_enqueue (List.Pairwise.of_cons sorted) condition')
+        simpa [arrive_eq] using
+          congrArg (head :: ·) (arrive_enqueue (List.Pairwise.of_cons sorted) condition')
 
 private theorem eraseP_comm {first second : γ → Bool} (disjoint : ∀ item, first item = true → second item = false) :
     ∀ items : List γ, (items.eraseP first).eraseP second = (items.eraseP second).eraseP first
@@ -2811,6 +2835,7 @@ private theorem arrive_comm {source target source' target' : PID}
     (distinct : (source, target) ≠ (source', target')) (inTransit : List Envelope) :
     arrive source target (arrive source' target' inTransit) =
       arrive source' target' (arrive source target inTransit) := by
+  simp only [arrive_eq]
   refine (eraseP_comm (fun item one => ?_) inTransit).symm
   exact between_false fun same => distinct ((Envelope.between_iff.mp one).symm.trans same)
 
@@ -2821,21 +2846,21 @@ private theorem find?_arrive_other {source target source' target' : PID}
       inTransit.find? (Envelope.between source target)
   | [] => rfl
   | head :: rest => by
-    simp only [arrive, List.eraseP_cons]
+    simp only [arrive, List.eraseP_cons, Kernel.eraseP_eq]
     by_cases between : Envelope.between source' target' head
     · have : Envelope.between source target head = false :=
         between_false fun same => distinct (same.symm.trans (Envelope.between_iff.mp between))
       simp [between, this]
     · simp only [between, Bool.false_eq_true, ↓reduceIte, List.find?_cons]
-      rw [← arrive, find?_arrive_other distinct rest]
+      rw [← arrive_eq, find?_arrive_other distinct rest]
 
 private theorem mem_of_mem_arrive {source target : PID} {inTransit : List Envelope} {item : Envelope}
     (mem : item ∈ arrive source target inTransit) : item ∈ inTransit :=
-  (List.eraseP_sublist).subset mem
+  (List.eraseP_sublist).subset (arrive_eq ▸ mem)
 
 private theorem arrive_sorted {source target : PID} {inTransit : List Envelope}
     (sorted : Sorted inTransit) : Sorted (arrive source target inTransit) :=
-  sorted.sublist List.eraseP_sublist
+  arrive_eq ▸ sorted.sublist List.eraseP_sublist
 
 
 /-! ### Signals that do nothing
@@ -2901,7 +2926,7 @@ private theorem Transit.congr {takes : List (PID × PID)} {first second : List E
 private theorem Transit.andThen {takes : List (PID × PID)} {first second : Effect}
     (one : Transit takes first.transit) (two : Transit takes second.transit) :
     Transit takes (first.andThen second).transit := by
-  simp only [Effect.transit, Effect.andThen] at one two ⊢
+  simp only [Effect.transit, Effect.andThen, Kernel.append_eq, Kernel.map_eq] at one two ⊢
   cases h : first.inTransit <;> cases h' : second.inTransit <;> simp only [h, h', Option.getD] at one two ⊢
   · exact .id
   · exact two
@@ -2924,7 +2949,7 @@ private theorem Transit.foldl {takes : List (PID × PID)} {γ : Type} (signal : 
 
 private theorem Transit.ending {takes : List (PID × PID)} {processId : PID} {process : ProcessState}
     {reason : Term} : Transit takes (Effect.ending processId process reason).transit := by
-  simp only [Effect.transit, Effect.ending, Option.getD]
+  simp only [Effect.transit, Effect.ending, Option.getD, Kernel.filter_eq, Kernel.foldl_eq]
   exact Transit.foldl (fun (entry : List Nat × PID) => ⟨processId, entry.2, .down entry.1 reason⟩)
     process.monitors (Transit.foldl (fun linked => ⟨processId, linked, .exit reason true⟩) process.links .id)
 
@@ -2935,7 +2960,9 @@ private def Key.channel : Key → List (PID × PID)
 
 private theorem Transit.request {takes : List (PID × PID)} {state : State} {processId : PID} {request : Request} :
     Transit takes (requestFootprint state processId request).effect.transit := by
-  cases request <;> simp only [requestFootprint] <;> (repeat' split) <;>
+  cases request <;> simp only [requestFootprint, Kernel.any_eq, Kernel.append_eq,
+      Kernel.contains_eq, Kernel.erase_eq, Kernel.eraseP_eq, Kernel.filter_eq,
+      Kernel.find?_eq] <;> (repeat' split) <;>
     first
     | exact .id
     | exact Transit.ending
@@ -2947,7 +2974,8 @@ private theorem Transit.own {takes : List (PID × PID)} {state : State} {process
     Transit takes (task.footprint state processId).effect.transit := by
   obtain ⟨computation, finish⟩ := task
   simp only [Task.footprint]
-  split <;> (try simp only [Footprint.ending, Footprint.spawn]) <;> (repeat' split) <;>
+  split <;> (try simp only [Footprint.ending, Footprint.spawn,
+      Kernel.append_eq]) <;> (repeat' split) <;>
     first
     | exact .id
     | exact Transit.ending
@@ -2958,7 +2986,7 @@ private theorem Transit.delivery {state : State} {envelope : Envelope} :
     Transit [(envelope.source, envelope.target)] (Footprint.delivery state envelope).effect.transit := by
   have taken : Transit [(envelope.source, envelope.target)]
       ({ inTransit := some (arrive envelope.source envelope.target) } : Effect).transit := .take (by simp)
-  simp only [Footprint.delivery]
+  simp only [Footprint.delivery, Kernel.erase_eq, Kernel.filter_eq]
   split
   · split
     · exact Transit.andThen taken Transit.ending
@@ -2983,14 +3011,14 @@ private theorem footprint_transit {config : Config α} {key : Key} {footprint : 
   | running state tasks finished exhausted =>
     cases key with
     | own processId index =>
-      simp only [Config.footprint] at found
+      simp only [Config.footprint, Kernel.lookup_eq, Kernel.length_eq] at found
       split at found
       · split at found
         · simp only [Option.some.injEq] at found; subst found; exact Transit.own
         · simp at found
       · simp at found
     | deliver source target =>
-      simp only [Config.footprint] at found
+      simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
       split at found
       · rename_i envelope _ oldestFound
         simp only [Option.some.injEq] at found
@@ -2999,7 +3027,7 @@ private theorem footprint_transit {config : Config α} {key : Key} {footprint : 
         exact Transit.delivery
       · simp at found
     | bounce source target =>
-      simp only [Config.footprint] at found
+      simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
       split at found
       · rename_i envelope oldestFound
         simp only [Option.some.injEq] at found
@@ -3008,7 +3036,7 @@ private theorem footprint_transit {config : Config α} {key : Key} {footprint : 
         exact Transit.bounce
       · simp at found
     | fire reference =>
-      simp only [Config.footprint] at found
+      simp only [Config.footprint, Kernel.find?_eq] at found
       split at found
       · simp only [Option.some.injEq] at found
         subst found
@@ -3053,7 +3081,7 @@ private theorem filter_arrive_quiet {source target : PID} {inTransit : List Enve
     simpa using quiet
   have taken : (arrive source target inTransit).filter keep = [] :=
     List.filter_eq_nil_iff.mpr fun envelope mem => by
-      simp [none envelope (List.eraseP_sublist.subset mem)]
+      simp [none envelope (mem_of_mem_arrive mem)]
   have kept : inTransit.filter keep = [] :=
     List.filter_eq_nil_iff.mpr fun envelope mem => by simp [none envelope mem]
   rw [taken, kept]
@@ -3072,9 +3100,10 @@ private theorem own_views {state : State} {processId : PID} {task : Task α} {tr
     | alive asked =>
       by_cases self : asked = processId
       · simp [Task.footprint, requestFootprint, self, Observes.record] at mem
-      · simp only [Task.footprint, requestFootprint, self, ite_false, List.mem_singleton] at mem
+      · simp only [Task.footprint, requestFootprint, self, ite_false, List.mem_singleton,
+          Kernel.filter_eq] at mem
         subst mem
-        simp only [Task.own, State.request, self, ite_false] at possible
+        simp only [Task.own, State.request, self, ite_false, Kernel.any_eq] at possible
         have quiet : (state.inTransit.any fun envelope =>
             envelope.source == processId && envelope.target == asked ||
               envelope.source == asked && envelope.target == processId) = false := by
@@ -3087,15 +3116,17 @@ private theorem own_views {state : State} {processId : PID} {task : Task α} {tr
             · exact Bool.eq_false_iff.mpr ‹_›
         exact filter_arrive_quiet (by simpa [Envelope.between] using quiet)
     | _ =>
-      simp only [Task.footprint, requestFootprint] at mem
+      simp only [Task.footprint, requestFootprint, Kernel.any_eq, Kernel.append_eq,
+          Kernel.contains_eq, Kernel.erase_eq, Kernel.eraseP_eq, Kernel.filter_eq,
+          Kernel.find?_eq] at mem
       (repeat' split at mem) <;> simp [Observes.record, Observes.and] at mem
   | _ =>
-      simp only [Task.footprint, Footprint.ending, Footprint.spawn] at mem
+      simp only [Task.footprint, Footprint.ending, Footprint.spawn, Kernel.append_eq] at mem
       (repeat' split at mem) <;> (try simp [Observes.record] at mem) <;> simp_all
 private theorem oldest_arrive_other {source target source' target' : PID}
     (distinct : (source, target) ≠ (source', target')) (inTransit : List Envelope) :
     oldest source target (arrive source' target' inTransit) = oldest source target inTransit := by
-  simp only [oldest, find?_arrive_other distinct]
+  simp only [oldest, find?_arrive_other distinct, Kernel.find?_eq]
 
 /-- Taking the oldest signal of a channel changes nothing another step observes. -/
 private theorem footprint_views {state : State} {tasks : List (PID × Task α)}
@@ -3109,7 +3140,7 @@ private theorem footprint_views {state : State} {tasks : List (PID × Task α)}
       view (arrive source target state.inTransit) = view state.inTransit := by
   cases key with
   | own processId index =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.length_eq] at found
     split at found
     · rename_i task lookup
       split at found
@@ -3133,7 +3164,7 @@ private theorem footprint_views {state : State} {tasks : List (PID × Task α)}
       · simp at found
     · simp at found
   | deliver source' target' =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
     split at found
     · rename_i envelope _ oldestFound
       simp only [Option.some.injEq] at found
@@ -3142,12 +3173,12 @@ private theorem footprint_views {state : State} {tasks : List (PID × Task α)}
       have distinct : (envelope.source, envelope.target) ≠ (source, target) := fun same =>
         other (by simp [Key.channel, same])
       intro view mem
-      simp only [Footprint.delivery] at mem
+      simp only [Footprint.delivery, Kernel.erase_eq, Kernel.filter_eq] at mem
       (repeat' split at mem) <;> simp [Observes.and, Observes.record] at mem <;> subst mem <;>
         exact oldest_arrive_other distinct _
     · simp at found
   | bounce source' target' =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.find?_eq] at found
     split at found
     · rename_i envelope _ oldestFound
       simp only [Option.some.injEq] at found
@@ -3161,7 +3192,7 @@ private theorem footprint_views {state : State} {tasks : List (PID × Task α)}
       exact oldest_arrive_other distinct _
     · simp at found
   | fire reference =>
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.find?_eq] at found
     split at found
     · simp only [Option.some.injEq] at found
       subst found
@@ -3204,13 +3235,14 @@ private theorem inert_next {state : State} {tasks : List (PID × Task α)} {fini
         subst target
         have received : ({ state with inTransit := rest }.receive envelope) =
             ({ state with inTransit := rest }, none) := by
-          simp only [Envelope.inert, ite_true] at inert
+          simp only [Envelope.inert, ite_true, Kernel.any_eq, Kernel.contains_eq] at inert
           cases signal : envelope.signal <;> simp only [signal, Bool.false_eq_true] at inert
           · simp only [Bool.and_eq_true, Bool.not_eq_true', State.process] at inert
-            simp only [State.receive, signal, State.process, inert.2, Bool.false_eq_true, ite_false]
+            simp only [State.receive, signal, State.process, inert.2, Bool.false_eq_true,
+                ite_false, Kernel.contains_eq]
           · simp only [Bool.and_eq_true, Bool.not_eq_true', State.process] at inert
             simp [State.receive, signal, State.process, inert.2]
-        simp only [Task.delivery, received, Transition.apply, tasksEq]
+        simp only [Task.delivery, received, Transition.apply, tasksEq, Kernel.append_eq]
         simp
     · cases same
     · cases same
@@ -3369,8 +3401,9 @@ private theorem Grows.refl {processId : PID} {process : ProcessState} : Grows pr
 
 private theorem Grows.receive {processId source : PID} {process : ProcessState} {signal : Signal} :
     Grows processId process (process.receive source signal) := by
-  cases signal <;> simp only [ProcessState.receive] <;> (repeat' split) <;>
-    simp only [Grows, ProcessState.append] <;>
+  cases signal <;> simp only [ProcessState.receive, Kernel.any_eq, Kernel.append_eq,
+      Kernel.contains_eq, Kernel.erase_eq, Kernel.filter_eq] <;> (repeat' split) <;>
+    simp only [Grows, ProcessState.append, Kernel.append_eq] <;>
     exact ⟨Nat.le_refl _, fun entry mem => .inl (by simp_all [List.mem_filter]),
       fun alias mem => .inl (by first | exact List.mem_of_mem_erase mem | simp_all)⟩
 
@@ -3380,13 +3413,16 @@ private theorem Task.footprint_grows {state : State} {processId : PID} {task : T
     Grows processId process process' := by
   have current : state.process processId = process := by simp [State.process, record]
   obtain ⟨computation, finish⟩ := task
-  cases computation <;> simp only [Task.footprint, Footprint.ending, Footprint.spawn, requestFootprint] at changed
+  cases computation <;> simp only [Task.footprint, Footprint.ending, Footprint.spawn,
+      requestFootprint, Kernel.append_eq, Kernel.any_eq, Kernel.contains_eq, Kernel.erase_eq,
+      Kernel.eraseP_eq, Kernel.filter_eq, Kernel.find?_eq] at changed
   all_goals (repeat' split at changed)
   all_goals try simp only [Effect.record_andThen] at changed
   all_goals
     simp only [Effect.record, Effect.change, Effect.send,
       Effect.ending, List.find?_cons, List.find?_nil, beq_self_eq_true, Function.comp_apply,
-      Option.map_some, id, Option.some.injEq, reduceCtorEq] at changed
+      Option.map_some, id, Option.some.injEq, reduceCtorEq, Kernel.find?_eq, Kernel.filter_eq,
+          Kernel.foldl_eq] at changed
   all_goals (try subst changed)
   all_goals simp_all [Grows, List.mem_append, List.mem_filter, State.process, ProcessState.append]
   all_goals try (split <;> simp_all)
@@ -3441,7 +3477,7 @@ private theorem step_grows {state : State} {tasks : List (PID × Task α)} {fini
     Grows processId process process' := by
   by_cases own : ∃ index, key = .own processId index
   · obtain ⟨index, rfl⟩ := own
-    simp only [Config.footprint] at found
+    simp only [Config.footprint, Kernel.lookup_eq, Kernel.length_eq] at found
     split at found
     · split at found
       · simp only [Option.some.injEq] at found
@@ -3456,19 +3492,19 @@ private theorem step_grows {state : State} {tasks : List (PID × Task α)} {fini
       simp only [id, Option.some.injEq] at changed
       subst changed
       exact Grows.refl
-    · simp only [Footprint.delivery] at changed
+    · simp only [Footprint.delivery, Kernel.erase_eq, Kernel.filter_eq] at changed
       split at changed
       · split at changed
         · simp only [Effect.record_andThen, Function.comp_apply] at changed
           simp [Effect.record, Effect.ending, equalTarget] at changed
         · simp only [Effect.record_andThen, Function.comp_apply] at changed
           simp only [Effect.record, Effect.change, List.find?_cons, List.find?_nil, equalTarget,
-            beq_self_eq_true, Option.map_some, Option.some.injEq, id] at changed
+            beq_self_eq_true, Option.map_some, Option.some.injEq, id, Kernel.find?_eq] at changed
           subst changed
           exact Grows.receive
       · simp only [Effect.record_andThen, Function.comp_apply] at changed
         simp only [Effect.record, Effect.change, List.find?_cons, List.find?_nil, equalTarget,
-          beq_self_eq_true, Option.map_some, Option.some.injEq, id] at changed
+          beq_self_eq_true, Option.map_some, Option.some.injEq, id, Kernel.find?_eq] at changed
         subst changed
         exact Grows.receive
 
@@ -3572,7 +3608,8 @@ private theorem inert_square {state : State} {tasks : List (PID × Task α)} {fi
           ((footprint.effect.apply state).processes envelope.target).isSome = false) :=
       Settled.step lives grows
     cases live : (tasks.lookup envelope.target).isSome
-    · simp only [Envelope.inert, live, Bool.false_eq_true, ite_false, Bool.and_eq_true] at inert
+    · simp only [Envelope.inert, live, Bool.false_eq_true, ite_false, Bool.and_eq_true,
+        Kernel.any_eq, Kernel.contains_eq] at inert
       obtain ⟨settled, signal⟩ := inert
       obtain ⟨settled', dead'⟩ := settledThere (settled_iff.mp settled)
       have dead : (state.processes envelope.target).isSome = false := by
@@ -3584,7 +3621,7 @@ private theorem inert_square {state : State} {tasks : List (PID × Task α)} {fi
           rw [dead' dead] at this
           cases this
       simp [Envelope.inert, missing', settled_iff.mpr settled', signal]
-    · simp only [Envelope.inert, live, ite_true] at inert
+    · simp only [Envelope.inert, live, ite_true, Kernel.any_eq, Kernel.contains_eq] at inert
       obtain ⟨process, record⟩ := Option.isSome_iff_exists.mp (live_of_lookup wellformed live)
       cases live' : ((move.tasks tasks).lookup envelope.target).isSome
       · have settled' := (settledThere (Settled.of_live wellformed (by simp [record]))).1
@@ -3592,7 +3629,7 @@ private theorem inert_square {state : State} {tasks : List (PID × Task α)} {fi
           intro reference
           constructor <;> intro same <;> simp [same] at inert
         simp only [Envelope.inert, Bool.false_eq_true, ite_false, settled_iff.mpr settled',
-          Bool.true_and]
+          Bool.true_and, Kernel.any_eq, Kernel.contains_eq]
         cases signal' : envelope.signal <;> simp_all
       · obtain ⟨process', record'⟩ := Option.isSome_iff_exists.mp (live_of_lookup wellformed' live')
         have changed : footprint.effect.record envelope.target (some process) = some process' := by
@@ -3601,7 +3638,7 @@ private theorem inert_square {state : State} {tasks : List (PID × Task α)} {fi
         have current : state.process envelope.target = process := by simp [State.process, record]
         have current' : (footprint.effect.apply state).process envelope.target = process' := by
           simp only [State.process]; rw [record']; rfl
-        simp only [Envelope.inert, ite_true]
+        simp only [Envelope.inert, ite_true, Kernel.any_eq, Kernel.contains_eq]
         cases signal : envelope.signal <;> simp only [signal, Bool.and_eq_true, Bool.not_eq_true',
           Bool.false_eq_true] at inert ⊢
         · rw [allocated_iff, current] at inert
@@ -3769,9 +3806,9 @@ the steps followed before it asleep, keeping only those that commute with it
     (sleep : List Key) : List Key → List (Key × Event × Config α) → Bool
   | _, [] => true
   | done, (key, _, next) :: rest =>
-      if sleep.contains key then explore visit commutes sleep done rest
-      else visit ((sleep ++ done).filter (commutes key)) next &&
-        explore visit commutes sleep (done ++ [key]) rest
+      if Kernel.contains sleep key then explore visit commutes sleep done rest
+      else visit (Kernel.filter (commutes key) (Kernel.append sleep done)) next &&
+        explore visit commutes sleep (Kernel.append done [key]) rest
 
 /-- Whether every run ends in an accepted outcome, following at most `depth`
 steps along each run, where runs taking a step asleep first are covered
@@ -3785,10 +3822,11 @@ configuration, whose reachable configurations are well-formed. -/
       | [] =>
           match config.successors with
           | [] => accept config.outcome
-          | successors => successors.all fun (_, next) => checkFrom accept depth [] next
+          | successors => Kernel.all successors fun (_, next) => checkFrom accept depth [] next
       | steps =>
-          match config.forced.bind fun key => steps.find? (·.1 == key) with
-          | some (key, _, next) => checkFrom accept depth (sleep.filter (config.commutesWith key)) next
+          match config.forced.bind fun key => Kernel.find? (·.1 == key) steps with
+          | some (key, _, next) =>
+              checkFrom accept depth (Kernel.filter (config.commutesWith key) sleep) next
           | none => explore (checkFrom accept depth) config.commutesWith sleep [] steps
 
 /-- Whether every run from a start configuration ends in an accepted outcome,
@@ -3886,7 +3924,7 @@ private theorem explore_sound {visit : List Key → Config α → Bool}
     intro done equal found unreached explored
     have mem : (key, event, next) ∈ steps := by rw [equal]; simp
     have extend : steps = (earlier ++ [(key, event, next)]) ++ rest := by rw [equal]; simp
-    simp only [explore] at explored
+    simp only [explore, Kernel.contains_eq, Kernel.filter_eq, Kernel.append_eq] at explored
     split at explored
     · rename_i slept
       refine ih _ done extend (fun key mem => ?_) (fun key' event' next' mem' out => ?_) explored
@@ -3945,7 +3983,7 @@ private theorem forced_facts {state : State} {tasks : List (PID × Task α)}
   have same : key = forced := by simpa using List.find?_some step
   subst same
   refine ⟨?_, List.mem_of_find?_eq_some step⟩
-  simp only [Config.forced] at isForced
+  simp only [Config.forced, Kernel.find?_eq] at isForced
   cases local' : tasks.find? (fun (processId, task) => task.local state processId) with
   | some entry =>
     obtain ⟨processId, task⟩ := entry
@@ -3955,7 +3993,8 @@ private theorem forced_facts {state : State} {tasks : List (PID × Task α)}
     exact .inl ⟨_, _, _, _, processId, task, rfl,
       lookup_of_mem wellformed.1 (List.mem_of_find?_eq_some local'), isLocal, rfl⟩
   | none =>
-    simp only [local', Option.map_none, Option.orElse, Config.inert, Option.map_eq_some_iff] at isForced
+    simp only [local', Option.map_none, Option.orElse, Config.inert, Option.map_eq_some_iff,
+        Kernel.find?_eq, Kernel.lookup_eq] at isForced
     obtain ⟨⟨envelope, rest⟩, head, rfl⟩ := isForced
     exact .inr ⟨_, _, _, _, envelope, rest, rfl, List.mem_of_find?_eq_some head,
       by simpa using List.find?_some head, rfl⟩
@@ -3974,6 +4013,7 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
     intro sleep first last events outcome reachable checked run terminal asleep
     have wellformed := reachable.1
     unfold checkFrom at checked
+    simp only [Kernel.all_eq, Kernel.find?_eq, Kernel.filter_eq] at checked
     cases found : first.steps with
     | nil =>
       -- No keyed steps: follow every step.

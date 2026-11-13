@@ -1,6 +1,7 @@
 module
 
 public import Lynx.Term.DataTypes
+public import Lynx.Concurrent.Kernel
 
 /-! Interleaving semantics of local processes, as a labelled transition system.
 
@@ -136,7 +137,8 @@ and its reference counter never goes back, so references stay unique. -/
 
 /-- Append a message to a live mailbox. -/
 @[expose] def State.append (state : State) (processId : PID) (message : Term) : State :=
-  state.modify processId fun process => { process with mailbox := process.mailbox ++ [message] }
+  state.modify processId fun process =>
+    { process with mailbox := Kernel.append process.mailbox [message] }
 
 /-- Whether one PID comes before another, comparing their paths. -/
 @[expose] def pidBefore : PID → PID → Bool
@@ -171,7 +173,7 @@ the order in which processes started them. -/
 
 /-- Allocate the next reference of a process. -/
 @[expose] def State.allocate (state : State) (processId : PID) : List Nat × State :=
-  (processId ++ [(state.process processId).refCounter + 1],
+  (Kernel.append processId [(state.process processId).refCounter + 1],
     state.modify processId fun process => { process with refCounter := process.refCounter + 1 })
 
 /-- The reason a process exits with when it raises. Stack traces are not recorded. -/
@@ -199,18 +201,18 @@ the order in which processes started them. -/
 
 /-- Add an element unless the list already has it. -/
 @[expose] def insertOnce [BEq γ] (item : γ) (items : List γ) : List γ :=
-  if items.contains item then items else items ++ [item]
+  if Kernel.contains items item then items else Kernel.append items [item]
 
 /-- A process ends: linked processes get exit signals, watchers `DOWN`
 signals, and timers sending to it are canceled, as OTP does. -/
 @[expose] def State.terminate (state : State) (processId : PID) (reason : Term) : State :=
   let process := state.process processId
   let state := { state.update processId none with
-    timers := state.timers.filter (·.destination != processId) }
-  let state := process.links.foldl (fun state linked =>
-    state.emit processId linked (.exit reason true)) state
-  process.monitors.foldl (fun state (reference, watcher) =>
-    state.emit processId watcher (.down reference reason)) state
+    timers := Kernel.filter (·.destination != processId) state.timers }
+  let state := Kernel.foldl (fun state linked =>
+    state.emit processId linked (.exit reason true)) state process.links
+  Kernel.foldl (fun state (reference, watcher) =>
+    state.emit processId watcher (.down reference reason)) state process.monitors
 
 /-- How a live process acts on an exit signal: the state, and the reason it
 exits with, if any. A link exit signal only acts while the link exists. A
@@ -219,9 +221,9 @@ cannot be trapped. Otherwise it exits, ignoring the reason `normal`. -/
 @[expose] def State.exitSignal (state : State) (target source : PID) (reason : Term)
     (linked : Bool) : State × Option Term :=
   let process := state.process target
-  if linked && !process.links.contains source then (state, none) else
+  if linked && !Kernel.contains process.links source then (state, none) else
   let state := if linked then
-      state.modify target fun process => { process with links := process.links.erase source }
+      state.modify target fun process => { process with links := Kernel.erase process.links source }
     else state
   if !linked && isKill reason then (state, some (.atom "killed"))
   else if process.trapExit then (state.append target (.tuple #[.atom "EXIT", .pid source, reason]), none)
@@ -234,20 +236,22 @@ cannot be trapped. Otherwise it exits, ignoring the reason `normal`. -/
   match envelope.signal with
   | .message message => (state.append target message, none)
   | .aliasMessage alias message =>
-      (if (state.process target).aliases.contains alias then state.append target message else state,
+      (if Kernel.contains (state.process target).aliases alias then state.append target message
+        else state,
         none)
   | .exit reason linked => state.exitSignal target envelope.source reason linked
   | .link => (state.modify target fun process =>
       { process with links := insertOnce envelope.source process.links }, none)
   | .unlink => (state.modify target fun process =>
-      { process with links := process.links.erase envelope.source }, none)
+      { process with links := Kernel.erase process.links envelope.source }, none)
   | .monitor reference => (state.modify target fun process =>
-      { process with monitors := process.monitors ++ [(reference, envelope.source)] }, none)
+      { process with monitors := Kernel.append process.monitors [(reference, envelope.source)] },
+        none)
   | .down reference reason =>
-      if (state.process target).monitoring.any (·.1 == reference) then
+      if Kernel.any (state.process target).monitoring (·.1 == reference) then
         ((state.modify target fun process =>
-          { process with monitoring := process.monitoring.filter (·.1 != reference)
-                         aliases := process.aliases.erase reference }).append target
+          { process with monitoring := Kernel.filter (·.1 != reference) process.monitoring
+                         aliases := Kernel.erase process.aliases reference }).append target
           (.tuple #[.atom "DOWN", .reference reference, .atom "process", .pid envelope.source,
             reason]), none)
       else (state, none)
@@ -266,10 +270,11 @@ in transit. -/
     List Envelope → List (Envelope × List Envelope)
   | [] => []
   | envelope :: rest =>
-      if seen.contains (envelope.source, envelope.target) then
-        deliverableFrom (before ++ [envelope]) seen rest
-      else (envelope, before ++ rest) ::
-        deliverableFrom (before ++ [envelope]) ((envelope.source, envelope.target) :: seen) rest
+      if Kernel.contains seen (envelope.source, envelope.target) then
+        deliverableFrom (Kernel.append before [envelope]) seen rest
+      else (envelope, Kernel.append before rest) ::
+        deliverableFrom (Kernel.append before [envelope])
+          ((envelope.source, envelope.target) :: seen) rest
 
 /-- The signals that can arrive next, each with the other signals in transit. -/
 @[expose] def deliverable (inTransit : List Envelope) : List (Envelope × List Envelope) :=
@@ -283,8 +288,9 @@ process exits with, if any. `none` while the request cannot be answered. -/
       let (reference, state) := state.allocate processId
       if target = processId then some (.reference reference, state, none) else
       let state := state.modify processId fun process =>
-        { process with monitoring := process.monitoring ++ [(reference, target)]
-                       aliases := if alias then process.aliases ++ [reference] else process.aliases }
+        { process with monitoring := Kernel.append process.monitoring [(reference, target)]
+                       aliases := if alias then Kernel.append process.aliases [reference]
+                         else process.aliases }
       -- Monitoring a process that does not exist answers at once.
       let state := if state.alive target then state.emit processId target (.monitor reference)
         else state.emit target processId (.down reference (.atom "noproc"))
@@ -294,12 +300,13 @@ process exits with, if any. `none` while the request cannot be answered. -/
       -- references are never reused, so no signal is needed. An active
       -- monitor has not delivered its `DOWN` message, so only an inactive one
       -- flushes, removing the oldest message of its shape, as OTP does.
-      let active := (state.process processId).monitoring.any (·.1 == reference)
+      let active := Kernel.any (state.process processId).monitoring (·.1 == reference)
       some (.atom (if active then "true" else "false"), state.modify processId fun process =>
         { process with
-            monitoring := process.monitoring.filter (·.1 != reference)
-            aliases := process.aliases.erase reference
-            mailbox := if flush && !active then process.mailbox.eraseP (isMonitorMessage reference)
+            monitoring := Kernel.filter (·.1 != reference) process.monitoring
+            aliases := Kernel.erase process.aliases reference
+            mailbox := if flush && !active then
+                Kernel.eraseP (isMonitorMessage reference) process.mailbox
               else process.mailbox }, none)
   | .link target =>
       if target = processId then some (.atom "true", state, none)
@@ -312,7 +319,7 @@ process exits with, if any. `none` while the request cannot be answered. -/
           else state.emit target processId (.exit (.atom "noproc") true), none)
   | .unlink target =>
       let state := state.modify processId fun process =>
-        { process with links := process.links.erase target }
+        { process with links := Kernel.erase process.links target }
       some (.atom "true", if target = processId then state else state.emit processId target .unlink,
         none)
   | .exit target reason =>
@@ -331,14 +338,14 @@ process exits with, if any. `none` while the request cannot be answered. -/
       -- OTP answers after the requester's earlier signals reach the target,
       -- and the target's earlier signals reach the requester.
       if target = processId then some (.atom "true", state, none)
-      else if state.inTransit.any fun envelope =>
+      else if Kernel.any state.inTransit fun envelope =>
           (envelope.source == processId && envelope.target == target) ||
             (envelope.source == target && envelope.target == processId) then none
       else some (.atom (if state.alive target then "true" else "false"), state, none)
   | .sendAlias alias message =>
       let owner := alias.dropLast
       if owner = processId then
-        some (message, if (state.process processId).aliases.contains alias then
+        some (message, if Kernel.contains (state.process processId).aliases alias then
           state.append processId message else state, none)
       else some (message, state.emit processId owner (.aliasMessage alias message), none)
   | .startTimer destination message duration =>
@@ -351,11 +358,11 @@ process exits with, if any. `none` while the request cannot be answered. -/
       -- Only a timer yet to fire is canceled. It reports the milliseconds left,
       -- from the time elapsed when it is canceled. Once it fired, its message
       -- may still be in transit.
-      match state.timers.find? (·.reference == reference) with
+      match Kernel.find? (·.reference == reference) state.timers with
       | some timer =>
           let process := state.process processId
           some (.integer (timer.duration - state.elapsed processId process.cancels),
-            { state with timers := state.timers.filter (·.reference != reference) }.modify
+            { state with timers := Kernel.filter (·.reference != reference) state.timers }.modify
               processId fun process => { process with cancels := process.cancels + 1 }, none)
       | none => some (.atom "false", state, none)
 
@@ -372,7 +379,7 @@ time elapsed when timers are canceled. -/
 /-- Allocate the next child of a process, which starts with an empty record. -/
 @[expose] def State.spawn (state : State) (processId : PID) : PID × State :=
   let process := state.process processId
-  let childPid := processId ++ [process.children + 1]
+  let childPid := Kernel.append processId [process.children + 1]
   (childPid, (state.update processId (some { process with children := process.children + 1 })).update
     childPid (some {}))
 
@@ -388,7 +395,8 @@ time elapsed when timers are canceled. -/
   let state := if options.monitor then
       let (reference, state) := state.allocate processId
       (state.modify processId fun process =>
-        { process with monitoring := process.monitoring ++ [(reference, child)] }).modify child
+        { process with monitoring := Kernel.append process.monitoring [(reference, child)] }).modify
+          child
           fun other => { other with monitors := [(reference, processId)] }
     else state
   (child, state)
@@ -397,7 +405,7 @@ time elapsed when timers are canceled. -/
 @[expose] def firstOfEach (seen : List (List Nat)) : List Timer → List Timer
   | [] => []
   | timer :: rest =>
-      if seen.contains timer.reference then firstOfEach seen rest
+      if Kernel.contains seen timer.reference then firstOfEach seen rest
       else timer :: firstOfEach (timer.reference :: seen) rest
 
 /-- The timers that can fire: the first of each reference. References are
@@ -407,7 +415,7 @@ ends every timer with its reference, as canceling it does. -/
 
 /-- Fire a timer: its message is in transit. -/
 @[expose] def State.fire (state : State) (timer : Timer) : State :=
-  { state with timers := state.timers.filter (·.reference != timer.reference) }.emit clock
+  { state with timers := Kernel.filter (·.reference != timer.reference) state.timers }.emit clock
     timer.destination (.message timer.message)
 
 /-- Select the oldest matching message, preserving all unmatched messages.
@@ -588,21 +596,21 @@ inductive Config (α : Type) : Type 1 where
 /-- The configuration a process step leads to. -/
 @[expose] def Transition.apply (transition : Transition α) (before after : List (PID × Task α))
     (finished : Option (Except Exception α)) (exhausted : Bool) : Config α :=
-  .running transition.state (before ++ transition.tasks ++ after)
+  .running transition.state (Kernel.append (Kernel.append before transition.tasks) after)
     (transition.finished.orElse fun _ => finished) (exhausted || transition.exhausted)
 
 /-- Every way to split a list around one element. -/
 @[expose] def splits : List γ → List (List γ × γ × List γ)
   | [] => []
-  | head :: rest => ([], head, rest) :: (splits rest).map fun (before, item, after) =>
-      (head :: before, item, after)
+  | head :: rest => ([], head, rest) :: Kernel.map (fun (before, item, after) =>
+      (head :: before, item, after)) (splits rest)
 
 theorem mem_splits {before after : List γ} {item : γ} :
     (before, item, after) ∈ splits (before ++ item :: after) := by
   induction before with
   | nil => simp [splits]
   | cons head rest ih =>
-    simp only [List.cons_append, splits, List.mem_cons, List.mem_map]
+    simp only [List.cons_append, splits, List.mem_cons, List.mem_map, Kernel.map_eq]
     exact .inr ⟨_, ih, rfl⟩
 
 theorem eq_of_mem_splits {tasks before after : List γ} {item : γ}
@@ -610,7 +618,8 @@ theorem eq_of_mem_splits {tasks before after : List γ} {item : γ}
   induction tasks generalizing before with
   | nil => simp [splits] at mem
   | cons head rest ih =>
-    simp only [splits, List.mem_cons, Prod.mk.injEq, List.mem_map, Prod.exists] at mem
+    simp only [splits, List.mem_cons, Prod.mk.injEq, List.mem_map, Prod.exists,
+        Kernel.map_eq] at mem
     rcases mem with ⟨rfl, rfl, rfl⟩ | ⟨before', item', after', mem, rfl, rfl, rfl⟩
     · rfl
     · simp [ih mem]
