@@ -95,7 +95,7 @@ public theorem concurrent_of_check (computation : Result α) (accept : Outcome �
 /-- Without races, one run to a terminal configuration determines the outcome of
 every run: different steps meet again, so all runs end alike. -/
 public theorem concurrent_of_raceFree (computation : Result α) {outcome : Outcome α}
-    (raceFree : ∀ elapsed, (Concurrent.Config.start {} computation elapsed).RaceFree)
+    (raceFree : ∀ elapsed, Concurrent.RaceFree (.start {} computation elapsed))
     (run : ∀ elapsed, ∃ events last, Concurrent.Run (.start {} computation elapsed) events last ∧
       Concurrent.Terminal last outcome) : concurrent computation outcome :=
   fun elapsed _ _ _ run' terminal' =>
@@ -105,7 +105,7 @@ public theorem concurrent_of_raceFree (computation : Result α) {outcome : Outco
 /-- Without races, taking the first step until none remain evaluates the
 outcome of every run. -/
 public theorem concurrent_of_advance (computation : Result α) (steps : Nat) {outcome : Outcome α}
-    (raceFree : ∀ elapsed, (Concurrent.Config.start {} computation elapsed).RaceFree)
+    (raceFree : ∀ elapsed, Concurrent.RaceFree (.start {} computation elapsed))
     (advanced : ∀ elapsed,
       ((Concurrent.Config.start {} computation elapsed).advance steps).successors.isEmpty ∧
         ((Concurrent.Config.start {} computation elapsed).advance steps).outcome = outcome) :

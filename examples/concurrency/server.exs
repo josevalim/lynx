@@ -367,7 +367,7 @@ defmodule ServerProofsTest do
         -- Without races, one run determines the outcome of every run, whatever
         -- time elapses before timers are canceled.
         refine concurrent_of_advance _ (3 + len xs + 5 * len xs + 2)
-          (fun _ => Config.RaceFree.of_talks single (root_talks _ xs)) fun elapsed => ?_
+          (fun _ => RaceFree.of_talks single (root_talks _ xs)) fun elapsed => ?_
         -- Spawn the server.
         have start : ∃ state : State,
             (Config.start {} (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table
