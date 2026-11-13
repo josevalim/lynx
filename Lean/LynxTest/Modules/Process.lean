@@ -419,7 +419,7 @@ theorem two_senders_every_run {events : List Concurrent.Event} {last : Concurren
   have checked := Concurrent.check_sound (accept := fun
       | .ok (.tuple ⟨[.atom "left", .atom "right"]⟩) => true
       | .ok (.tuple ⟨[.atom "right", .atom "left"]⟩) => true
-      | _ => false) (depth := 32) (by set_option cbv.maxSteps 10000000 in cbv) run terminal
+      | _ => false) (depth := 32) (by decide +kernel) run terminal
   split at checked
   · exact .inl rfl
   · exact .inr rfl
@@ -429,7 +429,7 @@ theorem two_senders_every_run {events : List Concurrent.Event} {last : Concurren
 theorem two_senders_check_rejects_one_order :
     Concurrent.check (fun
       | .ok (.tuple ⟨[.atom "left", .atom "right"]⟩) => true
-      | _ => false) 32 (.start {} twoSenders) = false := by set_option cbv.maxSteps 10000000 in cbv
+      | _ => false) 32 (.start {} twoSenders) = false := by decide +kernel
 
 /-- A deadlocked computation cannot have a successful return. -/
 theorem deadlock_cannot_accept (computation : Result) (env final : Environment)
