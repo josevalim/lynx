@@ -3,10 +3,11 @@ module
 public import Lynx.Concurrent
 
 /-! Every run ends. Each step of a process replaces its computation by what
-follows it, possibly with a spawned child, or ends the process. Every other
-step, a signal arriving or a timer firing, leaves the processes as they are
-and lowers the weight of the signals in transit and the timers. So statements
-about the runs that can no longer step cover every run. -/
+follows it, possibly with a spawned child, or ends the process, as an exit
+signal arriving can. Every other step, a signal arriving or a timer firing,
+leaves the processes as they are and lowers the weight of the signals in
+transit and the timers. So statements about the runs that can no longer step
+cover every run. -/
 
 public section
 
