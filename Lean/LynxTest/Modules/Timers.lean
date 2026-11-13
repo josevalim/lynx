@@ -40,7 +40,7 @@ private def waits : Term := .function "test" "waits" 0 #[]
 
 /-- Accept any of the given results, for proofs over every schedule. -/
 private def oneOf (expected : List Term) : Outcome Term → Bool
-  | .ok actual => expected.any (Term.exactCompare · actual == .eq)
+  | .ok actual => expected.any ((fun a b => Term.compareExact (Term.fuel a b) a b) · actual == .eq)
   | _ => false
 
 private def tick : Term := .atom "tick"
@@ -94,7 +94,7 @@ theorem cancel_false_before_delivery :
           let message ← receiveOrTimeout
           .ok (.tuple #[canceled, message]))) with
       | some (_, .rejected (.ok result)) =>
-          Term.exactCompare result (.tuple #[.atom "false", .atom "timeout"]) == .eq
+          Term.compareExact (Term.fuel result (.tuple #[.atom "false", .atom "timeout"])) result (.tuple #[.atom "false", .atom "timeout"]) == .eq
       | _ => false) = true := by cbv
 
 /-- A timer can only be canceled once. -/

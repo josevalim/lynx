@@ -242,7 +242,7 @@ registered names, so it is `[]` for live processes. Other items do not return. -
 @[expose] def «get/1» (_ : Dispatcher) (key : Term) : Result := do
   let env ← get
   .ok ((env.pdict.findSome? fun (stored, value) =>
-    if Term.exactCompare key stored = .eq then some value else none).getD (.atom "undefined"))
+    if Term.compareExact (Term.fuel key stored) key stored = .eq then some value else none).getD (.atom "undefined"))
 
 /-- Return all process-dictionary keys. Their order is unspecified by Erlang.erlang. -/
 @[expose] def «get_keys/0» (_ : Dispatcher) : Result := do
@@ -253,15 +253,15 @@ registered names, so it is `[]` for live processes. Other items do not return. -
 @[expose] def «get_keys/1» (_ : Dispatcher) (value : Term) : Result := do
   let env ← get
   .ok ((env.pdict.filterMap fun entry =>
-    if Term.exactCompare value entry.2 = .eq then some entry.1 else none).foldr Term.cons Term.nil)
+    if Term.compareExact (Term.fuel value entry.2) value entry.2 = .eq then some entry.1 else none).foldr Term.cons Term.nil)
 
 /-- Store a binding and return its previous value, or `undefined`. -/
 @[expose] def «put/2» (_ : Dispatcher) (key value : Term) : Result := do
   let env ← get
   let previous := (env.pdict.findSome? fun (stored, value) =>
-    if Term.exactCompare key stored = .eq then some value else none).getD (.atom "undefined")
+    if Term.compareExact (Term.fuel key stored) key stored = .eq then some value else none).getD (.atom "undefined")
   set { env with pdict := (key, value) :: env.pdict.filter fun entry =>
-    Term.exactCompare key entry.1 != Ordering.eq }
+    Term.compareExact (Term.fuel key entry.1) key entry.1 != Ordering.eq }
   .ok previous
 
 /-- Return all process-dictionary bindings and clear the dictionary. -/
@@ -274,8 +274,8 @@ registered names, so it is `[]` for live processes. Other items do not return. -
 @[expose] def «erase/1» (_ : Dispatcher) (key : Term) : Result := do
   let env ← get
   let previous := (env.pdict.findSome? fun (stored, value) =>
-    if Term.exactCompare key stored = .eq then some value else none).getD (.atom "undefined")
-  set { env with pdict := env.pdict.filter fun entry => Term.exactCompare key entry.1 != Ordering.eq }
+    if Term.compareExact (Term.fuel key stored) key stored = .eq then some value else none).getD (.atom "undefined")
+  set { env with pdict := env.pdict.filter fun entry => Term.compareExact (Term.fuel key entry.1) key entry.1 != Ordering.eq }
   .ok previous
 
 end Erlang.erlang

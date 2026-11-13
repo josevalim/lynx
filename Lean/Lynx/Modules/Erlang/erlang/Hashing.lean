@@ -141,7 +141,7 @@ private theorem sizeOf_pos (term : Term) : 0 < sizeOf term := by
 
 /-- Visible bindings are smaller than their map. -/
 private theorem visible_lt {entries : List (Term × Term)} {entry : Term × Term}
-    (h : entry ∈ Term.Compare.mapView Term.exactCompare entries) :
+    (h : entry ∈ Term.Compare.mapView (fun a b => Term.compareExact (Term.fuel a b) a b) entries) :
     sizeOf entry.1 < 1 + sizeOf entries ∧ sizeOf entry.2 < 1 + sizeOf entries := by
   have := List.sizeOf_lt_of_mem (Term.Compare.mem_mapView _ h)
   obtain ⟨k, v⟩ := entry
@@ -162,7 +162,7 @@ private def hashTerm (hash : UInt32) : Term → UInt32
       (hashWord (UInt32.ofNat elements.size) (hconst 9) hash)
   | .map entries =>
     -- The visible bindings, which exact equality compares, each hashed independently.
-    let view := (Term.Compare.mapView Term.exactCompare entries).attach
+    let view := (Term.Compare.mapView (fun a b => Term.compareExact (Term.fuel a b) a b) entries).attach
     let pairs := view.foldl (fun pairs entry => pairs ^^^ hashTerm (hashTerm 0 entry.val.1) entry.val.2) 0
     let hash := hashWord (UInt32.ofNat view.length) (hconst 16) hash
     if view.length = 0 then hash else hashWord pairs (hconst 19) hash
@@ -225,8 +225,8 @@ private inductive Pairwise₂ (R : Term → Term → Prop) : List Term → List 
   | nil : Pairwise₂ R [] []
   | cons {x y xs ys} : R x y → Pairwise₂ R xs ys → Pairwise₂ R (x :: xs) (y :: ys)
 
-private theorem exact_symm {a b : Term} (h : Term.exactCompare a b = .eq) : Term.exactCompare b a = .eq := by
-  rw [Std.OrientedCmp.eq_swap (cmp := Term.exactCompare), h]; rfl
+private theorem exact_symm {a b : Term} (h : Term.compareExact (Term.fuel a b) a b = .eq) : Term.compareExact (Term.fuel b a) b a = .eq := by
+  exact Term.compareExact_eq_symm h
 
 private theorem lex_eq {cmp : Term → Term → Ordering} :
     ∀ {xs ys : List Term}, List.compareLex cmp xs ys = .eq → Pairwise₂ (fun a b => cmp a b = .eq) xs ys
@@ -237,19 +237,19 @@ private theorem lex_eq {cmp : Term → Term → Ordering} :
     simp only [List.compareLex_cons_cons, Ordering.then_eq_eq] at h
     exact .cons h.1 (lex_eq h.2)
 
-private theorem byte_congr {a b : Term} (h : Term.exactCompare a b = .eq) : byte? a = byte? b := by
+private theorem byte_congr {a b : Term} (h : Term.compareExact (Term.fuel a b) a b = .eq) : byte? a = byte? b := by
   cases a with
-  | integer v => rw [Term.integer_exactCompare_eq] at h; subst h; rfl
+  | integer v => rw [Term.integer_compareExact_eq] at h; subst h; rfl
   | _ =>
     cases b with
-    | integer v => rw [Term.exactCompare_eq_integer] at h; cases h
+    | integer v => rw [Term.compareExact_eq_integer] at h; cases h
     | _ => rfl
 
 /-- Mapping equal hashes over exactly equal visible bindings. -/
 private theorem pairs_congr (g : Term × Term → UInt32) :
-    ∀ {xs ys : List (Term × Term)}, Pairwise₂ (fun a b => Term.exactCompare a b = .eq) (xs.map Prod.fst) (ys.map Prod.fst) →
-      Pairwise₂ (fun a b => Term.exactCompare a b = .eq) (xs.map Prod.snd) (ys.map Prod.snd) →
-      (∀ x ∈ xs, ∀ y, Term.exactCompare x.1 y.1 = .eq → Term.exactCompare x.2 y.2 = .eq → g x = g y) →
+    ∀ {xs ys : List (Term × Term)}, Pairwise₂ (fun a b => Term.compareExact (Term.fuel a b) a b = .eq) (xs.map Prod.fst) (ys.map Prod.fst) →
+      Pairwise₂ (fun a b => Term.compareExact (Term.fuel a b) a b = .eq) (xs.map Prod.snd) (ys.map Prod.snd) →
+      (∀ x ∈ xs, ∀ y, Term.compareExact (Term.fuel x.1 y.1) x.1 y.1 = .eq → Term.compareExact (Term.fuel x.2 y.2) x.2 y.2 = .eq → g x = g y) →
       xs.map g = ys.map g
   | [], [], _, _, _ => rfl
   | x :: xs, y :: ys, .cons hk keys, .cons hv values, h => by
@@ -277,18 +277,18 @@ where
     | _ :: _, _ :: _, .cons h rest, f => .cons (f _ _ h) (mono rest f)
 
 private theorem hash_congr : ∀ (n : Nat),
-    (∀ a b, sizeOf a ≤ n → Term.exactCompare a b = .eq → ∀ hash, hashTerm hash a = hashTerm hash b) ∧
+    (∀ a b, sizeOf a ≤ n → Term.compareExact (Term.fuel a b) a b = .eq → ∀ hash, hashTerm hash a = hashTerm hash b) ∧
     (∀ head tail head' tail' hash packed count, sizeOf head + sizeOf tail ≤ n →
-      Term.exactCompare head head' = .eq → Term.exactCompare tail tail' = .eq →
+      Term.compareExact (Term.fuel head head') head head' = .eq → Term.compareExact (Term.fuel tail tail') tail tail' = .eq →
       hashList hash packed count head tail = hashList hash packed count head' tail') := by
   intro n
   induction n using Nat.strongRecOn with
   | ind n ih =>
-  have term : ∀ {a b : Term}, sizeOf a < n → Term.exactCompare a b = .eq →
+  have term : ∀ {a b : Term}, sizeOf a < n → Term.compareExact (Term.fuel a b) a b = .eq →
       ∀ hash, hashTerm hash a = hashTerm hash b :=
     fun {a b} ha h hash => (ih (sizeOf a) ha).1 a b (Nat.le_refl _) h hash
   have elems : ∀ {xs ys : List Term}, (∀ x ∈ xs, sizeOf x < n) →
-      List.compareLex Term.exactCompare xs ys = .eq → ∀ hash,
+      List.compareLex (fun a b => Term.compareExact (Term.fuel a b) a b) xs ys = .eq → ∀ hash,
         xs.foldl hashTerm hash = ys.foldl hashTerm hash := by
     intro xs ys small h hash
     exact fold_congr hashTerm (forall₂_mem.mono (forall₂_mem (lex_eq h))
@@ -296,22 +296,22 @@ private theorem hash_congr : ∀ (n : Nat),
   constructor
   · intro a b ha h hash
     cases a with
-    | integer v => rw [Term.integer_exactCompare_eq] at h; subst h; rfl
-    | float v => rw [Term.float_exactCompare_eq] at h; subst h; rfl
-    | atom name => have := exact_symm h; rw [Term.exactCompare_eq_atom] at this; subst this; rfl
-    | reference r => rw [Term.reference_exactCompare_eq] at h; subst h; rfl
+    | integer v => rw [Term.integer_compareExact_eq] at h; subst h; rfl
+    | float v => rw [Term.float_compareExact_eq] at h; subst h; rfl
+    | atom name => have := exact_symm h; rw [Term.compareExact_eq_atom] at this; subst this; rfl
+    | reference r => rw [Term.reference_compareExact_eq] at h; subst h; rfl
     | pid p =>
-      cases b <;> rw [Term.exactCompare_eq_step] at h <;> simp [Term.Compare.compareStep] at h
+      cases b <;> rw [Term.compareExact_step] at h <;> simp [Term.Compare.compareStep] at h
       subst h; rfl
-    | nil => have := exact_symm h; rw [Term.exactCompare_eq_nil] at this; subst this; rfl
+    | nil => have := exact_symm h; rw [Term.compareExact_eq_nil] at this; subst this; rfl
     | cons hd tl =>
-      obtain ⟨hd', tl', rfl⟩ := Term.cons_exactCompare_eq hd tl b h
-      rw [Term.exactCompare_eq_step] at h
+      obtain ⟨hd', tl', rfl⟩ := Term.cons_compareExact_eq hd tl b h
+      rw [Term.compareExact_step] at h
       simp only [Term.Compare.compareStep, Ordering.then_eq_eq] at h
       simp only [hashTerm]
       exact (ih (sizeOf hd + sizeOf tl) (by simp at ha; omega)).2 hd tl hd' tl' hash 0 0 (Nat.le_refl _) h.1 h.2
     | tuple xs =>
-      cases b <;> rw [Term.exactCompare_eq_step] at h <;> simp [Term.Compare.compareStep] at h
+      cases b <;> rw [Term.compareExact_step] at h <;> simp [Term.Compare.compareStep] at h
       rename_i ys
       obtain ⟨size, lex⟩ := h
       have small : ∀ x ∈ xs.toList, sizeOf x < n := fun x m => by
@@ -322,19 +322,19 @@ private theorem hash_congr : ∀ (n : Nat),
       simp only [hashTerm, Array.foldl_attach, List.foldl_toArray', List.size_toArray, size]
       exact elems small lex _
     | function m nm ar caps =>
-      cases b <;> rw [Term.exactCompare_eq_step] at h <;> simp [Term.Compare.compareStep, Ordering.then_eq_eq] at h
+      cases b <;> rw [Term.compareExact_step] at h <;> simp [Term.Compare.compareStep, Ordering.then_eq_eq] at h
       obtain ⟨rfl, rfl, rfl, lex⟩ := h
       simp only [hashTerm, Array.foldl_attach]
       rw [← Array.foldl_toList, ← Array.foldl_toList]
       exact elems (fun x m => by
         have := Array.sizeOf_lt_of_mem (Array.mem_toList_iff.mp m); simp at ha; omega) lex _
     | map A =>
-      cases b <;> rw [Term.exactCompare_eq_step] at h <;> simp [Term.Compare.compareStep] at h
+      cases b <;> rw [Term.compareExact_step] at h <;> simp [Term.Compare.compareStep] at h
       rename_i B
       simp only [Term.Compare.compareMapViews, compareLex, Term.Compare.compareOn, Ordering.then_eq_eq] at h
       obtain ⟨length, keys, values⟩ := h
-      have length : (Term.Compare.mapView Term.exactCompare A).length =
-          (Term.Compare.mapView Term.exactCompare B).length := Nat.compare_eq_eq.mp length
+      have length : (Term.Compare.mapView (fun a b => Term.compareExact (Term.fuel a b) a b) A).length =
+          (Term.Compare.mapView (fun a b => Term.compareExact (Term.fuel a b) a b) B).length := Nat.compare_eq_eq.mp length
       have same := pairs_congr (fun e => hashTerm (hashTerm 0 e.1) e.2) (lex_eq keys) (lex_eq values)
         fun x mx y hk hv => by
           have small := visible_lt mx
@@ -348,8 +348,8 @@ private theorem hash_congr : ∀ (n : Nat),
         fun xs => by rw [List.foldl_map]
       rw [fold, fold, same]
     | bitstring bytes lb v =>
-      obtain ⟨other, ob, ov, rfl⟩ := Term.bitstring_exactCompare_eq bytes lb v b h
-      rw [Term.exactCompare_eq_step] at h
+      obtain ⟨other, ob, ov, rfl⟩ := Term.bitstring_compareExact_eq bytes lb v b h
+      rw [Term.compareExact_step] at h
       simp only [Term.Compare.compareStep] at h
       obtain ⟨rfl, rfl⟩ := Term.Bitstring.eq_of_toBits_eq v ov (Std.LawfulEqCmp.eq_of_compare h)
       rfl
@@ -366,14 +366,14 @@ private theorem hash_congr : ∀ (n : Nat),
       simp only []
       by_cases tc : ∃ next rest, tail = .cons next rest
       · obtain ⟨next, rest, rfl⟩ := tc
-        obtain ⟨next', rest', rfl⟩ := Term.cons_exactCompare_eq next rest tail' ht
-        rw [Term.exactCompare_eq_step] at ht
+        obtain ⟨next', rest', rfl⟩ := Term.cons_compareExact_eq next rest tail' ht
+        rw [Term.compareExact_step] at ht
         simp only [Term.Compare.compareStep, Ordering.then_eq_eq] at ht
         exact (ih (sizeOf next + sizeOf rest) (by simp at hs; omega)).2 _ _ _ _ _ _ _ (Nat.le_refl _) ht.1 ht.2
       · -- The other tail is not a list cell either.
         have _ : ∀ next rest, tail' ≠ .cons next rest := by
           rintro next rest rfl
-          obtain ⟨a, b, rfl⟩ := Term.cons_exactCompare_eq next rest tail (exact_symm ht)
+          obtain ⟨a, b, rfl⟩ := Term.cons_compareExact_eq next rest tail (exact_symm ht)
           exact tc ⟨a, b, rfl⟩
         split
         · exfalso; exact tc ⟨_, _, rfl⟩
@@ -381,7 +381,7 @@ private theorem hash_congr : ∀ (n : Nat),
           exact term (by omega) ht _
     · rw [term (by omega) hh, term (by omega) ht]
 
-theorem phash2_congr {a b : Term} (h : Term.exactCompare a b = .eq) : «phash2/1» a = «phash2/1» b := by
+theorem phash2_congr {a b : Term} (h : Term.compareExact (Term.fuel a b) a b = .eq) : «phash2/1» a = «phash2/1» b := by
   simp only [«phash2/1», hash2, (hash_congr _).1 a b (Nat.le_refl _) h 0]
 
 end Erlang.erlang

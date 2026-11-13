@@ -2,6 +2,7 @@ module
 
 public import Lynx.Term.DataTypes
 public import Lynx.Term.Bitstring
+import Lynx.Term.Eval
 import all Lynx.Term.FiniteFloat
 
 public section
@@ -74,6 +75,28 @@ private instance : Std.TransCmp ratCompare where
     exact (ratCompare_isLE_iff a c).mpr
       (Rat.le_trans ((ratCompare_isLE_iff a b).mp ab) ((ratCompare_isLE_iff b c).mp bc))
 
+/-- String order, comparing the characters as lists so that evaluation in the
+kernel can decide it. -/
+@[expose] def stringCompare (a b : String) : Ordering :=
+  compareOfLessAndEq a.toList b.toList
+
+/-- Strings with the same characters are equal. -/
+@[simp] theorem toList_eq_toList_iff (a b : String) : a.toList = b.toList ↔ a = b :=
+  ⟨String.toList_injective, fun h => h ▸ rfl⟩
+
+@[simp] theorem stringCompare_eq (a b : String) : stringCompare a b = Ord.compare a b := by
+  show _ = String.compare a b
+  rw [Term.string_compare_eq]
+  have lt : (a < b) = (a.toList < b.toList) := rfl
+  have eq : (a = b) = (a.toList = b.toList) := propext (toList_eq_toList_iff a b).symm
+  simp only [stringCompare, compareOfLessAndEq, lt, eq]
+
+private instance : Std.TransCmp stringCompare := by
+  have : stringCompare = fun a b => Ord.compare a b :=
+    funext fun a => funext fun b => stringCompare_eq a b
+  rw [this]
+  infer_instance
+
 /-- Exact float ordering is numeric first and uses the representation only to
 distinguish numerically equal encodings, notably positive and negative zero. -/
 @[expose] def exactFloatCompareSlow (a b : FiniteFloat) : Ordering :=
@@ -99,15 +122,25 @@ private instance : Std.TransCmp exactFloatCompareSlow :=
   · rintro rfl
     exact ⟨rfl, rfl, rfl, rfl⟩
 
-/-- Avoid decoding the binary64 value when the representations are already equal. -/
+/-- Avoid decoding the binary64 value when the representations are already
+equal. The representations are compared field by field, so evaluation in the
+kernel does not need the derived decidable equality. -/
 @[expose] def exactFloatCompare (a b : FiniteFloat) : Ordering :=
-  if a = b then .eq else exactFloatCompareSlow a b
+  if a.negative == b.negative && a.exponent.val == b.exponent.val && a.fraction.val == b.fraction.val then
+    .eq
+  else exactFloatCompareSlow a b
 
 private theorem exactFloatCompare_eq_slow (a b : FiniteFloat) :
     exactFloatCompare a b = exactFloatCompareSlow a b := by
   simp only [exactFloatCompare]
   split
   · rename_i equal
+    have : a = b := by
+      obtain ⟨negative, exponent, fraction⟩ := a
+      obtain ⟨negative', exponent', fraction'⟩ := b
+      simp only [Bool.and_eq_true, beq_iff_eq] at equal
+      obtain ⟨⟨rfl, same⟩, same'⟩ := equal
+      rw [Fin.ext same, Fin.ext same']
     subst b
     exact (Std.ReflCmp.compare_self (cmp := exactFloatCompareSlow)).symm
   · rfl
@@ -183,14 +216,14 @@ so evaluation can compare terms. -/
   | _, .integer _ => .gt
   | .float _, _ => .lt
   | _, .float _ => .gt
-  | .atom a, .atom b => Ord.compare a b
+  | .atom a, .atom b => stringCompare a b
   | .atom _, _ => .lt
   | _, .atom _ => .gt
   | .reference a, .reference b => Ord.compare a b
   | .reference _, _ => .lt
   | _, .reference _ => .gt
   | .function module name arity captures, .function otherModule otherName otherArity otherCaptures =>
-    (Ord.compare module otherModule).then ((Ord.compare name otherName).then
+    (stringCompare module otherModule).then ((stringCompare name otherName).then
       ((Ord.compare arity otherArity).then
         (List.compareLex exactCmp captures.toList otherCaptures.toList)))
   | .function _ _ _ _, _ => .lt
@@ -215,13 +248,72 @@ so evaluation can compare terms. -/
   | .bitstring _ _ _, _ => .gt
   | _, .bitstring _ _ _ => .lt
 
-private abbrev Child (n : Nat) := {t : Term // sizeOf t < n}
+end Lynx.Term.Compare
 
-private def boundedList (n : Nat) (xs : List Term) (h : ∀ x ∈ xs, sizeOf x < n) : List (Child n) :=
-  xs.attachWith (fun x => sizeOf x < n) h
+namespace Lynx.Term
+
+mutual
+/-- How deeply a term nests. Comparing two terms takes a step per level. -/
+@[expose] def nesting : Term → Nat
+  | .function _ _ _ captures => nestingList captures.toList + 1
+  | .tuple elements => nestingList elements.toList + 1
+  | .map entries => nestingEntries entries + 1
+  | .cons head tail => max (nesting head) (nesting tail) + 1
+  | _ => 0
+termination_by structural term => term
+
+/-- The deepest of a list of terms. -/
+@[expose] def nestingList : List Term → Nat
+  | [] => 0
+  | term :: rest => max (nesting term) (nestingList rest)
+termination_by structural terms => terms
+
+/-- The deepest key or value of a map's bindings. -/
+@[expose] def nestingEntries : List (Term × Term) → Nat
+  | [] => 0
+  | (key, value) :: rest => max (max (nesting key) (nesting value)) (nestingEntries rest)
+termination_by structural entries => entries
+end
+
+/-- Steps enough to compare two terms. -/
+@[expose] def fuel (a b : Term) : Nat := max (nesting a) (nesting b) + 1
+
+/-- Erlang's exact term order, in which integers and floats differ, taking at
+most `fuel` steps; `Term.fuel` steps decide it. -/
+@[expose] def compareExact : Nat → Term → Term → Ordering
+  | 0 => fun _ _ => .eq
+  | fuel + 1 => Compare.compareStep true (compareExact fuel) (compareExact fuel)
+
+/-- Erlang's term order, in which integers and floats compare by value, taking
+at most `fuel` steps; `Term.fuel` steps decide it. Map keys compare exactly. -/
+@[expose] def compare : Nat → Term → Term → Ordering
+  | 0 => fun _ _ => .eq
+  | fuel + 1 => Compare.compareStep false (compare fuel) (compareExact fuel)
+
+/-! ### Children are less deep -/
+
+private theorem nesting_le_list {term : Term} : ∀ {terms : List Term}, term ∈ terms →
+    nesting term ≤ nestingList terms
+  | _ :: _, .head _ => by simp only [nestingList]; omega
+  | _ :: _, .tail _ mem => by have := nesting_le_list mem; simp only [nestingList]; omega
+
+private theorem nesting_le_entries {key value : Term} : ∀ {entries : List (Term × Term)},
+    (key, value) ∈ entries → nesting key ≤ nestingEntries entries ∧ nesting value ≤ nestingEntries entries
+  | _ :: _, .head _ => by simp only [nestingEntries]; omega
+  | (_, _) :: _, .tail _ mem => by
+    have := nesting_le_entries mem; simp only [nestingEntries]; omega
+
+end Lynx.Term
+
+namespace Lynx.Term.Compare
+
+private abbrev Child (n : Nat) := {t : Term // Term.nesting t < n}
+
+private def boundedList (n : Nat) (xs : List Term) (h : ∀ x ∈ xs, Term.nesting x < n) : List (Child n) :=
+  xs.attachWith (fun x => Term.nesting x < n) h
 
 private def boundedEntries (n : Nat) (xs : List (Term × Term))
-    (h : ∀ k v, (k,v) ∈ xs → sizeOf k < n ∧ sizeOf v < n) : List (Child n × Child n) :=
+    (h : ∀ k v, (k,v) ∈ xs → Term.nesting k < n ∧ Term.nesting v < n) : List (Child n × Child n) :=
   xs.attach.map fun e => (⟨e.val.1, (h _ _ e.property).1⟩, ⟨e.val.2, (h _ _ e.property).2⟩)
 
 @[simp] private theorem boundedList_val (n xs h) : (boundedList n xs h).map Subtype.val = xs := by
@@ -232,28 +324,28 @@ private def boundedEntries (n : Nat) (xs : List (Term × Term))
   change xs.attach.map Subtype.val = xs
   exact List.attach_map_subtype_val xs
 
-private theorem tuple_child {n : Nat} {xs : Array Term} (h : sizeOf (Term.tuple xs) ≤ n)
-    (x : Term) (hx : x ∈ xs.toList) : sizeOf x < n := by
-  have := Array.sizeOf_lt_of_mem (by simpa using hx : x ∈ xs)
-  simp only [Term.tuple.sizeOf_spec] at h
+private theorem tuple_child {n : Nat} {xs : Array Term} (h : Term.nesting (Term.tuple xs) ≤ n)
+    (x : Term) (hx : x ∈ xs.toList) : Term.nesting x < n := by
+  have := Term.nesting_le_list hx
+  simp only [Term.nesting] at h
   omega
 
 private theorem function_child {n arity : Nat} {module name : String} {xs : Array Term}
-    (h : sizeOf (Term.function module name arity xs) ≤ n) (x : Term) (hx : x ∈ xs.toList) :
-    sizeOf x < n := by
-  have := Array.sizeOf_lt_of_mem (by simpa using hx : x ∈ xs)
-  simp only [Term.function.sizeOf_spec] at h
+    (h : Term.nesting (Term.function module name arity xs) ≤ n) (x : Term) (hx : x ∈ xs.toList) :
+    Term.nesting x < n := by
+  have := Term.nesting_le_list hx
+  simp only [Term.nesting] at h
   omega
 
-private theorem map_child {n : Nat} {xs : List (Term × Term)} (h : sizeOf (Term.map xs) ≤ n)
-    (k v : Term) (hx : (k,v) ∈ xs) : sizeOf k < n ∧ sizeOf v < n := by
-  have := List.sizeOf_lt_of_mem hx
-  simp only [Term.map.sizeOf_spec, Prod.mk.sizeOf_spec] at *
+private theorem map_child {n : Nat} {xs : List (Term × Term)} (h : Term.nesting (Term.map xs) ≤ n)
+    (k v : Term) (hx : (k,v) ∈ xs) : Term.nesting k < n ∧ Term.nesting v < n := by
+  have := Term.nesting_le_entries hx
+  simp only [Term.nesting] at h
   omega
 
 /-- The bound and membership witnesses are used only in types and proofs. -/
 private def boundedStep (exact : Bool) (n : Nat) (cmp exactCmp : Child n → Child n → Ordering)
-    (a b : Term) (ha : sizeOf a ≤ n) (hb : sizeOf b ≤ n) : Ordering :=
+    (a b : Term) (ha : Term.nesting a ≤ n) (hb : Term.nesting b ≤ n) : Ordering :=
   match a, b with
   | .integer a, .integer b => if exact then Ord.compare a b else ratCompare a b
   | .integer a, .float b => if exact then .lt else ratCompare a b.toRat
@@ -263,14 +355,14 @@ private def boundedStep (exact : Bool) (n : Nat) (cmp exactCmp : Child n → Chi
   | _, .integer _ => .gt
   | .float _, _ => .lt
   | _, .float _ => .gt
-  | .atom a, .atom b => Ord.compare a b
+  | .atom a, .atom b => stringCompare a b
   | .atom _, _ => .lt
   | _, .atom _ => .gt
   | .reference a, .reference b => Ord.compare a b
   | .reference _, _ => .lt
   | _, .reference _ => .gt
   | .function module name arity captures, .function otherModule otherName otherArity otherCaptures =>
-    (Ord.compare module otherModule).then ((Ord.compare name otherName).then
+    (stringCompare module otherModule).then ((stringCompare name otherName).then
       ((Ord.compare arity otherArity).then
         (List.compareLex exactCmp (boundedList n captures.toList (function_child ha))
           (boundedList n otherCaptures.toList (function_child hb)))))
@@ -295,10 +387,10 @@ private def boundedStep (exact : Bool) (n : Nat) (cmp exactCmp : Child n → Chi
   | .nil, .cons _ _ => .lt
   | .cons _ _, .nil => .gt
   | .cons a as, .cons b bs =>
-    (cmp ⟨a, by simp only [Term.cons.sizeOf_spec] at ha; omega⟩
-      ⟨b, by simp only [Term.cons.sizeOf_spec] at hb; omega⟩).then
-      (cmp ⟨as, by simp only [Term.cons.sizeOf_spec] at ha; omega⟩
-        ⟨bs, by simp only [Term.cons.sizeOf_spec] at hb; omega⟩)
+    (cmp ⟨a, by simp only [Term.nesting] at ha; omega⟩
+      ⟨b, by simp only [Term.nesting] at hb; omega⟩).then
+      (cmp ⟨as, by simp only [Term.nesting] at ha; omega⟩
+        ⟨bs, by simp only [Term.nesting] at hb; omega⟩)
   | .bitstring a ab _, .bitstring b bb _ =>
     List.compareLex Ord.compare (Bitstring.toBits a ab) (Bitstring.toBits b bb)
   | .bitstring _ _ _, _ => .gt
@@ -306,7 +398,7 @@ private def boundedStep (exact : Bool) (n : Nat) (cmp exactCmp : Child n → Chi
 
 private theorem boundedStep_eq (exact : Bool) (n : Nat)
     (cmp exactCmp : Term → Term → Ordering) (a b : Term)
-    (ha : sizeOf a ≤ n) (hb : sizeOf b ≤ n) :
+    (ha : Term.nesting a ≤ n) (hb : Term.nesting b ≤ n) :
     boundedStep exact n (fun a b => cmp a.val b.val) (fun a b => exactCmp a.val b.val)
       a b ha hb = compareStep exact cmp exactCmp a b := by
   cases a <;> cases b
@@ -322,27 +414,56 @@ private theorem boundedStep_eq (exact : Bool) (n : Nat)
       boundedEntries_val, boundedEntries_val]
   all_goals rfl
 
-end Lynx.Term.Compare
-
-namespace Lynx.Term
-
-/-- Erlang comparison, recursing only into children needed to decide the result.
-Map comparison resolves shadowing and sorts outer bindings, without rebuilding
-nested terms. The termination bound is erased from executable code. -/
-@[semireducible] def exactCompare (a b : Term) : Ordering :=
-  Compare.boundedStep true (max (sizeOf a) (sizeOf b))
-    (fun x y => exactCompare x.val y.val) (fun x y => exactCompare x.val y.val)
+/-- Exact comparison without a step bound, to prove that enough steps decide it. -/
+private def exactWF (a b : Term) : Ordering :=
+  boundedStep true (max (Term.nesting a) (Term.nesting b))
+    (fun x y => exactWF x.val y.val) (fun x y => exactWF x.val y.val)
     a b (Nat.le_max_left _ _) (Nat.le_max_right _ _)
-termination_by max (sizeOf a) (sizeOf b)
+termination_by max (Term.nesting a) (Term.nesting b)
 decreasing_by all_goals exact Nat.max_lt.mpr ⟨x.property, y.property⟩
 
-/-- Evaluation compares terms one step at a time. -/
-@[cbv_eval] theorem exactCompare_eq_step (a b : Term) :
-    exactCompare a b = Compare.compareStep true exactCompare exactCompare a b := by
-  rw [exactCompare]
-  exact Compare.boundedStep_eq _ _ _ _ _ _ _ _
+private theorem exactWF_eq_step (a b : Term) :
+    exactWF a b = compareStep true exactWF exactWF a b := by
+  rw [exactWF]
+  exact boundedStep_eq _ _ _ _ _ _ _ _
 
-end Lynx.Term
+/-- Comparison without a step bound, to prove that enough steps decide it. -/
+private def compareWF (a b : Term) : Ordering :=
+  boundedStep false (max (Term.nesting a) (Term.nesting b))
+    (fun x y => compareWF x.val y.val) (fun x y => exactWF x.val y.val)
+    a b (Nat.le_max_left _ _) (Nat.le_max_right _ _)
+termination_by max (Term.nesting a) (Term.nesting b)
+decreasing_by exact Nat.max_lt.mpr ⟨x.property, y.property⟩
+
+private theorem compareWF_eq_step (a b : Term) :
+    compareWF a b = compareStep false compareWF exactWF a b := by
+  rw [compareWF]
+  exact boundedStep_eq _ _ _ _ _ _ _ _
+
+private theorem compareExact_eq_wf (n : Nat) (a b : Term)
+    (h : max (Term.nesting a) (Term.nesting b) < n) : Term.compareExact n a b = exactWF a b := by
+  induction n generalizing a b with
+  | zero => omega
+  | succ n ih =>
+    rw [exactWF, Term.compareExact,
+      ← boundedStep_eq true (max (Term.nesting a) (Term.nesting b)) (Term.compareExact n)
+        (Term.compareExact n) a b (Nat.le_max_left _ _) (Nat.le_max_right _ _)]
+    congr 1 <;> funext x y <;>
+      exact ih x.val y.val (by have := x.property; have := y.property; omega)
+
+private theorem compare_eq_wf (n : Nat) (a b : Term)
+    (h : max (Term.nesting a) (Term.nesting b) < n) : Term.compare n a b = compareWF a b := by
+  induction n generalizing a b with
+  | zero => omega
+  | succ n ih =>
+    rw [compareWF, Term.compare,
+      ← boundedStep_eq false (max (Term.nesting a) (Term.nesting b)) (Term.compare n)
+        (Term.compareExact n) a b (Nat.le_max_left _ _) (Nat.le_max_right _ _)]
+    congr 1 <;> funext x y
+    · exact ih x.val y.val (by have := x.property; have := y.property; omega)
+    · exact compareExact_eq_wf n x.val y.val (by have := x.property; have := y.property; omega)
+
+end Lynx.Term.Compare
 
 /-! ## Ordering laws -/
 
@@ -400,8 +521,8 @@ private instance (exact : Bool) (cmp exactCmp : Term → Term → Ordering)
         all_goals try exact Std.TransCmp.isLE_trans ab bc
         case function.function.function.false am an arity ac bm bn barity bcaps cm cn carity cc =>
           exact Std.TransCmp.isLE_trans
-            (cmp := compareLex (compareOn Ord.compare Prod.fst)
-              (compareLex (compareOn Ord.compare fun p : String × String × Nat × List Term => p.2.1)
+            (cmp := compareLex (compareOn stringCompare Prod.fst)
+              (compareLex (compareOn stringCompare fun p : String × String × Nat × List Term => p.2.1)
                 (compareLex (compareOn Ord.compare fun p : String × String × Nat × List Term => p.2.2.1)
                   (compareOn (List.compareLex exactCmp) fun p : String × String × Nat × List Term =>
                     p.2.2.2))))
@@ -409,8 +530,8 @@ private instance (exact : Bool) (cmp exactCmp : Term → Term → Ordering)
             (c := (cm, cn, carity, cc.toList)) ab bc
         case function.function.function.true am an arity ac bm bn barity bcaps cm cn carity cc =>
           exact Std.TransCmp.isLE_trans
-            (cmp := compareLex (compareOn Ord.compare Prod.fst)
-              (compareLex (compareOn Ord.compare fun p : String × String × Nat × List Term => p.2.1)
+            (cmp := compareLex (compareOn stringCompare Prod.fst)
+              (compareLex (compareOn stringCompare fun p : String × String × Nat × List Term => p.2.1)
                 (compareLex (compareOn Ord.compare fun p : String × String × Nat × List Term => p.2.2.1)
                   (compareOn (List.compareLex exactCmp) fun p : String × String × Nat × List Term =>
                     p.2.2.2))))
@@ -441,171 +562,385 @@ private instance (exact : Bool) (cmp exactCmp : Term → Term → Ordering)
         rw [compareStep_of_rank_ne (by omega), Nat.isLE_compare]
         omega
 
-/-- Finite approximations used only to prove ordering laws. Executable comparison
-uses well-founded recursion, not a runtime depth counter. -/
-private def approximation : Nat → Term → Term → Ordering
-  | 0 => fun _ _ => .eq
-  | n + 1 => compareStep true (approximation n) (approximation n)
-
-private instance approximation_trans (n : Nat) : Std.TransCmp (approximation n) := by
-  induction n with
-  | zero => exact { eq_swap := by intros; rfl, isLE_trans := by intros; rfl }
-  | succ n ih =>
-    letI := ih
-    exact inferInstanceAs (Std.TransCmp (compareStep true (approximation n) (approximation n)))
-
-private theorem exactCompare_eq_approximation (n : Nat) (a b : Term)
-    (h : max (sizeOf a) (sizeOf b) ≤ n) : Term.exactCompare a b = approximation n a b := by
-  induction n generalizing a b with
-  | zero => cases a <;> simp_all <;> omega
-  | succ n ih =>
-    rw [Term.exactCompare, approximation,
-      ← boundedStep_eq true (max (sizeOf a) (sizeOf b)) (approximation n) (approximation n) a b
-        (Nat.le_max_left _ _) (Nat.le_max_right _ _)]
-    congr 1 <;> funext x y <;>
-      exact ih x.val y.val (by have := x.property; have := y.property; omega)
-
 end Lynx.Term.Compare
 
 namespace Lynx.Term
 
-instance : Std.TransCmp exactCompare where
-  eq_swap := by
-    intro a b
-    let n := max (sizeOf a) (sizeOf b)
-    rw [Compare.exactCompare_eq_approximation n a b (by omega),
-      Compare.exactCompare_eq_approximation n b a (by omega)]
-    exact Std.OrientedCmp.eq_swap
-  isLE_trans := by
-    intro a b c ab bc
-    let n := max (max (sizeOf a) (sizeOf b)) (sizeOf c)
-    rw [Compare.exactCompare_eq_approximation n a b (by omega)] at ab
-    rw [Compare.exactCompare_eq_approximation n b c (by omega)] at bc
-    rw [Compare.exactCompare_eq_approximation n a c (by omega)]
-    exact Std.TransCmp.isLE_trans ab bc
-
-@[simp] theorem exactCompare_self (a : Term) : exactCompare a a = .eq :=
-  Std.ReflCmp.compare_self
-
-end Lynx.Term
-
-/-! ## Numeric comparison
-
-Ordinary Erlang comparison coerces integers and floats into one numeric domain.
-Map keys remain exact terms even under ordinary comparison. -/
-
-namespace Lynx.Term
-
-/-- Erlang term comparison with numeric coercion between integers and floats.
-Map keys retain their exact types. -/
-@[semireducible] def compare (a b : Term) : Ordering :=
-  Compare.boundedStep false (max (sizeOf a) (sizeOf b))
-    (fun x y => compare x.val y.val) (fun x y => exactCompare x.val y.val)
-    a b (Nat.le_max_left _ _) (Nat.le_max_right _ _)
-termination_by max (sizeOf a) (sizeOf b)
-decreasing_by exact Nat.max_lt.mpr ⟨x.property, y.property⟩
-
-/-- Evaluation compares terms one step at a time. -/
-@[cbv_eval] theorem compare_eq_step (a b : Term) :
-    compare a b = Compare.compareStep false compare exactCompare a b := by
-  rw [compare]
-  exact Compare.boundedStep_eq _ _ _ _ _ _ _ _
-
-end Lynx.Term
-
-namespace Lynx.Term.Compare
-
-private def numericApproximation : Nat → Term → Term → Ordering
-  | 0 => fun _ _ => .eq
-  | n + 1 => compareStep false (numericApproximation n) exactCompare
-
-private instance numericApproximation_trans (n : Nat) :
-    Std.TransCmp (numericApproximation n) := by
-  induction n with
+/-- Exact comparison with any number of steps is a total order. -/
+instance (fuel : Nat) : Std.TransCmp (compareExact fuel) := by
+  induction fuel with
   | zero => exact { eq_swap := by intros; rfl, isLE_trans := by intros; rfl }
-  | succ n ih =>
+  | succ fuel ih =>
     letI := ih
     exact inferInstanceAs
-      (Std.TransCmp (compareStep false (numericApproximation n) exactCompare))
+      (Std.TransCmp (Compare.compareStep true (compareExact fuel) (compareExact fuel)))
 
-private theorem compare_eq_approximation (n : Nat) (a b : Term)
-    (h : max (sizeOf a) (sizeOf b) ≤ n) : Term.compare a b = numericApproximation n a b := by
-  induction n generalizing a b with
-  | zero => cases a <;> simp_all <;> omega
-  | succ n ih =>
-    rw [Term.compare, numericApproximation,
-      ← boundedStep_eq false (max (sizeOf a) (sizeOf b)) (numericApproximation n)
-        exactCompare a b (Nat.le_max_left _ _) (Nat.le_max_right _ _)]
-    congr 1
+/-- Comparison with any number of steps is a total order. -/
+instance (fuel : Nat) : Std.TransCmp (compare fuel) := by
+  induction fuel with
+  | zero => exact { eq_swap := by intros; rfl, isLE_trans := by intros; rfl }
+  | succ fuel ih =>
+    letI := ih
+    exact inferInstanceAs
+      (Std.TransCmp (Compare.compareStep false (compare fuel) (compareExact fuel)))
+
+theorem fuel_comm (a b : Term) : fuel a b = fuel b a := by
+  simp only [fuel, Nat.max_comm]
+
+/-- More steps than `Term.fuel` decide the same. -/
+theorem compareExact_fuel {n : Nat} {a b : Term} (enough : fuel a b ≤ n) :
+    compareExact n a b = compareExact (fuel a b) a b := by
+  simp only [fuel] at enough ⊢
+  rw [Compare.compareExact_eq_wf n a b (by omega), Compare.compareExact_eq_wf _ a b (by omega)]
+
+/-- More steps than `Term.fuel` decide the same. -/
+theorem compare_fuel {n : Nat} {a b : Term} (enough : fuel a b ≤ n) :
+    compare n a b = compare (fuel a b) a b := by
+  simp only [fuel] at enough ⊢
+  rw [Compare.compare_eq_wf n a b (by omega), Compare.compare_eq_wf _ a b (by omega)]
+
+/-- Exact comparison compares the children of two terms with the steps they need. -/
+theorem compareExact_step (a b : Term) :
+    compareExact (fuel a b) a b =
+      Compare.compareStep true (fun x y => compareExact (fuel x y) x y)
+        (fun x y => compareExact (fuel x y) x y) a b := by
+  have children : Compare.exactWF = fun x y => compareExact (fuel x y) x y := by
     funext x y
-    exact ih x.val y.val (by have := x.property; have := y.property; omega)
+    rw [Compare.compareExact_eq_wf _ x y (by simp [fuel])]
+  rw [Compare.compareExact_eq_wf _ a b (by simp [fuel]), Compare.exactWF_eq_step, children]
 
-end Lynx.Term.Compare
+/-- Comparison compares the children of two terms with the steps they need. -/
+theorem compare_step (a b : Term) :
+    compare (fuel a b) a b =
+      Compare.compareStep false (fun x y => compare (fuel x y) x y)
+        (fun x y => compareExact (fuel x y) x y) a b := by
+  have exact : Compare.exactWF = fun x y => compareExact (fuel x y) x y := by
+    funext x y
+    rw [Compare.compareExact_eq_wf _ x y (by simp [fuel])]
+  have numeric : Compare.compareWF = fun x y => compare (fuel x y) x y := by
+    funext x y
+    rw [Compare.compare_eq_wf _ x y (by simp [fuel])]
+  rw [Compare.compare_eq_wf _ a b (by simp [fuel]), Compare.compareWF_eq_step, exact, numeric]
 
-namespace Lynx.Term
-
-instance : Std.TransCmp compare where
+/-- Exact comparison with the steps each pair of terms needs is a total order. -/
+private instance : Std.TransCmp fun a b => compareExact (fuel a b) a b where
   eq_swap := by
     intro a b
-    let n := max (sizeOf a) (sizeOf b)
-    rw [Compare.compare_eq_approximation n a b (by omega),
-      Compare.compare_eq_approximation n b a (by omega)]
+    show compareExact (fuel a b) a b = (compareExact (fuel b a) b a).swap
+    rw [fuel_comm b a]
     exact Std.OrientedCmp.eq_swap
   isLE_trans := by
     intro a b c ab bc
-    let n := max (max (sizeOf a) (sizeOf b)) (sizeOf c)
-    rw [Compare.compare_eq_approximation n a b (by omega)] at ab
-    rw [Compare.compare_eq_approximation n b c (by omega)] at bc
-    rw [Compare.compare_eq_approximation n a c (by omega)]
+    show (compareExact (fuel a c) a c).isLE
+    let n := max (max (fuel a b) (fuel b c)) (fuel a c)
+    change (compareExact (fuel a b) a b).isLE at ab
+    change (compareExact (fuel b c) b c).isLE at bc
+    rw [← compareExact_fuel (n := n) (by omega)] at ab bc ⊢
     exact Std.TransCmp.isLE_trans ab bc
 
-@[simp] theorem compare_self (a : Term) : compare a a = .eq :=
-  Std.ReflCmp.compare_self
+/-- Comparison with the steps each pair of terms needs is a total order. -/
+private instance : Std.TransCmp fun a b => compare (fuel a b) a b where
+  eq_swap := by
+    intro a b
+    show compare (fuel a b) a b = (compare (fuel b a) b a).swap
+    rw [fuel_comm b a]
+    exact Std.OrientedCmp.eq_swap
+  isLE_trans := by
+    intro a b c ab bc
+    show (compare (fuel a c) a c).isLE
+    let n := max (max (fuel a b) (fuel b c)) (fuel a c)
+    change (compare (fuel a b) a b).isLE at ab
+    change (compare (fuel b c) b c).isLE at bc
+    rw [← compare_fuel (n := n) (by omega)] at ab bc ⊢
+    exact Std.TransCmp.isLE_trans ab bc
 
+/-- A comparison that `Term.fuel` steps decide, and that is a total order with any
+number of steps: `Term.compare` and `Term.compareExact`. Its order laws hold
+with the steps each pair of terms needs. -/
+private class Fueled (cmp : Nat → Term → Term → Ordering) : Prop where
+  total : ∀ n, Std.TransCmp (cmp n)
+  enough : ∀ {n a b}, fuel a b ≤ n → cmp n a b = cmp (fuel a b) a b
+
+private instance : Fueled compare := ⟨inferInstance, compare_fuel⟩
+
+private instance : Fueled compareExact := ⟨inferInstance, compareExact_fuel⟩
+
+namespace Fueled
+
+private theorem lift {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {n : Nat} {x y : Term} (enough : fuel x y ≤ n) :
+    cmp (fuel x y) x y = cmp n x y := (fueled.enough enough).symm
+
+private theorem lift₂ {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {x y : Term} : cmp (fuel x y) x y = cmp (fuel x y + fuel y x) x y ∧
+    cmp (fuel y x) y x = cmp (fuel x y + fuel y x) y x :=
+  ⟨lift (by omega), lift (by omega)⟩
+
+private def bound (a b c : Term) : Nat := fuel a b + fuel b a + fuel b c + fuel c b + fuel a c + fuel c a
+
+private theorem lift₃ {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} {x y : Term} (enough : fuel x y ≤ bound a b c) :
+    cmp (fuel x y) x y = cmp (bound a b c) x y := lift enough
+
+private theorem swap {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] (a b : Term) : cmp (fuel a b) a b = (cmp (fuel b a) b a).swap := by
+  have := fueled.total (fuel a b + fuel b a)
+  rw [(lift₂ (cmp := cmp) (x := a) (y := b)).1, (lift₂ (cmp := cmp) (x := a) (y := b)).2]
+  exact Std.OrientedCmp.eq_swap
+
+private theorem self {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] (a : Term) : cmp (fuel a a) a a = .eq := by
+  have := fueled.total (fuel a a)
+  exact Std.ReflCmp.compare_self
+
+private theorem eq_symm {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b : Term} (equal : cmp (fuel a b) a b = .eq) : cmp (fuel b a) b a = .eq := by
+  rw [swap (cmp := cmp)] at equal
+  simpa using equal
+
+private theorem gt_iff_lt {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b : Term} : cmp (fuel a b) a b = .gt ↔ cmp (fuel b a) b a = .lt := by
+  rw [swap (cmp := cmp)]
+  cases cmp (fuel b a) b a <;> simp
+
+private theorem lt_of_gt {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b : Term} (greater : cmp (fuel a b) a b = .gt) : cmp (fuel b a) b a = .lt :=
+  gt_iff_lt.mp greater
+
+private theorem gt_of_lt {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b : Term} (less : cmp (fuel a b) a b = .lt) : cmp (fuel b a) b a = .gt := by
+  rw [swap (cmp := cmp)] at less
+  cases ordered : cmp (fuel b a) b a <;> simp_all
+
+/-- Rewrite three comparisons at a common number of steps. -/
+private theorem common {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (motive : Ordering → Ordering → Ordering → Prop)
+    (holds : ∀ n, Std.TransCmp (cmp n) → motive (cmp n a b) (cmp n b c) (cmp n a c)) :
+    motive (cmp (fuel a b) a b) (cmp (fuel b c) b c) (cmp (fuel a c) a c) := by
+  rw [lift₃ (cmp := cmp) (a := a) (b := b) (c := c) (x := a) (y := b) (by simp only [bound]; omega),
+    lift₃ (cmp := cmp) (a := a) (b := b) (c := c) (x := b) (y := c) (by simp only [bound]; omega),
+    lift₃ (cmp := cmp) (a := a) (b := b) (c := c) (x := a) (y := c) (by simp only [bound]; omega)]
+  exact holds _ (fueled.total _)
+
+private theorem eq_trans {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .eq) (second : cmp (fuel b c) b c = .eq) :
+    cmp (fuel a c) a c = .eq :=
+  common (fun x y z => x = .eq → y = .eq → z = .eq)
+    (fun _ _ => Std.TransCmp.eq_trans) first second
+
+private theorem lt_trans {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .lt) (second : cmp (fuel b c) b c = .lt) :
+    cmp (fuel a c) a c = .lt :=
+  common (fun x y z => x = .lt → y = .lt → z = .lt)
+    (fun _ _ => Std.TransCmp.lt_trans) first second
+
+private theorem isLE_trans {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : (cmp (fuel a b) a b).isLE) (second : (cmp (fuel b c) b c).isLE) :
+    (cmp (fuel a c) a c).isLE :=
+  common (fun x y z => x.isLE → y.isLE → z.isLE)
+    (fun _ _ => Std.TransCmp.isLE_trans) first second
+
+private theorem lt_of_eq_of_lt {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .eq) (second : cmp (fuel b c) b c = .lt) :
+    cmp (fuel a c) a c = .lt :=
+  common (fun x y z => x = .eq → y = .lt → z = .lt)
+    (fun _ _ => Std.TransCmp.lt_of_eq_of_lt) first second
+
+private theorem lt_of_lt_of_eq {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .lt) (second : cmp (fuel b c) b c = .eq) :
+    cmp (fuel a c) a c = .lt :=
+  common (fun x y z => x = .lt → y = .eq → z = .lt)
+    (fun _ _ => Std.TransCmp.lt_of_lt_of_eq) first second
+
+private theorem lt_of_isLE_of_lt {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : (cmp (fuel a b) a b).isLE) (second : cmp (fuel b c) b c = .lt) :
+    cmp (fuel a c) a c = .lt :=
+  common (fun x y z => x.isLE → y = .lt → z = .lt)
+    (fun _ _ => Std.TransCmp.lt_of_isLE_of_lt) first second
+
+private theorem lt_of_lt_of_isLE {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .lt) (second : (cmp (fuel b c) b c).isLE) :
+    cmp (fuel a c) a c = .lt :=
+  common (fun x y z => x = .lt → y.isLE → z = .lt)
+    (fun _ _ => Std.TransCmp.lt_of_lt_of_isLE) first second
+
+private theorem gt_trans {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .gt) (second : cmp (fuel b c) b c = .gt) :
+    cmp (fuel a c) a c = .gt :=
+  common (fun x y z => x = .gt → y = .gt → z = .gt)
+    (fun _ _ => Std.TransCmp.gt_trans) first second
+
+private theorem gt_of_eq_of_gt {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .eq) (second : cmp (fuel b c) b c = .gt) :
+    cmp (fuel a c) a c = .gt :=
+  common (fun x y z => x = .eq → y = .gt → z = .gt)
+    (fun _ _ => Std.TransCmp.gt_of_eq_of_gt) first second
+
+private theorem gt_of_gt_of_eq {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .gt) (second : cmp (fuel b c) b c = .eq) :
+    cmp (fuel a c) a c = .gt :=
+  common (fun x y z => x = .gt → y = .eq → z = .gt)
+    (fun _ _ => Std.TransCmp.gt_of_gt_of_eq) first second
+
+/-- Equal terms compare alike with a third. -/
+private theorem congr_left {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (equal : cmp (fuel a b) a b = .eq) : cmp (fuel a c) a c = cmp (fuel b c) b c :=
+  common (fun x y z => x = .eq → z = y)
+    (fun _ _ equal => Std.TransCmp.congr_left equal) equal
+
+end Fueled
+
+
+/-! ### Order laws with the steps each pair of terms needs -/
+
+section
+
+variable {a b c : Term}
+
+theorem compare_eq_symm (equal : compare (fuel a b) a b = .eq) : compare (fuel b a) b a = .eq :=
+  Fueled.eq_symm equal
+
+theorem compare_gt_iff_lt : compare (fuel a b) a b = .gt ↔ compare (fuel b a) b a = .lt :=
+  Fueled.gt_iff_lt
+
+theorem compare_lt_of_gt (greater : compare (fuel a b) a b = .gt) : compare (fuel b a) b a = .lt :=
+  Fueled.lt_of_gt greater
+
+theorem compare_gt_of_lt (less : compare (fuel a b) a b = .lt) : compare (fuel b a) b a = .gt :=
+  Fueled.gt_of_lt less
+
+theorem compare_eq_trans (first : compare (fuel a b) a b = .eq) (second : compare (fuel b c) b c = .eq) :
+    compare (fuel a c) a c = .eq :=
+  Fueled.eq_trans first second
+
+theorem compare_lt_trans (first : compare (fuel a b) a b = .lt) (second : compare (fuel b c) b c = .lt) :
+    compare (fuel a c) a c = .lt :=
+  Fueled.lt_trans first second
+
+theorem compare_gt_trans (first : compare (fuel a b) a b = .gt) (second : compare (fuel b c) b c = .gt) :
+    compare (fuel a c) a c = .gt :=
+  Fueled.gt_trans first second
+
+theorem compare_isLE_trans (first : (compare (fuel a b) a b).isLE) (second : (compare (fuel b c) b c).isLE) :
+    (compare (fuel a c) a c).isLE :=
+  Fueled.isLE_trans first second
+
+theorem compare_lt_of_eq_of_lt (first : compare (fuel a b) a b = .eq) (second : compare (fuel b c) b c = .lt) :
+    compare (fuel a c) a c = .lt :=
+  Fueled.lt_of_eq_of_lt first second
+
+theorem compare_lt_of_lt_of_eq (first : compare (fuel a b) a b = .lt) (second : compare (fuel b c) b c = .eq) :
+    compare (fuel a c) a c = .lt :=
+  Fueled.lt_of_lt_of_eq first second
+
+theorem compare_lt_of_isLE_of_lt (first : (compare (fuel a b) a b).isLE) (second : compare (fuel b c) b c = .lt) :
+    compare (fuel a c) a c = .lt :=
+  Fueled.lt_of_isLE_of_lt first second
+
+theorem compare_lt_of_lt_of_isLE (first : compare (fuel a b) a b = .lt) (second : (compare (fuel b c) b c).isLE) :
+    compare (fuel a c) a c = .lt :=
+  Fueled.lt_of_lt_of_isLE first second
+
+theorem compare_gt_of_eq_of_gt (first : compare (fuel a b) a b = .eq) (second : compare (fuel b c) b c = .gt) :
+    compare (fuel a c) a c = .gt :=
+  Fueled.gt_of_eq_of_gt first second
+
+theorem compare_congr_left (equal : compare (fuel a b) a b = .eq) :
+    compare (fuel a c) a c = compare (fuel b c) b c :=
+  Fueled.congr_left equal
+
+theorem compareExact_eq_symm (equal : compareExact (fuel a b) a b = .eq) : compareExact (fuel b a) b a = .eq :=
+  Fueled.eq_symm equal
+
+theorem compareExact_gt_iff_lt : compareExact (fuel a b) a b = .gt ↔ compareExact (fuel b a) b a = .lt :=
+  Fueled.gt_iff_lt
+
+theorem compareExact_lt_of_gt (greater : compareExact (fuel a b) a b = .gt) : compareExact (fuel b a) b a = .lt :=
+  Fueled.lt_of_gt greater
+
+theorem compareExact_gt_of_lt (less : compareExact (fuel a b) a b = .lt) : compareExact (fuel b a) b a = .gt :=
+  Fueled.gt_of_lt less
+
+theorem compareExact_eq_trans (first : compareExact (fuel a b) a b = .eq) (second : compareExact (fuel b c) b c = .eq) :
+    compareExact (fuel a c) a c = .eq :=
+  Fueled.eq_trans first second
+
+theorem compareExact_lt_trans (first : compareExact (fuel a b) a b = .lt) (second : compareExact (fuel b c) b c = .lt) :
+    compareExact (fuel a c) a c = .lt :=
+  Fueled.lt_trans first second
+
+theorem compareExact_gt_trans (first : compareExact (fuel a b) a b = .gt) (second : compareExact (fuel b c) b c = .gt) :
+    compareExact (fuel a c) a c = .gt :=
+  Fueled.gt_trans first second
+
+theorem compareExact_isLE_trans (first : (compareExact (fuel a b) a b).isLE) (second : (compareExact (fuel b c) b c).isLE) :
+    (compareExact (fuel a c) a c).isLE :=
+  Fueled.isLE_trans first second
+
+theorem compareExact_lt_of_eq_of_lt (first : compareExact (fuel a b) a b = .eq) (second : compareExact (fuel b c) b c = .lt) :
+    compareExact (fuel a c) a c = .lt :=
+  Fueled.lt_of_eq_of_lt first second
+
+theorem compareExact_lt_of_lt_of_eq (first : compareExact (fuel a b) a b = .lt) (second : compareExact (fuel b c) b c = .eq) :
+    compareExact (fuel a c) a c = .lt :=
+  Fueled.lt_of_lt_of_eq first second
+
+theorem compareExact_lt_of_isLE_of_lt (first : (compareExact (fuel a b) a b).isLE) (second : compareExact (fuel b c) b c = .lt) :
+    compareExact (fuel a c) a c = .lt :=
+  Fueled.lt_of_isLE_of_lt first second
+
+theorem compareExact_lt_of_lt_of_isLE (first : compareExact (fuel a b) a b = .lt) (second : (compareExact (fuel b c) b c).isLE) :
+    compareExact (fuel a c) a c = .lt :=
+  Fueled.lt_of_lt_of_isLE first second
+
+theorem compareExact_gt_of_eq_of_gt (first : compareExact (fuel a b) a b = .eq) (second : compareExact (fuel b c) b c = .gt) :
+    compareExact (fuel a c) a c = .gt :=
+  Fueled.gt_of_eq_of_gt first second
+
+theorem compareExact_congr_left (equal : compareExact (fuel a b) a b = .eq) :
+    compareExact (fuel a c) a c = compareExact (fuel b c) b c :=
+  Fueled.congr_left equal
+
+end
+
+@[simp] theorem compareExact_self (a : Term) : compareExact (fuel a a) a a = .eq := Fueled.self a
+
+@[simp] theorem compare_self (a : Term) : compare (fuel a a) a a = .eq := Fueled.self a
+
+theorem compareExact_swap (a b : Term) :
+    compareExact (fuel a b) a b = (compareExact (fuel b a) b a).swap := Fueled.swap a b
+
+theorem compare_swap (a b : Term) : compare (fuel a b) a b = (compare (fuel b a) b a).swap :=
+  Fueled.swap a b
 
 end Lynx.Term
+
+/-- Exact comparison with the steps each pair of terms needs. -/
+local notation "exactOrder" => fun a b : Lynx.Term => Lynx.Term.compareExact (Lynx.Term.fuel a b) a b
+
+/-- Comparison with the steps each pair of terms needs. -/
+local notation "numericOrder" => fun a b : Lynx.Term => Lynx.Term.compare (Lynx.Term.fuel a b) a b
 
 /-! ## Exact equality -/
 
 namespace Lynx.Term
 
-@[simp] theorem exactCompare_integers (a b : Int) :
-    exactCompare (.integer a) (.integer b) = Ord.compare a b := by
-  rw [exactCompare_eq_step]
+@[simp] theorem compareExact_integers (a b : Int) :
+    compareExact (fuel (.integer a) (.integer b)) (.integer a) (.integer b) = Ord.compare a b := by
+  rw [compareExact_step]
   rfl
 
-@[simp] theorem exactCompare_atoms (a b : String) :
-    exactCompare (.atom a) (.atom b) = Ord.compare a b := by
-  rw [exactCompare_eq_step]
+@[simp] theorem compareExact_atoms (a b : String) :
+    compareExact (fuel (.atom a) (.atom b)) (.atom a) (.atom b) = Ord.compare a b := by
+  rw [compareExact_step]
+  exact Compare.stringCompare_eq a b
+
+@[simp] theorem compareExact_reference (a b : List Nat) :
+    compareExact (fuel (.reference a) (.reference b)) (.reference a) (.reference b) = Ord.compare a b := by
+  rw [compareExact_step]
   rfl
 
-@[simp] theorem exactCompare_reference (a b : List Nat) :
-    exactCompare (.reference a) (.reference b) = Ord.compare a b := by
-  rw [exactCompare_eq_step]
+@[simp] theorem compareExact_pid (a b : PID) :
+    compareExact (fuel (.pid a) (.pid b)) (.pid a) (.pid b) = Ord.compare a b := by
+  rw [compareExact_step]
   rfl
 
-@[simp] theorem exactCompare_pid (a b : PID) :
-    exactCompare (.pid a) (.pid b) = Ord.compare a b := by
-  rw [exactCompare_eq_step]
-  rfl
-
-@[simp] theorem exactCompare_eq_atom (a : Term) (name : String) :
-    exactCompare a (.atom name) = .eq ↔ a = .atom name := by
-  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
+@[simp] theorem compareExact_eq_atom (a : Term) (name : String) :
+    compareExact (fuel a (.atom name)) a (.atom name) = .eq ↔ a = .atom name := by
+  cases a <;> rw [compareExact_step] <;> simp [Compare.compareStep]
 
 /-- Only bitstrings are exactly equal to a bitstring. -/
-theorem bitstring_exactCompare_eq (bytes : ByteArray) (lastBits : Fin 8)
+theorem bitstring_compareExact_eq (bytes : ByteArray) (lastBits : Fin 8)
     (valid : Bitstring.Valid bytes lastBits) (a : Term)
-    (equal : exactCompare (.bitstring bytes lastBits valid) a = .eq) :
+    (equal : compareExact (fuel (.bitstring bytes lastBits valid) a) (.bitstring bytes lastBits valid) a = .eq) :
     ∃ other otherBits otherValid, a = .bitstring other otherBits otherValid := by
-  cases a <;> rw [exactCompare_eq_step] at equal <;> simp [Compare.compareStep] at equal
+  cases a <;> rw [compareExact_step] at equal <;> simp [Compare.compareStep] at equal
   exact ⟨_, _, _, rfl⟩
 
 /-- Binaries are exactly equal when they have the same bytes. -/
-theorem binary_exactCompare_eq (a b : ByteArray) :
-    exactCompare (.bitstring a 0 (Bitstring.valid_aligned a)) (.bitstring b 0 (Bitstring.valid_aligned b)) =
+theorem binary_compareExact_eq (a b : ByteArray) :
+    compareExact (fuel (.bitstring a 0 (Bitstring.valid_aligned a)) (.bitstring b 0 (Bitstring.valid_aligned b))) (.bitstring a 0 (Bitstring.valid_aligned a)) (.bitstring b 0 (Bitstring.valid_aligned b)) =
       .eq ↔ a = b := by
-  rw [exactCompare_eq_step]
+  rw [compareExact_step]
   simp only [Compare.compareStep]
   constructor
   · intro equal
@@ -623,75 +958,75 @@ private theorem mapViewInsert_ne_nil (cmp : α → α → Ordering) (e : α × �
     split <;> simp
 
 /-- Only maps without bindings are exactly equal to the empty map. -/
-theorem map_exactCompare_empty (entries : List (Term × Term))
-    (equal : exactCompare (.map entries) (.map []) = .eq) : entries = [] := by
+theorem map_compareExact_empty (entries : List (Term × Term))
+    (equal : compareExact (fuel (.map entries) (.map [])) (.map entries) (.map []) = .eq) : entries = [] := by
   cases entries with
   | nil => rfl
   | cons e es =>
     exfalso
-    rw [exactCompare_eq_step] at equal
+    rw [compareExact_step] at equal
     simp only [Compare.compareStep, Compare.mapView] at equal
-    have nonempty := mapViewInsert_ne_nil exactCompare e (Compare.mapView exactCompare es)
+    have nonempty := mapViewInsert_ne_nil exactOrder e (Compare.mapView exactOrder es)
     obtain ⟨p, ps, view⟩ := List.exists_cons_of_ne_nil nonempty
     rw [view] at equal
     simp [Compare.compareMapViews, compareLex, Compare.compareOn] at equal
 
 /-- Only maps without bindings are equal to the empty map. -/
 @[simp] theorem compare_map_empty (entries : List (Term × Term)) :
-    compare (.map entries) (.map []) = .eq ↔ entries = [] := by
+    compare (fuel (.map entries) (.map [])) (.map entries) (.map []) = .eq ↔ entries = [] := by
   constructor
   · intro equal
     cases entries with
     | nil => rfl
     | cons e es =>
       exfalso
-      rw [compare_eq_step] at equal
+      rw [compare_step] at equal
       simp only [Compare.compareStep, Compare.mapView] at equal
-      have nonempty := mapViewInsert_ne_nil exactCompare e (Compare.mapView exactCompare es)
+      have nonempty := mapViewInsert_ne_nil exactOrder e (Compare.mapView exactOrder es)
       obtain ⟨p, ps, view⟩ := List.exists_cons_of_ne_nil nonempty
       rw [view] at equal
       simp [Compare.compareMapViews, compareLex, Compare.compareOn] at equal
   · rintro rfl
     exact compare_self _
 
-@[simp] theorem exactCompare_eq_nil (a : Term) : exactCompare a .nil = .eq ↔ a = .nil := by
-  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
+@[simp] theorem compareExact_eq_nil (a : Term) : compareExact (fuel a .nil) a .nil = .eq ↔ a = .nil := by
+  cases a <;> rw [compareExact_step] <;> simp [Compare.compareStep]
 
 /-- Only nonempty lists are exactly equal to a nonempty list. -/
-theorem cons_exactCompare_eq (head tail a : Term) (equal : exactCompare (.cons head tail) a = .eq) :
+theorem cons_compareExact_eq (head tail a : Term) (equal : compareExact (fuel (.cons head tail) a) (.cons head tail) a = .eq) :
     ∃ otherHead otherTail, a = .cons otherHead otherTail := by
-  cases a <;> rw [exactCompare_eq_step] at equal <;> simp [Compare.compareStep] at equal
+  cases a <;> rw [compareExact_step] at equal <;> simp [Compare.compareStep] at equal
   exact ⟨_, _, rfl⟩
 
-@[simp] theorem exactCompare_eq_integer (a : Term) (n : Int) :
-    exactCompare a (.integer n) = .eq ↔ a = .integer n := by
-  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
+@[simp] theorem compareExact_eq_integer (a : Term) (n : Int) :
+    compareExact (fuel a (.integer n)) a (.integer n) = .eq ↔ a = .integer n := by
+  cases a <;> rw [compareExact_step] <;> simp [Compare.compareStep]
 
-@[simp] theorem integer_exactCompare_eq (n : Int) (a : Term) :
-    exactCompare (.integer n) a = .eq ↔ a = .integer n := by
-  rw [Std.OrientedCmp.eq_swap (cmp := exactCompare), Ordering.swap_eq_eq]
-  exact exactCompare_eq_integer a n
+@[simp] theorem integer_compareExact_eq (n : Int) (a : Term) :
+    compareExact (fuel (.integer n) a) (.integer n) a = .eq ↔ a = .integer n := by
+  rw [Std.OrientedCmp.eq_swap (cmp := exactOrder), Ordering.swap_eq_eq]
+  exact compareExact_eq_integer a n
 
-@[simp] theorem exactCompare_eq_reference (a : Term) (id : List Nat) :
-    exactCompare a (.reference id) = .eq ↔ a = .reference id := by
-  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
+@[simp] theorem compareExact_eq_reference (a : Term) (id : List Nat) :
+    compareExact (fuel a (.reference id)) a (.reference id) = .eq ↔ a = .reference id := by
+  cases a <;> rw [compareExact_step] <;> simp [Compare.compareStep]
 
-@[simp] theorem reference_exactCompare_eq (id : List Nat) (a : Term) :
-    exactCompare (.reference id) a = .eq ↔ a = .reference id := by
-  rw [Std.OrientedCmp.eq_swap (cmp := exactCompare), Ordering.swap_eq_eq]
-  exact exactCompare_eq_reference a id
+@[simp] theorem reference_compareExact_eq (id : List Nat) (a : Term) :
+    compareExact (fuel (.reference id) a) (.reference id) a = .eq ↔ a = .reference id := by
+  rw [Std.OrientedCmp.eq_swap (cmp := exactOrder), Ordering.swap_eq_eq]
+  exact compareExact_eq_reference a id
 
-@[simp] theorem exactCompare_eq_float (a : Term) (n : FiniteFloat) :
-    exactCompare a (.float n) = .eq ↔ a = .float n := by
-  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
-@[simp] theorem float_exactCompare_eq (n : FiniteFloat) (a : Term) :
-    exactCompare (.float n) a = .eq ↔ a = .float n := by
-  rw [Std.OrientedCmp.eq_swap (cmp := exactCompare), Ordering.swap_eq_eq]
-  exact exactCompare_eq_float a n
+@[simp] theorem compareExact_eq_float (a : Term) (n : FiniteFloat) :
+    compareExact (fuel a (.float n)) a (.float n) = .eq ↔ a = .float n := by
+  cases a <;> rw [compareExact_step] <;> simp [Compare.compareStep]
+@[simp] theorem float_compareExact_eq (n : FiniteFloat) (a : Term) :
+    compareExact (fuel (.float n) a) (.float n) a = .eq ↔ a = .float n := by
+  rw [Std.OrientedCmp.eq_swap (cmp := exactOrder), Ordering.swap_eq_eq]
+  exact compareExact_eq_float a n
 
-@[simp] theorem exactCompare_eq_closed_function (a : Term) (module name : String) (arity : Nat) :
-    exactCompare a (.function module name arity #[]) = .eq ↔ a = .function module name arity #[] := by
-  cases a <;> rw [exactCompare_eq_step] <;> simp [Compare.compareStep]
+@[simp] theorem compareExact_eq_closed_function (a : Term) (module name : String) (arity : Nat) :
+    compareExact (fuel a (.function module name arity #[])) a (.function module name arity #[]) = .eq ↔ a = .function module name arity #[] := by
+  cases a <;> rw [compareExact_step] <;> simp [Compare.compareStep]
   rintro rfl rfl rfl
   rename_i captures
   rcases captures with ⟨_ | _⟩ <;> simp [List.compareLex]
@@ -703,20 +1038,20 @@ end Lynx.Term
 namespace Lynx.Term
 
 @[simp] theorem compare_reference (a b : List Nat) :
-    compare (.reference a) (.reference b) = Ord.compare a b := by
-  rw [compare_eq_step]
+    compare (fuel (.reference a) (.reference b)) (.reference a) (.reference b) = Ord.compare a b := by
+  rw [compare_step]
   rfl
 
 @[simp] theorem compare_pid (a b : PID) :
-    compare (.pid a) (.pid b) = Ord.compare a b := by
-  rw [compare_eq_step]
+    compare (fuel (.pid a) (.pid b)) (.pid a) (.pid b) = Ord.compare a b := by
+  rw [compare_step]
   rfl
 
-/-- Binaries compare equal when they have the same bytes. -/
+/-- Binaries compare (fuel equal when) equal when they have the same bytes. -/
 theorem binary_compare_eq (a b : ByteArray) :
-    compare (.bitstring a 0 (Bitstring.valid_aligned a)) (.bitstring b 0 (Bitstring.valid_aligned b)) =
+    compare (fuel (.bitstring a 0 (Bitstring.valid_aligned a)) (.bitstring b 0 (Bitstring.valid_aligned b))) (.bitstring a 0 (Bitstring.valid_aligned a)) (.bitstring b 0 (Bitstring.valid_aligned b)) =
       .eq ↔ a = b := by
-  rw [compare_eq_step]
+  rw [compare_step]
   simp only [Compare.compareStep]
   constructor
   · intro equal
@@ -725,45 +1060,45 @@ theorem binary_compare_eq (a b : ByteArray) :
   · rintro rfl
     exact Std.ReflCmp.compare_self
 
-@[simp] theorem compare_eq_nil (a : Term) : compare a .nil = .eq ↔ a = .nil := by
-  cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
-@[simp] theorem nil_compare_eq (a : Term) : compare .nil a = .eq ↔ a = .nil := by
-  rw [Std.OrientedCmp.eq_swap (cmp := compare), Ordering.swap_eq_eq]
+@[simp] theorem compare_eq_nil (a : Term) : compare (fuel a .nil) a .nil = .eq ↔ a = .nil := by
+  cases a <;> rw [compare_step] <;> simp [Compare.compareStep]
+@[simp] theorem nil_compare_eq (a : Term) : compare (fuel .nil a) .nil a = .eq ↔ a = .nil := by
+  rw [Std.OrientedCmp.eq_swap (cmp := numericOrder), Ordering.swap_eq_eq]
   exact compare_eq_nil a
 
 /-- Only the same atom is equal to an atom. -/
 @[simp] theorem compare_eq_atom (a : Term) (name : String) :
-    compare a (.atom name) = .eq ↔ a = .atom name := by
-  cases a <;> rw [compare_eq_step] <;> simp [Compare.compareStep]
+    compare (fuel a (.atom name)) a (.atom name) = .eq ↔ a = .atom name := by
+  cases a <;> rw [compare_step] <;> simp [Compare.compareStep]
 
 @[simp] theorem compare_integers (a b : Int) :
-    compare (.integer a) (.integer b) = Ord.compare a b := by
-  rw [compare_eq_step]
+    compare (fuel (.integer a) (.integer b)) (.integer a) (.integer b) = Ord.compare a b := by
+  rw [compare_step]
   by_cases hab : a < b <;> by_cases hba : b < a <;> by_cases eq : a = b <;>
     simp [Compare.compareStep, Compare.ratCompare, compareOfLessAndEq,
       Int.compare_eq_ite_lt, Rat.intCast_lt_intCast, hab, hba, eq] <;> omega
 
 /-- Float ordering agrees with the exact rational value of each encoding. -/
 theorem compare_floats (a b : FiniteFloat) :
-    compare (.float a) (.float b) = compareOfLessAndEq a.toRat b.toRat := by
-  rw [compare_eq_step]
+    compare (fuel (.float a) (.float b)) (.float a) (.float b) = compareOfLessAndEq a.toRat b.toRat := by
+  rw [compare_step]
   rfl
 
 @[simp] theorem integer_compare_integer_eq (a b : Int) :
-    compare (.integer a) (.integer b) = .eq ↔ a = b := by
-  rw [compare_eq_step]
+    compare (fuel (.integer a) (.integer b)) (.integer a) (.integer b) = .eq ↔ a = b := by
+  rw [compare_step]
   simp [Compare.compareStep]
 @[simp] theorem integer_compare_float_eq (integer : Int) (float : FiniteFloat) :
-    compare (.integer integer) (.float float) = .eq ↔ integer = float.toRat := by
-  rw [compare_eq_step]
+    compare (fuel (.integer integer) (.float float)) (.integer integer) (.float float) = .eq ↔ integer = float.toRat := by
+  rw [compare_step]
   simp [Compare.compareStep]
 @[simp] theorem float_compare_integer_eq (float : FiniteFloat) (integer : Int) :
-    compare (.float float) (.integer integer) = .eq ↔ float.toRat = integer := by
-  rw [compare_eq_step]
+    compare (fuel (.float float) (.integer integer)) (.float float) (.integer integer) = .eq ↔ float.toRat = integer := by
+  rw [compare_step]
   simp [Compare.compareStep]
 @[simp] theorem float_compare_float_eq (a b : FiniteFloat) :
-    compare (.float a) (.float b) = .eq ↔ a.toRat = b.toRat := by
-  rw [compare_eq_step]
+    compare (fuel (.float a) (.float b)) (.float a) (.float b) = .eq ↔ a.toRat = b.toRat := by
+  rw [compare_step]
   simp [Compare.compareStep]
 
 end Lynx.Term
@@ -771,11 +1106,11 @@ end Lynx.Term
 namespace Lynx
 
 /-- Executable semantic equality. Lean `=` still compares representations. -/
-instance : BEq Term := ⟨fun a b => decide (Term.compare a b = .eq)⟩
+instance : BEq Term := ⟨fun a b => decide (Term.compare (Term.fuel a b) a b = .eq)⟩
 
 @[simp] theorem Term.beq_iff_compare_eq (a b : Term) :
-    (a == b) = true ↔ Term.compare a b = .eq := by
-  change decide (Term.compare a b = .eq) = true ↔ _
+    (a == b) = true ↔ Term.compare (Term.fuel a b) a b = .eq := by
+  change decide (Term.compare (Term.fuel a b) a b = .eq) = true ↔ _
   simp
 
 instance : EquivBEq Term where
@@ -783,11 +1118,11 @@ instance : EquivBEq Term where
   symm := by
     intro a b h
     exact (Term.beq_iff_compare_eq b a).mpr
-      (Std.OrientedCmp.eq_symm ((Term.beq_iff_compare_eq a b).mp h))
+      (Std.OrientedCmp.eq_symm (cmp := numericOrder) ((Term.beq_iff_compare_eq a b).mp h))
   trans := by
     intro a b c h h'
     exact (Term.beq_iff_compare_eq a c).mpr
-      (Std.TransCmp.eq_trans ((Term.beq_iff_compare_eq a b).mp h)
+      (Std.TransCmp.eq_trans (cmp := numericOrder) ((Term.beq_iff_compare_eq a b).mp h)
         ((Term.beq_iff_compare_eq b c).mp h'))
 
 end Lynx
@@ -957,70 +1292,70 @@ end Lynx.Term.Compare
 namespace Lynx.Term
 
 /-- Exact comparison keeps integer and float representations distinct. -/
-@[simp] theorem exactCompare_integer_float (integer : Int) (float : FiniteFloat) :
-    exactCompare (.integer integer) (.float float) = .lt := by
-  rw [exactCompare_eq_step]
+@[simp] theorem compareExact_integer_float (integer : Int) (float : FiniteFloat) :
+    compareExact (fuel (.integer integer) (.float float)) (.integer integer) (.float float) = .lt := by
+  rw [compareExact_step]
   rfl
 
-@[simp] theorem exactCompare_float_integer (float : FiniteFloat) (integer : Int) :
-    exactCompare (.float float) (.integer integer) = .gt := by
-  rw [exactCompare_eq_step]
+@[simp] theorem compareExact_float_integer (float : FiniteFloat) (integer : Int) :
+    compareExact (fuel (.float float) (.integer integer)) (.float float) (.integer integer) = .gt := by
+  rw [compareExact_step]
   rfl
 
-/-- Tuples exactCompare arity before their elements. -/
-theorem exactCompare_tuple (a b : Array Term) :
-    exactCompare (.tuple a) (.tuple b) =
-      (Ord.compare a.size b.size).then (List.compareLex exactCompare a.toList b.toList) := by
-  rw [exactCompare_eq_step]
+/-- Tuples compareExact (fuel arity before) arity before their elements. -/
+theorem compareExact_tuple (a b : Array Term) :
+    compareExact (fuel (.tuple a) (.tuple b)) (.tuple a) (.tuple b) =
+      (Ord.compare a.size b.size).then (List.compareLex exactOrder a.toList b.toList) := by
+  rw [compareExact_step]
   rfl
 
 /-- Every number precedes every map under ordinary comparison. -/
 theorem compare_integer_map (n : Int) (entries : List (Term × Term)) :
-    compare (.integer n) (.map entries) = .lt := by
-  rw [compare_eq_step]
+    compare (fuel (.integer n) (.map entries)) (.integer n) (.map entries) = .lt := by
+  rw [compare_step]
   rfl
 
-/-- Tuples compare arity before their elements. -/
+/-- Tuples compare (fuel arity before) arity before their elements. -/
 theorem compare_tuple (a b : Array Term) :
-    compare (.tuple a) (.tuple b) =
-      (Ord.compare a.size b.size).then (List.compareLex compare a.toList b.toList) := by
-  rw [compare_eq_step]
+    compare (fuel (.tuple a) (.tuple b)) (.tuple a) (.tuple b) =
+      (Ord.compare a.size b.size).then (List.compareLex numericOrder a.toList b.toList) := by
+  rw [compare_step]
   rfl
 
-/-- Lists exactCompare their heads before their tails. -/
-theorem exactCompare_cons (a as b bs : Term) :
-    exactCompare (.cons a as) (.cons b bs) = (exactCompare a b).then (exactCompare as bs) := by
-  rw [exactCompare_eq_step]
+/-- Lists compareExact (fuel their heads) their heads before their tails. -/
+theorem compareExact_cons (a as b bs : Term) :
+    compareExact (fuel (.cons a as) (.cons b bs)) (.cons a as) (.cons b bs) = (compareExact (fuel a b) a b).then (compareExact (fuel as bs) as bs) := by
+  rw [compareExact_step]
   rfl
 
-/-- Lists compare their heads before their tails. -/
+/-- Lists compare (fuel their heads) their heads before their tails. -/
 theorem compare_cons (a as b bs : Term) :
-    compare (.cons a as) (.cons b bs) = (compare a b).then (compare as bs) := by
-  rw [compare_eq_step]
+    compare (fuel (.cons a as) (.cons b bs)) (.cons a as) (.cons b bs) = (compare (fuel a b) a b).then (compare (fuel as bs) as bs) := by
+  rw [compare_step]
   rfl
 
 /-- A singleton map is larger than the empty map, regardless of its binding. -/
 theorem compare_singleton_map_empty (k v : Term) :
-    compare (.map [(k,v)]) (.map []) = .gt := by
-  rw [compare_eq_step]
+    compare (fuel (.map [(k,v)]) (.map [])) (.map [(k,v)]) (.map []) = .gt := by
+  rw [compare_step]
   rfl
 
-/-- Singleton maps compare exact keys before ordinarily compared values. -/
+/-- Singleton maps compare (fuel exact keys) exact keys before ordinarily compared values. -/
 theorem compare_singleton_map (k v l w : Term) :
-    compare (.map [(k,v)]) (.map [(l,w)]) =
-      (exactCompare k l).then (compare v w) := by
-  rw [compare_eq_step]
+    compare (fuel (.map [(k,v)]) (.map [(l,w)])) (.map [(k,v)]) (.map [(l,w)]) =
+      (compareExact (fuel k l) k l).then (compare (fuel v w) v w) := by
+  rw [compare_step]
   simp [Compare.compareStep, Compare.mapView, Compare.mapViewInsert, Compare.compareMapViews,
     compareLex, Compare.compareOn, List.compareLex_cons_cons, List.compareLex_nil_nil]
 
 /-- Matching first-binding lookups suffice for semantic map equality. -/
 theorem map_compare_eq_of_lookup (a b : List (Term × Term))
-    (h : ∀ q, Option.Rel (fun a b => compare a b = .eq)
-      ((a.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd)
-      ((b.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd)) :
-    compare (.map a) (.map b) = .eq := by
-  rw [compare_eq_step]
-  apply Compare.compareMapViews_eq_of_lookup (cmp := exactCompare) compare _ _
+    (h : ∀ q, Option.Rel (fun a b => compare (fuel a b) a b = .eq)
+      ((a.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd)
+      ((b.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd)) :
+    compare (fuel (.map a) (.map b)) (.map a) (.map b) = .eq := by
+  rw [compare_step]
+  apply Compare.compareMapViews_eq_of_lookup (cmp := exactOrder) numericOrder _ _
     (Compare.mapView_sorted _ _) (Compare.mapView_sorted _ _)
   intro q
   simp only [Compare.mapViewLookup_view]
@@ -1028,23 +1363,23 @@ theorem map_compare_eq_of_lookup (a b : List (Term × Term))
 
 /-- Matching first-binding lookups, up to exact equality of values, suffice for
 exact map equality. -/
-theorem map_exactCompare_eq_of_lookup (a b : List (Term × Term))
-    (h : ∀ q, Option.Rel (fun a b => exactCompare a b = .eq)
-      ((a.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd)
-      ((b.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd)) :
-    exactCompare (.map a) (.map b) = .eq := by
-  rw [exactCompare_eq_step]
-  apply Compare.compareMapViews_eq_of_lookup (cmp := exactCompare) exactCompare _ _
+theorem map_compareExact_eq_of_lookup (a b : List (Term × Term))
+    (h : ∀ q, Option.Rel (fun a b => compareExact (fuel a b) a b = .eq)
+      ((a.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd)
+      ((b.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd)) :
+    compareExact (fuel (.map a) (.map b)) (.map a) (.map b) = .eq := by
+  rw [compareExact_step]
+  apply Compare.compareMapViews_eq_of_lookup (cmp := exactOrder) exactOrder _ _
     (Compare.mapView_sorted _ _) (Compare.mapView_sorted _ _)
   intro q
   simp only [Compare.mapViewLookup_view]
   exact h q
 
 private theorem mapViewLookup_rel (cmp : Term → Term → Ordering) {xs ys : List (Term × Term)}
-    (keys : List.compareLex exactCompare (xs.map Prod.fst) (ys.map Prod.fst) = .eq)
+    (keys : List.compareLex exactOrder (xs.map Prod.fst) (ys.map Prod.fst) = .eq)
     (values : List.compareLex cmp (xs.map Prod.snd) (ys.map Prod.snd) = .eq) (q : Term) :
-    Option.Rel (fun a b => cmp a b = .eq) (Compare.mapViewLookup exactCompare xs q)
-      (Compare.mapViewLookup exactCompare ys q) := by
+    Option.Rel (fun a b => cmp a b = .eq) (Compare.mapViewLookup exactOrder xs q)
+      (Compare.mapViewLookup exactOrder ys q) := by
   induction xs generalizing ys with
   | nil =>
     cases ys with
@@ -1056,44 +1391,45 @@ private theorem mapViewLookup_rel (cmp : Term → Term → Ordering) {xs ys : Li
     | cons y ys =>
       simp only [List.map_cons, List.compareLex_cons_cons, Ordering.then_eq_eq] at keys values
       simp only [Compare.mapViewLookup_cons]
-      have same : exactCompare q x.1 = .eq ↔ exactCompare q y.1 = .eq :=
-        ⟨fun h => Std.TransCmp.eq_trans h keys.1,
-          fun h => Std.TransCmp.eq_trans h (Std.OrientedCmp.eq_symm keys.1)⟩
-      by_cases hit : exactCompare q x.1 = .eq
+      have same : compareExact (fuel q x.1) q x.1 = .eq ↔ compareExact (fuel q y.1) q y.1 = .eq :=
+        ⟨fun h => Std.TransCmp.eq_trans (cmp := exactOrder) h keys.1,
+          fun h => Std.TransCmp.eq_trans (cmp := exactOrder) h
+            (Std.OrientedCmp.eq_symm (cmp := exactOrder) keys.1)⟩
+      by_cases hit : compareExact (fuel q x.1) q x.1 = .eq
       · simp only [hit, ite_true, same.mp hit]
         exact Option.Rel.some values.1
       · simp only [hit, (not_congr same).mp hit]
         exact ih keys.2 values.2
 
 /-- Exactly equal maps have exactly equal first-binding lookups. -/
-theorem lookup_of_map_exactCompare_eq (a b : List (Term × Term))
-    (equal : exactCompare (.map a) (.map b) = .eq) (q : Term) :
-    Option.Rel (fun x y => exactCompare x y = .eq)
-      ((a.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd)
-      ((b.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd) := by
-  rw [exactCompare_eq_step] at equal
+theorem lookup_of_map_compareExact_eq (a b : List (Term × Term))
+    (equal : compareExact (fuel (.map a) (.map b)) (.map a) (.map b) = .eq) (q : Term) :
+    Option.Rel (fun x y => compareExact (fuel x y) x y = .eq)
+      ((a.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd)
+      ((b.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd) := by
+  rw [compareExact_step] at equal
   simp only [Compare.compareStep, Compare.compareMapViews, compareLex, Compare.compareOn,
     Ordering.then_eq_eq] at equal
-  have rel := mapViewLookup_rel exactCompare equal.2.1 equal.2.2 q
+  have rel := mapViewLookup_rel exactOrder equal.2.1 equal.2.2 q
   simp only [Compare.mapViewLookup_view] at rel
   exact rel
 
 /-- Semantically equal maps bind exactly equal keys to semantically equal values. -/
 theorem lookup_of_map_compare_eq (a b : List (Term × Term))
-    (equal : compare (.map a) (.map b) = .eq) (q : Term) :
-    Option.Rel (fun x y => compare x y = .eq)
-      ((a.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd)
-      ((b.find? fun e => decide (exactCompare q e.1 = .eq)).map Prod.snd) := by
-  rw [compare_eq_step] at equal
+    (equal : compare (fuel (.map a) (.map b)) (.map a) (.map b) = .eq) (q : Term) :
+    Option.Rel (fun x y => compare (fuel x y) x y = .eq)
+      ((a.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd)
+      ((b.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd) := by
+  rw [compare_step] at equal
   simp only [Compare.compareStep, Compare.compareMapViews, compareLex, Compare.compareOn,
     Ordering.then_eq_eq] at equal
-  have rel := mapViewLookup_rel compare equal.2.1 equal.2.2 q
+  have rel := mapViewLookup_rel numericOrder equal.2.1 equal.2.2 q
   simp only [Compare.mapViewLookup_view] at rel
   exact rel
 
 /-- First-binding lookup of a key in a map's entries. -/
 @[expose] def mapLookup (entries : List (Term × Term)) (key : Term) : Option Term :=
-  (entries.find? fun entry => decide (exactCompare key entry.1 = .eq)).map Prod.snd
+  (entries.find? fun entry => decide (compareExact (fuel key entry.1) key entry.1 = .eq)).map Prod.snd
 
 /-- The visible bindings of a map, each key once, in an unspecified order.
 Erlang does not specify map iteration order, so proofs may rely only on the
@@ -1101,13 +1437,13 @@ distinct keys, lookups, and bindings below. Execution enumerates the keys in
 ascending order. -/
 opaque mapEnumeration (entries : List (Term × Term)) :
     { enumerated : List (Term × Term) //
-      enumerated.Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq) ∧
+      enumerated.Pairwise (fun a b => compareExact (fuel a.1 b.1) a.1 b.1 ≠ .eq) ∧
       (∀ key, mapLookup enumerated key = mapLookup entries key) ∧
       ∀ entry ∈ enumerated, entry ∈ entries } :=
-  ⟨Compare.mapView exactCompare entries,
-    (Compare.mapView_sorted exactCompare entries).imp fun lt => by simp [lt],
-    Compare.mapViewLookup_view exactCompare entries,
-    fun _ => Compare.mem_mapView exactCompare⟩
+  ⟨Compare.mapView exactOrder entries,
+    (Compare.mapView_sorted exactOrder entries).imp fun lt => by simp [lt],
+    Compare.mapViewLookup_view exactOrder entries,
+    fun _ => Compare.mem_mapView exactOrder⟩
 
 /-- The visible bindings of a map, in an unspecified order. -/
 def mapEntries (entries : List (Term × Term)) : List (Term × Term) :=
@@ -1120,12 +1456,12 @@ def mapEntries (entries : List (Term × Term)) : List (Term × Term) :=
 
 /-- Enumerated keys are distinct. -/
 theorem mapEntries_distinct (entries : List (Term × Term)) :
-    (mapEntries entries).Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq) :=
+    (mapEntries entries).Pairwise (fun a b => compareExact (fuel a.1 b.1) a.1 b.1 ≠ .eq) :=
   (mapEnumeration entries).property.1
 
 /-- Bindings with distinct keys are found by their own key. -/
 private theorem mapLookup_of_mem {entries : List (Term × Term)} {entry : Term × Term}
-    (distinct : entries.Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq)) (member : entry ∈ entries) :
+    (distinct : entries.Pairwise (fun a b => compareExact (fuel a.1 b.1) a.1 b.1 ≠ .eq)) (member : entry ∈ entries) :
     mapLookup entries entry.1 = some entry.2 := by
   induction entries with
   | nil => simp at member
@@ -1133,7 +1469,7 @@ private theorem mapLookup_of_mem {entries : List (Term × Term)} {entry : Term �
     rcases List.mem_cons.mp member with rfl | member
     · simp [mapLookup]
     · have apart := (List.pairwise_cons.mp distinct).1 entry member
-      have miss : exactCompare entry.1 r.1 ≠ .eq := fun same => apart (Std.OrientedCmp.eq_symm same)
+      have miss : compareExact (fuel entry.1 r.1) entry.1 r.1 ≠ .eq := fun same => apart (Std.OrientedCmp.eq_symm (cmp := exactOrder) same)
       have := ih (List.pairwise_cons.mp distinct).2 member
       simp only [mapLookup, List.find?_cons, miss, decide_false] at this ⊢
       exact this
@@ -1175,7 +1511,7 @@ theorem mem_of_mem_mapEntries {entries : List (Term × Term)} {entry : Term × T
 /-- Whether no two keys of a map's entries are exactly equal. -/
 @[expose] def keysDistinct : List (Term × Term) → Bool
   | [] => .true
-  | entry :: rest => rest.all (fun other => exactCompare entry.1 other.1 != .eq) && keysDistinct rest
+  | entry :: rest => rest.all (fun other => compareExact (fuel entry.1 other.1) entry.1 other.1 != .eq) && keysDistinct rest
 
 /-- The lists inserting an element at each position of a list. -/
 @[expose] def insertions (element : α) : List α → List (List α)
@@ -1189,42 +1525,42 @@ theorem mem_of_mem_mapEntries {entries : List (Term × Term)} {entry : Term × T
 
 /-- A map has a key when one of its keys is exactly equal to it. -/
 theorem mapLookup_isSome (entries : List (Term × Term)) (key : Term) :
-    (mapLookup entries key).isSome ↔ ∃ entry ∈ entries, exactCompare key entry.1 = .eq := by
+    (mapLookup entries key).isSome ↔ ∃ entry ∈ entries, compareExact (fuel key entry.1) key entry.1 = .eq := by
   simp [mapLookup, List.find?_isSome]
 
 /-- Exactly equal keys look up the same binding. -/
-theorem mapLookup_congr {a b : Term} (equal : exactCompare a b = .eq) (entries : List (Term × Term)) :
+theorem mapLookup_congr {a b : Term} (equal : compareExact (fuel a b) a b = .eq) (entries : List (Term × Term)) :
     mapLookup entries a = mapLookup entries b := by
-  have symm := Std.OrientedCmp.eq_symm equal
-  have same : (fun entry : Term × Term => decide (exactCompare a entry.1 = .eq)) =
-      fun entry => decide (exactCompare b entry.1 = .eq) := by
+  have symm := Std.OrientedCmp.eq_symm (cmp := exactOrder) equal
+  have same : (fun entry : Term × Term => decide (compareExact (fuel a entry.1) a entry.1 = .eq)) =
+      fun entry => decide (compareExact (fuel b entry.1) b entry.1 = .eq) := by
     funext entry
     simp only [decide_eq_decide]
-    exact ⟨fun h => Std.TransCmp.eq_trans symm h, fun h => Std.TransCmp.eq_trans equal h⟩
+    exact ⟨fun h => Std.TransCmp.eq_trans (cmp := exactOrder) symm h, fun h => Std.TransCmp.eq_trans (cmp := exactOrder) equal h⟩
   simp only [mapLookup, same]
 
 /-- Removing a key's bindings leaves the bindings of other keys. -/
 theorem mapLookup_filter (entries : List (Term × Term)) (key query : Term) :
-    mapLookup (entries.filter fun entry => exactCompare key entry.1 != .eq) query =
-      if exactCompare query key = .eq then none else mapLookup entries query := by
+    mapLookup (entries.filter fun entry => compareExact (fuel key entry.1) key entry.1 != .eq) query =
+      if compareExact (fuel query key) query key = .eq then none else mapLookup entries query := by
   induction entries with
   | nil => simp [mapLookup]
   | cons entry rest ih =>
-    by_cases same : exactCompare query key = .eq
+    by_cases same : compareExact (fuel query key) query key = .eq
     · simp only [same, ite_true] at ih ⊢
-      by_cases hit : exactCompare key entry.1 = .eq
+      by_cases hit : compareExact (fuel key entry.1) key entry.1 = .eq
       · simp [hit, ih]
-      · have miss : exactCompare query entry.1 ≠ .eq := fun h =>
-          hit (Std.TransCmp.eq_trans (Std.OrientedCmp.eq_symm same) h)
+      · have miss : compareExact (fuel query entry.1) query entry.1 ≠ .eq := fun h =>
+          hit (Std.TransCmp.eq_trans (cmp := exactOrder) (Std.OrientedCmp.eq_symm (cmp := exactOrder) same) h)
         simp [hit, mapLookup, miss] at ih ⊢
         exact ih
     · simp only [same, ite_false] at ih ⊢
-      by_cases hit : exactCompare key entry.1 = .eq
-      · have miss : exactCompare query entry.1 ≠ .eq := fun h =>
-          same (Std.TransCmp.eq_trans h (Std.OrientedCmp.eq_symm hit))
+      by_cases hit : compareExact (fuel key entry.1) key entry.1 = .eq
+      · have miss : compareExact (fuel query entry.1) query entry.1 ≠ .eq := fun h =>
+          same (Std.TransCmp.eq_trans (cmp := exactOrder) h (Std.OrientedCmp.eq_symm (cmp := exactOrder) hit))
         simp [hit, mapLookup, miss] at ih ⊢
         exact ih
-      · by_cases found : exactCompare query entry.1 = .eq
+      · by_cases found : compareExact (fuel query entry.1) query entry.1 = .eq
         · simp [hit, mapLookup, found]
         · simp [hit, mapLookup, found] at ih ⊢
           exact ih
@@ -1234,13 +1570,13 @@ Guards test membership in sets of literals as chains of `=:=` comparisons. -/
 @[expose] def isMember (value : Term) : List Term → Term
   | [] => .atom "false"
   | candidate :: rest =>
-    if exactCompare value candidate = .eq then .atom "true" else isMember value rest
+    if compareExact (fuel value candidate) value candidate = .eq then .atom "true" else isMember value rest
 
 @[simp] theorem isMember_nil (value : Term) : isMember value [] = .atom "false" := rfl
 
 @[simp] theorem isMember_cons (value candidate : Term) (rest : List Term) :
     isMember value (candidate :: rest) =
-      if exactCompare value candidate = .eq then .atom "true" else isMember value rest := rfl
+      if compareExact (fuel value candidate) value candidate = .eq then .atom "true" else isMember value rest := rfl
 
 end Lynx.Term
 
@@ -1262,9 +1598,9 @@ private theorem compareLex_eq_mono {α : Type} {f g : α → α → Ordering} :
       compareLex_eq_mono (fun a ha b hb => step a (List.mem_cons_of_mem _ ha) b (List.mem_cons_of_mem _ hb)) h.2⟩
 
 /-- Exactly equal terms are equal under ordinary comparison. -/
-theorem compare_eq_of_exactCompare_eq (a b : Term) (h : exactCompare a b = .eq) : compare a b = .eq := by
-  rw [exactCompare_eq_step] at h
-  rw [compare_eq_step]
+theorem compare_eq_of_compareExact_eq (a b : Term) (h : compareExact (fuel a b) a b = .eq) : compare (fuel a b) a b = .eq := by
+  rw [compareExact_step] at h
+  rw [compare_step]
   cases a <;> cases b
   all_goals try simp only [Compare.compareStep, ite_true, Bool.false_eq_true, ite_false, reduceCtorEq] at h ⊢
   all_goals first | exact h | skip
@@ -1281,19 +1617,19 @@ theorem compare_eq_of_exactCompare_eq (a b : Term) (h : exactCompare a b = .eq) 
     refine ⟨h.1, compareLex_eq_mono (fun x hx y hy e => ?_) h.2⟩
     have := Array.sizeOf_lt_of_mem (by simpa using hx : x ∈ xs)
     have := Array.sizeOf_lt_of_mem (by simpa using hy : y ∈ ys)
-    exact compare_eq_of_exactCompare_eq x y e
+    exact compare_eq_of_compareExact_eq x y e
   case map.map xs ys =>
     simp only [Compare.compareMapViews, compareLex, Compare.compareOn, Ordering.then_eq_eq] at h ⊢
     refine ⟨h.1, h.2.1, compareLex_eq_mono (fun x hx y hy e => ?_) h.2.2⟩
     obtain ⟨⟨kx, vx⟩, mx, rfl⟩ := List.mem_map.mp hx
     obtain ⟨⟨ky, vy⟩, my, rfl⟩ := List.mem_map.mp hy
-    have := List.sizeOf_lt_of_mem (Compare.mem_mapView exactCompare mx)
-    have := List.sizeOf_lt_of_mem (Compare.mem_mapView exactCompare my)
+    have := List.sizeOf_lt_of_mem (Compare.mem_mapView exactOrder mx)
+    have := List.sizeOf_lt_of_mem (Compare.mem_mapView exactOrder my)
     simp only [Prod.mk.sizeOf_spec] at *
-    exact compare_eq_of_exactCompare_eq vx vy e
+    exact compare_eq_of_compareExact_eq vx vy e
   case cons.cons x xs y ys =>
     simp only [Ordering.then_eq_eq] at h ⊢
-    exact ⟨compare_eq_of_exactCompare_eq x y h.1, compare_eq_of_exactCompare_eq xs ys h.2⟩
+    exact ⟨compare_eq_of_compareExact_eq x y h.1, compare_eq_of_compareExact_eq xs ys h.2⟩
 termination_by sizeOf a + sizeOf b
 decreasing_by
   all_goals

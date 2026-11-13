@@ -94,6 +94,20 @@ example (depth : Nat) (elapsed : PID → Nat → Nat) :
     Concurrent.check answered 32 (.start {} (deep (depth + 1)) elapsed) = true := by
   lynx_kernel
 
+/-- Kernel evaluation decides Erlang's term comparisons through the public
+interface: atoms, numbers, tuples, lists, and maps. -/
+example : (match Erlang.erlang.«</2» (.tuple #[.atom "a", .integer 1, .map [(.atom "k", .nil)]])
+    (.tuple #[.atom "a", .float ⟨false, 1023, 0⟩, .map [(.atom "k", .cons (.integer 2) .nil)]]) with
+    | .ok (.atom "true") => true
+    | _ => false) = true := by
+  lynx_kernel
+
+example : (match Erlang.erlang.«=:=/2» (.map [(.atom "b", .integer 2), (.atom "a", .integer 1)])
+    (.map [(.atom "a", .integer 1), (.atom "b", .integer 2)]) with
+    | .ok (.atom "true") => true
+    | _ => false) = true := by
+  lynx_kernel
+
 /-- error: lynx_counterexample runs closed programs, but this one depends on [message] -/
 #guard_msgs in
 example (message : Term) :
