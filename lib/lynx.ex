@@ -318,11 +318,18 @@ defmodule Lynx do
   process, delivers a signal in transit, or fires a timer, and a
   `Lynx.Concurrent.Run` records consecutive steps. As in OTP, signals between
   two processes keep their order, while signals from different processes may
-  arrive in any order. A law is proven in one of two ways:
+  arrive in any order. A law is proven in one of three ways:
 
     * Programs whose processes take the same steps for every input are proven
       by evaluating every run, as described below. See
       `examples/concurrency/workers.exs`, where two workers race.
+
+    * Programs without races, whose processes only talk along their process
+      tree with a single sender for each receiver, are proven by evaluating a
+      single run: `Lynx.Concurrent.Config.RaceFree.of_talks` shows every run
+      ends alike, and `Lynx.concurrent_of_advance` evaluates one with
+      `Lynx.Concurrent.Config.advance`. See `examples/concurrency/server.exs`,
+      which does so for any input list.
 
     * Other programs are proven with an invariant preserved by every step,
       through `Lynx.concurrent_of_invariant`.
@@ -334,8 +341,27 @@ defmodule Lynx do
 
   `Lynx.Concurrent.check` explores the runs of a program, up to a depth
   bounding the steps along each run, and `Lynx.concurrent_of_check` turns its
-  result into the law. For example, for a law over an integer `x` that is only
-  carried by messages and arithmetic:
+  result into the law. It follows one run of those that differ only in the
+  order of steps that commute, so its cost grows with the races of the
+  program rather than with every interleaving.
+
+  When the evaluation does not need to inspect the law's inputs, as for a law
+  without parameters, prove the check with `lynx_kernel`. It evaluates the
+  check in Lean's kernel, typically an order of magnitude faster than `cbv`,
+  with the call depth and the time elapsed before timers are canceled left
+  unknown:
+
+      refine ⟨4, fun depth deep => ?_⟩
+      obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
+      exact Lynx.concurrent_of_check
+        (Lynx.apply «law:ensures/0» Erlang.program.fun_table (depth + 4))
+        Lynx.Outcome.isTrue 300 (fun _ => by lynx_counterexample; lynx_kernel)
+        fun _ => Lynx.Outcome.eq_of_isTrue
+
+  The kernel cannot decide what depends on an unknown value, so when the
+  processes compare a symbolic input, evaluate with `cbv` and decide those
+  comparisons with `simp`. For example, for a law over an integer `x` that is
+  only carried by messages and arithmetic:
 
       obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
         cases x <;> simp [«law:requires/1», Erlang.erlang.«is_integer/1»] at requires ⊢
@@ -380,7 +406,8 @@ defmodule Lynx do
   `(by lynx_counterexample; cbv)`: it runs the program in Lean's interpreter,
   which is much faster than the kernel, and fails with a run the check
   rejects, one step per line, or with one that takes more steps than the
-  depth. Otherwise it leaves the goal for `cbv`. It proves nothing itself.
+  depth. Otherwise it leaves the goal for `lynx_kernel` or `cbv`. It proves
+  nothing itself.
   Traces show the first process as `<0>` and its first child as `<0.1>`, and
   references as their allocating process followed by a count, as in `#Ref<0.1>`.
 
