@@ -1204,17 +1204,7 @@ private theorem delivery_matches {state other : State} {processId : PID} {task :
             simp only [State.process, live, Option.getD_some] at found
             simp [State.process, State.modify_of_some live, State.update, ← found]
         · rw [← Effect.apply_ending, found]
-      have views : ∀ current : State, (if linked then current.modify target fun process =>
-          { process with links := process.links.erase source } else current).view target =
-          current.view target := by
-        intro current
-        split
-        · exact State.view_modify fun _ => rfl
-        · rfl
-      refine ⟨⟨trivial, trivial, ?_, trivial, ?_⟩, ?_⟩
-      · rw [views, views]
-        have : other.view target = state.view target := State.view_eq (congrArg ProcessState.env view.2)
-        exact congrArg (fun view => Option.map (fun x => (x, view)) (task.finish (.error (.exit exit)))) this
+      refine ⟨⟨trivial, trivial, trivial, trivial, ?_⟩, ?_⟩
       · exact ending _ view.2
       · exact ending _ rfl
   | _ =>
@@ -1367,13 +1357,9 @@ private theorem ending_matches {state other : State} {processId : PID} {reason :
     Matches (Effect.ending processId (state.process processId) reason) other
       (Task.ended finish event state processId reason result)
       (Task.ended finish event other processId reason result) := by
-  have view : other.view processId = state.view processId := State.view_eq (by
-    simp only [ProcessState.ending, ProcessState.mk.injEq] at same
-    simp [ProcessState.env, same])
-  refine ⟨rfl, rfl, ?_, rfl, ?_⟩
-  · simp [Task.ended, view]
-  · simp only [Task.ended]
-    rw [← Effect.apply_ending, Effect.ending_congr same]
+  refine ⟨rfl, rfl, rfl, rfl, ?_⟩
+  simp only [Task.ended]
+  rw [← Effect.apply_ending, Effect.ending_congr same]
 
 /-- Answers to a request at two states agreeing on what it observes: the same
 reply and exit, and the effect applied, or the process ends unchanged. -/
@@ -1674,8 +1660,7 @@ private theorem own_matches {state other : State} {processId : PID} {task : Task
       | none => exact related_single ⟨rfl, rfl, rfl, rfl, settled⟩
       | some reason =>
         obtain ⟨rfl, rfl, view, ending⟩ := settled
-        refine related_single ⟨rfl, rfl, ?_, rfl, ending⟩
-        simp [Task.ended, view]
+        exact related_single ⟨rfl, rfl, rfl, rfl, ending⟩
 
 /-- A process's own step observes the process. -/
 private theorem Task.footprint_observes {state : State} {processId : PID} {task : Task α} :

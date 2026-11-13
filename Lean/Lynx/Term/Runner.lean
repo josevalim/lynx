@@ -79,24 +79,23 @@ private def schedule : List ScheduleChoice → ScheduleChoice × List ScheduleCh
   | [] => (.current, [])
   | choice :: rest => (choice, rest)
 
-/-- The root's last environment. -/
-private def final (root : PID) : Config α → Environment
+/-- The root's environment while it is live, and its last one once it ends. -/
+private def track (root : PID) (env : Environment) : Config α → Environment
   | .start env _ _ => env
-  | .running _ _ (some (_, env)) _ => env
-  | .running state _ none _ => state.view root
+  | .running state _ _ _ => if state.alive root then state.view root else env
 
-/-- Follow steps until none remain. -/
-private def execute (root : PID) (config : Config α) (current : PID) (preferred : ScheduleChoice)
-    (choices : List ScheduleChoice) : Outcome α × Environment :=
+/-- Follow steps until none remain, with the root's last environment. -/
+private def execute (root : PID) (env : Environment) (config : Config α) (current : PID)
+    (preferred : ScheduleChoice) (choices : List ScheduleChoice) : Outcome α × Environment :=
   match firstWhere config (fun event => event matches .deliver _ | .bounce _) with
-  | some ⟨(_, next), _⟩ => execute root next current preferred choices
+  | some ⟨(_, next), _⟩ => execute root (track root env next) next current preferred choices
   | none =>
       match choose config current preferred choices with
-      | (_, none) => (config.outcome, final root config)
+      | (_, none) => (config.outcome, env)
       | (choices, some ⟨(event, next), _⟩) =>
           let (preferred, choices) := if event matches .internal _ then (.current, choices)
             else schedule choices
-          execute root next ((owner event).getD current) preferred choices
+          execute root (track root env next) next ((owner event).getD current) preferred choices
 termination_by config
 decreasing_by all_goals exact ⟨_, ‹_›⟩
 
@@ -110,8 +109,8 @@ def run (computation : Result α) (env : Environment) (choices : List ScheduleCh
   | .get next => run (next env) env choices
   | .set next continuation => run continuation next choices
   | Result.schedule _ _ _ | .send _ _ _ | .receive _ _ _ | .request _ _ =>
-      execute env.currentPid (.running (State.initial env) [(env.currentPid, Task.root computation)]
-        none false) env.currentPid .current choices
+      execute env.currentPid env (.running (State.initial env)
+        [(env.currentPid, Task.root computation)] none false) env.currentPid .current choices
 
 /-! ### Soundness -/
 
@@ -146,21 +145,21 @@ private theorem choose_none {config : Config α} {current : PID} {preferred : Sc
     · exact ih none
 
 private theorem execute_reaches (root : PID) (config : Config α) :
-    ∀ current preferred choices, ∃ events last, Run config events last ∧
-      Terminal last (execute root config current preferred choices).1 := by
+    ∀ env current preferred choices, ∃ events last, Run config events last ∧
+      Terminal last (execute root env config current preferred choices).1 := by
   induction config using Config.terminates.induction with
   | h config ih =>
-    intro current preferred choices
+    intro env current preferred choices
     rw [execute]
     split
     · rename_i next mem _
-      obtain ⟨events, last, run, terminal⟩ := ih next ⟨_, mem⟩ current preferred choices
+      obtain ⟨events, last, run, terminal⟩ := ih next ⟨_, mem⟩ _ current preferred choices
       exact ⟨_, last, .step mem run, terminal⟩
     · split
       · rename_i none
         exact ⟨[], config, .refl, .stuck (choose_none none)⟩
       · rename_i event next mem _
-        obtain ⟨events, last, run, terminal⟩ := ih next ⟨_, mem⟩ _ _ _
+        obtain ⟨events, last, run, terminal⟩ := ih next ⟨_, mem⟩ _ _ _ _
         exact ⟨_, last, .step mem run, terminal⟩
 
 private theorem run_reaches (computation : Result α) (env : Environment)
@@ -181,7 +180,7 @@ private theorem run_reaches (computation : Result α) (env : Environment)
       by rw [run]; exact terminal⟩
   | schedule | send | receive | request =>
     rw [run]
-    obtain ⟨events, last, steps, terminal⟩ := execute_reaches env.currentPid _ env.currentPid
+    obtain ⟨events, last, steps, terminal⟩ := execute_reaches env.currentPid _ env env.currentPid
       .current choices
     exact ⟨_, last, .step (event := .internal env.currentPid)
       (by simp [Step, Config.successors, isRequest]) steps, terminal⟩

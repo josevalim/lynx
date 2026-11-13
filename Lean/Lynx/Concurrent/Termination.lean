@@ -290,7 +290,7 @@ private theorem deliveries_tasks {state : State} {processId : PID} {task : Task 
 
 /-- Each step of a running configuration lowers its measure. -/
 private theorem step_measure {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {event : Event}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {event : Event}
     {next : Config α} (step : Step (.running state tasks finished exhausted) event next) :
     ∃ state' tasks' finished' exhausted', next = .running state' tasks' finished' exhausted' ∧
       Prod.Lex (Replaces Follows) (· < ·) (measure state' tasks') (measure state tasks) := by
@@ -332,7 +332,7 @@ private theorem step_measure {state : State} {tasks : List (PID × Task α)}
 
 private theorem running_acc :
     ∀ (state : State) (tasks : List (PID × Task α))
-      (finished : Option (Except Exception α × Environment)) (exhausted : Bool),
+      (finished : Option (Except Exception α)) (exhausted : Bool),
       Acc (fun next first => ∃ event, Step first event next)
         (Config.running state tasks finished exhausted) := by
   intro state tasks finished exhausted
