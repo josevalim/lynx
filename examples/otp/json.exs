@@ -414,7 +414,7 @@ defmodule JsonProofsTest do
       induction l with
       | nil => simp
       | cons x xs ih =>
-        simp only [List.map_cons, Term.isMember_cons, Term.exactCompare_integers, ih, List.mem_cons]
+        simp only [List.map_cons, Term.isMember_cons, Term.compareExact_integers, ih, List.mem_cons]
         by_cases h : n = x
         · simp [h]
         · have : (n : Int) ≠ x := by omega
@@ -750,7 +750,7 @@ defmodule JsonProofsTest do
           rw [«escape_binary_ascii/5».eq_def (bin (w ++ rest)),
             matchInteger_bytes _ _ _ 56 (by omega)]
           simp only [extract_some, tail8, band_iband, bxor_ixor, Erlang.erlang.«+/2_integers»,
-            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.exactCompare_integers,
+            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.compareExact_integers,
             Int.compare_eq_eq, Lynx.Except.ok_bind, Lynx.Except.andAlso_eq]
           rw [show List.foldl (fun value b => value * 256 + b.toNat) 0 w = bytesValue w from rfl]
           by_cases c1 : iband (bytesValue w) 36170086419038336 = 0
@@ -1207,7 +1207,7 @@ defmodule JsonProofsTest do
           rw [«string_ascii/7».eq_def _ (bin (w ++ rest)),
             matchInteger_bytes _ _ _ 56 (by omega)]
           simp only [extract_some, tail8, band_iband, bxor_ixor, Erlang.erlang.«+/2_integers»,
-            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.exactCompare_integers,
+            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.compareExact_integers,
             Int.compare_eq_eq, Lynx.Except.ok_bind, Lynx.Except.andAlso_eq]
           rw [show List.foldl (fun value b => value * 256 + b.toNat) 0 w = bytesValue w from rfl]
           by_cases c1 : iband (bytesValue w) 36170086419038336 = 0
@@ -1297,7 +1297,7 @@ defmodule JsonProofsTest do
           rw [«string_ascii/9».eq_def _ (bin (w ++ rest)),
             matchInteger_bytes _ _ _ 56 (by omega)]
           simp only [extract_some, tail8, band_iband, bxor_ixor, Erlang.erlang.«+/2_integers»,
-            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.exactCompare_integers,
+            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.compareExact_integers,
             Int.compare_eq_eq, Lynx.Except.ok_bind, Lynx.Except.andAlso_eq]
           rw [show List.foldl (fun value b => value * 256 + b.toNat) 0 w = bytesValue w from rfl]
           by_cases c1 : iband (bytesValue w) 36170086419038336 = 0
@@ -3711,14 +3711,14 @@ defmodule JsonProofsTest do
           case encodesField => intro k v hv; exact hv
 
         -- A value decodes to a term that is exactly equal to every term it represents.
-        have represents_eq : ∀ (v : Json) (t : Term), Represents t v → Term.exactCompare v.term t = .eq := by
+        have represents_eq : ∀ (v : Json) (t : Term), Represents t v → Term.compareExact (Term.fuel v.term t) v.term t = .eq := by
           intro v
-          refine Json.rec (motive_1 := fun v => ∀ t, Represents t v → Term.exactCompare v.term t = .eq)
-            (motive_2 := fun l => ∀ ts, RepresentsList ts l → Term.exactCompare (Json.terms l) ts = .eq)
+          refine Json.rec (motive_1 := fun v => ∀ t, Represents t v → Term.compareExact (Term.fuel v.term t) v.term t = .eq)
+            (motive_2 := fun l => ∀ ts, RepresentsList ts l → Term.compareExact (Term.fuel (Json.terms l) ts) (Json.terms l) ts = .eq)
             (motive_3 := fun fields => ∀ es, RepresentsFields es fields → ∀ q,
-              Option.Rel (fun a b => Term.exactCompare a b = .eq) (Term.mapLookup (Json.fieldTerms fields) q)
+              Option.Rel (fun a b => Term.compareExact (Term.fuel a b) a b = .eq) (Term.mapLookup (Json.fieldTerms fields) q)
                 (Term.mapLookup es q))
-            (motive_4 := fun f => ∀ t, Represents t f.2 → Term.exactCompare f.2.term t = .eq)
+            (motive_4 := fun f => ∀ t, Represents t f.2 → Term.compareExact (Term.fuel f.2.term t) f.2.term t = .eq)
             ?equalInt ?equalFloat ?equalBool ?equalNull ?equalStr ?equalArr ?equalObj ?equalNil ?equalCons ?equalFieldsNil ?equalFieldsCons ?equalField v
           case equalInt => intro x; intro t represents; cases represents; simp [Json.term]
           case equalFloat => intro f; intro t represents; cases represents; simp [Json.term]
@@ -3731,7 +3731,7 @@ defmodule JsonProofsTest do
             intro t represents
             cases represents with
             | obj bindings =>
-              apply Term.map_exactCompare_eq_of_lookup
+              apply Term.map_compareExact_eq_of_lookup
               intro q
               have related := ih _ bindings q
               rw [Term.mapLookup_mapEntries] at related
@@ -3741,7 +3741,7 @@ defmodule JsonProofsTest do
             intro x xs hx hxs
             intro ts represents
             cases represents with
-            | cons head tail => simp [Json.terms, Term.exactCompare_cons, hx _ head, hxs _ tail]
+            | cons head tail => simp [Json.terms, Term.compareExact_cons, hx _ head, hxs _ tail]
           case equalFieldsNil => intro es represents q; cases represents; simp [Json.fieldTerms, Term.mapLookup]
           case equalFieldsCons =>
             intro f fs hf hfs es represents q
@@ -3750,7 +3750,7 @@ defmodule JsonProofsTest do
             | cons head tail =>
               have rest := hfs _ tail q
               simp only [Json.fieldTerms, Term.mapLookup, List.find?_cons] at rest ⊢
-              by_cases same : Term.exactCompare q (bin k.1) = .eq <;> simp [same] at rest ⊢
+              by_cases same : Term.compareExact (Term.fuel q (bin k.1)) q (bin k.1) = .eq <;> simp [same] at rest ⊢
               · exact hf _ head
               · exact rest
           case equalField => intro k v hv; exact hv

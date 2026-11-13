@@ -197,7 +197,7 @@ defmodule ArrayProofsTest do
                 simp [Erlang.array.«set/3», nonnegative, existing, hit,
                   boolAnd, andTT, andTF, andFT, masked, treeReturned, cacheReturned,
                   Erlang.erlang.«setelement/3», lo, bound, maxSize, pack, position]
-            · by_cases fixedTrue : fixed.exactCompare (.atom "true") = .eq <;>
+            · by_cases fixedTrue : Lynx.Term.compareExact (Lynx.Term.fuel fixed (.atom "true")) fixed (.atom "true") = .eq <;>
                 simp [Erlang.erlang.«=:=/2», fixedTrue] at returned
               have maxSize : max n (i + 1) = i + 1 := by omega
               have shiftInteger (s : Int) : ∃ b : Int,
