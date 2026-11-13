@@ -69,6 +69,9 @@ non-negotiable, so a new process BIF, or a change to one, goes through every lay
    `Request` (`Lynx/Term/DataTypes.lean`) and is answered by `State.request`.
    Keep signals between two processes in order, and put anything that reaches
    another process in transit (`State.emit`) rather than changing its record.
+   Definitions that `check` evaluates use the list functions of
+   `Lynx/Concurrent/Kernel.lean` rather than core's, as the kernel evaluates them
+   much faster; proofs rewrite them back with their `_eq` lemmas.
 3. Give the request a footprint in `requestFootprint`: what it observes and
    what it changes. A footprint that observes too little is unsound; one that
    observes too much only costs exploration. Extend `request_matches` and the

@@ -2,6 +2,7 @@ module
 
 public import Lynx.Concurrent
 public import Lynx.Term.Compare
+public import Lynx.Concurrent.Kernel
 
 /-! Footprints of concurrent steps: what a step observes of the state and what
 it does to it.
@@ -123,7 +124,7 @@ structure Effect where
 /-- How an effect changes the record of a process. -/
 @[expose] def Effect.record (effect : Effect) (processId : PID) :
     Option ProcessState → Option ProcessState :=
-  match effect.records.find? (·.1 == processId) with
+  match Kernel.find? (·.1 == processId) effect.records with
   | some (_, change) => change
   | none => id
 
@@ -157,24 +158,24 @@ structure Footprint where
 
 /-- Whether an effect keeps what a step observes, evaluated at a state. -/
 @[expose] def Effect.keeps (effect : Effect) (observes : Observes) (state : State) : Bool :=
-  observes.records.all (fun (processId, view) =>
-    match effect.records.find? (·.1 == processId) with
+  Kernel.all observes.records (fun (processId, view) =>
+    match Kernel.find? (·.1 == processId) effect.records with
     | some (_, change) => recordIdentical ((change (state.processes processId)).map view)
         ((state.processes processId).map view)
     | none => true) &&
   (match effect.timers with
-    | some change => observes.timers.all fun view =>
+    | some change => Kernel.all observes.timers fun view =>
         identicalLists Timer.identical (view (change state.timers)) (view state.timers)
     | none => true) &&
   match effect.inTransit with
-  | some change => observes.inTransit.all fun view =>
+  | some change => Kernel.all observes.inTransit fun view =>
       identicalLists Envelope.identical (view (change state.inTransit)) (view state.inTransit)
   | none => true
 
 /-- Whether two effects reach the same state in either order, evaluated at a state. -/
 @[expose] def Effect.commutes (first second : Effect) (state : State) : Bool :=
-  first.records.all (fun (processId, change) =>
-    match second.records.find? (·.1 == processId) with
+  Kernel.all first.records (fun (processId, change) =>
+    match Kernel.find? (·.1 == processId) second.records with
     | some (_, change') =>
         let record := state.processes processId
         recordIdentical (change (change' record)) (change' (change record))
@@ -199,7 +200,9 @@ observes, and their effects reach the same state in either order. -/
 
 /-- One effect after another. -/
 @[expose] def Effect.andThen (first second : Effect) : Effect where
-  records := first.records.map (fun (processId, change) => (processId, second.record processId ∘ change)) ++
+  records := Kernel.append
+    (Kernel.map (fun (processId, change) => (processId, second.record processId ∘ change))
+      first.records)
     second.records
   timers := match first.timers, second.timers with
     | some change, some change' => some (change' ∘ change)
@@ -219,18 +222,19 @@ observes, and their effects reach the same state in either order. -/
 
 /-- Append a message to a mailbox. -/
 @[expose] def ProcessState.append (message : Term) (process : ProcessState) : ProcessState :=
-  { process with mailbox := process.mailbox ++ [message] }
+  { process with mailbox := Kernel.append process.mailbox [message] }
 
 /-- A process ends with a reason: its record goes, timers sending to it are
 canceled, and linked and watching processes get signals. -/
 @[expose] def Effect.ending (processId : PID) (process : ProcessState) (reason : Term) : Effect :=
   { records := [(processId, fun _ => none)]
-    timers := some (·.filter (·.destination != processId))
+    timers := some (Kernel.filter (·.destination != processId))
     inTransit := some fun inTransit =>
-      process.monitors.foldl (fun inTransit (reference, watcher) =>
+      Kernel.foldl (fun inTransit (reference, watcher) =>
           enqueue ⟨processId, watcher, .down reference reason⟩ inTransit)
-        (process.links.foldl (fun inTransit linked =>
-          enqueue ⟨processId, linked, .exit reason true⟩ inTransit) inTransit) }
+        (Kernel.foldl (fun inTransit linked =>
+          enqueue ⟨processId, linked, .exit reason true⟩ inTransit) inTransit process.links)
+        process.monitors }
 
 /-! ### Views of records -/
 
@@ -263,15 +267,15 @@ canceled, and linked and watching processes get signals. -/
 
 /-- The oldest signal from one process to another. -/
 @[expose] def oldest (source target : PID) (inTransit : List Envelope) : List Envelope :=
-  (inTransit.find? (Envelope.between source target)).toList
+  (Kernel.find? (Envelope.between source target) inTransit).toList
 
 /-- The signals in transit once the oldest from one process to another arrives. -/
 @[expose] def arrive (source target : PID) (inTransit : List Envelope) : List Envelope :=
-  inTransit.eraseP (Envelope.between source target)
+  Kernel.eraseP (Envelope.between source target) inTransit
 
 /-- The timer with a reference that fires first. -/
 @[expose] def firstTimer (reference : List Nat) (timers : List Timer) : List Timer :=
-  (timers.find? (·.reference == reference)).toList
+  (Kernel.find? (·.reference == reference) timers).toList
 
 /-! ### Footprints of steps -/
 
@@ -281,8 +285,9 @@ canceled, and linked and watching processes get signals. -/
 
 /-- Observe more. -/
 @[expose] def Observes.and (first second : Observes) : Observes :=
-  { records := first.records ++ second.records, timers := first.timers ++ second.timers
-    inTransit := first.inTransit ++ second.inTransit }
+  { records := Kernel.append first.records second.records
+    timers := Kernel.append first.timers second.timers
+    inTransit := Kernel.append first.inTransit second.inTransit }
 
 /-- The footprint of a process ending, observing more. -/
 @[expose] def Footprint.ending (state : State) (processId : PID) (reason : Term) : Footprint :=
@@ -292,8 +297,8 @@ canceled, and linked and watching processes get signals. -/
 /-- The footprint of a spawn. -/
 @[expose] def Footprint.spawn (state : State) (processId : PID) (options : SpawnOptions) : Footprint :=
   let process := state.process processId
-  let child := processId ++ [process.children + 1]
-  let reference := processId ++ [process.refCounter + 1]
+  let child := Kernel.append processId [process.children + 1]
+  let reference := Kernel.append processId [process.refCounter + 1]
   { observes := .record processId fun process =>
       { children := process.children, refCounter := process.refCounter }
     effect := { records := [
@@ -303,7 +308,7 @@ canceled, and linked and watching processes get signals. -/
           else process
         if options.monitor then
           { process with refCounter := process.refCounter + 1
-                         monitoring := process.monitoring ++ [(reference, child)] }
+                         monitoring := Kernel.append process.monitoring [(reference, child)] }
         else process),
       (child, fun _ => some { links := if options.link then [processId] else []
                               monitors := if options.monitor then [(reference, processId)] else [] })] } }
@@ -311,7 +316,7 @@ canceled, and linked and watching processes get signals. -/
 /-- The footprint of answering a request. -/
 @[expose] def requestFootprint (state : State) (processId : PID) : Request → Footprint
   | .monitor target alias =>
-      let reference := processId ++ [(state.process processId).refCounter + 1]
+      let reference := Kernel.append processId [(state.process processId).refCounter + 1]
       let counted : Observes := .record processId fun process => { refCounter := process.refCounter }
       if target = processId then
         { observes := counted
@@ -321,19 +326,21 @@ canceled, and linked and watching processes get signals. -/
           effect := (Effect.change processId fun process =>
             { process with
                 refCounter := process.refCounter + 1
-                monitoring := process.monitoring ++ [(reference, target)]
-                aliases := if alias then process.aliases ++ [reference] else process.aliases }).andThen
+                monitoring := Kernel.append process.monitoring [(reference, target)]
+                aliases := if alias then Kernel.append process.aliases [reference]
+                  else process.aliases }).andThen
             (.send (if state.alive target then ⟨processId, target, .monitor reference⟩
               else ⟨target, processId, .down reference (.atom "noproc")⟩)) }
   | .demonitor reference flush =>
       { observes := .record processId fun process =>
-          { monitoring := process.monitoring.filter (·.1 == reference) }
+          { monitoring := Kernel.filter (·.1 == reference) process.monitoring }
         effect := .change processId fun process =>
-          let active := process.monitoring.any (·.1 == reference)
+          let active := Kernel.any process.monitoring (·.1 == reference)
           { process with
-              monitoring := process.monitoring.filter (·.1 != reference)
-              aliases := process.aliases.erase reference
-              mailbox := if flush && !active then process.mailbox.eraseP (isMonitorMessage reference)
+              monitoring := Kernel.filter (·.1 != reference) process.monitoring
+              aliases := Kernel.erase process.aliases reference
+              mailbox := if flush && !active then
+                  Kernel.eraseP (isMonitorMessage reference) process.mailbox
                 else process.mailbox } }
   | .link target =>
       let observes : Observes := (Observes.record processId fun process => { trapExit := process.trapExit }).and
@@ -349,7 +356,7 @@ canceled, and linked and watching processes get signals. -/
   | .unlink target =>
       { observes := .record processId ProcessState.live
         effect := (Effect.change processId fun process =>
-          { process with links := process.links.erase target }).andThen
+          { process with links := Kernel.erase process.links target }).andThen
           (if target = processId then {} else .send ⟨processId, target, .unlink⟩) }
   | .exit target reason =>
       if target = processId then
@@ -372,19 +379,20 @@ canceled, and linked and watching processes get signals. -/
       if target = processId then { observes := .record processId ProcessState.live }
       else
         { observes := { records := [(processId, ProcessState.live), (target, ProcessState.live)]
-                        inTransit := [fun inTransit => inTransit.filter fun envelope =>
-                          envelope.between processId target || envelope.between target processId] } }
+                        inTransit := [fun inTransit => Kernel.filter (fun envelope =>
+                          envelope.between processId target || envelope.between target processId)
+                          inTransit] } }
   | .sendAlias alias message =>
       let owner := alias.dropLast
       if owner = processId then
         { observes := .record processId ProcessState.live
           effect := .change processId fun process =>
-            if process.aliases.contains alias then process.append message else process }
+            if Kernel.contains process.aliases alias then process.append message else process }
       else
         { observes := .record processId ProcessState.live
           effect := .send ⟨processId, owner, .aliasMessage alias message⟩ }
   | .startTimer destination message duration =>
-      let reference := processId ++ [(state.process processId).refCounter + 1]
+      let reference := Kernel.append processId [(state.process processId).refCounter + 1]
       { observes := (Observes.record processId fun process => { refCounter := process.refCounter }).and
           (.record destination ProcessState.live)
         effect := (Effect.change processId fun process =>
@@ -394,12 +402,12 @@ canceled, and linked and watching processes get signals. -/
           else {}) }
   | .cancelTimer reference =>
       { observes := { records := [(processId, fun process => { cancels := process.cancels })]
-                      timers := [fun timers => timers.filter (·.reference == reference)] }
-        effect := match state.timers.find? (·.reference == reference) with
+                      timers := [fun timers => Kernel.filter (·.reference == reference) timers] }
+        effect := match Kernel.find? (·.reference == reference) state.timers with
           | some _ =>
               { records := [(processId, Option.map fun process =>
                   { process with cancels := process.cancels + 1 })]
-                timers := some (·.filter (·.reference != reference)) }
+                timers := some (Kernel.filter (·.reference != reference)) }
           | none => {} }
 
 /-- The footprint of a process's own step. -/
@@ -437,20 +445,22 @@ canceled, and linked and watching processes get signals. -/
 @[expose] def ProcessState.receive (source : PID) (process : ProcessState) : Signal → ProcessState
   | .message message => process.append message
   | .aliasMessage alias message =>
-      if process.aliases.contains alias then process.append message else process
+      if Kernel.contains process.aliases alias then process.append message else process
   | .exit reason linked =>
-      if linked && !process.links.contains source then process else
-      let process := if linked then { process with links := process.links.erase source } else process
+      if linked && !Kernel.contains process.links source then process else
+      let process := if linked then { process with links := Kernel.erase process.links source }
+        else process
       if process.trapExit then process.append (.tuple #[.atom "EXIT", .pid source, reason])
       else process
   | .link => { process with links := insertOnce source process.links }
-  | .unlink => { process with links := process.links.erase source }
-  | .monitor reference => { process with monitors := process.monitors ++ [(reference, source)] }
+  | .unlink => { process with links := Kernel.erase process.links source }
+  | .monitor reference =>
+      { process with monitors := Kernel.append process.monitors [(reference, source)] }
   | .down reference reason =>
-      if process.monitoring.any (·.1 == reference) then
+      if Kernel.any process.monitoring (·.1 == reference) then
         { process with
-            monitoring := process.monitoring.filter (·.1 != reference)
-            aliases := process.aliases.erase reference }.append
+            monitoring := Kernel.filter (·.1 != reference) process.monitoring
+            aliases := Kernel.erase process.aliases reference }.append
           (.tuple #[.atom "DOWN", .reference reference, .atom "process", .pid source, reason])
       else process
 
@@ -465,13 +475,13 @@ canceled, and linked and watching processes get signals. -/
       match (state.exitSignal target source reason linked).2 with
       | some reason =>
           let process := state.process target
-          let process := if linked then { process with links := process.links.erase source }
+          let process := if linked then { process with links := Kernel.erase process.links source }
             else process
           { observes := channel.and (.record target id)
             effect := taken.andThen (.ending target process reason) }
       | none =>
           { observes := channel.and (.record target fun process =>
-              { links := process.links.filter (· == source), trapExit := process.trapExit })
+              { links := Kernel.filter (· == source) process.links, trapExit := process.trapExit })
             effect := taken.andThen (.change target (·.receive source envelope.signal)) }
   | signal => { observes := channel, effect := taken.andThen (.change target (·.receive source signal)) }
 
@@ -490,8 +500,13 @@ canceled, and linked and watching processes get signals. -/
 /-- The footprint of a timer firing. -/
 @[expose] def Footprint.fire (timer : Timer) : Footprint :=
   { observes := { timers := [firstTimer timer.reference] }
-    effect := { timers := some (·.filter (·.reference != timer.reference))
+    effect := { timers := some (Kernel.filter (·.reference != timer.reference))
                 inTransit := some (enqueue ⟨clock, timer.destination, .message timer.message⟩) } }
+
+/-- `arrive` in proofs: core's `eraseP`. -/
+private theorem arrive_eq {source target : PID} {inTransit : List Envelope} :
+    arrive source target inTransit = inTransit.eraseP (Envelope.between source target) := by
+  simp [arrive]
 
 /-! ### Commuting footprints -/
 
@@ -510,11 +525,12 @@ private theorem State.ext' {first second : State} (processes : first.processes =
 /-- An effect keeping what a step observes leaves a state agreeing on it. -/
 private theorem Effect.agree_of_keeps {effect : Effect} {observes : Observes} {state : State}
     (keeps : effect.keeps observes state = true) : observes.Agree state (effect.apply state) := by
-  simp only [Effect.keeps, Bool.and_eq_true, List.all_eq_true] at keeps
+  simp only [Effect.keeps, Bool.and_eq_true, List.all_eq_true, Kernel.all_eq,
+      Kernel.find?_eq] at keeps
   obtain ⟨⟨records, timers⟩, inTransit⟩ := keeps
   refine ⟨fun entry mem => ?_, fun view mem => ?_, fun view mem => ?_, rfl⟩
   · have := records entry mem
-    simp only [Effect.processes_apply, Effect.record]
+    simp only [Effect.processes_apply, Effect.record, Kernel.find?_eq]
     split at this
     · rename_i found
       rw [found]
@@ -545,10 +561,11 @@ private theorem Effect.agree_of_keeps {effect : Effect} {observes : Observes} {s
 private theorem Effect.apply_comm {first second : Effect} {state : State}
     (commutes : first.commutes second state = true) :
     first.apply (second.apply state) = second.apply (first.apply state) := by
-  simp only [Effect.commutes, Bool.and_eq_true, List.all_eq_true] at commutes
+  simp only [Effect.commutes, Bool.and_eq_true, List.all_eq_true, Kernel.all_eq,
+      Kernel.find?_eq] at commutes
   obtain ⟨⟨records, timers⟩, inTransit⟩ := commutes
   refine State.ext' (funext fun processId => ?_) ?_ ?_ rfl
-  · simp only [Effect.processes_apply, Effect.record]
+  · simp only [Effect.processes_apply, Effect.record, Kernel.find?_eq]
     cases found : first.records.find? (·.1 == processId) with
     | none => rfl
     | some entry =>
@@ -629,23 +646,24 @@ private theorem Effect.record_andThen {first second : Effect} {processId : PID} 
         (entry.1, second.record entry.1 ∘ entry.2)) =
       fun (entry : PID × (Option ProcessState → Option ProcessState)) => entry.1 == processId := rfl
   unfold Effect.record Effect.andThen
-  simp only [List.find?_append, List.find?_map, predicate]
+  simp only [Kernel.find?_eq, Kernel.append_eq, Kernel.map_eq, List.find?_append, List.find?_map,
+    predicate]
   cases found : first.records.find? (·.1 == processId) with
   | none => rfl
   | some entry =>
     obtain ⟨processId', change⟩ := entry
     have same : processId' = processId := by simpa using List.find?_some found
     subst same
-    rfl
+    simp [Effect.record]
 
 @[simp] private theorem Effect.apply_andThen {first second : Effect} {state : State} :
     (first.andThen second).apply state = second.apply (first.apply state) := by
   apply State.ext'
   · funext processId
     simp only [Effect.processes_apply, Effect.record_andThen, Function.comp_apply]
-  · simp only [Effect.apply, Effect.andThen]
+  · simp only [Effect.apply, Effect.andThen, Kernel.append_eq, Kernel.map_eq]
     cases first.timers <;> cases second.timers <;> rfl
-  · simp only [Effect.apply, Effect.andThen]
+  · simp only [Effect.apply, Effect.andThen, Kernel.append_eq, Kernel.map_eq]
     cases first.inTransit <;> cases second.inTransit <;> rfl
   · rfl
 
@@ -655,7 +673,8 @@ private theorem Effect.record_andThen {first second : Effect} {processId : PID} 
   cases found : state.processes processId with
   | none =>
     refine State.ext' (funext fun candidate => ?_) rfl rfl rfl
-    simp only [Effect.processes_apply, Effect.record, Effect.change, List.find?_cons, List.find?_nil]
+    simp only [Effect.processes_apply, Effect.record, Effect.change, List.find?_cons,
+        List.find?_nil, Kernel.find?_eq]
     by_cases same : processId = candidate
     · subst same; simp [found]
     · have : (processId == candidate) = false := by simpa using same
@@ -663,7 +682,7 @@ private theorem Effect.record_andThen {first second : Effect} {processId : PID} 
   | some process =>
     refine State.ext' (funext fun candidate => ?_) rfl rfl rfl
     simp only [Effect.processes_apply, Effect.record, Effect.change, List.find?_cons, List.find?_nil,
-      State.update]
+      State.update, Kernel.find?_eq]
     by_cases same : processId = candidate
     · subst same; simp [found]
     · have : (processId == candidate) = false := by simpa using same
@@ -691,18 +710,19 @@ private theorem Effect.apply_ending {processId : PID} {reason : Term} {state : S
     (Effect.ending processId (state.process processId) reason).apply state =
       state.terminate processId reason := by
   unfold State.terminate
+  simp only [Kernel.foldl_eq]
   rw [foldl_emit (envelope := fun (entry : List Nat × PID) => ⟨processId, entry.2, .down entry.1 reason⟩),
     foldl_emit (envelope := fun linked => ⟨processId, linked, .exit reason true⟩)]
   apply State.ext'
   · funext candidate
     simp only [Effect.processes_apply, Effect.record, Effect.ending, List.find?_cons, List.find?_nil,
-      State.update]
+      State.update, Kernel.find?_eq, Kernel.filter_eq, Kernel.foldl_eq]
     by_cases same : processId = candidate
     · subst same; simp
     · have : (processId == candidate) = false := by simpa using same
       simp [this, Ne.symm same]
   · rfl
-  · rfl
+  · simp [Effect.apply, Effect.ending]; rfl
   · rfl
 
 /-- Ending depends only on whom the process signals. -/
@@ -710,13 +730,14 @@ private theorem Effect.ending_congr {processId : PID} {process process' : Proces
     (same : process'.ending = process.ending) :
     Effect.ending processId process' reason = Effect.ending processId process reason := by
   simp only [ProcessState.ending, ProcessState.mk.injEq] at same
-  simp only [Effect.ending, same]
+  simp only [Effect.ending, same, Kernel.filter_eq, Kernel.foldl_eq]
 
 private theorem Effect.apply_remove {processId : PID} {state : State} :
     ({ records := [(processId, fun _ => none)] } : Effect).apply state = state.update processId none := by
   apply State.ext'
   · funext candidate
-    simp only [Effect.processes_apply, Effect.record, List.find?_cons, List.find?_nil, State.update]
+    simp only [Effect.processes_apply, Effect.record, List.find?_cons, List.find?_nil,
+        State.update, Kernel.find?_eq]
     by_cases same : processId = candidate
     · subst same; simp
     · have : (processId == candidate) = false := by simpa using same
@@ -741,7 +762,7 @@ private theorem mem_deliverableFrom_iff {before : List Envelope} {seen : List (P
   induction inTransit generalizing before seen with
   | nil => simp [deliverableFrom]
   | cons head tail ih =>
-    simp only [deliverableFrom]
+    simp only [deliverableFrom, Kernel.append_eq, Kernel.contains_eq]
     by_cases same : Envelope.between envelope.source envelope.target head = true
     · have pair := between_iff.mp same
       simp only [List.find?_cons, same, List.eraseP_cons_of_pos same, Option.some.injEq]
@@ -785,7 +806,7 @@ private theorem mem_deliverable_iff {inTransit : List Envelope} {envelope : Enve
       oldest envelope.source envelope.target inTransit = [envelope] ∧
       rest = arrive envelope.source envelope.target inTransit := by
   simp only [deliverable, mem_deliverableFrom_iff, List.not_mem_nil, not_false_eq_true, true_and,
-    List.nil_append, oldest, arrive]
+    List.nil_append, oldest, arrive, Kernel.find?_eq, Kernel.eraseP_eq]
   constructor
   · rintro ⟨found, rfl⟩; simp [found]
   · rintro ⟨found, rfl⟩
@@ -799,7 +820,7 @@ private theorem mem_firstOfEach_iff {seen : List (List Nat)} {timers : List Time
   induction timers generalizing seen with
   | nil => simp [firstOfEach]
   | cons head rest ih =>
-    simp only [firstOfEach]
+    simp only [firstOfEach, Kernel.contains_eq]
     by_cases same : head.reference = timer.reference
     · have matched : (head.reference == timer.reference) = true := by simpa using same
       simp only [List.find?_cons, matched, Option.some.injEq]
@@ -835,7 +856,7 @@ private theorem mem_firstOfEach_iff {seen : List (List Nat)} {timers : List Time
 private theorem mem_firing_iff {state : State} {timer : Timer} :
     timer ∈ state.firing ↔ firstTimer timer.reference state.timers = [timer] := by
   simp only [State.firing, mem_firstOfEach_iff, List.not_mem_nil, not_false_eq_true, true_and,
-    firstTimer]
+    firstTimer, Kernel.find?_eq]
   cases state.timers.find? (·.reference == timer.reference) <;> simp
 
 /-! ### Steps act as their footprints say -/
@@ -978,14 +999,15 @@ private theorem State.receive_eq {state : State} {envelope : Envelope}
   | message => rfl
   | link | unlink | monitor => rfl
   | aliasMessage alias message =>
-    simp only [ProcessState.receive, State.append_eq, Prod.mk.injEq, and_true]
+    simp only [ProcessState.receive, State.append_eq, Prod.mk.injEq, and_true, Kernel.contains_eq]
     cases found : state.processes target with
     | none => simp [State.process, found, State.modify_of_none found]
     | some process =>
       simp only [State.process, found, Option.getD_some, State.modify_of_some found]
       split <;> simp [*, State.update_self found]
   | down reference reason =>
-    simp only [ProcessState.receive, State.append_eq, State.modify_modify]
+    simp only [ProcessState.receive, State.append_eq, State.modify_modify, Kernel.any_eq,
+        Kernel.erase_eq, Kernel.filter_eq]
     cases found : state.processes target with
     | none => simp [State.process, found, State.modify_of_none found]
     | some process =>
@@ -1010,7 +1032,7 @@ private theorem Effect.ending_modify {processId : PID} {process : ProcessState} 
   split
   · refine State.ext' (funext fun candidate => ?_) rfl rfl rfl
     simp only [Effect.processes_apply, Effect.record, Effect.ending, List.find?_cons, List.find?_nil,
-      State.update]
+      State.update, Kernel.find?_eq, Kernel.filter_eq, Kernel.foldl_eq]
     by_cases same : processId = candidate
     · subst same; simp
     · have : (processId == candidate) = false := by simpa using same
@@ -1056,7 +1078,7 @@ private theorem delivery_matches {state other : State} {processId : PID} {task :
     | none =>
       simp only [exiting] at agree ⊢
       have view := agree.right.record
-      simp only [ProcessState.mk.injEq, true_and, and_true] at view
+      simp only [ProcessState.mk.injEq, true_and, and_true, Kernel.filter_eq] at view
       have same : exits (other.process target) source reason linked = none := by
         rw [← exiting]
         unfold exits
@@ -1080,8 +1102,10 @@ private theorem delivery_matches {state other : State} {processId : PID} {task :
           (if linked then current.modify target fun process =>
             { process with links := process.links.erase source } else current).terminate target exit =
           (Effect.ending target (if linked then { state.process target with
-            links := (state.process target).links.erase source } else state.process target) exit).apply current := by
+            links := Kernel.erase (state.process target).links source } else state.process target)
+              exit).apply current := by
         intro current found
+        simp only [Kernel.erase_eq]
         split
         · rw [← Effect.apply_ending, Effect.ending_modify]
           congr 2
@@ -1163,12 +1187,13 @@ private theorem State.spawnWith_eq {state : State} {processId : PID} {options : 
   obtain ⟨process, found⟩ := Option.isSome_iff_exists.mp live
   have distinct : processId ++ [process.children + 1] ≠ processId := by
     intro equal; have := congrArg List.length equal; simp at this
-  simp only [State.process, found, Option.getD_some, State.spawnWith, State.spawn, State.allocate]
+  simp only [State.process, found, Option.getD_some, State.spawnWith, State.spawn, State.allocate,
+      Kernel.append_eq]
   refine Prod.ext rfl ?_
   dsimp only
   refine State.ext' (funext fun candidate => ?_) ?_ ?_ ?_
   · simp only [Effect.processes_apply, Effect.record, Footprint.spawn, State.process, found,
-      Option.getD_some, List.find?_cons, List.find?_nil]
+      Option.getD_some, List.find?_cons, List.find?_nil, Kernel.find?_eq, Kernel.append_eq]
     by_cases parent : processId = candidate
     · subst parent
       have : (processId ++ [process.children + 1] == processId) = false := beq_false_of_ne distinct
@@ -1199,7 +1224,7 @@ private theorem Footprint.spawn_congr {state other : State} {processId : PID} {o
     (children : (other.process processId).children = (state.process processId).children)
     (counter : (other.process processId).refCounter = (state.process processId).refCounter) :
     Footprint.spawn other processId options = Footprint.spawn state processId options := by
-  simp only [Footprint.spawn, children, counter]
+  simp only [Footprint.spawn, children, counter, Kernel.append_eq]
 
 private theorem selectMessage_value {select : Term → Option β} {mailbox : List Term} {message : Term}
     {value : β} {rest : List Term} (selected : selectMessage select mailbox = some (message, value, rest)) :
@@ -1270,18 +1295,20 @@ private theorem request_matches {state other : State} {processId : PID} {query :
       simp only [requestFootprint, ↓reduceIte] at agree ⊢
       have view := agree.record
       simp only [ProcessState.mk.injEq, true_and, and_true] at view
-      simp only [State.request, State.allocate, ↓reduceIte, view.2]
+      simp only [State.request, State.allocate, ↓reduceIte, view.2, Kernel.append_eq]
       exact .some ⟨rfl, rfl, by simp⟩
-    · simp only [requestFootprint, self, ↓reduceIte] at agree ⊢
+    · simp only [requestFootprint, self, ↓reduceIte, Kernel.append_eq] at agree ⊢
       have counter := agree.left.record
       simp only [ProcessState.mk.injEq, true_and, and_true] at counter
       have target' := alive_eq agree.right.record.1
-      simp only [State.request, State.allocate, self, ↓reduceIte, State.alive_modify, counter.2, target']
+      simp only [State.request, State.allocate, self, ↓reduceIte, State.alive_modify, counter.2,
+          target', Kernel.append_eq]
       refine .some ⟨rfl, rfl, ?_⟩
       simp only [Effect.apply_andThen, Effect.apply_change, Effect.apply_send, State.modify_modify]
       split <;> rfl
   | demonitor reference flush =>
-    simp only [requestFootprint] at agree ⊢
+    simp only [requestFootprint, Kernel.any_eq, Kernel.erase_eq, Kernel.eraseP_eq,
+        Kernel.filter_eq] at agree ⊢
     have view := agree.record
     simp only [ProcessState.mk.injEq, true_and, and_true] at view
     have active : (other.process processId).monitoring.any (·.1 == reference) =
@@ -1299,7 +1326,8 @@ private theorem request_matches {state other : State} {processId : PID} {query :
           List.mem_filter.mpr ⟨mem, found⟩
         rw [← view.2] at this
         exact ⟨entry, (List.mem_filter.mp this).1, found⟩
-    simp only [State.request, active]
+    simp only [State.request, active, Kernel.any_eq, Kernel.erase_eq, Kernel.eraseP_eq,
+        Kernel.filter_eq]
     refine .some ⟨rfl, rfl, ?_⟩
     simp only [Effect.apply_change]
     refine State.modify_congr fun process found => ?_
@@ -1326,7 +1354,7 @@ private theorem request_matches {state other : State} {processId : PID} {query :
           target']
         split <;> rfl
   | unlink target =>
-    simp only [requestFootprint, State.request]
+    simp only [requestFootprint, State.request, Kernel.erase_eq]
     refine .some ⟨rfl, rfl, ?_⟩
     simp only [Effect.apply_andThen, Effect.apply_change]
     split <;> simp
@@ -1345,7 +1373,7 @@ private theorem request_matches {state other : State} {processId : PID} {query :
         have ending := (agree.right : (Observes.record target ProcessState.ending).Agree state other).record
         rw [← Effect.apply_ending, Effect.ending_congr ending.2]
       simp only [State.request, ↓reduceIte, trapping.2, State.exitSignal, Bool.false_and,
-        Bool.false_eq_true, Bool.not_false, Bool.true_and]
+        Bool.false_eq_true, Bool.not_false, Bool.true_and, Kernel.contains_eq]
       cases kill : isKill reason
       · cases trap : (state.process target).trapExit
         · have condition : (isKill reason || !(state.process target).trapExit) = true := by
@@ -1375,7 +1403,7 @@ private theorem request_matches {state other : State} {processId : PID} {query :
     by_cases self : target = processId
     · simp only [requestFootprint, State.request, self, ↓reduceIte]
       exact .some ⟨rfl, rfl, by simp⟩
-    · simp only [requestFootprint, self, ↓reduceIte] at agree ⊢
+    · simp only [requestFootprint, self, ↓reduceIte, Kernel.filter_eq] at agree ⊢
       have target' := alive_eq (agree.view (processId := target) (view := ProcessState.live)
         (by simp)).1
       have between := agree.2.2.1 _ (List.mem_singleton_self _)
@@ -1387,12 +1415,12 @@ private theorem request_matches {state other : State} {processId : PID} {query :
         intro current
         rw [← any_eq_filter]
         rfl
-      simp only [State.request, self, ↓reduceIte, pending, between, target']
+      simp only [State.request, self, ↓reduceIte, pending, between, target', Kernel.any_eq]
       split
       · exact .none
       · exact .some ⟨rfl, rfl, by simp⟩
   | sendAlias alias message =>
-    simp only [requestFootprint, State.request]
+    simp only [requestFootprint, State.request, Kernel.contains_eq]
     split
     · refine .some ⟨rfl, rfl, ?_⟩
       simp only [Effect.apply_change, State.append_eq]
@@ -1400,11 +1428,12 @@ private theorem request_matches {state other : State} {processId : PID} {query :
         (change := ProcessState.append message)
     · exact .some ⟨rfl, rfl, by simp⟩
   | startTimer destination message duration =>
-    simp only [requestFootprint] at agree ⊢
+    simp only [requestFootprint, Kernel.append_eq] at agree ⊢
     have counter := agree.left.record
     simp only [ProcessState.mk.injEq, true_and, and_true] at counter
     have destination' := alive_eq agree.right.record.1
-    simp only [State.request, State.allocate, State.alive_modify, counter.2, destination']
+    simp only [State.request, State.allocate, State.alive_modify, counter.2, destination',
+        Kernel.append_eq]
     refine .some ⟨rfl, rfl, ?_⟩
     simp only [Effect.apply_andThen, Effect.apply_change]
     split
@@ -1412,7 +1441,7 @@ private theorem request_matches {state other : State} {processId : PID} {query :
       rfl
     · simp
   | cancelTimer reference =>
-    simp only [requestFootprint] at agree ⊢
+    simp only [requestFootprint, Kernel.filter_eq, Kernel.find?_eq] at agree ⊢
     have cancels := agree.view (processId := processId) (view := fun process => { cancels := process.cancels })
       (by simp)
     simp only [ProcessState.mk.injEq] at cancels
@@ -1420,14 +1449,14 @@ private theorem request_matches {state other : State} {processId : PID} {query :
     have found : other.timers.find? (·.reference == reference) =
         state.timers.find? (·.reference == reference) := by
       rw [← List.head?_filter, ← List.head?_filter, timers]
-    simp only [State.request, found, cancels.2, agree.2.2.2]
+    simp only [State.request, found, cancels.2, agree.2.2.2, Kernel.filter_eq, Kernel.find?_eq]
     cases found' : state.timers.find? (·.reference == reference) with
     | some timer =>
       refine .some ⟨rfl, rfl, ?_⟩
       refine State.ext' (funext fun candidate => ?_) (by simp [Effect.apply])
         (by simp [Effect.apply]) (by simp [Effect.apply, agree.2.2.2])
       simp only [Effect.processes_apply, Effect.record, List.find?_cons, List.find?_nil,
-        State.processes_modify]
+        State.processes_modify, Kernel.find?_eq]
       by_cases same : processId = candidate
       · subst same; simp
       · have : (processId == candidate) = false := by simpa using same
@@ -1545,11 +1574,15 @@ private theorem Task.footprint_observes {state : State} {processId : PID} {task 
     cases exception <;> simp only [Task.footprint, Footprint.ending, Observes.record] <;>
       exact ⟨_, List.mem_cons_self⟩
   | request query next =>
-    cases query <;> simp only [Task.footprint, requestFootprint] <;> (repeat' split) <;>
-      (try simp only [Observes.record, Observes.and, List.cons_append, List.nil_append]) <;>
+    cases query <;> simp only [Task.footprint, requestFootprint, Kernel.any_eq, Kernel.append_eq,
+        Kernel.contains_eq, Kernel.erase_eq, Kernel.eraseP_eq, Kernel.filter_eq,
+        Kernel.find?_eq] <;> (repeat' split) <;>
+      (try simp only [Observes.record, Observes.and, List.cons_append, List.nil_append,
+          Kernel.append_eq]) <;>
       exact ⟨_, List.mem_cons_self⟩
   | _ =>
-    simp only [Task.footprint, Footprint.ending, Footprint.spawn, Observes.record] <;>
+    simp only [Task.footprint, Footprint.ending, Footprint.spawn, Observes.record,
+        Kernel.append_eq] <;>
       exact ⟨_, List.mem_cons_self⟩
 
 /-- Own steps are at most one. -/
@@ -1608,7 +1641,9 @@ private theorem Task.footprint_observes_others {state : State} {processId : PID}
   | error exception =>
     cases exception <;> simp [Task.footprint, Footprint.ending, Observes.record]
   | request query next =>
-    cases query <;> simp only [Task.footprint, requestFootprint] <;> (repeat' split) <;>
+    cases query <;> simp only [Task.footprint, requestFootprint, Kernel.any_eq, Kernel.append_eq,
+        Kernel.contains_eq, Kernel.erase_eq, Kernel.eraseP_eq, Kernel.filter_eq,
+        Kernel.find?_eq] <;> (repeat' split) <;>
       simp [Observes.record, Observes.and]
   | _ => simp [Task.footprint, Footprint.ending, Footprint.spawn, Observes.record]
 
@@ -1621,7 +1656,9 @@ private theorem Task.footprint_changes {state : State} {processId : PID} {task :
   | error exception =>
     cases exception <;> simp [Task.footprint, Footprint.ending, Effect.ending]
   | request query next =>
-    cases query <;> simp only [Task.footprint, requestFootprint] <;> (repeat' split) <;>
+    cases query <;> simp only [Task.footprint, requestFootprint, Kernel.any_eq, Kernel.append_eq,
+        Kernel.contains_eq, Kernel.erase_eq, Kernel.eraseP_eq, Kernel.filter_eq,
+        Kernel.find?_eq] <;> (repeat' split) <;>
       simp [Effect.andThen, Effect.change, Effect.send, Effect.ending]
   | receive timeout select next =>
     simp only [Task.footprint]
@@ -1671,7 +1708,8 @@ private theorem ProcessState.receive_split {process : ProcessState} {source : PI
     process.receive source signal = { core with mailbox := process.mailbox ++ core.mailbox } ∧
       core.pdict = process.pdict ∧ core.refCounter = process.refCounter := by
   cases process
-  cases signal <;> simp only [ProcessState.receive, ProcessState.append] <;> (repeat' split) <;>
+  cases signal <;> simp only [ProcessState.receive, ProcessState.append, Kernel.append_eq,
+      Kernel.any_eq, Kernel.contains_eq, Kernel.erase_eq, Kernel.filter_eq] <;> (repeat' split) <;>
     simp_all
 
 private theorem selectMessage_append {select : Term → Option β} {mailbox extra : List Term}
@@ -1726,7 +1764,8 @@ private theorem Task.local_shape {state : State} {processId : PID} {task : Task 
       trivial, ⟨fun process source signal _ => ⟨trivial, rfl, ?_⟩,
         fun process => ⟨_, _, process.mailbox, rfl⟩, fun _ _ => rfl⟩, fun _ _ _ => rfl⟩
     cases process
-    cases signal <;> simp only [change, ProcessState.receive, ProcessState.append] <;>
+    cases signal <;> simp only [change, ProcessState.receive, ProcessState.append,
+        Kernel.append_eq, Kernel.any_eq, Kernel.contains_eq, Kernel.erase_eq, Kernel.filter_eq] <;>
       (repeat' split) <;> simp_all
   | receive timeout select next =>
     simp only [Task.local] at isLocal
