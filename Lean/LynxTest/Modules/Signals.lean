@@ -46,9 +46,9 @@ private def waits : Term := .function "test" "waits" 0 #[]
 /-- Accept exactly one outcome, for proofs over every schedule. -/
 private def only (expected : Outcome Term) (actual : Outcome Term) : Bool :=
   match expected, actual with
-  | .ok expected, .ok actual => Term.exactCompare expected actual == .eq
-  | .error (.exit expected), .error (.exit actual) => Term.exactCompare expected actual == .eq
-  | .error (.error expected), .error (.error actual) => Term.exactCompare expected actual == .eq
+  | .ok expected, .ok actual => Term.compareExact (Term.fuel expected actual) expected actual == .eq
+  | .error (.exit expected), .error (.exit actual) => Term.compareExact (Term.fuel expected actual) expected actual == .eq
+  | .error (.error expected), .error (.error actual) => Term.compareExact (Term.fuel expected actual) expected actual == .eq
   | .deadlock, .deadlock => true
   | _, _ => false
 

@@ -41,7 +41,7 @@ open Lynx
 @[expose] def «size/1» (set : Term) : Except Exception Term :=
   match set with
   | .map entries => .ok (.integer
-      ((entries.map Prod.fst).eraseDupsBy (fun a b => Term.exactCompare a b == .eq)).length)
+      ((entries.map Prod.fst).eraseDupsBy (fun a b => Term.compareExact (Term.fuel a b) a b == .eq)).length)
   | _ => .error .exhausted
 
 @[expose] def «union/2» (left right : Term) : Except Exception Term :=
@@ -71,22 +71,22 @@ open Lynx
   | _, _ => .error .exhausted
 
 private theorem lookup_filter (es : List (Term × Term))
-    (distinct : es.Pairwise (fun a b => Term.exactCompare a.1 b.1 ≠ .eq))
+    (distinct : es.Pairwise (fun a b => Term.compareExact (Term.fuel a.1 b.1) a.1 b.1 ≠ .eq))
     (keep : Term × Term → Bool) (query : Term) :
     (Term.mapLookup ((es.filter keep).map fun entry => (entry.1, Term.nil)) query).isSome =
-      match es.find? (fun e => decide (Term.exactCompare query e.1 = .eq)) with
+      match es.find? (fun e => decide (Term.compareExact (Term.fuel query e.1) query e.1 = .eq)) with
       | some e => keep e
       | none => false := by
   induction es with
   | nil => rfl
   | cons e rest ih =>
     have tail := ih (List.pairwise_cons.mp distinct).2
-    by_cases same : Term.exactCompare query e.1 = .eq
-    · have absent : rest.find? (fun p => decide (Term.exactCompare query p.1 = .eq)) = none := by
+    by_cases same : Term.compareExact (Term.fuel query e.1) query e.1 = .eq
+    · have absent : rest.find? (fun p => decide (Term.compareExact (Term.fuel query p.1) query p.1 = .eq)) = none := by
         rw [List.find?_eq_none]
         intro p mp hit
         exact (List.pairwise_cons.mp distinct).1 p mp
-          (Std.TransCmp.eq_trans (Std.OrientedCmp.eq_symm same) (of_decide_eq_true hit))
+          (Term.compareExact_eq_trans (Term.compareExact_eq_symm same) (of_decide_eq_true hit))
       rw [absent] at tail
       cases hk : keep e <;> simp_all [Term.mapLookup]
       intro a b m _
@@ -94,16 +94,16 @@ private theorem lookup_filter (es : List (Term × Term))
     · cases hk : keep e <;> simp_all [Term.mapLookup]
 
 private theorem member_filter (entries : List (Term × Term)) (keep : Term → Bool)
-    (congr : ∀ a b, Term.exactCompare a b = .eq → keep a = keep b) (query : Term) :
+    (congr : ∀ a b, Term.compareExact (Term.fuel a b) a b = .eq → keep a = keep b) (query : Term) :
     (Term.mapLookup (((Term.mapEntries entries).filter fun entry => keep entry.1).map
         fun entry => (entry.1, Term.nil)) query).isSome =
       ((Term.mapLookup entries query).isSome && keep query) := by
   rw [lookup_filter _ (Term.mapEntries_distinct entries), ← Term.mapLookup_mapEntries]
   simp only [Term.mapLookup]
-  cases found : (Term.mapEntries entries).find? (fun e => decide (Term.exactCompare query e.1 = .eq)) with
+  cases found : (Term.mapEntries entries).find? (fun e => decide (Term.compareExact (Term.fuel query e.1) query e.1 = .eq)) with
   | none => rfl
   | some e =>
-    have same : Term.exactCompare query e.1 = .eq := by simpa using List.find?_some found
+    have same : Term.compareExact (Term.fuel query e.1) query e.1 = .eq := by simpa using List.find?_some found
     simp [congr _ _ same]
 
 /-- A map is a version 2 set when it holds [] for each of its keys. -/
@@ -154,11 +154,11 @@ theorem union_member (left right : Term) (l r : List (Term × Term))
   refine ⟨r ++ l, by simp [«union/2», hl, hr], (elements_iff _).mpr fun key value found => ?_,
     fun element => ?_⟩
   · simp only [Term.mapLookup, List.find?_append, Option.map_or] at found
-    cases hit : r.find? (fun entry => decide (Term.exactCompare key entry.1 = .eq)) with
+    cases hit : r.find? (fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)) with
     | none => exact setL key value (by simpa [Term.mapLookup, hit] using found)
     | some entry => exact setR key value (by simpa [Term.mapLookup, hit] using found)
   · simp only [Term.mapLookup, List.find?_append, Option.map_or]
-    cases (r.find? fun entry => decide (Term.exactCompare element entry.1 = .eq)) <;> simp [Bool.or_comm]
+    cases (r.find? fun entry => decide (Term.compareExact (Term.fuel element entry.1) element entry.1 = .eq)) <;> simp [Bool.or_comm]
 
 /-- An element belongs to an intersection when it belongs to both sets. -/
 theorem intersection_member (left right : Term) (l r : List (Term × Term))
@@ -191,7 +191,7 @@ theorem from_list_elements (elements : List Term) :
     ∃ entries, «from_list/1» (Term.list elements) = .ok (.map entries) ∧
       elements? (.map entries) = some entries ∧
       ∀ element, (Term.mapLookup entries element).isSome ↔
-        ∃ x ∈ elements, Term.exactCompare element x = .eq := by
+        ∃ x ∈ elements, Term.compareExact (Term.fuel element x) element x = .eq := by
   refine ⟨elements.map (·, .nil), by simp [«from_list/1»], ?_, fun element => ?_⟩
   · have values : ∀ entry ∈ Term.mapEntries (elements.map (·, Term.nil)), entry.2 = .nil := by
       intro entry member
@@ -229,7 +229,7 @@ theorem size_empty (entries : List (Term × Term)) (element : Term)
   cases entries with
   | nil => rfl
   | cons entry rest =>
-    have := loop_length (fun a b => Term.exactCompare a b == .eq) (rest.map Prod.fst) [entry.1]
+    have := loop_length (fun a b => Term.compareExact (Term.fuel a b) a b == .eq) (rest.map Prod.fst) [entry.1]
     simp only [«size/1», List.map_cons, List.eraseDupsBy, List.eraseDupsBy.loop, List.any_nil,
       Except.ok.injEq, Term.integer.injEq] at empty
     simp at this

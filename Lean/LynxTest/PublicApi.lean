@@ -45,12 +45,13 @@ private theorem utf8ConstructionRoundTrip (value : Nat) (tail : List Bool)
   Lynx.Term.Bitstring.matchUtf8_construct value tail bounded scalar
 
 private theorem atomEquality (term : Lynx.Term) (name : String) :
-    term.exactCompare (.atom name) = .eq ↔ term = .atom name :=
-  Lynx.Term.exactCompare_eq_atom term name
+    Lynx.Term.compareExact (Lynx.Term.fuel term (.atom name)) term (.atom name) = .eq ↔ term = .atom name :=
+  Lynx.Term.compareExact_eq_atom term name
 
 private theorem integerEquality (term : Lynx.Term) (value : Int) :
-    term.exactCompare (.integer value) = .eq ↔ term = .integer value :=
-  Lynx.Term.exactCompare_eq_integer term value
+    Lynx.Term.compareExact (Lynx.Term.fuel term (.integer value)) term (.integer value) = .eq ↔
+      term = .integer value :=
+  Lynx.Term.compareExact_eq_integer term value
 
 private theorem extractBigEndian (value fieldWidth tailWidth : Nat) :
     Lynx.Term.Bitstring.matchInteger
@@ -69,7 +70,7 @@ private theorem binary64Encoding (value : Lynx.Term.FiniteFloat) :
 
 -- Numeric float ordering is available without unfolding comparison internals.
 private theorem floatOrdering (left right : Lynx.Term.FiniteFloat) :
-    Lynx.Term.compare (.float left) (.float right) =
+    Lynx.Term.compare (Lynx.Term.fuel (.float left) (.float right)) (.float left) (.float right) =
       compareOfLessAndEq left.toRat right.toRat :=
   Lynx.Term.compare_floats left right
 
@@ -693,6 +694,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.Compare.mapView",
   "Lynx.Term.Compare.mapViewInsert",
   "Lynx.Term.Compare.ratCompare",
+  "Lynx.Term.Compare.stringCompare",
   "Lynx.Term.FiniteFloat",
   "Lynx.Term.FiniteFloat.add",
   "Lynx.Term.FiniteFloat.binary16",
@@ -726,11 +728,12 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.atom",
   "Lynx.Term.bitstring",
   "Lynx.Term.compare",
+  "Lynx.Term.compareExact",
   "Lynx.Term.cons",
   "Lynx.Term.demonitorOptions",
-  "Lynx.Term.exactCompare",
   "Lynx.Term.false",
   "Lynx.Term.float",
+  "Lynx.Term.fuel",
   "Lynx.Term.function",
   "Lynx.Term.getMapKeys",
   "Lynx.Term.identical",
@@ -749,6 +752,9 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.mapEnumeration",
   "Lynx.Term.mapLookup",
   "Lynx.Term.monitorAlias",
+  "Lynx.Term.nesting",
+  "Lynx.Term.nestingEntries",
+  "Lynx.Term.nestingList",
   "Lynx.Term.nil",
   "Lynx.Term.orders",
   "Lynx.Term.pairList?",

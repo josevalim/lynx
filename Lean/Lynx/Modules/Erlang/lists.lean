@@ -18,7 +18,7 @@ improper tail or a non-list raises `badarg`. -/
 @[expose] def «member/2» : Term → Term → Except Exception Term
   | _, .nil => .ok Term.false
   | element, .cons head tail =>
-    if Term.exactCompare element head = .eq then .ok Term.true else «member/2» element tail
+    if Term.compareExact (Term.fuel element head) element head = .eq then .ok Term.true else «member/2» element tail
   | _, _ => .error (.error (.atom "badarg"))
 
 /-- The first tuple whose element at a position compares equal to a key, or
@@ -35,7 +35,7 @@ improper tail or a non-list raises `badarg`. -/
       | .tuple elements =>
         match elements[index.toNat - 1]? with
         | some element =>
-          if Term.compare element key = .eq then .ok head else «keyfind/3» key position tail
+          if Term.compare (Term.fuel element key) element key = .eq then .ok head else «keyfind/3» key position tail
         | none => «keyfind/3» key position tail
       | _ => «keyfind/3» key position tail
     | _ => .error (.error (.atom "badarg"))

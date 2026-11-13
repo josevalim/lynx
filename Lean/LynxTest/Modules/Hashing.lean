@@ -111,18 +111,18 @@ private meta def result : Except Exception Term → Option Int
 theorem shadowed_bindings_hash (k v w : Term) :
     Erlang.erlang.«phash2/1» (.map [(k, v), (k, w)]) = Erlang.erlang.«phash2/1» (.map [(k, v)]) := by
   apply Erlang.erlang.phash2_congr
-  apply Term.map_exactCompare_eq_of_lookup
+  apply Term.map_compareExact_eq_of_lookup
   intro q
-  by_cases same : Term.exactCompare q k = .eq <;> simp [same]
+  by_cases same : Term.compareExact (Term.fuel q k) q k = .eq <;> simp [same]
 
 /-- Closures hash the same when their captures are exactly equal. -/
 theorem capture_hash (k v w : Term) :
     Erlang.erlang.«phash2/1» (.function "m" "f" 0 #[.map [(k, v), (k, w)]]) =
       Erlang.erlang.«phash2/1» (.function "m" "f" 0 #[.map [(k, v)]]) := by
   apply Erlang.erlang.phash2_congr
-  have := Term.map_exactCompare_eq_of_lookup [(k, v), (k, w)] [(k, v)] fun q => by
-    by_cases same : Term.exactCompare q k = .eq <;> simp [same]
-  rw [Term.exactCompare_eq_step]
+  have := Term.map_compareExact_eq_of_lookup [(k, v), (k, w)] [(k, v)] fun q => by
+    by_cases same : Term.compareExact (Term.fuel q k) q k = .eq <;> simp [same]
+  rw [Term.compareExact_step]
   simp [Term.Compare.compareStep, List.compareLex_cons_cons, List.compareLex_nil_nil, this]
 
 #guard result (Erlang.erlang.«phash2/2» (.atom "a") (.integer 7)) == some 6

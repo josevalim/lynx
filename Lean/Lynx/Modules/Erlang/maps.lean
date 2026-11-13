@@ -12,7 +12,7 @@ open Lynx
 @[expose] def «get/2» (key input : Term) : Except Exception Term :=
   match input with
   | .map entries =>
-    match (entries.find? fun entry => decide (Term.exactCompare key entry.1 = .eq)).map Prod.snd with
+    match (entries.find? fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)).map Prod.snd with
     | some v => .ok v
     | none => .error (.error (.tuple #[.atom "badkey", key]))
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
@@ -25,7 +25,7 @@ open Lynx
 @[expose] def «update/3» (key value input : Term) : Except Exception Term :=
   match input with
   | .map entries =>
-    if (entries.find? fun entry => decide (Term.exactCompare key entry.1 = .eq)).isSome then
+    if (entries.find? fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)).isSome then
       .ok (.map ((key, value) :: entries))
     else
       .error (.error (.tuple #[.atom "badkey", key]))
@@ -96,7 +96,7 @@ the order `to_list/1` returns them. The BEAM's iterator representation is opaque
 /-- Every binding of the key is removed, including shadowed ones. -/
 @[expose] def «remove/2» (key input : Term) : Except Exception Term :=
   match input with
-  | .map entries => .ok (.map (entries.filter fun entry => Term.exactCompare key entry.1 != .eq))
+  | .map entries => .ok (.map (entries.filter fun entry => Term.compareExact (Term.fuel key entry.1) key entry.1 != .eq))
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
 @[expose] def «take/2» (key input : Term) : Except Exception Term :=
@@ -104,7 +104,7 @@ the order `to_list/1` returns them. The BEAM's iterator representation is opaque
   | .map entries =>
     match Term.mapLookup entries key with
     | some value =>
-      .ok (.tuple #[value, .map (entries.filter fun entry => Term.exactCompare key entry.1 != .eq)])
+      .ok (.tuple #[value, .map (entries.filter fun entry => Term.compareExact (Term.fuel key entry.1) key entry.1 != .eq)])
     | none => .ok (.atom "error")
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
@@ -191,21 +191,21 @@ theorem get_merge (key : Term) (left right : List (Term × Term)) :
       | .error _ => «get/2» key (.map left)
       | result => result := by
   simp only [«merge/2», Except.ok_bind, «get/2», List.find?_append, Option.map_or]
-  cases (right.find? fun e => decide (Term.exactCompare key e.1 = .eq)).map Prod.snd <;> rfl
+  cases (right.find? fun e => decide (Term.compareExact (Term.fuel key e.1) key e.1 = .eq)).map Prod.snd <;> rfl
 
 /-- Maps with identical lookup results are semantically equal. -/
 theorem compare_eq_of_get (left right : List (Term × Term))
     (h : ∀ key, «get/2» key (.map left) = «get/2» key (.map right)) :
-    Term.compare (.map left) (.map right) = .eq := by
+    Term.compare (Term.fuel (.map left) (.map right)) (.map left) (.map right) = .eq := by
   apply Term.map_compare_eq_of_lookup
   intro key
   have equal := h key
   simp only [«get/2»] at equal
   change Option.Rel _
-    ((left.find? fun entry => decide (Term.exactCompare key entry.1 = .eq)).map Prod.snd)
-    ((right.find? fun entry => decide (Term.exactCompare key entry.1 = .eq)).map Prod.snd)
-  cases ha : (left.find? fun entry => decide (Term.exactCompare key entry.1 = .eq)).map Prod.snd <;>
-    cases hb : (right.find? fun entry => decide (Term.exactCompare key entry.1 = .eq)).map Prod.snd <;> simp_all
+    ((left.find? fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)).map Prod.snd)
+    ((right.find? fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)).map Prod.snd)
+  cases ha : (left.find? fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)).map Prod.snd <;>
+    cases hb : (right.find? fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)).map Prod.snd <;> simp_all
 
 /-- Map shape is the only requirement; keys and values may be arbitrary terms. -/
 theorem get_after_put (m k v : Term)
@@ -220,14 +220,14 @@ theorem get_after_put (m k v : Term)
     «update/3» k v m = «put/3» k v m := by
   cases m <;> simp [«get/2»] at present
   rename_i entries
-  cases found : entries.find? (fun entry => decide (Term.exactCompare k entry.1 = .eq)) <;>
+  cases found : entries.find? (fun entry => decide (Term.compareExact (Term.fuel k entry.1) k entry.1 = .eq)) <;>
     simp_all [«update/3», «put/3»]
 
 /-- A missing key raises badkey. -/
 @[simp] theorem update_missing (entries : List (Term × Term)) (k v : Term)
     (missing : «get/2» k (.map entries) = .error (.error (.tuple #[.atom "badkey", k]))) :
     «update/3» k v (.map entries) = .error (.error (.tuple #[.atom "badkey", k])) := by
-  cases found : entries.find? (fun entry => decide (Term.exactCompare k entry.1 = .eq)) <;>
+  cases found : entries.find? (fun entry => decide (Term.compareExact (Term.fuel k entry.1) k entry.1 = .eq)) <;>
     simp [«get/2», «update/3», found] at missing ⊢
 
 /-- Reading the updated key returns its new value. -/
@@ -240,14 +240,14 @@ theorem get_after_update (m k v old : Term) (present : «get/2» k m = .ok old) 
 
 /-- Putting a distinct key preserves lookup. -/
 theorem get_after_put_other (entries : List (Term × Term)) (key other value : Term)
-    (distinct : Term.exactCompare other key ≠ .eq) :
+    (distinct : Term.compareExact (Term.fuel other key) other key ≠ .eq) :
     («put/3» key value (.map entries) >>= «get/2» other) = «get/2» other (.map entries) := by
   simp [«put/3», «get/2», distinct]
 
 /-- Updating a present key preserves lookup at distinct keys. -/
 theorem get_after_update_other (entries : List (Term × Term)) (key other value old : Term)
     (present : «get/2» key (.map entries) = .ok old)
-    (distinct : Term.exactCompare other key ≠ .eq) :
+    (distinct : Term.compareExact (Term.fuel other key) other key ≠ .eq) :
     («update/3» key value (.map entries) >>= «get/2» other) = «get/2» other (.map entries) := by
   rw [update_eq_put_of_get (.map entries) key value old present]
   exact get_after_put_other entries key other value distinct
@@ -272,15 +272,15 @@ private theorem mapM_ok {α β : Type} (f : α → Except Exception β) (h : α 
 
 private theorem lookup_append_map (es l : List (Term × Term)) (H : Term × Term → Term) (q : Term) :
     Term.mapLookup ((es.map fun e => (e.1, H e)) ++ l) q =
-      match es.find? (fun e => decide (Term.exactCompare q e.1 = .eq)) with
+      match es.find? (fun e => decide (Term.compareExact (Term.fuel q e.1) q e.1 = .eq)) with
       | some e => some (H e)
       | none => Term.mapLookup l q := by
   simp only [Term.mapLookup, List.find?_append, List.find?_map]
   dsimp only [Function.comp_def]
-  cases es.find? (fun e => decide (Term.exactCompare q e.1 = .eq)) <;> rfl
+  cases es.find? (fun e => decide (Term.compareExact (Term.fuel q e.1) q e.1 = .eq)) <;> rfl
 
 private theorem lookup_reduceOption_absent (es : List (Term × Term)) (F : Term × Term → Option Term)
-    (q : Term) (absent : ∀ p ∈ es, Term.exactCompare q p.1 ≠ .eq) :
+    (q : Term) (absent : ∀ p ∈ es, Term.compareExact (Term.fuel q p.1) q p.1 ≠ .eq) :
     Term.mapLookup ((es.map fun e => (F e).map fun v => (e.1, v)).reduceOption) q = none := by
   induction es with
   | nil => rfl
@@ -290,20 +290,20 @@ private theorem lookup_reduceOption_absent (es : List (Term × Term)) (F : Term 
     cases hF : F e <;> simp_all [List.reduceOption, Term.mapLookup]
 
 private theorem lookup_reduceOption (es : List (Term × Term))
-    (distinct : es.Pairwise (fun a b => Term.exactCompare a.1 b.1 ≠ .eq)) (F : Term × Term → Option Term)
+    (distinct : es.Pairwise (fun a b => Term.compareExact (Term.fuel a.1 b.1) a.1 b.1 ≠ .eq)) (F : Term × Term → Option Term)
     (q : Term) :
     Term.mapLookup ((es.map fun e => (F e).map fun v => (e.1, v)).reduceOption) q =
-      match es.find? (fun e => decide (Term.exactCompare q e.1 = .eq)) with
+      match es.find? (fun e => decide (Term.compareExact (Term.fuel q e.1) q e.1 = .eq)) with
       | some e => F e
       | none => none := by
   induction es with
   | nil => rfl
   | cons e rest ih =>
     have tail := ih (List.pairwise_cons.mp distinct).2
-    by_cases same : Term.exactCompare q e.1 = .eq
-    · have absent : ∀ p ∈ rest, Term.exactCompare q p.1 ≠ .eq := fun p mp hit =>
+    by_cases same : Term.compareExact (Term.fuel q e.1) q e.1 = .eq
+    · have absent : ∀ p ∈ rest, Term.compareExact (Term.fuel q p.1) q p.1 ≠ .eq := fun p mp hit =>
         (List.pairwise_cons.mp distinct).1 p mp
-          (Std.TransCmp.eq_trans (Std.OrientedCmp.eq_symm same) hit)
+          (Term.compareExact_eq_trans (Term.compareExact_eq_symm same) hit)
       have none := lookup_reduceOption_absent rest F q absent
       cases hF : F e <;> simp_all [List.reduceOption, Term.mapLookup]
     · cases hF : F e <;> simp_all [List.reduceOption, Term.mapLookup]
@@ -317,7 +317,7 @@ theorem merge_with_lookup (dispatcher : Dispatcher) (module name : String) (capt
     ∃ out, («merge_with/3» dispatcher (.function module name 3 captures) (.map l) (.map r) :
         Except Exception Term) = .ok (.map out) ∧
       ∀ q, Term.mapLookup out q =
-        match (Term.mapEntries r).find? (fun e => decide (Term.exactCompare q e.1 = .eq)) with
+        match (Term.mapEntries r).find? (fun e => decide (Term.compareExact (Term.fuel q e.1) q e.1 = .eq)) with
         | some e => some (match Term.mapLookup l e.1 with | some v => g e.1 v e.2 | none => e.2)
         | none => Term.mapLookup l q := by
   let H : Term × Term → Term := fun e =>
@@ -343,7 +343,7 @@ theorem intersect_with_lookup (dispatcher : Dispatcher) (module name : String) (
     ∃ out, («intersect_with/3» dispatcher (.function module name 3 captures) (.map l) (.map r) :
         Except Exception Term) = .ok (.map out) ∧
       ∀ q, Term.mapLookup out q =
-        match (Term.mapEntries l).find? (fun e => decide (Term.exactCompare q e.1 = .eq)) with
+        match (Term.mapEntries l).find? (fun e => decide (Term.compareExact (Term.fuel q e.1) q e.1 = .eq)) with
         | some e => (Term.mapLookup r e.1).map (g e.1 e.2)
         | none => none := by
   let F : Term × Term → Option Term := fun e => (Term.mapLookup r e.1).map (g e.1 e.2)
@@ -369,7 +369,7 @@ theorem filter_lookup (dispatcher : Dispatcher) (module name : String) (captures
     ∃ out, («filter/2» dispatcher (.function module name 2 captures) (.map entries) :
         Except Exception Term) = .ok (.map out) ∧
       ∀ q, Term.mapLookup out q =
-        match (Term.mapEntries entries).find? (fun e => decide (Term.exactCompare q e.1 = .eq)) with
+        match (Term.mapEntries entries).find? (fun e => decide (Term.compareExact (Term.fuel q e.1) q e.1 = .eq)) with
         | some e => if keep e then some e.2 else none
         | none => none := by
   let F : Term × Term → Option Term := fun e => if keep e then some e.2 else none

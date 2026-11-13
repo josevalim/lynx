@@ -264,10 +264,10 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
   simp [«band/2», Nat.and_two_pow_sub_one_eq_mod, Int.natCast_emod]
 
 @[expose] def «==/2» (left right : Term) : Except Exception Term :=
-  .ok (if Term.compare left right = .eq then Term.true else Term.false)
+  .ok (if Term.compare (Term.fuel left right) left right = .eq then Term.true else Term.false)
 
 @[expose] def «/=/2» (left right : Term) : Except Exception Term :=
-  .ok (if Term.compare left right = .eq then Term.false else Term.true)
+  .ok (if Term.compare (Term.fuel left right) left right = .eq then Term.false else Term.true)
 
 @[simp] theorem «==/2_integers» (x y : Int) :
     «==/2» (.integer x) (.integer y) = .ok (if x = y then Term.true else Term.false) := by
@@ -278,10 +278,10 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
   simp [«/=/2»]
 
 @[expose] def «=:=/2» (left right : Term) : Except Exception Term :=
-  .ok (if Term.exactCompare left right = .eq then Term.true else Term.false)
+  .ok (if Term.compareExact (Term.fuel left right) left right = .eq then Term.true else Term.false)
 
 @[expose] def «=/=/2» (left right : Term) : Except Exception Term :=
-  .ok (if Term.exactCompare left right = .eq then Term.false else Term.true)
+  .ok (if Term.compareExact (Term.fuel left right) left right = .eq then Term.false else Term.true)
 
 @[simp] theorem «=:=/2_integers» (x y : Int) :
     «=:=/2» (.integer x) (.integer y) = .ok (if x = y then Term.true else Term.false) := by
@@ -292,16 +292,16 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
   simp [«=/=/2»]
 
 @[expose] def «</2» (left right : Term) : Except Exception Term :=
-  .ok (if (Term.compare left right).isLT then Term.true else Term.false)
+  .ok (if (Term.compare (Term.fuel left right) left right).isLT then Term.true else Term.false)
 
 @[expose] def «>/2» (left right : Term) : Except Exception Term :=
-  .ok (if (Term.compare left right).isGT then Term.true else Term.false)
+  .ok (if (Term.compare (Term.fuel left right) left right).isGT then Term.true else Term.false)
 
 @[expose] def «=</2» (left right : Term) : Except Exception Term :=
-  .ok (if (Term.compare left right).isLE then Term.true else Term.false)
+  .ok (if (Term.compare (Term.fuel left right) left right).isLE then Term.true else Term.false)
 
 @[expose] def «>=/2» (left right : Term) : Except Exception Term :=
-  .ok (if (Term.compare left right).isGE then Term.true else Term.false)
+  .ok (if (Term.compare (Term.fuel left right) left right).isGE then Term.true else Term.false)
 
 @[simp] theorem «>=/2_integers» (x y : Int) :
     «>=/2» (.integer x) (.integer y) = .ok (if y ≤ x then Term.true else Term.false) := by
@@ -319,6 +319,98 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
     «=</2» (.integer x) (.integer y) = .ok (if x ≤ y then Term.true else Term.false) := by
   simp [«=</2», Int.isLE_compare]
 
+/-! ### Order laws of the comparison operators -/
+
+section Order
+
+
+private theorem ite_true_iff {condition : Prop} [Decidable condition] :
+    (Except.ok (if condition then Term.true else Term.false) : Except Exception Term) = .ok Term.true ↔
+      condition := by
+  by_cases holds : condition <;> simp [holds, Term.true, Term.false]
+
+@[simp] theorem «==/2_self» (a : Term) : «==/2» a a = .ok Term.true := by
+  simp [«==/2»]
+
+@[simp] theorem «=:=/2_self» (a : Term) : «=:=/2» a a = .ok Term.true := by
+  simp [«=:=/2»]
+
+theorem «==/2_comm» (a b : Term) : «==/2» a b = «==/2» b a := by
+  simp only [«==/2»]
+  congr 2
+  exact propext ⟨Term.compare_eq_symm, Term.compare_eq_symm⟩
+
+theorem «=:=/2_comm» (a b : Term) : «=:=/2» a b = «=:=/2» b a := by
+  simp only [«=:=/2»]
+  congr 2
+  exact propext ⟨Term.compareExact_eq_symm, Term.compareExact_eq_symm⟩
+
+theorem «==/2_trans» {a b c : Term} (first : «==/2» a b = .ok Term.true)
+    (second : «==/2» b c = .ok Term.true) : «==/2» a c = .ok Term.true := by
+  simp only [«==/2», ite_true_iff] at *
+  exact Term.compare_eq_trans first second
+
+theorem «=:=/2_trans» {a b c : Term} (first : «=:=/2» a b = .ok Term.true)
+    (second : «=:=/2» b c = .ok Term.true) : «=:=/2» a c = .ok Term.true := by
+  simp only [«=:=/2», ite_true_iff] at *
+  exact Term.compareExact_eq_trans first second
+
+/-- Exactly equal terms are equal. -/
+theorem «==/2_of_=:=/2» {a b : Term} (exact : «=:=/2» a b = .ok Term.true) :
+    «==/2» a b = .ok Term.true := by
+  simp only [«==/2», «=:=/2», ite_true_iff] at *
+  exact Term.compare_eq_of_compareExact_eq a b exact
+
+theorem «/=/2_iff» (a b : Term) : «/=/2» a b = .ok Term.true ↔ «==/2» a b ≠ .ok Term.true := by
+  simp only [«/=/2», «==/2»]
+  by_cases equal : Term.compare (Term.fuel a b) a b = .eq <;> simp [equal, Term.true, Term.false]
+
+theorem «=/=/2_iff» (a b : Term) : «=/=/2» a b = .ok Term.true ↔ «=:=/2» a b ≠ .ok Term.true := by
+  simp only [«=/=/2», «=:=/2»]
+  by_cases equal : Term.compareExact (Term.fuel a b) a b = .eq <;> simp [equal, Term.true, Term.false]
+
+theorem «>/2_eq» (a b : Term) : «>/2» a b = «</2» b a := by
+  simp only [«>/2», «</2»]
+  rw [Term.compare_swap a b]
+  cases Term.compare (Term.fuel b a) b a <;> rfl
+
+theorem «>=/2_eq» (a b : Term) : «>=/2» a b = «=</2» b a := by
+  simp only [«>=/2», «=</2»]
+  rw [Term.compare_swap a b]
+  cases Term.compare (Term.fuel b a) b a <;> rfl
+
+theorem «=</2_iff» (a b : Term) :
+    «=</2» a b = .ok Term.true ↔ «</2» a b = .ok Term.true ∨ «==/2» a b = .ok Term.true := by
+  simp only [«=</2», «</2», «==/2», ite_true_iff]
+  cases Term.compare (Term.fuel a b) a b <;> simp
+
+theorem «</2_irrefl» (a : Term) : «</2» a a = .ok Term.false := by
+  simp [«</2»]
+
+theorem «</2_trans» {a b c : Term} (first : «</2» a b = .ok Term.true)
+    (second : «</2» b c = .ok Term.true) : «</2» a c = .ok Term.true := by
+  simp only [«</2», ite_true_iff, Ordering.isLT_iff_eq_lt] at *
+  exact Term.compare_lt_trans first second
+
+theorem «</2_of_=</2_of_</2» {a b c : Term} (first : «=</2» a b = .ok Term.true)
+    (second : «</2» b c = .ok Term.true) : «</2» a c = .ok Term.true := by
+  simp only [«</2», «=</2», ite_true_iff, Ordering.isLT_iff_eq_lt] at *
+  exact Term.compare_lt_of_isLE_of_lt first second
+
+theorem «</2_of_</2_of_=</2» {a b c : Term} (first : «</2» a b = .ok Term.true)
+    (second : «=</2» b c = .ok Term.true) : «</2» a c = .ok Term.true := by
+  simp only [«</2», «=</2», ite_true_iff, Ordering.isLT_iff_eq_lt] at *
+  exact Term.compare_lt_of_lt_of_isLE first second
+
+/-- Any two terms are ordered one way or the other, or are equal. -/
+theorem «</2_trichotomy» (a b : Term) :
+    «</2» a b = .ok Term.true ∨ «==/2» a b = .ok Term.true ∨ «</2» b a = .ok Term.true := by
+  simp only [«</2», «==/2», ite_true_iff, Ordering.isLT_iff_eq_lt]
+  rw [Term.compare_swap b a]
+  cases Term.compare (Term.fuel a b) a b <;> simp
+
+end Order
+
 @[expose] def «++/2» : Term → Term → Except Exception Term
   | .nil, right => .ok right
   | .cons head tail, right => do
@@ -330,7 +422,7 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
 @[expose] def «--/2» (left right : Term) : Except Exception Term :=
   match Term.properList? left, Term.properList? right with
   | some xs, some ys =>
-    .ok (Term.list (ys.foldl (fun acc y => acc.eraseP fun x => Term.exactCompare x y == .eq) xs))
+    .ok (Term.list (ys.foldl (fun acc y => acc.eraseP fun x => Term.compareExact (Term.fuel x y) x y == .eq) xs))
   | _, _ => throw (.error (.atom "badarg"))
 
 @[expose] def «xor/2» : Term → Term → Except Exception Term
@@ -384,28 +476,28 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
 @[expose] def «map_get/2» (key input : Term) : Except Exception Term :=
   match input with
   | .map entries =>
-    match entries.find? (fun entry => decide (Term.exactCompare key entry.1 = .eq)) with
+    match entries.find? (fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)) with
     | some entry => .ok entry.2
     | none => throw (.error (.tuple #[.atom "badkey", key]))
   | _ => throw (.error (.tuple #[.atom "badmap", input]))
 
 @[expose] def «is_map_key/2» (key input : Term) : Except Exception Term :=
   match input with
-  | .map entries => .ok (if entries.any (fun entry => Term.exactCompare key entry.1 == .eq)
+  | .map entries => .ok (if entries.any (fun entry => Term.compareExact (Term.fuel key entry.1) key entry.1 == .eq)
     then Term.true else Term.false)
   | _ => throw (.error (.tuple #[.atom "badmap", input]))
 
 /-- The map representation retains shadowed entries, which count only once. -/
 @[expose] def «map_size/1» : Term → Except Exception Term
   | .map entries => .ok (.integer
-      ((entries.map Prod.fst).eraseDupsBy (fun a b => Term.exactCompare a b == .eq)).length)
+      ((entries.map Prod.fst).eraseDupsBy (fun a b => Term.compareExact (Term.fuel a b) a b == .eq)).length)
   | input => throw (.error (.tuple #[.atom "badmap", input]))
 
 @[expose] def «min/2» (left right : Term) : Except Exception Term :=
-  .ok (if (Term.compare left right).isLE then left else right)
+  .ok (if (Term.compare (Term.fuel left right) left right).isLE then left else right)
 
 @[expose] def «max/2» (left right : Term) : Except Exception Term :=
-  .ok (if (Term.compare left right).isGE then left else right)
+  .ok (if (Term.compare (Term.fuel left right) left right).isGE then left else right)
 
 /-- The runtime models a local node with distribution disabled. -/
 @[expose] def «node/0» : Except Exception Term := .ok (.atom "nonode@nohost")

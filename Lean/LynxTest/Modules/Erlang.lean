@@ -436,7 +436,7 @@ theorem ordered_operators :
       «>/2» b a = .ok (.atom "true") ∧
       «=</2» b a = .ok (.atom "false") ∧
       «>=/2» b a = .ok (.atom "true")) := by
-  apply List.Pairwise.imp (R := fun a b => Term.compare a b = .lt ∧ Term.compare b a = .gt)
+  apply List.Pairwise.imp (R := fun a b => Term.compare (Term.fuel a b) a b = .lt ∧ Term.compare (Term.fuel b a) b a = .gt)
     (fun {a b} h => ?_) ordered_terms
   simp [«</2», «>/2», «=</2», «>=/2», h.1, h.2]
 

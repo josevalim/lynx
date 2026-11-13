@@ -94,7 +94,7 @@ theorem update_lookup (m key value old : Term)
 
 theorem update_other_lookup (entries : List (Term × Term)) (key other value old : Term)
     (present : Erlang.maps.«get/2» key (.map entries) = .ok old)
-    (distinct : Term.exactCompare other key ≠ .eq) :
+    (distinct : Term.compareExact (Term.fuel other key) other key ≠ .eq) :
     (Erlang.maps.«update/3» key value (.map entries) >>= Erlang.maps.«get/2» other) =
       Erlang.maps.«get/2» other (.map entries) :=
   Erlang.maps.get_after_update_other entries key other value old present distinct
@@ -116,7 +116,7 @@ theorem from_list_pairs :
 /-- Map enumeration has no specified order, but keeps each visible binding once. -/
 theorem enumeration_lookup (entries : List (Term × Term)) (key : Term) :
     Term.mapLookup (Term.mapEntries entries) key = Term.mapLookup entries key ∧
-    (Term.mapEntries entries).Pairwise (fun x y => Term.exactCompare x.1 y.1 ≠ .eq) :=
+    (Term.mapEntries entries).Pairwise (fun x y => Term.compareExact (Term.fuel x.1 y.1) x.1 y.1 ≠ .eq) :=
   ⟨Term.mapLookup_mapEntries entries key, Term.mapEntries_distinct entries⟩
 
 theorem enumeration_shadowed :
