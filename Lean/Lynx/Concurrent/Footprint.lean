@@ -1,6 +1,7 @@
 module
 
 public import Lynx.Concurrent
+public import Lynx.Term.Compare
 
 /-! Footprints of concurrent steps: what a step observes of the state and what
 it does to it.
@@ -13,101 +14,6 @@ evaluating the changes at the current state, so a message appended to a mailbox
 commutes with a receive that would not take it, without a rule of its own. -/
 
 public section
-
-namespace Lynx
-
-/-! ### Identical values
-
-`==` on terms is Erlang's comparison, under which `1` and `1.0` are equal.
-Commuting steps must reach identical states, so they are compared structurally. -/
-
-mutual
-/-- Whether two terms are the same term. -/
-@[expose] def Term.identical : Term → Term → Bool
-  | .integer first, .integer second => first == second
-  | .float first, .float second =>
-      first.negative == second.negative && first.exponent.val == second.exponent.val &&
-        first.fraction.val == second.fraction.val
-  | .atom first, .atom second => first == second
-  | .reference first, .reference second => first == second
-  | .function module name arity captures, .function module' name' arity' captures' =>
-      module == module' && name == name' && arity == arity' &&
-        Term.identicalList captures.toList captures'.toList
-  | .pid first, .pid second => first == second
-  | .tuple first, .tuple second => Term.identicalList first.toList second.toList
-  | .map first, .map second => Term.identicalEntries first second
-  | .nil, .nil => true
-  | .cons head tail, .cons head' tail' => Term.identical head head' && Term.identical tail tail'
-  | .bitstring bytes lastBits _, .bitstring bytes' lastBits' _ =>
-      bytes.data == bytes'.data && lastBits == lastBits'
-  | _, _ => false
-termination_by structural first => first
-
-/-- Whether two lists hold the same terms. -/
-@[expose] def Term.identicalList : List Term → List Term → Bool
-  | [], [] => true
-  | first :: rest, second :: rest' => Term.identical first second && Term.identicalList rest rest'
-  | _, _ => false
-termination_by structural first => first
-
-/-- Whether two lists hold the same pairs of terms. -/
-@[expose] def Term.identicalEntries : List (Term × Term) → List (Term × Term) → Bool
-  | [], [] => true
-  | (key, value) :: rest, (key', value') :: rest' =>
-      Term.identical key key' && Term.identical value value' && Term.identicalEntries rest rest'
-  | _, _ => false
-termination_by structural first => first
-end
-
-mutual
-private theorem Term.eq_of_identical : ∀ {first second : Term},
-    Term.identical first second = true → first = second
-  | .function module name arity ⟨captures⟩, second, same => by
-    cases second <;> simp only [Term.identical, Bool.and_eq_true, beq_iff_eq, Bool.false_eq_true] at same
-    obtain ⟨⟨⟨rfl, rfl⟩, rfl⟩, same⟩ := same
-    rw [Term.eq_of_identicalList same]
-  | .tuple ⟨items⟩, second, same => by
-    cases second <;> simp only [Term.identical, Bool.false_eq_true] at same
-    rw [Term.eq_of_identicalList same]
-  | .map entries, second, same => by
-    cases second <;> simp only [Term.identical, Bool.false_eq_true] at same
-    rw [Term.eq_of_identicalEntries same]
-  | .cons head tail, second, same => by
-    cases second <;> simp only [Term.identical, Bool.and_eq_true, Bool.false_eq_true] at same
-    rw [Term.eq_of_identical same.1, Term.eq_of_identical same.2]
-  | .bitstring ⟨bytes⟩ _ _, second, same => by
-    cases second <;> simp only [Term.identical, Bool.and_eq_true, beq_iff_eq, Bool.false_eq_true] at same
-    obtain ⟨rfl, rfl⟩ := same
-    rfl
-  | .float ⟨negative, exponent, fraction⟩, second, same => by
-    cases second <;> simp only [Term.identical, Bool.and_eq_true, beq_iff_eq, Bool.false_eq_true] at same
-    rename_i float
-    obtain ⟨negative', exponent', fraction'⟩ := float
-    obtain ⟨⟨rfl, exponent⟩, fraction⟩ := same
-    rw [Fin.ext exponent, Fin.ext fraction]
-  | .integer _, second, same | .atom _, second, same
-  | .reference _, second, same | .pid _, second, same | .nil, second, same => by
-    cases second <;> simp_all [Term.identical]
-
-private theorem Term.eq_of_identicalList : ∀ {first second : List Term},
-    Term.identicalList first second = true → first = second
-  | [], [], _ => rfl
-  | head :: rest, head' :: rest', same => by
-    simp only [Term.identicalList, Bool.and_eq_true] at same
-    rw [Term.eq_of_identical same.1, Term.eq_of_identicalList same.2]
-  | [], _ :: _, same | _ :: _, [], same => by simp [Term.identicalList] at same
-
-private theorem Term.eq_of_identicalEntries : ∀ {first second : List (Term × Term)},
-    Term.identicalEntries first second = true → first = second
-  | [], [], _ => rfl
-  | (key, value) :: rest, (key', value') :: rest', same => by
-    simp only [Term.identicalEntries, Bool.and_eq_true] at same
-    rw [Term.eq_of_identical same.1.1, Term.eq_of_identical same.1.2,
-      Term.eq_of_identicalEntries same.2]
-  | [], _ :: _, same | _ :: _, [], same => by simp [Term.identicalEntries] at same
-end
-
-end Lynx
 
 namespace Lynx.Concurrent
 
@@ -1111,22 +1017,6 @@ private theorem Effect.ending_modify {processId : PID} {process : ProcessState} 
       simp [this, Ne.symm same]
   · rfl
 
-private theorem State.view_modify {state : State} {processId other : PID}
-    {change : ProcessState → ProcessState}
-    (same : ∀ process, (change process).env = process.env) :
-    (state.modify processId change).view other = state.view other := by
-  unfold State.modify
-  split
-  · rename_i process found
-    simp only [State.view, State.process, State.update]
-    split
-    · subst_vars
-      have := same process
-      simp only [ProcessState.env, ProcessState.mk.injEq] at this
-      simp [found, this]
-    · rfl
-  · rfl
-
 private theorem State.view_eq {state other : State} {processId : PID}
     (same : (other.process processId).env = (state.process processId).env) :
     other.view processId = state.view processId := by
@@ -1243,11 +1133,6 @@ private theorem State.alive_modify {state : State} {processId candidate : PID}
   simp only [State.alive, State.processes_modify]
   split <;> simp_all
 
-private theorem State.process_modify_ne {state : State} {processId candidate : PID}
-    {change : ProcessState → ProcessState} (ne : candidate ≠ processId) :
-    (state.modify processId change).process candidate = state.process candidate := by
-  simp [State.process, State.processes_modify, ne]
-
 /-- A change that applies only under a condition on the record. -/
 private theorem State.modify_if {state : State} {processId : PID} {condition : ProcessState → Bool}
     {change : ProcessState → ProcessState} :
@@ -1268,12 +1153,6 @@ private theorem State.modify_congr {state : State} {processId : PID}
   cases found : state.processes processId with
   | none => simp only [State.modify_of_none found]
   | some process => simp only [State.modify_of_some found, same process found]
-
-private theorem State.ext_modify {first second : State} {processId : PID}
-    {change change' : ProcessState → ProcessState} (same : first = second)
-    (equal : ∀ process, second.processes processId = some process → change process = change' process) :
-    first.modify processId change = second.modify processId change' := by
-  subst same; exact State.modify_congr equal
 
 /-- Spawning, as an effect. -/
 private theorem State.spawnWith_eq {state : State} {processId : PID} {options : SpawnOptions}

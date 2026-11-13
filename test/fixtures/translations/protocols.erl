@@ -39,7 +39,7 @@ cases value <;> simp [«size_undefined_requires/1», Erlang.erlang.«is_float/1�
 simp [«size_undefined_ensures/1», «size/1», Elixir.Lynx.Support.Size.«size/1»,
   Elixir.Lynx.Support.Size.«impl_for!/1», Elixir.Lynx.Support.Size.«impl_for/1»,
   Lynx.Exception.classTerm, Lynx.Exception.reason, Lynx.Term.getMapKeys,
-  Lynx.Term.exactCompare_atoms, Erlang.erlang.«=:=/2»]
+  Lynx.Term.compareExact_atoms, Erlang.erlang.«=:=/2»]
 """.
 
 %% Protocols falling back to Any dispatch values without an implementation there.

@@ -123,6 +123,17 @@ theorem trapped_exit_is_a_message :
         let _ ← «spawn_link/1» dispatcher raises
         receiveAny)) = true := by cbv
 
+/-- A root killed by a signal reports the environment it last had: the
+process dictionary it filled before its linked child raised. -/
+theorem killed_root_keeps_environment :
+    let run := (do
+      let _ ← «put/2» dispatcher (.atom "key") (.integer 1)
+      let _ ← «spawn_link/1» dispatcher raises
+      receiveAny : Result).run {} []
+    run.1 = .error (.exit (.tuple #[.atom "boom", .nil])) ∧
+      run.2.pdict = [(.atom "key", .integer 1)] := by
+  cbv
+
 /-- `kill` cannot be trapped, and monitors report it as `killed`. -/
 theorem kill_cannot_be_trapped :
     Concurrent.check (only (.ok (down [1] [1] (.atom "killed")))) 32 (.start {} (do

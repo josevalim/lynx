@@ -590,8 +590,8 @@ private theorem Step.wellformed {first next : Config α} {event : Event}
 /-! ### Keyed steps -/
 
 /-- Names a step across configurations: the step of a process by its place
-among the process's own steps, a signal by its pair of processes, or a timer
-by its reference. -/
+among the process's own steps (`Task.own`, which has at most one), a signal
+by its pair of processes, or a timer by its reference. -/
 inductive Key where
   | own (processId : PID) (index : Nat)
   | deliver (source target : PID)
@@ -924,6 +924,27 @@ same state in either order. -/
       first != second && match config.footprint first, config.footprint second with
         | some footprint, some footprint' => footprint.independent footprint' state
         | _, _ => false
+
+/-- The keys whose steps commute with the step with a key, at a configuration:
+`Config.independent` with the footprint of the key computed once. -/
+@[expose] def Config.commutesWith : Config α → Key → Key → Bool
+  | .start .., _ => fun _ => false
+  | config@(.running state ..), key =>
+      match config.footprint key with
+      | some footprint => fun other => other != key && match config.footprint other with
+          | some footprint' => footprint'.independent footprint state
+          | none => false
+      | none => fun _ => false
+
+private theorem Config.commutesWith_eq (config : Config α) (key other : Key) :
+    config.commutesWith key other = config.independent other key := by
+  cases config with
+  | start => rfl
+  | running state tasks finished exhausted =>
+    simp only [Config.commutesWith, Config.independent]
+    cases found : (Config.running state tasks finished exhausted).footprint key <;>
+      cases found' : (Config.running state tasks finished exhausted).footprint other <;>
+      simp [found']
 
 /-- A step every run can take first, if there is one: a process reading or
 replacing its environment, or receiving a message already queued. Its effects
@@ -2485,20 +2506,22 @@ the steps that commute with it and were followed before it asleep, as runs
 taking those first are covered elsewhere. Proving `check` by evaluation
 establishes a property for every schedule (see `Lynx.concurrent_of_check`). -/
 
-/-- Follow every step not asleep. Each step is followed with the steps asleep
-and the steps followed before it that commute with it asleep. -/
-@[expose] def explore (visit : List Key → Config α → Bool) (independent : Key → Key → Bool)
+/-- Follow every step not asleep. A step is followed with the steps asleep and
+the steps followed before it asleep, keeping only those that commute with it
+(`commutes key`). -/
+@[expose] def explore (visit : List Key → Config α → Bool) (commutes : Key → Key → Bool)
     (sleep : List Key) : List Key → List (Key × Event × Config α) → Bool
   | _, [] => true
   | done, (key, _, next) :: rest =>
-      if sleep.contains key then explore visit independent sleep done rest
-      else visit ((sleep ++ done).filter (independent · key)) next &&
-        explore visit independent sleep (done ++ [key]) rest
+      if sleep.contains key then explore visit commutes sleep done rest
+      else visit ((sleep ++ done).filter (commutes key)) next &&
+        explore visit commutes sleep (done ++ [key]) rest
 
-/-- Whether every run from the configuration ends in an accepted outcome,
-following at most `depth` steps along each run, where runs taking a step
-asleep first are covered elsewhere. A step every run can take first
-(`Config.forced`) is followed alone. -/
+/-- Whether every run ends in an accepted outcome, following at most `depth`
+steps along each run, where runs taking a step asleep first are covered
+elsewhere. A step every run can take first (`Config.forced`) is followed
+alone. Its soundness (`check_sound`) is proven for runs from a start
+configuration, whose reachable configurations are well-formed. -/
 @[expose] def checkFrom (accept : Outcome α → Bool) : Nat → List Key → Config α → Bool
   | 0, _, _ => false
   | depth + 1, sleep, config =>
@@ -2509,11 +2532,11 @@ asleep first are covered elsewhere. A step every run can take first
           | successors => successors.all fun (_, next) => checkFrom accept depth [] next
       | steps =>
           match config.forced.bind fun key => steps.find? (·.1 == key) with
-          | some (key, _, next) => checkFrom accept depth (sleep.filter (config.independent · key)) next
-          | none => explore (checkFrom accept depth) config.independent sleep [] steps
+          | some (key, _, next) => checkFrom accept depth (sleep.filter (config.commutesWith key)) next
+          | none => explore (checkFrom accept depth) config.commutesWith sleep [] steps
 
-/-- Whether every run from the configuration ends in an accepted outcome,
-following at most `depth` steps along each run. -/
+/-- Whether every run from a start configuration ends in an accepted outcome,
+following at most `depth` steps along each run (`check_sound`). -/
 @[expose] def check (accept : Outcome α → Bool) (depth : Nat) (config : Config α) : Bool :=
   checkFrom accept depth [] config
 
@@ -2524,18 +2547,20 @@ inductive Failure (α : Type) where
   /-- The run takes more steps than the depth allows. -/
   | unfinished : Failure α
 
-/-- The first run that `explore` finds. -/
+/-- The first run that `explore` finds. It must follow the same steps as
+`explore`, so that the runs it reports are the runs `check` rejects. -/
 @[expose] def exploreFind (visit : List Key → Config α → Option (List Event × β))
-    (independent : Key → Key → Bool) (sleep : List Key) :
+    (commutes : Key → Key → Bool) (sleep : List Key) :
     List Key → List (Key × Event × Config α) → Option (List Event × β)
   | _, [] => none
   | done, (key, event, next) :: rest =>
-      if sleep.contains key then exploreFind visit independent sleep done rest
-      else match visit ((sleep ++ done).filter (independent · key)) next with
+      if sleep.contains key then exploreFind visit commutes sleep done rest
+      else match visit ((sleep ++ done).filter (commutes key)) next with
         | some (events, failure) => some (event :: events, failure)
-        | none => exploreFind visit independent sleep (done ++ [key]) rest
+        | none => exploreFind visit commutes sleep (done ++ [key]) rest
 
-/-- The first run that `checkFrom` rejects. -/
+/-- The first run that `checkFrom` rejects. It mirrors `checkFrom` step by
+step; keep them in sync. -/
 @[expose] def counterexampleFrom (accept : Outcome α → Bool) :
     Nat → List Key → Config α → Option (List Event × Failure α)
   | 0, _, _ => some ([], .unfinished)
@@ -2550,9 +2575,9 @@ inductive Failure (α : Type) where
       | steps =>
           match config.forced.bind fun key => steps.find? (·.1 == key) with
           | some (key, event, next) =>
-              (counterexampleFrom accept depth (sleep.filter (config.independent · key)) next).map
+              (counterexampleFrom accept depth (sleep.filter (config.commutesWith key)) next).map
                 fun (events, failure) => (event :: events, failure)
-          | none => exploreFind (counterexampleFrom accept depth) config.independent sleep [] steps
+          | none => exploreFind (counterexampleFrom accept depth) config.commutesWith sleep [] steps
 
 /-- The first run that `check` rejects, as the events of its steps and how it
 fails. Evaluating it is a fast way to find why a check fails. -/
@@ -2571,24 +2596,24 @@ private theorem Reaches.step {first next last : Config α} {event : Event}
 that excludes the run: steps asleep before it cannot start the run, and of
 the steps it follows first, none starts it. -/
 private theorem explore_sound {visit : List Key → Config α → Bool}
-    {independent : Key → Key → Bool} {sleep : List Key} {steps : List (Key × Event × Config α)}
+    {commutes : Key → Key → Bool} {sleep : List Key} {steps : List (Key × Event × Config α)}
     {last : Config α} {goal : Prop}
     (visited : ∀ key event next, (key, event, next) ∈ steps → ∀ sleep', visit sleep' next = true →
       Reaches next last →
       (∀ key' ∈ sleep', ∀ event' next', (key', event', next') ∈ next.steps → ¬Reaches next' last) →
       goal)
-    (diamond : ∀ key event next, (key, event, next) ∈ steps → ∀ key', independent key' key = true →
+    (diamond : ∀ key event next, (key, event, next) ∈ steps → ∀ key', commutes key key' = true →
       ∀ event' next', (key', event', next') ∈ next.steps →
         ∃ next'', (key', event', next'') ∈ steps ∧ Step next'' event next')
     (unique : ∀ key event event' next next', (key, event, next) ∈ steps →
       (key, event', next') ∈ steps → next = next')
     (asleep : ∀ key ∈ sleep, ∀ event next, (key, event, next) ∈ steps → ¬Reaches next last)
     (first : ∃ key event next, (key, event, next) ∈ steps ∧ Reaches next last)
-    (explored : explore visit independent sleep [] steps = true) : goal := by
+    (explored : explore visit commutes sleep [] steps = true) : goal := by
   suffices ∀ (earlier rest : List (Key × Event × Config α)) (done : List Key), steps = earlier ++ rest →
       (∀ key ∈ done, ∃ event next, (key, event, next) ∈ earlier) →
       (∀ key event next, (key, event, next) ∈ earlier → key ∉ sleep → ¬Reaches next last) →
-      explore visit independent sleep done rest = true → goal from
+      explore visit commutes sleep done rest = true → goal from
     this [] steps [] rfl (by simp) (by simp) explored
   intro earlier rest
   induction rest generalizing earlier with
@@ -2716,15 +2741,16 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
             refine ih (Step.wellformed (Step.of_mem_steps mem) wellformed) checked run' terminal ?_
             intro key' slept event'' next'' mem' reaches
             simp only [List.mem_filter] at slept
-            obtain ⟨next₀, mem₀, step₀⟩ := diamond wellformed mem slept.2 mem'
+            obtain ⟨next₀, mem₀, step₀⟩ :=
+              diamond wellformed mem (by rw [← Config.commutesWith_eq]; exact slept.2) mem'
             exact asleep key' slept.1 event'' next₀ mem₀ (Reaches.step step₀ reaches)
           · obtain ⟨key, mem⟩ := Step.keyed step
             exact explore_sound (goal := accept outcome = true)
               (fun key event next mem sleep' visited reaches asleep' =>
                 let ⟨_, run'⟩ := reaches
                 ih (Step.wellformed (Step.of_mem_steps mem) wellformed) visited run' terminal asleep')
-              (fun key event next mem key' independent event' next' mem' =>
-                diamond wellformed mem independent mem')
+              (fun key event next mem key' commutes event' next' mem' =>
+                diamond wellformed mem (by rw [← Config.commutesWith_eq]; exact commutes) mem')
               (fun key event event' next next' mem mem' => (steps_unique wellformed mem mem').2)
               asleep ⟨key, _, _, mem, _, rest⟩ checked
 

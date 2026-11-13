@@ -80,16 +80,15 @@ kernel can decide it. -/
 @[expose] def stringCompare (a b : String) : Ordering :=
   compareOfLessAndEq a.toList b.toList
 
-/-- Strings with the same characters are equal. -/
-@[simp] theorem toList_eq_toList_iff (a b : String) : a.toList = b.toList ↔ a = b :=
-  ⟨String.toList_injective, fun h => h ▸ rfl⟩
-
-@[simp] theorem stringCompare_eq (a b : String) : stringCompare a b = Ord.compare a b := by
+@[simp] private theorem stringCompare_eq (a b : String) : stringCompare a b = Ord.compare a b := by
   show _ = String.compare a b
   rw [Term.string_compare_eq]
   have lt : (a < b) = (a.toList < b.toList) := rfl
-  have eq : (a = b) = (a.toList = b.toList) := propext (toList_eq_toList_iff a b).symm
+  have eq : (a = b) = (a.toList = b.toList) := propext String.toList_inj.symm
   simp only [stringCompare, compareOfLessAndEq, lt, eq]
+
+@[simp] theorem stringCompare_eq_iff (a b : String) : stringCompare a b = .eq ↔ a = b := by
+  rw [stringCompare_eq, Std.compare_eq_iff_eq]
 
 private instance : Std.TransCmp stringCompare := by
   have : stringCompare = fun a b => Ord.compare a b :=
@@ -654,120 +653,6 @@ private instance : Std.TransCmp fun a b => compare (fuel a b) a b where
     rw [← compare_fuel (n := n) (by omega)] at ab bc ⊢
     exact Std.TransCmp.isLE_trans ab bc
 
-/-- A comparison that `Term.fuel` steps decide, and that is a total order with any
-number of steps: `Term.compare` and `Term.compareExact`. Its order laws hold
-with the steps each pair of terms needs. -/
-private class Fueled (cmp : Nat → Term → Term → Ordering) : Prop where
-  total : ∀ n, Std.TransCmp (cmp n)
-  enough : ∀ {n a b}, fuel a b ≤ n → cmp n a b = cmp (fuel a b) a b
-
-private instance : Fueled compare := ⟨inferInstance, compare_fuel⟩
-
-private instance : Fueled compareExact := ⟨inferInstance, compareExact_fuel⟩
-
-namespace Fueled
-
-private theorem lift {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {n : Nat} {x y : Term} (enough : fuel x y ≤ n) :
-    cmp (fuel x y) x y = cmp n x y := (fueled.enough enough).symm
-
-private theorem lift₂ {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {x y : Term} : cmp (fuel x y) x y = cmp (fuel x y + fuel y x) x y ∧
-    cmp (fuel y x) y x = cmp (fuel x y + fuel y x) y x :=
-  ⟨lift (by omega), lift (by omega)⟩
-
-private def bound (a b c : Term) : Nat := fuel a b + fuel b a + fuel b c + fuel c b + fuel a c + fuel c a
-
-private theorem lift₃ {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} {x y : Term} (enough : fuel x y ≤ bound a b c) :
-    cmp (fuel x y) x y = cmp (bound a b c) x y := lift enough
-
-private theorem swap {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] (a b : Term) : cmp (fuel a b) a b = (cmp (fuel b a) b a).swap := by
-  have := fueled.total (fuel a b + fuel b a)
-  rw [(lift₂ (cmp := cmp) (x := a) (y := b)).1, (lift₂ (cmp := cmp) (x := a) (y := b)).2]
-  exact Std.OrientedCmp.eq_swap
-
-private theorem self {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] (a : Term) : cmp (fuel a a) a a = .eq := by
-  have := fueled.total (fuel a a)
-  exact Std.ReflCmp.compare_self
-
-private theorem eq_symm {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b : Term} (equal : cmp (fuel a b) a b = .eq) : cmp (fuel b a) b a = .eq := by
-  rw [swap (cmp := cmp)] at equal
-  simpa using equal
-
-private theorem gt_iff_lt {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b : Term} : cmp (fuel a b) a b = .gt ↔ cmp (fuel b a) b a = .lt := by
-  rw [swap (cmp := cmp)]
-  cases cmp (fuel b a) b a <;> simp
-
-private theorem lt_of_gt {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b : Term} (greater : cmp (fuel a b) a b = .gt) : cmp (fuel b a) b a = .lt :=
-  gt_iff_lt.mp greater
-
-private theorem gt_of_lt {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b : Term} (less : cmp (fuel a b) a b = .lt) : cmp (fuel b a) b a = .gt := by
-  rw [swap (cmp := cmp)] at less
-  cases ordered : cmp (fuel b a) b a <;> simp_all
-
-/-- Rewrite three comparisons at a common number of steps. -/
-private theorem common {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (motive : Ordering → Ordering → Ordering → Prop)
-    (holds : ∀ n, Std.TransCmp (cmp n) → motive (cmp n a b) (cmp n b c) (cmp n a c)) :
-    motive (cmp (fuel a b) a b) (cmp (fuel b c) b c) (cmp (fuel a c) a c) := by
-  rw [lift₃ (cmp := cmp) (a := a) (b := b) (c := c) (x := a) (y := b) (by simp only [bound]; omega),
-    lift₃ (cmp := cmp) (a := a) (b := b) (c := c) (x := b) (y := c) (by simp only [bound]; omega),
-    lift₃ (cmp := cmp) (a := a) (b := b) (c := c) (x := a) (y := c) (by simp only [bound]; omega)]
-  exact holds _ (fueled.total _)
-
-private theorem eq_trans {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .eq) (second : cmp (fuel b c) b c = .eq) :
-    cmp (fuel a c) a c = .eq :=
-  common (fun x y z => x = .eq → y = .eq → z = .eq)
-    (fun _ _ => Std.TransCmp.eq_trans) first second
-
-private theorem lt_trans {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .lt) (second : cmp (fuel b c) b c = .lt) :
-    cmp (fuel a c) a c = .lt :=
-  common (fun x y z => x = .lt → y = .lt → z = .lt)
-    (fun _ _ => Std.TransCmp.lt_trans) first second
-
-private theorem isLE_trans {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : (cmp (fuel a b) a b).isLE) (second : (cmp (fuel b c) b c).isLE) :
-    (cmp (fuel a c) a c).isLE :=
-  common (fun x y z => x.isLE → y.isLE → z.isLE)
-    (fun _ _ => Std.TransCmp.isLE_trans) first second
-
-private theorem lt_of_eq_of_lt {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .eq) (second : cmp (fuel b c) b c = .lt) :
-    cmp (fuel a c) a c = .lt :=
-  common (fun x y z => x = .eq → y = .lt → z = .lt)
-    (fun _ _ => Std.TransCmp.lt_of_eq_of_lt) first second
-
-private theorem lt_of_lt_of_eq {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .lt) (second : cmp (fuel b c) b c = .eq) :
-    cmp (fuel a c) a c = .lt :=
-  common (fun x y z => x = .lt → y = .eq → z = .lt)
-    (fun _ _ => Std.TransCmp.lt_of_lt_of_eq) first second
-
-private theorem lt_of_isLE_of_lt {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : (cmp (fuel a b) a b).isLE) (second : cmp (fuel b c) b c = .lt) :
-    cmp (fuel a c) a c = .lt :=
-  common (fun x y z => x.isLE → y = .lt → z = .lt)
-    (fun _ _ => Std.TransCmp.lt_of_isLE_of_lt) first second
-
-private theorem lt_of_lt_of_isLE {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .lt) (second : (cmp (fuel b c) b c).isLE) :
-    cmp (fuel a c) a c = .lt :=
-  common (fun x y z => x = .lt → y.isLE → z = .lt)
-    (fun _ _ => Std.TransCmp.lt_of_lt_of_isLE) first second
-
-private theorem gt_trans {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .gt) (second : cmp (fuel b c) b c = .gt) :
-    cmp (fuel a c) a c = .gt :=
-  common (fun x y z => x = .gt → y = .gt → z = .gt)
-    (fun _ _ => Std.TransCmp.gt_trans) first second
-
-private theorem gt_of_eq_of_gt {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .eq) (second : cmp (fuel b c) b c = .gt) :
-    cmp (fuel a c) a c = .gt :=
-  common (fun x y z => x = .eq → y = .gt → z = .gt)
-    (fun _ _ => Std.TransCmp.gt_of_eq_of_gt) first second
-
-private theorem gt_of_gt_of_eq {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (first : cmp (fuel a b) a b = .gt) (second : cmp (fuel b c) b c = .eq) :
-    cmp (fuel a c) a c = .gt :=
-  common (fun x y z => x = .gt → y = .eq → z = .gt)
-    (fun _ _ => Std.TransCmp.gt_of_gt_of_eq) first second
-
-/-- Equal terms compare alike with a third. -/
-private theorem congr_left {cmp : Nat → Term → Term → Ordering} [fueled : Fueled cmp] {a b c : Term} (equal : cmp (fuel a b) a b = .eq) : cmp (fuel a c) a c = cmp (fuel b c) b c :=
-  common (fun x y z => x = .eq → z = y)
-    (fun _ _ equal => Std.TransCmp.congr_left equal) equal
-
-end Fueled
 
 
 /-! ### Order laws with the steps each pair of terms needs -/
@@ -777,120 +662,123 @@ section
 variable {a b c : Term}
 
 theorem compare_eq_symm (equal : compare (fuel a b) a b = .eq) : compare (fuel b a) b a = .eq :=
-  Fueled.eq_symm equal
+  Std.OrientedCmp.eq_symm (cmp := fun a b => compare (fuel a b) a b) equal
 
 theorem compare_gt_iff_lt : compare (fuel a b) a b = .gt ↔ compare (fuel b a) b a = .lt :=
-  Fueled.gt_iff_lt
+  Std.OrientedCmp.gt_iff_lt (cmp := fun a b => compare (fuel a b) a b)
 
 theorem compare_lt_of_gt (greater : compare (fuel a b) a b = .gt) : compare (fuel b a) b a = .lt :=
-  Fueled.lt_of_gt greater
+  Std.OrientedCmp.lt_of_gt (cmp := fun a b => compare (fuel a b) a b) greater
 
 theorem compare_gt_of_lt (less : compare (fuel a b) a b = .lt) : compare (fuel b a) b a = .gt :=
-  Fueled.gt_of_lt less
+  Std.OrientedCmp.gt_of_lt (cmp := fun a b => compare (fuel a b) a b) less
 
 theorem compare_eq_trans (first : compare (fuel a b) a b = .eq) (second : compare (fuel b c) b c = .eq) :
     compare (fuel a c) a c = .eq :=
-  Fueled.eq_trans first second
+  Std.TransCmp.eq_trans (cmp := fun a b => compare (fuel a b) a b) first second
 
 theorem compare_lt_trans (first : compare (fuel a b) a b = .lt) (second : compare (fuel b c) b c = .lt) :
     compare (fuel a c) a c = .lt :=
-  Fueled.lt_trans first second
+  Std.TransCmp.lt_trans (cmp := fun a b => compare (fuel a b) a b) first second
 
 theorem compare_gt_trans (first : compare (fuel a b) a b = .gt) (second : compare (fuel b c) b c = .gt) :
     compare (fuel a c) a c = .gt :=
-  Fueled.gt_trans first second
+  Std.TransCmp.gt_trans (cmp := fun a b => compare (fuel a b) a b) first second
 
 theorem compare_isLE_trans (first : (compare (fuel a b) a b).isLE) (second : (compare (fuel b c) b c).isLE) :
     (compare (fuel a c) a c).isLE :=
-  Fueled.isLE_trans first second
+  Std.TransCmp.isLE_trans (cmp := fun a b => compare (fuel a b) a b) first second
 
 theorem compare_lt_of_eq_of_lt (first : compare (fuel a b) a b = .eq) (second : compare (fuel b c) b c = .lt) :
     compare (fuel a c) a c = .lt :=
-  Fueled.lt_of_eq_of_lt first second
+  Std.TransCmp.lt_of_eq_of_lt (cmp := fun a b => compare (fuel a b) a b) first second
 
 theorem compare_lt_of_lt_of_eq (first : compare (fuel a b) a b = .lt) (second : compare (fuel b c) b c = .eq) :
     compare (fuel a c) a c = .lt :=
-  Fueled.lt_of_lt_of_eq first second
+  Std.TransCmp.lt_of_lt_of_eq (cmp := fun a b => compare (fuel a b) a b) first second
 
 theorem compare_lt_of_isLE_of_lt (first : (compare (fuel a b) a b).isLE) (second : compare (fuel b c) b c = .lt) :
     compare (fuel a c) a c = .lt :=
-  Fueled.lt_of_isLE_of_lt first second
+  Std.TransCmp.lt_of_isLE_of_lt (cmp := fun a b => compare (fuel a b) a b) first second
 
 theorem compare_lt_of_lt_of_isLE (first : compare (fuel a b) a b = .lt) (second : (compare (fuel b c) b c).isLE) :
     compare (fuel a c) a c = .lt :=
-  Fueled.lt_of_lt_of_isLE first second
+  Std.TransCmp.lt_of_lt_of_isLE (cmp := fun a b => compare (fuel a b) a b) first second
 
 theorem compare_gt_of_eq_of_gt (first : compare (fuel a b) a b = .eq) (second : compare (fuel b c) b c = .gt) :
     compare (fuel a c) a c = .gt :=
-  Fueled.gt_of_eq_of_gt first second
+  Std.TransCmp.gt_of_eq_of_gt (cmp := fun a b => compare (fuel a b) a b) first second
 
 theorem compare_congr_left (equal : compare (fuel a b) a b = .eq) :
     compare (fuel a c) a c = compare (fuel b c) b c :=
-  Fueled.congr_left equal
+  Std.TransCmp.congr_left (cmp := fun a b => compare (fuel a b) a b) equal
 
 theorem compareExact_eq_symm (equal : compareExact (fuel a b) a b = .eq) : compareExact (fuel b a) b a = .eq :=
-  Fueled.eq_symm equal
+  Std.OrientedCmp.eq_symm (cmp := fun a b => compareExact (fuel a b) a b) equal
 
 theorem compareExact_gt_iff_lt : compareExact (fuel a b) a b = .gt ↔ compareExact (fuel b a) b a = .lt :=
-  Fueled.gt_iff_lt
+  Std.OrientedCmp.gt_iff_lt (cmp := fun a b => compareExact (fuel a b) a b)
 
 theorem compareExact_lt_of_gt (greater : compareExact (fuel a b) a b = .gt) : compareExact (fuel b a) b a = .lt :=
-  Fueled.lt_of_gt greater
+  Std.OrientedCmp.lt_of_gt (cmp := fun a b => compareExact (fuel a b) a b) greater
 
 theorem compareExact_gt_of_lt (less : compareExact (fuel a b) a b = .lt) : compareExact (fuel b a) b a = .gt :=
-  Fueled.gt_of_lt less
+  Std.OrientedCmp.gt_of_lt (cmp := fun a b => compareExact (fuel a b) a b) less
 
 theorem compareExact_eq_trans (first : compareExact (fuel a b) a b = .eq) (second : compareExact (fuel b c) b c = .eq) :
     compareExact (fuel a c) a c = .eq :=
-  Fueled.eq_trans first second
+  Std.TransCmp.eq_trans (cmp := fun a b => compareExact (fuel a b) a b) first second
 
 theorem compareExact_lt_trans (first : compareExact (fuel a b) a b = .lt) (second : compareExact (fuel b c) b c = .lt) :
     compareExact (fuel a c) a c = .lt :=
-  Fueled.lt_trans first second
+  Std.TransCmp.lt_trans (cmp := fun a b => compareExact (fuel a b) a b) first second
 
 theorem compareExact_gt_trans (first : compareExact (fuel a b) a b = .gt) (second : compareExact (fuel b c) b c = .gt) :
     compareExact (fuel a c) a c = .gt :=
-  Fueled.gt_trans first second
+  Std.TransCmp.gt_trans (cmp := fun a b => compareExact (fuel a b) a b) first second
 
 theorem compareExact_isLE_trans (first : (compareExact (fuel a b) a b).isLE) (second : (compareExact (fuel b c) b c).isLE) :
     (compareExact (fuel a c) a c).isLE :=
-  Fueled.isLE_trans first second
+  Std.TransCmp.isLE_trans (cmp := fun a b => compareExact (fuel a b) a b) first second
 
 theorem compareExact_lt_of_eq_of_lt (first : compareExact (fuel a b) a b = .eq) (second : compareExact (fuel b c) b c = .lt) :
     compareExact (fuel a c) a c = .lt :=
-  Fueled.lt_of_eq_of_lt first second
+  Std.TransCmp.lt_of_eq_of_lt (cmp := fun a b => compareExact (fuel a b) a b) first second
 
 theorem compareExact_lt_of_lt_of_eq (first : compareExact (fuel a b) a b = .lt) (second : compareExact (fuel b c) b c = .eq) :
     compareExact (fuel a c) a c = .lt :=
-  Fueled.lt_of_lt_of_eq first second
+  Std.TransCmp.lt_of_lt_of_eq (cmp := fun a b => compareExact (fuel a b) a b) first second
 
 theorem compareExact_lt_of_isLE_of_lt (first : (compareExact (fuel a b) a b).isLE) (second : compareExact (fuel b c) b c = .lt) :
     compareExact (fuel a c) a c = .lt :=
-  Fueled.lt_of_isLE_of_lt first second
+  Std.TransCmp.lt_of_isLE_of_lt (cmp := fun a b => compareExact (fuel a b) a b) first second
 
 theorem compareExact_lt_of_lt_of_isLE (first : compareExact (fuel a b) a b = .lt) (second : (compareExact (fuel b c) b c).isLE) :
     compareExact (fuel a c) a c = .lt :=
-  Fueled.lt_of_lt_of_isLE first second
+  Std.TransCmp.lt_of_lt_of_isLE (cmp := fun a b => compareExact (fuel a b) a b) first second
 
 theorem compareExact_gt_of_eq_of_gt (first : compareExact (fuel a b) a b = .eq) (second : compareExact (fuel b c) b c = .gt) :
     compareExact (fuel a c) a c = .gt :=
-  Fueled.gt_of_eq_of_gt first second
+  Std.TransCmp.gt_of_eq_of_gt (cmp := fun a b => compareExact (fuel a b) a b) first second
 
 theorem compareExact_congr_left (equal : compareExact (fuel a b) a b = .eq) :
     compareExact (fuel a c) a c = compareExact (fuel b c) b c :=
-  Fueled.congr_left equal
+  Std.TransCmp.congr_left (cmp := fun a b => compareExact (fuel a b) a b) equal
 
 end
 
-@[simp] theorem compareExact_self (a : Term) : compareExact (fuel a a) a a = .eq := Fueled.self a
+@[simp] theorem compareExact_self (a : Term) : compareExact (fuel a a) a a = .eq :=
+  Std.ReflCmp.compare_self (cmp := fun a b => compareExact (fuel a b) a b)
 
-@[simp] theorem compare_self (a : Term) : compare (fuel a a) a a = .eq := Fueled.self a
+@[simp] theorem compare_self (a : Term) : compare (fuel a a) a a = .eq :=
+  Std.ReflCmp.compare_self (cmp := fun a b => compare (fuel a b) a b)
 
 theorem compareExact_swap (a b : Term) :
-    compareExact (fuel a b) a b = (compareExact (fuel b a) b a).swap := Fueled.swap a b
+    compareExact (fuel a b) a b = (compareExact (fuel b a) b a).swap :=
+  Std.OrientedCmp.eq_swap (cmp := fun a b => compareExact (fuel a b) a b)
 
 theorem compare_swap (a b : Term) : compare (fuel a b) a b = (compare (fuel b a) b a).swap :=
-  Fueled.swap a b
+  Std.OrientedCmp.eq_swap (cmp := fun a b => compare (fuel a b) a b)
 
 end Lynx.Term
 
@@ -912,6 +800,11 @@ namespace Lynx.Term
 @[simp] theorem compareExact_atoms (a b : String) :
     compareExact (fuel (.atom a) (.atom b)) (.atom a) (.atom b) = Ord.compare a b := by
   rw [compareExact_step]
+  exact Compare.stringCompare_eq a b
+
+theorem compare_atoms (a b : String) :
+    compare (fuel (.atom a) (.atom b)) (.atom a) (.atom b) = Ord.compare a b := by
+  rw [compare_step]
   exact Compare.stringCompare_eq a b
 
 @[simp] theorem compareExact_reference (a b : List Nat) :
@@ -1639,3 +1532,102 @@ decreasing_by
     omega
 
 end Lynx.Term
+
+namespace Lynx
+
+/-! ## Identical terms
+
+Erlang's comparison equates `1` and `1.0`, and maps with shadowed bindings.
+`Term.identical` compares the representations instead, field by field, so that
+evaluation in the kernel can decide it, as checks of concurrent steps do. -/
+
+mutual
+/-- Whether two terms are the same term. -/
+@[expose] def Term.identical : Term → Term → Bool
+  | .integer first, .integer second => first == second
+  | .float first, .float second =>
+      first.negative == second.negative && first.exponent.val == second.exponent.val &&
+        first.fraction.val == second.fraction.val
+  | .atom first, .atom second => first == second
+  | .reference first, .reference second => first == second
+  | .function module name arity captures, .function module' name' arity' captures' =>
+      module == module' && name == name' && arity == arity' &&
+        Term.identicalList captures.toList captures'.toList
+  | .pid first, .pid second => first == second
+  | .tuple first, .tuple second => Term.identicalList first.toList second.toList
+  | .map first, .map second => Term.identicalEntries first second
+  | .nil, .nil => true
+  | .cons head tail, .cons head' tail' => Term.identical head head' && Term.identical tail tail'
+  | .bitstring bytes lastBits _, .bitstring bytes' lastBits' _ =>
+      bytes.data == bytes'.data && lastBits == lastBits'
+  | _, _ => false
+termination_by structural first => first
+
+/-- Whether two lists hold the same terms. -/
+@[expose] def Term.identicalList : List Term → List Term → Bool
+  | [], [] => true
+  | first :: rest, second :: rest' => Term.identical first second && Term.identicalList rest rest'
+  | _, _ => false
+termination_by structural first => first
+
+/-- Whether two lists hold the same pairs of terms. -/
+@[expose] def Term.identicalEntries : List (Term × Term) → List (Term × Term) → Bool
+  | [], [] => true
+  | (key, value) :: rest, (key', value') :: rest' =>
+      Term.identical key key' && Term.identical value value' && Term.identicalEntries rest rest'
+  | _, _ => false
+termination_by structural first => first
+end
+
+mutual
+/-- Identical terms are equal. -/
+theorem Term.eq_of_identical : ∀ {first second : Term},
+    Term.identical first second = true → first = second
+  | .function module name arity ⟨captures⟩, second, same => by
+    cases second <;> simp only [Term.identical, Bool.and_eq_true, beq_iff_eq, Bool.false_eq_true] at same
+    obtain ⟨⟨⟨rfl, rfl⟩, rfl⟩, same⟩ := same
+    rw [Term.eq_of_identicalList same]
+  | .tuple ⟨items⟩, second, same => by
+    cases second <;> simp only [Term.identical, Bool.false_eq_true] at same
+    rw [Term.eq_of_identicalList same]
+  | .map entries, second, same => by
+    cases second <;> simp only [Term.identical, Bool.false_eq_true] at same
+    rw [Term.eq_of_identicalEntries same]
+  | .cons head tail, second, same => by
+    cases second <;> simp only [Term.identical, Bool.and_eq_true, Bool.false_eq_true] at same
+    rw [Term.eq_of_identical same.1, Term.eq_of_identical same.2]
+  | .bitstring ⟨bytes⟩ _ _, second, same => by
+    cases second <;> simp only [Term.identical, Bool.and_eq_true, beq_iff_eq, Bool.false_eq_true] at same
+    obtain ⟨rfl, rfl⟩ := same
+    rfl
+  | .float ⟨negative, exponent, fraction⟩, second, same => by
+    cases second <;> simp only [Term.identical, Bool.and_eq_true, beq_iff_eq, Bool.false_eq_true] at same
+    rename_i float
+    obtain ⟨negative', exponent', fraction'⟩ := float
+    obtain ⟨⟨rfl, exponent⟩, fraction⟩ := same
+    rw [Fin.ext exponent, Fin.ext fraction]
+  | .integer _, second, same | .atom _, second, same
+  | .reference _, second, same | .pid _, second, same | .nil, second, same => by
+    cases second <;> simp_all [Term.identical]
+
+/-- Lists of identical terms are equal. -/
+theorem Term.eq_of_identicalList : ∀ {first second : List Term},
+    Term.identicalList first second = true → first = second
+  | [], [], _ => rfl
+  | head :: rest, head' :: rest', same => by
+    simp only [Term.identicalList, Bool.and_eq_true] at same
+    rw [Term.eq_of_identical same.1, Term.eq_of_identicalList same.2]
+  | [], _ :: _, same | _ :: _, [], same => by simp [Term.identicalList] at same
+
+/-- Lists of identical bindings are equal. -/
+theorem Term.eq_of_identicalEntries : ∀ {first second : List (Term × Term)},
+    Term.identicalEntries first second = true → first = second
+  | [], [], _ => rfl
+  | (key, value) :: rest, (key', value') :: rest', same => by
+    simp only [Term.identicalEntries, Bool.and_eq_true] at same
+    rw [Term.eq_of_identical same.1.1, Term.eq_of_identical same.1.2,
+      Term.eq_of_identicalEntries same.2]
+  | [], _ :: _, same | _ :: _, [], same => by simp [Term.identicalEntries] at same
+end
+
+end Lynx

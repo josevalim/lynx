@@ -8,9 +8,9 @@ import all Lynx.Concurrent.Footprint
 interleaving, so one run determines the outcome of every run.
 
 `Config.RaceFree` asks that any two different steps of a reachable
-configuration meet again after one step each. Since every run ends
-(`Config.terminates`), all runs then end in the same configuration
-(`Config.RaceFree.outcome_eq`). `Config.RaceFree.of_talks` establishes it for
+configuration meet again after one step each. Then any two runs that reach a
+terminal configuration reach the same one (`Config.RaceFree.outcome_eq`), and
+every run reaches one, since runs end (`Config.terminates`). `Config.RaceFree.of_talks` establishes it for
 processes that only talk along their process tree, each receiver hearing from
 a single sender. -/
 

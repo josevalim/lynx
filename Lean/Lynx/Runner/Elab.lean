@@ -207,14 +207,17 @@ syntax (name := kernelTactic) "lynx_kernel" : tactic
     unless rhs.isConstOf ``Bool.true do throwError expected
     if type.hasMVar then throwError "lynx_kernel expects a goal without metavariables"
     let locals ← (← getLCtx).foldlM (init := #[]) fun locals decl =>
-      return if decl.isImplementationDetail then locals else locals.push decl.toExpr
+      return if decl.isImplementationDetail then locals else locals.push decl
+    -- Let-bound locals become `let`s of the theorem, so only the others are arguments.
+    let arguments := (locals.filter fun decl => !decl.isLet).map (·.toExpr)
+    let locals := locals.map (·.toExpr)
     let closedType ← mkForallFVars locals type
     let closedValue ← mkLambdaFVars locals
       (mkApp2 (mkConst ``Eq.refl [1]) (mkConst ``Bool) (mkConst ``Bool.true))
     let levelParams := (collectLevelParams {} closedType).params.toList
     let name ← mkAuxDeclName `_lynx_kernel
     addDecl (.thmDecl { name, levelParams, type := closedType, value := closedValue })
-    goal.assign (mkAppN (mkConst name (levelParams.map mkLevelParam)) locals)
+    goal.assign (mkAppN (mkConst name (levelParams.map mkLevelParam)) arguments)
     replaceMainGoal []
 
 end Kernel

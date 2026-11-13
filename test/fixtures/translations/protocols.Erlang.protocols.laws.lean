@@ -35,7 +35,7 @@ theorem «size_undefined/1» (value : Lynx.Term)
   simp [«size_undefined_ensures/1», «size/1», Elixir.Lynx.Support.Size.«size/1»,
     Elixir.Lynx.Support.Size.«impl_for!/1», Elixir.Lynx.Support.Size.«impl_for/1»,
     Lynx.Exception.classTerm, Lynx.Exception.reason, Lynx.Term.getMapKeys,
-    Lynx.Term.exactCompare_atoms, Erlang.erlang.«=:=/2»]
+    Lynx.Term.compareExact_atoms, Erlang.erlang.«=:=/2»]
 
 theorem «describe_fallback/1» (value : Lynx.Term)
     (requires : «describe_fallback_requires/1» value = Except.ok Lynx.Term.true) :

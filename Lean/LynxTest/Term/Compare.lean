@@ -90,9 +90,9 @@ theorem numeric_and_exact_comparison :
     Term.compareExact (Term.fuel (.integer 1) (.float floatOne)) (.integer 1) (.float floatOne) = .lt ∧
     Term.compare (Term.fuel (.tuple #[.integer 1]) (.tuple #[.float floatOne])) (.tuple #[.integer 1]) (.tuple #[.float floatOne]) = .eq ∧
     Term.compareExact (Term.fuel (.tuple #[.integer 1]) (.tuple #[.float floatOne])) (.tuple #[.integer 1]) (.tuple #[.float floatOne]) = .lt ∧
-    (fun a b => Term.compare (Term.fuel a b) a b) (.map [(.atom "key", .integer 1)])
+    Term.compare (Term.fuel (.map [(.atom "key", .integer 1)]) (.map [(.atom "key", .float floatOne)])) (.map [(.atom "key", .integer 1)])
       (.map [(.atom "key", .float floatOne)]) = .eq ∧
-    (fun a b => Term.compare (Term.fuel a b) a b) (.map [(.integer 1, .nil)])
+    Term.compare (Term.fuel (.map [(.integer 1, .nil)]) (.map [(.float floatOne, .nil)])) (.map [(.integer 1, .nil)])
       (.map [(.float floatOne, .nil)]) = .lt := by
   simp [Term.compare_tuple, Term.compareExact_tuple, Term.compare_singleton_map,
     List.compareLex_cons_cons, List.compareLex_nil_nil, floatOne_toRat]
@@ -107,22 +107,22 @@ theorem association_list_order :
     let a := Term.atom "a"
     let b := Term.atom "b"
     let c := Term.atom "c"
-    (fun a b => Term.compare (Term.fuel a b) a b) (.map [(a, .nil), (a, .integer 99)])
+    Term.compare (Term.fuel (.map [(a, .nil), (a, .integer 99)]) (.map [(b, .nil), (a, .nil)])) (.map [(a, .nil), (a, .integer 99)])
       (.map [(b, .nil), (a, .nil)]) = .lt ∧
-    (fun a b => Term.compare (Term.fuel a b) a b) (.map [(b, .integer 0), (a, .integer 99)])
+    Term.compare (Term.fuel (.map [(b, .integer 0), (a, .integer 99)]) (.map [(c, .integer 0), (a, .integer 0)])) (.map [(b, .integer 0), (a, .integer 99)])
       (.map [(c, .integer 0), (a, .integer 0)]) = .lt ∧
-    (fun a b => Term.compare (Term.fuel a b) a b) (.map [(b, .integer 0), (a, .integer 99)])
+    Term.compare (Term.fuel (.map [(b, .integer 0), (a, .integer 99)]) (.map [(a, .integer 99), (b, .integer 1)])) (.map [(b, .integer 0), (a, .integer 99)])
       (.map [(a, .integer 99), (b, .integer 1)]) = .lt ∧
-    (fun a b => Term.compare (Term.fuel a b) a b) (.map [(b, .nil), (a, .integer 1), (a, .integer 99)])
+    Term.compare (Term.fuel (.map [(b, .nil), (a, .integer 1), (a, .integer 99)]) (.map [(a, .integer 1), (b, .nil)])) (.map [(b, .nil), (a, .integer 1), (a, .integer 99)])
       (.map [(a, .integer 1), (b, .nil)]) = .eq := by decide
 
 /-- Comparison reaches map keys and values through every recursive constructor. -/
 theorem nested_map_order :
     let x := Term.map [(.integer 1, .nil), (.integer 0, .nil)]
     let y := Term.map [(.integer 0, .nil), (.integer 1, .nil), (.integer 1, .integer 99)]
-    (fun a b => Term.compare (Term.fuel a b) a b) (.map [(x, .tuple #[.cons y x])])
+    Term.compare (Term.fuel (.map [(x, .tuple #[.cons y x])]) (.map [(y, .tuple #[.cons x y])])) (.map [(x, .tuple #[.cons y x])])
       (.map [(y, .tuple #[.cons x y])]) = .eq ∧
-    (fun a b => Term.compare (Term.fuel a b) a b) (.map [(x, .integer 0), (y, .integer 99)])
+    Term.compare (Term.fuel (.map [(x, .integer 0), (y, .integer 99)]) (.map [(y, .integer 1)])) (.map [(x, .integer 0), (y, .integer 99)])
       (.map [(y, .integer 1)]) = .lt := by decide
 
 /-- Constructor rank and tuple arity decide without comparing children. -/
@@ -182,9 +182,9 @@ theorem list_exact_kinds (head tail : Term) :
 
 /-- Binaries are exactly equal when their bytes are. -/
 theorem binary_exact_bytes :
-    (fun a b => Term.compareExact (Term.fuel a b) a b) (.bitstring ⟨#[1, 2]⟩ 0 (Term.Bitstring.valid_aligned _))
+    Term.compareExact (Term.fuel (.bitstring ⟨#[1, 2]⟩ 0 (Term.Bitstring.valid_aligned _)) (.bitstring ⟨#[1, 2]⟩ 0 (Term.Bitstring.valid_aligned _))) (.bitstring ⟨#[1, 2]⟩ 0 (Term.Bitstring.valid_aligned _))
         (.bitstring ⟨#[1, 2]⟩ 0 (Term.Bitstring.valid_aligned _)) = .eq ∧
-      (fun a b => Term.compareExact (Term.fuel a b) a b) (.bitstring ⟨#[1, 2]⟩ 0 (Term.Bitstring.valid_aligned _))
+      Term.compareExact (Term.fuel (.bitstring ⟨#[1, 2]⟩ 0 (Term.Bitstring.valid_aligned _)) (.bitstring ⟨#[1]⟩ 0 (Term.Bitstring.valid_aligned _))) (.bitstring ⟨#[1, 2]⟩ 0 (Term.Bitstring.valid_aligned _))
         (.bitstring ⟨#[1]⟩ 0 (Term.Bitstring.valid_aligned _)) ≠ .eq := by
   refine ⟨(Term.binary_compareExact_eq _ _).mpr rfl, fun equal => ?_⟩
   have := (Term.binary_compareExact_eq _ _).mp equal
