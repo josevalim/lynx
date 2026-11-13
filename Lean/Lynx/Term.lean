@@ -9,8 +9,6 @@ public import Lynx.Term.Runner
 public import Lynx.Term.Induction
 public import Lynx.Term.Order
 public import Lynx.Term.Eval
-public import Lynx.Concurrent.Reduction
-public import Lynx.Concurrent.Confluence
 public import Lynx.Concurrent.Trace
 public import Lynx.Concurrent.Termination
 
@@ -91,30 +89,6 @@ public theorem concurrent_of_check (computation : Result α) (accept : Outcome �
     concurrent computation outcome :=
   fun elapsed _ _ result run final =>
     accepted result (Concurrent.check_sound (checked elapsed) run final)
-
-/-- Without races, one run to a terminal configuration determines the outcome of
-every run: steps of different processes commute, so all runs end alike. -/
-public theorem concurrent_of_raceFree (computation : Result α) {outcome : Outcome α}
-    (raceFree : ∀ elapsed, (Concurrent.Config.start {} computation elapsed).RaceFree)
-    (run : ∀ elapsed, ∃ events last, Concurrent.Run (.start {} computation elapsed) events last ∧
-      Concurrent.Terminal last outcome) : concurrent computation outcome :=
-  fun elapsed _ _ _ run' terminal' =>
-    let ⟨_, _, run, terminal⟩ := run elapsed
-    (raceFree elapsed).outcome_eq run terminal run' terminal'
-
-/-- Without races, taking the first available steps until none remain evaluates
-the outcome of every run. -/
-public theorem concurrent_of_advance (computation : Result α) (steps : Nat) {outcome : Outcome α}
-    (raceFree : ∀ elapsed, (Concurrent.Config.start {} computation elapsed).RaceFree)
-    (advanced : ∀ elapsed,
-      ((Concurrent.Config.start {} computation elapsed).advance steps).successors.isEmpty ∧
-        ((Concurrent.Config.start {} computation elapsed).advance steps).outcome = outcome) :
-    concurrent computation outcome := by
-  refine concurrent_of_raceFree computation raceFree fun elapsed => ?_
-  obtain ⟨stuck, reached⟩ := advanced elapsed
-  obtain ⟨_, run⟩ := Concurrent.Config.run_advance steps (.start {} computation elapsed)
-  exact ⟨_, _, run, reached ▸
-    Concurrent.Config.terminal_of_successors_eq_nil (List.isEmpty_iff.mp stuck)⟩
 
 @[simp] public theorem sequential_ok (value : α) : sequential (.ok value) = .ok value := by
   simp [sequential]
