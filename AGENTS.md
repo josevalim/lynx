@@ -76,17 +76,29 @@ non-negotiable, so a new process BIF, or a change to one, goes through every lay
    process's own record. Termination (`Concurrent/Termination.lean`), traces
    (`Concurrent/Trace.lean`) and the runner (`Lynx/Term/Runner.lean`) must cover
    it too.
-4. Register the BIF's purity in `@runtime_purity` (`lib/lynx/translation.ex`) and
+4. Look for steps that do nothing now and never will. For example, a `DOWN`
+   in transit after its monitor was removed by `demonitor`, a message sent to an
+   alias that was removed by `unalias`, or a message or exit signal to a process
+   that has exited and can never be live again (`State.settled`). `check` takes such
+   steps alone (`Config.forced`), so it never explores their interleavings with other
+   steps. If the new BIF creates steps like these, recognize them from the configuration
+   in `Envelope.inert`, or in a new case of `ForcedStep`. Then prove the obligations of
+   `forced_first`: the step stays enabled, every other step either commutes with it or
+   absorbs it, and the step stays forced.
+   Not every such signal qualifies: a link or monitor signal to a process that has
+   exited is not inert, because its bounce answers with an exit or a `DOWN`.
+5. Register the BIF's purity in `@runtime_purity` (`lib/lynx/translation.ex`) and
    regenerate `Lean/modules.json` if its signature changed.
-5. Test it in `LynxTest/Modules/Signals.lean` with kernel-checked closed programs
+6. Test it in `LynxTest/Modules/Signals.lean` with kernel-checked closed programs
    for each OTP behavior, including races where the order of steps changes the
    reply, and update `LynxTest/PublicApi.lean`.
-6. Before trusting a change to footprints or to how `check` explores, audit it
+7. Before trusting a change to footprints or to how `check` explores, audit it
    executably: over every configuration reachable from closed programs that use
    the BIF, check that steps reported as commuting reach the same configuration
-   in either order. Audits only cover the races the programs exercise, so write
+   in either order, and that the steps `check` takes alone lose no terminal
+   configuration. Audits only cover the races the programs exercise, so write
    programs for each race (for example, a timer whose destination dies).
-7. Measure the concurrent examples (`examples/concurrency`, `examples/elixir/task.exs`):
+8. Measure the concurrent examples (`examples/concurrency`, `examples/elixir/task.exs`):
    explored configurations and kernel time, before and after.
 
 ### Examples
