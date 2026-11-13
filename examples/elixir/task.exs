@@ -75,6 +75,41 @@ defmodule TaskProofsTest do
     result in [:reply, :timeout] and empty?
   end
 
+  def await_many_leaves_no_reply do
+    first = Task.async(fn -> :first end)
+    second = Task.async(fn -> :second end)
+
+    # The timeout only matters through the milliseconds cancel_timer/1 may
+    # report left, any of which the proof explores, so a short one keeps them few.
+    result =
+      try do
+        Task.await_many([first, second], 1)
+      catch
+        :exit, {:timeout, _} -> :timeout
+      end
+
+    # Once both tasks exit, no other process can send to the owner.
+    await_exit(first.pid)
+    await_exit(second.pid)
+
+    empty? =
+      receive do
+        _ -> false
+      after
+        0 -> true
+      end
+
+    result in [[:first, :second], :timeout] and empty?
+  end
+
+  defp await_exit(pid) do
+    monitor = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^monitor, _, _, _} -> :ok
+    end
+  end
+
   laws "Task" do
     prelude ~LEAN"""
     module
@@ -205,6 +240,63 @@ defmodule TaskProofsTest do
       exact Lynx.concurrent_of_check
         (Lynx.apply «await_drains_reply:ensures/0» Erlang.program.fun_table (depth + 4))
         Lynx.Outcome.isTrue 300
+        (fun _ => by lynx_counterexample; lynx_kernel)
+        fun _ => Lynx.Outcome.eq_of_isTrue
+      """
+  end
+
+  laws "Task.await_many", options: [maxHeartbeats: 0] do
+    # Task.Supervised runs the task with apply(:erlang, :apply, [fun, []]).
+    dynamic &:erlang.apply/2
+
+    # The tasks do not raise, so their crash reports are unreachable.
+    cutoff &Task.Supervised.get_running/1
+    cutoff &Task.Supervised.format_report/1
+    cutoff &:proc_lib.get_label/1
+    cutoff &:logger.error/2
+
+    # The owner awaits its own tasks, so it never reports another owner.
+    cutoff &Task.invalid_owner_error/1
+    cutoff &ArgumentError.exception/1
+
+    # Tasks are maps, so task.pid never reports a non-map.
+    cutoff &:elixir_erl_pass.no_parens_remote/2
+
+    # Only lists of tasks are enumerated, so other enumerables are
+    # unreachable: I/O streams, and those counting through ranges or folding
+    # over indices, whose termination is not inferred.
+    cutoff &Enumerable.File.Stream.reduce/3
+    cutoff &Enumerable.IO.Stream.reduce/3
+    cutoff &Enumerable.GenEvent.Stream.reduce/3
+    cutoff &Enumerable.Range.reduce/3
+    cutoff &Enumerable.Date.Range.reduce/3
+    cutoff &Enumerable.MapSet.reduce/3
+    cutoff &Enumerable.HashSet.reduce/3
+    cutoff &Enumerable.HashDict.reduce/3
+    cutoff &Enum.map_range/4
+    cutoff &Enum.reduce_range/5
+
+    # Functions enumerated with the wrong arity raise Protocol.UndefinedError,
+    # but none are enumerated.
+    cutoff &Protocol.UndefinedError.exception/1
+
+    # Task.await_many/2 builds its map of pending replies from a list.
+    cutoff &Map.new_from_map/2
+
+    # Task.await_many/2 must not leave a reply or its timer's message in the
+    # mailbox, whether it returns both replies or times out. Checked on Elixir
+    # main (d392fe2) with OTP 29.1.2, where it demonitors pending tasks in the
+    # order of the list rather than of a map, which the proof cannot evaluate.
+    law await_many_drains_replies,
+      expects: await_many_leaves_no_reply(),
+      proof: ~LEAN"""
+      -- Each task is spawned, receives its work, and applies its function
+      -- through :erlang.apply/2, each one level down.
+      refine ⟨4, fun depth deep => ?_⟩
+      obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
+      exact Lynx.concurrent_of_check
+        (Lynx.apply «await_many_drains_replies:ensures/0» Erlang.program.fun_table (depth + 4))
+        Lynx.Outcome.isTrue 600
         (fun _ => by lynx_counterexample; lynx_kernel)
         fun _ => Lynx.Outcome.eq_of_isTrue
       """
