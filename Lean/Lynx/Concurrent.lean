@@ -128,10 +128,11 @@ structure State where
   | some process => state.update processId (some (change process))
   | none => state
 
-/-- Keep what the process left in its environment. Its identity is not stored. -/
+/-- Keep what the process left in its environment. Its identity is not stored,
+and its reference counter never goes back, so references stay unique. -/
 @[expose] def State.store (state : State) (processId : PID) (env : Environment) : State :=
   state.modify processId fun process =>
-    { process with pdict := env.pdict, refCounter := env.refCounter }
+    { process with pdict := env.pdict, refCounter := max process.refCounter env.refCounter }
 
 /-- Append a message to a live mailbox. -/
 @[expose] def State.append (state : State) (processId : PID) (message : Term) : State :=

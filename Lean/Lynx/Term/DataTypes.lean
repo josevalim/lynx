@@ -121,7 +121,8 @@ replacing `currentPid` does not change which process is running. -/
 structure Environment where
   /-- PID of the process running the current computation. -/
   currentPid : PID := []
-  /-- Number of references the process running the current computation allocated. -/
+  /-- Number of references the process running the current computation allocated.
+  Once processes run concurrently, a process cannot lower it. -/
   refCounter : Nat := 0
   /-- Process dictionary of the process running the current computation. -/
   pdict : List (Term × Term) := []
