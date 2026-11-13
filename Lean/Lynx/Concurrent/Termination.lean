@@ -99,6 +99,15 @@ theorem mem_deliverable {inTransit : List Envelope} {envelope : Envelope} {rest 
     ∃ pre post, inTransit = pre ++ envelope :: post ∧ rest = pre ++ post := by
   simpa using mem_deliverableFrom mem
 
+theorem weight_enqueue (envelope : Envelope) (inTransit : List Envelope) :
+    ((enqueue envelope inTransit).map Envelope.weight).sum =
+      envelope.weight + (inTransit.map Envelope.weight).sum := by
+  induction inTransit with
+  | nil => simp [enqueue]
+  | cons head rest ih =>
+    simp only [enqueue]
+    split <;> simp [ih] <;> omega
+
 /-- Taking a signal lowers the weight. -/
 theorem State.weight_receive {state : State} {envelope : Envelope} {rest : List Envelope}
     (mem : (envelope, rest) ∈ deliverable state.inTransit) :
@@ -116,8 +125,8 @@ theorem State.weight_bounce {state : State} {envelope : Envelope} {rest : List E
   obtain ⟨pre, post, split, rfl⟩ := mem_deliverable mem
   unfold State.bounce
   split <;> rename_i signal <;>
-    simp only [State.weight, State.emit, split, List.map_append, List.map_cons, List.sum_append,
-      List.sum_cons, List.map_nil, List.sum_nil, Envelope.weight, signal] <;> omega
+    simp only [State.weight, State.emit, weight_enqueue, split, List.map_append, List.map_cons,
+      List.sum_append, List.sum_cons, List.map_nil, List.sum_nil, Envelope.weight, signal] <;> omega
 
 /-- A timer firing lowers the weight. -/
 theorem State.weight_fire {state : State} {timer : Timer} (mem : timer ∈ state.timers) :
@@ -125,8 +134,7 @@ theorem State.weight_fire {state : State} {timer : Timer} (mem : timer ∈ state
   have shorter : (state.timers.filter (·.reference != timer.reference)).length <
       state.timers.length :=
     List.length_filter_lt_length_iff_exists.mpr ⟨timer, mem, by simp⟩
-  simp only [State.weight, State.fire, State.emit, List.map_append, List.map_cons, List.sum_append,
-    List.sum_cons, List.map_nil, List.sum_nil, Envelope.weight]
+  simp only [State.weight, State.fire, State.emit, weight_enqueue, Envelope.weight]
   omega
 
 /-- A computation and what follows it: the continuation of its request, or a

@@ -92,9 +92,10 @@ deriving Repr
 structure State where
   /-- Live processes. Terminated and unknown PIDs have no state. -/
   processes : PID → Option ProcessState := fun _ => none
-  /-- Timers yet to fire, oldest first. -/
+  /-- Timers yet to fire, in the order of their references. -/
   timers : List Timer := []
-  /-- Signals in transit, oldest first. -/
+  /-- Signals in transit, oldest first within each pair of processes, and
+  pairs in the order of their PIDs. -/
   inTransit : List Envelope := []
   /-- The milliseconds elapsed when a process cancels a timer, by how many
   timers it canceled before. Elapsed time is not modeled: a run starts with any
@@ -136,9 +137,36 @@ structure State where
 @[expose] def State.append (state : State) (processId : PID) (message : Term) : State :=
   state.modify processId fun process => { process with mailbox := process.mailbox ++ [message] }
 
+/-- Whether one PID comes before another, comparing their paths. -/
+@[expose] def pidBefore : PID → PID → Bool
+  | [], _ :: _ => true
+  | _, [] => false
+  | first :: rest, first' :: rest' => first < first' || (first == first' && pidBefore rest rest')
+
+/-- Whether the signals between one pair of processes come before another pair's. -/
+@[expose] def Envelope.before (first second : Envelope) : Bool :=
+  pidBefore first.source second.source ||
+    (first.source == second.source && pidBefore first.target second.target)
+
+/-- Add a signal in transit after the signals of its own pair and of the pairs
+before it. Signals between two processes keep their order, and the signals in
+transit do not depend on the order in which different pairs sent them. -/
+@[expose] def enqueue (envelope : Envelope) : List Envelope → List Envelope
+  | [] => [envelope]
+  | head :: rest =>
+      if envelope.before head then envelope :: head :: rest else head :: enqueue envelope rest
+
 /-- Send a signal: it is in transit until its receiver takes it. -/
 @[expose] def State.emit (state : State) (source target : PID) (signal : Signal) : State :=
-  { state with inTransit := state.inTransit ++ [{ source, target, signal }] }
+  { state with inTransit := enqueue { source, target, signal } state.inTransit }
+
+/-- Add a timer in the order of the references, so the timers do not depend on
+the order in which processes started them. -/
+@[expose] def insertTimer (timer : Timer) : List Timer → List Timer
+  | [] => [timer]
+  | head :: rest =>
+      if pidBefore timer.reference head.reference then timer :: head :: rest
+      else head :: insertTimer timer rest
 
 /-- Allocate the next reference of a process. -/
 @[expose] def State.allocate (state : State) (processId : PID) : List Nat × State :=
@@ -316,7 +344,7 @@ process exits with, if any. `none` while the request cannot be answered. -/
       -- OTP destroys a timer for a process that is not alive at once.
       let (reference, state) := state.allocate processId
       some (.reference reference, if state.alive destination then
-        { state with timers := state.timers ++ [{ reference, destination, message, duration }] }
+        { state with timers := insertTimer { reference, destination, message, duration } state.timers }
         else state, none)
   | .cancelTimer reference =>
       -- Only a timer yet to fire is canceled. It reports the milliseconds left,
