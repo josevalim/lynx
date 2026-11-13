@@ -52,6 +52,43 @@ If a proof needs to unfold a public operation, deliberately expose its body with
 `import all` is reserved for intentional dependencies within the implementation
 and for proof audits that inspect private declarations in test modules.
 
+### Concurrency
+
+Processes are modeled by the labelled transition system in `Lynx/Concurrent.lean`
+(`Config`, `Step`, `State.request`), and concurrent laws are proven by evaluating
+`Lynx.Concurrent.check` (`Lynx/Concurrent/Reduction.lean`), whose soundness rests
+on footprints (`Lynx/Concurrent/Footprint.lean`). Soundness with what OTP does is
+non-negotiable, so a new process BIF, or a change to one, goes through every layer:
+
+1. Model OTP from its source (`../otp`), not its documentation, including the
+   corner cases (dead targets, self-targets, exit signals racing the request,
+   `false` replies). Each reply must be one OTP can give, and every reply OTP can
+   give must be reachable in some run.
+2. Express the BIF in `Lynx/Modules/Erlang/erlang/Process.lean` as a `Result`
+   built from existing requests where possible. A new kind of request extends
+   `Request` (`Lynx/Term/DataTypes.lean`) and is answered by `State.request`.
+   Keep signals between two processes in order, and put anything that reaches
+   another process in transit (`State.emit`) rather than changing its record.
+3. Give the request a footprint in `requestFootprint`: what it observes and
+   what it changes. A footprint that observes too little is unsound; one that
+   observes too much only costs exploration. Extend `request_matches` and the
+   commuting proofs, and `Task.local` only for steps that touch nothing but the
+   process's own record. Termination (`Concurrent/Termination.lean`), traces
+   (`Concurrent/Trace.lean`) and the runner (`Lynx/Term/Runner.lean`) must cover
+   it too.
+4. Register the BIF's purity in `@runtime_purity` (`lib/lynx/translation.ex`) and
+   regenerate `Lean/modules.json` if its signature changed.
+5. Test it in `LynxTest/Modules/Signals.lean` with kernel-checked closed programs
+   for each OTP behavior, including races where the order of steps changes the
+   reply, and update `LynxTest/PublicApi.lean`.
+6. Before trusting a change to footprints or to how `check` explores, audit it
+   executably: over every configuration reachable from closed programs that use
+   the BIF, check that steps reported as commuting reach the same configuration
+   in either order. Audits only cover the races the programs exercise, so write
+   programs for each race (for example, a timer whose destination dies).
+7. Measure the concurrent examples (`examples/concurrency`, `examples/elixir/task.exs`):
+   explored configurations and kernel time, before and after.
+
 ### Examples
 
 Do not add new examples unless explicitly requested. Existing examples may be
