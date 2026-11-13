@@ -187,4 +187,36 @@ syntax (name := counterexampleTactic) "lynx_counterexample" : tactic
 
 end Counterexample
 
+section Kernel
+open Lean Meta Elab Tactic
+
+/-- Prove a goal `lhs = true` by kernel evaluation, such as
+`Lynx.Concurrent.check accept depth config = true`. The goal's locals are
+abstracted into an auxiliary theorem whose proof is `Eq.refl true`, so the
+kernel evaluates `lhs` with them free, as it can a law's call depth, or the
+time elapsed when timers are canceled, when evaluation does not need their
+values. The elaborator does not evaluate it, and no axiom is added. -/
+syntax (name := kernelTactic) "lynx_kernel" : tactic
+
+@[tactic kernelTactic] public meta def evalKernel : Tactic := fun _ => do
+  let goal ← getMainGoal
+  goal.withContext do
+    let type ← instantiateMVars (← goal.getType)
+    let expected := "lynx_kernel expects a goal `lhs = true`"
+    let some (_, _, rhs) := type.eq? | throwError expected
+    unless rhs.isConstOf ``Bool.true do throwError expected
+    if type.hasMVar then throwError "lynx_kernel expects a goal without metavariables"
+    let locals ← (← getLCtx).foldlM (init := #[]) fun locals decl =>
+      return if decl.isImplementationDetail then locals else locals.push decl.toExpr
+    let closedType ← mkForallFVars locals type
+    let closedValue ← mkLambdaFVars locals
+      (mkApp2 (mkConst ``Eq.refl [1]) (mkConst ``Bool) (mkConst ``Bool.true))
+    let levelParams := (collectLevelParams {} closedType).params.toList
+    let name ← mkAuxDeclName `_lynx_kernel
+    addDecl (.thmDecl { name, levelParams, type := closedType, value := closedValue })
+    goal.assign (mkAppN (mkConst name (levelParams.map mkLevelParam)) locals)
+    replaceMainGoal []
+
+end Kernel
+
 end Lynx.Concurrent
