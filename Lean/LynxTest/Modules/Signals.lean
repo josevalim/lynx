@@ -200,6 +200,42 @@ theorem keyfind_finds_first_match :
       .ok (.atom "false") := by
   constructor <;> cbv
 
+/-! Signals that do nothing when they arrive, which `check` takes alone. -/
+
+/-- The root waits for a message, holding the records `[]` maps to, with its first child
+`[1]` already ended, and `signal` in transit from `source` to `target`. -/
+private def waitingWith (root : Concurrent.ProcessState) (source target : PID)
+    (signal : Concurrent.Signal) : Concurrent.Config Term :=
+  .running
+    { processes := fun processId => if processId == [] then some root else none
+      inTransit := [⟨source, target, signal⟩] }
+    [([], .root receiveAny)] none false
+
+/-- A `DOWN` of a monitor that was removed, and a message to an alias that was removed. -/
+theorem inactive_reference_is_forced :
+    (waitingWith { refCounter := 1 } [1] [] (.down [1] (.atom "normal"))).forced =
+      some (.deliver [1] []) ∧
+    (waitingWith { refCounter := 1 } [1] [] (.aliasMessage [1] (.atom "hello"))).forced =
+      some (.deliver [1] []) := by
+  constructor <;> cbv
+
+/-- A `DOWN` of an active monitor, or of a reference the receiver has not allocated yet
+(a later monitor may receive it), does something. -/
+theorem active_reference_is_not_forced :
+    (waitingWith { refCounter := 1, monitoring := [([1], [1])] } [1] []
+      (.down [1] (.atom "normal"))).forced = none ∧
+    (waitingWith {} [1] [] (.down [1] (.atom "normal"))).forced = none := by
+  constructor <;> cbv
+
+/-- A message to a process that ended is dropped, but a link to it answers with an exit
+signal, and a message to a process not spawned yet may still reach it. -/
+theorem ended_process_is_forced :
+    (waitingWith { children := 1 } [] [1] (.message (.atom "hello"))).forced =
+      some (.bounce [] [1]) ∧
+    (waitingWith { children := 1 } [] [1] .link).forced = none ∧
+    (waitingWith {} [] [1] (.message (.atom "hello"))).forced = none := by
+  refine ⟨?_, ?_, ?_⟩ <;> cbv
+
 end LynxTest.Modules.Signals
 
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Modules.Signals

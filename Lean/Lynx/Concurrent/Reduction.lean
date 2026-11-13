@@ -946,15 +946,62 @@ private theorem Config.commutesWith_eq (config : Config α) (key other : Key) :
       cases found' : (Config.running state tasks finished exhausted).footprint other <;>
       simp [found']
 
-/-- A step every run can take first, if there is one: a process reading or
-replacing its environment, or receiving a message already queued. Its effects
-stay in its own record, so it commutes with every step the process survives,
-and a signal ending the process absorbs it. -/
-@[expose] def Config.forced : Config α → Option Key
+/-- Whether every live process on a path below `ancestor` already spawned the next process on
+it. Only a live process spawns, and only a child it has not spawned yet, so a PID whose path
+passes this check and that is not live never becomes live: PIDs are never reused. -/
+@[expose] def State.settledFrom (state : State) : PID → List Nat → Bool
+  | _, [] => true
+  | ancestor, index :: rest =>
+      (!state.alive ancestor || index ≤ (state.process ancestor).children) &&
+        state.settledFrom (ancestor ++ [index]) rest
+
+/-- Whether a process that is not live can no longer become live (`State.settledFrom`). -/
+@[expose] def State.settled (state : State) (processId : PID) : Bool :=
+  state.settledFrom [] processId
+
+/-- Whether a process already allocated a reference, so a monitor or an alias that it no
+longer holds can never become active again. -/
+@[expose] def State.allocated (state : State) (owner : PID) (reference : List Nat) : Bool :=
+  reference.dropLast == owner && match reference.getLast? with
+    | some count => 1 ≤ count && count ≤ (state.process owner).refCounter
+    | none => false
+
+/-- Whether a signal does nothing when it arrives and never will: a `DOWN` of a monitor or a
+message to an alias its live receiver no longer holds, or a signal to a process that can
+no longer become live and whose bounce answers nothing. `live` says whether the target is
+live, which decides whether the signal is delivered or bounced. -/
+@[expose] def Envelope.inert (state : State) (live : Bool) (envelope : Envelope) : Bool :=
+  let target := envelope.target
+  if live then
+    match envelope.signal with
+    | .down reference _ => state.allocated target reference &&
+        !(state.process target).monitoring.any (·.1 == reference)
+    | .aliasMessage alias _ => state.allocated target alias &&
+        !(state.process target).aliases.contains alias
+    | _ => false
+  else
+    state.settled target && match envelope.signal with
+      | .link | .monitor _ => false
+      | _ => true
+
+/-- A signal that does nothing when it arrives and never will, at the head of its channel. -/
+@[expose] def Config.inert : Config α → Option Key
   | .start .. => none
   | .running state tasks _ _ =>
-      (tasks.find? fun (processId, task) => task.local state processId).map fun (processId, _) =>
-        .own processId 0
+      ((deliverable state.inTransit).find? fun (envelope, _) =>
+        envelope.inert state (tasks.lookup envelope.target).isSome).map fun (envelope, _) =>
+          if (tasks.lookup envelope.target).isSome then .deliver envelope.source envelope.target
+          else .bounce envelope.source envelope.target
+
+/-- A step every run can take first, if there is one: a process reading or replacing its
+environment, or receiving a message already queued, whose effects stay in its own record, so
+it commutes with every step the process survives and a signal ending the process absorbs it;
+or a signal that does nothing when it arrives and never will (`Envelope.inert`). -/
+@[expose] def Config.forced : Config α → Option Key
+  | .start .. => none
+  | config@(.running state tasks _ _) =>
+      ((tasks.find? fun (processId, task) => task.local state processId).map fun (processId, _) =>
+        .own processId 0).orElse fun _ => config.inert
 
 /-- Replace the process with a PID by others. -/
 private def replace (processId : PID) (replacement : List (PID × Task α))
@@ -2445,57 +2492,1266 @@ private theorem local_persists {state : State} {tasks : List (PID × Task α)}
     · simp [State.view, State.process, Effect.processes_apply, record'', record, pdict, refCounter]
     · simpa [State.process, Effect.processes_apply, record'', record] using ready'
 
-/-- Every run of a configuration with a local step can take it first: it
-commutes with every step its process survives, and a signal ending the
+/-- A process whose next step is local (`Task.local`). -/
+private def LocalStep (config : Config α) (key : Key) : Prop :=
+  ∃ state tasks finished exhausted processId task, config = .running state tasks finished exhausted ∧
+    tasks.lookup processId = some task ∧ task.local state processId = true ∧ key = .own processId 0
+
+/-- A local step commutes with every step its process survives, and a signal ending the
 process absorbs it. -/
-private theorem local_first {outcome : Outcome α} :
+private theorem local_forced {config : Config α} {key key' : Key} {event event' : Event}
+    {next middle : Config α} (wellformed : Wellformed config) (forced : LocalStep config key)
+    (mem : (key, event, next) ∈ config.steps) (mem' : (key', event', middle) ∈ config.steps)
+    (distinct : key' ≠ key) :
+    (∃ absorbed, (key', absorbed, middle) ∈ next.steps) ∨
+      ∃ key'' forced other last, LocalStep middle key'' ∧ (key'', forced, last) ∈ middle.steps ∧
+        (key', other, last) ∈ next.steps := by
+  obtain ⟨state, tasks, finished, exhausted, processId, task, rfl, found, isLocal, rfl⟩ := forced
+  by_cases own : ∃ index, key' = .own processId index
+  · exfalso
+    obtain ⟨index, rfl⟩ := own
+    obtain ⟨footprint, found'⟩ := footprint_of_mem wellformed mem'
+    obtain rfl := index_of_footprint found'
+    exact distinct rfl
+  have other : ∀ index, key' ≠ .own processId index := fun index same => own ⟨index, same⟩
+  by_cases kills : ∃ source envelope, key' = .deliver source processId ∧
+      (envelope, arrive source processId state.inTransit) ∈ deliverable state.inTransit ∧
+      envelope.source = source ∧ envelope.target = processId ∧
+      ({ state with inTransit := arrive source processId state.inTransit }.receive envelope).2.isSome
+  · obtain ⟨source, envelope, rfl, delivered, equalSource, equalTarget, ends⟩ := kills
+    exact .inl ⟨_, local_absorbs wellformed found isLocal mem mem' delivered equalSource equalTarget ends⟩
+  have survives : ∀ source envelope, key' = .deliver source processId →
+      (envelope, arrive source processId state.inTransit) ∈ deliverable state.inTransit →
+      envelope.source = source → envelope.target = processId →
+      ({ state with inTransit := arrive source processId state.inTransit }.receive envelope).2 = none := by
+    intro source envelope same delivered equalSource equalTarget
+    cases exits : ({ state with inTransit := arrive source processId state.inTransit }.receive
+      envelope).2 with
+    | none => rfl
+    | some _ => exact absurd ⟨source, envelope, same, delivered, equalSource, equalTarget, by simp [exits]⟩ kills
+  obtain ⟨last', forth, back⟩ := local_square wellformed found isLocal mem mem' other survives
+  obtain ⟨state', tasks', finished', exhausted', rfl, found', isLocal'⟩ :=
+    local_persists wellformed found isLocal mem' other survives
+  exact .inr ⟨_, _, _, _, ⟨_, _, _, _, _, _, rfl, found', isLocal', rfl⟩, back, forth⟩
+
+/-! ### The order of signals in transit -/
+
+private theorem pidBefore_irrefl : ∀ processId : PID, pidBefore processId processId = false
+  | [] => rfl
+  | head :: rest => by simp [pidBefore, pidBefore_irrefl rest]
+
+private theorem pidBefore_trans : ∀ {first second third : PID}, pidBefore first second = true →
+    pidBefore second third = true → pidBefore first third = true
+  | [], _, _ :: _, _, _ => rfl
+  | _, second, [], _, two => by cases second <;> simp [pidBefore] at two
+  | _ :: _, [], _ :: _, one, _ => by simp [pidBefore] at one
+  | _ :: _, _ :: _, _ :: _, one, two => by
+    simp only [pidBefore, Bool.or_eq_true, decide_eq_true_eq, Bool.and_eq_true, beq_iff_eq] at one two ⊢
+    rcases one with less | ⟨rfl, one⟩ <;> rcases two with less' | ⟨rfl, two⟩
+    · exact .inl (Nat.lt_trans less less')
+    · exact .inl less
+    · exact .inl less'
+    · exact .inr ⟨rfl, pidBefore_trans one two⟩
+
+private theorem pidBefore_total : ∀ {first second : PID}, first ≠ second →
+    pidBefore first second = true ∨ pidBefore second first = true
+  | [], [], distinct => absurd rfl distinct
+  | [], _ :: _, _ => .inl rfl
+  | _ :: _, [], _ => .inr rfl
+  | head :: rest, head' :: rest', distinct => by
+    simp only [pidBefore, Bool.or_eq_true, decide_eq_true_eq, Bool.and_eq_true, beq_iff_eq]
+    rcases Nat.lt_trichotomy head head' with less | rfl | greater
+    · exact .inl (.inl less)
+    · have : rest ≠ rest' := fun same => distinct (by rw [same])
+      rcases pidBefore_total this with before | before
+      · exact .inl (.inr ⟨rfl, before⟩)
+      · exact .inr (.inr ⟨rfl, before⟩)
+    · exact .inr (.inl greater)
+
+/-- The pair of processes a signal goes between. -/
+private def Envelope.pair (envelope : Envelope) : PID × PID := (envelope.source, envelope.target)
+
+private theorem Envelope.before_congr {first first' second second' : Envelope}
+    (same : first.pair = first'.pair) (same' : second.pair = second'.pair) :
+    first.before second = first'.before second' := by
+  simp only [Envelope.pair, Prod.mk.injEq] at same same'
+  simp [Envelope.before, same.1, same.2, same'.1, same'.2]
+
+private theorem Envelope.before_irrefl {first second : Envelope} (same : first.pair = second.pair) :
+    first.before second = false := by
+  rw [Envelope.before_congr rfl same.symm]
+  simp [Envelope.before, pidBefore_irrefl]
+
+private theorem Envelope.before_trans {first second third : Envelope}
+    (one : first.before second = true) (two : second.before third = true) :
+    first.before third = true := by
+  simp only [Envelope.before, Bool.or_eq_true, Bool.and_eq_true, beq_iff_eq] at one two ⊢
+  rcases one with less | ⟨same, less⟩ <;> rcases two with less' | ⟨same', less'⟩
+  · exact .inl (pidBefore_trans less less')
+  · exact .inl (same' ▸ less)
+  · exact .inl (same ▸ less')
+  · exact .inr ⟨same.trans same', pidBefore_trans less less'⟩
+
+private theorem Envelope.before_total {first second : Envelope} (distinct : first.pair ≠ second.pair) :
+    first.before second = true ∨ second.before first = true := by
+  simp only [Envelope.before, Bool.or_eq_true, Bool.and_eq_true, beq_iff_eq]
+  by_cases same : first.source = second.source
+  · have : first.target ≠ second.target := fun same' =>
+      distinct (by simp [Envelope.pair, same, same'])
+    rcases pidBefore_total this with before | before
+    · exact .inl (.inr ⟨same, before⟩)
+    · exact .inr (.inr ⟨same.symm, before⟩)
+  · rcases pidBefore_total same with before | before
+    · exact .inl (.inl before)
+    · exact .inr (.inl before)
+
+private theorem Envelope.before_asymm {first second : Envelope} (before : first.before second = true) :
+    second.before first = false := by
+  cases other : second.before first
+  · rfl
+  · have := Envelope.before_trans before other
+    rw [Envelope.before_irrefl rfl] at this
+    contradiction
+
+private theorem Envelope.between_iff {source target : PID} {envelope : Envelope} :
+    Envelope.between source target envelope = true ↔ envelope.pair = (source, target) := by
+  simp [Envelope.between, Envelope.pair]
+
+/-- Signals in transit in the order of their pairs, as sending keeps them. -/
+private def Sorted (inTransit : List Envelope) : Prop :=
+  inTransit.Pairwise fun first second => second.before first = false
+
+private theorem mem_enqueue {envelope item : Envelope} {inTransit : List Envelope} :
+    item ∈ enqueue envelope inTransit ↔ item = envelope ∨ item ∈ inTransit := by
+  induction inTransit with
+  | nil => simp [enqueue]
+  | cons head rest ih =>
+    simp only [enqueue]
+    split <;> simp [ih, or_left_comm]
+
+/-- A signal before the first of a sorted list is before all of them. -/
+private theorem before_of_sorted {envelope head : Envelope} {rest : List Envelope}
+    (sorted : Sorted (head :: rest)) (before : envelope.before head = true) :
+    ∀ item ∈ rest, envelope.before item = true := by
+  intro item mem
+  have notBefore := List.rel_of_pairwise_cons sorted mem
+  by_cases same : head.pair = item.pair
+  · rwa [← Envelope.before_congr rfl same]
+  · rcases Envelope.before_total same with forward | backward
+    · exact Envelope.before_trans before forward
+    · rw [notBefore] at backward; contradiction
+
+private theorem enqueue_sorted {envelope : Envelope} {inTransit : List Envelope}
+    (sorted : Sorted inTransit) : Sorted (enqueue envelope inTransit) := by
+  induction inTransit with
+  | nil => simp [enqueue, Sorted]
+  | cons head rest ih =>
+    simp only [enqueue]
+    split
+    · rename_i before
+      refine List.Pairwise.cons (fun item mem => ?_) sorted
+      simp only [List.mem_cons] at mem
+      rcases mem with rfl | mem
+      · exact Envelope.before_asymm before
+      · exact Envelope.before_asymm (before_of_sorted sorted before item mem)
+    · rename_i notBefore
+      refine List.Pairwise.cons (fun item mem => ?_) (ih (List.Pairwise.of_cons sorted))
+      rcases mem_enqueue.mp mem with rfl | mem
+      · simpa using notBefore
+      · exact List.rel_of_pairwise_cons sorted mem
+
+/-- Signals between different pairs reach the same order whichever is sent first. -/
+private theorem enqueue_comm {first second : Envelope} (distinct : first.pair ≠ second.pair) :
+    ∀ inTransit : List Envelope,
+      enqueue first (enqueue second inTransit) = enqueue second (enqueue first inTransit)
+  | [] => by
+    simp only [enqueue]
+    rcases Envelope.before_total distinct with before | before
+    · simp [before, Envelope.before_asymm before]
+    · simp [before, Envelope.before_asymm before]
+  | head :: rest => by
+    simp only [enqueue]
+    by_cases before : first.before head <;> by_cases before' : second.before head <;>
+      simp only [before, before', ite_true, ite_false, enqueue, Bool.false_eq_true]
+    · rcases Envelope.before_total distinct with order | order
+      · simp [order, Envelope.before_asymm order]
+      · simp [order, Envelope.before_asymm order]
+    · have : second.before first = false := by
+        cases other : second.before first
+        · rfl
+        · exact absurd (Envelope.before_trans other before) before'
+      simp [this]
+    · have : first.before second = false := by
+        cases other : first.before second
+        · rfl
+        · exact absurd (Envelope.before_trans other before') before
+      simp [this]
+    · rw [enqueue_comm distinct rest]
+
+/-- The oldest signal of a pair stays when a signal of another pair is sent. -/
+private theorem find?_enqueue_other {source target : PID} {envelope : Envelope}
+    (other : envelope.pair ≠ (source, target)) :
+    ∀ inTransit : List Envelope, (enqueue envelope inTransit).find? (Envelope.between source target) =
+      inTransit.find? (Envelope.between source target)
+  | [] => by
+    have : Envelope.between source target envelope = false := by
+      cases equal : Envelope.between source target envelope
+      · rfl
+      · exact absurd (Envelope.between_iff.mp equal) other
+    simp [enqueue, this]
+  | head :: rest => by
+    have : Envelope.between source target envelope = false := by
+      cases equal : Envelope.between source target envelope
+      · rfl
+      · exact absurd (Envelope.between_iff.mp equal) other
+    simp only [enqueue]
+    split
+    · simp [List.find?_cons, this]
+    · simp only [List.find?_cons, find?_enqueue_other other rest]
+
+/-- The oldest signal of a pair stays when another signal of the pair is sent. -/
+private theorem find?_enqueue_same {source target : PID} {envelope oldest : Envelope}
+    (same : envelope.pair = (source, target)) :
+    ∀ {inTransit : List Envelope}, Sorted inTransit →
+      inTransit.find? (Envelope.between source target) = some oldest →
+      (enqueue envelope inTransit).find? (Envelope.between source target) = some oldest
+  | [], _, found => by simp at found
+  | head :: rest, sorted, found => by
+    simp only [enqueue]
+    split
+    · rename_i before
+      exfalso
+      simp only [List.find?_cons] at found
+      split at found
+      · rename_i between
+        rw [Envelope.before_irrefl (same.trans (Envelope.between_iff.mp between).symm)] at before
+        contradiction
+      · have := List.find?_some found
+        have mem := List.mem_of_find?_eq_some found
+        have := before_of_sorted sorted before oldest mem
+        rw [Envelope.before_irrefl (same.trans (Envelope.between_iff.mp ‹_›).symm)] at this
+        contradiction
+    · simp only [List.find?_cons] at found ⊢
+      split
+      · rename_i between
+        rw [between] at found
+        exact found
+      · rename_i between
+        simp only [between] at found
+        exact find?_enqueue_same same (List.Pairwise.of_cons sorted) found
+
+private theorem between_false {source target : PID} {envelope : Envelope}
+    (other : envelope.pair ≠ (source, target)) : Envelope.between source target envelope = false := by
+  cases equal : Envelope.between source target envelope
+  · rfl
+  · exact absurd (Envelope.between_iff.mp equal) other
+
+/-- Taking the oldest signal of a pair commutes with sending another signal,
+unless the pair has no other signal in transit. -/
+private theorem arrive_enqueue {source target : PID} {envelope : Envelope} :
+    ∀ {inTransit : List Envelope}, Sorted inTransit →
+      (envelope.pair ≠ (source, target) ∨ (inTransit.find? (Envelope.between source target)).isSome) →
+      arrive source target (enqueue envelope inTransit) = enqueue envelope (arrive source target inTransit)
+  | [], _, condition => by
+    rcases condition with other | found
+    · simp [arrive, enqueue, between_false other]
+    · simp at found
+  | head :: rest, sorted, condition => by
+    simp only [arrive, enqueue]
+    by_cases before : envelope.before head
+    · simp only [before, ↓reduceIte]
+      by_cases same : envelope.pair = (source, target)
+      · exfalso
+        have found := condition.resolve_left (fun other => other same)
+        obtain ⟨oldest, foundOldest⟩ := Option.isSome_iff_exists.mp found
+        have mem := List.mem_of_find?_eq_some foundOldest
+        have between := Envelope.between_iff.mp (List.find?_some foundOldest)
+        simp only [List.mem_cons] at mem
+        rcases mem with rfl | mem
+        · rw [Envelope.before_irrefl (same.trans between.symm)] at before
+          contradiction
+        · have := before_of_sorted sorted before oldest mem
+          rw [Envelope.before_irrefl (same.trans between.symm)] at this
+          contradiction
+      rw [List.eraseP_cons_of_neg (by simp [between_false same])]
+      by_cases between : Envelope.between source target head
+      · rw [List.eraseP_cons_of_pos between]
+        cases rest with
+        | nil => simp [enqueue]
+        | cons next rest =>
+          have := before_of_sorted sorted before next (by simp)
+          simp [enqueue, this]
+      · rw [List.eraseP_cons_of_neg between]
+        simp [enqueue, before]
+    · simp only [before, Bool.false_eq_true, ↓reduceIte]
+      by_cases between : Envelope.between source target head
+      · rw [List.eraseP_cons_of_pos between, List.eraseP_cons_of_pos between]
+      · rw [List.eraseP_cons_of_neg between, List.eraseP_cons_of_neg between]
+        simp only [enqueue, before, Bool.false_eq_true, ↓reduceIte]
+        have condition' : envelope.pair ≠ (source, target) ∨
+            (rest.find? (Envelope.between source target)).isSome := by
+          rcases condition with other | found
+          · exact .inl other
+          · refine .inr ?_
+            simpa [List.find?_cons, between] using found
+        exact congrArg (head :: ·) (arrive_enqueue (List.Pairwise.of_cons sorted) condition')
+
+private theorem eraseP_comm {first second : γ → Bool} (disjoint : ∀ item, first item = true → second item = false) :
+    ∀ items : List γ, (items.eraseP first).eraseP second = (items.eraseP second).eraseP first
+  | [] => rfl
+  | head :: rest => by
+    by_cases one : first head <;> by_cases two : second head
+    · rw [disjoint head one] at two; contradiction
+    · simp [one, two]
+    · simp [one, two]
+    · simp [one, two, eraseP_comm disjoint rest]
+
+/-- Signals of different pairs arrive in either order. -/
+private theorem arrive_comm {source target source' target' : PID}
+    (distinct : (source, target) ≠ (source', target')) (inTransit : List Envelope) :
+    arrive source target (arrive source' target' inTransit) =
+      arrive source' target' (arrive source target inTransit) := by
+  refine (eraseP_comm (fun item one => ?_) inTransit).symm
+  exact between_false fun same => distinct ((Envelope.between_iff.mp one).symm.trans same)
+
+/-- The oldest signal of a pair stays when a signal of another pair arrives. -/
+private theorem find?_arrive_other {source target source' target' : PID}
+    (distinct : (source, target) ≠ (source', target')) :
+    ∀ inTransit : List Envelope, (arrive source' target' inTransit).find? (Envelope.between source target) =
+      inTransit.find? (Envelope.between source target)
+  | [] => rfl
+  | head :: rest => by
+    simp only [arrive, List.eraseP_cons]
+    by_cases between : Envelope.between source' target' head
+    · have : Envelope.between source target head = false :=
+        between_false fun same => distinct (same.symm.trans (Envelope.between_iff.mp between))
+      simp [between, this]
+    · simp only [between, Bool.false_eq_true, ↓reduceIte, List.find?_cons]
+      rw [← arrive, find?_arrive_other distinct rest]
+
+private theorem mem_of_mem_arrive {source target : PID} {inTransit : List Envelope} {item : Envelope}
+    (mem : item ∈ arrive source target inTransit) : item ∈ inTransit :=
+  (List.eraseP_sublist).subset mem
+
+private theorem arrive_sorted {source target : PID} {inTransit : List Envelope}
+    (sorted : Sorted inTransit) : Sorted (arrive source target inTransit) :=
+  sorted.sublist List.eraseP_sublist
+
+
+/-! ### Signals that do nothing
+
+A signal that does nothing when it arrives and never will is taken alone (`Config.forced`):
+every other step keeps it at the head of its channel and commutes with taking it. -/
+
+/-- How a step changes the signals in transit: it sends signals and takes the oldest signal
+of the channels in `takes`. -/
+private inductive Transit (takes : List (PID × PID)) : (List Envelope → List Envelope) → Prop
+  | id : Transit takes id
+  | send (envelope : Envelope) : Transit takes (enqueue envelope)
+  | take {source target : PID} : (source, target) ∈ takes → Transit takes (arrive source target)
+  | comp {first second : List Envelope → List Envelope} :
+      Transit takes first → Transit takes second → Transit takes (second ∘ first)
+
+private theorem Transit.sorted {takes : List (PID × PID)} {change : List Envelope → List Envelope}
+    (transit : Transit takes change) : ∀ {inTransit}, Sorted inTransit → Sorted (change inTransit) := by
+  induction transit with
+  | id => exact fun sorted => sorted
+  | send envelope => exact enqueue_sorted
+  | take _ => exact arrive_sorted
+  | comp _ _ ih ih' => exact fun sorted => ih' (ih sorted)
+
+/-- A change that does not take from a channel keeps its oldest signal and commutes with
+taking it. -/
+private theorem Transit.keeps {takes : List (PID × PID)} {change : List Envelope → List Envelope}
+    (transit : Transit takes change) {source target : PID} (other : (source, target) ∉ takes) :
+    ∀ {inTransit : List Envelope} {oldest : Envelope}, Sorted inTransit →
+      inTransit.find? (Envelope.between source target) = some oldest →
+      (change inTransit).find? (Envelope.between source target) = some oldest ∧
+      change (arrive source target inTransit) = arrive source target (change inTransit) := by
+  induction transit with
+  | id => exact fun _ found => ⟨found, rfl⟩
+  | send envelope =>
+    intro inTransit oldest sorted found
+    by_cases same : envelope.pair = (source, target)
+    · exact ⟨find?_enqueue_same same sorted found,
+        (arrive_enqueue sorted (.inr (by simp [found]))).symm⟩
+    · exact ⟨by rw [find?_enqueue_other same]; exact found,
+        (arrive_enqueue sorted (.inl same)).symm⟩
+  | take mem =>
+    rename_i source' target'
+    have distinct : (source, target) ≠ (source', target') := fun same => other (same ▸ mem)
+    intro inTransit oldest sorted found
+    exact ⟨by rw [find?_arrive_other distinct]; exact found, arrive_comm distinct.symm inTransit⟩
+  | comp transit transit' ih ih' =>
+    intro inTransit oldest sorted found
+    obtain ⟨found', comm⟩ := ih sorted found
+    obtain ⟨found'', comm'⟩ := ih' (transit.sorted sorted) found'
+    exact ⟨found'', by simp only [Function.comp_apply, comm, comm']⟩
+
+/-- How an effect changes the signals in transit. -/
+private def Effect.transit (effect : Effect) : List Envelope → List Envelope := effect.inTransit.getD id
+
+private theorem Transit.congr {takes : List (PID × PID)} {first second : List Envelope → List Envelope}
+    (same : ∀ inTransit, first inTransit = second inTransit) (transit : Transit takes second) :
+    Transit takes first := by
+  have : first = second := funext same
+  subst this
+  exact transit
+
+private theorem Transit.andThen {takes : List (PID × PID)} {first second : Effect}
+    (one : Transit takes first.transit) (two : Transit takes second.transit) :
+    Transit takes (first.andThen second).transit := by
+  simp only [Effect.transit, Effect.andThen] at one two ⊢
+  cases h : first.inTransit <;> cases h' : second.inTransit <;> simp only [h, h', Option.getD] at one two ⊢
+  · exact .id
+  · exact two
+  · exact one
+  · exact .comp one two
+
+private theorem Transit.foldl {takes : List (PID × PID)} {γ : Type} (signal : γ → Envelope) :
+    ∀ (items : List γ) {start : List Envelope → List Envelope}, Transit takes start →
+      Transit takes fun inTransit => items.foldl (fun inTransit item => enqueue (signal item) inTransit)
+        (start inTransit)
+  | [], _, transit => transit
+  | item :: rest, start, transit =>
+      Transit.foldl signal rest (start := enqueue (signal item) ∘ start) (.comp transit (.send _))
+
+@[simp] private theorem Effect.transit_change {processId : PID} {change : ProcessState → ProcessState} :
+    (Effect.change processId change).transit = id := rfl
+
+@[simp] private theorem Effect.transit_send {envelope : Envelope} :
+    (Effect.send envelope).transit = enqueue envelope := rfl
+
+private theorem Transit.ending {takes : List (PID × PID)} {processId : PID} {process : ProcessState}
+    {reason : Term} : Transit takes (Effect.ending processId process reason).transit := by
+  simp only [Effect.transit, Effect.ending, Option.getD]
+  exact Transit.foldl (fun (entry : List Nat × PID) => ⟨processId, entry.2, .down entry.1 reason⟩)
+    process.monitors (Transit.foldl (fun linked => ⟨processId, linked, .exit reason true⟩) process.links .id)
+
+/-- The channel a step takes the oldest signal of. -/
+private def Key.channel : Key → List (PID × PID)
+  | .deliver source target | .bounce source target => [(source, target)]
+  | _ => []
+
+private theorem Transit.request {takes : List (PID × PID)} {state : State} {processId : PID} {request : Request} :
+    Transit takes (requestFootprint state processId request).effect.transit := by
+  cases request <;> simp only [requestFootprint] <;> (repeat' split) <;>
+    first
+    | exact .id
+    | exact Transit.ending
+    | exact .send _
+    | exact Transit.andThen .id (.send _)
+    | exact Transit.andThen .id .id
+
+private theorem Transit.own {takes : List (PID × PID)} {state : State} {processId : PID} {task : Task α} :
+    Transit takes (task.footprint state processId).effect.transit := by
+  obtain ⟨computation, finish⟩ := task
+  simp only [Task.footprint]
+  split <;> (try simp only [Footprint.ending, Footprint.spawn]) <;> (repeat' split) <;>
+    first
+    | exact .id
+    | exact Transit.ending
+    | exact .send _
+    | exact Transit.request
+
+private theorem Transit.delivery {state : State} {envelope : Envelope} :
+    Transit [(envelope.source, envelope.target)] (Footprint.delivery state envelope).effect.transit := by
+  have taken : Transit [(envelope.source, envelope.target)]
+      ({ inTransit := some (arrive envelope.source envelope.target) } : Effect).transit := .take (by simp)
+  simp only [Footprint.delivery]
+  split
+  · split
+    · exact Transit.andThen taken Transit.ending
+    · exact Transit.andThen taken .id
+  · exact Transit.andThen taken .id
+
+private theorem Transit.bounce {envelope : Envelope} :
+    Transit [(envelope.source, envelope.target)] (Footprint.bounce envelope).effect.transit := by
+  simp only [Effect.transit, Footprint.bounce, Option.getD]
+  have taken : Transit [(envelope.source, envelope.target)] (arrive envelope.source envelope.target) :=
+    .take (by simp)
+  cases signal : envelope.signal <;> simp only
+  all_goals first
+    | exact .comp taken (.send _)
+    | exact taken
+
+/-- Every step takes the oldest signal of its own channel only. -/
+private theorem footprint_transit {config : Config α} {key : Key} {footprint : Footprint}
+    (found : config.footprint key = some footprint) : Transit key.channel footprint.effect.transit := by
+  cases config with
+  | start => simp [Config.footprint] at found
+  | running state tasks finished exhausted =>
+    cases key with
+    | own processId index =>
+      simp only [Config.footprint] at found
+      split at found
+      · split at found
+        · simp only [Option.some.injEq] at found; subst found; exact Transit.own
+        · simp at found
+      · simp at found
+    | deliver source target =>
+      simp only [Config.footprint] at found
+      split at found
+      · rename_i envelope _ oldestFound
+        simp only [Option.some.injEq] at found
+        subst found
+        obtain ⟨rfl, rfl⟩ := between_of_find oldestFound
+        exact Transit.delivery
+      · simp at found
+    | bounce source target =>
+      simp only [Config.footprint] at found
+      split at found
+      · rename_i envelope oldestFound
+        simp only [Option.some.injEq] at found
+        subst found
+        obtain ⟨rfl, rfl⟩ := between_of_find oldestFound
+        exact Transit.bounce
+      · simp at found
+    | fire reference =>
+      simp only [Config.footprint] at found
+      split at found
+      · simp only [Option.some.injEq] at found
+        subst found
+        exact .send _
+      · simp at found
+
+/-- Signals in transit stay in the order of their pairs. -/
+private theorem Step.sorted {first next : Config α} {event : Event} (step : Step first event next)
+    (wellformed : Wellformed first) (sorted : ∀ state tasks finished exhausted,
+      first = .running state tasks finished exhausted → Sorted state.inTransit) :
+    ∀ state tasks finished exhausted, next = .running state tasks finished exhausted →
+      Sorted state.inTransit := by
+  cases first with
+  | start env computation elapsed =>
+    intro state tasks finished exhausted equal
+    subst equal
+    simp only [Step, Config.successors] at step
+    split at step
+    · simp at step
+    · simp at step
+    · split at step
+      · simp only [List.mem_singleton, Prod.mk.injEq, Config.running.injEq] at step
+        obtain ⟨-, rfl, -⟩ := step
+        simp [State.initial, Sorted]
+      · simp at step
+  | running state tasks finished exhausted =>
+    intro state' tasks' finished' exhausted' equal
+    obtain ⟨key, mem⟩ := Step.keyed step
+    obtain ⟨footprint, found⟩ := footprint_of_mem wellformed mem
+    obtain ⟨move, moved⟩ := moves wellformed mem found
+    rw [moved.next] at equal
+    simp only [Move.config, Config.running.injEq] at equal
+    obtain ⟨rfl, -⟩ := equal
+    rw [moved.effect]
+    simp only [Effect.apply]
+    exact (footprint_transit found).sorted (sorted _ _ _ _ rfl)
+
+private theorem filter_arrive_quiet {source target : PID} {inTransit : List Envelope} {keep : Envelope → Bool}
+    (quiet : (inTransit.any keep) = false) :
+    (arrive source target inTransit).filter keep = inTransit.filter keep := by
+  have none : ∀ envelope ∈ inTransit, keep envelope = false := by
+    simpa using quiet
+  have taken : (arrive source target inTransit).filter keep = [] :=
+    List.filter_eq_nil_iff.mpr fun envelope mem => by
+      simp [none envelope (List.eraseP_sublist.subset mem)]
+  have kept : inTransit.filter keep = [] :=
+    List.filter_eq_nil_iff.mpr fun envelope mem => by simp [none envelope mem]
+  rw [taken, kept]
+
+/-- A process's own step observes the signals in transit only when it asks whether a process
+is alive, and then none are in transit between the two. -/
+private theorem own_views {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (possible : transition ∈ task.own state processId) {source target : PID} :
+    ∀ view ∈ (task.footprint state processId).observes.inTransit,
+      view (arrive source target state.inTransit) = view state.inTransit := by
+  obtain ⟨computation, finish⟩ := task
+  intro view mem
+  cases computation with
+  | request query next =>
+    cases query with
+    | alive asked =>
+      by_cases self : asked = processId
+      · simp [Task.footprint, requestFootprint, self, Observes.record] at mem
+      · simp only [Task.footprint, requestFootprint, self, ite_false, List.mem_singleton] at mem
+        subst mem
+        simp only [Task.own, State.request, self, ite_false] at possible
+        have quiet : (state.inTransit.any fun envelope =>
+            envelope.source == processId && envelope.target == asked ||
+              envelope.source == asked && envelope.target == processId) = false := by
+          split at possible
+          · simp at possible
+          all_goals
+            rename_i answer
+            split at answer
+            · simp at answer
+            · exact Bool.eq_false_iff.mpr ‹_›
+        exact filter_arrive_quiet (by simpa [Envelope.between] using quiet)
+    | _ =>
+      simp only [Task.footprint, requestFootprint] at mem
+      (repeat' split at mem) <;> simp [Observes.record, Observes.and] at mem
+  | _ =>
+      simp only [Task.footprint, Footprint.ending, Footprint.spawn] at mem
+      (repeat' split at mem) <;> (try simp [Observes.record] at mem) <;> simp_all
+private theorem oldest_arrive_other {source target source' target' : PID}
+    (distinct : (source, target) ≠ (source', target')) (inTransit : List Envelope) :
+    oldest source target (arrive source' target' inTransit) = oldest source target inTransit := by
+  simp only [oldest, find?_arrive_other distinct]
+
+/-- Taking the oldest signal of a channel changes nothing another step observes. -/
+private theorem footprint_views {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key : Key} {event : Event}
+    {next : Config α} {footprint : Footprint}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
+    (found : (Config.running state tasks finished exhausted).footprint key = some footprint)
+    {source target : PID} (other : (source, target) ∉ key.channel) :
+    ∀ view ∈ footprint.observes.inTransit,
+      view (arrive source target state.inTransit) = view state.inTransit := by
+  cases key with
+  | own processId index =>
+    simp only [Config.footprint] at found
+    split at found
+    · rename_i task lookup
+      split at found
+      · simp only [Option.some.injEq] at found
+        subst found
+        rw [mem_steps] at mem
+        rcases mem with ⟨before, processId', task', after, transition, split, keyed, -, -⟩ |
+          ⟨_, _, _, _, same, _, _⟩ | ⟨_, _, same, _, _⟩
+        · rw [mem_keyed] at keyed
+          rcases keyed with ⟨index', same, own⟩ | ⟨_, _, _, _, same, _⟩
+          · simp only [Key.own.injEq] at same
+            obtain ⟨rfl, rfl⟩ := same
+            have lookup' : tasks.lookup processId = some task' :=
+              lookup_of_mem wellformed.1 (by rw [eq_of_mem_splits split]; simp)
+            rw [lookup] at lookup'
+            cases lookup'
+            exact own_views (List.mem_of_getElem? own)
+          · cases same
+        · cases same
+        · cases same
+      · simp at found
+    · simp at found
+  | deliver source' target' =>
+    simp only [Config.footprint] at found
+    split at found
+    · rename_i envelope _ oldestFound
+      simp only [Option.some.injEq] at found
+      subst found
+      obtain ⟨rfl, rfl⟩ := between_of_find oldestFound
+      have distinct : (envelope.source, envelope.target) ≠ (source, target) := fun same =>
+        other (by simp [Key.channel, same])
+      intro view mem
+      simp only [Footprint.delivery] at mem
+      (repeat' split at mem) <;> simp [Observes.and, Observes.record] at mem <;> subst mem <;>
+        exact oldest_arrive_other distinct _
+    · simp at found
+  | bounce source' target' =>
+    simp only [Config.footprint] at found
+    split at found
+    · rename_i envelope _ oldestFound
+      simp only [Option.some.injEq] at found
+      subst found
+      obtain ⟨rfl, rfl⟩ := between_of_find oldestFound
+      have distinct : (envelope.source, envelope.target) ≠ (source, target) := fun same =>
+        other (by simp [Key.channel, same])
+      intro view mem
+      simp only [Footprint.bounce, List.mem_singleton] at mem
+      subst mem
+      exact oldest_arrive_other distinct _
+    · simp at found
+  | fire reference =>
+    simp only [Config.footprint] at found
+    split at found
+    · simp only [Option.some.injEq] at found
+      subst found
+      simp [Footprint.fire]
+    · simp at found
+
+/-- A signal that does nothing when it arrives leaves the configuration as it was, without it. -/
+private theorem inert_next {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {exhausted : Bool} {envelope : Envelope} {rest : List Envelope} {event : Event} {next : Config α}
+    (delivered : (envelope, rest) ∈ deliverable state.inTransit)
+    (inert : envelope.inert state (tasks.lookup envelope.target).isSome = true)
+    (mem : ((if (tasks.lookup envelope.target).isSome then Key.deliver envelope.source envelope.target
+        else .bounce envelope.source envelope.target), event, next) ∈
+      (Config.running state tasks finished exhausted).steps) :
+    next = .running { state with inTransit := rest } tasks finished exhausted := by
+  cases live : (tasks.lookup envelope.target).isSome
+  · simp only [live, Bool.false_eq_true, ite_false] at mem inert
+    rw [mem_steps] at mem
+    rcases mem with ⟨_, _, _, _, _, _, keyed, -, -⟩ | ⟨envelope', rest', delivered', dead, same, -, rfl⟩ |
+      ⟨_, _, same, _, _⟩
+    · rw [mem_keyed] at keyed
+      rcases keyed with ⟨_, same, _⟩ | ⟨_, _, _, _, same, _⟩ <;> cases same
+    · simp only [Key.bounce.injEq] at same
+      obtain ⟨equal, equal'⟩ := deliverable_unique delivered delivered' same.1 same.2
+      subst equal equal'
+      congr 1
+      cases signal : envelope.signal <;> simp_all [State.bounce, Envelope.inert]
+    · cases same
+  · simp only [live, ite_true] at mem inert
+    rw [mem_steps] at mem
+    rcases mem with ⟨before, processId, task, after, transition, split, keyed, -, rfl⟩ |
+      ⟨_, _, _, _, same, _, _⟩ | ⟨_, _, same, _, _⟩
+    · rw [mem_keyed] at keyed
+      rcases keyed with ⟨_, same, _⟩ | ⟨envelope', rest', delivered', target, same, rfl⟩
+      · cases same
+      · simp only [Key.deliver.injEq] at same
+        obtain ⟨equal, equal'⟩ := deliverable_unique delivered delivered' same.1 (by rw [target, same.2])
+        subst equal equal'
+        have tasksEq := eq_of_mem_splits split
+        subst target
+        have received : ({ state with inTransit := rest }.receive envelope) =
+            ({ state with inTransit := rest }, none) := by
+          simp only [Envelope.inert, ite_true] at inert
+          cases signal : envelope.signal <;> simp only [signal, Bool.false_eq_true] at inert
+          · simp only [Bool.and_eq_true, Bool.not_eq_true', State.process] at inert
+            simp only [State.receive, signal, State.process, inert.2, Bool.false_eq_true, ite_false]
+          · simp only [Bool.and_eq_true, Bool.not_eq_true', State.process] at inert
+            simp [State.receive, signal, State.process, inert.2]
+        simp only [Task.delivery, received, Transition.apply, tasksEq]
+        simp
+    · cases same
+    · cases same
+
+/-- Every live process on a PID's path already spawned the next process on it. -/
+private def Settled (state : State) (processId : PID) : Prop :=
+  ∀ ancestor index rest, processId = ancestor ++ index :: rest → (state.processes ancestor).isSome →
+    index ≤ (state.process ancestor).children
+
+private theorem settledFrom_iff {state : State} :
+    ∀ {ancestor : PID} {path : List Nat}, state.settledFrom ancestor path = true ↔
+      ∀ middle index rest, path = middle ++ index :: rest → (state.processes (ancestor ++ middle)).isSome →
+        index ≤ (state.process (ancestor ++ middle)).children
+  | ancestor, [] => by simp [State.settledFrom]
+  | ancestor, index :: rest => by
+    simp only [State.settledFrom, Bool.and_eq_true, Bool.or_eq_true, Bool.not_eq_true', decide_eq_true_eq,
+      State.alive, settledFrom_iff (ancestor := ancestor ++ [index]) (path := rest)]
+    constructor
+    · rintro ⟨here, below⟩ middle index' rest' equal live
+      cases middle with
+      | nil =>
+        simp only [List.nil_append, List.cons.injEq] at equal
+        obtain ⟨rfl, -⟩ := equal
+        simp only [List.append_nil] at live ⊢
+        rcases here with dead | bound
+        · simp [dead] at live
+        · exact bound
+      | cons first middle =>
+        simp only [List.cons_append, List.cons.injEq] at equal
+        obtain ⟨rfl, rfl⟩ := equal
+        have := below middle index' rest' rfl (by simpa using live)
+        simpa using this
+    · intro all
+      refine ⟨?_, fun middle index' rest' equal live => ?_⟩
+      · cases live : (state.processes ancestor).isSome
+        · exact .inl rfl
+        · exact .inr (by simpa using all [] index rest rfl (by simpa using live))
+      · have := all (index :: middle) index' rest' (by simp [equal]) (by simpa using live)
+        simpa using this
+
+private theorem settled_iff {state : State} {processId : PID} :
+    state.settled processId = true ↔ Settled state processId := by
+  simp only [State.settled, settledFrom_iff, List.nil_append, Settled]
+
+/-- A live process passes the check: its ancestors spawned it. -/
+private theorem Settled.of_live {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {processId : PID}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (live : (state.processes processId).isSome) : Settled state processId := by
+  obtain ⟨-, fresh, -, -, owned⟩ := wellformed
+  intro ancestor index rest equal ancestorLive
+  obtain ⟨task, mem⟩ := List.mem_map.mp (owned processId live)
+  obtain ⟨task', mem'⟩ := List.mem_map.mp (owned ancestor ancestorLive)
+  have := fresh _ mem'.1 _ mem.1 index rest (by rw [mem.2, mem'.2, equal])
+  rwa [mem'.2] at this
+
+/-- A step makes live only a child it spawns, and live processes keep the children they spawned. -/
+private theorem Step.lives {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {exhausted : Bool} {event : Event} {next : Config α}
+    (step : Step (.running state tasks finished exhausted) event next)
+    (wellformed : Wellformed (.running state tasks finished exhausted)) :
+    ∃ state' tasks' finished' exhausted', next = .running state' tasks' finished' exhausted' ∧
+      (∀ other, (state'.processes other).isSome → (state.processes other).isSome ∨
+        ∃ parent, (state.processes parent).isSome ∧ other = parent ++ [(state.process parent).children + 1]) ∧
+      (∀ other, (state.processes other).isSome → (state'.processes other).isSome →
+        (state.process other).children ≤ (state'.process other).children) := by
+  simp only [Step, Config.successors, List.mem_append, List.mem_flatMap, List.mem_map,
+    List.mem_filterMap, Prod.exists] at step
+  rcases step with (⟨before, processId, task, after, split, transition, possible, same⟩ |
+    ⟨envelope, rest, -, bounced⟩) | ⟨timer, -, same⟩
+  · simp only [Prod.mk.injEq] at same
+    obtain ⟨-, rfl⟩ := same
+    have tasksEq := eq_of_mem_splits split
+    subst tasksEq
+    obtain ⟨distinct, fresh, live, -, owned⟩ := wellformed
+    have self : (processId, task) ∈ before ++ (processId, task) :: after := by simp
+    obtain ⟨frame, -, -, grows, spawned, -, -, stays, -⟩ := transition_facts possible (live _ self)
+    have childNew : ∀ child, transition.event = .spawn processId child →
+        (state.processes child).isSome = false := by
+      intro child spawn
+      cases alive : (state.processes child).isSome
+      · rfl
+      · exfalso
+        obtain ⟨entry, mem, equal⟩ := List.mem_map.mp (owned child alive)
+        have := fresh (processId, task) self entry mem _ [] (by rw [equal, (spawned child spawn).1])
+        dsimp only at this
+        omega
+    refine ⟨_, _, _, _, rfl, fun other alive' => ?_, fun other alive alive' => ?_⟩
+    · by_cases self' : other = processId
+      · exact .inl (self' ▸ live _ self)
+      · by_cases spawn : ∃ child, transition.event = .spawn processId child ∧ other = child
+        · obtain ⟨child, spawn, same⟩ := spawn
+          exact .inr ⟨processId, live _ self, by rw [same]; exact (spawned child spawn).1⟩
+        · have kept := (frame other self' fun child spawn' same => spawn ⟨child, spawn', same⟩).1
+          exact .inl (kept ▸ alive')
+    · by_cases self' : other = processId
+      · subst self'
+        have mem := stays alive'
+        exact (grows (by intro empty; simp [empty] at mem)).2
+      · have notChild : ∀ child, transition.event = .spawn processId child → other ≠ child := by
+          intro child spawn same
+          subst same
+          rw [childNew other spawn] at alive
+          cases alive
+        exact Nat.le_of_eq (frame other self' notChild).2.symm
+  · split at bounced
+    · simp at bounced
+    · simp only [Option.some.injEq, Prod.mk.injEq] at bounced
+      obtain ⟨-, rfl⟩ := bounced
+      have keeps := State.keeps_inTransit.trans (State.keeps_bounce (state := { state with inTransit := rest })
+        (envelope := envelope))
+      exact ⟨_, _, _, _, rfl, fun other alive' => .inl ((keeps other).1 ▸ alive'),
+        fun other _ _ => Nat.le_of_eq (keeps other).2.symm⟩
+  · simp only [Prod.mk.injEq] at same
+    obtain ⟨-, rfl⟩ := same
+    have keeps := State.keeps_fire (state := state) (timer := timer)
+    exact ⟨_, _, _, _, rfl, fun other alive' => .inl ((keeps other).1 ▸ alive'),
+      fun other _ _ => Nat.le_of_eq (keeps other).2.symm⟩
+
+/-- A step keeps a PID settled, and a settled PID that is not live stays so. -/
+private theorem Settled.step {state state' : State}
+    (lives : ∀ other, (state'.processes other).isSome → (state.processes other).isSome ∨
+      ∃ parent, (state.processes parent).isSome ∧ other = parent ++ [(state.process parent).children + 1])
+    (grows : ∀ other, (state.processes other).isSome → (state'.processes other).isSome →
+      (state.process other).children ≤ (state'.process other).children)
+    {processId : PID} (settled : Settled state processId) :
+    Settled state' processId ∧
+      ((state.processes processId).isSome = false → (state'.processes processId).isSome = false) := by
+  have notSpawned : ∀ ancestor index rest, processId = ancestor ++ index :: rest →
+      ∀ parent, (state.processes parent).isSome → ancestor ≠ parent ++ [(state.process parent).children + 1] := by
+    intro ancestor index rest equal parent live same
+    subst same
+    have := settled parent ((state.process parent).children + 1) (index :: rest) (by simp [equal]) live
+    omega
+  refine ⟨fun ancestor index rest equal live' => ?_, fun dead => ?_⟩
+  · rcases lives ancestor live' with live | ⟨parent, live, same⟩
+    · exact Nat.le_trans (settled ancestor index rest equal live) (grows ancestor live live')
+    · exact absurd same (notSpawned ancestor index rest equal parent live)
+  · cases live' : (state'.processes processId).isSome
+    · rfl
+    · exfalso
+      rcases lives processId live' with live | ⟨parent, live, same⟩
+      · rw [dead] at live; cases live
+      · have := settled parent ((state.process parent).children + 1) [] (by simp [same]) live
+        omega
+
+/-- A process's monitors and aliases gain only the reference it allocates next. -/
+private def Grows (processId : PID) (process process' : ProcessState) : Prop :=
+  process.refCounter ≤ process'.refCounter ∧
+    (∀ entry ∈ process'.monitoring, entry ∈ process.monitoring ∨
+      entry.1 = processId ++ [process.refCounter + 1]) ∧
+    (∀ alias ∈ process'.aliases, alias ∈ process.aliases ∨ alias = processId ++ [process.refCounter + 1])
+
+private theorem Grows.refl {processId : PID} {process : ProcessState} : Grows processId process process :=
+  ⟨Nat.le_refl _, fun _ mem => .inl mem, fun _ mem => .inl mem⟩
+
+private theorem Grows.receive {processId source : PID} {process : ProcessState} {signal : Signal} :
+    Grows processId process (process.receive source signal) := by
+  cases signal <;> simp only [ProcessState.receive] <;> (repeat' split) <;>
+    simp only [Grows, ProcessState.append] <;>
+    exact ⟨Nat.le_refl _, fun entry mem => .inl (by simp_all [List.mem_filter]),
+      fun alias mem => .inl (by first | exact List.mem_of_mem_erase mem | simp_all)⟩
+
+private theorem Task.footprint_grows {state : State} {processId : PID} {task : Task α}
+    {process process' : ProcessState} (record : state.processes processId = some process)
+    (changed : (task.footprint state processId).effect.record processId (some process) = some process') :
+    Grows processId process process' := by
+  have current : state.process processId = process := by simp [State.process, record]
+  obtain ⟨computation, finish⟩ := task
+  cases computation <;> simp only [Task.footprint, Footprint.ending, Footprint.spawn, requestFootprint] at changed
+  all_goals (repeat' split at changed)
+  all_goals try simp only [Effect.record_andThen] at changed
+  all_goals
+    simp only [Effect.record, Effect.change, Effect.send,
+      Effect.ending, List.find?_cons, List.find?_nil, beq_self_eq_true, Function.comp_apply,
+      Option.map_some, id, Option.some.injEq, reduceCtorEq] at changed
+  all_goals (try subst changed)
+  all_goals simp_all [Grows, List.mem_append, List.mem_filter, State.process, ProcessState.append]
+  all_goals try (split <;> simp_all)
+  all_goals try first
+    | exact Nat.le_max_left _ _
+    | exact fun _ _ mem => Or.imp id And.left mem
+    | exact fun _ mem => .inl (List.mem_of_mem_erase mem)
+
+private theorem deliver_live {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {exhausted : Bool} {source target : PID} {event : Event} {next : Config α}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (mem : (.deliver source target, event, next) ∈ (Config.running state tasks finished exhausted).steps) :
+    (tasks.lookup target).isSome := by
+  rw [mem_steps] at mem
+  rcases mem with ⟨before, processId, task, after, transition, split, keyed, -, -⟩ |
+    ⟨_, _, _, _, same, _, _⟩ | ⟨_, _, same, _, _⟩
+  · rw [mem_keyed] at keyed
+    rcases keyed with ⟨_, same, _⟩ | ⟨envelope, rest, -, target', same, -⟩
+    · cases same
+    · simp only [Key.deliver.injEq] at same
+      obtain ⟨-, rfl⟩ := same
+      have : tasks.lookup target = some task :=
+        lookup_of_mem wellformed.1 (by rw [eq_of_mem_splits split]; simp)
+      simp [this]
+  · cases same
+  · cases same
+
+private theorem bounce_dead {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {exhausted : Bool} {source target : PID} {event : Event} {next : Config α}
+    (mem : (.bounce source target, event, next) ∈ (Config.running state tasks finished exhausted).steps) :
+    tasks.lookup target = none := by
+  rw [mem_steps] at mem
+  rcases mem with ⟨before, processId, task, after, transition, split, keyed, -, -⟩ |
+    ⟨envelope, rest, -, dead, same, -, -⟩ | ⟨_, _, same, _, _⟩
+  · rw [mem_keyed] at keyed
+    rcases keyed with ⟨_, same, _⟩ | ⟨_, _, _, _, same, _⟩ <;> cases same
+  · simp only [Key.bounce.injEq] at same
+    obtain ⟨-, rfl⟩ := same
+    simpa using dead
+  · cases same
+
+/-- How any step changes a live process's record: its monitors and aliases grow only by the
+reference it allocates next. -/
+private theorem step_grows {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {exhausted : Bool} {key : Key} {event : Event} {next : Config α} {footprint : Footprint}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
+    (found : (Config.running state tasks finished exhausted).footprint key = some footprint)
+    {processId : PID} {process process' : ProcessState} (present : (tasks.lookup processId).isSome)
+    (record : state.processes processId = some process)
+    (changed : footprint.effect.record processId (some process) = some process') :
+    Grows processId process process' := by
+  by_cases own : ∃ index, key = .own processId index
+  · obtain ⟨index, rfl⟩ := own
+    simp only [Config.footprint] at found
+    split at found
+    · split at found
+      · simp only [Option.some.injEq] at found
+        subst found
+        exact Task.footprint_grows record changed
+      · simp at found
+    · simp at found
+  · have other : ∀ index, key ≠ .own processId index := fun index same => own ⟨index, same⟩
+    rcases footprint_at wellformed found present other with ⟨unchanged, -⟩ |
+      ⟨source, envelope, rfl, -, equalTarget, -, rfl⟩
+    · rw [unchanged] at changed
+      simp only [id, Option.some.injEq] at changed
+      subst changed
+      exact Grows.refl
+    · simp only [Footprint.delivery] at changed
+      split at changed
+      · split at changed
+        · simp only [Effect.record_andThen, Function.comp_apply] at changed
+          simp [Effect.record, Effect.ending, equalTarget] at changed
+        · simp only [Effect.record_andThen, Function.comp_apply] at changed
+          simp only [Effect.record, Effect.change, List.find?_cons, List.find?_nil, equalTarget,
+            beq_self_eq_true, Option.map_some, Option.some.injEq, id] at changed
+          subst changed
+          exact Grows.receive
+      · simp only [Effect.record_andThen, Function.comp_apply] at changed
+        simp only [Effect.record, Effect.change, List.find?_cons, List.find?_nil, equalTarget,
+          beq_self_eq_true, Option.map_some, Option.some.injEq, id] at changed
+        subst changed
+        exact Grows.receive
+
+private theorem allocated_iff {state : State} {owner : PID} {reference : List Nat} :
+    state.allocated owner reference = true ↔
+      ∃ count, reference = owner ++ [count] ∧ 1 ≤ count ∧ count ≤ (state.process owner).refCounter := by
+  simp only [State.allocated, Bool.and_eq_true, beq_iff_eq]
+  constructor
+  · rintro ⟨owned, counted⟩
+    split at counted
+    · rename_i count last
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at counted
+      refine ⟨count, ?_, counted⟩
+      obtain ⟨prefix', rfl⟩ := List.getLast?_eq_some_iff.mp last
+      simp only [List.dropLast_concat] at owned
+      rw [owned]
+    · simp at counted
+  · rintro ⟨count, rfl, counted⟩
+    simp [counted]
+
+/-- An allocated reference that is not active stays so. -/
+private theorem Grows.inactive {owner : PID} {process process' : ProcessState} (grows : Grows owner process process')
+    {reference : List Nat} (allocated : ∃ count, reference = owner ++ [count] ∧ 1 ≤ count ∧
+      count ≤ process.refCounter) :
+    (∃ count, reference = owner ++ [count] ∧ 1 ≤ count ∧ count ≤ process'.refCounter) ∧
+      ((process.monitoring.any (·.1 == reference)) = false →
+        (process'.monitoring.any (·.1 == reference)) = false) ∧
+      (process.aliases.contains reference = false → process'.aliases.contains reference = false) := by
+  obtain ⟨count, rfl, positive, counted⟩ := allocated
+  obtain ⟨more, monitoring, aliases⟩ := grows
+  have fresh : owner ++ [count] ≠ owner ++ [process.refCounter + 1] := by
+    intro same
+    have := List.append_cancel_left same
+    simp only [List.cons.injEq, and_true] at this
+    omega
+  refine ⟨⟨count, rfl, positive, Nat.le_trans counted more⟩, fun inactive => ?_, fun absent => ?_⟩
+  · simp only [List.any_eq_false, beq_iff_eq] at inactive ⊢
+    intro entry mem same
+    rcases monitoring entry mem with old | new
+    · exact inactive entry old same
+    · exact fresh (same ▸ new)
+  · cases present : process'.aliases.contains (owner ++ [count])
+    · rfl
+    · exfalso
+      have mem := List.contains_iff_mem.mp present
+      rcases aliases _ mem with old | new
+      · rw [List.contains_iff_mem.mpr old] at absent; cases absent
+      · exact fresh new
+
+/-- Taking a signal that does nothing commutes with every other step, which leaves it a signal
+that does nothing. -/
+private theorem inert_square {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {exhausted : Bool} {envelope : Envelope} {rest : List Envelope} {key : Key} {event : Event}
+    {middle : Config α} (wellformed : Wellformed (.running state tasks finished exhausted))
+    (sorted : Sorted state.inTransit) (delivered : (envelope, rest) ∈ deliverable state.inTransit)
+    (inert : envelope.inert state (tasks.lookup envelope.target).isSome = true)
+    (mem : (key, event, middle) ∈ (Config.running state tasks finished exhausted).steps)
+    (distinct : key ≠ if (tasks.lookup envelope.target).isSome then .deliver envelope.source envelope.target
+        else .bounce envelope.source envelope.target) :
+    ∃ state' tasks' finished' exhausted', middle = .running state' tasks' finished' exhausted' ∧
+      (envelope, arrive envelope.source envelope.target state'.inTransit) ∈ deliverable state'.inTransit ∧
+      envelope.inert state' (tasks'.lookup envelope.target).isSome = true ∧
+      (key, event, .running { state' with inTransit := arrive envelope.source envelope.target state'.inTransit }
+        tasks' finished' exhausted') ∈
+        (Config.running { state with inTransit := rest } tasks finished exhausted).steps := by
+  obtain ⟨oldestEnvelope, rfl⟩ := mem_deliverable_iff.mp delivered
+  have found := oldest_iff.mp oldestEnvelope
+  obtain ⟨footprint, foundFootprint⟩ := footprint_of_mem wellformed mem
+  obtain ⟨move, moved⟩ := moves wellformed mem foundFootprint
+  -- The other step does not take from this channel.
+  have other : (envelope.source, envelope.target) ∉ key.channel := by
+    intro inChannel
+    cases key with
+    | own _ _ => simp [Key.channel] at inChannel
+    | fire _ => simp [Key.channel] at inChannel
+    | deliver source target =>
+      simp only [Key.channel, List.mem_singleton, Prod.mk.injEq] at inChannel
+      obtain ⟨rfl, rfl⟩ := inChannel
+      apply distinct
+      simp [deliver_live wellformed mem]
+    | bounce source target =>
+      simp only [Key.channel, List.mem_singleton, Prod.mk.injEq] at inChannel
+      obtain ⟨rfl, rfl⟩ := inChannel
+      apply distinct
+      simp [bounce_dead mem]
+  obtain ⟨found', comm⟩ := (footprint_transit foundFootprint).keeps other sorted found
+  -- What the other step reaches.
+  have middleEq := moved.next
+  have wellformed' := Step.wellformed (Step.of_mem_steps mem) wellformed
+  obtain ⟨state'', tasks'', finished'', exhausted'', middleEq', lives, grows⟩ :=
+    Step.lives (Step.of_mem_steps mem) wellformed
+  rw [middleEq, Move.config, moved.effect] at middleEq'
+  simp only [Config.running.injEq] at middleEq'
+  obtain ⟨stateEq, tasksEq, -, -⟩ := middleEq'
+  subst stateEq tasksEq
+  rw [middleEq, Move.config, moved.effect] at wellformed' ⊢
+  refine ⟨_, _, _, _, rfl, mem_deliverable_iff.mpr ⟨oldest_iff.mpr found', rfl⟩, ?_, ?_⟩
+  · -- The signal still does nothing.
+    have settledThere : Settled state envelope.target → Settled (footprint.effect.apply state) envelope.target ∧
+        ((state.processes envelope.target).isSome = false →
+          ((footprint.effect.apply state).processes envelope.target).isSome = false) :=
+      Settled.step lives grows
+    cases live : (tasks.lookup envelope.target).isSome
+    · simp only [Envelope.inert, live, Bool.false_eq_true, ite_false, Bool.and_eq_true] at inert
+      obtain ⟨settled, signal⟩ := inert
+      obtain ⟨settled', dead'⟩ := settledThere (settled_iff.mp settled)
+      have dead : (state.processes envelope.target).isSome = false := by
+        simpa using dead_of_missing wellformed (by simpa using live)
+      have missing' : ((move.tasks tasks).lookup envelope.target).isSome = false := by
+        cases present : ((move.tasks tasks).lookup envelope.target).isSome
+        · rfl
+        · have := live_of_lookup wellformed' present
+          rw [dead' dead] at this
+          cases this
+      simp [Envelope.inert, missing', settled_iff.mpr settled', signal]
+    · simp only [Envelope.inert, live, ite_true] at inert
+      obtain ⟨process, record⟩ := Option.isSome_iff_exists.mp (live_of_lookup wellformed live)
+      cases live' : ((move.tasks tasks).lookup envelope.target).isSome
+      · have settled' := (settledThere (Settled.of_live wellformed (by simp [record]))).1
+        have signal : ∀ reference, envelope.signal ≠ .link ∧ envelope.signal ≠ .monitor reference := by
+          intro reference
+          constructor <;> intro same <;> simp [same] at inert
+        simp only [Envelope.inert, Bool.false_eq_true, ite_false, settled_iff.mpr settled',
+          Bool.true_and]
+        cases signal' : envelope.signal <;> simp_all
+      · obtain ⟨process', record'⟩ := Option.isSome_iff_exists.mp (live_of_lookup wellformed' live')
+        have changed : footprint.effect.record envelope.target (some process) = some process' := by
+          rw [← record, ← record']; rfl
+        have grown := step_grows wellformed mem foundFootprint live record changed
+        have current : state.process envelope.target = process := by simp [State.process, record]
+        have current' : (footprint.effect.apply state).process envelope.target = process' := by
+          simp only [State.process]; rw [record']; rfl
+        simp only [Envelope.inert, ite_true]
+        cases signal : envelope.signal <;> simp only [signal, Bool.and_eq_true, Bool.not_eq_true',
+          Bool.false_eq_true] at inert ⊢
+        · rw [allocated_iff, current] at inert
+          obtain ⟨allocated, absent⟩ := inert
+          obtain ⟨allocated', -, absent'⟩ := grown.inactive allocated
+          rw [allocated_iff, current']
+          exact ⟨allocated', absent' (current ▸ absent)⟩
+        · rw [allocated_iff, current] at inert
+          obtain ⟨allocated, inactive⟩ := inert
+          obtain ⟨allocated', inactive', -⟩ := grown.inactive allocated
+          rw [allocated_iff, current']
+          exact ⟨allocated', inactive' (current ▸ inactive)⟩
+  · -- The other step after taking the signal.
+    have agree : footprint.observes.Agree state
+        { state with inTransit := arrive envelope.source envelope.target state.inTransit } :=
+      ⟨fun _ _ => rfl, fun _ _ => rfl,
+        fun view mem' => footprint_views wellformed mem foundFootprint other view mem', rfl⟩
+    have supports : Supports key move tasks tasks := by
+      cases key with
+      | own _ _ => rfl
+      | deliver source target =>
+        simp only [Supports]
+        split
+        · trivial
+        · exact deliver_live wellformed mem
+      | bounce _ _ => exact bounce_dead mem
+      | fire _ => trivial
+    have forth := moved.transfer _ tasks finished exhausted
+      (wellformed_keeps wellformed State.keeps_inTransit) agree supports
+    rw [← moved.event] at forth
+    have same : move.effect.apply
+        { state with inTransit := arrive envelope.source envelope.target state.inTransit } =
+        { footprint.effect.apply state with
+          inTransit := arrive envelope.source envelope.target (footprint.effect.apply state).inTransit } := by
+      rw [moved.effect]
+      simp only [Effect.apply]
+      congr 1
+    simpa [Move.config, same] using forth
+
+/-- A signal at the head of its channel can always arrive: delivered to a live process, or
+bounced from one that is not. -/
+private theorem inert_enabled {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {exhausted : Bool} {envelope : Envelope} {rest : List Envelope}
+    (delivered : (envelope, rest) ∈ deliverable state.inTransit) :
+    ∃ event next, ((if (tasks.lookup envelope.target).isSome then Key.deliver envelope.source envelope.target
+        else .bounce envelope.source envelope.target), event, next) ∈
+      (Config.running state tasks finished exhausted).steps := by
+  cases live : (tasks.lookup envelope.target).isSome
+  · simp only [Bool.false_eq_true, ite_false]
+    exact ⟨_, _, mem_steps.mpr (.inr (.inl ⟨envelope, rest, delivered, live, rfl, rfl, rfl⟩))⟩
+  · simp only [ite_true]
+    obtain ⟨task, found⟩ := Option.isSome_iff_exists.mp live
+    obtain ⟨before, after, split⟩ := List.mem_iff_append.mp (mem_of_lookup found)
+    refine ⟨_, _, mem_steps.mpr (.inl ⟨before, envelope.target, task, after,
+      task.delivery state envelope.target envelope rest, ?_, ?_, rfl, rfl⟩)⟩
+    · rw [split]; exact mem_splits
+    · exact mem_keyed.mpr (.inr ⟨envelope, rest, delivered, rfl, rfl, rfl⟩)
+
+/-- What every configuration a run reaches satisfies, for the steps `check` takes alone. -/
+private def Reachable (config : Config α) : Prop :=
+  Wellformed config ∧ ∀ state tasks finished exhausted, config = .running state tasks finished exhausted →
+    Sorted state.inTransit
+
+private theorem Step.reachable {first next : Config α} {event : Event} (step : Step first event next)
+    (reachable : Reachable first) : Reachable next :=
+  ⟨Step.wellformed step reachable.1, Step.sorted step reachable.1 reachable.2⟩
+
+/-- A step every run can take first. At a configuration where `Forced` holds of its key,
+the step is enabled, and every other step either absorbs it (the other step is enabled after
+it and reaches the same configuration), or commutes with it into a configuration where a step
+`Forced` holds of is enabled and closes the square. -/
+private theorem forced_first {outcome : Outcome α} (Forced : Config α → Key → Prop)
+    (square : ∀ {config : Config α} {key key' : Key} {event event' : Event} {next middle : Config α},
+      Reachable config → Forced config key → (key, event, next) ∈ config.steps →
+      (key', event', middle) ∈ config.steps → key' ≠ key →
+      (∃ absorbed, (key', absorbed, middle) ∈ next.steps) ∨
+      ∃ key'' forced other last, Forced middle key'' ∧ (key'', forced, last) ∈ middle.steps ∧
+        (key', other, last) ∈ next.steps) :
     ∀ {first last : Config α} {events : List Event}, Run first events last →
-    ∀ {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
-      {exhausted : Bool} {processId : PID} {task : Task α} {event : Event} {next : Config α},
-      first = .running state tasks finished exhausted → Wellformed first →
-      tasks.lookup processId = some task → task.local state processId = true →
-      (.own processId 0, event, next) ∈ first.steps → Terminal last outcome →
-      ∃ events', Run next events' last := by
+    ∀ {key : Key} {event : Event} {next : Config α}, Reachable first → Forced first key →
+      (key, event, next) ∈ first.steps → Terminal last outcome → ∃ events', Run next events' last := by
   intro first last events run
   induction run with
   | refl =>
-    intro state tasks finished exhausted processId task event next _ _ _ _ mem terminal
+    intro key event next _ _ mem terminal
     have := Step.of_mem_steps mem
     simp [Step, terminal.successors_eq_nil] at this
   | step step rest ih =>
     rename_i first event' middle events last
-    intro state tasks finished exhausted processId task event next equal wellformed found isLocal
-      mem terminal
-    subst equal
-    obtain ⟨key, mem'⟩ := Step.keyed step
-    by_cases own : ∃ index, key = .own processId index
-    · obtain ⟨index, rfl⟩ := own
-      obtain ⟨footprint, found'⟩ := footprint_of_mem wellformed mem'
-      obtain rfl := index_of_footprint found'
-      obtain ⟨rfl, rfl⟩ := steps_unique wellformed mem' mem
+    intro key event next wellformed forced mem terminal
+    cases first with
+    | start => simp [Config.steps] at mem
+    | running =>
+    obtain ⟨key', mem'⟩ := Step.keyed step
+    by_cases same : key' = key
+    · subst same
+      obtain ⟨-, rfl⟩ := steps_unique wellformed.1 mem' mem
       exact ⟨events, rest⟩
-    have other : ∀ index, key ≠ .own processId index := fun index same => own ⟨index, same⟩
-    by_cases kills : ∃ source envelope, key = .deliver source processId ∧
-        (envelope, arrive source processId state.inTransit) ∈ deliverable state.inTransit ∧
-        envelope.source = source ∧ envelope.target = processId ∧
-        ({ state with inTransit := arrive source processId state.inTransit }.receive envelope).2.isSome
-    · obtain ⟨source, envelope, rfl, delivered, equalSource, equalTarget, ends⟩ := kills
-      exact ⟨_, .step (Step.of_mem_steps (local_absorbs wellformed found isLocal mem mem' delivered
-        equalSource equalTarget ends)) rest⟩
-    have survives : ∀ source envelope, key = .deliver source processId →
-        (envelope, arrive source processId state.inTransit) ∈ deliverable state.inTransit →
-        envelope.source = source → envelope.target = processId →
-        ({ state with inTransit := arrive source processId state.inTransit }.receive envelope).2 = none := by
-      intro source envelope same delivered equalSource equalTarget
-      cases exits : ({ state with inTransit := arrive source processId state.inTransit }.receive
-        envelope).2 with
-      | none => rfl
-      | some _ => exact absurd ⟨source, envelope, same, delivered, equalSource, equalTarget, by simp [exits]⟩ kills
-    obtain ⟨last', forth, back⟩ := local_square wellformed found isLocal mem mem' other survives
-    obtain ⟨state', tasks', finished', exhausted', rfl, found', isLocal'⟩ :=
-      local_persists wellformed found isLocal mem' other survives
-    obtain ⟨events', run'⟩ := ih rfl (Step.wellformed step wellformed) found' isLocal' back terminal
-    exact ⟨_, .step (Step.of_mem_steps forth) run'⟩
+    · rcases square wellformed forced mem mem' same with ⟨absorbed, mem''⟩ |
+        ⟨key'', forced', other, last', isForced, forth, back⟩
+      · exact ⟨_, .step (Step.of_mem_steps mem'') rest⟩
+      · obtain ⟨events', run'⟩ := ih (Step.reachable step wellformed) isForced forth terminal
+        exact ⟨_, .step (Step.of_mem_steps back) run'⟩
+
+/-- A signal at the head of its channel that does nothing when it arrives and never will. -/
+private def InertStep (config : Config α) (key : Key) : Prop :=
+  ∃ state tasks finished exhausted envelope rest, config = .running state tasks finished exhausted ∧
+    (envelope, rest) ∈ deliverable state.inTransit ∧
+    envelope.inert state (tasks.lookup envelope.target).isSome = true ∧
+    key = if (tasks.lookup envelope.target).isSome then .deliver envelope.source envelope.target
+      else .bounce envelope.source envelope.target
+
+/-- A signal that does nothing commutes with every other step, which leaves it one. -/
+private theorem inert_forced {config : Config α} {key key' : Key} {event event' : Event}
+    {next middle : Config α} (reachable : Reachable config) (forced : InertStep config key)
+    (mem : (key, event, next) ∈ config.steps) (mem' : (key', event', middle) ∈ config.steps)
+    (distinct : key' ≠ key) :
+    ∃ key'' forced other last, InertStep middle key'' ∧ (key'', forced, last) ∈ middle.steps ∧
+      (key', other, last) ∈ next.steps := by
+  obtain ⟨state, tasks, finished, exhausted, envelope, rest, rfl, delivered, inert, rfl⟩ := forced
+  obtain ⟨wellformed, sorted⟩ := reachable
+  have nextEq := inert_next delivered inert mem
+  subst nextEq
+  obtain ⟨state', tasks', finished', exhausted', rfl, delivered', inert', forth⟩ :=
+    inert_square wellformed (sorted _ _ _ _ rfl) delivered inert mem' distinct
+  obtain ⟨forced, last, back⟩ := inert_enabled (tasks := tasks') (finished := finished')
+    (exhausted := exhausted') delivered'
+  have lastEq := inert_next delivered' inert' back
+  subst lastEq
+  exact ⟨_, forced, event', _, ⟨_, _, _, _, envelope, _, rfl, delivered', inert', rfl⟩, back, forth⟩
+
+/-- A step `Config.forced` takes. -/
+private def ForcedStep (config : Config α) (key : Key) : Prop :=
+  LocalStep config key ∨ InertStep config key
+
+private theorem forced_square {config : Config α} {key key' : Key} {event event' : Event}
+    {next middle : Config α} (reachable : Reachable config) (forced : ForcedStep config key)
+    (mem : (key, event, next) ∈ config.steps) (mem' : (key', event', middle) ∈ config.steps)
+    (distinct : key' ≠ key) :
+    (∃ absorbed, (key', absorbed, middle) ∈ next.steps) ∨
+      ∃ key'' forced other last, ForcedStep middle key'' ∧ (key'', forced, last) ∈ middle.steps ∧
+        (key', other, last) ∈ next.steps := by
+  rcases forced with isLocal | isInert
+  · rcases local_forced reachable.1 isLocal mem mem' distinct with absorbed |
+      ⟨key'', forced, other, last, isLocal', forth, back⟩
+    · exact .inl absorbed
+    · exact .inr ⟨key'', forced, other, last, .inl isLocal', forth, back⟩
+  · obtain ⟨key'', forced, other, last, isInert', forth, back⟩ :=
+      inert_forced reachable isInert mem mem' distinct
+    exact .inr ⟨key'', forced, other, last, .inr isInert', forth, back⟩
 
 /-! ### Exploration
 
@@ -2676,28 +3932,38 @@ private theorem steps_nil_of_successors {config : Config α} (none : config.succ
   | start => rfl
   | running => rw [← List.map_eq_nil_iff, Config.steps_running, none]
 
-/-- The step `check` follows alone is a local step of a process. -/
+/-- The step `check` follows alone is a local step, or a signal that does nothing. -/
 private theorem forced_facts {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {exhausted : Bool} {key : Key} {event : Event}
     {next : Config α} (wellformed : Wellformed (.running state tasks finished exhausted))
     (found : ((Config.running state tasks finished exhausted).forced.bind fun key =>
       (Config.running state tasks finished exhausted).steps.find? (·.1 == key)) = some (key, event, next)) :
-    ∃ processId task, tasks.lookup processId = some task ∧ task.local state processId = true ∧
-      key = .own processId 0 ∧ (key, event, next) ∈ (Config.running state tasks finished exhausted).steps := by
+    ForcedStep (.running state tasks finished exhausted) key ∧
+      (key, event, next) ∈ (Config.running state tasks finished exhausted).steps := by
   simp only [Option.bind_eq_some_iff] at found
   obtain ⟨forced, isForced, step⟩ := found
   have same : key = forced := by simpa using List.find?_some step
   subst same
-  simp only [Config.forced, Option.map_eq_some_iff] at isForced
-  obtain ⟨⟨processId, task⟩, local', rfl⟩ := isForced
-  have isLocal : task.local state processId = true := by simpa using List.find?_some local'
-  exact ⟨processId, task, lookup_of_mem wellformed.1 (List.mem_of_find?_eq_some local'), isLocal, rfl,
-    List.mem_of_find?_eq_some step⟩
+  refine ⟨?_, List.mem_of_find?_eq_some step⟩
+  simp only [Config.forced] at isForced
+  cases local' : tasks.find? (fun (processId, task) => task.local state processId) with
+  | some entry =>
+    obtain ⟨processId, task⟩ := entry
+    simp only [local', Option.map_some, Option.orElse_some, Option.some.injEq] at isForced
+    subst isForced
+    have isLocal : task.local state processId = true := by simpa using List.find?_some local'
+    exact .inl ⟨_, _, _, _, processId, task, rfl,
+      lookup_of_mem wellformed.1 (List.mem_of_find?_eq_some local'), isLocal, rfl⟩
+  | none =>
+    simp only [local', Option.map_none, Option.orElse, Config.inert, Option.map_eq_some_iff] at isForced
+    obtain ⟨⟨envelope, rest⟩, head, rfl⟩ := isForced
+    exact .inr ⟨_, _, _, _, envelope, rest, rfl, List.mem_of_find?_eq_some head,
+      by simpa using List.find?_some head, rfl⟩
 
 private theorem check_wellformed {accept : Outcome α → Bool} :
     ∀ {depth : Nat} {sleep : List Key} {first last : Config α} {events : List Event}
       {outcome : Outcome α},
-      Wellformed first → checkFrom accept depth sleep first = true → Run first events last →
+      Reachable first → checkFrom accept depth sleep first = true → Run first events last →
       Terminal last outcome →
       (∀ key ∈ sleep, ∀ event next, (key, event, next) ∈ first.steps → ¬Reaches next last) →
       accept outcome = true := by
@@ -2705,7 +3971,8 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
   induction depth with
   | zero => intro _ _ _ _ _ _ checked; simp [checkFrom] at checked
   | succ depth ih =>
-    intro sleep first last events outcome wellformed checked run terminal asleep
+    intro sleep first last events outcome reachable checked run terminal asleep
+    have wellformed := reachable.1
     unfold checkFrom at checked
     cases found : first.steps with
     | nil =>
@@ -2720,7 +3987,7 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
         · rename_i none
           simp [Step, none] at step
         · simp only [List.all_eq_true] at checked
-          exact ih (Step.wellformed step wellformed) (checked _ step) rest terminal (by simp)
+          exact ih (Step.reachable step reachable) (checked _ step) rest terminal (by simp)
     | cons entry entries =>
       simp only [found] at checked
       rw [← found] at checked
@@ -2735,10 +4002,10 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
           split at checked
           · -- A step every run can take first.
             rename_i key event' next forced
-            obtain ⟨processId, task, lookup, isLocal, rfl, mem⟩ := forced_facts wellformed forced
-            obtain ⟨events', run'⟩ := local_first (.step step rest) rfl wellformed lookup isLocal mem
-              terminal
-            refine ih (Step.wellformed (Step.of_mem_steps mem) wellformed) checked run' terminal ?_
+            obtain ⟨isForced, mem⟩ := forced_facts wellformed forced
+            obtain ⟨events', run'⟩ := forced_first ForcedStep forced_square (.step step rest) reachable
+              isForced mem terminal
+            refine ih (Step.reachable (Step.of_mem_steps mem) reachable) checked run' terminal ?_
             intro key' slept event'' next'' mem' reaches
             simp only [List.mem_filter] at slept
             obtain ⟨next₀, mem₀, step₀⟩ :=
@@ -2748,7 +4015,7 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
             exact explore_sound (goal := accept outcome = true)
               (fun key event next mem sleep' visited reaches asleep' =>
                 let ⟨_, run'⟩ := reaches
-                ih (Step.wellformed (Step.of_mem_steps mem) wellformed) visited run' terminal asleep')
+                ih (Step.reachable (Step.of_mem_steps mem) reachable) visited run' terminal asleep')
               (fun key event next mem key' commutes event' next' mem' =>
                 diamond wellformed mem (by rw [← Config.commutesWith_eq]; exact commutes) mem')
               (fun key event event' next next' mem mem' => (steps_unique wellformed mem mem').2)
@@ -2760,7 +4027,8 @@ theorem check_sound {accept : Outcome α → Bool} {depth : Nat} {env : Environm
     {outcome : Outcome α} (checked : check accept depth (.start env computation elapsed) = true)
     (run : Run (.start env computation elapsed) events last) (terminal : Terminal last outcome) :
     accept outcome = true :=
-  check_wellformed (show Wellformed (Config.start env computation elapsed) from trivial) checked run
+  check_wellformed (show Reachable (Config.start env computation elapsed) from
+    ⟨trivial, fun _ _ _ _ equal => by cases equal⟩) checked run
     terminal (by simp)
 
 end Lynx.Concurrent
