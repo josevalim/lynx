@@ -35,7 +35,7 @@ defmodule WorkersProofsTest do
       exact Lynx.concurrent_of_check
         (Lynx.apply «sum_workers_is_three:ensures/0» Erlang.program.fun_table (depth + 2))
         Lynx.Outcome.isTrue 64
-        (fun _ => by cbv)
+        (fun _ => by lynx_kernel)
         fun _ => Lynx.Outcome.eq_of_isTrue
       """
   end

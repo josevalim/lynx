@@ -113,19 +113,16 @@ open Lynx
 
 -- Convert a successful binary64 operation or raise badarith.
 private def floatResult (value : Option Term.FiniteFloat) : Except Exception Term :=
-  match value with
-  | some value => .ok (.float value)
-  | none => throw (.error (.atom "badarith"))
+  value.elim (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
 
-@[simp] private theorem floatResult_ok_iff (value : Option Term.FiniteFloat) (result : Term) :
-    floatResult value = .ok result ↔ ∃ f, value = some f ∧ result = .float f := by
-  cases value <;> simp [floatResult, eq_comm]
-
-def «+/2» : Term → Term → Except Exception Term
+@[expose] def «+/2» : Term → Term → Except Exception Term
   | .integer x, .integer y => .ok (.integer (x + y))
-  | .float x, .float y => floatResult (x.add y)
-  | .integer x, .float y => floatResult (Term.FiniteFloat.ofInt x >>= (·.add y))
-  | .float x, .integer y => floatResult (Term.FiniteFloat.ofInt y >>= x.add)
+  | .float x, .float y => (x.add y).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
+  | .integer x, .float y => (Term.FiniteFloat.ofInt x >>= (·.add y)).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
+  | .float x, .integer y => (Term.FiniteFloat.ofInt y >>= x.add).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
   | _, _ => throw (.error (.atom "badarith"))
 
 @[simp↓, cbv_eval] theorem «+/2_integers» (left right : Int) :
@@ -135,7 +132,7 @@ def «+/2» : Term → Term → Except Exception Term
 @[simp↓] theorem «+/2_integer_ok_iff» (left right : Term) (sum : Int) :
     «+/2» left right = .ok (.integer sum) ↔
       ∃ x y, left = .integer x ∧ right = .integer y ∧ x + y = sum := by
-  cases left <;> cases right <;> simp [«+/2», floatResult_ok_iff]
+  cases left <;> cases right <;> simp [«+/2», Option.elim] <;> split <;> simp
 
 @[simp] theorem «+/2_floats» (left right : Term.FiniteFloat) :
     «+/2» (.float left) (.float right) =
@@ -161,11 +158,14 @@ def «+/2» : Term → Term → Except Exception Term
   simp only [«+/2»]
   cases Term.FiniteFloat.ofInt right >>= left.add <;> rfl
 
-def «-/2» : Term → Term → Except Exception Term
+@[expose] def «-/2» : Term → Term → Except Exception Term
   | .integer x, .integer y => .ok (.integer (x - y))
-  | .float x, .float y => floatResult (x.sub y)
-  | .integer x, .float y => floatResult (Term.FiniteFloat.ofInt x >>= (·.sub y))
-  | .float x, .integer y => floatResult (Term.FiniteFloat.ofInt y >>= x.sub)
+  | .float x, .float y => (x.sub y).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
+  | .integer x, .float y => (Term.FiniteFloat.ofInt x >>= (·.sub y)).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
+  | .float x, .integer y => (Term.FiniteFloat.ofInt y >>= x.sub).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
   | _, _ => throw (.error (.atom "badarith"))
 
 @[simp↓, cbv_eval] theorem «-/2_integers» (left right : Int) :
@@ -174,23 +174,30 @@ def «-/2» : Term → Term → Except Exception Term
 /-- Integer subtraction results cannot originate from a float or another term kind. -/
 @[simp] theorem «-/2_integer_result» (left : Term) (right value : Int) :
     «-/2» left (.integer right) = .ok (.integer value) ↔ left = .integer (value + right) := by
-  cases left <;> simp [«-/2», floatResult]
+  cases left <;> simp [«-/2», Option.elim]
   · omega
   · split <;> simp_all
 
-def «//2» : Term → Term → Except Exception Term
-  | .float x, .float y => floatResult (x.div y)
-  | .integer x, .float y => floatResult (Term.FiniteFloat.ofInt x >>= (·.div y))
-  | .float x, .integer y => floatResult (Term.FiniteFloat.ofInt y >>= x.div)
-  | .integer x, .integer y => floatResult
-      (Term.FiniteFloat.ofInt x >>= fun a => Term.FiniteFloat.ofInt y >>= a.div)
+@[expose] def «//2» : Term → Term → Except Exception Term
+  | .float x, .float y => (x.div y).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
+  | .integer x, .float y => (Term.FiniteFloat.ofInt x >>= (·.div y)).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
+  | .float x, .integer y => (Term.FiniteFloat.ofInt y >>= x.div).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
+  | .integer x, .integer y =>
+    (Term.FiniteFloat.ofInt x >>= fun a => Term.FiniteFloat.ofInt y >>= a.div).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
   | _, _ => throw (.error (.atom "badarith"))
 
-def «*/2» : Term → Term → Except Exception Term
+@[expose] def «*/2» : Term → Term → Except Exception Term
   | .integer x, .integer y => .ok (.integer (x * y))
-  | .float x, .float y => floatResult (x.mul y)
-  | .integer x, .float y => floatResult (Term.FiniteFloat.ofInt x >>= (·.mul y))
-  | .float x, .integer y => floatResult (Term.FiniteFloat.ofInt y >>= x.mul)
+  | .float x, .float y => (x.mul y).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
+  | .integer x, .float y => (Term.FiniteFloat.ofInt x >>= (·.mul y)).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
+  | .float x, .integer y => (Term.FiniteFloat.ofInt y >>= x.mul).elim
+    (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
   | _, _ => throw (.error (.atom "badarith"))
 
 @[simp↓, cbv_eval] theorem «*/2_integers» (left right : Int) :
@@ -199,6 +206,7 @@ def «*/2» : Term → Term → Except Exception Term
 private theorem «*/2_integer_float_eq» (n : Int) (value : Term.FiniteFloat) :
     «*/2» (.integer n) (.float value) = floatResult (Term.FiniteFloat.ofInt n >>= (·.mul value)) := by
   simp only [«*/2»]
+  rfl
 
 /-- An integer that converts to a float times a float below one in magnitude, that
 is, with a biased exponent below 1023, is a float. -/
