@@ -88,6 +88,12 @@ example (depth : Nat) : Concurrent.check hello 32 (.start {} (deep (depth + 1)))
   lynx_counterexample
   sorry
 
+/-- Kernel evaluation proves a check, with the call depth and the time elapsed
+when timers are canceled free. -/
+example (depth : Nat) (elapsed : PID → Nat → Nat) :
+    Concurrent.check answered 32 (.start {} (deep (depth + 1)) elapsed) = true := by
+  lynx_kernel
+
 /-- error: lynx_counterexample runs closed programs, but this one depends on [message] -/
 #guard_msgs in
 example (message : Term) :

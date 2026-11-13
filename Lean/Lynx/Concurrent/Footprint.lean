@@ -1863,7 +1863,7 @@ private theorem Task.local_shape {state : State} {processId : PID} {task : Task 
     · simp only [Task.footprint]
       split
       · simp only [Effect.apply_change]; rfl
-      · simp_all [choose]
+      · simp_all
     · simp only [Task.footprint]
       split <;> simp [Effect.change]
     · obtain ⟨split, pdict, refCounter⟩ := ProcessState.receive_split (process := process)
@@ -1876,7 +1876,7 @@ private theorem Task.local_shape {state : State} {processId : PID} {task : Task 
       · obtain ⟨split', -, -⟩ := ProcessState.receive_split
           (process := change process) (source := source) (signal := signal)
         rw [split, split']
-        simp only [change, rest, List.append_assoc]
+        simp only [change, rest]
   | _ => simp [Task.local] at isLocal
 
 end Lynx.Concurrent
