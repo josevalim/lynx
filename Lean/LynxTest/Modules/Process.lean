@@ -458,6 +458,7 @@ run_cmd do
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Termination
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Footprint
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Reduction
+  LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Confluence
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Term.DataTypes
 
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.erlang.Exceptions
