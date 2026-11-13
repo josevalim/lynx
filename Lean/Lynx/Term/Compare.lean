@@ -1123,22 +1123,26 @@ theorem mapEntries_distinct (entries : List (Term × Term)) :
     (mapEntries entries).Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq) :=
   (mapEnumeration entries).property.1
 
-/-- Enumerated bindings are found by their own key. -/
-theorem mapLookup_of_mem_mapEntries {entries : List (Term × Term)} {entry : Term × Term}
-    (member : entry ∈ mapEntries entries) : mapLookup entries entry.1 = some entry.2 := by
-  rw [← mapLookup_mapEntries]
-  have distinct := mapEntries_distinct entries
-  generalize mapEntries entries = es at member distinct
-  induction es with
+/-- Bindings with distinct keys are found by their own key. -/
+private theorem mapLookup_of_mem {entries : List (Term × Term)} {entry : Term × Term}
+    (distinct : entries.Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq)) (member : entry ∈ entries) :
+    mapLookup entries entry.1 = some entry.2 := by
+  induction entries with
   | nil => simp at member
   | cons r rest ih =>
     rcases List.mem_cons.mp member with rfl | member
     · simp [mapLookup]
     · have apart := (List.pairwise_cons.mp distinct).1 entry member
       have miss : exactCompare entry.1 r.1 ≠ .eq := fun same => apart (Std.OrientedCmp.eq_symm same)
-      have := ih member (List.pairwise_cons.mp distinct).2
+      have := ih (List.pairwise_cons.mp distinct).2 member
       simp only [mapLookup, List.find?_cons, miss, decide_false] at this ⊢
       exact this
+
+/-- Enumerated bindings are found by their own key. -/
+theorem mapLookup_of_mem_mapEntries {entries : List (Term × Term)} {entry : Term × Term}
+    (member : entry ∈ mapEntries entries) : mapLookup entries entry.1 = some entry.2 := by
+  rw [← mapLookup_mapEntries]
+  exact mapLookup_of_mem (mapEntries_distinct entries) member
 
 /-- Enumerated bindings are bindings of the map. -/
 theorem mem_of_mem_mapEntries {entries : List (Term × Term)} {entry : Term × Term}
@@ -1167,6 +1171,85 @@ theorem mem_of_mem_mapEntries {entries : List (Term × Term)} {entry : Term × T
   | cons entry rest =>
     have found := mapLookup_mapEntries [] entry.1
     simp [enumerated, mapLookup] at found
+
+/-- Whether no two keys of a map's entries are exactly equal. -/
+@[expose] def keysDistinct : List (Term × Term) → Bool
+  | [] => .true
+  | entry :: rest => rest.all (fun other => exactCompare entry.1 other.1 != .eq) && keysDistinct rest
+
+/-- The lists inserting an element at each position of a list. -/
+@[expose] def insertions (element : α) : List α → List (List α)
+  | [] => [[element]]
+  | first :: rest => (element :: first :: rest) :: (insertions element rest).map (first :: ·)
+
+/-- Every order of a list. -/
+@[expose] def orders : List α → List (List α)
+  | [] => [[]]
+  | first :: rest => (orders rest).flatMap (insertions first)
+
+private theorem mem_insertions (element : α) (before after : List α) :
+    before ++ element :: after ∈ insertions element (before ++ after) := by
+  induction before with
+  | nil => cases after <;> simp [insertions]
+  | cons first before ih => simp [insertions, ih]
+
+private theorem mem_orders {list other : List α} (perm : other.Perm list) : other ∈ orders list := by
+  induction list generalizing other with
+  | nil => simp [orders, List.perm_nil.mp perm]
+  | cons first rest ih =>
+    obtain ⟨before, after, rfl⟩ := List.append_of_mem (perm.mem_iff.mpr List.mem_cons_self)
+    have rest_perm := (List.perm_cons first).mp (List.perm_middle.symm.trans perm)
+    exact List.mem_flatMap.mpr ⟨_, ih rest_perm, mem_insertions first before after⟩
+
+private theorem pairwise_of_keysDistinct {entries : List (Term × Term)}
+    (distinct : keysDistinct entries = .true) :
+    entries.Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq) := by
+  induction entries with
+  | nil => simp
+  | cons entry rest ih =>
+    simp only [keysDistinct, Bool.and_eq_true, List.all_eq_true, bne_iff_ne, ne_eq] at distinct
+    exact List.pairwise_cons.mpr ⟨distinct.1, ih distinct.2⟩
+
+private theorem nodup_of_distinct {entries : List (Term × Term)}
+    (distinct : entries.Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq)) : entries.Nodup :=
+  distinct.imp fun {a b} apart (same : a = b) => apart (same ▸ Std.ReflCmp.compare_self)
+
+private theorem eq_of_mem_of_mem {entries : List (Term × Term)} {a b : Term × Term}
+    (distinct : entries.Pairwise (fun a b => exactCompare a.1 b.1 ≠ .eq))
+    (first : a ∈ entries) (second : b ∈ entries) (same : exactCompare a.1 b.1 = .eq) : a = b := by
+  induction entries with
+  | nil => simp at first
+  | cons r rest ih =>
+    have ⟨apart, distinct⟩ := List.pairwise_cons.mp distinct
+    rcases List.mem_cons.mp first with first | first <;>
+      rcases List.mem_cons.mp second with second | second
+    · exact first.trans second.symm
+    · exact absurd (first ▸ same) (apart b second)
+    · exact absurd (second ▸ Std.OrientedCmp.eq_symm same) (apart a first)
+    · exact ih distinct first second
+
+/-- A map without exactly equal keys enumerates its bindings in one of their
+orders. -/
+theorem mapEntries_mem_orders {entries : List (Term × Term)} (distinct : keysDistinct entries = .true) :
+    mapEntries entries ∈ orders entries := by
+  have distinct := pairwise_of_keysDistinct distinct
+  refine mem_orders ((List.perm_ext_iff_of_nodup (nodup_of_distinct (mapEntries_distinct entries))
+    (nodup_of_distinct distinct)).mpr fun entry => ⟨mem_of_mem_mapEntries, fun member => ?_⟩)
+  have found := mapLookup_of_mem distinct member
+  rw [← mapLookup_mapEntries] at found
+  simp only [mapLookup, Option.map_eq_some_iff] at found
+  obtain ⟨other, found, -⟩ := found
+  have same := List.find?_some found
+  have enumerated := List.mem_of_find?_eq_some found
+  rw [eq_of_mem_of_mem distinct member (mem_of_mem_mapEntries enumerated) (of_decide_eq_true same)]
+  exact enumerated
+
+/-- A property of every order of a map's bindings holds of its enumeration, when
+no two keys are exactly equal. `lynx_cbv` splits evaluation on these orders. -/
+theorem mapEntries_cases {entries : List (Term × Term)} {property : List (Term × Term) → Prop}
+    (distinct : keysDistinct entries = .true) (cases : ∀ order ∈ orders entries, property order) :
+    property (mapEntries entries) :=
+  cases _ (mapEntries_mem_orders distinct)
 
 /-- A map has a key when one of its keys is exactly equal to it. -/
 theorem mapLookup_isSome (entries : List (Term × Term)) (key : Term) :
