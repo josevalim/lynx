@@ -379,10 +379,7 @@ defmodule Lynx do
       keys takes `k!` evaluations.
 
     * Receive timeouts with a positive duration may expire at any step, so a
-      law about `Task.await/2` with a timeout must allow both outcomes. When a
-      process is about to read its environment, such as its PID or process
-      dictionary, the check follows only that read first: every other order
-      reaches the same outcomes, as `Lynx.Concurrent.check_sound` proves.
+      law about `Task.await/2` with a timeout must allow both outcomes.
 
   When a check of a closed program fails, such as a law without parameters,
   `lynx_counterexample` explains why. Run it before evaluating the check, as in

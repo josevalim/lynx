@@ -130,7 +130,7 @@ The monitor's reference is the caller's next one. -/
         .ok (.tuple #[.pid pid, .reference (env.currentPid ++ [env.refCounter])])
   | _ => .error (.error (.atom "badarg"))
 
-/-- Monitor a process. Monitoring a process that does not exist delivers its
+/-- Monitor a process. Monitoring a process that does not exist sends its
 `DOWN` message at once, with reason `noproc`. Registered names are not
 modeled and do not return. -/
 @[expose] def «monitor/2» (_ : Dispatcher) (kind target : Term) : Result :=
@@ -163,8 +163,8 @@ its `DOWN` message. `info` returns whether the monitor was still active. -/
       .request (.demonitor id flush) fun found => .ok (if info = true then found else .atom "true")
   | _, _ => .error (.error (.atom "badarg"))
 
-/-- Send `message` once a timer of `time` milliseconds expires, replying the
-timer's reference. When it expires, and when its message then arrives, are the
+/-- Send `message` once a timer of `time` milliseconds fires, replying the
+timer's reference. When it fires, and when its message then arrives, are the
 scheduler's choices. -/
 @[expose] def «send_after/3» (_ : Dispatcher) (time destination message : Term) : Result :=
   Term.sendAfter time destination message
@@ -202,7 +202,7 @@ on its way. Timers paused by the debugger are not modeled. -/
 
 /-- Send an exit signal. `kill` cannot be trapped, and `normal` is ignored
 unless the target traps exits or is the caller. The target acts on the signal
-at its next step. -/
+when it arrives; the caller acts on its own at once. -/
 @[expose] def «exit/2» (_ : Dispatcher) (target reason : Term) : Result :=
   match target with
   | .pid pid => .request (.exit pid reason) .ok

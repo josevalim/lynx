@@ -369,16 +369,6 @@ time elapsed when timers are canceled. -/
   { state with timers := state.timers.filter (·.reference != timer.reference) }.emit clock
     timer.destination (.message timer.message)
 
-/-! Steps keep the time elapsed when timers are canceled. -/
-
-@[simp] theorem State.elapsed_update {state : State} {processId : PID}
-    {process : Option ProcessState} : (state.update processId process).elapsed = state.elapsed := rfl
-
-@[simp] theorem State.elapsed_modify {state : State} {processId : PID}
-    {change : ProcessState → ProcessState} :
-    (state.modify processId change).elapsed = state.elapsed := by
-  unfold State.modify; split <;> rfl
-
 /-- Select the oldest matching message, preserving all unmatched messages.
 Returns the message, the selector's bindings, and the remaining mailbox. -/
 @[expose] def selectMessage (select : Term → Option β) : List Term → Option (Term × β × List Term)
@@ -460,8 +450,6 @@ structure Transition (α : Type) : Type 1 where
   tasks : List (PID × Task α)
   /-- The root's result and final environment, when the root ends. -/
   finished : Option (Except Exception α × Environment) := none
-  /-- A positive timeout expired, which is the scheduler's choice. -/
-  expired : Bool := false
   /-- The process did not return, so the run's outcome is `Exception.exhausted`. -/
   exhausted : Bool := false
 
@@ -511,8 +499,7 @@ positive-timeout receive without a match, one otherwise. -/
             let timedOut := proceed (.timeout processId) state (next none)
             match timeout with
             | .infinity => []
-            | .immediate => [timedOut]
-            | .finite => [{ timedOut with expired := true }]
+            | .immediate | .finite => [timedOut]
     | .request query next =>
         match state.request processId query with
         | none => []
@@ -641,11 +628,6 @@ theorem Terminal.successors_eq_nil {config : Config α} {outcome : Outcome α}
 theorem Terminal.outcome_eq {config : Config α} {outcome : Outcome α}
     (terminal : Terminal config outcome) : config.outcome = outcome := by
   cases terminal; rfl
-
-/-- A configuration without successors is terminal. -/
-theorem Config.terminal_of_successors_eq_nil {config : Config α}
-    (stuck : config.successors = []) : Terminal config config.outcome :=
-  .stuck stuck
 
 /-- A property preserved by every step holds after every run. -/
 theorem Run.invariant {invariant : Config α → Prop}

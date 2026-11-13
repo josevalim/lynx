@@ -452,7 +452,6 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Transition.apply",
   "Lynx.Concurrent.Transition.event",
   "Lynx.Concurrent.Transition.exhausted",
-  "Lynx.Concurrent.Transition.expired",
   "Lynx.Concurrent.Transition.finished",
   "Lynx.Concurrent.Transition.mk",
   "Lynx.Concurrent.Transition.state",

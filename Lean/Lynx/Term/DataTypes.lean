@@ -95,13 +95,15 @@ namespace Exception
 
 end Exception
 
-/-- Scheduler decisions consumed after spawn, send, and successful receive.
-They are supplied to the runner, not stored in the environment processes observe.
+/-- Scheduler decisions, consumed after each step of a process other than an
+environment access. They are supplied to the runner, not stored in the
+environment processes observe. Signals in transit arrive before any choice.
 No remaining choice defaults to the current process when runnable. `swap pid`
 prefers the named process; blocked or finished processes yield automatically.
 Positive receive durations are abstract: timeout choices express expiry
 order, without measuring or waiting for elapsed time. Blocking also consumes
-choices; when no process can run, a finite receive expires automatically. -/
+choices; when no process can run, a finite receive expires automatically, and
+otherwise the oldest timer fires. -/
 inductive ScheduleChoice where
   | current
   /-- Prefer this runnable process; unavailable choices fall back to the current/first runnable process. -/
@@ -179,9 +181,9 @@ inductive Request where
   /-- Start a timer sending a message to a process, replying its reference. A
   timer for a process that is not alive never fires. -/
   | startTimer (destination : PID) (message : Term) (duration : Nat)
-  /-- Cancel a timer by its reference. Replies its duration, or `false` once it
-  expired, was canceled, or its destination exited. An expired timer's message
-  may still be on its way. -/
+  /-- Cancel a timer by its reference. Replies the milliseconds it had left, or
+  `false` once it fired, was canceled, or its destination exited. A fired
+  timer's message may still be in transit. -/
   | cancelTimer (reference : List Nat)
 deriving Repr
 
@@ -194,7 +196,7 @@ inductive Result : (α : Type := Term) → Type 1 where
   | set {α : Type} : Environment → Result α → Result α
   /-- A spawned child process, then the continuation receiving its PID. -/
   | schedule {α : Type} : SpawnOptions → Result Term → (PID → Result α) → Result α
-  /-- Local asynchronous send. The continuation receives control after delivery. -/
+  /-- Local asynchronous send. The message is in transit, and the sender continues at once. -/
   | send {α : Type} : PID → Term → Result α → Result α
   /-- A receive with an already validated timeout. Select the oldest matching
   message and schedule before executing its body. `some` carries clause bindings;
