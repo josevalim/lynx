@@ -265,13 +265,13 @@ defmodule RandProofsTest do
       -- The multiplicity of a value counts the elements exactly equal to it.
       have counts : ∀ (xs : List Lynx.Term) (v : Lynx.Term),
           «multiplicity/2» (Lynx.Term.list xs) v =
-            .ok (.integer (xs.filter (fun x => Lynx.Term.exactCompare x v == .eq)).length) := by
+            .ok (.integer (xs.filter (fun x => Lynx.Term.compareExact (Lynx.Term.fuel x v) x v == .eq)).length) := by
         intro xs v
         induction xs with
         | nil => simp [«multiplicity/2»]
         | cons x xs ih =>
           unfold «multiplicity/2»
-          by_cases same : Lynx.Term.exactCompare x v = .eq <;>
+          by_cases same : Lynx.Term.compareExact (Lynx.Term.fuel x v) x v = .eq <;>
             simp [Erlang.erlang.«=:=/2», same, ih, List.filter_cons] <;> omega
       simp only [Lynx.apply_eq, «shuffle_permutes:requires/4», «shuffle_returns/3»,
         Lynx.Except.bind_eq_ok] at requires

@@ -204,7 +204,7 @@ defmodule RangeProofsTest do
       have keys (f l s : Int) : Lynx.Term.getMapKeys
           [.atom "__struct__", .atom "first", .atom "last", .atom "step"] (range f l s) =
           [.atom "Elixir.Range", .integer f, .integer l, .integer s] := by
-        simp [range, Lynx.Term.getMapKeys, Lynx.Term.exactCompare_atoms]
+        simp [range, Lynx.Term.getMapKeys, Lynx.Term.compareExact_atoms]
       have sizeModel (f l s : Int) (nonzero : s ≠ 0) :
           Elixir.Range.«size/1» (range f l s) = .ok (.integer (count f l s)) := by
         rw [Elixir.Range.«size/1».eq_def]
@@ -341,7 +341,7 @@ defmodule RangeProofsTest do
       have keys3 (f l s : Int) : Lynx.Term.getMapKeys
           [.atom "__struct__", .atom "first", .atom "step"] (range f l s) =
           [.atom "Elixir.Range", .integer f, .integer s] := by
-        simp [range, Lynx.Term.getMapKeys, Lynx.Term.exactCompare_atoms]
+        simp [range, Lynx.Term.getMapKeys, Lynx.Term.compareExact_atoms]
       have finish (f l s c i m rf n k : Int) (nz : s ≠ 0)
           (returned : Elixir.Range.«split/2» (range f l s) (.integer c) =
             .ok (.tuple #[range f m s, range rf l s]))
@@ -447,10 +447,10 @@ defmodule RangeProofsTest do
       have keys (f l s : Int) : Lynx.Term.getMapKeys
           [.atom "__struct__",.atom "first",.atom "last",.atom "step"] (range f l s) =
           [.atom "Elixir.Range",.integer f,.integer l,.integer s] := by
-        simp [range,Lynx.Term.getMapKeys,Lynx.Term.exactCompare_atoms]
+        simp [range,Lynx.Term.getMapKeys,Lynx.Term.compareExact_atoms]
       have key (f l s : Int) : Lynx.Term.getMapKeys [.atom "__struct__"] (range f l s) =
           [.atom "Elixir.Range"] := by
-        simp [range,Lynx.Term.getMapKeys,Lynx.Term.exactCompare_atoms]
+        simp [range,Lynx.Term.getMapKeys,Lynx.Term.compareExact_atoms]
       have newModel (f l s : Int) (nz : s≠0) :
           Elixir.Range.«new/3» (.integer f) (.integer l) (.integer s) = .ok (range f l s) := by
         unfold Elixir.Range.«new/3»

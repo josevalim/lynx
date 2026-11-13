@@ -68,7 +68,7 @@ defmodule ListsProofsTest do
       -- Reverse merging prefers the right run on ties. Sortedness uses a
       -- non-strict relation in both directions; element identity is preserved.
       let select (descending : Bool) (left right : Lynx.Term) : Bool :=
-        if descending then (Lynx.Term.compare left right).isGT else (Lynx.Term.compare left right).isLE
+        if descending then (Lynx.Term.compare (Lynx.Term.fuel left right) left right).isGT else (Lynx.Term.compare (Lynx.Term.fuel left right) left right).isLE
       let first (descending : Bool) :=
         if descending then Erlang.lists.«rmerge2_1/4» else Erlang.lists.«merge2_1/4»
       let second (descending : Bool) :=
@@ -99,11 +99,11 @@ defmodule ListsProofsTest do
         cases descending
         · simp only [first, second, select, Bool.false_eq_true, ite_false, ite_true]
           rw [Erlang.lists.«merge2_1/4».eq_def]
-          cases comparison : Lynx.Term.compare x head <;>
+          cases comparison : Lynx.Term.compare (Lynx.Term.fuel x head) x head <;>
             simp [encode, Erlang.erlang.«=</2», comparison]
         · simp only [first, second, select, Bool.false_eq_true, ite_false, ite_true]
           rw [Erlang.lists.«rmerge2_1/4».eq_def]
-          cases comparison : Lynx.Term.compare x head <;>
+          cases comparison : Lynx.Term.compare (Lynx.Term.fuel x head) x head <;>
             simp [encode, Erlang.erlang.«=</2», comparison]
       have secondStep (descending : Bool) (head previous y : Lynx.Term) (xs ys acc : List Lynx.Term) :
           second descending (encode xs) previous (encode (y :: ys)) (encode acc) head =
@@ -113,11 +113,11 @@ defmodule ListsProofsTest do
         cases descending
         · simp only [first, second, select, Bool.false_eq_true, ite_false, ite_true]
           rw [Erlang.lists.«merge2_2/5».eq_def]
-          cases comparison : Lynx.Term.compare head y <;>
+          cases comparison : Lynx.Term.compare (Lynx.Term.fuel head y) head y <;>
             simp [encode, Erlang.erlang.«=</2», comparison]
         · simp only [first, second, select, Bool.false_eq_true, ite_false, ite_true]
           rw [Erlang.lists.«rmerge2_2/5».eq_def]
-          cases comparison : Lynx.Term.compare head y <;>
+          cases comparison : Lynx.Term.compare (Lynx.Term.fuel head y) head y <;>
             simp [encode, Erlang.erlang.«=</2», comparison]
       -- The two worker states implement an ordinary merge into a reversed accumulator.
       have merge2Model (descending : Bool) (n : Nat) (xs ys : List Lynx.Term)
@@ -214,8 +214,8 @@ defmodule ListsProofsTest do
               else f21 descending xs x h2 ys (h3 :: acc) zs := by
         cases descending <;> simp only [f1, f2, f12, f21, select, Bool.false_eq_true, ite_false, ite_true]
         all_goals first | rw [Erlang.lists.«merge3_1/6».eq_def] | rw [Erlang.lists.«rmerge3_1/6».eq_def]
-        all_goals cases a : Lynx.Term.compare x h2 <;> cases b : Lynx.Term.compare x h3 <;>
-          cases c : Lynx.Term.compare h2 h3 <;> simp [encode, Erlang.erlang.«=</2», a, b, c]
+        all_goals cases a : Lynx.Term.compare (Lynx.Term.fuel x h2) x h2 <;> cases b : Lynx.Term.compare (Lynx.Term.fuel x h3) x h3 <;>
+          cases c : Lynx.Term.compare (Lynx.Term.fuel h2 h3) h2 h3 <;> simp [encode, Erlang.erlang.«=</2», a, b, c]
       have f2Step (descending : Bool) (h1 h2 h3 : Lynx.Term) (xs acc ys zs : List Lynx.Term) :
           f2 descending xs h1 acc (h2 :: ys) h3 zs =
             f1 descending (h1 :: xs) acc h2 ys h3 zs := by
@@ -232,14 +232,14 @@ defmodule ListsProofsTest do
             else f12 descending xs h1 h2 ys (h3 :: acc) zs := by
         cases descending <;> simp only [f1, f12, select, Bool.false_eq_true, ite_false, ite_true]
         all_goals first | rw [Erlang.lists.«merge3_12_3/6».eq_def] | rw [Erlang.lists.«rmerge3_21_3/6».eq_def]
-        all_goals cases comparison : Lynx.Term.compare h1 h3 <;> simp [encode, Erlang.erlang.«=</2», comparison]
+        all_goals cases comparison : Lynx.Term.compare (Lynx.Term.fuel h1 h3) h1 h3 <;> simp [encode, Erlang.erlang.«=</2», comparison]
       have f21Step (descending : Bool) (h1 h2 h3 : Lynx.Term) (xs ys acc zs : List Lynx.Term) :
           f21 descending xs h1 h2 ys acc (h3 :: zs) =
             if select descending h2 h3 then f2 descending xs h1 (h2 :: acc) ys h3 zs
             else f21 descending xs h1 h2 ys (h3 :: acc) zs := by
         cases descending <;> simp only [f2, f21, select, Bool.false_eq_true, ite_false, ite_true]
         all_goals first | rw [Erlang.lists.«merge3_21_3/6».eq_def] | rw [Erlang.lists.«rmerge3_12_3/6».eq_def]
-        all_goals cases comparison : Lynx.Term.compare h2 h3 <;> simp [encode, Erlang.erlang.«=</2», comparison]
+        all_goals cases comparison : Lynx.Term.compare (Lynx.Term.fuel h2 h3) h2 h3 <;> simp [encode, Erlang.erlang.«=</2», comparison]
       let merged (descending : Bool) (xs ys zs : List Lynx.Term) :=
         List.merge (List.merge xs ys (select descending)) zs (select descending)
       -- OTP caches the minimum of the first two heads before reading the third run.
@@ -323,7 +323,7 @@ defmodule ListsProofsTest do
               · simpa [merged, List.cons_merge_cons, selected, choice, List.reverse_cons, List.append_assoc] using
                   previous.2.2.2 xs ys zs rfl h1 h2 (h3 :: acc) selected
       let order (descending : Bool) (left right : Lynx.Term) : Bool :=
-        if descending then (Lynx.Term.compare right left).isLE else (Lynx.Term.compare left right).isLE
+        if descending then (Lynx.Term.compare (Lynx.Term.fuel right left) right left).isLE else (Lynx.Term.compare (Lynx.Term.fuel left right) left right).isLE
       -- Quantifying over weights proves multiplicity preservation for every term.
       let mass (weight : Lynx.Term → Nat) (xs : List Lynx.Term) := (xs.map weight).sum
       have massNil (weight : Lynx.Term → Nat) : mass weight [] = 0 := rfl
@@ -345,13 +345,13 @@ defmodule ListsProofsTest do
       have orderTrans (descending : Bool) (a b c : Lynx.Term)
           (ab : order descending a b) (bc : order descending b c) : order descending a c := by
         cases descending
-        · exact Std.TransCmp.isLE_trans ab bc
-        · exact Std.TransCmp.isLE_trans bc ab
+        · exact Lynx.Term.compare_isLE_trans ab bc
+        · exact Lynx.Term.compare_isLE_trans bc ab
       have selectedOrder (descending : Bool) (a b : Lynx.Term) :
           (select descending a b → order descending a b) ∧
           (¬ select descending a b → order descending b a) := by
-        have swapped : Lynx.Term.compare b a = (Lynx.Term.compare a b).swap := Std.OrientedCmp.eq_swap
-        cases descending <;> cases comparison : Lynx.Term.compare a b <;>
+        have swapped : Lynx.Term.compare (Lynx.Term.fuel b a) b a = (Lynx.Term.compare (Lynx.Term.fuel a b) a b).swap := Lynx.Term.compare_swap b a
+        cases descending <;> cases comparison : Lynx.Term.compare (Lynx.Term.fuel a b) a b <;>
           simp [order, select, swapped, comparison]
       have mergeSorted (descending : Bool) (xs ys : List Lynx.Term)
           (left : xs.Pairwise (fun a b => order descending a b))
@@ -623,10 +623,10 @@ defmodule ListsProofsTest do
                   simp only [List.flatten_cons, massAppend, combineMass]
                   omega
       have geFlip (left right : Lynx.Term) :
-          (Lynx.Term.compare left right).isGE = (Lynx.Term.compare right left).isLE := by
-        have swapped : Lynx.Term.compare left right = (Lynx.Term.compare right left).swap := Std.OrientedCmp.eq_swap
+          (Lynx.Term.compare (Lynx.Term.fuel left right) left right).isGE = (Lynx.Term.compare (Lynx.Term.fuel right left) right left).isLE := by
+        have swapped : Lynx.Term.compare (Lynx.Term.fuel left right) left right = (Lynx.Term.compare (Lynx.Term.fuel right left) right left).swap := Lynx.Term.compare_swap left right
         rw [swapped]
-        cases Lynx.Term.compare right left <;> rfl
+        cases Lynx.Term.compare (Lynx.Term.fuel right left) right left <;> rfl
       have reversePack (runs tail : List (List Lynx.Term)) :
           Erlang.lists.«reverse/2» (pack runs) (pack tail) = .ok (pack (runs.reverse ++ tail)) := by
         simpa [pack, List.map_reverse, List.map_append] using reverseModel (runs.map encode) (tail.map encode)
@@ -667,7 +667,7 @@ defmodule ListsProofsTest do
         cases descending <;> cases r <;>
           simp only [start, pending, select, Bool.false_eq_true, ite_false, ite_true]
         all_goals first | rw [Erlang.lists.«split_1/5».eq_def] | rw [Erlang.lists.«split_2/5».eq_def]
-        all_goals cases a : Lynx.Term.compare y z <;> cases b : Lynx.Term.compare x z <;>
+        all_goals cases a : Lynx.Term.compare (Lynx.Term.fuel y z) y z <;> cases b : Lynx.Term.compare (Lynx.Term.fuel x z) x z <;>
           simp [encode, Erlang.erlang.«>=/2», Erlang.erlang.«>/2», geFlip, a, b]
       have pendingStep (descending : Bool) (x y z saved : Lynx.Term) (xs r : List Lynx.Term) (runs : List (List Lynx.Term)) :
           pending descending x y (z :: xs) r runs saved =
@@ -677,8 +677,8 @@ defmodule ListsProofsTest do
             else start descending z saved xs [] ((y :: x :: r) :: runs) := by
         cases descending <;> simp only [start, pending, select, Bool.false_eq_true, ite_false, ite_true]
         all_goals first | rw [Erlang.lists.«split_1_1/6».eq_def] | rw [Erlang.lists.«split_2_1/6».eq_def]
-        all_goals cases a : Lynx.Term.compare y z <;> cases b : Lynx.Term.compare x z <;>
-          cases c : Lynx.Term.compare saved z <;>
+        all_goals cases a : Lynx.Term.compare (Lynx.Term.fuel y z) y z <;> cases b : Lynx.Term.compare (Lynx.Term.fuel x z) x z <;>
+          cases c : Lynx.Term.compare (Lynx.Term.fuel saved z) saved z <;>
           simp [encode, pack, Erlang.erlang.«>=/2», Erlang.erlang.«>/2», geFlip, a, b, c]
       have flipped (descending : Bool) (left right : Lynx.Term) :
           order (!descending) left right = order descending right left := by cases descending <;> rfl
@@ -879,7 +879,7 @@ defmodule ListsProofsTest do
         rw [Erlang.lists.«sort_1/3».eq_def]
         simpa [encode] using returned
       have initialStep (x y : Lynx.Term) (xs r : List Lynx.Term) :
-          initial x (y :: xs) r = match Lynx.Term.compare x y with
+          initial x (y :: xs) r = match Lynx.Term.compare (Lynx.Term.fuel x y) x y with
             | .eq => initial y xs (x :: r)
             | .lt => start false x y xs r []
             | .gt => start true x y xs [] [r.reverse] := by
@@ -887,7 +887,7 @@ defmodule ListsProofsTest do
         simp only [encode, List.foldr_nil, List.append_nil] at returned
         simp only [initial, start, Bool.false_eq_true, ite_false, ite_true]
         rw [Erlang.lists.«sort_1/3».eq_def]
-        cases comparison : Lynx.Term.compare x y <;>
+        cases comparison : Lynx.Term.compare (Lynx.Term.fuel x y) x y <;>
           simp [encode, pack, Erlang.erlang.«==/2», Erlang.erlang.«</2», comparison, returned]
       have initialModel (n : Nat) (xs : List Lynx.Term) (length : xs.length = n) :
           ∀ x r, r ≠ [] → (x :: r).Pairwise (fun a b => order true a b) →
@@ -906,7 +906,7 @@ defmodule ListsProofsTest do
             intro x r nonempty sorted
             have smaller : xs.length < n := by simp at length; omega
             rw [initialStep]
-            cases comparison : Lynx.Term.compare x y with
+            cases comparison : Lynx.Term.compare (Lynx.Term.fuel x y) x y with
             | eq =>
               have prefixSorted := prependRun true y x r (by simp [order, comparison]) sorted
               have child := ih _ smaller xs rfl y (x :: r) (by simp) prefixSorted
@@ -922,7 +922,7 @@ defmodule ListsProofsTest do
               simp only [List.flatten_nil, massAppend, massCons, massNil]
               omega
             | gt =>
-              have backwards : Lynx.Term.compare y x = .lt := Std.OrientedCmp.lt_of_gt comparison
+              have backwards : Lynx.Term.compare (Lynx.Term.fuel y x) y x = .lt := Lynx.Term.compare_lt_of_gt comparison
               have prefixSorted := prependRun false y x [] (by simp [order, backwards]) (by simp)
               have saved := (runsCons false r.reverse []).mpr
                 ⟨reversedValid true r ⟨nonempty, (List.pairwise_cons.mp sorted).2⟩, runsNil false⟩
@@ -954,19 +954,19 @@ defmodule ListsProofsTest do
       have sortTwo (x y : Lynx.Term) : Erlang.lists.«sort/1» (encode [x,y]) =
           .ok (encode (if select false x y then [x,y] else [y,x])) := by
         rw [Erlang.lists.«sort/1».eq_def]
-        cases comparison : Lynx.Term.compare x y <;> simp [encode, select, Erlang.erlang.«=</2», comparison]
+        cases comparison : Lynx.Term.compare (Lynx.Term.fuel x y) x y <;> simp [encode, select, Erlang.erlang.«=</2», comparison]
       have sortThree (x y z : Lynx.Term) : Erlang.lists.«sort/1» (encode [x,y,z]) = .ok (encode (small x y z)) := by
         rw [Erlang.lists.«sort/1».eq_def]
-        cases a : Lynx.Term.compare x y <;> cases b : Lynx.Term.compare y z <;> cases c : Lynx.Term.compare x z <;>
+        cases a : Lynx.Term.compare (Lynx.Term.fuel x y) x y <;> cases b : Lynx.Term.compare (Lynx.Term.fuel y z) y z <;> cases c : Lynx.Term.compare (Lynx.Term.fuel x z) x z <;>
           simp [encode, small, select, Erlang.erlang.«=</2», a, b, c]
       have sortMany (x y z w : Lynx.Term) (xs : List Lynx.Term) :
           Erlang.lists.«sort/1» (encode (x :: y :: z :: w :: xs)) =
             if select false x y then
-              if Lynx.Term.compare x y = .eq then initial y (z :: w :: xs) [x]
+              if Lynx.Term.compare (Lynx.Term.fuel x y) x y = .eq then initial y (z :: w :: xs) [x]
               else start false x y (z :: w :: xs) [] []
             else start true x y (z :: w :: xs) [] [] := by
         rw [Erlang.lists.«sort/1».eq_def]
-        cases comparison : Lynx.Term.compare x y <;>
+        cases comparison : Lynx.Term.compare (Lynx.Term.fuel x y) x y <;>
           simp [encode, select, initial, start, pack, Erlang.erlang.«=</2», Erlang.erlang.«==/2», comparison]
       have sortModel (xs : List Lynx.Term) : good xs (Erlang.lists.«sort/1» (encode xs)) := by
         match xs with
@@ -992,7 +992,7 @@ defmodule ListsProofsTest do
           rw [sortMany]
           by_cases choice : select false x y
           · rw [ite_eq_left choice]
-            by_cases same : Lynx.Term.compare x y = .eq
+            by_cases same : Lynx.Term.compare (Lynx.Term.fuel x y) x y = .eq
             · rw [ite_eq_left same]
               have prefixSorted := prependRun true y x [] (by simp [order, same]) (by simp)
               have child := initialModel _ (z :: w :: xs) rfl y [x] (by simp) prefixSorted
@@ -1045,7 +1045,7 @@ defmodule ListsProofsTest do
         | nil => exact initialNil x r
         | cons y xs ih =>
           rw [initialStep]
-          cases comparison : Lynx.Term.compare x y with
+          cases comparison : Lynx.Term.compare (Lynx.Term.fuel x y) x y with
           | eq =>
             simpa only [List.reverse_cons, List.reverse_singleton, List.singleton_append, List.append_assoc] using
               ih y (x :: r) (List.pairwise_cons.mp sorted).2
@@ -1070,7 +1070,7 @@ defmodule ListsProofsTest do
         | x :: y :: z :: w :: xs =>
           have ordered : select false x y := (List.pairwise_cons.mp sorted).1 y (by simp)
           rw [sortMany, ite_eq_left ordered]
-          by_cases same : Lynx.Term.compare x y = .eq
+          by_cases same : Lynx.Term.compare (Lynx.Term.fuel x y) x y = .eq
           · rw [ite_eq_left same]
             simpa using initialSorted (z :: w :: xs) y [x] (List.pairwise_cons.mp sorted).2
           · rw [ite_eq_right same]
@@ -1094,18 +1094,18 @@ defmodule ListsProofsTest do
           cases xs with
           | nil => rw [«sorted/1».eq_def]; rfl
           | cons y xs =>
-            have ordered : (Lynx.Term.compare x y).isLE := (List.pairwise_cons.mp sorted).1 y (by simp)
+            have ordered : (Lynx.Term.compare (Lynx.Term.fuel x y) x y).isLE := (List.pairwise_cons.mp sorted).1 y (by simp)
             have returned := ih (List.pairwise_cons.mp sorted).2
             simp only [encode, List.foldr_cons] at returned
             rw [«sorted/1».eq_def]
             simp [encode, Erlang.erlang.«=</2», ordered, returned]
       have multiplicityModel (xs : List Lynx.Term) (value : Lynx.Term) :
           «multiplicity/2» (encode xs) value =
-            .ok (.integer (mass (fun head => if Lynx.Term.exactCompare head value = .eq then 1 else 0) xs)) := by
+            .ok (.integer (mass (fun head => if Lynx.Term.compareExact (Lynx.Term.fuel head value) head value = .eq then 1 else 0) xs)) := by
         induction xs with
         | nil => rfl
         | cons head tail ih =>
-          by_cases equal : Lynx.Term.exactCompare head value = .eq <;>
+          by_cases equal : Lynx.Term.compareExact (Lynx.Term.fuel head value) head value = .eq <;>
             simp [«multiplicity/2», encode, Erlang.erlang.«=:=/2», equal, ih,
               massCons, Int.natCast_add]
       have enumSort (xs : List Lynx.Term) :
@@ -1117,7 +1117,7 @@ defmodule ListsProofsTest do
         simpa only [«sort_contract_holds:requires/2»] using requires
       obtain ⟨xs, rfl⟩ := properModel list accepted
       obtain ⟨output, returned, sorted, masses⟩ := sortModel xs
-      have countEqual := masses (fun head => if Lynx.Term.exactCompare head value = .eq then 1 else 0)
+      have countEqual := masses (fun head => if Lynx.Term.compareExact (Lynx.Term.fuel head value) head value = .eq then 1 else 0)
       simp [«sort_contract_holds:ensures/2», «sort_contract/2», «enum_sort_contract/2», enumSort, returned,
         sortedCheck output sorted, multiplicityModel, countEqual, sortSorted output sorted,
         Erlang.erlang.«=:=/2»]

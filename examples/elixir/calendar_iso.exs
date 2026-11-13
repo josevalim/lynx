@@ -467,7 +467,6 @@ defmodule CalendarISOProofsTest do
         Erlang.erlang.«is_integer/1»] at requires
       rename_i y
       simp [«leap_year_cycle:ensures/1», leap, Int.add_emod]
-      split <;> simp [Erlang.erlang.«=:=/2»]
       """
 
     law twelve_months_in_year(year),

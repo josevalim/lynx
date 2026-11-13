@@ -71,14 +71,14 @@ defmodule GbTreesProofsTest do
       let pair (entry : Lynx.Term × Lynx.Term) : Lynx.Term := .tuple ⟨[entry.1, entry.2]⟩
       let encode (xs : List (Lynx.Term × Lynx.Term)) (tail : Lynx.Term := .nil) : Lynx.Term :=
         xs.foldr (fun entry rest => .cons (pair entry) rest) tail
-      let less (left right : Lynx.Term × Lynx.Term) := Lynx.Term.compare left.1 right.1 = .lt
+      let less (left right : Lynx.Term × Lynx.Term) := Lynx.Term.compare (Lynx.Term.fuel left.1 right.1) left.1 right.1 = .lt
       let search (query : Lynx.Term) (xs : List (Lynx.Term × Lynx.Term)) : Lynx.Term :=
-        xs.foldr (fun (key, value) rest => match Lynx.Term.compare query key with
+        xs.foldr (fun (key, value) rest => match Lynx.Term.compare (Lynx.Term.fuel query key) query key with
           | .lt => .atom "none"
           | .eq => .tuple #[.atom "value", value]
           | .gt => rest) (.atom "none")
       have skipPrefix (query : Lynx.Term) (xs ys : List (Lynx.Term × Lynx.Term))
-          (above : ∀ entry ∈ xs, Lynx.Term.compare query entry.1 = .gt) :
+          (above : ∀ entry ∈ xs, Lynx.Term.compare (Lynx.Term.fuel query entry.1) query entry.1 = .gt) :
           search query (xs ++ ys) = search query ys := by
         induction xs with
         | nil => rfl
@@ -111,9 +111,9 @@ defmodule GbTreesProofsTest do
         · intro query sorted
           simp only [List.pairwise_append, List.pairwise_cons] at sorted
           have leftBound (entry : Lynx.Term × Lynx.Term) (member : entry ∈ xs) :
-              Lynx.Term.compare entry.1 key = .lt :=
+              Lynx.Term.compare (Lynx.Term.fuel entry.1 key) entry.1 key = .lt :=
             sorted.2.2 entry member (key, value) (by simp)
-          cases comparison : Lynx.Term.compare query key with
+          cases comparison : Lynx.Term.compare (Lynx.Term.fuel query key) query key with
           | lt =>
             have empty : search query ((key, value) :: ys) = .atom "none" := by
               simp only [search, List.foldr_cons, comparison]
@@ -123,15 +123,15 @@ defmodule GbTreesProofsTest do
               comparison, leftLookup query sorted.1]
           | eq =>
             have past := skipPrefix query xs ((key, value) :: ys) (fun entry member =>
-              Std.TransCmp.gt_of_eq_of_gt comparison
-                (Std.OrientedCmp.gt_of_lt (leftBound entry member)))
+              Lynx.Term.compare_gt_of_eq_of_gt comparison
+                (Lynx.Term.compare_gt_of_lt (leftBound entry member)))
             rw [past]
             simp [Erlang.gb_trees.«lookup_1/2», Erlang.erlang.«</2», Erlang.erlang.«>/2»,
               comparison, search]
           | gt =>
             have past := skipPrefix query xs ((key, value) :: ys) (fun entry member =>
-              Std.TransCmp.gt_trans comparison
-                (Std.OrientedCmp.gt_of_lt (leftBound entry member)))
+              Lynx.Term.compare_gt_trans comparison
+                (Lynx.Term.compare_gt_of_lt (leftBound entry member)))
             rw [past]
             simp [Erlang.gb_trees.«lookup_1/2», Erlang.erlang.«</2», Erlang.erlang.«>/2»,
               comparison, search, rightLookup query sorted.2.1.2]
@@ -231,7 +231,7 @@ defmodule GbTreesProofsTest do
           intro item member
           rcases List.mem_cons.mp member with rfl | member
           · exact first
-          · exact Std.TransCmp.lt_trans first ((List.pairwise_cons.mp rest).1 item member)
+          · exact Lynx.Term.compare_lt_trans first ((List.pairwise_cons.mp rest).1 item member)
       have orderedModel (xs : List (Lynx.Term × Lynx.Term)) :
           «ordered/1» (encode xs) = .ok (if xs.Pairwise less then Lynx.Term.true else Lynx.Term.false) := by
         induction xs with
@@ -243,7 +243,7 @@ defmodule GbTreesProofsTest do
           | cons next tail =>
             rcases next with ⟨nextKey, nextValue⟩
             simp only [encode, List.foldr_cons, pair] at ih
-            by_cases first : Lynx.Term.compare key nextKey = .lt <;>
+            by_cases first : Lynx.Term.compare (Lynx.Term.fuel key nextKey) key nextKey = .lt <;>
               by_cases rest : ((nextKey, nextValue) :: tail).Pairwise less <;>
               simp [«ordered/1», encode, pair, Erlang.erlang.«</2»,
                 Ordering.isLT_iff_eq_lt, first, rest, ih, pairwiseStep, less]
