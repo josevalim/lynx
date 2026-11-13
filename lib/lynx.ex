@@ -315,23 +315,10 @@ defmodule Lynx do
 
   A concurrent law must hold in every run. `Lynx.Concurrent` describes every
   interleaving of a program's processes: a `Lynx.Concurrent.Step` advances one
-  process or timer, and a `Lynx.Concurrent.Run` records consecutive steps. A law
-  is proven in one of three ways:
-
-    * Programs without races are proven from a single run, since all runs end
-      alike. Two steps race when both deliver to the same process, when one
-      delivers to a process whose receive the other times out, or when one
-      delivers to the process the other spawns. Links, monitors, exit signals,
-      and other requests to the scheduler count as races whenever another
-      process can step. `Lynx.Result.Talks` rules races out when each process
-      only sends to itself, its ancestors, or its own children, each receiver
-      has a single sender, no receive has a timeout, and no process links,
-      monitors, or makes requests; `Lynx.Concurrent.Config.RaceFree.of_talks`
-      turns it into race freedom. `Lynx.concurrent_of_advance` then evaluates
-      the outcome of every run with `Lynx.Concurrent.Config.advance`,
-      which takes the first available step, and `Config.advance_add` splits the
-      run into phases that proofs can take by induction. See
-      `examples/concurrency/server.exs`, which proves a law for every list.
+  process, delivers a signal in transit, or fires a timer, and a
+  `Lynx.Concurrent.Run` records consecutive steps. As in OTP, signals between
+  two processes keep their order, while signals from different processes may
+  arrive in any order. A law is proven in one of two ways:
 
     * Programs whose processes take the same steps for every input are proven
       by evaluating every run, as described below. See

@@ -2,10 +2,11 @@ module
 
 public import Lynx.Concurrent
 
-/-! Every run ends: each step of a process replaces its computation by what
-follows it, possibly with a spawned child, and each step of a timer leaves its
-timers fewer steps to take. So statements about the runs that can no longer
-step cover every run. -/
+/-! Every run ends. Each step of a process replaces its computation by what
+follows it, possibly with a spawned child, or ends the process. Every other
+step, a signal arriving or a timer firing, leaves the processes as they are
+and lowers the weight of the signals in transit and the timers. So statements
+about the runs that can no longer step cover every run. -/
 
 public section
 
@@ -13,61 +14,119 @@ namespace Lynx.Concurrent
 
 open Lynx
 
-/-- The steps the timers have left: an armed timer expires and then arrives. -/
-def State.timerWeight (state : State) : Nat :=
-  (state.timers.map fun timer => if timer.expired then 1 else 2).sum
+/-- The steps a signal in transit has left: links and monitors reaching a
+process that is not live are answered with one more signal. -/
+def Envelope.weight (envelope : Envelope) : Nat :=
+  match envelope.signal with
+  | .link | .monitor _ => 2
+  | _ => 1
 
-private theorem sum_filter_lt {items : List γ} {weight : γ → Nat} {keep : γ → Bool} {item : γ}
-    (mem : item ∈ items) (dropped : keep item = false) (positive : 0 < weight item) :
-    ((items.filter keep).map weight).sum < (items.map weight).sum := by
-  induction items with
-  | nil => simp at mem
-  | cons head rest ih =>
-    simp only [List.mem_cons] at mem
-    rcases mem with rfl | mem
-    · have : ((rest.filter keep).map weight).sum ≤ (rest.map weight).sum := by
-        clear ih; induction rest with
-        | nil => simp
-        | cons next tail ih => simp only [List.filter_cons]; split <;> simp <;> omega
-      simp [dropped]; omega
-    · have := ih mem
-      simp only [List.filter_cons]; split <;> simp <;> omega
+/-- The steps the signals in transit and the timers have left: a timer fires
+and its message then arrives. -/
+def State.weight (state : State) : Nat :=
+  (state.inTransit.map Envelope.weight).sum + 2 * state.timers.length
 
-private theorem sum_map_lt {items : List γ} {weight : γ → Nat} {change : γ → γ} {item : γ}
-    (mem : item ∈ items) (smaller : weight (change item) < weight item)
-    (le : ∀ other, weight (change other) ≤ weight other) :
-    (items.map (weight ∘ change)).sum < (items.map weight).sum := by
-  induction items with
-  | nil => simp at mem
-  | cons head rest ih =>
-    simp only [List.mem_cons] at mem
-    have bound : (rest.map (weight ∘ change)).sum ≤ (rest.map weight).sum := by
-      clear ih mem
-      induction rest with
-      | nil => simp
-      | cons next tail ih =>
-        simp only [List.map_cons, List.sum_cons, Function.comp_apply]
-        have := le next
-        omega
-    simp only [List.map_cons, List.sum_cons, Function.comp_apply]
-    rcases mem with rfl | mem
-    · omega
-    · have := ih mem
-      have := le head
-      omega
+/-! Taking a signal changes the records of processes only. -/
 
-/-- Each timer step leaves fewer steps to the timers. -/
-theorem State.timerWeight_lt {state next : State} {event : Event}
-    (possible : (event, next) ∈ state.timerSteps) : next.timerWeight < state.timerWeight := by
-  simp only [State.timerSteps, List.mem_map] at possible
-  obtain ⟨timer, mem, step⟩ := possible
-  split at step <;> simp only [Prod.mk.injEq] at step <;> obtain ⟨-, rfl⟩ := step
-  · exact sum_filter_lt mem (by simp) (by split <;> simp)
-  · rename_i armed
-    simp only [State.timerWeight, List.map_map]
-    refine sum_map_lt mem (by simp [armed]) fun other => ?_
-    by_cases same : (other.reference == timer.reference) = true <;>
-      cases expired : other.expired <;> simp [same, expired]
+@[simp] theorem State.inTransit_update {state : State} {processId : PID}
+    {process : Option ProcessState} : (state.update processId process).inTransit = state.inTransit := rfl
+
+@[simp] theorem State.timers_update {state : State} {processId : PID}
+    {process : Option ProcessState} : (state.update processId process).timers = state.timers := rfl
+
+@[simp] theorem State.inTransit_modify {state : State} {processId : PID}
+    {change : ProcessState → ProcessState} :
+    (state.modify processId change).inTransit = state.inTransit := by
+  unfold State.modify; split <;> rfl
+
+@[simp] theorem State.timers_modify {state : State} {processId : PID}
+    {change : ProcessState → ProcessState} : (state.modify processId change).timers = state.timers := by
+  unfold State.modify; split <;> rfl
+
+@[simp] theorem State.inTransit_append {state : State} {processId : PID} {message : Term} :
+    (state.append processId message).inTransit = state.inTransit := by
+  simp [State.append]
+
+@[simp] theorem State.timers_append {state : State} {processId : PID} {message : Term} :
+    (state.append processId message).timers = state.timers := by
+  simp [State.append]
+
+theorem State.inTransit_exitSignal {state : State} {target source : PID} {reason : Term}
+    {linked : Bool} : (state.exitSignal target source reason linked).1.inTransit = state.inTransit := by
+  unfold State.exitSignal
+  cases linked <;> simp only [Bool.false_and, Bool.true_and, Bool.not_false, Bool.not_true] <;>
+    repeat' (first | split | simp)
+
+theorem State.timers_exitSignal {state : State} {target source : PID} {reason : Term}
+    {linked : Bool} : (state.exitSignal target source reason linked).1.timers = state.timers := by
+  unfold State.exitSignal
+  cases linked <;> simp only [Bool.false_and, Bool.true_and, Bool.not_false, Bool.not_true] <;>
+    repeat' (first | split | simp)
+
+theorem State.inTransit_receive {state : State} {envelope : Envelope} :
+    (state.receive envelope).1.inTransit = state.inTransit := by
+  unfold State.receive
+  split
+  all_goals first | exact State.inTransit_exitSignal | (repeat' (first | split | simp))
+
+theorem State.timers_receive {state : State} {envelope : Envelope} :
+    (state.receive envelope).1.timers = state.timers := by
+  unfold State.receive
+  split
+  all_goals first | exact State.timers_exitSignal | (repeat' (first | split | simp))
+
+/-- An arriving signal is one of those in transit, and the others stay. -/
+theorem mem_deliverableFrom {before : List Envelope} {seen : List (PID × PID)}
+    {inTransit : List Envelope} {envelope : Envelope} {rest : List Envelope}
+    (mem : (envelope, rest) ∈ deliverableFrom before seen inTransit) :
+    ∃ pre post, inTransit = pre ++ envelope :: post ∧ rest = before ++ pre ++ post := by
+  induction inTransit generalizing before seen with
+  | nil => simp [deliverableFrom] at mem
+  | cons head tail ih =>
+    simp only [deliverableFrom] at mem
+    split at mem
+    · obtain ⟨pre, post, rfl, rfl⟩ := ih mem
+      exact ⟨head :: pre, post, rfl, by simp⟩
+    · simp only [List.mem_cons, Prod.mk.injEq] at mem
+      rcases mem with ⟨rfl, rfl⟩ | mem
+      · exact ⟨[], tail, rfl, by simp⟩
+      · obtain ⟨pre, post, rfl, rfl⟩ := ih mem
+        exact ⟨head :: pre, post, rfl, by simp⟩
+
+theorem mem_deliverable {inTransit : List Envelope} {envelope : Envelope} {rest : List Envelope}
+    (mem : (envelope, rest) ∈ deliverable inTransit) :
+    ∃ pre post, inTransit = pre ++ envelope :: post ∧ rest = pre ++ post := by
+  simpa using mem_deliverableFrom mem
+
+/-- Taking a signal lowers the weight. -/
+theorem State.weight_receive {state : State} {envelope : Envelope} {rest : List Envelope}
+    (mem : (envelope, rest) ∈ deliverable state.inTransit) :
+    ({ state with inTransit := rest }.receive envelope).1.weight < state.weight := by
+  obtain ⟨pre, post, split, rfl⟩ := mem_deliverable mem
+  simp only [State.weight, State.inTransit_receive, State.timers_receive, split, List.map_append,
+    List.map_cons, List.sum_append, List.sum_cons]
+  have : 0 < envelope.weight := by unfold Envelope.weight; split <;> simp
+  omega
+
+/-- A signal reaching a process that is not live lowers the weight. -/
+theorem State.weight_bounce {state : State} {envelope : Envelope} {rest : List Envelope}
+    (mem : (envelope, rest) ∈ deliverable state.inTransit) :
+    ({ state with inTransit := rest }.bounce envelope).weight < state.weight := by
+  obtain ⟨pre, post, split, rfl⟩ := mem_deliverable mem
+  unfold State.bounce
+  split <;> rename_i signal <;>
+    simp only [State.weight, State.emit, split, List.map_append, List.map_cons, List.sum_append,
+      List.sum_cons, List.map_nil, List.sum_nil, Envelope.weight, signal] <;> omega
+
+/-- A timer firing lowers the weight. -/
+theorem State.weight_fire {state : State} {timer : Timer} (mem : timer ∈ state.timers) :
+    (state.fire timer).weight < state.weight := by
+  have shorter : (state.timers.filter (·.reference != timer.reference)).length <
+      state.timers.length :=
+    List.length_filter_lt_length_iff_exists.mpr ⟨timer, mem, by simp⟩
+  simp only [State.weight, State.fire, State.emit, List.map_append, List.map_cons, List.sum_append,
+    List.sum_cons, List.map_nil, List.sum_nil, Envelope.weight]
+  omega
 
 /-- A computation and what follows it: the continuation of its request, or a
 child it spawns. -/
@@ -149,45 +208,63 @@ private theorem replaces_acc {below : γ → γ → Prop} :
           exact this replacement smaller
         · exact restIh next' replaces'
 
-/-- The computations of the processes, and the steps left to the timers. -/
+/-- A process's computation. -/
+private def entry (item : PID × Task α) : Σ β, Result β := ⟨item.2.β, item.2.computation⟩
+
+/-- The computations of the processes, and the weight of the signals in
+transit and the timers. -/
 private def measure (state : State) (tasks : List (PID × Task α)) :
     List (Σ β, Result β) × Nat :=
-  (tasks.map fun entry => ⟨entry.2.β, entry.2.computation⟩, state.timerWeight)
+  (tasks.map entry, state.weight)
 
-/-- What a step of a process leaves follows its computation. -/
-private theorem transition_follows {state : State} {processId : PID} {task : Task α}
-    {transition : Transition α} (possible : transition ∈ task.transitions state processId) :
-    ∀ entry ∈ transition.tasks,
-      Follows ⟨entry.2.β, entry.2.computation⟩ ⟨task.β, task.computation⟩ := by
+/-- What a step of a process itself leaves follows its computation. -/
+private theorem own_follows {state : State} {processId : PID} {task : Task α}
+    {transition : Transition α} (possible : transition ∈ task.own state processId) :
+    ∀ item ∈ transition.tasks, Follows (entry item) (entry (processId, task)) := by
   obtain ⟨computation, finish⟩ := task
-  simp only [Task.transitions] at possible
-  split at possible
-  · simp only [List.mem_singleton] at possible; subst possible; simp
-  · -- Only steps that continue the process leave tasks.
-    have single : ∀ {transitions : List (Transition α)} {entry : Transition α → Prop},
-        transition ∈ transitions → (∀ other ∈ transitions, entry other) → entry transition :=
-      fun mem all => all _ mem
-    refine single (entry := fun transition : Transition α => ∀ entry ∈ transition.tasks,
-      Follows ⟨entry.2.β, entry.2.computation⟩ ⟨_, computation⟩) possible ?_
-    cases computation with
-    | ok => simp
-    | error exception => cases exception <;> simp
-    | get next => simp only [List.mem_singleton, forall_eq]; first | exact Follows.get | exact fun _ => Follows.get
-    | set env next => simp only [List.mem_singleton, forall_eq]; first | exact Follows.set | exact fun _ => Follows.set
-    | schedule options child next =>
-      simp only [forall_eq, List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp]
-      exact ⟨.spawned, .child⟩
-    | send destination message next =>
-      simp only [List.mem_singleton, forall_eq]; first | exact Follows.send | exact fun _ => Follows.send
-    | receive timeout select next =>
-      dsimp only
-      split
-      · simp only [List.mem_singleton, forall_eq]; first | exact Follows.receive | exact fun _ => Follows.receive
-      · split <;> simp only [List.mem_singleton, forall_eq, List.not_mem_nil] <;>
-          first | exact Follows.receive | exact fun _ => Follows.receive | simp
-    | request query next =>
-      simp only [List.mem_singleton, forall_eq]
-      exact Follows.request
+  cases computation with
+  | ok | error =>
+    intro item mem
+    simp only [Task.own] at possible
+    (try split at possible) <;> simp_all [Task.ended]
+  | get | set | send =>
+    simp only [Task.own, List.mem_singleton] at possible; subst possible
+    simp only [List.mem_singleton, forall_eq]; constructor
+  | schedule options child next =>
+    simp only [Task.own, List.mem_singleton] at possible; subst possible
+    simp only [List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp, forall_eq]
+    exact ⟨.spawned, .child⟩
+  | receive timeout select next =>
+    simp only [Task.own] at possible
+    split at possible
+    · simp only [List.mem_singleton] at possible; subst possible
+      simp only [List.mem_singleton, forall_eq]; exact .receive
+    · split at possible <;> simp only [List.mem_singleton, List.not_mem_nil] at possible <;>
+        subst possible <;> simp only [List.mem_singleton, forall_eq] <;> exact .receive
+  | request query next =>
+    simp only [Task.own] at possible
+    split at possible
+    · simp at possible
+    · simp only [List.mem_singleton] at possible; subst possible
+      simp only [List.mem_singleton, forall_eq]; exact .request
+    · simp only [List.mem_singleton] at possible; subst possible; simp [Task.ended]
+
+/-- A signal a process takes leaves it as it is, or ends it. -/
+private theorem deliveries_tasks {state : State} {processId : PID} {task : Task α}
+    {transition : Transition α} (possible : transition ∈ task.deliveries state processId) :
+    ∃ envelope rest, (envelope, rest) ∈ deliverable state.inTransit ∧
+      ((transition.tasks = [(processId, task)] ∧
+        transition.state = ({ state with inTransit := rest }.receive envelope).1) ∨
+       transition.tasks = []) := by
+  simp only [Task.deliveries, List.mem_filterMap] at possible
+  obtain ⟨⟨envelope, rest⟩, mem, found⟩ := possible
+  refine ⟨envelope, rest, mem, ?_⟩
+  split at found
+  · simp at found
+  · split at found <;> simp only [Option.some.injEq] at found <;> subst found
+    · rename_i exits
+      exact .inl ⟨rfl, rfl⟩
+    · exact .inr (by simp [Task.ended])
 
 /-- Each step of a running configuration lowers its measure. -/
 private theorem step_measure {state : State} {tasks : List (PID × Task α)}
@@ -195,20 +272,41 @@ private theorem step_measure {state : State} {tasks : List (PID × Task α)}
     {next : Config α} (step : Step (.running state tasks finished exhausted) event next) :
     ∃ state' tasks' finished' exhausted', next = .running state' tasks' finished' exhausted' ∧
       Prod.Lex (Replaces Follows) (· < ·) (measure state' tasks') (measure state tasks) := by
-  cases step with
-  | run split possible =>
-    rename_i before processId task after transition
-    let entry := fun entry : PID × Task α => (⟨entry.2.β, entry.2.computation⟩ : Σ β, Result β)
-    refine ⟨_, _, _, _, rfl, .left _ _ ⟨before.map entry, entry (processId, task), after.map entry,
-      transition.tasks.map entry, ?_, ?_, ?_⟩⟩
-    · rw [split, List.map_append, List.map_cons]
-    · simp only [List.map_append]; rfl
-    · intro new mem
-      simp only [List.mem_map] at mem
-      obtain ⟨entry, mem, rfl⟩ := mem
-      exact transition_follows possible entry mem
-  | timer possible =>
-    exact ⟨_, _, _, _, rfl, .right _ (State.timerWeight_lt possible)⟩
+  simp only [Step, Config.successors, List.mem_append, List.mem_flatMap, List.mem_map,
+    List.mem_filterMap, Prod.exists] at step
+  rcases step with (⟨before, processId, task, after, split, transition, possible, same⟩ |
+    ⟨envelope, rest, mem, bounced⟩) | ⟨timer, mem, same⟩
+  · simp only [Prod.mk.injEq] at same
+    obtain ⟨-, rfl⟩ := same
+    have tasks_eq := eq_of_mem_splits split
+    simp only [Task.transitions, List.mem_append] at possible
+    rcases possible with possible | possible
+    · refine ⟨_, _, _, _, rfl, .left _ _ ⟨before.map entry, entry (processId, task), after.map entry,
+        transition.tasks.map entry, ?_, ?_, ?_⟩⟩
+      · simp [tasks_eq]
+      · simp
+      · intro new mem
+        simp only [List.mem_map] at mem
+        obtain ⟨item, mem, rfl⟩ := mem
+        exact own_follows possible item mem
+    · obtain ⟨envelope, rest, mem, (⟨tasks', state'⟩ | tasks')⟩ := deliveries_tasks possible
+      · refine ⟨_, _, _, _, rfl, ?_⟩
+        have first : (before ++ transition.tasks ++ after).map entry = tasks.map entry := by
+          simp [tasks_eq, tasks']
+        simp only [measure, first]
+        exact .right _ (state' ▸ State.weight_receive mem)
+      · refine ⟨_, _, _, _, rfl, .left _ _ ⟨before.map entry, entry (processId, task),
+          after.map entry, [], ?_, ?_, by simp⟩⟩
+        · simp [tasks_eq]
+        · simp [tasks']
+  · split at bounced
+    · simp at bounced
+    · simp only [Option.some.injEq, Prod.mk.injEq] at bounced
+      obtain ⟨-, rfl⟩ := bounced
+      exact ⟨_, _, _, _, rfl, .right _ (State.weight_bounce mem)⟩
+  · simp only [Prod.mk.injEq] at same
+    obtain ⟨-, rfl⟩ := same
+    exact ⟨_, _, _, _, rfl, .right _ (State.weight_fire mem)⟩
 
 private theorem running_acc :
     ∀ (state : State) (tasks : List (PID × Task α))
@@ -237,9 +335,17 @@ theorem Config.terminates :
     induction accessible generalizing env computation with
     | intro current _ ih =>
       refine ⟨_, fun next ⟨event, step⟩ => ?_⟩
-      cases step with
-      | get => exact ih _ (equal ▸ .get) _ _ rfl
-      | set => exact ih _ (equal ▸ .set) _ _ rfl
-      | enter => exact running_acc _ _ _ _
+      simp only [Step, Config.successors] at step
+      cases computation with
+      | get next =>
+        simp only [List.mem_singleton, Prod.mk.injEq] at step
+        obtain ⟨-, rfl⟩ := step
+        exact ih _ (equal ▸ .get) _ _ rfl
+      | set env' next =>
+        simp only [List.mem_singleton, Prod.mk.injEq] at step
+        obtain ⟨-, rfl⟩ := step
+        exact ih _ (equal ▸ .set) _ _ rfl
+      | _ =>
+        simp [isRequest] at step <;> obtain ⟨-, rfl⟩ := step <;> exact running_acc _ _ _ _
 
 end Lynx.Concurrent

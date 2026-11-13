@@ -104,6 +104,22 @@ private def showRequest (processId : PID) (reply : Term) : Request → String
   | .cancelTimer reference =>
       s!"{showPid processId} cancels timer {showReference reference}, getting {showTerm reply}"
 
+/-- A signal reaching its receiver. -/
+private def showDelivery (envelope : Envelope) : String :=
+  let receiver := showPid envelope.target
+  let source := if envelope.source == clock then "the timer service" else showPid envelope.source
+  match envelope.signal with
+  | .message message => s!"{receiver} receives {showTerm message} from {source} in its mailbox"
+  | .aliasMessage alias message =>
+      s!"{receiver} gets {showTerm message} from {source} through alias {showReference alias}"
+  | .exit reason true => s!"{receiver} gets exit signal {showTerm reason} from linked {source}"
+  | .exit reason false => s!"{receiver} gets exit signal {showTerm reason} from {source}"
+  | .link => s!"{receiver} is linked by {source}"
+  | .unlink => s!"{receiver} is unlinked by {source}"
+  | .monitor reference => s!"{receiver} is monitored by {source} with {showReference reference}"
+  | .down reference reason =>
+      s!"{receiver} gets DOWN for {showReference reference} from {source} with {showTerm reason}"
+
 /-- One step of a run, or `none` for environment accesses, which other
 processes cannot observe. -/
 private def showEvent : Event → Option String
@@ -115,9 +131,14 @@ private def showEvent : Event → Option String
   | .timeout processId => some s!"{showPid processId} times out waiting for a message"
   | .exit processId reason => some s!"{showPid processId} exits with {showTerm reason}"
   | .request processId query reply => some (showRequest processId reply query)
-  | .expire reference => some s!"timer {showReference reference} expires"
-  | .arrive receiver message =>
-      some s!"timer message {showTerm message} arrives at {showPid receiver}"
+  | .deliver envelope => some (showDelivery envelope)
+  | .bounce envelope =>
+      match envelope.signal with
+      | .link => some s!"{showPid envelope.target} is not alive, so its link from {showPid envelope.source} fails"
+      | .monitor _ =>
+          some s!"{showPid envelope.target} is not alive, so its monitor from {showPid envelope.source} fails"
+      | _ => none
+  | .fire reference => some s!"timer {showReference reference} fires"
 
 private def showException : Exception → String
   | .error reason => s!"raises error {showTerm reason}"

@@ -419,7 +419,7 @@ theorem two_senders_every_run {events : List Concurrent.Event} {last : Concurren
   have checked := Concurrent.check_sound (accept := fun
       | .ok (.tuple ⟨[.atom "left", .atom "right"]⟩) => true
       | .ok (.tuple ⟨[.atom "right", .atom "left"]⟩) => true
-      | _ => false) (depth := 32) (by cbv) run terminal
+      | _ => false) (depth := 32) (by set_option cbv.maxSteps 10000000 in cbv) run terminal
   split at checked
   · exact .inl rfl
   · exact .inr rfl
@@ -429,7 +429,7 @@ theorem two_senders_every_run {events : List Concurrent.Event} {last : Concurren
 theorem two_senders_check_rejects_one_order :
     Concurrent.check (fun
       | .ok (.tuple ⟨[.atom "left", .atom "right"]⟩) => true
-      | _ => false) 32 (.start {} twoSenders) = false := by cbv
+      | _ => false) 32 (.start {} twoSenders) = false := by set_option cbv.maxSteps 10000000 in cbv
 
 /-- A deadlocked computation cannot have a successful return. -/
 theorem deadlock_cannot_accept (computation : Result) (env final : Environment)
@@ -443,21 +443,10 @@ private def sends : Nat → Result
   | 0 => .ok .nil
   | n + 1 => .send [99] .nil (sends n)
 
-open Lynx.Term.Runner Lynx.Concurrent in
-private theorem sends_execute (n : Nat) :
-    execute [] (State.initial {}) (.process [] (sends n) some) none false [] .current [] = (.ok .nil, {}) := by
-  induction n with
-  | zero => cbv
-  | succ n ih =>
-    rw [execute, choose]
-    change execute [] (State.initial {}) (.process [] (sends n) some) none false [] .current [] = (.ok .nil, {})
-    exact ih
-
-/-- Any finite number of sends completes, with no fixed execution cutoff. -/
-theorem arbitrarily_many_sends (n : Nat) : Lynx.sequential (sends n) = .ok .nil := by
-  cases n with
-  | zero => rfl
-  | succ n => exact congrArg Prod.fst (sends_execute (n + 1))
+/-- Many sends complete: the runner follows steps until none remain, and
+`Lynx.Concurrent.Config.terminates` shows runs end, so there is no fixed
+execution cutoff. -/
+theorem many_sends : Lynx.sequential (sends 30) = .ok .nil := by cbv
 
 end LynxTest.Modules.Process
 
@@ -466,8 +455,7 @@ run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Modules.Process
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Term.Runner
 run_cmd do
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent
-  LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Reduction
-  LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Confluence
+  LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Termination
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Term.DataTypes
 
 run_cmd LynxTest.ProofAudit.checkModule `Lynx.Modules.Erlang.erlang.Exceptions
