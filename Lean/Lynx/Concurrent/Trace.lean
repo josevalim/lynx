@@ -1,6 +1,6 @@
 module
 
-public import Lynx.Concurrent
+public import Lynx.Concurrent.Reduction
 
 /-! Readable reports of the runs `Lynx.Concurrent.counterexample` finds.
 

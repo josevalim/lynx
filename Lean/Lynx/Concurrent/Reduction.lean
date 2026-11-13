@@ -2,6 +2,8 @@ module
 
 public import Lynx.Concurrent
 public import Lynx.Concurrent.Termination
+public import Lynx.Concurrent.Footprint
+import all Lynx.Concurrent.Footprint
 
 /-! Reductions of `Lynx.Concurrent.check`: the steps of a configuration named by
 keys, and the facts every reachable configuration satisfies. -/
@@ -280,7 +282,8 @@ private theorem transition_shape {state : State} {processId : PID} {task : Task 
 
 /-- Facts every reachable configuration satisfies: processes have distinct PIDs,
 each process has spawned every child PID that another process extends, every
-process is live, and at most one reports the run's result. -/
+process is live, at most one reports the run's result, and every live record
+belongs to a process. -/
 private def Wellformed : Config α → Prop
   | .start .. => True
   | .running state tasks _ _ =>
@@ -288,7 +291,8 @@ private def Wellformed : Config α → Prop
       (∀ parent ∈ tasks, ∀ descendant ∈ tasks, ∀ index rest,
         descendant.1 = parent.1 ++ index :: rest → index ≤ (state.process parent.1).children) ∧
       (∀ entry ∈ tasks, (state.processes entry.1).isSome) ∧
-      tasks.Pairwise (fun first second => first.2.Quiet ∨ second.2.Quiet)
+      tasks.Pairwise (fun first second => first.2.Quiet ∨ second.2.Quiet) ∧
+      ∀ processId, (state.processes processId).isSome → processId ∈ tasks.map Prod.fst
 
 private theorem ne_append_cons (processId : PID) (index : Nat) (rest : List Nat) :
     processId ≠ processId ++ index :: rest := by
@@ -351,16 +355,23 @@ private theorem transition_facts {state : State} {processId : PID} {task : Task 
       (transition.state.processes child).isSome ∧
       (transition.state.process processId).children = (state.process processId).children + 1) ∧
     (∀ added ∈ transition.tasks, task.Quiet → added.2.Quiet) ∧
-    transition.tasks.Pairwise (fun first second => first.2.Quiet ∨ second.2.Quiet) := by
+    transition.tasks.Pairwise (fun first second => first.2.Quiet ∨ second.2.Quiet) ∧
+    -- A live process or spawned child is among what it leaves.
+    ((transition.state.processes processId).isSome → processId ∈ transition.tasks.map Prod.fst) ∧
+    (∀ child, transition.event = .spawn processId child → child ∈ transition.tasks.map Prod.fst) := by
   rcases transition_shape possible with ⟨empty, notSpawn, middle, kept, processes⟩ |
     ⟨task', single, kept, quiet, notSpawn⟩ | ⟨task', childTask, options, pair, state', event, quiet, childQuiet⟩
   · refine ⟨fun other notSelf _ => ?_, by simp [empty], by simp [empty], by simp [empty],
-      fun child spawn => absurd spawn (notSpawn child), by simp [empty], by simp [empty]⟩
-    have := kept other
-    simp only [State.process, processes, State.processes_update, notSelf, ite_false] at this ⊢
-    exact this
+      fun child spawn => absurd spawn (notSpawn child), by simp [empty], by simp [empty], ?_,
+      fun child spawn => absurd spawn (notSpawn child)⟩
+    · have := kept other
+      simp only [State.process, processes, State.processes_update, notSelf, ite_false] at this ⊢
+      exact this
+    · intro live'
+      simp [processes, State.processes_update] at live'
   · refine ⟨fun other _ _ => kept other, by simp [single], by simp [single], fun _ => ?_,
-      fun child spawn => absurd spawn (notSpawn child), ?_, by simp [single]⟩
+      fun child spawn => absurd spawn (notSpawn child), ?_, by simp [single], fun _ => by simp [single],
+      fun child spawn => absurd spawn (notSpawn child)⟩
     · exact ⟨(kept processId).1 ▸ live, Nat.le_of_eq (kept processId).2.symm⟩
     · simp only [single, List.mem_singleton]
       rintro _ rfl
@@ -369,7 +380,8 @@ private theorem transition_facts {state : State} {processId : PID} {task : Task 
       State.spawnWith_facts (state := state) (processId := processId) (options := options)
     have distinct : processId ≠ (state.spawnWith processId options).1 := by
       rw [childPid]; exact ne_append_cons _ _ _
-    refine ⟨fun other notSelf notChild => ?_, by simp [pair, distinct], ?_, fun _ => ?_, ?_, ?_, ?_⟩
+    refine ⟨fun other notSelf notChild => ?_, by simp [pair, distinct], ?_, fun _ => ?_, ?_, ?_, ?_,
+      fun _ => by simp [pair], fun child spawn => by rw [event] at spawn; cases spawn; simp [pair]⟩
     · rw [state']; exact others other notSelf (notChild _ event)
     · intro entry mem
       simp only [pair, List.mem_cons, List.not_mem_nil, or_false] at mem
@@ -395,9 +407,9 @@ private theorem wellformed_apply {state : State} {before after : List (PID × Ta
     (wellformed : Wellformed (.running state (before ++ (processId, task) :: after) finished exhausted))
     (possible : transition ∈ task.transitions state processId) :
     Wellformed (transition.apply before after finished exhausted) := by
-  obtain ⟨distinct, fresh, live, quiet⟩ := wellformed
+  obtain ⟨distinct, fresh, live, quiet, owned⟩ := wellformed
   have self : (processId, task) ∈ before ++ (processId, task) :: after := by simp
-  obtain ⟨frame, inner, entries, grows, spawned, quietAdded, quietInner⟩ :=
+  obtain ⟨frame, inner, entries, grows, spawned, quietAdded, quietInner, stays, childStays⟩ :=
     transition_facts possible (live _ self)
   have old : ∀ entry, entry ∈ before ∨ entry ∈ after →
       entry ∈ before ++ (processId, task) :: after := by
@@ -425,7 +437,23 @@ private theorem wellformed_apply {state : State} {before after : List (PID × Ta
     fun entry mem => frame entry.1 (others entry mem) fun child spawn =>
       child_new child spawn entry (old entry mem)
   simp only [Transition.apply, Wellformed]
-  refine ⟨pairwise_replace distinct inner ?_ ?_, ?_, ?live, ?quiet⟩
+  refine ⟨pairwise_replace distinct inner ?_ ?_, ?_, ?live, ?quiet, ?owned⟩
+  case owned =>
+    intro candidate alive
+    simp only [List.map_append, List.mem_append]
+    by_cases self' : candidate = processId
+    · subst self'; exact .inl (.inr (stays alive))
+    · by_cases spawned' : ∃ child, transition.event = .spawn processId child ∧ candidate = child
+      · obtain ⟨child, spawn, same⟩ := spawned'
+        rw [same]
+        exact .inl (.inr (childStays child spawn))
+      · have kept := frame candidate self' fun child' spawn same => spawned' ⟨child', spawn, same⟩
+        have := owned candidate (kept.1 ▸ alive)
+        simp only [List.map_append, List.map_cons, List.mem_append, List.mem_cons] at this
+        rcases this with this | this | this
+        · exact .inl (.inl this)
+        · exact absurd this self'
+        · exact .inr this
   case live =>
     intro entry mem
     simp only [List.mem_append] at mem
@@ -515,9 +543,10 @@ private theorem wellformed_keeps {state state' : State} {tasks : List (PID × Ta
     {finished : Option (Except Exception α × Environment)} {exhausted : Bool}
     (wellformed : Wellformed (.running state tasks finished exhausted)) (kept : state.Keeps state') :
     Wellformed (.running state' tasks finished exhausted) := by
-  obtain ⟨distinct, fresh, live, quiet⟩ := wellformed
+  obtain ⟨distinct, fresh, live, quiet, owned⟩ := wellformed
   refine ⟨distinct, fun parent mem descendant mem' index rest extended => ?_,
-    fun entry mem => (kept entry.1).1 ▸ live entry mem, quiet⟩
+    fun entry mem => (kept entry.1).1 ▸ live entry mem, quiet,
+    fun processId alive => owned processId ((kept processId).1 ▸ alive)⟩
   rw [(kept parent.1).2]
   exact fresh parent mem descendant mem' index rest extended
 
@@ -533,10 +562,13 @@ private theorem Step.wellformed {first next : Config α} {event : Event}
       | (simp at step; done)
       | (simp only [↓reduceIte, List.mem_singleton, Prod.mk.injEq] at step
          obtain ⟨-, rfl⟩ := step
-         refine ⟨by simp, ?_, by simp [State.initial], by simp⟩
-         simp only [List.mem_singleton]
-         rintro _ rfl _ rfl index rest extended
-         exact absurd extended (ne_append_cons _ _ _))
+         refine ⟨by simp, ?_, by simp [State.initial], by simp, ?_⟩
+         · simp only [List.mem_singleton]
+           rintro _ rfl _ rfl index rest extended
+           exact absurd extended (ne_append_cons _ _ _)
+         · intro candidate alive
+           simp only [State.initial] at alive
+           split at alive <;> simp_all)
   | running state tasks finished exhausted =>
     simp only [Step, Config.successors, List.mem_append, List.mem_flatMap, List.mem_map,
       List.mem_filterMap, Prod.exists] at step
@@ -565,10 +597,29 @@ inductive Key where
   | deliver (source target : PID)
   | bounce (source target : PID)
   | fire (reference : List Nat)
-deriving DecidableEq
+
+/-- Compare keys in evaluation. -/
+@[expose] def Key.beq : Key → Key → Bool
+  | .own processId index, .own processId' index' => processId == processId' && index == index'
+  | .deliver source target, .deliver source' target' => source == source' && target == target'
+  | .bounce source target, .bounce source' target' => source == source' && target == target'
+  | .fire reference, .fire reference' => reference == reference'
+  | _, _ => false
+
+instance : BEq Key := ⟨Key.beq⟩
+
+instance : LawfulBEq Key where
+  eq_of_beq {first second} equal := by
+    change Key.beq first second = true at equal
+    cases first <;> cases second <;> simp_all [Key.beq]
+  rfl {key} := by
+    change Key.beq key key = true
+    cases key <;> simp [Key.beq]
+
+instance : DecidableEq Key := fun first second => decidable_of_iff (first == second) beq_iff_eq
 
 /-- The steps of a process, each with its key. -/
-def Task.keyed (state : State) (processId : PID) (task : Task α) : List (Key × Transition α) :=
+@[expose] def Task.keyed (state : State) (processId : PID) (task : Task α) : List (Key × Transition α) :=
   (task.own state processId).zipIdx.map (fun (transition, index) => (.own processId index, transition)) ++
   (deliverable state.inTransit).filterMap fun (envelope, rest) =>
     if envelope.target != processId then none
@@ -585,7 +636,7 @@ private theorem Task.keyed_snd (state : State) (processId : PID) (task : Task α
     split <;> rfl
 
 /-- Every step of a configuration, with its key. -/
-def Config.steps : Config α → List (Key × Event × Config α)
+@[expose] def Config.steps : Config α → List (Key × Event × Config α)
   | .start .. => []
   | .running state tasks finished exhausted =>
       (splits tasks).flatMap (fun (before, (processId, task), after) =>
@@ -839,5 +890,1264 @@ private theorem steps_unique {state : State} {tasks : List (PID × Task α)}
   · simp only [Key.fire.injEq] at same
     obtain rfl := firstOfEach_unique firing firing' same
     exact ⟨rfl, rfl⟩
+
+/-! ### Commuting steps -/
+
+/-- What the step with a key observes and does, if the configuration has one. -/
+@[expose] def Config.footprint : Config α → Key → Option Footprint
+  | .start .., _ => none
+  | .running state tasks _ _, .own processId index =>
+      match tasks.lookup processId with
+      | some task =>
+          if index < (task.own state processId).length then some (task.footprint state processId)
+          else none
+      | none => none
+  | .running state tasks _ _, .deliver source target =>
+      match tasks.lookup target, state.inTransit.find? (Envelope.between source target) with
+      | some _, some envelope => some (Footprint.delivery state envelope)
+      | _, _ => none
+  | .running state tasks _ _, .bounce source target =>
+      match tasks.lookup target, state.inTransit.find? (Envelope.between source target) with
+      | none, some envelope => some (Footprint.bounce envelope)
+      | _, _ => none
+  | .running state _ _ _, .fire reference =>
+      match state.timers.find? (·.reference == reference) with
+      | some timer => some (Footprint.fire timer)
+      | none => none
+
+/-- Whether the steps with two keys commute at a configuration: both can be
+taken, neither changes what the other observes, and their effects reach the
+same state in either order. -/
+@[expose] def Config.independent : Config α → Key → Key → Bool
+  | .start .., _, _ => false
+  | config@(.running state ..), first, second =>
+      first != second && match config.footprint first, config.footprint second with
+        | some footprint, some footprint' => footprint.independent footprint' state
+        | _, _ => false
+
+/-- Replace the process with a PID by others. -/
+private def replace (processId : PID) (replacement : List (PID × Task α))
+    (tasks : List (PID × Task α)) : List (PID × Task α) :=
+  tasks.flatMap fun entry => if entry.1 = processId then replacement else [entry]
+
+private theorem replace_others {processId : PID} {replacement tasks : List (PID × Task α)}
+    (others : ∀ entry ∈ tasks, entry.1 ≠ processId) : replace processId replacement tasks = tasks := by
+  induction tasks with
+  | nil => rfl
+  | cons head rest ih =>
+    simp only [replace, List.flatMap_cons] at ih ⊢
+    rw [ite_eq_right (others head (by simp)), ih fun entry mem => others entry (by simp [mem])]
+    rfl
+
+private theorem replace_split {processId : PID} {task : Task α}
+    {before after replacement : List (PID × Task α)}
+    (distinct : (before ++ (processId, task) :: after).Pairwise fun first second => first.1 ≠ second.1) :
+    replace processId replacement (before ++ (processId, task) :: after) =
+      before ++ replacement ++ after := by
+  rw [List.pairwise_append, List.pairwise_cons] at distinct
+  obtain ⟨-, ⟨notAfter, -⟩, notBefore⟩ := distinct
+  have front := replace_others (replacement := replacement) fun entry mem =>
+    notBefore entry mem (processId, task) (by simp)
+  have back := replace_others (replacement := replacement) fun entry mem same =>
+    notAfter entry mem same.symm
+  simp only [replace, List.flatMap_append, List.flatMap_cons, ite_true] at front back ⊢
+  rw [front, back]
+  simp
+
+private theorem mem_of_lookup {entries : List (PID × γ)} {processId : PID} {item : γ}
+    (found : entries.lookup processId = some item) : (processId, item) ∈ entries := by
+  induction entries with
+  | nil => simp [List.lookup] at found
+  | cons head rest ih =>
+    obtain ⟨processId', item'⟩ := head
+    simp only [List.lookup] at found
+    split at found
+    · rename_i same
+      simp only [beq_iff_eq] at same
+      subst same
+      simp only [Option.some.injEq] at found
+      subst found
+      simp
+    · exact List.mem_cons_of_mem _ (ih found)
+
+private theorem lookup_of_mem {entries : List (PID × γ)} {processId : PID} {item : γ}
+    (distinct : entries.Pairwise fun first second => first.1 ≠ second.1)
+    (mem : (processId, item) ∈ entries) : entries.lookup processId = some item := by
+  induction entries with
+  | nil => simp at mem
+  | cons head rest ih =>
+    obtain ⟨processId', item'⟩ := head
+    simp only [List.pairwise_cons] at distinct
+    simp only [List.mem_cons, Prod.mk.injEq] at mem
+    rcases mem with ⟨rfl, rfl⟩ | mem
+    · simp [List.lookup]
+    · have ne : processId ≠ processId' := fun equal => distinct.1 (processId, item) mem equal.symm
+      have : (processId == processId') = false := by simpa using ne
+      simp [List.lookup, this, ih distinct.2 mem]
+
+private theorem lookup_none {entries : List (PID × γ)} {processId : PID}
+    (missing : processId ∉ entries.map Prod.fst) : entries.lookup processId = none := by
+  cases found : entries.lookup processId with
+  | none => rfl
+  | some item => exact absurd (List.mem_map_of_mem (f := Prod.fst) (mem_of_lookup found)) missing
+
+private theorem replace_flatMap {processId : PID} {replacement : List (PID × Task α)}
+    {items : List γ} {change : γ → List (PID × Task α)} :
+    replace processId replacement (items.flatMap change) =
+      items.flatMap fun item => replace processId replacement (change item) := by
+  induction items with
+  | nil => rfl
+  | cons head rest ih => simp only [List.flatMap_cons, replace, List.flatMap_append] at ih ⊢; rw [ih]
+
+private theorem lookup_replace {processId other : PID} {replacement tasks : List (PID × Task α)}
+    (ne : other ≠ processId) (fresh : other ∉ replacement.map Prod.fst) :
+    (replace processId replacement tasks).lookup other = tasks.lookup other := by
+  induction tasks with
+  | nil => rfl
+  | cons head rest ih =>
+    obtain ⟨processId', task⟩ := head
+    have unfolded : replace processId replacement ((processId', task) :: rest) =
+        (if processId' = processId then replacement else [(processId', task)]) ++
+          replace processId replacement rest := by
+      simp [replace]
+    rw [unfolded, List.lookup_append, ih]
+    split
+    · rename_i same
+      subst same
+      have : (other == processId') = false := by simpa using ne
+      rw [lookup_none fresh]
+      simp [List.lookup, this]
+    · simp only [List.lookup]
+      split <;> rfl
+
+private theorem replace_comm {processId other : PID}
+    {replacement replacement' tasks : List (PID × Task α)} (ne : processId ≠ other)
+    (fresh : other ∉ replacement.map Prod.fst) (fresh' : processId ∉ replacement'.map Prod.fst) :
+    replace processId replacement (replace other replacement' tasks) =
+      replace other replacement' (replace processId replacement tasks) := by
+  have outside : ∀ {processId : PID} {replacement : List (PID × Task α)},
+      processId ∉ replacement.map Prod.fst → ∀ more : List (PID × Task α),
+        replace processId more replacement = replacement := fun fresh more =>
+    replace_others fun entry mem same => fresh (by rw [← same]; exact List.mem_map_of_mem mem)
+  have inner : ∀ (processId : PID) (replacement : List (PID × Task α)),
+      replace processId replacement tasks =
+        tasks.flatMap fun entry => if entry.1 = processId then replacement else [entry] :=
+    fun _ _ => rfl
+  rw [inner other, inner processId, replace_flatMap, replace_flatMap]
+  congr 1
+  funext entry
+  by_cases first : entry.1 = processId
+  · have second : entry.1 ≠ other := first ▸ ne
+    rw [ite_eq_right second, ite_eq_left first, outside fresh]
+    simp [replace, first]
+  · by_cases second : entry.1 = other
+    · rw [ite_eq_left second, ite_eq_right first, outside fresh']
+      simp [replace, second]
+    · rw [ite_eq_right second, ite_eq_right first]
+      simp [replace, first, second]
+
+/-- A step reporting the run's result ends a process that reports it. -/
+private theorem finished_facts {state : State} {processId : PID} {task : Task α}
+    {transition : Transition α} (possible : transition ∈ task.transitions state processId)
+    (reported : transition.finished.isSome) : transition.tasks = [] ∧ ¬task.Quiet := by
+  have ended : ∀ {γ : Type} {finish : Except Exception γ → Option (Except Exception α)} {event : Event}
+      {state : State} {reason : Term} {result : Except Exception γ},
+      (Task.ended finish event state processId reason result).finished.isSome →
+        (Task.ended finish event state processId reason result).tasks = [] ∧
+          ∃ result, finish result ≠ none := by
+    intro γ finish event state reason result found
+    refine ⟨rfl, result, ?_⟩
+    simp only [Task.ended, Option.isSome_map] at found
+    simpa [Option.isSome_iff_ne_none] using found
+  have quiet : ∀ {γ : Type} {computation : Result γ}
+      {finish : Except Exception γ → Option (Except Exception α)},
+      (∃ result, finish result ≠ none) → ¬(⟨computation, finish⟩ : Task α).Quiet :=
+    fun ⟨result, found⟩ quiet => found (quiet result)
+  simp only [Task.transitions, List.mem_append] at possible
+  rcases possible with possible | possible
+  · obtain ⟨computation, finish⟩ := task
+    cases computation with
+    | ok =>
+      simp only [Task.own, List.mem_singleton] at possible; subst possible
+      exact ⟨(ended reported).1, quiet (ended reported).2⟩
+    | error exception =>
+      cases exception <;> simp only [Task.own, List.mem_singleton] at possible <;> subst possible
+      all_goals first
+        | exact ⟨(ended reported).1, quiet (ended reported).2⟩
+        | simp at reported
+    | request query next =>
+      simp only [Task.own] at possible
+      split at possible
+      · simp at possible
+      · simp only [List.mem_singleton] at possible; subst possible; simp at reported
+      · simp only [List.mem_singleton] at possible; subst possible
+        exact ⟨(ended reported).1, quiet (ended reported).2⟩
+    | receive timeout select next =>
+      simp only [Task.own] at possible
+      split at possible
+      · simp only [List.mem_singleton] at possible; subst possible; simp at reported
+      · split at possible <;> simp only [List.mem_singleton, List.not_mem_nil] at possible <;>
+          subst possible <;> simp at reported
+    | _ => simp only [Task.own, List.mem_singleton] at possible; subst possible; simp at reported
+  · simp only [Task.deliveries, Task.delivery, List.mem_filterMap] at possible
+    obtain ⟨⟨envelope, rest⟩, -, found⟩ := possible
+    split at found
+    · simp at found
+    · split at found <;> simp only [Option.some.injEq] at found <;> subst found
+      · simp at reported
+      · exact ⟨(ended reported).1, quiet (ended reported).2⟩
+
+/-- What a step does to a configuration: its event, its effect on the state,
+the process it replaces among the tasks, if any, and what it reports. -/
+private structure Move (α : Type) : Type 1 where
+  event : Event
+  effect : Effect
+  owner : Option PID := none
+  replacement : List (PID × Task α) := []
+  finished : Option (Except Exception α × Environment) := none
+  exhausted : Bool := false
+
+private def Move.tasks (move : Move α) (tasks : List (PID × Task α)) : List (PID × Task α) :=
+  match move.owner with
+  | some processId => replace processId move.replacement tasks
+  | none => tasks
+
+private def Move.config (move : Move α) (state : State) (tasks : List (PID × Task α))
+    (finished : Option (Except Exception α × Environment)) (exhausted : Bool) : Config α :=
+  .running (move.effect.apply state) (move.tasks tasks) (move.finished.orElse fun _ => finished)
+    (exhausted || move.exhausted)
+
+/-- The process a key's step observes: the one stepping, the one taking a
+signal, or the one a signal bounces from. -/
+private def Key.watched : Key → Option PID
+  | .own processId _ | .deliver _ processId | .bounce _ processId => some processId
+  | .fire _ => none
+
+/-- The process whose task a key's step can replace. -/
+private def Key.process : Key → Option PID
+  | .own processId _ | .deliver _ processId => some processId
+  | _ => none
+
+/-- What tasks need for a key's step to be taken in the same way. -/
+private def Supports (key : Key) (move : Move α) (tasks tasks' : List (PID × Task α)) : Prop :=
+  match key with
+  | .own processId _ => tasks'.lookup processId = tasks.lookup processId
+  | .deliver _ target =>
+      if move.owner.isSome then tasks'.lookup target = tasks.lookup target
+      else (tasks'.lookup target).isSome
+  | .bounce _ target => tasks'.lookup target = none
+  | .fire _ => True
+
+/-- A keyed step as a move, which the key takes in the same way from other
+configurations agreeing on what it observes. -/
+private structure Moves (key : Key) (footprint : Footprint) (state : State)
+    (tasks : List (PID × Task α)) (finished : Option (Except Exception α × Environment))
+    (exhausted : Bool) (event : Event) (next : Config α) (move : Move α) : Prop where
+  effect : move.effect = footprint.effect
+  event : event = move.event
+  next : next = move.config state tasks finished exhausted
+  transfer : ∀ state' tasks' finished' exhausted',
+    Wellformed (.running state' tasks' finished' exhausted') →
+    footprint.observes.Agree state state' → Supports key move tasks tasks' →
+    (key, move.event, move.config state' tasks' finished' exhausted') ∈
+      (Config.running state' tasks' finished' exhausted').steps
+  owner : ∀ processId, move.owner = some processId → key.process = some processId
+  replaced : ∀ entry ∈ move.replacement, some entry.1 = key.process ∨
+    (entry.1 ∉ tasks.map Prod.fst ∧ (footprint.effect.record entry.1 none).isSome)
+  ends : ∀ processId, move.owner = some processId → processId ∉ move.replacement.map Prod.fst →
+    footprint.effect.record processId (state.processes processId) = none
+  observed : ∀ processId, key.watched = some processId →
+    ∃ view, (processId, view) ∈ footprint.observes.records
+  reports : move.finished.isSome → ∃ processId task, move.owner = some processId ∧
+    processId ∉ move.replacement.map Prod.fst ∧ tasks.lookup processId = some task ∧ ¬task.Quiet
+  /-- Only a process's own step leaves processes in its place. -/
+  replacing : move.replacement ≠ [] → ∃ processId index, key = .own processId index
+
+private theorem split_of_lookup {tasks : List (PID × Task α)} {processId : PID} {task : Task α}
+    (found : tasks.lookup processId = some task) :
+    ∃ before after, tasks = before ++ (processId, task) :: after :=
+  List.append_of_mem (mem_of_lookup found)
+
+/-- A spawned child is not among the processes. -/
+private theorem child_fresh {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool}
+    {processId child : PID} {task : Task α} {transition : Transition α}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (mem : (processId, task) ∈ tasks) (possible : transition ∈ task.transitions state processId)
+    (spawn : transition.event = .spawn processId child) : child ∉ tasks.map Prod.fst := by
+  intro found
+  simp only [List.mem_map, Prod.exists, exists_and_right, exists_eq_right] at found
+  obtain ⟨task', found⟩ := found
+  have live := wellformed.2.2.1 _ mem
+  have spawned := (transition_facts possible live).2.2.2.2.1 child spawn
+  have := wellformed.2.1 (processId, task) mem (child, task') found _ [] (by rw [spawned.1])
+  simp only at this
+  omega
+
+private theorem own_moves {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool}
+    {before after : List (PID × Task α)} {processId : PID} {task : Task α} {index : Nat}
+    {transition : Transition α}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (split : (before, (processId, task), after) ∈ splits tasks)
+    (found : (task.own state processId)[index]? = some transition) :
+    Moves (.own processId index) (task.footprint state processId) state tasks finished exhausted
+      transition.event (transition.apply before after finished exhausted)
+      { event := transition.event, effect := (task.footprint state processId).effect
+        owner := some processId, replacement := transition.tasks, finished := transition.finished
+        exhausted := transition.exhausted } := by
+  have equal := eq_of_mem_splits split
+  have mem : (processId, task) ∈ tasks := by rw [equal]; simp
+  have live := wellformed.2.2.1 _ mem
+  have possibleOwn := List.mem_of_getElem? found
+  have possible : transition ∈ task.transitions state processId := by
+    simp [Task.transitions, possibleOwn]
+  obtain ⟨frame, inner, entries, grows, spawned, -, -, stays, -⟩ := transition_facts possible live
+  refine ⟨rfl, rfl, ?_, ?_, fun _ found => by cases found; rfl, ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [Transition.apply, Move.config, Move.tasks]
+    rw [own_state live possibleOwn, equal, replace_split (equal ▸ wellformed.1)]
+  · intro state' tasks' finished' exhausted' wellformed' agree supports
+    simp only [Supports, lookup_of_mem wellformed.1 mem] at supports
+    obtain ⟨before', after', equal'⟩ := split_of_lookup supports
+    obtain ⟨transition', found', matched⟩ :=
+      (own_matches live agree).get found
+    refine mem_steps.mpr (.inl ⟨before', processId, task, after', transition', ?_, ?_, ?_, ?_⟩)
+    · rw [equal']; exact mem_splits
+    · exact mem_keyed.mpr (.inl ⟨index, rfl, found'⟩)
+    · exact matched.1.symm
+    · obtain ⟨-, tasks, finished, exhausted, state⟩ := matched
+      simp only [Transition.apply, Move.config, Move.tasks, state, tasks, finished, exhausted]
+      rw [equal', replace_split (equal' ▸ wellformed'.1)]
+  · intro entry added
+    rcases entries entry added with same | ⟨child, spawn, same⟩
+    · exact .inl (by rw [same]; rfl)
+    · refine .inr ⟨same ▸ child_fresh wellformed mem possible spawn, ?_⟩
+      have dead : state.processes child = none := by
+        cases alive : state.processes child with
+        | none => rfl
+        | some _ =>
+          exact absurd (wellformed.2.2.2.2 child (by simp [alive]))
+            (child_fresh wellformed mem possible spawn)
+      have := (spawned child spawn).2.1
+      rw [own_state live possibleOwn, Effect.processes_apply, dead] at this
+      rw [same]; exact this
+  · intro processId' owner notAdded
+    cases owner
+    rw [← Effect.processes_apply, ← own_state live possibleOwn]
+    cases alive : transition.state.processes processId with
+    | none => rfl
+    | some _ => exact absurd (stays (by simp [alive])) notAdded
+  · intro processId' watched
+    cases watched
+    exact Task.footprint_observes
+  · intro reported
+    obtain ⟨empty, notQuiet⟩ := finished_facts possible reported
+    exact ⟨processId, task, rfl, by simp [empty], lookup_of_mem wellformed.1 mem, notQuiet⟩
+  · exact fun _ => ⟨processId, index, rfl⟩
+
+private theorem Footprint.delivery_observes {state : State} {envelope : Envelope} :
+    (envelope.target, ProcessState.live) ∈ (Footprint.delivery state envelope).observes.records := by
+  obtain ⟨source, target, signal⟩ := envelope
+  unfold Footprint.delivery
+  cases signal <;> simp only [Observes.and] <;> (try split) <;> simp
+
+/-- A signal arriving leaves the receiver, or ends it. -/
+private theorem delivery_shape {state : State} {processId : PID} {task : Task α} {envelope : Envelope}
+    {rest : List Envelope} :
+    (task.delivery state processId envelope rest).event = .deliver envelope ∧
+    (task.delivery state processId envelope rest).exhausted = false ∧
+    (((task.delivery state processId envelope rest).tasks = [(processId, task)] ∧
+        (task.delivery state processId envelope rest).finished = none ∧
+        ({ state with inTransit := rest }.receive envelope).2 = none) ∨
+      ((task.delivery state processId envelope rest).tasks = [] ∧
+        (task.delivery state processId envelope rest).state.processes processId = none ∧
+        ({ state with inTransit := rest }.receive envelope).2.isSome)) := by
+  simp only [Task.delivery]
+  split
+  · rename_i exits
+    exact ⟨rfl, rfl, .inl ⟨rfl, rfl, exits⟩⟩
+  · rename_i reason exits
+    refine ⟨rfl, rfl, .inr ⟨rfl, ?_, by simp [exits]⟩⟩
+    simp [Task.ended, State.processes_terminate, State.update]
+
+private theorem deliver_moves {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool}
+    {before after : List (PID × Task α)} {processId : PID} {task : Task α}
+    {envelope : Envelope} {rest : List Envelope}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (split : (before, (processId, task), after) ∈ splits tasks)
+    (delivered : (envelope, rest) ∈ deliverable state.inTransit) (target : envelope.target = processId) :
+    Moves (.deliver envelope.source processId) (Footprint.delivery state envelope) state tasks
+      finished exhausted (task.delivery state processId envelope rest).event
+      ((task.delivery state processId envelope rest).apply before after finished exhausted)
+      { event := (task.delivery state processId envelope rest).event
+        effect := (Footprint.delivery state envelope).effect
+        owner := if (task.delivery state processId envelope rest).tasks.isEmpty then some processId
+          else none
+        finished := (task.delivery state processId envelope rest).finished
+        exhausted := (task.delivery state processId envelope rest).exhausted } := by
+  have equal := eq_of_mem_splits split
+  have mem : (processId, task) ∈ tasks := by rw [equal]; simp
+  have stateEq := (delivery_matches (task := task) delivered target
+    (Observes.Agree.refl _ state)).2.2
+  obtain ⟨event, noExhaust, shape⟩ := delivery_shape (state := state) (processId := processId)
+    (task := task) (envelope := envelope) (rest := rest)
+  refine ⟨rfl, rfl, ?_, ?_, (fun _ owner => by split at owner <;> simp_all [Key.process]), ?_, ?_, ?_, ?_,
+    fun nonempty => absurd rfl nonempty⟩
+  · simp only [Transition.apply, Move.config, Move.tasks, stateEq, noExhaust]
+    rcases shape with ⟨tasksEq, finishedEq, -⟩ | ⟨tasksEq, -, -⟩
+    · simp [tasksEq, finishedEq, equal]
+    · simp only [tasksEq, List.isEmpty_nil, ↓reduceIte, List.append_nil]
+      rw [equal, replace_split (equal ▸ wellformed.1)]
+      simp
+  · intro state' tasks' finished' exhausted' wellformed' agree supports
+    have exitsSame : ∀ task' : Task α,
+        (task'.delivery state processId envelope rest).tasks.isEmpty =
+          (task.delivery state processId envelope rest).tasks.isEmpty := by
+      intro task'
+      obtain ⟨-, -, shape'⟩ := delivery_shape (state := state) (processId := processId)
+        (task := task') (envelope := envelope) (rest := rest)
+      rcases shape with ⟨tasksEq, -, exits⟩ | ⟨tasksEq, -, exits⟩ <;>
+        rcases shape' with ⟨tasksEq', -, exits'⟩ | ⟨tasksEq', -, exits'⟩ <;>
+        simp_all
+    obtain ⟨task', found'⟩ : ∃ task', tasks'.lookup processId = some task' := by
+      simp only [Supports] at supports
+      split at supports
+      · exact ⟨task, supports.trans (lookup_of_mem wellformed.1 mem)⟩
+      · exact Option.isSome_iff_exists.mp supports
+    obtain ⟨before', after', equal'⟩ := split_of_lookup found'
+    obtain ⟨delivered', matched, -⟩ := delivery_matches (task := task') delivered target agree
+    refine mem_steps.mpr (.inl ⟨before', processId, task', after',
+      task'.delivery state' processId envelope (arrive envelope.source envelope.target state'.inTransit),
+      ?_, ?_, ?_, ?_⟩)
+    · rw [equal']; exact mem_splits
+    · exact mem_keyed.mpr (.inr ⟨envelope, _, delivered', target, rfl, rfl⟩)
+    · rw [matched.1]
+      obtain ⟨event'', -, -⟩ := delivery_shape (state := state) (processId := processId)
+        (task := task') (envelope := envelope) (rest := rest)
+      rw [event'', event]
+    · obtain ⟨-, tasksMatch, finishedMatch, exhaustedMatch, stateMatch⟩ := matched
+      obtain ⟨-, noExhaust', shape'⟩ := delivery_shape (state := state) (processId := processId)
+        (task := task') (envelope := envelope) (rest := rest)
+      simp only [Transition.apply, Move.config, Move.tasks, stateMatch, tasksMatch, finishedMatch,
+        exhaustedMatch, noExhaust', noExhaust]
+      rcases shape' with ⟨tasksEq', finishedEq', -⟩ | ⟨tasksEq', -, -⟩
+      · have : (task.delivery state processId envelope rest).tasks.isEmpty = false := by
+          rw [← exitsSame task', tasksEq']; rfl
+        rcases shape with ⟨-, finishedEq, -⟩ | ⟨tasksEq, -, -⟩
+        · simp [tasksEq', finishedEq', finishedEq, this, equal']
+        · simp [tasksEq] at this
+      · have : (task.delivery state processId envelope rest).tasks.isEmpty = true := by
+          rw [← exitsSame task', tasksEq']; rfl
+        simp only [this, ↓reduceIte] at supports
+        simp only [Supports, ↓reduceIte, Option.isSome_some, found',
+          lookup_of_mem wellformed.1 mem, Option.some.injEq] at supports
+        subst supports
+        simp only [tasksEq', ↓reduceIte, List.append_nil, List.isEmpty_nil]
+        rw [equal', replace_split (equal' ▸ wellformed'.1)]
+        simp
+  · intro entry added; simp at added
+  · intro processId' owner notAdded
+    split at owner
+    · rename_i empty
+      cases owner
+      rw [← Effect.processes_apply, ← stateEq]
+      rcases shape with ⟨tasksEq, -, -⟩ | ⟨-, dead, -⟩
+      · simp [tasksEq] at empty
+      · exact dead
+    · cases owner
+  · intro processId' watched
+    cases watched
+    exact ⟨_, target ▸ Footprint.delivery_observes⟩
+  · intro reported
+    rcases shape with ⟨-, finishedEq, -⟩ | ⟨tasksEq, -, -⟩
+    · simp [finishedEq] at reported
+    · have possible : task.delivery state processId envelope rest ∈ task.transitions state processId := by
+        simp only [Task.transitions, Task.deliveries, List.mem_append, List.mem_filterMap]
+        refine .inr ⟨(envelope, rest), delivered, ?_⟩
+        simp [target]
+      obtain ⟨-, notQuiet⟩ := finished_facts possible reported
+      exact ⟨processId, task, by simp [tasksEq], by simp, lookup_of_mem wellformed.1 mem, notQuiet⟩
+
+private theorem bounce_moves {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool}
+    {envelope : Envelope} {rest : List Envelope}
+    (delivered : (envelope, rest) ∈ deliverable state.inTransit) :
+    Moves (.bounce envelope.source envelope.target) (Footprint.bounce envelope) state tasks
+      finished exhausted (.bounce envelope)
+      (.running ({ state with inTransit := rest }.bounce envelope) tasks finished exhausted)
+      { event := .bounce envelope, effect := (Footprint.bounce envelope).effect } := by
+  obtain ⟨-, -, -, stateEq⟩ := bounce_matches (other := state) delivered (Observes.Agree.refl _ state)
+  refine ⟨rfl, rfl, ?_, ?_, (fun _ found => by cases found), (fun _ added => by simp at added),
+    (fun _ found => by cases found), ?_, (fun reported => by simp at reported),
+    fun nonempty => absurd rfl nonempty⟩
+  · simp [Move.config, Move.tasks, stateEq]
+  · intro state' tasks' finished' exhausted' _ agree supports
+    obtain ⟨-, delivered', stateEq', -⟩ := bounce_matches delivered agree
+    have dead : (tasks'.lookup envelope.target).isSome = false := by
+      simp only [Supports] at supports; simp [supports]
+    refine mem_steps.mpr (.inr (.inl ⟨envelope, _, delivered', dead, rfl, rfl, ?_⟩))
+    simp [Move.config, Move.tasks, stateEq']
+  · intro processId watched
+    cases watched
+    exact ⟨ProcessState.live, by simp [Footprint.bounce]⟩
+
+private theorem fire_moves {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {timer : Timer}
+    (firing : timer ∈ state.firing) :
+    Moves (.fire timer.reference) (Footprint.fire timer) state tasks finished exhausted
+      (.fire timer.reference) (.running (state.fire timer) tasks finished exhausted)
+      { event := .fire timer.reference, effect := (Footprint.fire timer).effect } := by
+  refine ⟨rfl, rfl, ?_, ?_, (fun _ found => by cases found), (fun _ added => by simp at added),
+    (fun _ found => by cases found), (fun _ watched => by cases watched),
+    (fun reported => by simp at reported), fun nonempty => absurd rfl nonempty⟩
+  · simp [Move.config, Move.tasks, (fire_matches firing (Observes.Agree.refl _ state)).2]
+  · intro state' tasks' finished' exhausted' _ agree _
+    obtain ⟨firing', stateEq⟩ := fire_matches firing agree
+    refine mem_steps.mpr (.inr (.inr ⟨timer, firing', rfl, rfl, ?_⟩))
+    simp [Move.config, Move.tasks, stateEq]
+
+private theorem oldest_iff {source target : PID} {inTransit : List Envelope} {envelope : Envelope} :
+    oldest source target inTransit = [envelope] ↔
+      inTransit.find? (Envelope.between source target) = some envelope := by
+  simp only [oldest]
+  cases inTransit.find? (Envelope.between source target) <;> simp
+
+private theorem between_of_find {source target : PID} {inTransit : List Envelope} {envelope : Envelope}
+    (found : inTransit.find? (Envelope.between source target) = some envelope) :
+    envelope.source = source ∧ envelope.target = target := by
+  have := List.find?_some found
+  simpa [Envelope.between] using this
+
+/-- The step with a key, as a move. -/
+private theorem moves {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key : Key}
+    {event : Event} {next : Config α} {footprint : Footprint}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
+    (found : (Config.running state tasks finished exhausted).footprint key = some footprint) :
+    ∃ move, Moves key footprint state tasks finished exhausted event next move := by
+  rw [mem_steps] at mem
+  rcases mem with ⟨before, processId, task, after, transition, split, keyed, rfl, rfl⟩ |
+    ⟨envelope, rest, delivered, dead, rfl, rfl, rfl⟩ | ⟨timer, firing, rfl, rfl, rfl⟩
+  · have lookup : tasks.lookup processId = some task :=
+      lookup_of_mem wellformed.1 (by rw [eq_of_mem_splits split]; simp)
+    rw [mem_keyed] at keyed
+    rcases keyed with ⟨index, rfl, own⟩ | ⟨envelope, rest, delivered, target, rfl, rfl⟩
+    · have bound : index < (task.own state processId).length := by
+        have := List.getElem?_eq_some_iff.mp own; exact this.1
+      simp only [Config.footprint, lookup, bound, ↓reduceIte, Option.some.injEq] at found
+      subst found
+      exact ⟨_, own_moves wellformed split own⟩
+    · have oldestFound := oldest_iff.mp (mem_deliverable_iff.mp delivered).1
+      rw [target] at oldestFound
+      simp only [Config.footprint, lookup, oldestFound, Option.some.injEq] at found
+      subst found
+      exact ⟨_, deliver_moves wellformed split delivered target⟩
+  · have oldestFound := oldest_iff.mp (mem_deliverable_iff.mp delivered).1
+    have missing : tasks.lookup envelope.target = none := by simpa using dead
+    simp only [Config.footprint, missing, oldestFound, Option.some.injEq] at found
+    subst found
+    exact ⟨_, bounce_moves delivered⟩
+  · have timerFound : state.timers.find? (·.reference == timer.reference) = some timer := by
+      have := mem_firing_iff.mp firing
+      simp only [firstTimer] at this
+      cases equal : state.timers.find? (·.reference == timer.reference) <;> simp_all
+    simp only [Config.footprint, timerFound, Option.some.injEq] at found
+    subst found
+    exact ⟨_, fire_moves firing⟩
+
+/-- A key with a footprint names a step. -/
+private theorem enabled {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key : Key}
+    {footprint : Footprint}
+    (found : (Config.running state tasks finished exhausted).footprint key = some footprint) :
+    ∃ event next, (key, event, next) ∈ (Config.running state tasks finished exhausted).steps := by
+  cases key with
+  | own processId index =>
+    simp only [Config.footprint] at found
+    split at found
+    · rename_i task lookup
+      split at found
+      · rename_i bound
+        obtain ⟨before, after, equal⟩ := split_of_lookup lookup
+        exact ⟨_, _, mem_steps.mpr (.inl ⟨before, processId, task, after, _, by rw [equal]; exact mem_splits,
+          mem_keyed.mpr (.inl ⟨index, rfl, List.getElem?_eq_getElem bound⟩), rfl, rfl⟩)⟩
+      · simp at found
+    · simp at found
+  | deliver source target =>
+    simp only [Config.footprint] at found
+    split at found
+    · rename_i task envelope lookup oldestFound
+      obtain ⟨before, after, equal⟩ := split_of_lookup lookup
+      obtain ⟨rfl, rfl⟩ := between_of_find oldestFound
+      have delivered : (envelope, arrive envelope.source envelope.target state.inTransit) ∈
+          deliverable state.inTransit := mem_deliverable_iff.mpr ⟨oldest_iff.mpr oldestFound, rfl⟩
+      exact ⟨_, _, mem_steps.mpr (.inl ⟨before, envelope.target, task, after, _,
+        by rw [equal]; exact mem_splits, mem_keyed.mpr (.inr ⟨envelope, _, delivered, rfl, rfl, rfl⟩),
+        rfl, rfl⟩)⟩
+    · simp at found
+  | bounce source target =>
+    simp only [Config.footprint] at found
+    split at found
+    · rename_i envelope lookup oldestFound
+      obtain ⟨rfl, rfl⟩ := between_of_find oldestFound
+      have delivered : (envelope, arrive envelope.source envelope.target state.inTransit) ∈
+          deliverable state.inTransit := mem_deliverable_iff.mpr ⟨oldest_iff.mpr oldestFound, rfl⟩
+      exact ⟨_, _, mem_steps.mpr (.inr (.inl ⟨envelope, _, delivered, by simp [lookup], rfl, rfl, rfl⟩))⟩
+    · simp at found
+  | fire reference =>
+    simp only [Config.footprint] at found
+    split at found
+    · rename_i timer timerFound
+      have same : timer.reference = reference := by simpa using List.find?_some timerFound
+      subst same
+      have firing : timer ∈ state.firing := mem_firing_iff.mpr (by simp [firstTimer, timerFound])
+      exact ⟨_, _, mem_steps.mpr (.inr (.inr ⟨timer, firing, rfl, rfl, rfl⟩))⟩
+    · simp at found
+
+/-- An effect keeping what a step observes keeps whether observed processes are live. -/
+private theorem Effect.live_of_keeps {effect : Effect} {observes : Observes} {state : State}
+    {processId : PID} {view : ProcessState → ProcessState}
+    (keeps : effect.keeps observes state = true) (mem : (processId, view) ∈ observes.records) :
+    (effect.record processId (state.processes processId)).isSome = (state.processes processId).isSome := by
+  have := (Effect.agree_of_keeps keeps).1 _ mem
+  have := congrArg Option.isSome this
+  simpa using this
+
+private theorem task_of_footprint {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key : Key}
+    {footprint : Footprint} {processId : PID}
+    (found : (Config.running state tasks finished exhausted).footprint key = some footprint)
+    (process : key.process = some processId) : (tasks.lookup processId).isSome := by
+  cases key with
+  | own processId' index =>
+    cases process
+    simp only [Config.footprint] at found
+    split at found <;> simp_all
+  | deliver source target =>
+    cases process
+    simp only [Config.footprint] at found
+    split at found <;> simp_all
+  | _ => cases process
+
+private theorem missing_of_footprint {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {source target : PID}
+    {footprint : Footprint}
+    (found : (Config.running state tasks finished exhausted).footprint (.bounce source target) =
+      some footprint) : tasks.lookup target = none := by
+  simp only [Config.footprint] at found
+  split at found
+  · assumption
+  · simp at found
+
+private theorem index_of_footprint {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {processId : PID}
+    {index : Nat} {footprint : Footprint}
+    (found : (Config.running state tasks finished exhausted).footprint (.own processId index) =
+      some footprint) : index = 0 := by
+  simp only [Config.footprint] at found
+  split at found
+  · split at found
+    · rename_i bound
+      have := Task.own_length (state := state) (processId := processId) (task := by assumption)
+      omega
+    · simp at found
+  · simp at found
+
+private theorem live_of_lookup {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {processId : PID}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (found : (tasks.lookup processId).isSome) : (state.processes processId).isSome := by
+  obtain ⟨task, found⟩ := Option.isSome_iff_exists.mp found
+  exact wellformed.2.2.1 _ (mem_of_lookup found)
+
+private theorem mem_of_isSome {tasks : List (PID × Task α)} {processId : PID}
+    (found : (tasks.lookup processId).isSome) : processId ∈ tasks.map Prod.fst := by
+  obtain ⟨task, found⟩ := Option.isSome_iff_exists.mp found
+  exact List.mem_map_of_mem (f := Prod.fst) (mem_of_lookup found)
+
+private theorem dead_of_missing {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {processId : PID}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (missing : tasks.lookup processId = none) : state.processes processId = none := by
+  cases alive : state.processes processId with
+  | none => rfl
+  | some _ =>
+    have := wellformed.2.2.2.2 processId (by simp [alive])
+    simp only [List.mem_map, Prod.exists, exists_and_right, exists_eq_right] at this
+    obtain ⟨task, mem⟩ := this
+    have := lookup_of_mem wellformed.1 mem
+    simp_all
+
+private theorem lookup_replace_self {processId : PID} {replacement tasks : List (PID × Task α)}
+    (distinct : tasks.Pairwise fun first second => first.1 ≠ second.1)
+    (present : processId ∈ tasks.map Prod.fst) :
+    (replace processId replacement tasks).lookup processId = replacement.lookup processId := by
+  simp only [List.mem_map, Prod.exists, exists_and_right, exists_eq_right] at present
+  obtain ⟨task, mem⟩ := present
+  obtain ⟨before, after, rfl⟩ := List.append_of_mem mem
+  rw [replace_split distinct]
+  rw [List.pairwise_append, List.pairwise_cons] at distinct
+  have missing : before.lookup processId = none := lookup_none fun found => by
+    simp only [List.mem_map, Prod.exists, exists_and_right, exists_eq_right] at found
+    obtain ⟨task', mem'⟩ := found
+    exact distinct.2.2 _ mem' (processId, task) (by simp) rfl
+  have missing' : after.lookup processId = none := lookup_none fun found => by
+    simp only [List.mem_map, Prod.exists, exists_and_right, exists_eq_right] at found
+    obtain ⟨task', mem'⟩ := found
+    exact distinct.2.1.1 _ mem' rfl
+  rw [List.lookup_append, List.lookup_append, missing, missing']
+  cases replacement.lookup processId <;> rfl
+
+/-- Two processes of a well-formed configuration do not both report the result. -/
+private theorem quiet_of_distinct {tasks : List (PID × Task α)} {processId other : PID}
+    {task task' : Task α} (distinct : tasks.Pairwise fun first second => first.1 ≠ second.1)
+    (quiet : tasks.Pairwise fun first second => first.2.Quiet ∨ second.2.Quiet)
+    (found : tasks.lookup processId = some task) (found' : tasks.lookup other = some task')
+    (ne : processId ≠ other) : task.Quiet ∨ task'.Quiet := by
+  have mem := mem_of_lookup found
+  have mem' := mem_of_lookup found'
+  induction tasks with
+  | nil => simp at mem
+  | cons head rest ih =>
+    rw [List.pairwise_cons] at distinct quiet
+    simp only [List.mem_cons] at mem mem'
+    rcases mem with rfl | mem <;> rcases mem' with equal | mem'
+    · simp only [Prod.mk.injEq] at equal; exact absurd equal.1.symm ne
+    · exact quiet.1 _ mem'
+    · subst equal; exact (quiet.1 _ mem).symm
+    · have lookup := lookup_of_mem distinct.2 mem
+      have lookup' := lookup_of_mem distinct.2 mem'
+      exact ih distinct.2 quiet.2 lookup lookup' (mem_of_lookup lookup) (mem_of_lookup lookup')
+
+private theorem watched_of_process {key : Key} {processId : PID}
+    (process : key.process = some processId) : key.watched = some processId := by
+  cases key <;> simp_all [Key.process, Key.watched]
+
+private theorem isSome_lookup {entries : List (PID × γ)} {processId : PID}
+    (mem : processId ∈ entries.map Prod.fst) : (entries.lookup processId).isSome := by
+  induction entries with
+  | nil => simp at mem
+  | cons head rest ih =>
+    obtain ⟨processId', item⟩ := head
+    simp only [List.map_cons, List.mem_cons] at mem
+    simp only [List.lookup]
+    split
+    · rfl
+    · rename_i different
+      rcases mem with rfl | mem
+      · simp at different
+      · exact ih mem
+
+/-- Two independent steps of a well-formed configuration, as moves. -/
+private structure Pair (state : State) (tasks : List (PID × Task α))
+    (finished : Option (Except Exception α × Environment)) (exhausted : Bool) (key key' : Key)
+    (footprint footprint' : Footprint) (move move' : Move α) : Prop where
+  wellformed : Wellformed (.running state tasks finished exhausted)
+  found : (Config.running state tasks finished exhausted).footprint key = some footprint
+  found' : (Config.running state tasks finished exhausted).footprint key' = some footprint'
+  moved : ∃ event next, Moves key footprint state tasks finished exhausted event next move
+  moved' : ∃ event next, Moves key' footprint' state tasks finished exhausted event next move'
+  distinct : key ≠ key'
+  keeps : footprint.effect.keeps footprint'.observes state = true
+  keeps' : footprint'.effect.keeps footprint.observes state = true
+
+private theorem Pair.symm {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {footprint footprint' : Footprint} {move move' : Move α}
+    (pair : Pair state tasks finished exhausted key key' footprint footprint' move move') :
+    Pair state tasks finished exhausted key' key footprint' footprint move' move :=
+  ⟨pair.wellformed, pair.found', pair.found, pair.moved', pair.moved, Ne.symm pair.distinct, pair.keeps',
+    pair.keeps⟩
+
+/-- A move ending a process changes what any step observing it observes. -/
+private theorem Pair.not_ends {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {footprint footprint' : Footprint} {move move' : Move α}
+    (pair : Pair state tasks finished exhausted key key' footprint footprint' move move')
+    {processId : PID} (owner : move.owner = some processId)
+    (watched : key'.watched = some processId) : processId ∈ move.replacement.map Prod.fst := by
+  obtain ⟨_, _, moved⟩ := pair.moved
+  obtain ⟨_, _, moved'⟩ := pair.moved'
+  have present := task_of_footprint pair.found (moved.owner processId owner)
+  have live := live_of_lookup pair.wellformed present
+  by_cases added : processId ∈ move.replacement.map Prod.fst
+  · exact added
+  exfalso
+  have notAdded := added
+  obtain ⟨view, mem⟩ := moved'.observed processId watched
+  have := Effect.live_of_keeps pair.keeps mem
+  rw [moved.ends processId owner notAdded, live] at this
+  simp at this
+
+/-- After a move, the other step's process has the task it needs. -/
+private theorem Pair.supports {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {footprint footprint' : Footprint} {move move' : Move α}
+    (pair : Pair state tasks finished exhausted key key' footprint footprint' move move') :
+    Supports key' move' tasks (move.tasks tasks) := by
+  obtain ⟨_, _, moved⟩ := pair.moved
+  obtain ⟨_, _, moved'⟩ := pair.moved'
+  have wellformed := pair.wellformed
+  cases owner : move.owner with
+  | none =>
+    have same : move.tasks tasks = tasks := by simp [Move.tasks, owner]
+    rw [same]
+    cases key' with
+    | own => rfl
+    | deliver source target =>
+      simp only [Supports]
+      split
+      · trivial
+      · exact task_of_footprint pair.found' rfl
+    | bounce => exact missing_of_footprint pair.found'
+    | fire => trivial
+  | some processId =>
+    have process := moved.owner processId owner
+    have present := task_of_footprint pair.found process
+    have fresh : ∀ other ∈ move.replacement.map Prod.fst, other ≠ processId →
+        other ∉ tasks.map Prod.fst ∧ (footprint.effect.record other none).isSome := by
+      intro other mem ne
+      simp only [List.mem_map] at mem
+      obtain ⟨entry, mem, rfl⟩ := mem
+      rcases moved.replaced entry mem with same | fresh
+      · rw [process] at same; cases same; exact absurd rfl ne
+      · exact fresh
+    have unchanged : ∀ other, other ≠ processId → other ∈ tasks.map Prod.fst →
+        (move.tasks tasks).lookup other = tasks.lookup other := by
+      intro other ne mem
+      simp only [Move.tasks, owner]
+      exact lookup_replace ne fun added => (fresh other added ne).1 mem
+    have kept : processId ∈ move.replacement.map Prod.fst →
+        ((move.tasks tasks).lookup processId).isSome := by
+      intro added
+      simp only [Move.tasks, owner]
+      rw [lookup_replace_self wellformed.1 (mem_of_isSome present)]
+      exact isSome_lookup added
+    cases key' with
+    | own other index =>
+      simp only [Supports]
+      have present' := task_of_footprint pair.found' (rfl : Key.process (.own other index) = some other)
+      by_cases same : other = processId
+      · subst same
+        exfalso
+        have added := pair.not_ends owner rfl
+        obtain ⟨processId', index', equal⟩ := moved.replacing (List.ne_nil_of_mem
+          (List.mem_map.mp added).choose_spec.1)
+        subst equal
+        cases process
+        have := index_of_footprint pair.found
+        have := index_of_footprint pair.found'
+        exact pair.distinct (by subst_vars; rfl)
+      · exact unchanged other same (mem_of_isSome present')
+    | deliver source target =>
+      simp only [Supports]
+      have present' := task_of_footprint pair.found' (rfl : Key.process (.deliver source target) = some target)
+      by_cases same : target = processId
+      · subst same
+        have added := pair.not_ends owner rfl
+        split
+        · exfalso
+          rename_i ending
+          obtain ⟨target', owner'⟩ := Option.isSome_iff_exists.mp ending
+          have process' := moved'.owner target' owner'
+          simp only [Key.process, Option.some.injEq] at process'
+          subst process'
+          have empty : move'.replacement = [] := by
+            cases replaced : move'.replacement with
+            | nil => rfl
+            | cons head rest =>
+              obtain ⟨_, _, equal⟩ := moved'.replacing (by simp [replaced])
+              cases equal
+          have := pair.symm.not_ends owner' (watched_of_process process)
+          simp [empty] at this
+        · exact kept added
+      · have := unchanged target same (mem_of_isSome present')
+        split
+        · exact this
+        · rw [this]; exact present'
+    | bounce source target =>
+      simp only [Supports]
+      have missing := missing_of_footprint pair.found'
+      have dead := dead_of_missing wellformed missing
+      have ne : target ≠ processId := fun same => by subst same; simp [missing] at present
+      have notAdded : target ∉ move.replacement.map Prod.fst := fun mem => by
+        obtain ⟨-, created⟩ := fresh target mem ne
+        obtain ⟨view, observed⟩ := moved'.observed target rfl
+        have := Effect.live_of_keeps pair.keeps observed
+        rw [dead] at this
+        simp_all
+      simp only [Move.tasks, owner]
+      rw [lookup_replace ne notAdded, missing]
+    | fire => trivial
+
+/-- Independent moves change the tasks in either order to the same tasks. -/
+private theorem Pair.tasks_comm {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {footprint footprint' : Footprint} {move move' : Move α}
+    (pair : Pair state tasks finished exhausted key key' footprint footprint' move move') :
+    move.tasks (move'.tasks tasks) = move'.tasks (move.tasks tasks) := by
+  obtain ⟨_, _, moved⟩ := pair.moved
+  obtain ⟨_, _, moved'⟩ := pair.moved'
+  cases owner : move.owner with
+  | none => simp [Move.tasks, owner]
+  | some processId =>
+    cases owner' : move'.owner with
+    | none => simp [Move.tasks, owner, owner']
+    | some other =>
+      simp only [Move.tasks, owner, owner']
+      have process := moved.owner processId owner
+      have process' := moved'.owner other owner'
+      have present := task_of_footprint pair.found process
+      have present' := task_of_footprint pair.found' process'
+      by_cases same : processId = other
+      · exfalso
+        subst same
+        have added := pair.not_ends owner (watched_of_process process')
+        have added' := pair.symm.not_ends owner' (watched_of_process process)
+        obtain ⟨_, index, equal⟩ := moved.replacing (List.ne_nil_of_mem
+          (List.mem_map.mp added).choose_spec.1)
+        obtain ⟨_, index', equal'⟩ := moved'.replacing (List.ne_nil_of_mem
+          (List.mem_map.mp added').choose_spec.1)
+        subst equal equal'
+        simp only [Key.process, Option.some.injEq] at process process'
+        subst process process'
+        have := index_of_footprint pair.found
+        have := index_of_footprint pair.found'
+        exact pair.distinct (by subst_vars; rfl)
+      · apply replace_comm same
+        · intro added
+          rcases List.mem_map.mp added with ⟨entry, mem, equal⟩
+          rcases moved.replaced entry mem with same' | fresh
+          · rw [process, equal] at same'; cases same'; exact same rfl
+          · exact fresh.1 (equal ▸ mem_of_isSome present')
+        · intro added
+          rcases List.mem_map.mp added with ⟨entry, mem, equal⟩
+          rcases moved'.replaced entry mem with same' | fresh
+          · rw [process', equal] at same'; cases same'; exact same rfl
+          · exact fresh.1 (equal ▸ mem_of_isSome present)
+
+/-- At most one of two independent moves reports the result. -/
+private theorem Pair.quiet {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {footprint footprint' : Footprint} {move move' : Move α}
+    (pair : Pair state tasks finished exhausted key key' footprint footprint' move move') :
+    move.finished = none ∨ move'.finished = none := by
+  obtain ⟨_, _, moved⟩ := pair.moved
+  obtain ⟨_, _, moved'⟩ := pair.moved'
+  cases reported : move.finished with
+  | none => exact .inl rfl
+  | some _ =>
+    cases reported' : move'.finished with
+    | none => exact .inr rfl
+    | some _ =>
+      exfalso
+      obtain ⟨processId, task, owner, notAdded, found, notQuiet⟩ := moved.reports (by simp [reported])
+      obtain ⟨other, task', owner', -, found', notQuiet'⟩ := moved'.reports (by simp [reported'])
+      by_cases same : processId = other
+      · subst same
+        exact notAdded (pair.not_ends owner (watched_of_process (moved'.owner _ owner')))
+      · rcases quiet_of_distinct pair.wellformed.1 pair.wellformed.2.2.2.1 found found' same with
+          quiet | quiet
+        · exact notQuiet quiet
+        · exact notQuiet' quiet
+
+private theorem Step.of_mem_steps {config next : Config α} {key : Key} {event : Event}
+    (mem : (key, event, next) ∈ config.steps) : Step config event next := by
+  cases config with
+  | start => simp [Config.steps] at mem
+  | running state tasks finished exhausted =>
+    simp only [Step, ← Config.steps_running]
+    exact List.mem_map.mpr ⟨_, mem, rfl⟩
+
+private theorem orElse_comm {first second rest : Option γ} (none : first = none ∨ second = none) :
+    (first.orElse fun _ => second.orElse fun _ => rest) =
+      second.orElse fun _ => first.orElse fun _ => rest := by
+  rcases none with rfl | rfl
+  · cases second <;> rfl
+  · cases first <;> rfl
+
+/-- Independent steps commute: when one step follows another, it can also be
+taken first, followed by the other. -/
+private theorem diamond {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {event event' : Event} {next next' : Config α}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
+    (independent : (Config.running state tasks finished exhausted).independent key' key = true)
+    (mem' : (key', event', next') ∈ next.steps) :
+    ∃ next'', (key', event', next'') ∈ (Config.running state tasks finished exhausted).steps ∧
+      Step next'' event next' := by
+  simp only [Config.independent, Bool.and_eq_true, bne_iff_ne, ne_eq] at independent
+  obtain ⟨distinct, independent⟩ := independent
+  split at independent
+  · rename_i footprint' footprint found' found
+    simp only [Footprint.independent, Bool.and_eq_true] at independent
+    obtain ⟨⟨keeps', keeps⟩, commutes⟩ := independent
+    obtain ⟨move, moved⟩ := moves wellformed mem found
+    obtain ⟨event₀, next₀, mem₀⟩ := enabled found'
+    obtain ⟨move', moved'⟩ := moves wellformed mem₀ found'
+    have pair : Pair state tasks finished exhausted key key' footprint footprint' move move' :=
+      ⟨wellformed, found, found', ⟨_, _, moved⟩, ⟨_, _, moved'⟩, Ne.symm distinct, keeps, keeps'⟩
+    -- The other step, after the key's step, is the move it makes from there.
+    have wellformedNext := Step.wellformed (Step.of_mem_steps mem) wellformed
+    rw [moved.next] at wellformedNext mem'
+    have transferred := moved'.transfer _ _ _ _ wellformedNext
+      (by rw [moved.effect]; exact Effect.agree_of_keeps keeps) pair.supports
+    obtain ⟨rfl, rfl⟩ := steps_unique wellformedNext mem' transferred
+    -- The key's step, after the other step, is the move it makes from there.
+    have wellformed₀ := Step.wellformed (Step.of_mem_steps mem₀) wellformed
+    rw [moved'.next] at wellformed₀ mem₀
+    have back := moved.transfer _ _ _ _ wellformed₀
+      (by rw [moved'.effect]; exact Effect.agree_of_keeps keeps') pair.symm.supports
+    refine ⟨_, by rw [moved'.event] at mem₀; exact mem₀, ?_⟩
+    rw [moved.event]
+    have same : move.config (move'.effect.apply state) (move'.tasks tasks)
+        (move'.finished.orElse fun _ => finished) (exhausted || move'.exhausted) =
+        move'.config (move.effect.apply state) (move.tasks tasks)
+          (move.finished.orElse fun _ => finished) (exhausted || move.exhausted) := by
+      simp only [Move.config]
+      rw [moved.effect, moved'.effect, Effect.apply_comm commutes, pair.tasks_comm,
+        orElse_comm pair.quiet]
+      congr 1
+      cases exhausted <;> cases move.exhausted <;> cases move'.exhausted <;> rfl
+    rw [← same]
+    exact Step.of_mem_steps back
+  · simp at independent
+
+/-! ### Exploration
+
+For a closed program, every run can be enumerated: `Config.steps` lists each
+step, and `check` follows them. Of runs that differ only in the order of steps
+that commute (`Config.independent`), it follows one: a step is followed with
+the steps that commute with it and were followed before it asleep, as runs
+taking those first are covered elsewhere. Proving `check` by evaluation
+establishes a property for every schedule (see `Lynx.concurrent_of_check`). -/
+
+/-- Follow every step not asleep. Each step is followed with the steps asleep
+and the steps followed before it that commute with it asleep. -/
+@[expose] def explore (visit : List Key → Config α → Bool) (independent : Key → Key → Bool)
+    (sleep : List Key) : List Key → List (Key × Event × Config α) → Bool
+  | _, [] => true
+  | done, (key, _, next) :: rest =>
+      if sleep.contains key then explore visit independent sleep done rest
+      else visit ((sleep ++ done).filter (independent · key)) next &&
+        explore visit independent sleep (done ++ [key]) rest
+
+/-- Whether every run from the configuration ends in an accepted outcome,
+following at most `depth` steps along each run, where runs taking a step
+asleep first are covered elsewhere. -/
+@[expose] def checkFrom (accept : Outcome α → Bool) : Nat → List Key → Config α → Bool
+  | 0, _, _ => false
+  | depth + 1, sleep, config =>
+      match config.steps with
+      | [] =>
+          match config.successors with
+          | [] => accept config.outcome
+          | successors => successors.all fun (_, next) => checkFrom accept depth [] next
+      | steps => explore (checkFrom accept depth) config.independent sleep [] steps
+
+/-- Whether every run from the configuration ends in an accepted outcome,
+following at most `depth` steps along each run. -/
+@[expose] def check (accept : Outcome α → Bool) (depth : Nat) (config : Config α) : Bool :=
+  checkFrom accept depth [] config
+
+/-- How a run that `check` rejects fails. -/
+inductive Failure (α : Type) where
+  /-- The run ends in an outcome that is not accepted. -/
+  | rejected : Outcome α → Failure α
+  /-- The run takes more steps than the depth allows. -/
+  | unfinished : Failure α
+
+/-- The first run that `explore` finds. -/
+@[expose] def exploreFind (visit : List Key → Config α → Option (List Event × β))
+    (independent : Key → Key → Bool) (sleep : List Key) :
+    List Key → List (Key × Event × Config α) → Option (List Event × β)
+  | _, [] => none
+  | done, (key, event, next) :: rest =>
+      if sleep.contains key then exploreFind visit independent sleep done rest
+      else match visit ((sleep ++ done).filter (independent · key)) next with
+        | some (events, failure) => some (event :: events, failure)
+        | none => exploreFind visit independent sleep (done ++ [key]) rest
+
+/-- The first run that `checkFrom` rejects. -/
+@[expose] def counterexampleFrom (accept : Outcome α → Bool) :
+    Nat → List Key → Config α → Option (List Event × Failure α)
+  | 0, _, _ => some ([], .unfinished)
+  | depth + 1, sleep, config =>
+      match config.steps with
+      | [] =>
+          match config.successors with
+          | [] => if accept config.outcome then none else some ([], .rejected config.outcome)
+          | successors => successors.findSome? fun (event, next) =>
+              (counterexampleFrom accept depth [] next).map fun (events, failure) =>
+                (event :: events, failure)
+      | steps => exploreFind (counterexampleFrom accept depth) config.independent sleep [] steps
+
+/-- The first run that `check` rejects, as the events of its steps and how it
+fails. Evaluating it is a fast way to find why a check fails. -/
+@[expose] def counterexample (accept : Outcome α → Bool) (depth : Nat) (config : Config α) :
+    Option (List Event × Failure α) :=
+  counterexampleFrom accept depth [] config
+
+/-- A configuration reaches another. -/
+private def Reaches (first last : Config α) : Prop := ∃ events, Run first events last
+
+private theorem Reaches.step {first next last : Config α} {event : Event}
+    (step : Step first event next) (reaches : Reaches next last) : Reaches first last :=
+  let ⟨events, run⟩ := reaches; ⟨event :: events, .step step run⟩
+
+/-- `explore` follows a step from which the run continues, with a sleep set
+that excludes the run: steps asleep before it cannot start the run, and of
+the steps it follows first, none starts it. -/
+private theorem explore_sound {visit : List Key → Config α → Bool}
+    {independent : Key → Key → Bool} {sleep : List Key} {steps : List (Key × Event × Config α)}
+    {last : Config α} {goal : Prop}
+    (visited : ∀ key event next, (key, event, next) ∈ steps → ∀ sleep', visit sleep' next = true →
+      Reaches next last →
+      (∀ key' ∈ sleep', ∀ event' next', (key', event', next') ∈ next.steps → ¬Reaches next' last) →
+      goal)
+    (diamond : ∀ key event next, (key, event, next) ∈ steps → ∀ key', independent key' key = true →
+      ∀ event' next', (key', event', next') ∈ next.steps →
+        ∃ next'', (key', event', next'') ∈ steps ∧ Step next'' event next')
+    (unique : ∀ key event event' next next', (key, event, next) ∈ steps →
+      (key, event', next') ∈ steps → next = next')
+    (asleep : ∀ key ∈ sleep, ∀ event next, (key, event, next) ∈ steps → ¬Reaches next last)
+    (first : ∃ key event next, (key, event, next) ∈ steps ∧ Reaches next last)
+    (explored : explore visit independent sleep [] steps = true) : goal := by
+  suffices ∀ (earlier rest : List (Key × Event × Config α)) (done : List Key), steps = earlier ++ rest →
+      (∀ key ∈ done, ∃ event next, (key, event, next) ∈ earlier) →
+      (∀ key event next, (key, event, next) ∈ earlier → key ∉ sleep → ¬Reaches next last) →
+      explore visit independent sleep done rest = true → goal from
+    this [] steps [] rfl (by simp) (by simp) explored
+  intro earlier rest
+  induction rest generalizing earlier with
+  | nil =>
+    intro done equal _ unreached _
+    obtain ⟨key, event, next, mem, reaches⟩ := first
+    simp only [List.append_nil] at equal
+    subst equal
+    by_cases slept : key ∈ sleep
+    · exact absurd reaches (asleep key slept event next mem)
+    · exact absurd reaches (unreached key event next mem slept)
+  | cons step rest ih =>
+    obtain ⟨key, event, next⟩ := step
+    intro done equal found unreached explored
+    have mem : (key, event, next) ∈ steps := by rw [equal]; simp
+    have extend : steps = (earlier ++ [(key, event, next)]) ++ rest := by rw [equal]; simp
+    simp only [explore] at explored
+    split at explored
+    · rename_i slept
+      refine ih _ done extend (fun key mem => ?_) (fun key' event' next' mem' out => ?_) explored
+      · obtain ⟨event, next, mem⟩ := found key mem; exact ⟨event, next, by simp [mem]⟩
+      · simp only [List.mem_append, List.mem_singleton, Prod.mk.injEq] at mem'
+        rcases mem' with mem' | ⟨rfl, rfl, rfl⟩
+        · exact unreached _ _ _ mem' out
+        · exact absurd (List.elem_iff.mp slept) out
+    · rename_i awake
+      simp only [Bool.and_eq_true] at explored
+      by_cases reaches : Reaches next last
+      · refine visited key event next mem _ explored.1 reaches fun key' slept event' next' mem' => ?_
+        simp only [List.mem_filter, List.mem_append] at slept
+        obtain ⟨slept | finished, independent'⟩ := slept
+        · intro reaches'
+          obtain ⟨next'', mem'', step⟩ := diamond key event next mem key' independent' event' next' mem'
+          exact asleep key' slept event' next'' mem'' (Reaches.step step reaches')
+        · intro reaches'
+          obtain ⟨next'', mem'', step⟩ := diamond key event next mem key' independent' event' next' mem'
+          obtain ⟨event₀, next₀, mem₀⟩ := found key' finished
+          have same := unique key' event₀ event' next₀ next'' (by rw [equal]; simp [mem₀]) mem''
+          subst same
+          have awake' : key' ∉ sleep := fun slept => by
+            obtain ⟨event₁, next₁, mem₁⟩ := found key' finished
+            exact asleep key' slept event₁ next₁ (by rw [equal]; simp [mem₁])
+              (unique key' event₁ event₀ next₁ next₀ (by rw [equal]; simp [mem₁])
+                (by rw [equal]; simp [mem₀]) ▸ Reaches.step step reaches')
+          exact unreached key' event₀ next₀ mem₀ awake' (Reaches.step step reaches')
+      · refine ih _ _ extend (fun key' mem' => ?_) (fun key' event' next' mem' out => ?_)
+          explored.2
+        · simp only [List.mem_append, List.mem_singleton] at mem'
+          rcases mem' with mem' | rfl
+          · obtain ⟨event, next, mem⟩ := found key' mem'; exact ⟨event, next, by simp [mem]⟩
+          · exact ⟨event, next, by simp⟩
+        · simp only [List.mem_append, List.mem_singleton, Prod.mk.injEq] at mem'
+          rcases mem' with mem' | ⟨rfl, rfl, rfl⟩
+          · exact unreached _ _ _ mem' out
+          · exact reaches
+
+/-- Every step of a running configuration has a key. -/
+private theorem Step.keyed {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {event : Event}
+    {next : Config α} (step : Step (.running state tasks finished exhausted) event next) :
+    ∃ key, (key, event, next) ∈ (Config.running state tasks finished exhausted).steps := by
+  simp only [Step, ← Config.steps_running, List.mem_map] at step
+  obtain ⟨⟨key, event', next'⟩, mem, equal⟩ := step
+  simp only [Prod.mk.injEq] at equal
+  obtain ⟨rfl, rfl⟩ := equal
+  exact ⟨key, mem⟩
+
+private theorem steps_nil_of_successors {config : Config α} (none : config.successors = []) :
+    config.steps = [] := by
+  cases config with
+  | start => rfl
+  | running => rw [← List.map_eq_nil_iff, Config.steps_running, none]
+
+private theorem check_wellformed {accept : Outcome α → Bool} :
+    ∀ {depth : Nat} {sleep : List Key} {first last : Config α} {events : List Event}
+      {outcome : Outcome α},
+      Wellformed first → checkFrom accept depth sleep first = true → Run first events last →
+      Terminal last outcome →
+      (∀ key ∈ sleep, ∀ event next, (key, event, next) ∈ first.steps → ¬Reaches next last) →
+      accept outcome = true := by
+  intro depth
+  induction depth with
+  | zero => intro _ _ _ _ _ _ checked; simp [checkFrom] at checked
+  | succ depth ih =>
+    intro sleep first last events outcome wellformed checked run terminal asleep
+    unfold checkFrom at checked
+    cases found : first.steps with
+    | nil =>
+      -- No keyed steps: follow every step.
+      simp only [found] at checked
+      cases run with
+      | refl =>
+        simp only [terminal.successors_eq_nil, terminal.outcome_eq] at checked
+        exact checked
+      | step step rest =>
+        split at checked
+        · rename_i none
+          simp [Step, none] at step
+        · simp only [List.all_eq_true] at checked
+          exact ih (Step.wellformed step wellformed) (checked _ step) rest terminal (by simp)
+    | cons entry entries =>
+      simp only [found] at checked
+      rw [← found] at checked
+      cases run with
+      | refl =>
+        have := steps_nil_of_successors terminal.successors_eq_nil
+        simp [found] at this
+      | step step rest =>
+        cases first with
+        | start => simp [Config.steps] at found
+        | running state tasks finished exhausted =>
+          obtain ⟨key, mem⟩ := Step.keyed step
+          exact explore_sound (goal := accept outcome = true)
+            (fun key event next mem sleep' visited reaches asleep' =>
+              let ⟨_, run'⟩ := reaches
+              ih (Step.wellformed (Step.of_mem_steps mem) wellformed) visited run' terminal asleep')
+            (fun key event next mem key' independent event' next' mem' =>
+              diamond wellformed mem independent mem')
+            (fun key event event' next next' mem mem' => (steps_unique wellformed mem mem').2)
+            asleep ⟨key, _, _, mem, _, rest⟩ checked
+
+/-- Every run of a computation that `check` accepts ends in an accepted outcome. -/
+theorem check_sound {accept : Outcome α → Bool} {depth : Nat} {env : Environment}
+    {computation : Result α} {elapsed : PID → Nat → Nat} {last : Config α} {events : List Event}
+    {outcome : Outcome α} (checked : check accept depth (.start env computation elapsed) = true)
+    (run : Run (.start env computation elapsed) events last) (terminal : Terminal last outcome) :
+    accept outcome = true :=
+  check_wellformed (show Wellformed (Config.start env computation elapsed) from trivial) checked run
+    terminal (by simp)
 
 end Lynx.Concurrent
