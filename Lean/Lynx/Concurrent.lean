@@ -489,8 +489,8 @@ structure Transition (α : Type) : Type 1 where
   /-- Empty when the process ends; otherwise its continuation, followed by
   any process it spawned. -/
   tasks : List (PID × Task α)
-  /-- The root's result and final environment, when the root ends. -/
-  finished : Option (Except Exception α × Environment) := none
+  /-- The root's result, when the root ends. -/
+  finished : Option (Except Exception α) := none
   /-- The process did not return, so the run's outcome is `Exception.exhausted`. -/
   exhausted : Bool := false
 
@@ -499,9 +499,7 @@ the root. -/
 @[expose] def Task.ended {γ : Type} (finish : Except Exception γ → Option (Except Exception α))
     (event : Event) (state : State) (processId : PID) (reason : Term) (result : Except Exception γ) :
     Transition α :=
-  let view := state.view processId
-  { event, state := state.terminate processId reason, tasks := []
-    finished := (finish result).map (·, view) }
+  { event, state := state.terminate processId reason, tasks := [], finished := finish result }
 
 /-- The steps of a process itself: none while blocked, two for a
 positive-timeout receive without a match, one otherwise. -/
@@ -585,11 +583,11 @@ inductive Config (α : Type) : Type 1 where
   /-- Live processes in tree order, the root's result once it ends, and whether
   some process did not return. -/
   | running (state : State) (tasks : List (PID × Task α))
-      (finished : Option (Except Exception α × Environment)) (exhausted : Bool)
+      (finished : Option (Except Exception α)) (exhausted : Bool)
 
 /-- The configuration a process step leads to. -/
 @[expose] def Transition.apply (transition : Transition α) (before after : List (PID × Task α))
-    (finished : Option (Except Exception α × Environment)) (exhausted : Bool) : Config α :=
+    (finished : Option (Except Exception α)) (exhausted : Bool) : Config α :=
   .running transition.state (before ++ transition.tasks ++ after)
     (transition.finished.orElse fun _ => finished) (exhausted || transition.exhausted)
 
@@ -655,8 +653,8 @@ inductive Run {α : Type} : Config α → List Event → Config α → Prop wher
   | .start _ (.error exception) _ => .error exception
   | .start .. => .deadlock
   | .running _ _ _ true => .error .exhausted
-  | .running _ [] (some (.ok value, _)) false => .ok value
-  | .running _ [] (some (.error exception, _)) false => .error exception
+  | .running _ [] (some (.ok value)) false => .ok value
+  | .running _ [] (some (.error exception)) false => .error exception
   | .running .. => .deadlock
 
 /-- A configuration without steps, and its outcome: the root's result once

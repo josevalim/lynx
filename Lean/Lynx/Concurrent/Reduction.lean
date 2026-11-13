@@ -403,7 +403,7 @@ private theorem transition_facts {state : State} {processId : PID} {task : Task 
 /-- A process step preserves well-formedness. -/
 private theorem wellformed_apply {state : State} {before after : List (PID × Task α)}
     {processId : PID} {task : Task α} {transition : Transition α}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool}
+    {finished : Option (Except Exception α)} {exhausted : Bool}
     (wellformed : Wellformed (.running state (before ++ (processId, task) :: after) finished exhausted))
     (possible : transition ∈ task.transitions state processId) :
     Wellformed (transition.apply before after finished exhausted) := by
@@ -540,7 +540,7 @@ private theorem wellformed_apply {state : State} {before after : List (PID × Ta
 
 /-- Steps that keep every record keep well-formedness. -/
 private theorem wellformed_keeps {state state' : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool}
+    {finished : Option (Except Exception α)} {exhausted : Bool}
     (wellformed : Wellformed (.running state tasks finished exhausted)) (kept : state.Keeps state') :
     Wellformed (.running state' tasks finished exhausted) := by
   obtain ⟨distinct, fresh, live, quiet, owned⟩ := wellformed
@@ -651,7 +651,7 @@ private theorem Task.keyed_snd (state : State) (processId : PID) (task : Task α
 
 /-- Without their keys, the steps of a running configuration are its successors. -/
 private theorem Config.steps_running {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} :
+    {finished : Option (Except Exception α)} {exhausted : Bool} :
     (Config.running state tasks finished exhausted).steps.map (fun step => (step.2.1, step.2.2)) =
       (Config.running state tasks finished exhausted).successors := by
   simp only [Config.steps, Config.successors, List.map_append, List.map_flatMap, List.map_map,
@@ -810,7 +810,7 @@ private theorem mem_keyed {state : State} {processId : PID} {task : Task α} {ke
       exact ⟨envelope, rest, mem, by simp [target]⟩
 
 private theorem mem_steps {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key : Key}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key : Key}
     {event : Event} {next : Config α} :
     (key, event, next) ∈ (Config.running state tasks finished exhausted).steps ↔
       (∃ before processId task after transition, (before, (processId, task), after) ∈ splits tasks ∧
@@ -850,7 +850,7 @@ private theorem mem_steps {state : State} {tasks : List (PID × Task α)}
 
 /-- In a well-formed configuration, a key names at most one step. -/
 private theorem steps_unique {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key : Key}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key : Key}
     {event event' : Event} {next next' : Config α}
     (wellformed : Wellformed (Config.running state tasks finished exhausted))
     (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
@@ -1057,7 +1057,7 @@ private theorem finished_facts {state : State} {processId : PID} {task : Task α
           ∃ result, finish result ≠ none := by
     intro γ finish event state reason result found
     refine ⟨rfl, result, ?_⟩
-    simp only [Task.ended, Option.isSome_map] at found
+    simp only [Task.ended] at found
     simpa [Option.isSome_iff_ne_none] using found
   have quiet : ∀ {γ : Type} {computation : Result γ}
       {finish : Except Exception γ → Option (Except Exception α)},
@@ -1104,7 +1104,7 @@ private structure Move (α : Type) : Type 1 where
   effect : Effect
   owner : Option PID := none
   replacement : List (PID × Task α) := []
-  finished : Option (Except Exception α × Environment) := none
+  finished : Option (Except Exception α) := none
   exhausted : Bool := false
 
 private def Move.tasks (move : Move α) (tasks : List (PID × Task α)) : List (PID × Task α) :=
@@ -1113,7 +1113,7 @@ private def Move.tasks (move : Move α) (tasks : List (PID × Task α)) : List (
   | none => tasks
 
 private def Move.config (move : Move α) (state : State) (tasks : List (PID × Task α))
-    (finished : Option (Except Exception α × Environment)) (exhausted : Bool) : Config α :=
+    (finished : Option (Except Exception α)) (exhausted : Bool) : Config α :=
   .running (move.effect.apply state) (move.tasks tasks) (move.finished.orElse fun _ => finished)
     (exhausted || move.exhausted)
 
@@ -1141,7 +1141,7 @@ private def Supports (key : Key) (move : Move α) (tasks tasks' : List (PID × T
 /-- A keyed step as a move, which the key takes in the same way from other
 configurations agreeing on what it observes. -/
 private structure Moves (key : Key) (footprint : Footprint) (state : State)
-    (tasks : List (PID × Task α)) (finished : Option (Except Exception α × Environment))
+    (tasks : List (PID × Task α)) (finished : Option (Except Exception α))
     (exhausted : Bool) (event : Event) (next : Config α) (move : Move α) : Prop where
   effect : move.effect = footprint.effect
   event : event = move.event
@@ -1170,7 +1170,7 @@ private theorem split_of_lookup {tasks : List (PID × Task α)} {processId : PID
 
 /-- A spawned child is not among the processes. -/
 private theorem child_fresh {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool}
+    {finished : Option (Except Exception α)} {exhausted : Bool}
     {processId child : PID} {task : Task α} {transition : Transition α}
     (wellformed : Wellformed (.running state tasks finished exhausted))
     (mem : (processId, task) ∈ tasks) (possible : transition ∈ task.transitions state processId)
@@ -1185,7 +1185,7 @@ private theorem child_fresh {state : State} {tasks : List (PID × Task α)}
   omega
 
 private theorem own_moves {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool}
+    {finished : Option (Except Exception α)} {exhausted : Bool}
     {before after : List (PID × Task α)} {processId : PID} {task : Task α} {index : Nat}
     {transition : Transition α}
     (wellformed : Wellformed (.running state tasks finished exhausted))
@@ -1271,7 +1271,7 @@ private theorem delivery_shape {state : State} {processId : PID} {task : Task α
     simp [Task.ended, State.processes_terminate, State.update]
 
 private theorem deliver_moves {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool}
+    {finished : Option (Except Exception α)} {exhausted : Bool}
     {before after : List (PID × Task α)} {processId : PID} {task : Task α}
     {envelope : Envelope} {rest : List Envelope}
     (wellformed : Wellformed (.running state tasks finished exhausted))
@@ -1370,7 +1370,7 @@ private theorem deliver_moves {state : State} {tasks : List (PID × Task α)}
       exact ⟨processId, task, by simp [tasksEq], by simp, lookup_of_mem wellformed.1 mem, notQuiet⟩
 
 private theorem bounce_moves {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool}
+    {finished : Option (Except Exception α)} {exhausted : Bool}
     {envelope : Envelope} {rest : List Envelope}
     (delivered : (envelope, rest) ∈ deliverable state.inTransit) :
     Moves (.bounce envelope.source envelope.target) (Footprint.bounce envelope) state tasks
@@ -1393,7 +1393,7 @@ private theorem bounce_moves {state : State} {tasks : List (PID × Task α)}
     exact ⟨ProcessState.live, by simp [Footprint.bounce]⟩
 
 private theorem fire_moves {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {timer : Timer}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {timer : Timer}
     (firing : timer ∈ state.firing) :
     Moves (.fire timer.reference) (Footprint.fire timer) state tasks finished exhausted
       (.fire timer.reference) (.running (state.fire timer) tasks finished exhausted)
@@ -1421,7 +1421,7 @@ private theorem between_of_find {source target : PID} {inTransit : List Envelope
 
 /-- The step with a key, as a move. -/
 private theorem moves {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key : Key}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key : Key}
     {event : Event} {next : Config α} {footprint : Footprint}
     (wellformed : Wellformed (.running state tasks finished exhausted))
     (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
@@ -1459,7 +1459,7 @@ private theorem moves {state : State} {tasks : List (PID × Task α)}
 
 /-- A key with a footprint names a step. -/
 private theorem enabled {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key : Key}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key : Key}
     {footprint : Footprint}
     (found : (Config.running state tasks finished exhausted).footprint key = some footprint) :
     ∃ event next, (key, event, next) ∈ (Config.running state tasks finished exhausted).steps := by
@@ -1516,7 +1516,7 @@ private theorem Effect.live_of_keeps {effect : Effect} {observes : Observes} {st
   simpa using this
 
 private theorem task_of_footprint {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key : Key}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key : Key}
     {footprint : Footprint} {processId : PID}
     (found : (Config.running state tasks finished exhausted).footprint key = some footprint)
     (process : key.process = some processId) : (tasks.lookup processId).isSome := by
@@ -1532,7 +1532,7 @@ private theorem task_of_footprint {state : State} {tasks : List (PID × Task α)
   | _ => cases process
 
 private theorem missing_of_footprint {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {source target : PID}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {source target : PID}
     {footprint : Footprint}
     (found : (Config.running state tasks finished exhausted).footprint (.bounce source target) =
       some footprint) : tasks.lookup target = none := by
@@ -1542,7 +1542,7 @@ private theorem missing_of_footprint {state : State} {tasks : List (PID × Task 
   · simp at found
 
 private theorem index_of_footprint {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {processId : PID}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {processId : PID}
     {index : Nat} {footprint : Footprint}
     (found : (Config.running state tasks finished exhausted).footprint (.own processId index) =
       some footprint) : index = 0 := by
@@ -1556,7 +1556,7 @@ private theorem index_of_footprint {state : State} {tasks : List (PID × Task α
   · simp at found
 
 private theorem live_of_lookup {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {processId : PID}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {processId : PID}
     (wellformed : Wellformed (.running state tasks finished exhausted))
     (found : (tasks.lookup processId).isSome) : (state.processes processId).isSome := by
   obtain ⟨task, found⟩ := Option.isSome_iff_exists.mp found
@@ -1568,7 +1568,7 @@ private theorem mem_of_isSome {tasks : List (PID × Task α)} {processId : PID}
   exact List.mem_map_of_mem (f := Prod.fst) (mem_of_lookup found)
 
 private theorem dead_of_missing {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {processId : PID}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {processId : PID}
     (wellformed : Wellformed (.running state tasks finished exhausted))
     (missing : tasks.lookup processId = none) : state.processes processId = none := by
   cases alive : state.processes processId with
@@ -1642,7 +1642,7 @@ private theorem isSome_lookup {entries : List (PID × γ)} {processId : PID}
 
 /-- Two independent steps of a well-formed configuration, as moves. -/
 private structure Pair (state : State) (tasks : List (PID × Task α))
-    (finished : Option (Except Exception α × Environment)) (exhausted : Bool) (key key' : Key)
+    (finished : Option (Except Exception α)) (exhausted : Bool) (key key' : Key)
     (footprint footprint' : Footprint) (move move' : Move α) : Prop where
   wellformed : Wellformed (.running state tasks finished exhausted)
   found : (Config.running state tasks finished exhausted).footprint key = some footprint
@@ -1654,7 +1654,7 @@ private structure Pair (state : State) (tasks : List (PID × Task α))
   keeps' : footprint'.effect.keeps footprint.observes state = true
 
 private theorem Pair.symm {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key key' : Key}
     {footprint footprint' : Footprint} {move move' : Move α}
     (pair : Pair state tasks finished exhausted key key' footprint footprint' move move') :
     Pair state tasks finished exhausted key' key footprint' footprint move' move :=
@@ -1663,7 +1663,7 @@ private theorem Pair.symm {state : State} {tasks : List (PID × Task α)}
 
 /-- A move ending a process changes what any step observing it observes. -/
 private theorem Pair.not_ends {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key key' : Key}
     {footprint footprint' : Footprint} {move move' : Move α}
     (pair : Pair state tasks finished exhausted key key' footprint footprint' move move')
     {processId : PID} (owner : move.owner = some processId)
@@ -1683,7 +1683,7 @@ private theorem Pair.not_ends {state : State} {tasks : List (PID × Task α)}
 
 /-- After a move, the other step's process has the task it needs. -/
 private theorem Pair.supports {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key key' : Key}
     {footprint footprint' : Footprint} {move move' : Move α}
     (pair : Pair state tasks finished exhausted key key' footprint footprint' move move') :
     Supports key' move' tasks (move.tasks tasks) := by
@@ -1784,7 +1784,7 @@ private theorem Pair.supports {state : State} {tasks : List (PID × Task α)}
 
 /-- Independent moves change the tasks in either order to the same tasks. -/
 private theorem Pair.tasks_comm {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key key' : Key}
     {footprint footprint' : Footprint} {move move' : Move α}
     (pair : Pair state tasks finished exhausted key key' footprint footprint' move move') :
     move.tasks (move'.tasks tasks) = move'.tasks (move.tasks tasks) := by
@@ -1830,7 +1830,7 @@ private theorem Pair.tasks_comm {state : State} {tasks : List (PID × Task α)}
 
 /-- At most one of two independent moves reports the result. -/
 private theorem Pair.quiet {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key key' : Key}
     {footprint footprint' : Footprint} {move move' : Move α}
     (pair : Pair state tasks finished exhausted key key' footprint footprint' move move') :
     move.finished = none ∨ move'.finished = none := by
@@ -1871,7 +1871,7 @@ private theorem orElse_comm {first second rest : Option γ} (none : first = none
 /-- Independent steps commute: when one step follows another, it can also be
 taken first, followed by the other. -/
 private theorem diamond {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {key key' : Key}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key key' : Key}
     {event event' : Event} {next next' : Config α}
     (wellformed : Wellformed (.running state tasks finished exhausted))
     (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
@@ -2078,7 +2078,7 @@ private theorem explore_sound {visit : List Key → Config α → Bool}
 
 /-- Every step of a running configuration has a key. -/
 private theorem Step.keyed {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α × Environment)} {exhausted : Bool} {event : Event}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {event : Event}
     {next : Config α} (step : Step (.running state tasks finished exhausted) event next) :
     ∃ key, (key, event, next) ∈ (Config.running state tasks finished exhausted).steps := by
   simp only [Step, ← Config.steps_running, List.mem_map] at step
