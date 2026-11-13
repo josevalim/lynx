@@ -180,7 +180,7 @@ defmodule Lynx do
 
     * Map iteration order is unspecified, as in Erlang. Map generators and
       other enumerations visit each key once, but proofs cannot rely on any
-      particular order. Evaluating them with `lynx_cbv` covers every order.
+      particular order.
 
     * Erlang's `sets` are only modeled as version 2 sets, which are maps from
       their elements to `[]`. `sets:new/0,1` and `sets:from_list/1,2` always
@@ -371,12 +371,6 @@ defmodule Lynx do
       with `simp` and resume, repeating until every run is evaluated:
       `cbv; repeat (simp only [Int.lt_irrefl, ite_false, ite_true]; cbv)`
       (`===` and `in` compare integers exactly, hence `Int.lt_irrefl`).
-
-    * Evaluation also stops at map enumerations, such as `maps:to_list/1`,
-      `maps:fold/3`, or `Enum.each/2` over a map, since their order is
-      unspecified. `lynx_cbv` evaluates like `cbv` and splits the goal on every
-      order of each enumerated map, so the proof covers them all. A map of `k`
-      keys takes `k!` evaluations.
 
     * Receive timeouts with a positive duration may expire at any step, so a
       law about `Task.await/2` with a timeout must allow both outcomes.

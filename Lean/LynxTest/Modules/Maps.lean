@@ -4,7 +4,6 @@ import Lynx.Modules.Erlang.maps
 import Lynx.Modules.Erlang.erlang
 meta import LynxTest.ProofAudit
 import Lynx
-import Lynx.Runner.Elab
 import all Lynx.Term.Compare
 import all Std
 import all Init.Data.List.Basic
@@ -193,49 +192,6 @@ theorem combine_inputs :
     intersectWith combiner (Term.map []) one = .error (.error (.tuple #[.atom "badmap", one])) := by
   refine ⟨?_, ?_, rfl, rfl, rfl⟩ <;> simp [mergeWith, intersectWith, Erlang.maps.«merge_with/3»,
     Erlang.maps.«intersect_with/3», combiner, List.reduceOption, Term.mapLookup]
-
-/-- Evaluation covers every order of an enumerated map, so listing a map and
-building it back is equal to it whatever order the bindings are listed in. -/
-theorem to_list_round_trip :
-    (Erlang.maps.«to_list/1» (.map [(a, one), (b, two)]) >>= Erlang.maps.«from_list/1» >>=
-      fun built => Erlang.erlang.«==/2» built (.map [(a, one), (b, two)])) = .ok Term.true := by
-  lynx_cbv
-
--- No order is assumed: the keys may be listed either way, which is left to prove.
-/--
-error: unsolved goals
-⊢ Except.ok ((Term.atom "b").cons ((Term.atom "a").cons Term.nil)) =
-    Except.ok ((Term.atom "a").cons ((Term.atom "b").cons Term.nil))
--/
-#guard_msgs in
-example : Erlang.maps.«keys/1» (.map [(a, one), (b, two)]) = .ok (Term.list [a, b]) := by
-  lynx_cbv
-
-/-- A process that sends itself the keys of a map, in their enumeration order,
-and returns the first one it receives. -/
-private def firstKey : Result := do
-  let self ← Erlang.erlang.«self/0» (Dispatcher.ofTable [] 0)
-  for entry in Term.mapEntries [(a, one), (b, two)] do
-    let _ ← Erlang.erlang.«send/2» (Dispatcher.ofTable [] 0) self entry.1
-  .receive .infinity (fun _ message => some message) fun
-    | some message => .ok message
-    | none => .error .exhausted
-
-/-- Every run of a process returns one of the map's keys. -/
-theorem first_key_is_a_key :
-    Concurrent.check (fun | .ok (.atom "a") | .ok (.atom "b") => .true | _ => .false) 16
-      (.start {} firstKey) = .true := by
-  lynx_cbv
-
--- But either key may come first, and the check rejects the runs where `b` does.
-/--
-error: unsolved goals
-⊢ False
--/
-#guard_msgs in
-example : Concurrent.check (fun | .ok (.atom "a") => .true | _ => .false) 16
-    (.start {} firstKey) = .true := by
-  lynx_cbv
 
 end LynxTest.Modules.Maps
 
