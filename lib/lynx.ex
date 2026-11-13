@@ -178,9 +178,9 @@ defmodule Lynx do
 
     * Exception stack traces are not recorded and are represented by `[]`.
 
-    * Map iteration order is unspecified, as in Erlang. Map generators and
-      other enumerations visit each key once, but proofs cannot rely on any
-      particular order.
+    * Map iteration order is unspecified, as in Erlang, and opaque.
+      Map generators and other enumerations visit each key once, but proofs
+      cannot rely on any particular order.
 
     * Erlang's `sets` are only modeled as version 2 sets, which are maps from
       their elements to `[]`. `sets:new/0,1` and `sets:from_list/1,2` always
@@ -414,9 +414,8 @@ defmodule Lynx do
   `lynx_counterexample` explains why. Run it before evaluating the check, as in
   `(by lynx_counterexample; cbv)`: it runs the program in Lean's interpreter,
   which is much faster than the kernel, and fails with a run the check
-  rejects, one step per line, or with one that takes more steps than the
-  depth. Otherwise it leaves the goal for `lynx_kernel` or `cbv`. It proves
-  nothing itself.
+  rejects, one step per line, or with one that takes more steps than the depth.
+  Otherwise it leaves the goal for `lynx_kernel` or `cbv`. It proves nothing itself.
   Traces show the first process as `<0>` and its first child as `<0.1>`, and
   references as their allocating process followed by a count, as in `#Ref<0.1>`.
 
