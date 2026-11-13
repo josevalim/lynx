@@ -76,6 +76,27 @@ defmodule TaskProofsTest do
   end
 
   laws "Task" do
+    prelude ~LEAN"""
+    module
+
+    public import Lynx
+
+    public section
+
+    namespace TaskProof
+
+    /-! `cbv` cannot decide `n * 2 < n * 2` for a symbolic `n`, so it compares
+    a number with itself by these lemmas instead. -/
+
+    @[cbv_eval] theorem compare_int_self (a : Int) : compareOfLessAndEq a a = .eq := by
+      simp [compareOfLessAndEq]
+
+    @[cbv_eval] theorem compare_rat_self (a : Rat) : compareOfLessAndEq a a = .eq := by
+      simp [compareOfLessAndEq]
+
+    end TaskProof
+    """
+
     # Task.Supervised runs the task with apply(:erlang, :apply, [fun, []]).
     dynamic &:erlang.apply/2
 
@@ -106,7 +127,7 @@ defmodule TaskProofsTest do
       exact Lynx.concurrent_of_check
         (Lynx.apply «double_in_task_doubles:ensures/1» Erlang.program.fun_table (depth + 4) (.integer n))
         Lynx.Outcome.isTrue 300
-        (fun _ => by cbv; simp [Rat.lt_irrefl])
+        (fun _ => by cbv)
         fun _ => Lynx.Outcome.eq_of_isTrue
       """
 
@@ -121,12 +142,12 @@ defmodule TaskProofsTest do
       refine ⟨4, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       -- The timeout may expire before or after the reply arrives. When the
-      -- reply wins, the owner compares n * 2 with itself while the task is
-      -- still running, so evaluation resumes after simp decides it.
+      -- reply wins, the owner compares n * 2 with itself, which cbv decides
+      -- with TaskProof.compare_int_self.
       exact Lynx.concurrent_of_check
         (Lynx.apply «double_or_timeout_doubles:ensures/1» Erlang.program.fun_table (depth + 4) (.integer n))
         Lynx.Outcome.isTrue 300
-        (fun _ => by cbv; repeat (simp only [Int.lt_irrefl, ite_false, ite_true]; cbv))
+        (fun _ => by cbv)
         fun _ => Lynx.Outcome.eq_of_isTrue
       """
 
@@ -142,12 +163,12 @@ defmodule TaskProofsTest do
       -- through :erlang.apply/2, each one level down.
       refine ⟨4, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
-      -- lynx_counterexample reports a failing schedule quickly, before cbv
-      -- evaluates every interleaving, which takes more than its default steps.
+      -- lynx_counterexample reports a failing schedule quickly, before the
+      -- kernel evaluates every interleaving.
       exact Lynx.concurrent_of_check
         (Lynx.apply «ignore_drains_reply:ensures/0» Erlang.program.fun_table (depth + 4))
         Lynx.Outcome.isTrue 300
-        (fun _ => by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv)
+        (fun _ => by lynx_counterexample; lynx_kernel)
         fun _ => Lynx.Outcome.eq_of_isTrue
       """
   end
@@ -184,7 +205,7 @@ defmodule TaskProofsTest do
       exact Lynx.concurrent_of_check
         (Lynx.apply «await_drains_reply:ensures/0» Erlang.program.fun_table (depth + 4))
         Lynx.Outcome.isTrue 300
-        (fun _ => by lynx_counterexample; set_option cbv.maxSteps 1000000 in cbv)
+        (fun _ => by lynx_counterexample; lynx_kernel)
         fun _ => Lynx.Outcome.eq_of_isTrue
       """
   end

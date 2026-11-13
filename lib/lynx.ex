@@ -359,9 +359,21 @@ defmodule Lynx do
         fun _ => Lynx.Outcome.eq_of_isTrue
 
   The kernel cannot decide what depends on an unknown value, so when the
-  processes compare a symbolic input, evaluate with `cbv` and decide those
-  comparisons with `simp`. For example, for a law over an integer `x` that is
-  only carried by messages and arithmetic:
+  processes compare a symbolic input, evaluate with `cbv`. It stops at
+  comparisons it cannot decide, such as `n * 2 == n * 2` for a symbolic `n`,
+  unless a `@[cbv_eval]` lemma decides them. Lemmas for numbers compared with
+  themselves can go in the laws group's `Lynx.Case.prelude/1`, inside a
+  `public section` of a module that publicly imports `Lynx`:
+
+      @[cbv_eval] theorem compare_int_self (a : Int) : compareOfLessAndEq a a = .eq := by
+        simp [compareOfLessAndEq]
+
+      @[cbv_eval] theorem compare_rat_self (a : Rat) : compareOfLessAndEq a a = .eq := by
+        simp [compareOfLessAndEq]
+
+  (`===` and `in` compare integers exactly, as `Int`, and `==` compares numbers
+  as rationals.) For example, for a law over an integer `x` that is only
+  carried by messages and arithmetic:
 
       obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
         cases x <;> simp [«law:requires/1», Erlang.erlang.«is_integer/1»] at requires ⊢
@@ -369,7 +381,7 @@ defmodule Lynx do
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       exact Lynx.concurrent_of_check
         (Lynx.apply «law:ensures/1» Erlang.program.fun_table (depth + 1) (.integer n))
-        Lynx.Outcome.isTrue 300 (fun _ => by cbv; simp [Rat.lt_irrefl])
+        Lynx.Outcome.isTrue 300 (fun _ => by cbv)
         fun _ => Lynx.Outcome.eq_of_isTrue
 
   `Lynx.Outcome.isTrue` accepts the outcome the law expects, and `cbv`
@@ -378,9 +390,7 @@ defmodule Lynx do
   with `false` evaluate without knowing it. Writing the depth as `depth + 1` lets evaluation take the level the
   spawned function consumes, and the level the receive of its reply consumes,
   whatever the remaining depth. Evaluation takes longer as the bound grows,
-  so choose the smallest bound that covers the program. The final comparison
-  of `n * 2` with itself depends on `n`, which `simp` decides (`==` compares
-  numbers as rationals, hence `Rat.lt_irrefl`).
+  so choose the smallest bound that covers the program.
 
   A few things to keep in mind:
 
@@ -392,11 +402,10 @@ defmodule Lynx do
       the evaluation, so the proof does not close. Increase it until every run
       ends within it.
 
-    * Evaluation stops at comparisons it cannot decide, such as `n * 2 == n * 2`
-      for a symbolic `n`, and does not explore the runs after them. Decide them
-      with `simp` and resume, repeating until every run is evaluated:
-      `cbv; repeat (simp only [Int.lt_irrefl, ite_false, ite_true]; cbv)`
-      (`===` and `in` compare integers exactly, hence `Int.lt_irrefl`).
+    * Evaluation stops at comparisons it cannot decide and does not explore
+      the runs after them, so the proof does not close. Give `cbv` a lemma
+      that decides them, as above, which is much faster than deciding them
+      with `simp` and resuming `cbv`.
 
     * Receive timeouts with a positive duration may expire at any step, so a
       law about `Task.await/2` with a timeout must allow both outcomes.
