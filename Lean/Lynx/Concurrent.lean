@@ -501,8 +501,8 @@ the root. -/
     Transition α :=
   { event, state := state.terminate processId reason, tasks := [], finished := finish result }
 
-/-- The steps of a process itself: none while blocked, two for a
-positive-timeout receive without a match, one otherwise. -/
+/-- The steps of a process itself: none while blocked, one otherwise. A
+receive without a match and with a timeout steps by timing out. -/
 @[expose] def Task.own (state : State) (processId : PID) : Task α → List (Transition α)
   | ⟨computation, finish⟩ =>
     let view := state.view processId

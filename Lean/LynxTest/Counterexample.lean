@@ -3,6 +3,7 @@ module
 import Lynx
 import Lynx.Runner.Elab
 import Lynx.Modules.Erlang.erlang
+meta import LynxTest.ProofAudit
 -- The search runs the runtime in the interpreter, which needs its compiled code.
 meta import Lynx.Modules.Erlang.erlang
 
@@ -94,6 +95,13 @@ example (depth : Nat) (elapsed : PID → Nat → Nat) :
     Concurrent.check answered 32 (.start {} (deep (depth + 1)) elapsed) = true := by
   lynx_kernel
 
+/-- Let-bound locals are unfolded in the auxiliary theorem rather than passed to it. -/
+example (depth : Nat) (elapsed : PID → Nat → Nat) :
+    let calls := depth + 1
+    Concurrent.check answered 32 (.start {} (deep calls) elapsed) = true := by
+  intro calls
+  lynx_kernel
+
 /-- Kernel evaluation decides Erlang's term comparisons through the public
 interface: atoms, numbers, tuples, lists, and maps. -/
 example : (match Erlang.erlang.«</2» (.tuple #[.atom "a", .integer 1, .map [(.atom "k", .nil)]])
@@ -116,3 +124,6 @@ example (message : Term) :
   sorry
 
 end LynxTest.Counterexample
+
+-- The theorems lynx_kernel adds use only the standard axioms.
+run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Counterexample

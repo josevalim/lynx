@@ -126,7 +126,7 @@ theorem State.weight_bounce {state : State} {envelope : Envelope} {rest : List E
   unfold State.bounce
   split <;> rename_i signal <;>
     simp only [State.weight, State.emit, weight_enqueue, split, List.map_append, List.map_cons,
-      List.sum_append, List.sum_cons, List.map_nil, List.sum_nil, Envelope.weight, signal] <;> omega
+      List.sum_append, List.sum_cons, Envelope.weight, signal] <;> omega
 
 theorem mem_firstOfEach {seen : List (List Nat)} {timers : List Timer} {timer : Timer}
     (mem : timer ∈ firstOfEach seen timers) : timer ∈ timers := by

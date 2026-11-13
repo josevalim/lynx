@@ -24737,8 +24737,8 @@ defmodule STTDescrProofsTest do
       simp at this
       omega
 
-    theorem atoms_cmp (a b : String) : Term.compare (Term.fuel (.atom a) (.atom b)) (.atom a) (.atom b) = compare a b := by
-      rw [Term.compare_step]; exact Compare.stringCompare_eq a b
+    theorem atoms_cmp (a b : String) : Term.compare (Term.fuel (.atom a) (.atom b)) (.atom a) (.atom b) = compare a b :=
+      Term.compare_atoms a b
 
     /-- Fields of value maps: atom keys in increasing order, holding fields of element types. -/
     def FieldsV (E : Term → Prop) (l : List (Term × Term)) : Prop :=
