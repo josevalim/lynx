@@ -802,7 +802,8 @@ private theorem delivery_message {state : State} {envelope : Envelope} {message 
       { observes := { records := [(envelope.target, ProcessState.live)],
                       inTransit := [oldest envelope.source envelope.target] }
         effect := { records := [(envelope.target, Option.map (ProcessState.append message))],
-                    inTransit := some (arrive envelope.source envelope.target) } } := by
+                    inTransit := some (arrive envelope.source envelope.target) }
+        frames := some [(envelope.target, [.mailbox], [.mailbox])] } := by
   obtain ⟨source, target, signal'⟩ := envelope
   dsimp only at signal
   subst signal
@@ -814,7 +815,8 @@ private theorem bounce_message {envelope : Envelope} {message : Term}
     Footprint.bounce envelope =
       { observes := { records := [(envelope.target, ProcessState.live)],
                       inTransit := [oldest envelope.source envelope.target] }
-        effect := { inTransit := some (arrive envelope.source envelope.target) } } := by
+        effect := { inTransit := some (arrive envelope.source envelope.target) }
+        frames := some [(envelope.target, [], [])] } := by
   obtain ⟨source, target, signal'⟩ := envelope
   dsimp only at signal
   subst signal

@@ -151,18 +151,31 @@ private def Observes.Agree (observes : Observes) (state other : State) : Prop :=
   (∀ view ∈ observes.inTransit, view other.inTransit = view state.inTransit) ∧
   other.elapsed = state.elapsed
 
-/-- What a step observes and does. -/
+/-- A field of a process record, or `live`: whether the process has a record. -/
+inductive Field where
+  | pdict | mailbox | refCounter | children | links | monitors | monitoring | aliases | trapExit
+  | cancels | live
+deriving DecidableEq
+
+/-- What a step observes and does. `frames`, when known, gives for each process
+whose record the step observes or changes the fields it reads and the fields
+it writes, at the current state (`Footprint.apart`). -/
 structure Footprint where
   observes : Observes := {}
   effect : Effect := {}
+  frames : Option (List (PID × List Field × List Field)) := none
 
-/-- Whether an effect keeps what a step observes, evaluated at a state. -/
-@[expose] def Effect.keeps (effect : Effect) (observes : Observes) (state : State) : Bool :=
-  Kernel.all observes.records (fun (processId, view) =>
+/-- Whether an effect keeps the records a step observes, evaluated at a state. -/
+@[expose] def Effect.keepsRecords (effect : Effect) (observes : Observes) (state : State) : Bool :=
+  Kernel.all observes.records fun (processId, view) =>
     match Kernel.find? (·.1 == processId) effect.records with
     | some (_, change) => recordIdentical ((change (state.processes processId)).map view)
         ((state.processes processId).map view)
-    | none => true) &&
+    | none => true
+
+/-- Whether an effect keeps the timers and signals in transit a step observes,
+evaluated at a state. -/
+@[expose] def Effect.keepsRest (effect : Effect) (observes : Observes) (state : State) : Bool :=
   (match effect.timers with
     | some change => Kernel.all observes.timers fun view =>
         identicalLists Timer.identical (view (change state.timers)) (view state.timers)
@@ -172,14 +185,18 @@ structure Footprint where
       identicalLists Envelope.identical (view (change state.inTransit)) (view state.inTransit)
   | none => true
 
-/-- Whether two effects reach the same state in either order, evaluated at a state. -/
-@[expose] def Effect.commutes (first second : Effect) (state : State) : Bool :=
-  Kernel.all first.records (fun (processId, change) =>
+/-- Whether two effects change the records to the same in either order, evaluated at a state. -/
+@[expose] def Effect.commutesRecords (first second : Effect) (state : State) : Bool :=
+  Kernel.all first.records fun (processId, change) =>
     match Kernel.find? (·.1 == processId) second.records with
     | some (_, change') =>
         let record := state.processes processId
         recordIdentical (change (change' record)) (change' (change record))
-    | none => true) &&
+    | none => true
+
+/-- Whether two effects change the timers and the signals in transit to the
+same in either order, evaluated at a state. -/
+@[expose] def Effect.commutesRest (first second : Effect) (state : State) : Bool :=
   (match first.timers, second.timers with
     | some change, some change' =>
         identicalLists Timer.identical (change (change' state.timers)) (change' (change state.timers))
@@ -190,11 +207,29 @@ structure Footprint where
         (change' (change state.inTransit))
   | _, _ => true
 
+/-- Whether two steps touch the records of the processes both touch apart: neither
+ends or starts the process, and neither writes a field the other reads or writes.
+Unknown frames are not apart. -/
+@[expose] def Footprint.apart (first second : Footprint) : Bool :=
+  match first.frames, second.frames with
+  | some frames, some frames' => Kernel.all frames fun (processId, reads, writes) =>
+      match Kernel.lookup processId frames' with
+      | some (reads', writes') =>
+          !Kernel.contains writes .live && !Kernel.contains writes' .live &&
+          Kernel.all writes (fun field => !Kernel.contains reads' field && !Kernel.contains writes' field) &&
+          Kernel.all writes' fun field => !Kernel.contains reads field && !Kernel.contains writes field
+      | none => true
+  | _, _ => false
+
 /-- Whether two steps commute at a state: neither changes what the other
-observes, and their effects reach the same state in either order. -/
+observes, and their effects reach the same state in either order. Records
+touched apart need no evaluation. -/
 @[expose] def Footprint.independent (first second : Footprint) (state : State) : Bool :=
-  first.effect.keeps second.observes state && second.effect.keeps first.observes state &&
-    first.effect.commutes second.effect state
+  (first.apart second ||
+    first.effect.keepsRecords second.observes state && second.effect.keepsRecords first.observes state &&
+      first.effect.commutesRecords second.effect state) &&
+  first.effect.keepsRest second.observes state && second.effect.keepsRest first.observes state &&
+    first.effect.commutesRest second.effect state
 
 /-! ### Effects of operations -/
 
@@ -292,7 +327,8 @@ canceled, and linked and watching processes get signals. -/
 /-- The footprint of a process ending, observing more. -/
 @[expose] def Footprint.ending (state : State) (processId : PID) (reason : Term) : Footprint :=
   { observes := .record processId ProcessState.ending
-    effect := .ending processId (state.process processId) reason }
+    effect := .ending processId (state.process processId) reason
+    frames := some [(processId, [.links, .monitors], [.live])] }
 
 /-- The footprint of a spawn. -/
 @[expose] def Footprint.spawn (state : State) (processId : PID) (options : SpawnOptions) : Footprint :=
@@ -320,7 +356,8 @@ canceled, and linked and watching processes get signals. -/
       let counted : Observes := .record processId fun process => { refCounter := process.refCounter }
       if target = processId then
         { observes := counted
-          effect := .change processId fun process => { process with refCounter := process.refCounter + 1 } }
+          effect := .change processId fun process => { process with refCounter := process.refCounter + 1 }
+          frames := some [(processId, [.refCounter], [.refCounter])] }
       else
         { observes := counted.and (.record target ProcessState.live)
           effect := (Effect.change processId fun process =>
@@ -330,7 +367,9 @@ canceled, and linked and watching processes get signals. -/
                 aliases := if alias then Kernel.append process.aliases [reference]
                   else process.aliases }).andThen
             (.send (if state.alive target then ⟨processId, target, .monitor reference⟩
-              else ⟨target, processId, .down reference (.atom "noproc")⟩)) }
+              else ⟨target, processId, .down reference (.atom "noproc")⟩))
+          frames := some [(processId, [.refCounter, .monitoring, .aliases], [.refCounter, .monitoring, .aliases]),
+            (target, [], [])] }
   | .demonitor reference flush =>
       { observes := .record processId fun process =>
           { monitoring := Kernel.filter (·.1 == reference) process.monitoring }
@@ -341,7 +380,12 @@ canceled, and linked and watching processes get signals. -/
               aliases := Kernel.erase process.aliases reference
               mailbox := if flush && !active then
                   Kernel.eraseP (isMonitorMessage reference) process.mailbox
-                else process.mailbox } }
+                else process.mailbox }
+        -- An active monitor keeps the mailbox.
+        frames := some [(processId,
+          cond (flush && !Kernel.any (state.process processId).monitoring (·.1 == reference))
+            ([.monitoring, .aliases, .mailbox], [.monitoring, .aliases, .mailbox])
+            ([.monitoring, .aliases], [.monitoring, .aliases]))] }
   | .link target =>
       let observes : Observes := (Observes.record processId fun process => { trapExit := process.trapExit }).and
         (.record target ProcessState.live)
@@ -352,12 +396,14 @@ canceled, and linked and watching processes get signals. -/
           effect := (Effect.change processId fun process =>
             { process with links := insertOnce target process.links }).andThen
             (.send (if state.alive target then ⟨processId, target, .link⟩
-              else ⟨target, processId, .exit (.atom "noproc") true⟩)) }
+              else ⟨target, processId, .exit (.atom "noproc") true⟩))
+          frames := some [(processId, [.trapExit, .links], [.links]), (target, [], [])] }
   | .unlink target =>
       { observes := .record processId ProcessState.live
         effect := (Effect.change processId fun process =>
           { process with links := Kernel.erase process.links target }).andThen
-          (if target = processId then {} else .send ⟨processId, target, .unlink⟩) }
+          (if target = processId then {} else .send ⟨processId, target, .unlink⟩)
+        frames := some [(processId, [.links], [.links])] }
   | .exit target reason =>
       if target = processId then
         let trapping : Observes := .record processId fun process => { trapExit := process.trapExit }
@@ -368,29 +414,36 @@ canceled, and linked and watching processes get signals. -/
         else
           { observes := trapping
             effect := .change processId
-              (ProcessState.append (.tuple #[.atom "EXIT", .pid processId, reason])) }
+              (ProcessState.append (.tuple #[.atom "EXIT", .pid processId, reason]))
+            frames := some [(processId, [.trapExit, .mailbox], [.mailbox])] }
       else
         { observes := .record processId ProcessState.live
-          effect := .send ⟨processId, target, .exit reason false⟩ }
+          effect := .send ⟨processId, target, .exit reason false⟩
+          frames := some [(processId, [], [])] }
   | .trapExit enabled =>
       { observes := .record processId fun process => { trapExit := process.trapExit }
-        effect := .change processId fun process => { process with trapExit := enabled } }
+        effect := .change processId fun process => { process with trapExit := enabled }
+        frames := some [(processId, [.trapExit], [.trapExit])] }
   | .alive target =>
-      if target = processId then { observes := .record processId ProcessState.live }
+      if target = processId then
+        { observes := .record processId ProcessState.live, frames := some [(processId, [], [])] }
       else
         { observes := { records := [(processId, ProcessState.live), (target, ProcessState.live)]
                         inTransit := [fun inTransit => Kernel.filter (fun envelope =>
                           envelope.between processId target || envelope.between target processId)
-                          inTransit] } }
+                          inTransit] }
+          frames := some [(processId, [], []), (target, [], [])] }
   | .sendAlias alias message =>
       let owner := alias.dropLast
       if owner = processId then
         { observes := .record processId ProcessState.live
           effect := .change processId fun process =>
-            if Kernel.contains process.aliases alias then process.append message else process }
+            if Kernel.contains process.aliases alias then process.append message else process
+          frames := some [(processId, [.aliases, .mailbox], [.mailbox])] }
       else
         { observes := .record processId ProcessState.live
-          effect := .send ⟨processId, owner, .aliasMessage alias message⟩ }
+          effect := .send ⟨processId, owner, .aliasMessage alias message⟩
+          frames := some [(processId, [], [])] }
   | .startTimer destination message duration =>
       let reference := Kernel.append processId [(state.process processId).refCounter + 1]
       { observes := (Observes.record processId fun process => { refCounter := process.refCounter }).and
@@ -399,7 +452,8 @@ canceled, and linked and watching processes get signals. -/
           { process with refCounter := process.refCounter + 1 }).andThen
           (if state.alive destination then
             { timers := some (insertTimer { reference, destination, message, duration }) }
-          else {}) }
+          else {})
+        frames := some [(processId, [.refCounter], [.refCounter]), (destination, [], [])] }
   | .cancelTimer reference =>
       { observes := { records := [(processId, fun process => { cancels := process.cancels })]
                       timers := [fun timers => Kernel.filter (·.reference == reference) timers] }
@@ -408,7 +462,8 @@ canceled, and linked and watching processes get signals. -/
               { records := [(processId, Option.map fun process =>
                   { process with cancels := process.cancels + 1 })]
                 timers := some (Kernel.filter (·.reference != reference)) }
-          | none => {} }
+          | none => {}
+        frames := some [(processId, [.cancels], [.cancels])] }
 
 /-- The footprint of a process's own step. -/
 @[expose] def Task.footprint (state : State) (processId : PID) : Task α → Footprint
@@ -419,17 +474,21 @@ canceled, and linked and watching processes get signals. -/
           effect := { records := [(processId, fun _ => none)] } }
     | .ok _ => Footprint.ending state processId (.atom "normal")
     | .error exception => Footprint.ending state processId (exitReason exception)
-    | .get _ => { observes := .record processId ProcessState.env }
+    | .get _ =>
+        { observes := .record processId ProcessState.env
+          frames := some [(processId, [.pdict, .refCounter], [])] }
     | .set updated _ =>
         { observes := .record processId ProcessState.live
           effect := .change processId fun process =>
             { process with pdict := updated.pdict
-                           refCounter := max process.refCounter updated.refCounter } }
+                           refCounter := max process.refCounter updated.refCounter }
+          frames := some [(processId, [.refCounter], [.pdict, .refCounter])] }
     | Result.schedule options _ _ => Footprint.spawn state processId options
     | .send destination message _ =>
         { observes := .record processId ProcessState.live
           effect := if destination = processId then .change processId (ProcessState.append message)
-            else .send ⟨processId, destination, .message message⟩ }
+            else .send ⟨processId, destination, .message message⟩
+          frames := some [(processId, [.mailbox], [.mailbox])] }
     | .receive _ select _ =>
         let choose := select (state.view processId)
         { observes := .record processId fun process =>
@@ -438,7 +497,8 @@ canceled, and linked and watching processes get signals. -/
           effect := match selectMessage choose (state.process processId).mailbox with
             | some _ => .change processId fun process =>
                 { process with mailbox := remaining choose process.mailbox }
-            | none => {} }
+            | none => {}
+          frames := some [(processId, [.pdict, .refCounter, .mailbox], [.mailbox])] }
     | .request query _ => requestFootprint state processId query
 
 /-- What a live process does with a signal, without exiting. -/
@@ -464,6 +524,15 @@ canceled, and linked and watching processes get signals. -/
           (.tuple #[.atom "DOWN", .reference reference, .atom "process", .pid source, reason])
       else process
 
+/-- The fields of a record a signal reads and writes when it reaches a live process. -/
+@[expose] def Signal.frame : Signal → List Field × List Field
+  | .message _ => ([.mailbox], [.mailbox])
+  | .aliasMessage .. => ([.aliases, .mailbox], [.mailbox])
+  | .exit .. => ([.links, .trapExit, .mailbox], [.links, .mailbox])
+  | .link | .unlink => ([.links], [.links])
+  | .monitor _ => ([.monitors], [.monitors])
+  | .down .. => ([.monitoring, .aliases, .mailbox], [.monitoring, .aliases, .mailbox])
+
 /-- The footprint of a signal reaching a live process. -/
 @[expose] def Footprint.delivery (state : State) (envelope : Envelope) : Footprint :=
   let target := envelope.target
@@ -482,8 +551,13 @@ canceled, and linked and watching processes get signals. -/
       | none =>
           { observes := channel.and (.record target fun process =>
               { links := Kernel.filter (· == source) process.links, trapExit := process.trapExit })
-            effect := taken.andThen (.change target (·.receive source envelope.signal)) }
-  | signal => { observes := channel, effect := taken.andThen (.change target (·.receive source signal)) }
+            effect := taken.andThen (.change target (·.receive source envelope.signal))
+            -- A process not trapping exits only drops the link.
+            frames := some [(target, cond (state.process target).trapExit envelope.signal.frame
+              ([.links, .trapExit], [.links]))] }
+  | signal =>
+      { observes := channel, effect := taken.andThen (.change target (·.receive source signal))
+        frames := some [(target, signal.frame)] }
 
 /-- The footprint of a signal reaching a process that is not live. -/
 @[expose] def Footprint.bounce (envelope : Envelope) : Footprint :=
@@ -495,13 +569,15 @@ canceled, and linked and watching processes get signals. -/
       match envelope.signal with
       | .link => enqueue ⟨target, source, .exit (.atom "noproc") true⟩ inTransit
       | .monitor reference => enqueue ⟨target, source, .down reference (.atom "noproc")⟩ inTransit
-      | _ => inTransit } }
+      | _ => inTransit }
+    frames := some [(target, [], [])] }
 
 /-- The footprint of a timer firing. -/
 @[expose] def Footprint.fire (timer : Timer) : Footprint :=
   { observes := { timers := [firstTimer timer.reference] }
     effect := { timers := some (Kernel.filter (·.reference != timer.reference))
-                inTransit := some (enqueue ⟨clock, timer.destination, .message timer.message⟩) } }
+                inTransit := some (enqueue ⟨clock, timer.destination, .message timer.message⟩) }
+    frames := some [] }
 
 /-- `arrive` in proofs: core's `eraseP`. -/
 private theorem arrive_eq {source target : PID} {inTransit : List Envelope} :
@@ -522,22 +598,31 @@ private theorem State.ext' {first second : State} (processes : first.processes =
 @[simp] private theorem Effect.elapsed_apply {effect : Effect} {state : State} :
     (effect.apply state).elapsed = state.elapsed := rfl
 
-/-- An effect keeping what a step observes leaves a state agreeing on it. -/
-private theorem Effect.agree_of_keeps {effect : Effect} {observes : Observes} {state : State}
-    (keeps : effect.keeps observes state = true) : observes.Agree state (effect.apply state) := by
-  simp only [Effect.keeps, Bool.and_eq_true, List.all_eq_true, Kernel.all_eq,
-      Kernel.find?_eq] at keeps
-  obtain ⟨⟨records, timers⟩, inTransit⟩ := keeps
-  refine ⟨fun entry mem => ?_, fun view mem => ?_, fun view mem => ?_, rfl⟩
-  · have := records entry mem
-    simp only [Effect.processes_apply, Effect.record, Kernel.find?_eq]
-    split at this
-    · rename_i found
-      rw [found]
-      exact eq_of_recordIdentical this
-    · rename_i found
-      rw [found]
-      rfl
+/-- An effect keeping the records a step observes keeps their views. -/
+private theorem Effect.agree_records {effect : Effect} {observes : Observes} {state : State}
+    (keeps : effect.keepsRecords observes state = true) :
+    ∀ entry ∈ observes.records,
+      ((effect.apply state).processes entry.1).map entry.2 = (state.processes entry.1).map entry.2 := by
+  simp only [Effect.keepsRecords, List.all_eq_true, Kernel.all_eq, Kernel.find?_eq] at keeps
+  intro entry mem
+  have := keeps entry mem
+  simp only [Effect.processes_apply, Effect.record, Kernel.find?_eq]
+  split at this
+  · rename_i found
+    rw [found]
+    exact eq_of_recordIdentical this
+  · rename_i found
+    rw [found]
+    rfl
+
+/-- An effect keeping the timers and signals in transit a step observes keeps their views. -/
+private theorem Effect.agree_rest {effect : Effect} {observes : Observes} {state : State}
+    (keeps : effect.keepsRest observes state = true) :
+    (∀ view ∈ observes.timers, view (effect.apply state).timers = view state.timers) ∧
+      ∀ view ∈ observes.inTransit, view (effect.apply state).inTransit = view state.inTransit := by
+  simp only [Effect.keepsRest, Bool.and_eq_true, Kernel.all_eq] at keeps
+  obtain ⟨timers, inTransit⟩ := keeps
+  refine ⟨fun view mem => ?_, fun view mem => ?_⟩
   · simp only [Effect.apply]
     split at timers
     · rename_i found
@@ -557,29 +642,37 @@ private theorem Effect.agree_of_keeps {effect : Effect} {observes : Observes} {s
       rw [found]
       rfl
 
-/-- Commuting effects reach the same state in either order. -/
-private theorem Effect.apply_comm {first second : Effect} {state : State}
-    (commutes : first.commutes second state = true) :
-    first.apply (second.apply state) = second.apply (first.apply state) := by
-  simp only [Effect.commutes, Bool.and_eq_true, List.all_eq_true, Kernel.all_eq,
-      Kernel.find?_eq] at commutes
-  obtain ⟨⟨records, timers⟩, inTransit⟩ := commutes
-  refine State.ext' (funext fun processId => ?_) ?_ ?_ rfl
-  · simp only [Effect.processes_apply, Effect.record, Kernel.find?_eq]
-    cases found : first.records.find? (·.1 == processId) with
+/-- Effects whose changes of records commute change the records to the same in either order. -/
+private theorem Effect.records_comm {first second : Effect} {state : State}
+    (commutes : first.commutesRecords second state = true) :
+    (first.apply (second.apply state)).processes = (second.apply (first.apply state)).processes := by
+  simp only [Effect.commutesRecords, List.all_eq_true, Kernel.all_eq, Kernel.find?_eq] at commutes
+  funext processId
+  simp only [Effect.processes_apply, Effect.record, Kernel.find?_eq]
+  cases found : first.records.find? (·.1 == processId) with
+  | none => rfl
+  | some entry =>
+    obtain ⟨processId', change⟩ := entry
+    have same : processId' = processId := by
+      have := List.find?_some found; simpa using this
+    subst same
+    have := commutes _ (List.mem_of_find?_eq_some found)
+    cases found' : second.records.find? (·.1 == processId') with
     | none => rfl
-    | some entry =>
-      obtain ⟨processId', change⟩ := entry
-      have same : processId' = processId := by
-        have := List.find?_some found; simpa using this
-      subst same
-      have := records _ (List.mem_of_find?_eq_some found)
-      cases found' : second.records.find? (·.1 == processId') with
-      | none => rfl
-      | some entry' =>
-        obtain ⟨_, change'⟩ := entry'
-        simp only [found'] at this
-        exact eq_of_recordIdentical this
+    | some entry' =>
+      obtain ⟨_, change'⟩ := entry'
+      simp only [found'] at this
+      exact eq_of_recordIdentical this
+
+/-- Effects whose changes of timers and signals in transit commute change them
+to the same in either order. -/
+private theorem Effect.rest_comm {first second : Effect} {state : State}
+    (commutes : first.commutesRest second state = true) :
+    (first.apply (second.apply state)).timers = (second.apply (first.apply state)).timers ∧
+      (first.apply (second.apply state)).inTransit = (second.apply (first.apply state)).inTransit := by
+  simp only [Effect.commutesRest, Bool.and_eq_true] at commutes
+  obtain ⟨timers, inTransit⟩ := commutes
+  constructor
   · simp only [Effect.apply]
     split at timers
     · rename_i change change' found found'
@@ -594,6 +687,541 @@ private theorem Effect.apply_comm {first second : Effect} {state : State}
       exact eq_of_identicalLists Envelope.eq_of_identical inTransit
     · rename_i none
       cases found : first.inTransit <;> cases found' : second.inTransit <;> simp_all
+
+/-! ### Frames -/
+
+/-- The type of a field of a record. -/
+@[reducible] private def Field.type : Field → Type
+  | .pdict => List (Term × Term)
+  | .mailbox => List Term
+  | .refCounter | .children | .cancels => Nat
+  | .links => List PID
+  | .monitors | .monitoring => List (List Nat × PID)
+  | .aliases => List (List Nat)
+  | .trapExit => Bool
+  | .live => Unit
+
+/-- A field of a record. -/
+private def ProcessState.get (process : ProcessState) : (field : Field) → field.type
+  | .pdict => process.pdict
+  | .mailbox => process.mailbox
+  | .refCounter => process.refCounter
+  | .children => process.children
+  | .links => process.links
+  | .monitors => process.monitors
+  | .monitoring => process.monitoring
+  | .aliases => process.aliases
+  | .trapExit => process.trapExit
+  | .cancels => process.cancels
+  | .live => ()
+
+private theorem ProcessState.ext_get {first second : ProcessState}
+    (same : ∀ field, first.get field = second.get field) : first = second := by
+  cases first; cases second
+  have := same .pdict; have := same .mailbox; have := same .refCounter; have := same .children
+  have := same .links; have := same .monitors; have := same .monitoring; have := same .aliases
+  have := same .trapExit; have := same .cancels
+  simp_all [ProcessState.get]
+
+/-- Two records agree on some fields. -/
+private def ProcessState.Same (fields : List Field) (first second : ProcessState) : Prop :=
+  ∀ field ∈ fields, first.get field = second.get field
+
+/-- A change of records agreeing with `record` on `reads`: it keeps the fields
+outside `writes`, and what it writes depends only on `reads`. -/
+private def Frame (record : ProcessState) (reads writes : List Field)
+    (change : ProcessState → ProcessState) : Prop :=
+  (∀ process, process.Same reads record → ∀ field, field ∉ writes →
+    (change process).get field = process.get field) ∧
+  ∀ process process', process.Same reads record → process'.Same reads record →
+    ∀ field ∈ writes, (change process).get field = (change process').get field
+
+/-- The frames of a footprint describe it at a state: each record it changes
+keeps being live and changes within its frame, and each view of a record reads
+only the fields of its frame. -/
+private def Footprint.Framed (footprint : Footprint) (state : State) : Prop :=
+  ∀ frames, footprint.frames = some frames →
+    (∀ entry ∈ footprint.effect.records, ∃ reads writes,
+      frames.lookup entry.1 = some (reads, writes) ∧ (Field.live ∈ writes ∨
+        ∃ change, entry.2 = Option.map change ∧
+          ∀ record, state.processes entry.1 = some record → Frame record reads writes change)) ∧
+    ∀ entry ∈ footprint.observes.records, ∃ reads writes,
+      frames.lookup entry.1 = some (reads, writes) ∧
+        ∀ process process', process.Same reads process' → entry.2 process = entry.2 process'
+
+private theorem Footprint.framed_none {footprint : Footprint} {state : State}
+    (none : footprint.frames = none) : footprint.Framed state := by
+  intro frames found
+  rw [none] at found
+  cases found
+
+private theorem mem_of_lookup {entries : List (PID × β)} {processId : PID} {value : β}
+    (found : entries.lookup processId = some value) : (processId, value) ∈ entries := by
+  induction entries with
+  | nil => simp at found
+  | cons head rest ih =>
+    obtain ⟨processId', value'⟩ := head
+    simp only [List.lookup] at found
+    split at found
+    · rename_i same
+      simp only [Option.some.injEq] at found
+      subst found
+      have : processId = processId' := by simpa using same
+      subst this
+      exact List.mem_cons_self
+    · exact List.mem_cons_of_mem _ (ih found)
+
+/-- Frames that `Footprint.apart` accepts for a process both steps touch. -/
+private theorem apart_frames {first second : Footprint}
+    {frames frames' : List (PID × List Field × List Field)} {processId : PID}
+    {reads writes reads' writes' : List Field}
+    (apart : first.apart second = true) (found : first.frames = some frames)
+    (found' : second.frames = some frames')
+    (lookup : frames.lookup processId = some (reads, writes))
+    (lookup' : frames'.lookup processId = some (reads', writes')) :
+    (∀ field ∈ writes, field ∉ reads' ∧ field ∉ writes') ∧
+      (∀ field ∈ writes', field ∉ reads ∧ field ∉ writes) ∧ Field.live ∉ writes ∧
+      Field.live ∉ writes' := by
+  simp only [Footprint.apart, found, found', List.all_eq_true, Kernel.all_eq, Kernel.lookup_eq,
+    Kernel.contains_eq] at apart
+  have := apart _ (mem_of_lookup lookup)
+  simp only [lookup'] at this
+  simp only [Bool.and_eq_true, List.all_eq_true] at this
+  obtain ⟨⟨⟨live, live'⟩, one⟩, two⟩ := this
+  exact ⟨fun field mem => by simpa using one field mem, fun field mem => by simpa using two field mem,
+    by simpa using live, by simpa using live'⟩
+
+/-- A change within its frame keeps a view reading none of the fields it writes. -/
+private theorem frame_keeps {record : ProcessState} {reads writes reads' : List Field}
+    {change view : ProcessState → ProcessState} (frame : Frame record reads writes change)
+    (viewFrame : ∀ process process', process.Same reads' process' → view process = view process')
+    (apart : ∀ field ∈ writes, field ∉ reads') :
+    view (change record) = view record :=
+  viewFrame _ _ fun field mem =>
+    frame.1 record (fun _ _ => rfl) field fun written => apart field written mem
+
+/-- Changes within frames that neither writes in the other commute. -/
+private theorem frame_comm {record : ProcessState} {reads writes reads' writes' : List Field}
+    {change change' : ProcessState → ProcessState} (frame : Frame record reads writes change)
+    (frame' : Frame record reads' writes' change')
+    (apart : ∀ field ∈ writes, field ∉ reads' ∧ field ∉ writes')
+    (apart' : ∀ field ∈ writes', field ∉ reads ∧ field ∉ writes) :
+    change (change' record) = change' (change record) := by
+  have same : (change' record).Same reads record := fun field mem =>
+    frame'.1 record (fun _ _ => rfl) field fun written => (apart' field written).1 mem
+  have same' : (change record).Same reads' record := fun field mem =>
+    frame.1 record (fun _ _ => rfl) field fun written => (apart field written).1 mem
+  refine ProcessState.ext_get fun field => ?_
+  by_cases written : field ∈ writes
+  · rw [frame.2 _ _ same (fun _ _ => rfl) field written,
+      frame'.1 _ same' field (apart field written).2]
+  · by_cases written' : field ∈ writes'
+    · rw [frame.1 _ same field written, frame'.2 _ _ same' (fun _ _ => rfl) field written']
+    · rw [frame.1 _ same field written, frame'.1 _ (fun _ _ => rfl) field written',
+        frame'.1 _ same' field written', frame.1 _ (fun _ _ => rfl) field written]
+
+/-- How an effect changes a record, by its frame. -/
+private theorem Footprint.record_framed {footprint : Footprint} {state : State}
+    {frames : List (PID × List Field × List Field)} {processId : PID}
+    (framed : footprint.Framed state) (found : footprint.frames = some frames) :
+    footprint.effect.record processId = id ∨ ∃ reads writes,
+      frames.lookup processId = some (reads, writes) ∧ (Field.live ∈ writes ∨ ∃ change,
+        footprint.effect.record processId = Option.map change ∧
+        ∀ record, state.processes processId = some record → Frame record reads writes change) := by
+  simp only [Effect.record, Kernel.find?_eq]
+  cases entry : footprint.effect.records.find? (·.1 == processId) with
+  | none => exact .inl rfl
+  | some entry' =>
+    obtain ⟨processId', change⟩ := entry'
+    have same : processId' = processId := by simpa using List.find?_some entry
+    subst same
+    obtain ⟨reads, writes, lookup, live | ⟨change', rfl, frame⟩⟩ :=
+      (framed frames found).1 _ (List.mem_of_find?_eq_some entry)
+    · exact .inr ⟨reads, writes, lookup, .inl live⟩
+    · exact .inr ⟨reads, writes, lookup, .inr ⟨change', rfl, frame⟩⟩
+
+/-- A step writing none of the fields another reads keeps the records it observes. -/
+private theorem Footprint.agree_records_of_apart {first second : Footprint} {state : State}
+    {frames frames' : List (PID × List Field × List Field)}
+    (framed : first.Framed state) (framed' : second.Framed state)
+    (found : first.frames = some frames) (found' : second.frames = some frames')
+    (apart : ∀ {processId reads writes reads' writes'}, frames.lookup processId = some (reads, writes) →
+      frames'.lookup processId = some (reads', writes') →
+        Field.live ∉ writes ∧ ∀ field ∈ writes, field ∉ reads') :
+    ∀ entry ∈ second.observes.records,
+      ((first.effect.apply state).processes entry.1).map entry.2 =
+        (state.processes entry.1).map entry.2 := by
+  intro entry mem
+  obtain ⟨reads', writes', lookup', viewFrame⟩ := (framed' frames' found').2 entry mem
+  simp only [Effect.processes_apply]
+  rcases Footprint.record_framed (processId := entry.1) framed found with same |
+    ⟨reads, writes, lookup, live | ⟨change, same, frame⟩⟩
+  · rw [same]; rfl
+  · exact absurd live (apart lookup lookup').1
+  · rw [same]
+    cases record : state.processes entry.1 with
+    | none => rfl
+    | some record' =>
+      simp only [Option.map_some]
+      exact congrArg some (frame_keeps (frame record' record) viewFrame (apart lookup lookup').2)
+
+/-- Steps touching records apart change them to the same in either order. -/
+private theorem Footprint.records_comm_of_apart {first second : Footprint} {state : State}
+    (framed : first.Framed state) (framed' : second.Framed state)
+    (apart : first.apart second = true) :
+    (first.effect.apply (second.effect.apply state)).processes =
+      (second.effect.apply (first.effect.apply state)).processes := by
+  obtain ⟨frames, found⟩ : ∃ frames, first.frames = some frames := by
+    cases found : first.frames <;> simp_all [Footprint.apart]
+  obtain ⟨frames', found'⟩ : ∃ frames', second.frames = some frames' := by
+    cases found' : second.frames <;> cases first.frames <;> simp_all [Footprint.apart]
+  funext processId
+  simp only [Effect.processes_apply]
+  rcases Footprint.record_framed (processId := processId) framed found with same |
+    ⟨reads, writes, lookup, live | ⟨change, same, frame⟩⟩
+  · rw [same]; rfl
+  · rcases Footprint.record_framed (processId := processId) framed' found' with same' |
+      ⟨reads', writes', lookup', -⟩
+    · rw [same']; rfl
+    · exact absurd live (apart_frames apart found found' lookup lookup').2.2.1
+  · rcases Footprint.record_framed (processId := processId) framed' found' with same' |
+      ⟨reads', writes', lookup', live' | ⟨change', same', frame'⟩⟩
+    · rw [same']; rfl
+    · exact absurd live' (apart_frames apart found found' lookup lookup').2.2.2
+    · rw [same, same']
+      cases record : state.processes processId with
+      | none => rfl
+      | some record' =>
+        simp only [Option.map_some]
+        have disjoint := apart_frames apart found found' lookup lookup'
+        exact congrArg some (frame_comm (frame record' record) (frame' record' record)
+          disjoint.1 disjoint.2.1)
+
+/-- Independent steps keep what the other observes and commute. -/
+private theorem Footprint.sound_of_independent {first second : Footprint} {state : State}
+    (framed : first.Framed state) (framed' : second.Framed state)
+    (independent : first.independent second state = true) :
+    second.observes.Agree state (first.effect.apply state) ∧
+      first.observes.Agree state (second.effect.apply state) ∧
+      first.effect.apply (second.effect.apply state) =
+        second.effect.apply (first.effect.apply state) := by
+  simp only [Footprint.independent, Bool.and_eq_true, Bool.or_eq_true] at independent
+  obtain ⟨⟨⟨records, keepsRest⟩, keepsRest'⟩, commutesRest⟩ := independent
+  obtain ⟨timers, inTransit⟩ := Effect.agree_rest keepsRest
+  obtain ⟨timers', inTransit'⟩ := Effect.agree_rest keepsRest'
+  obtain ⟨timersComm, inTransitComm⟩ := Effect.rest_comm commutesRest
+  have parts : (∀ entry ∈ second.observes.records,
+        ((first.effect.apply state).processes entry.1).map entry.2 =
+          (state.processes entry.1).map entry.2) ∧
+      (∀ entry ∈ first.observes.records,
+        ((second.effect.apply state).processes entry.1).map entry.2 =
+          (state.processes entry.1).map entry.2) ∧
+      (first.effect.apply (second.effect.apply state)).processes =
+        (second.effect.apply (first.effect.apply state)).processes := by
+    rcases records with apart | ⟨⟨keeps, keeps'⟩, commutes⟩
+    · obtain ⟨frames, found⟩ : ∃ frames, first.frames = some frames := by
+        cases found : first.frames <;> simp_all [Footprint.apart]
+      obtain ⟨frames', found'⟩ : ∃ frames', second.frames = some frames' := by
+        cases found' : second.frames <;> cases first.frames <;> simp_all [Footprint.apart]
+      exact ⟨Footprint.agree_records_of_apart framed framed' found found' fun lookup lookup' =>
+          ⟨(apart_frames apart found found' lookup lookup').2.2.1, fun field written =>
+            ((apart_frames apart found found' lookup lookup').1 field written).1⟩,
+        Footprint.agree_records_of_apart framed' framed found' found fun lookup' lookup =>
+          ⟨(apart_frames apart found found' lookup lookup').2.2.2, fun field written =>
+            ((apart_frames apart found found' lookup lookup').2.1 field written).1⟩,
+        Footprint.records_comm_of_apart framed framed' apart⟩
+    · exact ⟨Effect.agree_records keeps, Effect.agree_records keeps', Effect.records_comm commutes⟩
+  exact ⟨⟨parts.1, timers, inTransit, rfl⟩, ⟨parts.2.1, timers', inTransit', rfl⟩,
+    State.ext' parts.2.2 timersComm inTransitComm rfl⟩
+
+/-! ### Frames of steps -/
+
+/-- How a change of a record keeps it live, after an effect changing no record. -/
+private theorem record_comp_map {effect : Effect} {processId : PID}
+    {change : ProcessState → ProcessState} (none : effect.records = []) :
+    effect.record processId ∘ Option.map change = Option.map change := by
+  funext record
+  simp [Effect.record, none]
+
+private theorem lookup_head {processId : PID} {value : β} {rest : List (PID × β)} :
+    ((processId, value) :: rest).lookup processId = some value := by
+  simp [List.lookup]
+
+private theorem lookup_pair_if {processId target : PID} {value value' : β} :
+    [(processId, value), (target, value')].lookup target =
+      some (if target = processId then value else value') := by
+  by_cases same : target = processId
+  · subst same; simp [List.lookup]
+  · have : (target == processId) = false := by simpa using same
+    simp [List.lookup, this, same]
+
+private theorem lookup_pair {processId target : PID} {value value' : β} (distinct : ¬target = processId) :
+    [(processId, value), (target, value')].lookup target = some value' := by
+  have : (target == processId) = false := by simpa using distinct
+  simp [List.lookup, this]
+
+/-- A record update agreeing with a frame. -/
+private theorem frame_of {record : ProcessState} {reads writes : List Field}
+    {change : ProcessState → ProcessState}
+    (keeps : ∀ process, process.Same reads record → ∀ field, field ∉ writes →
+      (change process).get field = process.get field)
+    (depends : ∀ process process', process.Same reads record → process'.Same reads record →
+      ∀ field ∈ writes, (change process).get field = (change process').get field) :
+    Frame record reads writes change := ⟨keeps, depends⟩
+
+private theorem lookup_single {processId : PID} {value : β} :
+    [(processId, value)].lookup processId = some value := by
+  simp [List.lookup]
+
+/-- A process ending reads whom it signals and ends its record. -/
+private theorem Footprint.ending_framed {state : State} {processId : PID} {reason : Term} :
+    (Footprint.ending state processId reason).Framed state := by
+  intro frames found
+  simp only [Footprint.ending, Option.some.injEq] at found
+  subst found
+  refine ⟨fun entry mem => ?_, fun entry mem => ?_⟩
+  · simp only [Footprint.ending, Effect.ending, List.mem_singleton] at mem
+    subst mem
+    exact ⟨_, _, lookup_single, .inl (by simp)⟩
+  · simp only [Footprint.ending, Observes.record, List.mem_singleton] at mem
+    subst mem
+    refine ⟨_, _, lookup_single, fun process process' agree => ?_⟩
+    simp only [ProcessState.Same, List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp,
+      forall_eq, ProcessState.get] at agree
+    simp [ProcessState.ending, agree]
+
+/-- Removing a monitor changes its process within its frame: an active monitor keeps the mailbox. -/
+private theorem requestFootprint_demonitor_framed {state : State} {processId : PID}
+    {reference : List Nat} {flush : Bool} :
+    (requestFootprint state processId (.demonitor reference flush)).Framed state := by
+  intro frames found
+  simp only [requestFootprint, Option.some.injEq] at found
+  subst found
+  refine ⟨fun entry mem => ?_, fun entry mem => ?_⟩
+  · simp only [requestFootprint, Effect.change, List.mem_singleton] at mem
+    subst mem
+    refine ⟨_, _, lookup_head, .inr ⟨_, rfl, fun record live => ?_⟩⟩
+    have process : state.process processId = record := by simp [State.process, live]
+    rw [process]
+    cases flush <;> cases active : Kernel.any record.monitoring (·.1 == reference) <;>
+      simp only [Bool.false_and, Bool.true_and, Bool.not_true, Bool.not_false] <;>
+      refine frame_of (fun process same field written => ?_)
+        (fun process process' same same' field written => ?_)
+    all_goals
+      simp only [ProcessState.Same, List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp,
+        forall_eq, ProcessState.get] at same written ⊢
+      try simp only [ProcessState.Same, List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp,
+        forall_eq, ProcessState.get] at same'
+      simp only [Kernel.any_eq] at *
+      cases field <;> (try simp only [same.1]) <;> (try simp only [same'.1]) <;>
+        simp_all <;>
+        (intro none; obtain ⟨_, found⟩ := active; exact absurd rfl (none _ _ found))
+  · simp only [requestFootprint, Observes.record, List.mem_singleton] at mem
+    subst mem
+    refine ⟨_, _, lookup_head, fun process process' agree => ?_⟩
+    have : process.monitoring = process'.monitoring :=
+      agree .monitoring (by cases (flush && _) <;> simp)
+    simp [this]
+
+private theorem requestFootprint_framed {state : State} {processId : PID} {query : Request} :
+    (requestFootprint state processId query).Framed state := by
+  cases query
+  case demonitor => exact requestFootprint_demonitor_framed
+  all_goals simp only [requestFootprint]
+  all_goals (repeat' split) <;>
+    first
+    | exact Footprint.framed_none rfl
+    | (intro frames found
+       simp only [Option.some.injEq] at found
+       subst found
+       refine ⟨fun entry mem => ?_, fun entry mem => ?_⟩
+       · simp only [Effect.andThen, Effect.change, Effect.send, Kernel.append_eq, Kernel.map_eq,
+           List.map_cons, List.map_nil, List.mem_cons, List.not_mem_nil, or_false,
+           List.append_nil] at mem
+         all_goals subst mem
+         all_goals refine ⟨_, _, lookup_head, .inr ⟨_,
+           by first | rfl | exact record_comp_map rfl | exact record_comp_map (by split <;> rfl),
+           fun record live => frame_of ?_ ?_⟩⟩
+         all_goals
+           intros
+           rename_i field written
+           simp only [ProcessState.Same, List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp,
+             forall_eq, ProcessState.get] at *
+           cases field <;> simp_all [ProcessState.append] <;> (repeat' split) <;> simp_all
+       · simp only [Observes.and, Observes.record, List.cons_append, List.nil_append, Kernel.append_eq,
+           List.mem_cons, List.not_mem_nil, or_false] at mem
+         rcases mem with rfl | rfl <;>
+           refine ⟨_, _, by first | exact lookup_head | exact lookup_pair_if,
+             fun process process' agree => ?_⟩ <;>
+           simp only [ProcessState.Same, List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp,
+             forall_eq, ProcessState.get] at agree <;>
+           simp_all [ProcessState.live])
+
+/-- A receive reads its process's environment and mailbox, and changes only the mailbox. -/
+private theorem Task.footprint_receive_framed {state : State} {processId : PID}
+    {γ δ : Type} {timeout : ReceiveTimeout} {select : Environment → Term → Option γ}
+    {next : Option γ → Result δ} {finish : Except Exception δ → Option (Except Exception α)} :
+    (Task.footprint state processId ⟨.receive timeout select next, finish⟩).Framed state := by
+  intro frames found
+  simp only [Task.footprint, Option.some.injEq] at found
+  subst found
+  refine ⟨fun entry mem => ?_, fun entry mem => ?_⟩
+  · simp only [Task.footprint] at mem
+    cases selected : selectMessage (select (state.view processId)) (state.process processId).mailbox with
+    | none => simp [selected] at mem
+    | some _ =>
+      simp only [selected, Effect.change, List.mem_singleton] at mem
+      subst mem
+      refine ⟨_, _, lookup_head, .inr ⟨_, rfl, fun record live => frame_of ?_ ?_⟩⟩
+      all_goals
+        intros
+        rename_i field written
+        simp only [ProcessState.Same, List.mem_cons, List.not_mem_nil, or_false,
+          ProcessState.get] at *
+        cases field <;> simp_all
+  · simp only [Task.footprint, Observes.record, List.mem_singleton] at mem
+    subst mem
+    refine ⟨_, _, lookup_head, fun process process' agree => ?_⟩
+    simp only [ProcessState.Same, List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp,
+      forall_eq, ProcessState.get] at agree
+    simp_all
+
+private theorem Task.footprint_framed {state : State} {processId : PID} {task : Task α} :
+    (task.footprint state processId).Framed state := by
+  obtain ⟨computation, _⟩ := task
+  cases computation
+  case receive => exact Task.footprint_receive_framed
+  case request => exact requestFootprint_framed
+  case error exception =>
+    cases exception
+    case exhausted => exact Footprint.framed_none rfl
+    all_goals exact Footprint.ending_framed
+  all_goals simp only [Task.footprint]
+  all_goals (repeat' split) <;> first
+    | exact Footprint.ending_framed
+    | exact Footprint.framed_none rfl
+    | (intro frames found
+       simp only [Option.some.injEq] at found
+       subst found
+       refine ⟨fun entry mem => ?_, fun entry mem => ?_⟩
+       · simp only [Effect.change, Effect.send, List.mem_cons, List.not_mem_nil, or_false,
+           List.not_mem_nil] at mem
+         all_goals subst mem
+         all_goals refine ⟨_, _, lookup_head, .inr ⟨_, rfl, fun record live => frame_of ?_ ?_⟩⟩
+         all_goals
+           intros
+           rename_i field written
+           simp only [ProcessState.Same, List.mem_cons, List.not_mem_nil, or_false, forall_eq,
+             ProcessState.get] at *
+           cases field <;> simp_all [ProcessState.append]
+       · simp only [Observes.record, List.mem_singleton] at mem
+         subst mem
+         refine ⟨_, _, lookup_head, fun process process' agree => ?_⟩
+         simp only [ProcessState.Same, List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp,
+           forall_eq, ProcessState.get] at agree
+         simp_all [ProcessState.live, ProcessState.env])
+
+/-- A signal reaching a live process changes its record within the signal's frame. -/
+private theorem ProcessState.receive_frame {record : ProcessState} {source : PID} {signal : Signal} :
+    Frame record signal.frame.1 signal.frame.2 (·.receive source signal) := by
+  constructor
+  · intro process same field written
+    cases signal <;> cases field <;>
+      simp_all [Signal.frame, ProcessState.receive, ProcessState.append, ProcessState.get] <;>
+      (repeat' split) <;> simp_all
+  · intro process process' same same' field written
+    simp only [ProcessState.Same] at same same'
+    cases signal <;> cases field <;>
+      simp_all [Signal.frame, ProcessState.receive, ProcessState.append, ProcessState.get] <;>
+      (repeat' split) <;> simp_all
+
+/-- An exit signal reaching a live process not trapping exits only drops the link. -/
+private theorem ProcessState.receive_exit_frame {record : ProcessState} {source : PID} {reason : Term}
+    {linked : Bool} (trapping : record.trapExit = false) :
+    Frame record [.links, .trapExit] [.links] (·.receive source (.exit reason linked)) := by
+  constructor
+  · intro process same field written
+    simp only [ProcessState.Same, List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp,
+      forall_eq] at same
+    cases field <;> simp_all [ProcessState.receive, ProcessState.get] <;> (repeat' split) <;> simp_all
+  · intro process process' same same' field written
+    simp only [ProcessState.Same, List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp,
+      forall_eq] at same same'
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at written
+    subst written
+    simp_all [ProcessState.receive, ProcessState.get] <;> (repeat' split) <;> simp_all
+
+private theorem Footprint.delivery_framed {state : State} {envelope : Envelope} :
+    (Footprint.delivery state envelope).Framed state := by
+  obtain ⟨source, target, signal⟩ := envelope
+  unfold Footprint.delivery
+  split
+  · rename_i reason linked same
+    cases exits : (state.exitSignal target source reason linked).2 with
+    | some _ => exact Footprint.framed_none (by simp [exits])
+    | none =>
+      intro frames found
+      simp only [exits, Option.some.injEq] at found
+      subst found
+      constructor
+      · intro entry mem
+        simp only [exits, Effect.andThen, Effect.change, Kernel.append_eq, Kernel.map_eq, List.map_nil,
+          List.nil_append, List.mem_singleton] at mem
+        subst mem
+        refine ⟨_, _, lookup_single, .inr ⟨_, rfl, fun record live => ?_⟩⟩
+        have process : state.process target = record := by simp [State.process, live]
+        rw [process]
+        cases trapping : record.trapExit
+        · simp only at same
+          rw [same]
+          exact ProcessState.receive_exit_frame trapping
+        · exact ProcessState.receive_frame
+      · intro entry mem
+        simp only [exits, Observes.and, Observes.record, Kernel.append_eq, List.cons_append,
+          List.nil_append, List.mem_cons, List.not_mem_nil, or_false] at mem
+        rcases mem with rfl | rfl <;> refine ⟨_, _, lookup_single, fun process process' agree => ?_⟩
+        · rfl
+        · have read : ∀ field ∈ [Field.links, .trapExit], field ∈
+              (cond (state.process target).trapExit signal.frame ([.links, .trapExit], [.links])).1 := by
+            simp only at same
+            cases (state.process target).trapExit <;> simp [Signal.frame, same]
+          have links := agree .links (read _ (by simp))
+          have trapExit := agree .trapExit (read _ (by simp))
+          simp only [ProcessState.get] at links trapExit
+          simp [links, trapExit]
+  · rename_i other
+    intro frames found
+    simp only [Option.some.injEq] at found
+    subst found
+    constructor
+    · intro entry mem
+      simp only [Effect.andThen, Effect.change, Kernel.append_eq, Kernel.map_eq, List.map_nil,
+        List.nil_append, List.mem_singleton] at mem
+      subst mem
+      exact ⟨_, _, lookup_single, .inr ⟨_, rfl, fun _ _ => ProcessState.receive_frame⟩⟩
+    · intro entry mem
+      simp only [List.mem_singleton] at mem
+      subst mem
+      exact ⟨_, _, lookup_single, fun _ _ _ => rfl⟩
+
+private theorem Footprint.bounce_framed {state : State} {envelope : Envelope} :
+    (Footprint.bounce envelope).Framed state := by
+  intro frames found
+  simp only [Footprint.bounce, Option.some.injEq] at found
+  subst found
+  refine ⟨fun entry mem => by simp [Footprint.bounce] at mem, fun entry mem => ?_⟩
+  simp only [Footprint.bounce, List.mem_singleton] at mem
+  subst mem
+  exact ⟨_, _, lookup_single, fun _ _ _ => rfl⟩
+
+private theorem Footprint.fire_framed {state : State} {timer : Timer} :
+    (Footprint.fire timer).Framed state := by
+  intro frames found
+  simp only [Footprint.fire, Option.some.injEq] at found
+  subst found
+  exact ⟨fun entry mem => by simp [Footprint.fire] at mem,
+    fun entry mem => by simp [Footprint.fire] at mem⟩
+
 
 end Lynx.Concurrent
 

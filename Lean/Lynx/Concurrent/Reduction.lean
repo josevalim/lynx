@@ -2001,6 +2001,18 @@ private theorem Pair.square {state : State} {tasks : List (PID × Task α)}
   rw [← same]
   exact back
 
+/-- The frames of the footprint of a step describe it. -/
+private theorem Config.footprint_framed {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key : Key} {footprint : Footprint}
+    (found : (Config.running state tasks finished exhausted).footprint key = some footprint) :
+    footprint.Framed state := by
+  cases key <;> simp only [Config.footprint] at found <;> (repeat' split at found) <;>
+    simp only [Option.some.injEq, reduceCtorEq] at found <;> subst found
+  · exact Task.footprint_framed
+  · exact Footprint.delivery_framed
+  · exact Footprint.bounce_framed
+  · exact Footprint.fire_framed
+
 /-- Independent steps commute: when one step follows another, it can also be
 taken first, followed by the other. -/
 private theorem diamond {state : State} {tasks : List (PID × Task α)}
@@ -2016,15 +2028,14 @@ private theorem diamond {state : State} {tasks : List (PID × Task α)}
   obtain ⟨distinct, independent⟩ := independent
   split at independent
   · rename_i footprint' footprint found' found
-    simp only [Footprint.independent, Bool.and_eq_true] at independent
-    obtain ⟨⟨keeps', keeps⟩, commutes⟩ := independent
+    obtain ⟨keeps', keeps, commutes⟩ := Footprint.sound_of_independent
+      (Config.footprint_framed found') (Config.footprint_framed found) independent
     obtain ⟨move, moved⟩ := moves wellformed mem found
     obtain ⟨event₀, next₀, mem₀⟩ := enabled found'
     obtain ⟨move', moved'⟩ := moves wellformed mem₀ found'
     have pair : Pair state tasks finished exhausted key key' footprint footprint' move move' :=
-      ⟨wellformed, found, found', ⟨_, _, moved⟩, ⟨_, _, moved'⟩, Ne.symm distinct,
-        Effect.agree_of_keeps keeps, Effect.agree_of_keeps keeps'⟩
-    obtain ⟨last, forth, back⟩ := pair.square moved moved' (Effect.apply_comm commutes).symm mem mem₀
+      ⟨wellformed, found, found', ⟨_, _, moved⟩, ⟨_, _, moved'⟩, Ne.symm distinct, keeps, keeps'⟩
+    obtain ⟨last, forth, back⟩ := pair.square moved moved' commutes.symm mem mem₀
     have wellformedNext := Step.wellformed (Step.of_mem_steps mem) wellformed
     rw [moved.next] at wellformedNext mem' forth
     obtain ⟨rfl, rfl⟩ := steps_unique wellformedNext mem' forth
@@ -2043,15 +2054,14 @@ private theorem forward {state : State} {tasks : List (PID × Task α)}
   obtain ⟨distinct, independent⟩ := independent
   split at independent
   · rename_i footprint' footprint found' found
-    simp only [Footprint.independent, Bool.and_eq_true] at independent
-    obtain ⟨⟨keeps', keeps⟩, commutes⟩ := independent
+    obtain ⟨keeps', keeps, commutes⟩ := Footprint.sound_of_independent
+      (Config.footprint_framed found') (Config.footprint_framed found) independent
     obtain ⟨move, moved⟩ := moves wellformed mem found
     obtain ⟨event₀, next₀, mem₀⟩ := enabled found'
     obtain ⟨move', moved'⟩ := moves wellformed mem₀ found'
     have pair : Pair state tasks finished exhausted key key' footprint footprint' move move' :=
-      ⟨wellformed, found, found', ⟨_, _, moved⟩, ⟨_, _, moved'⟩, Ne.symm distinct,
-        Effect.agree_of_keeps keeps, Effect.agree_of_keeps keeps'⟩
-    obtain ⟨last, forth, -⟩ := pair.square moved moved' (Effect.apply_comm commutes).symm mem mem₀
+      ⟨wellformed, found, found', ⟨_, _, moved⟩, ⟨_, _, moved'⟩, Ne.symm distinct, keeps, keeps'⟩
+    obtain ⟨last, forth, -⟩ := pair.square moved moved' commutes.symm mem mem₀
     exact ⟨_, _, forth⟩
   · simp at independent
 
