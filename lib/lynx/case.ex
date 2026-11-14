@@ -222,15 +222,23 @@ defmodule Lynx.Case do
   The prelude cannot refer to translated definitions, which do not exist yet.
   It does not leak into other groups, and its source participates in verification
   cache keys. Proofs retain kernel checking and axiom audits.
+
+  A file path may be given instead, relative to the directory of the calling
+  file, to load its contents with `Lynx.Lean.from_file!/1`:
+
+      prelude "tactics.lean"
   '''
   defmacro prelude(source) do
     quote do
-      Lynx.Case.__prelude__(__MODULE__, unquote(source))
+      Lynx.Case.__prelude__(__MODULE__, unquote(source), __DIR__)
     end
   end
 
   @doc false
-  def __prelude__(module, %Lynx.Lean{} = source) do
+  def __prelude__(module, path, dir) when is_binary(path),
+    do: __prelude__(module, Lynx.Lean.from_file!(Path.expand(path, dir)), dir)
+
+  def __prelude__(module, %Lynx.Lean{} = source, _dir) do
     case Module.get_attribute(module, :lynx_preludes) do
       nil ->
         raise ArgumentError, "prelude must be defined inside a laws group"
@@ -240,8 +248,8 @@ defmodule Lynx.Case do
     end
   end
 
-  def __prelude__(_module, _source),
-    do: raise(ArgumentError, "prelude expects a Lynx.Lean value")
+  def __prelude__(_module, _source, _dir),
+    do: raise(ArgumentError, "prelude expects a Lynx.Lean value or a file path")
 
   @doc ~S'''
   Adds Lean declarations about translated definitions to this laws group.
@@ -268,15 +276,21 @@ defmodule Lynx.Case do
   definition they mention. They do not leak into other groups, and their source
   participates in verification cache keys. Proofs retain kernel checking and
   axiom audits.
+
+  As with `prelude/1`, a file path may be given instead, relative to the
+  directory of the calling file.
   '''
   defmacro postlude(source) do
     quote do
-      Lynx.Case.__postlude__(__MODULE__, unquote(source))
+      Lynx.Case.__postlude__(__MODULE__, unquote(source), __DIR__)
     end
   end
 
   @doc false
-  def __postlude__(module, %Lynx.Lean{} = source) do
+  def __postlude__(module, path, dir) when is_binary(path),
+    do: __postlude__(module, Lynx.Lean.from_file!(Path.expand(path, dir)), dir)
+
+  def __postlude__(module, %Lynx.Lean{} = source, _dir) do
     case Module.get_attribute(module, :lynx_postludes) do
       nil ->
         raise ArgumentError, "postlude must be defined inside a laws group"
@@ -286,8 +300,8 @@ defmodule Lynx.Case do
     end
   end
 
-  def __postlude__(_module, _source),
-    do: raise(ArgumentError, "postlude expects a Lynx.Lean value")
+  def __postlude__(_module, _source, _dir),
+    do: raise(ArgumentError, "postlude expects a Lynx.Lean value or a file path")
 
   @doc """
   Leaves a function untranslated in this laws group.

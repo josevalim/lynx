@@ -12,10 +12,8 @@ defmodule BinaryProofsTest do
     :binary.decode_hex(encoded) === bytes and byte_size(encoded) === 2 * byte_size(bytes)
   end
 
-  @lookup_tables Lynx.Lean.from_file!(Path.expand("lookup_tables.lean", __DIR__))
-
   laws "hexadecimal encoding round trip", options: [maxHeartbeats: 1_000_000] do
-    prelude @lookup_tables
+    prelude "lookup_tables.lean"
 
     law hex_roundtrip(bytes, mode),
       requires: is_binary(bytes) and (mode === :uppercase or mode === :lowercase),
