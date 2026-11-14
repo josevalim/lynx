@@ -213,19 +213,7 @@ defmodule Lynx.CaseTest do
       def increment(_value), do: true
 
       laws "custom syntax" do
-        prelude ~LEAN"""
-        module
-        public import Lynx
-        public section
-        namespace PreludeTest
-        theorem truth : True := by trivial
-        end PreludeTest
-        open Lean Elab Tactic
-        elab "test_partial" : tactic => do evalTactic (← `(tactic| (
-          intro f g h n
-          cases n <;> simp
-          all_goals first | exact h _ | exact Lean.Order.PartialOrder.rel_refl)))
-        """
+        prelude "case_test/prelude.lean"
 
         # Parsing this declaration requires the syntax from the previous one.
         prelude ~LEAN"""
@@ -289,12 +277,7 @@ defmodule Lynx.CaseTest do
       def double(value) when is_integer(value), do: value + value
 
       laws "shared" do
-        postlude(~LEAN"""
-        namespace Elixir.Lynx.CaseTest.Postludes
-
-        theorem double_integer (n : Int) : «double/1» (.integer n) = .ok (.integer (n + n)) := by
-          simp [«double/1»]
-        """)
+        postlude "case_test/postlude.lean"
 
         postlude(~LEAN"""
         theorem double_zero : «double/1» (.integer 0) = .ok (.integer 0) := by

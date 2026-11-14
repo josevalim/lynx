@@ -11,10 +11,8 @@ defmodule Base64ProofsTest do
     :base64.decode(encoded) === bytes and byte_size(encoded) === div(byte_size(bytes) + 2, 3) * 4
   end
 
-  @lookup_tables Lynx.Lean.from_file!(Path.expand("lookup_tables.lean", __DIR__))
-
   laws "Base64 encoding round trip", options: [maxHeartbeats: 800_000] do
-    prelude @lookup_tables
+    prelude "lookup_tables.lean"
     cutoff &:base64.encode_list/4
     cutoff &:base64.decode_list/4
 
