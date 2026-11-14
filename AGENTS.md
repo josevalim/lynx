@@ -76,11 +76,12 @@ non-negotiable, so a new process BIF, or a change to one, goes through every lay
    what it changes. A footprint that observes too little is unsound; one that
    observes too much only costs exploration. Extend `request_matches` and the
    commuting proofs, and `Task.local` only for steps that touch nothing but the
-   process's own record. Give it `frames` too, the fields of each record it reads
-   and writes at the state (`Footprint.Framed`), so that steps touching records
-   apart commute without evaluating them; unknown frames only cost evaluation. Termination (`Concurrent/Termination.lean`), traces
-   (`Concurrent/Trace.lean`) and the runner (`Lynx/Term/Runner.lean`) must cover
-   it too.
+   process's own record. Give it `frames` too: for each process, once, the fields
+   of its record the step reads and writes at the state, with `live` when it ends
+   or starts the process (`Footprint.Framed`), so that steps touching records
+   apart commute without evaluating them; unknown frames only cost evaluation.
+   Termination (`Concurrent/Termination.lean`), traces (`Concurrent/Trace.lean`)
+   and the runner (`Lynx/Term/Runner.lean`) must cover it too.
 4. Look for steps that do nothing now and never will. For example, a `DOWN`
    in transit after its monitor was removed by `demonitor`, a message sent to an
    alias that was removed by `unalias`, or a message or exit signal to a process

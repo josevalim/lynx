@@ -2013,17 +2013,16 @@ private theorem Config.footprint_framed {state : State} {tasks : List (PID × Ta
   · exact Footprint.bounce_framed
   · exact Footprint.fire_framed
 
-/-- Independent steps commute: when one step follows another, it can also be
-taken first, followed by the other. -/
-private theorem diamond {state : State} {tasks : List (PID × Task α)}
+/-- Independent steps meet again: taking either first, the other follows to the
+same configuration. -/
+private theorem independent_square {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {exhausted : Bool} {key key' : Key}
-    {event event' : Event} {next next' : Config α}
+    {event : Event} {next : Config α}
     (wellformed : Wellformed (.running state tasks finished exhausted))
     (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
-    (independent : (Config.running state tasks finished exhausted).independent key' key = true)
-    (mem' : (key', event', next') ∈ next.steps) :
-    ∃ next'', (key', event', next'') ∈ (Config.running state tasks finished exhausted).steps ∧
-      Step next'' event next' := by
+    (independent : (Config.running state tasks finished exhausted).independent key' key = true) :
+    ∃ event' next' last, (key', event', next') ∈ (Config.running state tasks finished exhausted).steps ∧
+      (key', event', last) ∈ next.steps ∧ (key, event, last) ∈ next'.steps := by
   simp only [Config.independent, Bool.and_eq_true, bne_iff_ne, ne_eq] at independent
   obtain ⟨distinct, independent⟩ := independent
   split at independent
@@ -2036,11 +2035,27 @@ private theorem diamond {state : State} {tasks : List (PID × Task α)}
     have pair : Pair state tasks finished exhausted key key' footprint footprint' move move' :=
       ⟨wellformed, found, found', ⟨_, _, moved⟩, ⟨_, _, moved'⟩, Ne.symm distinct, keeps, keeps'⟩
     obtain ⟨last, forth, back⟩ := pair.square moved moved' commutes.symm mem mem₀
-    have wellformedNext := Step.wellformed (Step.of_mem_steps mem) wellformed
-    rw [moved.next] at wellformedNext mem' forth
+    exact ⟨event₀, next₀, last, mem₀, forth, back⟩
+  · simp at independent
+
+/-- Independent steps commute: when one step follows another, it can also be
+taken first, followed by the other. -/
+private theorem diamond {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key key' : Key}
+    {event event' : Event} {next next' : Config α}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
+    (independent : (Config.running state tasks finished exhausted).independent key' key = true)
+    (mem' : (key', event', next') ∈ next.steps) :
+    ∃ next'', (key', event', next'') ∈ (Config.running state tasks finished exhausted).steps ∧
+      Step next'' event next' := by
+  obtain ⟨event₀, next₀, last, mem₀, forth, back⟩ := independent_square wellformed mem independent
+  have wellformedNext := Step.wellformed (Step.of_mem_steps mem) wellformed
+  cases next with
+  | start => simp [Config.steps] at mem'
+  | running =>
     obtain ⟨rfl, rfl⟩ := steps_unique wellformedNext mem' forth
     exact ⟨next₀, mem₀, Step.of_mem_steps back⟩
-  · simp at independent
 
 /-- A step independent of another stays enabled once the other is taken. -/
 private theorem forward {state : State} {tasks : List (PID × Task α)}
@@ -2049,21 +2064,9 @@ private theorem forward {state : State} {tasks : List (PID × Task α)}
     (wellformed : Wellformed (.running state tasks finished exhausted))
     (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
     (independent : (Config.running state tasks finished exhausted).independent key' key = true) :
-    ∃ event' next', (key', event', next') ∈ next.steps := by
-  simp only [Config.independent, Bool.and_eq_true, bne_iff_ne, ne_eq] at independent
-  obtain ⟨distinct, independent⟩ := independent
-  split at independent
-  · rename_i footprint' footprint found' found
-    obtain ⟨keeps', keeps, commutes⟩ := Footprint.sound_of_independent
-      (Config.footprint_framed found') (Config.footprint_framed found) independent
-    obtain ⟨move, moved⟩ := moves wellformed mem found
-    obtain ⟨event₀, next₀, mem₀⟩ := enabled found'
-    obtain ⟨move', moved'⟩ := moves wellformed mem₀ found'
-    have pair : Pair state tasks finished exhausted key key' footprint footprint' move move' :=
-      ⟨wellformed, found, found', ⟨_, _, moved⟩, ⟨_, _, moved'⟩, Ne.symm distinct, keeps, keeps'⟩
-    obtain ⟨last, forth, -⟩ := pair.square moved moved' commutes.symm mem mem₀
-    exact ⟨_, _, forth⟩
-  · simp at independent
+    ∃ event' next', (key', event', next') ∈ next.steps :=
+  let ⟨event', _, last, _, forth, _⟩ := independent_square wellformed mem independent
+  ⟨event', last, forth⟩
 
 /-- Every step of a running configuration has a key. -/
 private theorem Step.keyed {state : State} {tasks : List (PID × Task α)}
