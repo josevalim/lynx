@@ -32,6 +32,41 @@ started or ask your coding agent to run `mix help Lynx`.
 >
 > See the ["Getting started with proofs"](#getting-started-with-proofs) section below.
 
+## Features
+
+  * **Laws written in Elixir or Erlang** - use `Lynx.Case` to verify laws
+    alongside your ExUnit tests, or `Lynx.Laws` to control when they are verified
+
+  * **Kernel-checked proofs** - each law becomes a Lean theorem, with
+    `requires:` as its hypothesis and `expects:` as its goal, and proofs
+    may not rely on `sorry` or untrusted axioms
+
+  * **Whole-program translation** - your compiled code is translated together
+    with all of its dependencies, including Elixir and Erlang's standard library
+
+  * **Exceptions and termination** - exceptions are part of a function's
+    result, and proving a law also proves its computation returns. Recursive
+    functions can declare their termination with `termination_by` or
+    `partial_fixpoint`, and `cutoff` excludes dependencies your inputs are
+    proven to never reach
+
+  * **Purity tracking** - every function is classified as pure, higher-order,
+    sequential, or concurrent, and each law is stated in the simplest form its
+    purity allows
+
+  * **Concurrency** - spawning, sending and receiving messages, links, monitors,
+    exit signals, and timers are modeled after OTP. Concurrent laws hold for every
+    interleaving of processes and every point at which timers fire, and steps
+    that commute are explored only once. `lynx_counterexample` prints a failing
+    run of a   concurrent program, one step per line
+
+  * **Profiling** - `LYNX_DEBUG=lean` reports the time each module and law takes
+    to verify, and translated sources can be profiled with Lean's built-in profiler
+    or [leanprof](https://github.com/unbalancedparentheses/leanprof)
+
+  * **Independent checks** - `LYNX_EXPORT` exports the elaborated proofs, so
+    they can be checked again by the independent checkers bundled with Lean
+
 ## Examples
 
 ### Elixir
@@ -175,27 +210,27 @@ A law states a property, `expects:`, that must hold for every input satisfying
 its assumptions, `requires:`. Several kinds of properties are straightforward
 to state and often catch real bugs. Here are some examples:
 
-  * **Totality** — the function returns for every valid input, without raising
+  * **Totality** - the function returns for every valid input, without raising
     or looping forever. Since a law can only prove its expectation when the
     computation returns, any law doubles as a proof of totality. The simplest one
     checks the result's shape: `expects: is_binary(encode(term))`.
 
-  * **Roundtrip** — one function undoes another, as with encoding and decoding,
+  * **Roundtrip** - one function undoes another, as with encoding and decoding,
     serializing and parsing, or compressing and decompressing:
     `expects: decode(encode(term)) == {:ok, term}`.
 
-  * **Oracle** — the function agrees with a simpler, obviously correct
+  * **Oracle** - the function agrees with a simpler, obviously correct
     implementation, such as an optimized version against a naive one, or a
     rewrite against the code it replaces: `expects: fast_sort(list) == naive_sort(list)`.
 
-  * **Invariants** — some aspect of the input is preserved, or some structure
+  * **Invariants** - some aspect of the input is preserved, or some structure
     of the output always holds, such as sorting preserving the length of a
     list: `expects: length(sort(list)) == length(list)`.
 
-  * **Idempotence** — applying a function twice is the same as applying it
+  * **Idempotence** - applying a function twice is the same as applying it
     once, as with normalization and formatting: `expects: normalize(normalize(x)) == normalize(x)`.
 
-  * **Algebraic laws** — the function interacts predictably with other
+  * **Algebraic laws** - the function interacts predictably with other
     operations, such as the `sum(l) + sum(r) == sum(l ++ r)` law in the
     examples below.
 
