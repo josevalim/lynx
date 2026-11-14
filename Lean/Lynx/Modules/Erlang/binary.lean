@@ -144,6 +144,17 @@ def «match/3» (subject pattern options : Term) : Except Exception Term :=
 def «match/2» (subject pattern : Term) : Except Exception Term :=
   «match/3» subject pattern .nil
 
+/-- The bytes of a natural number, least significant first, at least one, within
+`fuel` bytes. -/
+private def unsignedBytes : Nat → Nat → List UInt8
+  | 0, _ => []
+  | fuel + 1, n => if n < 256 then [UInt8.ofNat n] else UInt8.ofNat (n % 256) :: unsignedBytes fuel (n / 256)
+
+/-- The big-endian bytes of a non-negative integer, at least one. -/
+def «encode_unsigned/1» : Term → Except Exception Term
+  | .integer n => if n < 0 then badarg else .ok (binary (unsignedBytes (n.toNat + 1) n.toNat).reverse)
+  | _ => badarg
+
 def «last/1» (subject : Term) : Except Exception Term :=
   match bytes? subject with
   | some bytes =>
@@ -261,6 +272,67 @@ theorem split_global_intercalate (c : UInt8) (separated : List (List UInt8))
     simp [«split/3», bytes?_binary, patterns?, pattern, Term.properList?, splitOptions?, whole,
       binary_eq]
   · exact length_le_intercalate c separated
+
+/-- The parts a byte separates. -/
+private def separated (c : UInt8) : List UInt8 → List (List UInt8)
+  | [] => [[]]
+  | b :: rest =>
+    if b = c then [] :: separated c rest
+    else match separated c rest with
+      | p :: ps => (b :: p) :: ps
+      | [] => [[b]]
+
+private theorem intercalate_cons_head (c b : UInt8) (p : List UInt8) (ps : List (List UInt8)) :
+    List.intercalate [c] ((b :: p) :: ps) = b :: List.intercalate [c] (p :: ps) := by
+  cases ps <;> simp [List.intercalate_cons_cons]
+
+private theorem separated_spec (c : UInt8) : ∀ bytes : List UInt8,
+    separated c bytes ≠ [] ∧ List.intercalate [c] (separated c bytes) = bytes ∧
+      ∀ part ∈ separated c bytes, c ∉ part ∧ part.length ≤ bytes.length
+  | [] => by simp [separated]
+  | b :: rest => by
+    obtain ⟨ne, join, parts⟩ := separated_spec c rest
+    by_cases e : b = c
+    · subst e
+      have unfold : separated b (b :: rest) = [] :: separated b rest := by simp [separated]
+      rw [unfold]
+      obtain ⟨p, ps, h⟩ := List.exists_cons_of_ne_nil ne
+      refine ⟨by simp, ?_, fun part mp => ?_⟩
+      · rw [h] at join ⊢
+        simp [List.intercalate_cons_cons, join]
+      · simp only [List.mem_cons] at mp
+        rcases mp with rfl | mp
+        · simp
+        · have := parts part mp
+          exact ⟨this.1, by simp; omega⟩
+    · generalize hS : separated c rest = S at ne join parts
+      cases S with
+      | nil => exact absurd rfl ne
+      | cons p ps =>
+        have unfold : separated c (b :: rest) = (b :: p) :: ps := by simp [separated, e, hS]
+        rw [unfold]
+        refine ⟨by simp, by rw [intercalate_cons_head, join], fun part mp => ?_⟩
+        simp only [List.mem_cons] at mp
+        rcases mp with rfl | mp
+        · have := parts p (by simp)
+          refine ⟨?_, by simp; omega⟩
+          simp only [List.mem_cons, not_or]
+          exact ⟨fun h => e h.symm, this.1⟩
+        · have := parts part (by simp [mp])
+          exact ⟨this.1, by simp; omega⟩
+
+/-- Splitting at every occurrence of a byte gives parts no longer than the subject. -/
+theorem split_global_parts (c : UInt8) (bytes : List UInt8) :
+    ∃ parts : List (List UInt8),
+      «split/3» (.bitstring ⟨bytes.toArray⟩ 0 (Term.Bitstring.valid_aligned _))
+          (.bitstring ⟨#[c]⟩ 0 (Term.Bitstring.valid_aligned _)) (Term.list [.atom "global"]) =
+        .ok (Term.list (parts.map fun part => .bitstring ⟨part.toArray⟩ 0 (Term.Bitstring.valid_aligned _))) ∧
+      ∀ part ∈ parts, part.length ≤ bytes.length := by
+  obtain ⟨ne, join, parts⟩ := separated_spec c bytes
+  refine ⟨separated c bytes, ?_, fun part mp => (parts part mp).2⟩
+  have := split_global_intercalate c (separated c bytes) ne fun part mp => (parts part mp).1
+  simp only [join] at this
+  exact this
 
 /-- Splitting once at a separator absent from the first part. -/
 theorem split_first (c : UInt8) (before after : List UInt8) (absent : c ∉ before) :

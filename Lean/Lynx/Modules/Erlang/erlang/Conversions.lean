@@ -45,6 +45,76 @@ public def «iolist_to_binary/1» (value : Term) : Except Exception Term :=
 @[expose] public def «atom_to_binary/1» (atom : Term) : Except Exception Term :=
   «atom_to_binary/2» atom (.atom "utf8")
 
+/-- The elements of a tuple, in order. -/
+@[expose] public def «tuple_to_list/1» : Term → Except Exception Term
+  | .tuple elements => .ok (Term.list elements.toList)
+  | _ => .error (.error (.atom "badarg"))
+
+/-- One UTF-8 character at the head of the bytes, as OTP's `analyze_utf8` accepts it:
+continuation bytes in place, and no overlong forms, surrogates, or code points
+above U+10FFFF. -/
+private def utf8Char : List UInt8 → Option (Char × List UInt8)
+  | b0 :: rest =>
+    let continues (b : UInt8) := b &&& 0xC0 == 0x80
+    let low (b : UInt8) := (b &&& 0x3F).toNat
+    if b0 < 0x80 then some (Char.ofNat b0.toNat, rest)
+    else if b0 &&& 0xE0 == 0xC0 then
+      match rest with
+      | b1 :: rest =>
+        if continues b1 && 0xC2 ≤ b0 then
+          some (Char.ofNat ((b0 &&& 0x1F).toNat * 64 + low b1), rest)
+        else none
+      | [] => none
+    else if b0 &&& 0xF0 == 0xE0 then
+      match rest with
+      | b1 :: b2 :: rest =>
+        if continues b1 && continues b2 && !(b0 == 0xE0 && b1 < 0xA0) &&
+            !(b0 &&& 0x0F == 0x0D && b1 &&& 0x20 != 0) then
+          some (Char.ofNat ((b0 &&& 0x0F).toNat * 4096 + low b1 * 64 + low b2), rest)
+        else none
+      | _ => none
+    else if b0 &&& 0xF8 == 0xF0 then
+      match rest with
+      | b1 :: b2 :: b3 :: rest =>
+        if continues b1 && continues b2 && continues b3 && !(b0 == 0xF0 && b1 < 0x90) &&
+            !(b0 &&& 0x07 > 4 || (b0 &&& 0x07 == 4 && b1 &&& 0x3F > 0x0F)) then
+          some (Char.ofNat ((b0 &&& 0x07).toNat * 262144 + low b1 * 4096 + low b2 * 64 + low b3),
+            rest)
+        else none
+      | _ => none
+    else none
+  | [] => none
+
+/-- The characters of an atom name in UTF-8, after `count` of them, or the error
+`binary_to_atom/2` raises: `system_limit` once 255 characters leave bytes behind,
+otherwise `badarg` at the first invalid character. Each character consumes a
+byte of `fuel` at least. -/
+private def utf8AtomChars : Nat → Nat → List UInt8 → Except Exception (List Char)
+  | _, _, [] => .ok []
+  | 0, _, _ :: _ => .error (.error (.atom "badarg"))
+  | fuel + 1, count, bytes =>
+    match utf8Char bytes with
+    | none => .error (.error (.atom "badarg"))
+    | some (char, rest) =>
+      if count + 1 = 255 ∧ rest ≠ [] then .error (.error (.atom "system_limit"))
+      else (char :: ·) <$> utf8AtomChars fuel (count + 1) rest
+
+/-- The atom named by a binary in an encoding. Atoms hold at most 255 characters,
+and UTF-8 names of more than 1020 bytes are rejected before decoding, as OTP's
+`erts_atom_put_index` does. -/
+public def «binary_to_atom/2» : Term → Term → Except Exception Term
+  | .bitstring bytes 0 _, .atom "latin1" =>
+    if bytes.size > 255 then .error (.error (.atom "system_limit"))
+    else .ok (.atom (String.ofList (bytes.toList.map fun byte => Char.ofNat byte.toNat)))
+  | .bitstring bytes 0 _, .atom "utf8" | .bitstring bytes 0 _, .atom "unicode" =>
+    if bytes.size > 1020 then .error (.error (.atom "system_limit"))
+    else (fun chars => .atom (String.ofList chars)) <$> utf8AtomChars bytes.size 0 bytes.toList
+  | _, _ => .error (.error (.atom "badarg"))
+
+@[expose] public def «binary_to_atom/1» (binary : Term) : Except Exception Term :=
+  «binary_to_atom/2» binary (.atom "utf8")
+
+
 private def binaryOfString (text : String) : Term :=
   .bitstring text.toUTF8 0 (Term.Bitstring.valid_aligned _)
 
@@ -89,6 +159,35 @@ private theorem toList_loop (bs : ByteArray) (i : Nat) (r : List UInt8) :
 
 private theorem toList_eq_data (bs : ByteArray) : bs.toList = bs.data.toList := by
   rw [ByteArray.toList, toList_loop]; simp
+
+private theorem utf8AtomChars_ascii : ∀ (fuel count : Nat) (bytes : List UInt8), bytes.length ≤ fuel →
+    count + bytes.length ≤ 255 → (∀ b ∈ bytes, b < 0x80) →
+    utf8AtomChars fuel count bytes = .ok (bytes.map fun b => Char.ofNat b.toNat)
+  | _, _, [], _, _, _ => by simp [utf8AtomChars]
+  | 0, _, _ :: _, fits, _, _ => by simp at fits
+  | fuel + 1, count, b :: rest, fits, short, ascii => by
+    have head : b < 0x80 := ascii b (by simp)
+    have tail := utf8AtomChars_ascii fuel (count + 1) rest (by simp at fits; omega)
+      (by simp at short; omega) (fun c mc => ascii c (by simp [mc]))
+    have limit : ¬(count = 254 ∧ ¬rest = []) := by
+      rintro ⟨e, ne⟩
+      cases rest with
+      | nil => exact ne rfl
+      | cons _ _ => simp at short; omega
+    simp [utf8AtomChars, utf8Char, head, limit, tail]
+    rfl
+
+/-- ASCII binaries of at most 255 bytes name the atom of their characters. -/
+public theorem binary_to_atom_ascii (bytes : List UInt8) (valid : Term.Bitstring.Valid ⟨bytes.toArray⟩ 0)
+    (short : bytes.length ≤ 255) (ascii : ∀ b ∈ bytes, b < 0x80) :
+    «binary_to_atom/1» (.bitstring ⟨bytes.toArray⟩ 0 valid) =
+      .ok (.atom (String.ofList (bytes.map fun b => Char.ofNat b.toNat))) := by
+  have size : (ByteArray.mk bytes.toArray).size = bytes.length := by simp [ByteArray.size]
+  have chars := utf8AtomChars_ascii bytes.length 0 bytes (Nat.le_refl _) (by omega) ascii
+  simp only [«binary_to_atom/1», «binary_to_atom/2», size, show ¬bytes.length > 1020 by omega,
+    ↓reduceIte, toList_eq_data]
+  simp [chars]
+  rfl
 
 /-- ASCII digits of a natural number, most significant first. -/
 private def decimalBytes (m : Nat) : List UInt8 :=

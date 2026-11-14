@@ -16,6 +16,13 @@ theorem reverse_improper (a tail : Term) :
     «reverse/2» (.cons a (.atom "improper")) tail = .error (.error (.atom "badarg")) := by
   simp [«reverse/2»]
 
+theorem keymember_finds_tuples :
+    «keymember/3» (.atom "b") (.integer 1)
+        (.cons (.atom "skipped") (.cons (.tuple #[.atom "b", .integer 2]) .nil)) = .ok Term.true ∧
+    «keymember/3» (.atom "c") (.integer 1) (.cons (.tuple #[.atom "a"]) .nil) = .ok Term.false ∧
+    «keymember/3» (.atom "c") (.integer 0) .nil = .error (.error (.atom "badarg")) := by
+  refine ⟨?_, ?_, ?_⟩ <;> cbv
+
 theorem reverse_non_list (tail : Term) :
     «reverse/2» (.integer 1) tail = .error (.error (.atom "badarg")) := rfl
 

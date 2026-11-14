@@ -203,6 +203,7 @@ namespace LynxTest.PublicApi
 open Lean Elab Command
 
 private def expectedDeclarations : Array String := #[
+  "Erlang.binary.«encode_unsigned/1»",
   "Erlang.binary.«last/1»",
   "Erlang.binary.«match/2»",
   "Erlang.binary.«match/3»",
@@ -233,6 +234,8 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«band/2»",
   "Erlang.erlang.«binary_part/2»",
   "Erlang.erlang.«binary_part/3»",
+  "Erlang.erlang.«binary_to_atom/1»",
+  "Erlang.erlang.«binary_to_atom/2»",
   "Erlang.erlang.«binary_to_float/1»",
   "Erlang.erlang.«binary_to_integer/1»",
   "Erlang.erlang.«bit_size/1»",
@@ -319,11 +322,13 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«tl/1»",
   "Erlang.erlang.«trunc/1»",
   "Erlang.erlang.«tuple_size/1»",
+  "Erlang.erlang.«tuple_to_list/1»",
   "Erlang.erlang.«unlink/1»",
   "Erlang.erlang.«xor/2»",
   "Erlang.erts_internal.«mc_iterator/1»",
   "Erlang.erts_internal.«mc_refill/1»",
   "Erlang.lists.«keyfind/3»",
+  "Erlang.lists.«keymember/3»",
   "Erlang.lists.«member/2»",
   "Erlang.lists.«reverse/2»",
   "Erlang.maps.«filter/2»",

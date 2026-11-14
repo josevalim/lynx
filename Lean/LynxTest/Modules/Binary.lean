@@ -49,6 +49,17 @@ private meta def splitCases : List ((Term × Term × Term) × Except Exception T
 
 #guard same (Erlang.binary.«split/2» (bin "k=v=w") (bin "=")) (.ok (bins ["k", "v=w"]))
 
+-- Big-endian bytes, at least one, from Erlang/OTP 29.1.2.
+private meta def unsignedCases : List (Int × Except Exception Term) := [
+  (0, .ok (.bitstring ⟨#[0]⟩ 0 (Term.Bitstring.valid_aligned _))),
+  (255, .ok (.bitstring ⟨#[255]⟩ 0 (Term.Bitstring.valid_aligned _))),
+  (256, .ok (.bitstring ⟨#[1, 0]⟩ 0 (Term.Bitstring.valid_aligned _))),
+  (2 ^ 64 + 5, .ok (.bitstring ⟨#[1, 0, 0, 0, 0, 0, 0, 0, 5]⟩ 0 (Term.Bitstring.valid_aligned _))),
+  (-1, badarg)]
+
+#guard unsignedCases.all fun (input, expected) => same (Erlang.binary.«encode_unsigned/1» (.integer input)) expected
+#guard same (Erlang.binary.«encode_unsigned/1» (.atom "a")) badarg
+
 private meta def matchCases : List ((Term × Term × Term) × Except Exception Term) := [
   ((bin "a[b]", bin "[", .nil), .ok (.tuple #[.integer 1, .integer 1])),
   ((bin "ab", bin "[", .nil), .ok (.atom "nomatch")),
