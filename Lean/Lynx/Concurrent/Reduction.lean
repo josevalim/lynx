@@ -2031,6 +2031,30 @@ private theorem diamond {state : State} {tasks : List (PID × Task α)}
     exact ⟨next₀, mem₀, Step.of_mem_steps back⟩
   · simp at independent
 
+/-- A step independent of another stays enabled once the other is taken. -/
+private theorem forward {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {exhausted : Bool} {key key' : Key}
+    {event : Event} {next : Config α}
+    (wellformed : Wellformed (.running state tasks finished exhausted))
+    (mem : (key, event, next) ∈ (Config.running state tasks finished exhausted).steps)
+    (independent : (Config.running state tasks finished exhausted).independent key' key = true) :
+    ∃ event' next', (key', event', next') ∈ next.steps := by
+  simp only [Config.independent, Bool.and_eq_true, bne_iff_ne, ne_eq] at independent
+  obtain ⟨distinct, independent⟩ := independent
+  split at independent
+  · rename_i footprint' footprint found' found
+    simp only [Footprint.independent, Bool.and_eq_true] at independent
+    obtain ⟨⟨keeps', keeps⟩, commutes⟩ := independent
+    obtain ⟨move, moved⟩ := moves wellformed mem found
+    obtain ⟨event₀, next₀, mem₀⟩ := enabled found'
+    obtain ⟨move', moved'⟩ := moves wellformed mem₀ found'
+    have pair : Pair state tasks finished exhausted key key' footprint footprint' move move' :=
+      ⟨wellformed, found, found', ⟨_, _, moved⟩, ⟨_, _, moved'⟩, Ne.symm distinct,
+        Effect.agree_of_keeps keeps, Effect.agree_of_keeps keeps'⟩
+    obtain ⟨last, forth, -⟩ := pair.square moved moved' (Effect.apply_comm commutes).symm mem mem₀
+    exact ⟨_, _, forth⟩
+  · simp at independent
+
 /-- Every step of a running configuration has a key. -/
 private theorem Step.keyed {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {exhausted : Bool} {event : Event}
@@ -3813,7 +3837,8 @@ the steps followed before it asleep, keeping only those that commute with it
 /-- Whether every run ends in an accepted outcome, following at most `depth`
 steps along each run, where runs taking a step asleep first are covered
 elsewhere. A step every run can take first (`Config.forced`) is followed
-alone. Its soundness (`check_sound`) is proven for runs from a start
+alone, keeping the same steps asleep: every other step commutes with it or
+absorbs it. Its soundness (`check_sound`) is proven for runs from a start
 configuration, whose reachable configurations are well-formed. -/
 @[expose] def checkFrom (accept : Outcome α → Bool) : Nat → List Key → Config α → Bool
   | 0, _, _ => false
@@ -3825,8 +3850,7 @@ configuration, whose reachable configurations are well-formed. -/
           | successors => Kernel.all successors fun (_, next) => checkFrom accept depth [] next
       | steps =>
           match config.forced.bind fun key => Kernel.find? (·.1 == key) steps with
-          | some (key, _, next) =>
-              checkFrom accept depth (Kernel.filter (config.commutesWith key) sleep) next
+          | some (_, _, next) => checkFrom accept depth sleep next
           | none => explore (checkFrom accept depth) config.commutesWith sleep [] steps
 
 /-- Whether every run from a start configuration ends in an accepted outcome,
@@ -3868,9 +3892,9 @@ step; keep them in sync. -/
                 (event :: events, failure)
       | steps =>
           match config.forced.bind fun key => steps.find? (·.1 == key) with
-          | some (key, event, next) =>
-              (counterexampleFrom accept depth (sleep.filter (config.commutesWith key)) next).map
-                fun (events, failure) => (event :: events, failure)
+          | some (_, event, next) =>
+              (counterexampleFrom accept depth sleep next).map fun (events, failure) =>
+                (event :: events, failure)
           | none => exploreFind (counterexampleFrom accept depth) config.commutesWith sleep [] steps
 
 /-- The first run that `check` rejects, as the events of its steps and how it
@@ -3893,7 +3917,7 @@ private theorem explore_sound {visit : List Key → Config α → Bool}
     {commutes : Key → Key → Bool} {sleep : List Key} {steps : List (Key × Event × Config α)}
     {last : Config α} {goal : Prop}
     (visited : ∀ key event next, (key, event, next) ∈ steps → ∀ sleep', visit sleep' next = true →
-      Reaches next last →
+      (∀ key' ∈ sleep', commutes key key' = true) → Reaches next last →
       (∀ key' ∈ sleep', ∀ event' next', (key', event', next') ∈ next.steps → ¬Reaches next' last) →
       goal)
     (diamond : ∀ key event next, (key, event, next) ∈ steps → ∀ key', commutes key key' = true →
@@ -3936,7 +3960,8 @@ private theorem explore_sound {visit : List Key → Config α → Bool}
     · rename_i awake
       simp only [Bool.and_eq_true] at explored
       by_cases reaches : Reaches next last
-      · refine visited key event next mem _ explored.1 reaches fun key' slept event' next' mem' => ?_
+      · refine visited key event next mem _ explored.1 (fun key' slept => (List.mem_filter.mp slept).2)
+          reaches fun key' slept event' next' mem' => ?_
         simp only [List.mem_filter, List.mem_append] at slept
         obtain ⟨slept | finished, independent'⟩ := slept
         · intro reaches'
@@ -4004,16 +4029,17 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
       {outcome : Outcome α},
       Reachable first → checkFrom accept depth sleep first = true → Run first events last →
       Terminal last outcome →
+      (∀ key ∈ sleep, ∃ event next, (key, event, next) ∈ first.steps) →
       (∀ key ∈ sleep, ∀ event next, (key, event, next) ∈ first.steps → ¬Reaches next last) →
       accept outcome = true := by
   intro depth
   induction depth with
   | zero => intro _ _ _ _ _ _ checked; simp [checkFrom] at checked
   | succ depth ih =>
-    intro sleep first last events outcome reachable checked run terminal asleep
+    intro sleep first last events outcome reachable checked run terminal awake asleep
     have wellformed := reachable.1
     unfold checkFrom at checked
-    simp only [Kernel.all_eq, Kernel.find?_eq, Kernel.filter_eq] at checked
+    simp only [Kernel.all_eq, Kernel.find?_eq] at checked
     cases found : first.steps with
     | nil =>
       -- No keyed steps: follow every step.
@@ -4027,7 +4053,7 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
         · rename_i none
           simp [Step, none] at step
         · simp only [List.all_eq_true] at checked
-          exact ih (Step.reachable step reachable) (checked _ step) rest terminal (by simp)
+          exact ih (Step.reachable step reachable) (checked _ step) rest terminal (by simp) (by simp)
     | cons entry entries =>
       simp only [found] at checked
       rw [← found] at checked
@@ -4040,22 +4066,52 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
         | start => simp [Config.steps] at found
         | running state tasks finished exhausted =>
           split at checked
-          · -- A step every run can take first.
+          · -- A step every run can take first, keeping the same steps asleep.
             rename_i key event' next forced
             obtain ⟨isForced, mem⟩ := forced_facts wellformed forced
             obtain ⟨events', run'⟩ := forced_first ForcedStep forced_square (.step step rest) reachable
               isForced mem terminal
-            refine ih (Step.reachable (Step.of_mem_steps mem) reachable) checked run' terminal ?_
-            intro key' slept event'' next'' mem' reaches
-            simp only [List.mem_filter] at slept
-            obtain ⟨next₀, mem₀, step₀⟩ :=
-              diamond wellformed mem (by rw [← Config.commutesWith_eq]; exact slept.2) mem'
-            exact asleep key' slept.1 event'' next₀ mem₀ (Reaches.step step₀ reaches)
+            -- Runs taking the forced step first are covered unless it is asleep itself.
+            have notAsleep : key ∉ sleep := fun slept => asleep key slept event' next mem ⟨_, run'⟩
+            have unique : ∀ {key' : Key} {event₁ event₂ : Event} {next₁ next₂ : Config α},
+                (key', event₁, next₁) ∈ next.steps → (key', event₂, next₂) ∈ next.steps →
+                next₁ = next₂ := by
+              have wellformedNext := (Step.reachable (Step.of_mem_steps mem) reachable).1
+              intro key' event₁ event₂ next₁ next₂ mem₁ mem₂
+              cases next with
+              | start => simp [Config.steps] at mem₁
+              | running => exact (steps_unique wellformedNext mem₁ mem₂).2
+            -- A step asleep before the forced step is taken after it, from where it went before
+            -- (absorbed) or one forced step before it.
+            have after : ∀ key' ∈ sleep, ∀ event₀ next₀,
+                (key', event₀, next₀) ∈ (Config.running state tasks finished exhausted).steps →
+                ∃ event'' next'', (key', event'', next'') ∈ next.steps ∧
+                  ∀ event''' next''', (key', event''', next''') ∈ next.steps →
+                    Reaches next''' last → Reaches next₀ last := by
+              intro key' slept event₀ next₀ mem₀
+              have distinct : key' ≠ key := fun same => notAsleep (same ▸ slept)
+              rcases forced_square reachable isForced mem mem₀ distinct with ⟨absorbed, mem''⟩ |
+                  ⟨key'', forced', other, last', -, forth, back⟩
+              · refine ⟨_, _, mem'', fun event''' next''' mem''' reaches => ?_⟩
+                exact unique mem''' mem'' ▸ reaches
+              · refine ⟨_, _, back, fun event''' next''' mem''' reaches => ?_⟩
+                exact Reaches.step (Step.of_mem_steps forth) (unique mem''' back ▸ reaches)
+            refine ih (Step.reachable (Step.of_mem_steps mem) reachable) checked run' terminal
+              (fun key' slept => ?_) (fun key' slept event'' next'' mem' reaches => ?_)
+            · obtain ⟨event₀, next₀, mem₀⟩ := awake key' slept
+              obtain ⟨event'', next'', mem'', -⟩ := after key' slept event₀ next₀ mem₀
+              exact ⟨event'', next'', mem''⟩
+            · obtain ⟨event₀, next₀, mem₀⟩ := awake key' slept
+              obtain ⟨-, -, -, back⟩ := after key' slept event₀ next₀ mem₀
+              exact asleep key' slept event₀ next₀ mem₀ (back event'' next'' mem' reaches)
           · obtain ⟨key, mem⟩ := Step.keyed step
             exact explore_sound (goal := accept outcome = true)
-              (fun key event next mem sleep' visited reaches asleep' =>
+              (fun key event next mem sleep' visited commutes reaches asleep' =>
                 let ⟨_, run'⟩ := reaches
-                ih (Step.reachable (Step.of_mem_steps mem) reachable) visited run' terminal asleep')
+                ih (Step.reachable (Step.of_mem_steps mem) reachable) visited run' terminal
+                  (fun key' slept => forward wellformed mem
+                    (by rw [← Config.commutesWith_eq]; exact commutes key' slept))
+                  asleep')
               (fun key event next mem key' commutes event' next' mem' =>
                 diamond wellformed mem (by rw [← Config.commutesWith_eq]; exact commutes) mem')
               (fun key event event' next next' mem mem' => (steps_unique wellformed mem mem').2)
@@ -4069,6 +4125,6 @@ theorem check_sound {accept : Outcome α → Bool} {depth : Nat} {env : Environm
     accept outcome = true :=
   check_wellformed (show Reachable (Config.start env computation elapsed) from
     ⟨trivial, fun _ _ _ _ equal => by cases equal⟩) checked run
-    terminal (by simp)
+    terminal (by simp) (by simp)
 
 end Lynx.Concurrent
