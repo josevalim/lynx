@@ -496,7 +496,7 @@ theorem opt_tuple_union_sem (ef : EF nd E V den tl K) {m : Nat} (hm : K ≤ m) {
     | exact via_tuple_union hx hy (by unfold Elixir.Module.Types.Descr.«opt_tuple_union/2»; rfl)
     | (apply via_tuple_union hx hy
        unfold Elixir.Module.Types.Descr.«opt_tuple_union/2»
-       simp only [leaf_guard, atom_ne3, node_ne3, ite_false]
+       simp only [leaf_guard, node_ne3, ite_false]
        done)
     | skip
   · by_cases same : compareExact (fuel (.tuple #[.integer k₂, .atom t₂, Term.list l₂]) (.tuple #[.integer k₁, .atom t₁, Term.list l₁])) (.tuple #[.integer k₂, .atom t₂, Term.list l₂])

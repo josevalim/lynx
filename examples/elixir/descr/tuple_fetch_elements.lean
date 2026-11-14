@@ -55,7 +55,7 @@ theorem take_closed_short (l : List Term) (i : Nat) (h : l.length ≤ i) :
     Elixir.Module.Types.Descr.«tuple_take_element/3» (Term.list l) (.integer i) (.atom "closed") = .ok (.atom "empty") := by
   have := do_take_short l [] i h
   simp [Elixir.Module.Types.Descr.«tuple_take_element/3», Term.list] at this ⊢
-  simp [this, Erlang.erlang.«==/2»]
+  simp [this]
 
 theorem take_open_short (l : List Term) (i : Nat) (h : l.length ≤ i) :
     ∃ k : Int, Elixir.Module.Types.Descr.«tuple_take_element/3» (Term.list l) (.integer i) (.atom "open") =

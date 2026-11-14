@@ -34,12 +34,14 @@
  "lists":
  {"reverse/2": {"pure": true},
   "member/2": {"pure": true},
+  "keymember/3": {"pure": true},
   "keyfind/3": {"pure": true}},
  "erts_internal":
  {"mc_refill/1": {"pure": true}, "mc_iterator/1": {"pure": true}},
  "erlang":
  {"xor/2": {"pure": true},
   "unlink/1": {"pure": false},
+  "tuple_to_list/1": {"pure": true},
   "tuple_size/1": {"pure": true},
   "trunc/1": {"pure": true},
   "tl/1": {"pure": true},
@@ -126,6 +128,8 @@
   "bit_size/1": {"pure": true},
   "binary_to_integer/1": {"pure": true},
   "binary_to_float/1": {"pure": true},
+  "binary_to_atom/2": {"pure": true},
+  "binary_to_atom/1": {"pure": true},
   "binary_part/3": {"pure": true},
   "binary_part/2": {"pure": true},
   "band/2": {"pure": true},
@@ -156,4 +160,5 @@
   "split/2": {"pure": true},
   "match/3": {"pure": true},
   "match/2": {"pure": true},
-  "last/1": {"pure": true}}}
+  "last/1": {"pure": true},
+  "encode_unsigned/1": {"pure": true}}}

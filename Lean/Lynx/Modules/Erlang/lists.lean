@@ -41,4 +41,10 @@ improper tail or a non-list raises `badarg`. -/
     | _ => .error (.error (.atom "badarg"))
   | _ => .error (.error (.atom "badarg"))
 
+/-- Whether `keyfind/3` finds a tuple, raising as it does. -/
+@[expose] def «keymember/3» (key position list : Term) : Except Exception Term :=
+  match «keyfind/3» key position list with
+  | .ok (.tuple _) => .ok Term.true
+  | result => result
+
 end Erlang.lists

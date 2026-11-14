@@ -70,8 +70,7 @@ theorem put_all_dom {d : String} (hd : d ∈ domainKinds) (v : Term) (m : Nat) :
     simp (config := { decide := true }) [Elixir.Module.Types.Descr.«fields_put_all_new/3».eq_def, Term.list, domKeysT,
       domainKinds, domL, fieldsTerm, Erlang.erlang.«</2», Erlang.erlang.«>/2», Erlang.lists.«map/2»,
       Erlang.lists.«map_1/2».eq_def, Erlang.erlang.«is_function/2», Elixir.Module.Types.Descr.«-fields_put_all_new/3-fun-0-/2»,
-      Erlang.program.«Elixir.Module.Types.Descr:-fields_put_all_new/3-fun-0-/1».pure, atoms_cmp, Ord.compare,
-      Lynx.Term.string_compare_eq, compareOfLessAndEq]
+      Erlang.program.«Elixir.Module.Types.Descr:-fields_put_all_new/3-fun-0-/1».pure]
 
 
 theorem domsV_domL (d : String) {v : Term} (he : (level t n).E v) : DomsV (level t n).E (domL d v) := by

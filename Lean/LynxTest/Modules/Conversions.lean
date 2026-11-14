@@ -114,6 +114,59 @@ private meta def shortCases : List (String × String) := [
 #guard rendered (Erlang.erlang.«atom_to_binary/2» (.atom "café") (.atom "latin1")) == "caf\xe9"
 #guard rendered (Erlang.erlang.«atom_to_binary/2» (.atom "π") (.atom "latin1")) == "badarg"
 
+/-! Atoms from binaries, checked against Erlang/OTP 29.1.2: UTF-8 without overlong forms,
+surrogates, or code points above U+10FFFF, and at most 255 characters. -/
+
+private meta def bytes (values : List Nat) : Term :=
+  .bitstring ⟨(values.map UInt8.ofNat).toArray⟩ 0 (Term.Bitstring.valid_aligned _)
+
+private meta def atomCodes : Except Exception Term → String
+  | .ok (.atom name) => toString (name.toList.map Char.toNat)
+  | .error (.error (.atom error)) => error
+  | _ => "invalid"
+
+private meta def atomCases : List (List Nat × String × String) := [
+  ([], "[]", "[]"),
+  ([104, 105], "[104, 105]", "[104, 105]"),
+  ([0xC0, 0x80], "badarg", "[192, 128]"),
+  ([0xC2, 0x80], "[128]", "[194, 128]"),
+  ([0xE0, 0x9F, 0x80], "badarg", "[224, 159, 128]"),
+  ([0xE0, 0xA0, 0x80], "[2048]", "[224, 160, 128]"),
+  ([0xED, 0xA0, 0x80], "badarg", "[237, 160, 128]"),
+  ([0xED, 0x9F, 0xBF], "[55295]", "[237, 159, 191]"),
+  ([0xF0, 0x8F, 0x80, 0x80], "badarg", "[240, 143, 128, 128]"),
+  ([0xF0, 0x90, 0x80, 0x80], "[65536]", "[240, 144, 128, 128]"),
+  ([0xF4, 0x8F, 0xBF, 0xBF], "[1114111]", "[244, 143, 191, 191]"),
+  ([0xF4, 0x90, 0x80, 0x80], "badarg", "[244, 144, 128, 128]"),
+  ([0xF5, 0x80, 0x80, 0x80], "badarg", "[245, 128, 128, 128]"),
+  ([0x80], "badarg", "[128]"),
+  ([0xC3], "badarg", "[195]"),
+  (List.replicate 256 97, "system_limit", "system_limit"),
+  (List.replicate 255 97 ++ [0xFF], "system_limit", "system_limit"),
+  (List.replicate 254 97 ++ [0xFF], "badarg", toString (List.replicate 254 97 ++ [255])),
+  (List.replicate 1021 97, "system_limit", "system_limit"),
+  ((List.replicate 300 [0xC3, 0xA9]).flatten, "system_limit", "system_limit")]
+
+#guard atomCases.all fun (input, utf8, latin1) =>
+  atomCodes (Erlang.erlang.«binary_to_atom/2» (bytes input) (.atom "utf8")) == utf8 &&
+    atomCodes (Erlang.erlang.«binary_to_atom/2» (bytes input) (.atom "unicode")) == utf8 &&
+    atomCodes (Erlang.erlang.«binary_to_atom/2» (bytes input) (.atom "latin1")) == latin1
+
+#guard atomCodes (Erlang.erlang.«binary_to_atom/2» (bytes (List.replicate 255 97)) (.atom "utf8")) ==
+  toString (List.replicate 255 97)
+#guard atomCodes (Erlang.erlang.«binary_to_atom/1» (bytes [104, 105])) == "[104, 105]"
+#guard atomCodes (Erlang.erlang.«binary_to_atom/2» (bytes [104]) (.atom "ascii")) == "badarg"
+#guard atomCodes (Erlang.erlang.«binary_to_atom/2» (.atom "a") (.atom "utf8")) == "badarg"
+#guard atomCodes (Erlang.erlang.«binary_to_atom/2»
+  (.bitstring ⟨#[128]⟩ 1 (by decide)) (.atom "utf8")) == "badarg"
+
+theorem tuple_to_list_elements :
+    Erlang.erlang.«tuple_to_list/1» (.tuple #[.atom "a", .integer 1]) =
+      .ok (.cons (.atom "a") (.cons (.integer 1) .nil)) ∧
+    Erlang.erlang.«tuple_to_list/1» (.tuple #[]) = .ok .nil ∧
+    Erlang.erlang.«tuple_to_list/1» .nil = .error (.error (.atom "badarg")) := by
+  refine ⟨rfl, rfl, rfl⟩
+
 /-- Decimal text produced by `integer_to_binary/1` reads back as the same integer. -/
 theorem integer_binary_round_trip (n : Int) :
     (Erlang.erlang.«integer_to_binary/1» (.integer n) >>= Erlang.erlang.«binary_to_integer/1») =

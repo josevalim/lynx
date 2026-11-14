@@ -56,8 +56,7 @@ theorem lookup_keys (f : Term → Term) (s : String) : ∀ (K : List Term), Term
 
 /-- The domain kinds as atoms, in order. -/
 theorem sak_kinds : SAK (domainKinds.map Term.atom) := by
-  simp (config := { decide := true }) [SAK, domainKinds, atoms_cmp, Ord.compare, Lynx.Term.string_compare_eq,
-    compareOfLessAndEq]
+  simp (config := { decide := true }) [SAK]
 
 section
 variable {t : Term} {n : Nat}

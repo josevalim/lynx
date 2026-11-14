@@ -499,7 +499,7 @@ theorem pure_opt_union (m : Nat) {x y : Term} (fx : OField (PureLit t) x) (fy : 
     | exact via_pure_union fx' fy' (by unfold Elixir.Module.Types.Descr.«opt_tuple_union/2»; rfl)
     | (apply via_pure_union fx' fy'
        unfold Elixir.Module.Types.Descr.«opt_tuple_union/2»
-       simp only [leaf_guard, atom_ne3, node_ne3, ite_false, litN, Term.list]
+       simp only [leaf_guard, node_ne3, ite_false, litN, Term.list]
        done)
     | skip
   -- two top leaves
