@@ -52,7 +52,7 @@ defmodule SVBench.CohencuLLTest do
                 .integer (6 * n + 6)]) := by
         rw [«loop/5».eq_def]
         simp
-        simp (disch := grind) only [if_pos]
+        simp (disch := grind) only [ite_eq_left]
         simp only [«check/1»]
         by_cases le : n ≤ a <;> simp [le]
         rw [show n * n * n + (3 * n * n + 3 * n + 1) = (n + 1) * (n + 1) * (n + 1) by grind,
@@ -64,14 +64,14 @@ defmodule SVBench.CohencuLLTest do
             .ok (.tuple #[.integer m, .integer (m * m * m), .integer (3 * m * m + 3 * m + 1),
               .integer (6 * m + 6)]) := by
         induction k with
-        | zero => intro n bound; exact ⟨n, by omega, .inl rfl, by rw [step, if_neg (by omega)]⟩
+        | zero => intro n bound; exact ⟨n, by omega, .inl rfl, by rw [step, ite_eq_right (by omega)]⟩
         | succ k ih =>
           intro n bound
           rw [step]
           by_cases le : n ≤ a
           · obtain ⟨m, above, which, returned⟩ := ih (n + 1) (by omega)
-            exact ⟨m, above, by omega, by rw [if_pos le, returned]⟩
-          · exact ⟨n, by omega, .inl rfl, by rw [if_neg le]⟩
+            exact ⟨m, above, by omega, by rw [ite_eq_left le, returned]⟩
+          · exact ⟨n, by omega, .inl rfl, by rw [ite_eq_right le]⟩
       clear step
       cases a <;> simp [«cohencu_ll:requires/1», Erlang.erlang.«is_integer/1»] at requires
       rename_i a

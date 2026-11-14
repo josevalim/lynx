@@ -34,7 +34,7 @@ defmodule SVBench.AdditionTest do
         | succ k ih =>
           intro m
           rw [«addition/2».eq_def]
-          split <;> simp_all [Lynx.Except.guard, show (0 : Int) < k + 1 by omega] <;> omega
+          split <;> simp_all [show (0 : Int) < k + 1 by omega] <;> omega
       have down (k : Nat) : ∀ m : Int,
           «addition/2» (.integer m) (.integer (-k)) = .ok (.integer (m - k)) := by
         induction k with
@@ -43,14 +43,14 @@ defmodule SVBench.AdditionTest do
           intro m
           rw [«addition/2».eq_def]
           have step := ih (m - 1)
-          split <;> simp_all [Lynx.Except.guard, show ¬ (k : Int) + 1 < 0 by omega,
+          split <;> simp_all [show ¬ (k : Int) + 1 < 0 by omega,
             show -((k : Int) + 1) + 1 = -k by omega] <;> omega
       have total (m n : Int) : «addition/2» (.integer m) (.integer n) = .ok (.integer (m + n)) := by
         by_cases nonneg : 0 ≤ n
         · simpa [Int.toNat_of_nonneg nonneg] using up n.toNat m
         · simpa [show ((-n).toNat : Int) = -n by omega, Int.sub_eq_add_neg] using down (-n).toNat m
       cases m <;> simp [«addition01_2:requires/2», Erlang.erlang.«is_integer/1»] at requires
-      cases n <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases n <;> simp at requires
       simp [«addition01_2:ensures/2», total]
       """
 
@@ -65,7 +65,7 @@ defmodule SVBench.AdditionTest do
         | succ k ih =>
           intro m
           rw [«addition/2».eq_def]
-          split <;> simp_all [Lynx.Except.guard, show (0 : Int) < k + 1 by omega] <;> omega
+          split <;> simp_all [show (0 : Int) < k + 1 by omega] <;> omega
       have down (k : Nat) : ∀ m : Int,
           «addition/2» (.integer m) (.integer (-k)) = .ok (.integer (m - k)) := by
         induction k with
@@ -74,14 +74,14 @@ defmodule SVBench.AdditionTest do
           intro m
           rw [«addition/2».eq_def]
           have step := ih (m - 1)
-          split <;> simp_all [Lynx.Except.guard, show ¬ (k : Int) + 1 < 0 by omega,
+          split <;> simp_all [show ¬ (k : Int) + 1 < 0 by omega,
             show -((k : Int) + 1) + 1 = -k by omega] <;> omega
       have total (m n : Int) : «addition/2» (.integer m) (.integer n) = .ok (.integer (m + n)) := by
         by_cases nonneg : 0 ≤ n
         · simpa [Int.toNat_of_nonneg nonneg] using up n.toNat m
         · simpa [show ((-n).toNat : Int) = -n by omega, Int.sub_eq_add_neg] using down (-n).toNat m
       cases m <;> simp [«addition03_1:requires/2», Erlang.erlang.«is_integer/1»] at requires
-      cases n <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases n <;> simp at requires
       rename_i m n
       by_cases small : m < 100 ∨ n < 100
       · rcases small with small | small <;> simp [«addition03_1:ensures/2», small]

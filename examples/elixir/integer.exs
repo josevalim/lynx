@@ -1,6 +1,6 @@
 # LYNX_DEBUG=lean LYNX_CACHE=0 mix run examples/elixir/integer.exs
 # Prove the installed Integer module, translated from BEAM debug information.
-# Checked against Elixir 1.21.0-dev (3790cd8), Erlang/OTP 29.1.2.
+# Checked against Elixir 1.21.0-dev (f6478e5), Erlang/OTP 29.1.2.
 # Source reference: ../elixir/lib/elixir/lib/integer.ex.
 # These proofs depend on implementation details; rerun after Elixir upgrades.
 ExUnit.start()
@@ -74,7 +74,7 @@ defmodule IntegerProofsTest do
       cases integer <;> simp [«digits_round_trip:requires/2»,
         Erlang.erlang.«is_integer/1»] at requires
       rename_i n
-      cases base <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases base <;> simp at requires
       rename_i b
       have baseValid : 2 ≤ b := by
         by_cases h : 2 ≤ b <;> simp [h] at requires <;> omega
@@ -82,7 +82,7 @@ defmodule IntegerProofsTest do
           Elixir.Integer.«undigits/3» (.cons (.integer r) acc) (.integer b) (.integer a) =
             Elixir.Integer.«undigits/3» acc (.integer b) (.integer (a*b+r)) := by
         rw [Elixir.Integer.«undigits/3».eq_def]
-        simp [Erlang.erlang.«is_integer/1», Erlang.erlang.«=:=/2»,
+        simp [Erlang.erlang.«is_integer/1»,
           Erlang.erlang.«-/1», show ¬ b ≤ r by omega, show ¬ r ≤ -b by omega]
       -- k records the positional multiplier: decoding the generated prefix
       -- from a yields a*k+n before decoding the supplied suffix.
@@ -104,7 +104,7 @@ defmodule IntegerProofsTest do
               exact Nat.div_lt_self (by omega) (by omega)
             obtain ⟨ds, k, returned, dsProper, decoded⟩ :=
               ih _ smaller (n.tdiv b) rfl (.cons (.integer (n.tmod b)) acc)
-                (by simpa [Erlang.erlang.«is_list/1»] using proper)
+                (by simp [Erlang.erlang.«is_list/1»])
             refine ⟨ds, k*b, ?_, dsProper, ?_⟩
             · rw [Elixir.Integer.«digits/3».eq_def]
               simp [zero, Erlang.erlang.«div/2», Erlang.erlang.«rem/2»,
@@ -146,7 +146,7 @@ defmodule IntegerProofsTest do
       cases dividend <;> simp [«signed_division_contract:requires/2»,
         Erlang.erlang.«is_integer/1»] at requires
       rename_i a
-      cases divisor <;> simp [Erlang.erlang.«is_integer/1», Erlang.erlang.«=/=/2»] at requires
+      cases divisor <;> simp [Erlang.erlang.«=/=/2»] at requires
       rename_i b
       have nonzero : b ≠ 0 := by simpa using requires
       have sign : b.sign = if b < 0 then -1 else 1 := by
@@ -176,7 +176,7 @@ defmodule IntegerProofsTest do
           · have bNeg : b < 0 := by omega
             by_cases zero : a.tmod b = 0
             · simp [Elixir.Integer.«mod/2», Erlang.erlang.«rem/2», nonzero,
-                Int.fmod_eq_tmod, aSign, bSign, zero, divisible]
+                Int.fmod_eq_tmod, zero, divisible]
             · have product : a.tmod b * b < 0 := Int.mul_neg_of_pos_of_neg (by omega) bNeg
               simp [Elixir.Integer.«mod/2», Erlang.erlang.«rem/2», nonzero,
                 Int.fmod_eq_tmod, aSign, bSign, zero, divisible, product]
@@ -187,7 +187,7 @@ defmodule IntegerProofsTest do
           · have bPos : 0 < b := by omega
             by_cases zero : a.tmod b = 0
             · simp [Elixir.Integer.«mod/2», Erlang.erlang.«rem/2», nonzero,
-                Int.fmod_eq_tmod, aSign, bSign, zero, divisible]
+                Int.fmod_eq_tmod, zero, divisible]
             · have product : a.tmod b * b < 0 := Int.mul_neg_of_neg_of_pos (by omega) bPos
               simp [Elixir.Integer.«mod/2», Erlang.erlang.«rem/2», nonzero,
                 Int.fmod_eq_tmod, aSign, bSign, zero, divisible, product,
@@ -202,7 +202,7 @@ defmodule IntegerProofsTest do
         rw [Int.neg_fdiv, Int.fdiv_eq_tdiv]
         have divisible : b ∣ a ↔ a.tmod b = 0 := Int.dvd_iff_tmod_eq_zero
         by_cases aNeg : a < 0 <;> by_cases bNeg : b < 0 <;> by_cases zero : a.tmod b = 0 <;>
-          simp [Elixir.Integer.«ceil_div/2», Erlang.erlang.«xor/2», Erlang.erlang.«not/1»,
+          simp [Elixir.Integer.«ceil_div/2», Erlang.erlang.«xor/2»,
             Erlang.erlang.«rem/2», Erlang.erlang.«div/2», Erlang.erlang.«/=/2»,
             nonzero, aNeg, bNeg, zero, divisible, sign,
             show (0 ≤ a) ↔ ¬ a < 0 by omega, show (0 ≤ b) ↔ ¬ b < 0 by omega] <;> omega
@@ -237,7 +237,7 @@ defmodule IntegerProofsTest do
           «mod_zero_raises/1», «floor_zero_raises/1», «ceil_zero_raises/1»,
           Elixir.Integer.«mod/2», Elixir.Integer.«floor_div/2», Elixir.Integer.«ceil_div/2»,
           Erlang.erlang.«rem/2», Erlang.erlang.«div/2», Erlang.erlang.«xor/2»,
-          Erlang.erlang.«not/1», Lynx.Exception.classTerm, Lynx.Exception.reason, negative]
+          Lynx.Exception.classTerm, Lynx.Exception.reason, negative]
       """
   end
 
@@ -284,7 +284,7 @@ defmodule IntegerProofsTest do
               simp [aZero]
             · have recurse := ih (a % b) (Nat.mod_lt a (by omega)) b
               rw [Elixir.Integer.«gcd_positive/2».eq_def]
-              simp [aZero, bZero, Erlang.erlang.«rem/2», ← Int.ofNat_tmod, recurse,
+              simp [aZero, bZero, Erlang.erlang.«rem/2», ← Int.ofNat_tmod,
                 Nat.gcd_rec b a, Nat.gcd_comm]
               simpa only [Int.natCast_emod] using recurse
       have divides (d n : Int) : «divides/2» (.integer d) (.integer n) =
@@ -298,19 +298,19 @@ defmodule IntegerProofsTest do
               ← Int.dvd_iff_tmod_eq_zero, divisible]
       cases left <;> simp [«gcd_characterization:requires/3», Erlang.erlang.«is_integer/1»] at requires
       rename_i a
-      cases right <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases right <;> simp at requires
       rename_i b
-      cases divisor <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases divisor <;> simp at requires
       rename_i d
       have returned : Elixir.Integer.«gcd/2» (.integer a) (.integer b) =
           .ok (.integer (Int.gcd a b)) := by
         simp [Elixir.Integer.«gcd/2», Erlang.erlang.«is_integer/1», Erlang.erlang.«abs/1»,
-          Erlang.erlang.«=:=/2», model, Int.gcd_eq_natAbs_gcd_natAbs]
+          model, Int.gcd_eq_natAbs_gcd_natAbs]
       have leftDivides := Int.gcd_dvd_left a b
       have rightDivides := Int.gcd_dvd_right a b
       by_cases da : d ∣ a <;> by_cases db : d ∣ b <;>
         simp [«gcd_characterization:ensures/3», «gcd_contract/3», returned,
-          «common_divisor_preserved/4», Erlang.erlang.«=:=/2», divides, leftDivides, rightDivides, da, db,
+          «common_divisor_preserved/4», divides, leftDivides, rightDivides, da, db,
           Int.dvd_coe_gcd]
       """
 
@@ -318,37 +318,62 @@ defmodule IntegerProofsTest do
       requires: is_integer(integer) and integer >= 0,
       expects: popcount_in_bounds(Integer.popcount(integer), integer),
       proof: ~LEAN"""
-      have count (n : Nat) (acc : Int) : ∃ bits : Nat, bits ≤ n ∧
-          (bits = 0 ↔ n = 0) ∧
-          Elixir.Integer.«popcount/2» (.integer n) (.integer acc) = .ok (.integer (acc + bits)) := by
-        induction n using Nat.strongRecOn generalizing acc with
-        | ind n ih =>
-          by_cases zero : n = 0
-          · subst n
-            refine ⟨0, by omega, by simp, ?_⟩
+      -- Each byte's entry in the popcount table is at most the byte, and zero only for zero.
+      have table : ∀ n : Nat, n < 256 →
+          (match Erlang.erlang.«element/2» (.integer ((n : Int) + 1)) Elixir.Integer.lynx_literal_fhewahoz with
+            | .ok (.integer k) => decide (0 ≤ k ∧ k ≤ n ∧ (k = 0 ↔ n = 0))
+            | _ => false) = true := by
+        decide +kernel
+      have lookup (b : UInt8) : ∃ k : Nat,
+          Erlang.erlang.«element/2» (.integer ((b.toNat : Int) + 1)) Elixir.Integer.lynx_literal_fhewahoz =
+            .ok (.integer k) ∧ k ≤ b.toNat ∧ (k = 0 ↔ b.toNat = 0) := by
+        have entry := table b.toNat b.toNat_lt
+        split at entry
+        · rename_i k returned
+          simp only [decide_eq_true_eq] at entry
+          exact ⟨k.toNat, by rw [returned, Int.toNat_of_nonneg entry.1], by omega, by omega⟩
+        · simp at entry
+      -- Counting the bytes adds at most their big-endian value, and nothing only for zeros.
+      have count (bytes : List UInt8) (acc : Int) (value : Nat) : ∃ bits : Nat,
+          Elixir.Integer.«popcount/2» (.bitstring ⟨bytes.toArray⟩ 0 (Lynx.Term.Bitstring.valid_aligned _))
+            (.integer acc) = .ok (.integer (acc + bits)) ∧
+          bits + value ≤ bytes.foldl (fun value byte => value * 256 + byte.toNat) value ∧
+          (bits = 0 ∧ value = 0 ↔ bytes.foldl (fun value byte => value * 256 + byte.toNat) value = 0) := by
+        induction bytes generalizing acc value with
+        | nil =>
+          refine ⟨0, ?_, by simp, by simp⟩
+          rw [Elixir.Integer.«popcount/2».eq_def]
+          simp [Lynx.Term.Bitstring.matchInteger_byte_nil, Lynx.Term.Bitstring.matchEnd_byte_nil]
+        | cons b bytes ih =>
+          obtain ⟨k, returned, bounded, zero⟩ := lookup b
+          obtain ⟨bits, counted, below, none⟩ := ih (acc + k) (value * 256 + b.toNat)
+          refine ⟨k + bits, ?_, ?_, ?_⟩
+          · have tail : Lynx.Term.Bitstring.matchTail
+                (.bitstring ⟨bytes.toArray⟩ 0 (Lynx.Term.Bitstring.valid_aligned _)) (.atom "all") 8 := by
+              simp [Lynx.Term.Bitstring.matchTail, Lynx.Term.Bitstring.bitSize]
+              split <;> omega
             rw [Elixir.Integer.«popcount/2».eq_def]
-            simp
-          · have lower : n &&& (n - 1) < n := Nat.lt_of_le_of_lt Nat.and_le_right (by omega)
-            obtain ⟨bits, bounded, _, returned⟩ := ih (n &&& (n - 1)) lower (acc + 1)
-            refine ⟨bits + 1, by omega, by omega, ?_⟩
-            rw [Elixir.Integer.«popcount/2».eq_def]
-            have previous : (n : Int) - 1 = ((n - 1 : Nat) : Int) := by omega
-            simp [zero, previous, Erlang.erlang.«band/2», returned, Int.add_assoc, Int.add_comm,
-              Int.add_left_comm]
+            simp [Lynx.Term.Bitstring.matchInteger_byte, tail, returned, counted, Int.add_assoc]
+          · simp only [List.foldl_cons]
+            omega
+          · simp only [List.foldl_cons]
+            omega
       cases integer <;> simp [«popcount_total_and_bounded:requires/1»,
         Erlang.erlang.«is_integer/1»] at requires
       rename_i n
       have nonnegative : 0 ≤ n := by
         by_cases h : 0 ≤ n <;> simp [h] at requires <;> omega
-      obtain ⟨bits, bounded, zero, returned⟩ := count n.toNat 0
+      obtain ⟨bytes, -, encoded, value⟩ := Erlang.binary.encode_unsigned_bytes n.toNat
+      obtain ⟨bits, returned, bounded, zero⟩ := count bytes 0 0
+      rw [value] at bounded zero
       have shape : (n.toNat : Int) = n := Int.toNat_of_nonneg nonnegative
-      simp only [Int.zero_add, shape] at returned
+      rw [shape] at encoded
       have upper : (bits : Int) ≤ n := by omega
       have bitsZero : ((bits : Int) = 0) ↔ n = 0 := by omega
       simp [«popcount_total_and_bounded:ensures/1», Elixir.Integer.«popcount/1»,
         Erlang.erlang.«is_integer/1», Erlang.erlang.«=:=/2», show ¬ n < 0 by omega,
-        returned, «popcount_in_bounds/2», upper, bitsZero]
-      all_goals split <;> simp_all [Erlang.erlang.«=:=/2»]
+        encoded, returned, «popcount_in_bounds/2», upper]
+      all_goals split <;> simp_all
       """
 
     law parity_is_complementary(integer),
@@ -369,7 +394,7 @@ defmodule IntegerProofsTest do
             Erlang.erlang.«not/1», Erlang.erlang.«=:=/2»]
       | negSucc n =>
         have mask : 1 &&& n = n % 2 := by
-          simpa [Nat.and_comm] using Nat.and_two_pow_sub_one_eq_mod n 1
+          simp [Nat.and_comm]
         have bound : n % 2 < 2 := Nat.mod_lt n (by decide)
         have choices : n % 2 = 0 ∨ n % 2 = 1 := by omega
         rcases choices with choice | choice <;>

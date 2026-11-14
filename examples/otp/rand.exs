@@ -272,7 +272,7 @@ defmodule RandProofsTest do
         | cons x xs ih =>
           unfold «multiplicity/2»
           by_cases same : Lynx.Term.compareExact (Lynx.Term.fuel x v) x v = .eq <;>
-            simp [Erlang.erlang.«=:=/2», same, ih, List.filter_cons] <;> omega
+            simp [Erlang.erlang.«=:=/2», same, ih] <;> omega
       simp only [Lynx.apply_eq, «shuffle_permutes:requires/4», «shuffle_returns/3»,
         Lynx.Except.bind_eq_ok] at requires
       obtain ⟨state, seeded, r, returned, -⟩ := requires

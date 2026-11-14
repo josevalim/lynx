@@ -205,7 +205,7 @@ defmodule BinaryProofsTest do
             have cg := digitBound lower g.val hg
             have ch := digitBound lower h.val hh
             simp (disch := (try simp only [sourceLength, wireLength]); omega) only
-              [field8, extract_some, tailMatch, decodeLookup, okBind, construct4, binarySegment_bits, Except.bind, append_bits, sourceCons, sourceNil, List.append_nil, List.append_assoc]
+              [field8, extract_some, tailMatch, decodeLookup, okBind, construct4, binarySegment_bits, Except.bind, append_bits, sourceCons, sourceNil, List.append_nil]
           have decBlockEmpty (lower : Bool) (acc : List Bool) :
               Erlang.binary.«lynx_local_6/2» (ofBits []) (ofBits acc) = .ok (ofBits acc) := by
             conv => lhs; unfold Erlang.binary.«lynx_local_6/2»
@@ -307,13 +307,13 @@ defmodule BinaryProofsTest do
             simp only [matchTail_bits, sourceSize, sourceDiv, Lynx.Except.tryWith_ok, okBind, pure_bind]
             rw [represented]
             rw [matchPrefix _ _ count prefixSize]
-            simp only [extract_some, tailMatch _ 8 (by decide) (by decide) restAligned, pure_bind]
+            simp only [extract_some, tailMatch _ 8 (by decide) (by decide) restAligned]
             change (Erlang.binary.«lynx_local_2/3» (ofBits (source first)) (ofBits []) (.integer (offset lower)) >>=
               fun value => Erlang.binary.«encode_hex2/3» (ofBits (source rest)) (.integer (offset lower)) value) = _
             rw [encBlock lower first (by omega) []]
             simp only [okBind, List.nil_append]
             rw [encTail lower rest (by omega) _ (by rw [wireLength]; omega)]
-            simp only [List.nil_append, ←wireAppend, joined]
+            simp only [←wireAppend, joined]
           have decodeFull (lower : Bool) (ns : List (Fin 16)) :
               Erlang.binary.«decode_hex1/1» (ofBits (wire lower ns)) = .ok (ofBits (source ns)) := by
             let count := ns.length/8
@@ -329,13 +329,13 @@ defmodule BinaryProofsTest do
             simp only [matchTail_bits, wireSize, wireDiv, Lynx.Except.tryWith_ok, okBind, pure_bind]
             rw [represented]
             rw [matchPrefix _ _ count prefixSize]
-            simp only [extract_some, tailMatch _ 8 (by decide) (by decide) restAligned, pure_bind]
+            simp only [extract_some, tailMatch _ 8 (by decide) (by decide) restAligned]
             change (Erlang.binary.«lynx_local_6/2» (ofBits (wire lower first)) (ofBits []) >>=
               fun value => Erlang.binary.«decode_hex2/2» (ofBits (wire lower rest)) value) = _
             rw [decBlock lower first (by omega) []]
             simp only [okBind, List.nil_append]
             rw [decTail lower rest _ (by rw [sourceLength]; omega)]
-            simp only [List.nil_append, ←sourceAppend, joined]
+            simp only [←sourceAppend, joined]
           have binaryBits (bits : List Bool) (aligned : bits.length%8=0) :
               ofBits bits=.bitstring (pack bits) 0 (valid_aligned _) := by
             have last : (⟨bits.length%8, Nat.mod_lt _ (by decide)⟩ : Fin 8)=0 := Fin.ext aligned
@@ -352,7 +352,7 @@ defmodule BinaryProofsTest do
               Erlang.binary.«decode_hex/1» (ofBits (wire lower ns))=.ok (ofBits (source ns)) := by
             have remainder : (ns.length : Int) % 2 = 0 := by omega
             unfold Erlang.binary.«decode_hex/1»
-            simp [wireSize, remainder, Erlang.erlang.«=:=/2», Lynx.Except.guard, decodeFull]
+            simp [wireSize, remainder, Erlang.erlang.«=:=/2», decodeFull]
           have nibbleModel (bits : List Bool) (aligned : bits.length%4=0) :
               ∃ ns : List (Fin 16), source ns=bits := by
             induction length : bits.length using Nat.strongRecOn generalizing bits with
@@ -375,7 +375,7 @@ defmodule BinaryProofsTest do
           rename_i storage last valid
           rcases last with ⟨last,lastLt⟩
           cases last with
-          | succ last => simp [«hex_roundtrip:requires/2», Erlang.erlang.«is_binary/1»] at requires
+          | succ last => simp at requires
           | zero =>
             change «hex_roundtrip:ensures/2» (.bitstring storage 0 valid) mode=.ok Lynx.Term.true
             have modeCases : mode=.atom "uppercase" ∨ mode=.atom "lowercase" := by
@@ -384,7 +384,7 @@ defmodule BinaryProofsTest do
               · right
                 apply Classical.byContradiction
                 intro lower
-                simp [«hex_roundtrip:requires/2», Erlang.erlang.«is_binary/1», Erlang.erlang.«=:=/2»,
+                simp [
                   upper, lower] at requires
             obtain ⟨lower, rfl⟩ : ∃ lower : Bool, mode=.atom (if lower then "lowercase" else "uppercase") := by
               rcases modeCases with upper | lower
@@ -406,9 +406,9 @@ defmodule BinaryProofsTest do
             simp only [«hex_roundtrip:ensures/2», «hex_contract/2»]
             rw [encoded]
             simp only [okBind,decoded]
-            simp only [Erlang.erlang.«=:=/2», Lynx.Term.compareExact_self, ite_true, Lynx.Term.true, okBind]
+            simp only [Erlang.erlang.«=:=/2», Lynx.Term.compareExact_self, ite_true, Lynx.Term.true]
             rw [wireSize]
-            simp [Erlang.erlang.«=:=/2», Lynx.Term.true,
+            simp [
               Erlang.erlang.«byte_size/1», Erlang.erlang.«*/2_integers», nsLength,
               Int.natCast_mul, Int.mul_comm]
       """

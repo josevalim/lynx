@@ -89,7 +89,7 @@ defmodule SVBench.FibonacciTest do
         | case3 k next previous =>
           rw [«fibonacci/1».eq_def]
           simp only [Lynx.Except.guard_eq, Erlang.erlang.«</2_integers», Lynx.Except.tryWith_ok,
-            show ¬ ((k + 2 : Nat) : Int) < 1 by omega, if_false, Lynx.Term.false]
+            show ¬ ((k + 2 : Nat) : Int) < 1 by omega, ite_false, Lynx.Term.false]
           split
           · rename_i one; simp at one
           · push_cast at next previous
@@ -120,7 +120,7 @@ defmodule SVBench.FibonacciTest do
         | case3 k next previous =>
           rw [«fibonacci/1».eq_def]
           simp only [Lynx.Except.guard_eq, Erlang.erlang.«</2_integers», Lynx.Except.tryWith_ok,
-            show ¬ ((k + 2 : Nat) : Int) < 1 by omega, if_false, Lynx.Term.false]
+            show ¬ ((k + 2 : Nat) : Int) < 1 by omega, ite_false, Lynx.Term.false]
           split
           · rename_i one; simp at one
           · push_cast at next previous
@@ -145,7 +145,7 @@ defmodule SVBench.FibonacciTest do
         | case3 k next previous =>
           rw [«fibonacci/1».eq_def]
           simp only [Lynx.Except.guard_eq, Erlang.erlang.«</2_integers», Lynx.Except.tryWith_ok,
-            show ¬ ((k + 2 : Nat) : Int) < 1 by omega, if_false, Lynx.Term.false]
+            show ¬ ((k + 2 : Nat) : Int) < 1 by omega, ite_false, Lynx.Term.false]
           split
           · rename_i one; simp at one
           · push_cast at next previous

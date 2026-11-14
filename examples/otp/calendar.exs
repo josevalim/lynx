@@ -88,11 +88,11 @@ defmodule CalendarProofsTest do
       rename_i h
       by_cases hLo : 0 ≤ h <;> simp [hLo] at requires
       by_cases hHi : h < 24 <;> simp [hHi] at requires
-      cases minute <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases minute <;> simp at requires
       rename_i m
       by_cases mLo : 0 ≤ m <;> simp [mLo] at requires
       by_cases mHi : m < 60 <;> simp [mHi] at requires
-      cases second <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases second <;> simp at requires
       rename_i s
       by_cases sLo : 0 ≤ s <;> simp [sLo] at requires
       by_cases sHi : s < 60 <;> simp [sHi] at requires
@@ -128,11 +128,10 @@ defmodule CalendarProofsTest do
         by_cases century : n % 100 = 0 <;>
         by_cases fourHundred : n % 400 = 0 <;>
         simp [«is_leap_year_cycle:ensures/1», Erlang.calendar.«is_leap_year/1»,
-        Erlang.calendar.«is_leap_year1/1», nonnegative, shifted,
+        Erlang.calendar.«is_leap_year1/1»,
         Erlang.erlang.«rem/2», Int.tmod_eq_emod_of_nonneg nonnegative,
         Int.tmod_eq_emod_of_nonneg shifted, Int.add_emod, four, century,
-        fourHundred, Erlang.erlang.«and/2», Erlang.erlang.«=:=/2», Erlang.erlang.«=/=/2»,
-        Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt, Int.compare_eq_gt]
+        fourHundred, Erlang.erlang.«and/2», Erlang.erlang.«=:=/2», Erlang.erlang.«=/=/2»]
       """
 
     law date_to_gregorian_days_cycle(year),
@@ -250,8 +249,8 @@ defmodule CalendarProofsTest do
           Erlang.erlang.«+/2_integers», Erlang.erlang.«-/2_integers»,
           Erlang.erlang.«*/2_integers», divide, Erlang.erlang.«>=/2_integers», greater,
           Erlang.erlang.«=</2_integers», branch, iteResult, iteInteger, pureOk, okBind,
-          positive, ite_true, Erlang.erlang.«and/2», branchTrue, Lynx.Except.tryWith_ok]
-        simp only [Lynx.Term.true, branchTrue]
+          positive, ite_true, Erlang.erlang.«and/2»]
+        simp only [Lynx.Term.true]
         apply congrArg (fun value : Int => Except.ok (Lynx.Term.integer value))
         dsimp [dateNumber]
         omega
@@ -376,7 +375,7 @@ defmodule CalendarProofsTest do
           (dLo : 1≤day) (dHi : day≤monthDays year month) :
           Erlang.calendar.«valid_date/1» (.tuple #[.integer year, .integer month, .integer day]) = .ok Lynx.Term.true := by
         simp [Erlang.calendar.«valid_date/1», Erlang.calendar.«valid_date/3»,
-          Erlang.calendar.«valid_date1/3», Erlang.erlang.«is_integer/1»,
+          Erlang.calendar.«valid_date1/3»,
           Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt, Int.compare_eq_gt,
           show 0<month by omega, show month<13 by omega, show 0<day by omega,
           Erlang.erlang.«and/2», lastDayReturned year month mLo mHi, dHi]
@@ -536,16 +535,16 @@ defmodule CalendarProofsTest do
         obtain ⟨dec, december⟩ := weekday (y - 1) 12 31 (by decide)
         by_cases current : w ≤ n ∧ n < next
         · simp [Erlang.calendar.«iso_week_number/1», Erlang.calendar.«date_to_gregorian_days/1»,
-            returned, first, nextFirst, current.1, current.2, Erlang.erlang.«=:=/2», Erlang.erlang.«div/2»]
+            returned, first, nextFirst, current.1, current.2, Erlang.erlang.«div/2»]
         · by_cases previous : n < w
           · by_cases janFour : jan = 4 <;> by_cases decFour : dec = 4 <;>
               simp [Erlang.calendar.«iso_week_number/1», Erlang.calendar.«date_to_gregorian_days/1»,
                 returned, first, nextFirst, january, december, previous, show ¬ w ≤ n by omega,
-                Erlang.erlang.«=:=/2», janFour, decFour]
+                janFour, decFour]
           · have nextYear : next ≤ n := by omega
             simp [Erlang.calendar.«iso_week_number/1», Erlang.calendar.«date_to_gregorian_days/1»,
               returned, first, nextFirst, previous, nextYear, show w ≤ n by omega,
-              show ¬ n < next by omega, Erlang.erlang.«=:=/2»]
+              show ¬ n < next by omega]
 
       have dateShape (date : Lynx.Term) (valid : Erlang.calendar.«valid_date/1» date = .ok Lynx.Term.true) :
           ∃ y m d : Int, date = .tuple #[.integer y, .integer m, .integer d] ∧ 0 < d := by

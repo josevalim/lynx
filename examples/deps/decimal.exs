@@ -93,7 +93,7 @@ defmodule DecimalProofsTest do
         (try have hb1 : ¬ b < 0 := by omega) <;>
         (try have ha2 : ¬ 0 < a := by omega) <;>
         (try have hb2 : ¬ 0 < b := by omega) <;>
-        simp [Lynx.Term.getMapKeys, «integer_order/2», Erlang.erlang.«=:=/2», Erlang.erlang.«==/2»,
+        simp [Lynx.Term.getMapKeys, «integer_order/2», Erlang.erlang.«=:=/2»,
           Erlang.erlang.«</2», Erlang.erlang.«>/2», Int.compare_eq_lt, Int.compare_eq_gt,
           Ordering.isLT_iff_eq_lt, Ordering.isGT_iff_eq_gt, *]
       all_goals
@@ -137,7 +137,7 @@ defmodule DecimalProofsTest do
           (try have n1 : c1 ≠ 0 := by omega) <;>
           (try have n2 : c2 ≠ 0 := by omega) <;>
           simp [Lynx.Term.getMapKeys, «integer_order/2», Erlang.erlang.«=:=/2»,
-            Erlang.erlang.«==/2», Erlang.erlang.«</2», Erlang.erlang.«>/2», Int.compare_eq_lt,
+            Erlang.erlang.«</2», Erlang.erlang.«>/2», Int.compare_eq_lt,
             Int.compare_eq_gt, Ordering.isLT_iff_eq_lt, Ordering.isGT_iff_eq_gt, *]
       all_goals
         repeat' split

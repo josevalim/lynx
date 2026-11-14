@@ -40,13 +40,13 @@ defmodule RangeProofsTest do
         split
         · simp only [Lynx.Term.integer.injEq] at *
           omega
-        · simp [Erlang.erlang.«is_integer/1», Erlang.erlang.«=:=/2»,
+        · simp [Erlang.erlang.«is_integer/1»,
             Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt, Int.compare_eq_gt,
-            positive, show b ≠ 0 by omega, show ¬ b < 0 by omega]
+            positive]
       cases left <;>
         simp [«extended_gcd_obeys_bezout:requires/2», Erlang.erlang.«is_integer/1»] at requires
       rename_i a
-      cases right <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases right <;> simp at requires
       rename_i b
       have run (n : Nat) :
         ∀ (r1 r0 s1 s0 t1 t0 : Int),
@@ -120,7 +120,7 @@ defmodule RangeProofsTest do
             refine ⟨0, -1, ?_, by simp [abs]⟩
             unfold Elixir.Integer.«extended_gcd/2»
             simp [Erlang.erlang.«is_integer/1»,
-              Erlang.erlang.«=:=/2», Erlang.erlang.«-/1», Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
+              Erlang.erlang.«-/1», Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
               Int.compare_eq_gt, bZero, positive, negative, abs]
         · by_cases bZero : b = 0
           · clear run
@@ -130,14 +130,14 @@ defmodule RangeProofsTest do
               refine ⟨1, 0, ?_, by simp [abs]⟩
               unfold Elixir.Integer.«extended_gcd/2»
               simp [Erlang.erlang.«is_integer/1»,
-                Erlang.erlang.«=:=/2», Erlang.erlang.«-/1», Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
-                Int.compare_eq_gt, aZero, positive, abs, show ¬ a < 0 by omega]
+                Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
+                Int.compare_eq_gt, aZero, positive, abs]
             · have negative : a < 0 := by omega
               have abs := Int.ofNat_natAbs_of_nonpos (show a ≤ 0 by omega)
               refine ⟨-1, 0, ?_, by simp [abs]⟩
               unfold Elixir.Integer.«extended_gcd/2»
               simp [Erlang.erlang.«is_integer/1»,
-                Erlang.erlang.«=:=/2», Erlang.erlang.«-/1», Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
+                Erlang.erlang.«-/1», Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
                 Int.compare_eq_gt, aZero, positive, negative, abs]
           · obtain ⟨s, t, result, identity⟩ := run b.natAbs b a 0 1 1 0 rfl bZero (by simp) (by simp)
             refine ⟨s, t, ?_, identity⟩
@@ -212,13 +212,13 @@ defmodule RangeProofsTest do
         by_cases pos : 0 < s <;> by_cases asc : f < l <;> by_cases desc : l < f <;>
           simp [count, Erlang.erlang.«>/2», Erlang.erlang.«</2»,
             Ordering.isGT_iff_eq_gt, Ordering.isLT_iff_eq_lt, Int.compare_eq_gt,
-            Int.compare_eq_lt, Erlang.erlang.«=:=/2», Erlang.erlang.«div/2»,
+            Int.compare_eq_lt, Erlang.erlang.«div/2»,
             pos, asc, desc, nonzero, show (s < 0) ↔ ¬ 0 < s by omega]
       have newModel (f l s : Int) (nonzero : s ≠ 0) :
           Elixir.Range.«new/3» (.integer f) (.integer l) (.integer s) = .ok (range f l s) := by
         unfold Elixir.Range.«new/3»
         simp [range, Erlang.erlang.«is_integer/1», Erlang.erlang.«/=/2»,
-          Erlang.erlang.«=:=/2», nonzero]
+          nonzero]
       have maxInt (a b : Int) : Erlang.erlang.«max/2» (.integer a) (.integer b) =
           .ok (.integer (max a b)) := by
         by_cases le : a ≤ b <;> by_cases ge : b ≤ a <;>
@@ -239,7 +239,7 @@ defmodule RangeProofsTest do
         unfold Elixir.Range.«split/4»
         by_cases pos : 0<s <;> by_cases asc : f<l <;> by_cases equal : f=l <;>
           simp [middle, Erlang.erlang.«>/2», Erlang.erlang.«</2», Erlang.erlang.«==/2»,
-            Erlang.erlang.«=:=/2», Ordering.isGT_iff_eq_gt, Ordering.isLT_iff_eq_lt,
+            Ordering.isGT_iff_eq_gt, Ordering.isLT_iff_eq_lt,
             Int.compare_eq_gt, Int.compare_eq_lt, maxInt, minInt, newModel _ _ _ nz,
             pos, asc, equal, show (s<0) ↔ ¬0<s by omega,
             show (f≤l) ↔ (f<l ∨ f=l) by omega,
@@ -372,14 +372,14 @@ defmodule RangeProofsTest do
       cases first <;> simp [«split_preserves_ordered_partition:requires/5»,
         Erlang.erlang.«is_integer/1»] at requires
       rename_i f
-      cases last <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases last <;> simp at requires
       rename_i l
-      cases step <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases step <;> simp at requires
       rename_i s
-      by_cases nonzero : s = 0 <;> simp [Erlang.erlang.«/=/2», Erlang.erlang.«==/2», nonzero] at requires
-      cases cut <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      by_cases nonzero : s = 0 <;> simp [nonzero] at requires
+      cases cut <;> simp at requires
       rename_i c
-      cases index <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases index <;> simp at requires
       rename_i i
       change «split_contract/5» (.integer f) (.integer l) (.integer s) (.integer c) (.integer i) = .ok Lynx.Term.true
       let n := count f l s
@@ -454,13 +454,13 @@ defmodule RangeProofsTest do
       have newModel (f l s : Int) (nz : s≠0) :
           Elixir.Range.«new/3» (.integer f) (.integer l) (.integer s) = .ok (range f l s) := by
         unfold Elixir.Range.«new/3»
-        simp [range,Erlang.erlang.«is_integer/1»,Erlang.erlang.«/=/2»,Erlang.erlang.«=:=/2»,nz]
+        simp [range,Erlang.erlang.«is_integer/1»,Erlang.erlang.«/=/2»,nz]
       have sizeModel (f l s : Int) (nz : s≠0) :
           Elixir.Range.«size/1» (range f l s) = .ok (.integer (count f l s)) := by
         rw [Elixir.Range.«size/1».eq_def]
         simp only [keys]
         by_cases pos : 0<s <;> by_cases asc : f<l <;> by_cases desc : l<f <;>
-          simp [count,Erlang.erlang.«>/2»,Erlang.erlang.«</2»,Erlang.erlang.«=:=/2»,
+          simp [count,Erlang.erlang.«>/2»,Erlang.erlang.«</2»,
             Erlang.erlang.«div/2»,Ordering.isGT_iff_eq_gt,Ordering.isLT_iff_eq_lt,
             Int.compare_eq_gt,Int.compare_eq_lt,pos,asc,desc,nz,show (s<0) ↔ ¬0<s by omega]
       have sizeShift (f l s delta : Int) : count (f+delta) (l+delta) s=count f l s := by
@@ -488,20 +488,20 @@ defmodule RangeProofsTest do
         by_cases zero : n=0
         · subst n
           simp [key]
-        · simp [key,keys,newModel _ _ _ nz,zero,Erlang.erlang.«is_integer/1»]
+        · simp [keys,newModel _ _ _ nz,zero,]
       cases first <;> simp [«shift_obeys_translation_laws:requires/6»,«valid_range/3»,
         Erlang.erlang.«is_integer/1»] at requires
       rename_i f
-      cases last <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases last <;> simp at requires
       rename_i l
-      cases step <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases step <;> simp at requires
       rename_i s
-      by_cases nz : s=0 <;> simp [Erlang.erlang.«/=/2»,Erlang.erlang.«==/2»,nz] at requires
-      cases left <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      by_cases nz : s=0 <;> simp [nz] at requires
+      cases left <;> simp at requires
       rename_i a
-      cases right <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases right <;> simp at requires
       rename_i b
-      cases point <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases point <;> simp at requires
       rename_i z
       obtain ⟨member,returned⟩ := memberReturns f l s z nz
       have shifts := shiftModel

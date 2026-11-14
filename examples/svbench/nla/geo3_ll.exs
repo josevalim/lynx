@@ -45,7 +45,7 @@ defmodule SVBench.Geo3LLTest do
               .ok (.tuple #[.integer x, .integer y, .integer c]) := by
         rw [«loop/7».eq_def]
         simp
-        simp (disch := grind) only [if_pos]
+        simp (disch := grind) only [ite_eq_left]
         simp only [«check/1»]
         by_cases lt : c < k <;> simp [lt]
       have loop (z a k az : Int) (fuel : Nat) : ∀ x y c : Int, k - c ≤ fuel →
@@ -57,15 +57,15 @@ defmodule SVBench.Geo3LLTest do
         induction fuel with
         | zero =>
           intro x y c bound invariant
-          exact ⟨x, y, c, invariant, by rw [step z a k az x y c invariant, if_neg (by omega)]⟩
+          exact ⟨x, y, c, invariant, by rw [step z a k az x y c invariant, ite_eq_right (by omega)]⟩
         | succ fuel ih =>
           intro x y c bound invariant
           rw [step z a k az x y c invariant]
           by_cases lt : c < k
           · obtain ⟨x', y', c', invariant', returned⟩ :=
               ih (x * z + a) (y * z) (c + 1) (by omega) (by grind)
-            exact ⟨x', y', c', invariant', by rw [if_pos lt, returned]⟩
-          · exact ⟨x, y, c, invariant, by rw [if_neg lt]⟩
+            exact ⟨x', y', c', invariant', by rw [ite_eq_left lt, returned]⟩
+          · exact ⟨x, y, c, invariant, by rw [ite_eq_right lt]⟩
       clear step
       simp [«geo3_ll:requires/3»] at requires
       obtain ⟨⟨integerZ, integerA⟩, integerK⟩ := requires

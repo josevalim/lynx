@@ -55,7 +55,7 @@ defmodule SVBench.EgcdLlTest do
           intro a b p q r s bound ha hb det ea eb
           rw [«egcd/8».eq_def]
           simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«-/2_integers»,
-            Erlang.erlang.«+/2_integers», det, ea, eb, Erlang.erlang.«==/2_integers», if_true, «check/1», Lynx.Term.true,
+            Erlang.erlang.«+/2_integers», det, ea, eb, Erlang.erlang.«==/2_integers», ite_true, «check/1», Lynx.Term.true,
             Lynx.Except.ok_bind]
           by_cases same : a = b
           · subst same

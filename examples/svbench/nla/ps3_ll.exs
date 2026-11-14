@@ -43,7 +43,7 @@ defmodule SVBench.Ps3LLTest do
               .ok (.tuple #[.integer y, .integer y, .integer x]) := by
         rw [«loop/4».eq_def]
         simp
-        simp (disch := grind) only [if_pos]
+        simp (disch := grind) only [ite_eq_left]
         simp only [«check/1»]
         by_cases lt : y < k <;> simp [lt]
       have loop (k : Int) (fuel : Nat) : ∀ y x : Int, k - y ≤ fuel →
@@ -54,15 +54,15 @@ defmodule SVBench.Ps3LLTest do
         induction fuel with
         | zero =>
           intro y x bound invariant
-          exact ⟨y, x, by omega, .inl rfl, invariant, by rw [step k y x invariant, if_neg (by omega)]⟩
+          exact ⟨y, x, by omega, .inl rfl, invariant, by rw [step k y x invariant, ite_eq_right (by omega)]⟩
         | succ fuel ih =>
           intro y x bound invariant
           rw [step k y x invariant]
           by_cases lt : y < k
           · obtain ⟨m, z, done, which, invariant, returned⟩ :=
               ih (y + 1) ((y + 1) * (y + 1) + x) (by omega) (by grind)
-            exact ⟨m, z, done, by omega, invariant, by rw [if_pos lt, returned]⟩
-          · exact ⟨y, x, lt, .inl rfl, invariant, by rw [if_neg lt]⟩
+            exact ⟨m, z, done, by omega, invariant, by rw [ite_eq_left lt, returned]⟩
+          · exact ⟨y, x, lt, .inl rfl, invariant, by rw [ite_eq_right lt]⟩
       clear step
       cases k <;> simp [«ps3_ll:requires/1», Erlang.erlang.«is_integer/1»] at requires
       rename_i k

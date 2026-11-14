@@ -115,6 +115,12 @@ open Lynx
 private def floatResult (value : Option Term.FiniteFloat) : Except Exception Term :=
   value.elim (throw (.error (.atom "badarith"))) fun value => .ok (.float value)
 
+-- A float operation never yields an integer, without unfolding the operation.
+private theorem float_elim_ne_integer (value : Option Term.FiniteFloat) (sum : Int) :
+    value.elim (.error (.error (.atom "badarith"))) (fun value => .ok (.float value)) ≠
+      (.ok (.integer sum) : Except Exception Term) := by
+  cases value <;> nofun
+
 @[expose] def «+/2» : Term → Term → Except Exception Term
   | .integer x, .integer y => .ok (.integer (x + y))
   | .float x, .float y => (x.add y).elim
@@ -132,7 +138,7 @@ private def floatResult (value : Option Term.FiniteFloat) : Except Exception Ter
 @[simp↓] theorem «+/2_integer_ok_iff» (left right : Term) (sum : Int) :
     «+/2» left right = .ok (.integer sum) ↔
       ∃ x y, left = .integer x ∧ right = .integer y ∧ x + y = sum := by
-  cases left <;> cases right <;> simp [«+/2», Option.elim] <;> split <;> simp
+  cases left <;> cases right <;> simp [«+/2», float_elim_ne_integer]
 
 @[simp] theorem «+/2_floats» (left right : Term.FiniteFloat) :
     «+/2» (.float left) (.float right) =
@@ -174,9 +180,8 @@ private def floatResult (value : Option Term.FiniteFloat) : Except Exception Ter
 /-- Integer subtraction results cannot originate from a float or another term kind. -/
 @[simp] theorem «-/2_integer_result» (left : Term) (right value : Int) :
     «-/2» left (.integer right) = .ok (.integer value) ↔ left = .integer (value + right) := by
-  cases left <;> simp [«-/2», Option.elim]
-  · omega
-  · split <;> simp_all
+  cases left <;> simp [«-/2», float_elim_ne_integer]
+  omega
 
 @[expose] def «//2» : Term → Term → Except Exception Term
   | .float x, .float y => (x.div y).elim

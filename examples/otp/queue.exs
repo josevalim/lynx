@@ -225,7 +225,7 @@ defmodule QueueProofsTest do
           refine ⟨[], [], r, f, ?_, rfl, by simp⟩
           dsimp only [Erlang.queue.«split/2», pack]
           simp only [Int.cast_ofNat_Int, shape, Lynx.Except.ok_bind, Erlang.erlang.«and/2»,
-            Lynx.Term.true, Lynx.Except.guard_eq, Lynx.Except.tryWith_ok, pack, encNil] <;> rfl
+            Lynx.Term.true, Lynx.Except.guard_eq, Lynx.Except.tryWith_ok, encNil] <;> rfl
         | succ n =>
           have positive : (1 : Int) ≤ ↑(n+1) := by omega
           have nonzero : (↑(n+1) : Int) ≠ 0 := by omega
@@ -253,7 +253,7 @@ defmodule QueueProofsTest do
                     returned
               · simp only [List.length_reverse, List.length_take, List.length_singleton]
                 omega
-              · simp only [List.reverse_reverse, List.singleton_append, List.cons_append, List.nil_append]
+              · simp only [List.reverse_reverse, List.cons_append, List.nil_append]
                 rw [← List.append_assoc, List.take_append_drop]
           · by_cases after : f.length < n+1
             · let remaining := r.length - ((n+1) - f.length)
@@ -264,13 +264,13 @@ defmodule QueueProofsTest do
               · refine ⟨r, f, [], [], ?_, by dsimp only [remaining, List.length_cons] at empty; omega, by simp⟩
                 dsimp only [Erlang.queue.«split/2», pack]
                 simp only [Lynx.Term.atom.injEq, String.reduceEq, imp_self, Int.cast_ofNat_Int, Int.reduceLT,
-                  Int.reduceLE, Int.reduceEq, List.length_cons, lengthCons, List.append_nil, Lynx.Term.true,
-                  Lynx.Term.false, shapeCons, shapeNil, ite_true, ite_false, Lynx.Except.ok_bind,
+                  Lynx.Term.true,
+                  Lynx.Term.false, ite_false, Lynx.Except.ok_bind,
                   Lynx.Except.guard_eq, Lynx.Except.tryWith_ok, Lynx.Except.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
-                  Erlang.erlang.«</2_integers», greaterModel, Erlang.erlang.«-/2_integers», ite_eq_left, ite_eq_right, encNil,
+                  Erlang.erlang.«</2_integers», greaterModel, Erlang.erlang.«-/2_integers», ite_eq_left, encNil,
                   shape, lengthModel,
                   Erlang.erlang.«and/2»,
-                  positive, nonzero,
+                  positive,
                   show ¬ (↑(n+1) : Int) < ↑f.length by omega,
                   show (↑f.length : Int) < ↑(n+1) by omega,
                   remainingEq, empty]
@@ -316,14 +316,14 @@ defmodule QueueProofsTest do
                       let right ← rear (encode r)
                       .ok (.tuple #[left, right])) := by
                 dsimp only [Erlang.queue.«split/2», pack]
-                simp only [Lynx.Term.atom.injEq, String.reduceEq, imp_self, Int.cast_ofNat_Int, Int.reduceLT,
-                  Int.reduceLE, Int.reduceEq, List.length_cons, lengthCons, List.append_nil, Lynx.Term.true,
-                  Lynx.Term.false, shapeCons, shapeNil, ite_true, ite_false, Lynx.Except.ok_bind,
+                simp only [Lynx.Term.atom.injEq, String.reduceEq, imp_self,
+                  Lynx.Term.true,
+                  Lynx.Term.false, ite_false, Lynx.Except.ok_bind,
                   Lynx.Except.guard_eq, Lynx.Except.tryWith_ok, Lynx.Except.pure_eq_ok, Erlang.erlang.«>=/2_integers»,
-                  Erlang.erlang.«</2_integers», greaterModel, Erlang.erlang.«-/2_integers», ite_eq_left, ite_eq_right, encNil,
+                  Erlang.erlang.«</2_integers», greaterModel, Erlang.erlang.«-/2_integers», ite_eq_left,
                   shape, lengthModel,
                   Erlang.erlang.«and/2»,
-                  positive, nonzero,
+                  positive,
                   show ¬ (↑(n+1) : Int) < ↑f.length by omega,
                   show ¬ (↑f.length : Int) < ↑(n+1) by omega, front, rear]
                 all_goals rcases f with _ | ⟨x, _ | ⟨y, _ | ⟨z, tail⟩⟩⟩
@@ -357,13 +357,13 @@ defmodule QueueProofsTest do
       rename_i fields
       rcases fields with ⟨fields⟩
       match fields with
-      | [] | [_] | _ :: _ :: _ :: _ => simp [«valid_queue/1»] at requires
+      | [] | [_] | _ :: _ :: _ :: _ => simp at requires
       | [rTerm, fTerm] =>
         rcases properBool rTerm with rProper | rInvalid
         · rcases properBool fTerm with fProper | fInvalid
           · obtain ⟨r, rfl⟩ := properModel rTerm rProper
             obtain ⟨f, rfl⟩ := properModel fTerm fProper
-            simp [«valid_queue/1», rProper, fProper] at requires
+            simp [rProper, fProper] at requires
             change (do let total ← Erlang.queue.«len/1» (pack r f)
                        Erlang.erlang.«=</2» (.integer k) total) = .ok Lynx.Term.true at requires
             rw [lenModel] at requires
@@ -380,8 +380,8 @@ defmodule QueueProofsTest do
             rw [returned]
             simp [lenModel, toListModel, appendModel, leftSize, order,
               Erlang.erlang.«=:=/2»]
-          · simp [«valid_queue/1», rProper, fInvalid] at requires
-        · simp [«valid_queue/1», rInvalid] at requires
+          · simp [rProper, fInvalid] at requires
+        · simp [rInvalid] at requires
       """
   end
 
@@ -394,11 +394,11 @@ defmodule QueueProofsTest do
       rename_i fields
       rcases fields with ⟨fields⟩
       match fields with
-      | [] | [_] | _ :: _ :: _ :: _ => simp [Erlang.queue.«is_queue/1»] at requires
+      | [] | [_] | _ :: _ :: _ :: _ => simp at requires
       | [rear, front] =>
-        cases rear <;> simp [«reverse_involution:requires/1», Erlang.queue.«is_queue/1»,
+        cases rear <;> simp [
           Erlang.erlang.«is_list/1», Erlang.erlang.«and/2»] at requires
-        all_goals cases front <;> simp [Erlang.erlang.«is_list/1»] at requires
+        all_goals cases front <;> simp at requires
         all_goals simp [«reverse_involution:ensures/1», Erlang.erlang.«is_list/1»,
           Erlang.erlang.«and/2», Erlang.queue.«reverse/1», Erlang.erlang.«=:=/2»]
       """
@@ -412,17 +412,15 @@ defmodule QueueProofsTest do
       rename_i fields
       rcases fields with ⟨fields⟩
       match fields with
-      | [] | [_] | _ :: _ :: _ :: _ => simp [Erlang.queue.«is_queue/1»] at requires
+      | [] | [_] | _ :: _ :: _ :: _ => simp at requires
       | [rear, front] =>
-        cases rear <;> simp [«reverse_exchanges_ends:requires/2», Erlang.queue.«is_queue/1»,
+        cases rear <;> simp [
           Erlang.erlang.«is_list/1», Erlang.erlang.«and/2»] at requires
-        all_goals cases front <;> simp [Erlang.erlang.«is_list/1»] at requires
+        all_goals cases front <;> simp at requires
         all_goals simp [«reverse_exchanges_ends:ensures/2», Erlang.erlang.«is_list/1»,
           Erlang.erlang.«and/2», Erlang.queue.«reverse/1», Erlang.queue.«in/2»,
           Erlang.queue.«in_r/2», Erlang.erlang.«=:=/2»]
-        all_goals split <;> simp_all [Erlang.queue.«reverse/1», Erlang.queue.«in_r/2»,
-          Erlang.erlang.«is_list/1», Erlang.erlang.«and/2»,
-          Erlang.erlang.«=:=/2»]
+        all_goals split <;> simp_all
       """
 
     law front_insert_peek(value, queue),
@@ -433,16 +431,14 @@ defmodule QueueProofsTest do
       rename_i fields
       rcases fields with ⟨fields⟩
       match fields with
-      | [] | [_] | _ :: _ :: _ :: _ => simp [Erlang.queue.«is_queue/1»] at requires
+      | [] | [_] | _ :: _ :: _ :: _ => simp at requires
       | [rear, front] =>
-        cases rear <;> simp [«front_insert_peek:requires/2», Erlang.queue.«is_queue/1»,
+        cases rear <;> simp [
           Erlang.erlang.«is_list/1», Erlang.erlang.«and/2»] at requires
-        all_goals cases front <;> simp [Erlang.erlang.«is_list/1»] at requires
+        all_goals cases front <;> simp at requires
         all_goals simp [«front_insert_peek:ensures/2», Erlang.erlang.«is_list/1»,
           Erlang.erlang.«and/2», Erlang.queue.«in_r/2», Erlang.queue.«peek/1», Erlang.erlang.«=:=/2»]
-        all_goals split <;> simp_all [Erlang.queue.«in_r/2»,
-          Erlang.queue.«peek/1», Erlang.erlang.«is_list/1», Erlang.erlang.«and/2»,
-          Erlang.erlang.«=:=/2»]
+        all_goals split <;> simp_all
       """
   end
 end

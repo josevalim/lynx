@@ -83,8 +83,8 @@ defmodule SVBench.DijkstraUTest do
                 (.integer (p + q.tdiv 4)) := by
         rw [«descend/5».eq_def]
         simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«+/2_integers», Erlang.erlang.«-/2_integers»,
-          Erlang.erlang.«==/2_integers», Erlang.erlang.«</2_integers», Erlang.erlang.«>=/2_integers»,
-          Erlang.erlang.«div/2_integers», Lynx.Except.ok_bind, c1, c2, c3, c4, c5, c6, if_true,
+          Erlang.erlang.«==/2_integers», Erlang.erlang.«</2_integers»,
+          Lynx.Except.ok_bind, c1, c2, c3, c4, c5, c6, ite_true,
           «check/1», Lynx.Term.true]
         by_cases one : q = 1
         · simp [one]
@@ -119,15 +119,15 @@ defmodule SVBench.DijkstraUTest do
           have p2 : p = 2 * (s * 2 ^ j) := by rw [hp, Int.pow_succ]; grind
           have qDiv : q.tdiv 4 = 4 ^ j := by rw [q4]; exact Int.mul_tdiv_cancel_left _ (by decide)
           have pDiv : p.tdiv 2 = s * 2 ^ j := by rw [p2]; exact Int.mul_tdiv_cancel_left _ (by decide)
-          rw [if_neg (by omega), qDiv, pDiv]
+          rw [ite_eq_right (by omega), qDiv, pDiv]
           by_cases more : p + 4 ^ j ≤ r
           · obtain ⟨p', r', h', ret, h1, h2⟩ := ih (s + 2 ^ j) (s * 2 ^ j + 4 ^ j) (4 ^ j)
               (r - (p + 4 ^ j)) (p + 4 ^ j) rfl (by rw [four]; grind) (by grind) (by grind)
               (.inr (.inl (by grind)))
-            exact ⟨p', r', h', by rw [if_pos more]; exact ret, h1, h2⟩
+            exact ⟨p', r', h', by rw [ite_eq_left more]; exact ret, h1, h2⟩
           · obtain ⟨p', r', h', ret, h1, h2⟩ := ih s (s * 2 ^ j) (4 ^ j) r (p + 4 ^ j) rfl rfl
               (by grind) (by omega) (.inr (.inr (by grind)))
-            exact ⟨p', r', h', by rw [if_neg more]; exact ret, h1, h2⟩
+            exact ⟨p', r', h', by rw [ite_eq_right more]; exact ret, h1, h2⟩
       clear step polys
       have grow (m : Nat) : ∀ k : Nat, (n + 1 - 4 ^ k).toNat ≤ m →
           ∃ K : Nat, «grow/2» (.integer n) (.integer (4 ^ k)) = .ok (.integer (4 ^ K)) ∧ n < 4 ^ K := by

@@ -57,8 +57,8 @@ defmodule SVBench.Egcd2LlTest do
         rw [«inner/12».eq_def]
         simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«+/2_integers», Erlang.erlang.«-/2_integers»,
           Erlang.erlang.«==/2_integers», Erlang.erlang.«>=/2_integers», Lynx.Except.ok_bind]
-        simp (disch := grind) only [if_pos]
-        simp only [«check/1», Lynx.Term.true, Lynx.Except.ok_bind]
+        simp (disch := grind) only [ite_eq_left]
+        simp only [«check/1», Lynx.Term.true]
         by_cases more : b ≤ c <;> simp [more]
       have inner (a b p q r s : Int) (hb : 1 ≤ b) (ea : a = y * r + x * p) (eb : b = x * q + y * s)
           (m : Nat) : ∀ c k : Int, c.toNat ≤ m → 0 ≤ c → a = k * b + c →

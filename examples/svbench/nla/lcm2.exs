@@ -49,7 +49,7 @@ defmodule SVBench.Lcm2Test do
                 (.integer v) := by
         rw [«loop/6».eq_def]
         simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«+/2_integers», Lynx.Except.ok_bind,
-          Erlang.erlang.«==/2_integers», invariant, if_true, «check/1», Lynx.Term.true]
+          Erlang.erlang.«==/2_integers», invariant, ite_true, «check/1», Lynx.Term.true]
         by_cases same : x = y
         · simp [same]
         · by_cases more : y < x <;> simp [same, more]

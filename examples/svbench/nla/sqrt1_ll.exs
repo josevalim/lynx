@@ -43,7 +43,7 @@ defmodule SVBench.Sqrt1LLTest do
               .ok (.tuple #[.integer a, .integer ((a + 1) * (a + 1)), .integer (2 * a + 1)]) := by
         rw [«loop/4».eq_def]
         simp
-        simp (disch := grind) only [if_pos]
+        simp (disch := grind) only [ite_eq_left]
         simp only [«check/1»]
         by_cases le : (a + 1) * (a + 1) ≤ n <;> simp [le]
         rw [show (a + 1) * (a + 1) + (2 * a + 1 + 2) = (a + 1 + 1) * (a + 1 + 1) by grind,
@@ -56,14 +56,14 @@ defmodule SVBench.Sqrt1LLTest do
           intro a nonneg bound
           have grows := Int.mul_le_mul_of_nonneg_left (show (1 : Int) ≤ a + 1 by omega)
             (show 0 ≤ a + 1 by omega)
-          exact ⟨a, by rw [step, if_neg (by grind)]⟩
+          exact ⟨a, by rw [step, ite_eq_right (by grind)]⟩
         | succ fuel ih =>
           intro a nonneg bound
           rw [step]
           by_cases le : (a + 1) * (a + 1) ≤ n
           · obtain ⟨m, returned⟩ := ih (a + 1) (by omega) (by omega)
-            exact ⟨m, by rw [if_pos le, returned]⟩
-          · exact ⟨a, by rw [if_neg le]⟩
+            exact ⟨m, by rw [ite_eq_left le, returned]⟩
+          · exact ⟨a, by rw [ite_eq_right le]⟩
       clear step
       cases n <;> simp [«sqrt1_ll:requires/1», Erlang.erlang.«is_integer/1»] at requires
       rename_i n

@@ -60,7 +60,7 @@ defmodule SVBench.Lcm1Test do
             else .ok (.tuple #[.integer x, .integer v]) := by
         rw [«reduce_x/6».eq_def]
         simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«+/2_integers», Lynx.Except.ok_bind,
-          Erlang.erlang.«==/2_integers», invariant, if_true, «check/1», Lynx.Term.true]
+          Erlang.erlang.«==/2_integers», invariant, ite_true, «check/1», Lynx.Term.true]
         by_cases more : y < x <;> simp [more]
       have stepY (x y u v : Int) (invariant : x * u + y * v = a * b) :
           «reduce_y/6» (.integer a) (.integer b) (.integer x) (.integer y) (.integer u) (.integer v) =
@@ -70,7 +70,7 @@ defmodule SVBench.Lcm1Test do
             else .ok (.tuple #[.integer y, .integer u]) := by
         rw [«reduce_y/6».eq_def]
         simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«+/2_integers», Lynx.Except.ok_bind,
-          Erlang.erlang.«==/2_integers», invariant, if_true, «check/1», Lynx.Term.true]
+          Erlang.erlang.«==/2_integers», invariant, ite_true, «check/1», Lynx.Term.true]
         by_cases less : x < y <;> simp [less]
       have reduceX (y u : Int) (hy : 1 ≤ y) (k : Nat) : ∀ x v : Int, x.toNat ≤ k → 1 ≤ x →
           x * u + y * v = a * b →
@@ -111,7 +111,7 @@ defmodule SVBench.Lcm1Test do
           intro x y u v bound hx hy invariant
           rw [«outer/6».eq_def]
           simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«+/2_integers», Lynx.Except.ok_bind,
-            Erlang.erlang.«==/2_integers», invariant, if_true, «check/1», Lynx.Term.true]
+            Erlang.erlang.«==/2_integers», invariant, ite_true, «check/1», Lynx.Term.true]
           by_cases same : x = y
           · subst same
             exact ⟨x, u, v, by simp, invariant⟩

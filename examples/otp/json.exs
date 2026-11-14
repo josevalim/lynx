@@ -1072,7 +1072,7 @@ defmodule JsonProofsTest do
                   have joined := flat_join _ _ _ _ flat flat_close
                   simpa [Term.list_cons, Term.list_nil] using joined
                 · have part := binary_part_middle done run []
-                  simp only [List.append_nil, List.append_assoc] at part
+                  simp only [List.append_nil] at part
                   refine ⟨Term.list [acc, bin run, .integer 34], by simp [d0, r0, part], ?_⟩
                   have joined := flat_join _ _ _ _ flat
                     (flat_join _ _ _ _ (flat_bin run) flat_close)
@@ -1165,7 +1165,7 @@ defmodule JsonProofsTest do
                 «string_ascii/7» d (bin bs) orig next acc stack dec (.integer 0)) := by
           intro d orig skip acc stack dec bs
           unfold «value/6»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- The decoder takes bytes that need no escaping as they are.
@@ -1460,7 +1460,7 @@ defmodule JsonProofsTest do
                 rw [← same.1] at aPlain
                 exact absurd aPlain (by decide)
               · simp only [escapeText, List.flatMap_cons, escape] at same
-                simp only [Bool.false_eq_true, ite_false, List.cons_append, List.singleton_append,
+                simp only [Bool.false_eq_true, ite_false, List.cons_append,
                   List.cons.injEq] at same
                 obtain ⟨rfl, same⟩ := same
                 obtain ⟨rest2, rfl, rfl⟩ := ih rest post Y (fun x mem => all x (by simp [mem]))
@@ -1740,7 +1740,7 @@ defmodule JsonProofsTest do
                       omega)).2
                   simp only [escapeText_append, escapeText_verbatim run verbatim,
                     escapeText_escape b escape, et, List.append_assoc, List.cons_append,
-                    List.singleton_append, List.nil_append] at next ⊢
+                    List.nil_append] at next ⊢
                   exact next
               · have text : escapeText (u ++ rest') = u ++ escapeText rest' := by
                   rw [escapeText_append, escapeText_verbatim u copied]
@@ -1832,7 +1832,7 @@ defmodule JsonProofsTest do
               rcases utf8_cases rest valid with rfl | ⟨b, rest', rfl, ascii, valid'⟩ |
                   ⟨u, rest', rfl, unit, copied, valid'⟩
               · have part := binary_part_middle (pre ++ [34]) run (34 :: post)
-                simp only [List.append_assoc, List.cons_append, List.singleton_append,
+                simp only [List.append_assoc, List.cons_append,
                   List.nil_append, List.length_append, List.length_cons, List.length_nil] at part
                 simp only [show escapeText [] = [] from rfl, List.nil_append, List.append_nil,
                   List.length_nil] at stopped ⊢
@@ -1868,7 +1868,7 @@ defmodule JsonProofsTest do
                     rfl
                   have part := binary_part_middle (pre ++ [34]) run
                     (92 :: (t ++ (escapeText rest' ++ 34 :: post)))
-                  simp only [List.append_assoc, List.cons_append, List.singleton_append,
+                  simp only [List.append_assoc, List.cons_append,
                     List.nil_append, List.length_append, List.length_cons, List.length_nil] at part
                   simp only [text, List.cons_append, List.append_assoc, List.length_cons,
                     List.length_append] at stopped ⊢
@@ -1887,7 +1887,7 @@ defmodule JsonProofsTest do
                       omega)).2
                   simp only [escapeText_append, escapeText_verbatim run verbatim,
                     escapeText_escape b escape, et, List.append_assoc, List.cons_append,
-                    List.singleton_append, List.nil_append] at next ⊢
+                    List.nil_append] at next ⊢
                   exact next
               · have text : escapeText (u ++ rest') = u ++ escapeText rest' := by
                   rw [escapeText_append, escapeText_verbatim u copied]
@@ -1977,7 +1977,7 @@ defmodule JsonProofsTest do
           have digit : (b.toNat : Int) = 49 ∨ (b.toNat : Int) = 50 ∨ (b.toNat : Int) = 51 ∨
               (b.toNat : Int) = 52 ∨ (b.toNat : Int) = 53 ∨ (b.toNat : Int) = 54 ∨
               (b.toNat : Int) = 55 ∨ (b.toNat : Int) = 56 ∨ (b.toNat : Int) = 57 := by omega
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»,
             h32, h9, h13, h10, h48]
           rcases digit with h | h | h | h | h | h | h | h | h <;> simp [h]
@@ -1991,7 +1991,7 @@ defmodule JsonProofsTest do
                   dec := by
           intro d orig skip acc stack dec bs
           unfold «value/6»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- A leading zero starts a number that only continues with a fraction or exponent.
@@ -2004,7 +2004,7 @@ defmodule JsonProofsTest do
                 (.integer 1) := by
           intro d orig skip acc stack dec bs
           unfold «value/6»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have number_minus_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (b : UInt8)
@@ -2022,7 +2022,7 @@ defmodule JsonProofsTest do
               (b.toNat : Int) = 52 ∨ (b.toNat : Int) = 53 ∨ (b.toNat : Int) = 54 ∨
               (b.toNat : Int) = 55 ∨ (b.toNat : Int) = 56 ∨ (b.toNat : Int) = 57 := by omega
           unfold «number_minus/6»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, h48]
           rcases digit with h | h | h | h | h | h | h | h | h <;> simp [h]
 
@@ -2230,7 +2230,7 @@ defmodule JsonProofsTest do
                     acc) stack options) := by
           intro d bs orig skip acc stack value
           conv => lhs; unfold «array_push/7»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have array_push_close : ∀ {d : Dispatcher} (bs : List UInt8)
@@ -2245,7 +2245,7 @@ defmodule JsonProofsTest do
                     options list) := by
           intro d bs orig skip acc old stack value
           conv => lhs; unfold «array_push/7»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have value_open : ∀ {d : Dispatcher} (bs : List UInt8) (orig skip acc stack : Term),
@@ -2255,7 +2255,7 @@ defmodule JsonProofsTest do
                   options (.integer 1) := by
           intro d bs orig skip acc stack
           unfold «value/6»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- An array whose first element starts with a minus sign, a digit, a bracket, a
@@ -2511,7 +2511,7 @@ defmodule JsonProofsTest do
               «number_zero/7» d (bin bs) orig skip acc stack dec (.integer 2) := by
           intro d orig skip acc stack dec bs
           unfold «number_minus/6»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one]
 
         -- A point after the whole part starts the fraction.
@@ -2550,7 +2550,7 @@ defmodule JsonProofsTest do
           intro d orig skip acc stack dec len b bs low high
           obtain ⟨ge, le⟩ := digit_guard b low high
           conv => lhs; unfold «number_frac/7»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», ge, le]
 
         have frac_cont_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int)
@@ -2561,7 +2561,7 @@ defmodule JsonProofsTest do
           intro d orig skip acc stack dec len b bs low high
           obtain ⟨ge, le⟩ := digit_guard b low high
           conv => lhs; unfold «number_frac_cont/7»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», ge, le]
 
         have exp_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int) (b : UInt8)
@@ -2571,7 +2571,7 @@ defmodule JsonProofsTest do
           intro d orig skip acc stack dec len b bs low high
           obtain ⟨ge, le⟩ := digit_guard b low high
           conv => lhs; unfold «number_exp/7»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», ge, le]
 
         have exp_sign_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int)
@@ -2582,7 +2582,7 @@ defmodule JsonProofsTest do
           intro d orig skip acc stack dec len b bs low high
           obtain ⟨ge, le⟩ := digit_guard b low high
           conv => lhs; unfold «number_exp_sign/7»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», ge, le]
 
         have exp_cont_digit : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (len : Int)
@@ -2593,7 +2593,7 @@ defmodule JsonProofsTest do
           intro d orig skip acc stack dec len b bs low high
           obtain ⟨ge, le⟩ := digit_guard b low high
           conv => lhs; unfold «number_exp_cont/7»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2», ge, le]
 
         -- An `e` after the fraction starts the exponent, which may have a minus sign.
@@ -2606,7 +2606,7 @@ defmodule JsonProofsTest do
           have ge : (compare (101 : Int) 48).isGE = true := by decide
           have above : (compare (101 : Int) 57).isLE = false := by decide
           conv => lhs; unfold «number_frac_cont/7»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2»,
             Erlang.erlang.«=:=/2», Erlang.erlang.«or/2», ge, above]
 
@@ -2617,7 +2617,7 @@ defmodule JsonProofsTest do
           intro d orig skip acc stack dec len bs
           have below : (compare (45 : Int) 48).isGE = false := by decide
           conv => lhs; unfold «number_exp/7»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«>=/2», Erlang.erlang.«=</2»,
             Erlang.erlang.«=:=/2», Erlang.erlang.«or/2», below]
 
@@ -2752,7 +2752,7 @@ defmodule JsonProofsTest do
                 exp_cont_digits _ _ _ _ _ ds _ (fun x mem => dd x (by simp [mem])),
                 exp_cont_done _ _ _ _ _ _ stops]
               exact done _ _ (by simp; omega)
-            · simp only [List.singleton_append, List.cons_append, List.nil_append]
+            · simp only [List.cons_append, List.nil_append]
               rw [exp_minus, exp_sign_digit _ _ _ _ _ _ d _ db.1 db.2,
                 exp_cont_digits _ _ _ _ _ ds _ (fun x mem => dd x (by simp [mem])),
                 exp_cont_done _ _ _ _ _ _ stops]
@@ -2782,7 +2782,7 @@ defmodule JsonProofsTest do
             · simp only [List.nil_append, List.cons_append]
               rw [value_zero, number_zero_point]
               exact frac _ _ (by simp)
-            · simp only [List.singleton_append, List.cons_append, List.nil_append]
+            · simp only [List.cons_append, List.nil_append]
               rw [value_minus, number_minus_zero, number_zero_point]
               exact frac _ _ (by simp)
           · have positive : 49 ≤ w.toNat := by
@@ -2793,7 +2793,7 @@ defmodule JsonProofsTest do
               rw [value_digit _ _ _ _ _ w _ positive wb.2, number_digits _ _ _ _ _ ws _ wsd,
                 number_point]
               exact frac _ _ (by simp; omega)
-            · simp only [List.singleton_append, List.cons_append, List.nil_append]
+            · simp only [List.cons_append, List.nil_append]
               rw [value_minus, number_minus_digit _ _ _ _ _ w _ positive wb.2,
                 number_digits _ _ _ _ _ ws _ wsd, number_point]
               exact frac _ _ (by simp; omega)
@@ -2843,8 +2843,7 @@ defmodule JsonProofsTest do
           unfold «decode/1»
           simp only []
           rw [before, after, len]
-          simp only [Erlang.erlang.binary_part_whole, Lynx.Except.ok_bind,
-            ]
+          simp only [Erlang.erlang.binary_part_whole, Lynx.Except.ok_bind]
           rw [float_decode_end _ _ _ _ _ _ f depth parsed, unexpected_whole]
           simp
 
@@ -2903,7 +2902,7 @@ defmodule JsonProofsTest do
               «true/6» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec := by
           intro d orig skip acc stack dec bs
           unfold «value/6»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have value_false : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (bs : List UInt8),
@@ -2913,7 +2912,7 @@ defmodule JsonProofsTest do
                   by
           intro d orig skip acc stack dec bs
           unfold «value/6»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have value_null : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (bs : List UInt8),
@@ -2922,7 +2921,7 @@ defmodule JsonProofsTest do
               «null/6» d (.bitstring ⟨bs.toArray⟩ 0 (valid_aligned _)) orig skip acc stack dec := by
           intro d orig skip acc stack dec bs
           unfold «value/6»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have true_rest : ∀ {d : Dispatcher} (orig skip acc stack dec : Term) (post : List UInt8),
@@ -2968,7 +2967,7 @@ defmodule JsonProofsTest do
           induction l generalizing tail with
           | nil => simp [Erlang.lists.«reverse/2»]
           | cons x xs ih =>
-            simp only [Term.list_cons, Erlang.lists.«reverse/2»]
+            simp only [Erlang.lists.«reverse/2»]
             rw [show Term.cons x (Term.list tail) = Term.list (x :: tail) from rfl, ih]
             simp
 
@@ -2982,7 +2981,7 @@ defmodule JsonProofsTest do
           | a :: b :: c :: rest =>
             unfold Erlang.lists.«reverse/1»
             have reversed := reverse2 (c :: rest) [b, a]
-            simp only [Term.list_cons, Term.list_nil] at reversed ⊢
+            simp only at reversed ⊢
             rw [reversed]
             simp
 
@@ -3027,7 +3026,7 @@ defmodule JsonProofsTest do
               «object_start/7» d (bin bs) orig skip acc stack options (.integer 1) := by
           intro d bs orig skip acc stack
           unfold «value/6»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have object_start_close : ∀ {d : Dispatcher} (bs : List UInt8) (orig skip acc stack : Term)
@@ -3039,7 +3038,7 @@ defmodule JsonProofsTest do
                 «continue/7» d (bin bs) orig after acc stack options (.map [])) := by
           intro d bs orig skip acc stack len
           conv => lhs; unfold «object_start/7»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- An object frame decodes its first key with the outer accumulator saved.
@@ -3054,7 +3053,7 @@ defmodule JsonProofsTest do
                   options (.integer 0)) := by
           intro d bs orig skip acc stack len
           conv => lhs; unfold «object_start/7»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- A decoded key waits for its colon, and a decoded value is pushed with its key.
@@ -3075,7 +3074,7 @@ defmodule JsonProofsTest do
                 «value/6» d (bin bs) orig next acc (.cons key stack) options) := by
           intro d bs orig skip acc stack key
           conv => lhs; unfold «object_value/7»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have continue_key : ∀ {d : Dispatcher} (bs key : List UInt8)
@@ -3095,7 +3094,7 @@ defmodule JsonProofsTest do
                   options) := by
           intro d bs orig skip acc stack value key
           conv => lhs; unfold «object_push/8»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         -- The closing brace builds the map from the pushed pairs and restores the outer frame.
@@ -3110,7 +3109,7 @@ defmodule JsonProofsTest do
                 «continue/7» d (bin bs) orig next old stack options map) := by
           intro d bs orig skip acc frame old stack value key
           conv => lhs; unfold «object_push/8»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have object_key_quote : ∀ {d : Dispatcher} (bs : List UInt8) (orig skip acc stack : Term),
@@ -3120,7 +3119,7 @@ defmodule JsonProofsTest do
                 «string_ascii/7» d (bin bs) orig next acc stack options (.integer 0)) := by
           intro d bs orig skip acc stack
           conv => lhs; unfold «object_key/6»
-          simp only [matchInteger_byte, extract_some, matchEnd_byte]
+          simp only [matchInteger_byte, extract_some]
           simp [matchTail, Nat.mod_one, Erlang.erlang.«=:=/2», Erlang.erlang.«or/2»]
 
         have from_list_pairs : ∀ pairs : List (Term × Term),
@@ -3257,9 +3256,9 @@ defmodule JsonProofsTest do
             simp only [List.cons_append, List.nil_append]
             rw [object_push_close]
             have collected := from_list_pairs ((done ++ [(key, value)]).reverse)
-            simp only [List.map_reverse, List.reverse_reverse, List.map_append, List.map_cons,
-              List.map_nil, List.reverse_append, List.reverse_cons, List.reverse_nil,
-              List.nil_append, List.singleton_append, Term.list_cons] at collected
+            simp only [List.map_reverse, List.reverse_reverse, List.map_cons,
+              List.reverse_append, List.reverse_cons, List.reverse_nil,
+              List.nil_append, List.singleton_append] at collected
             simp [collected, Json.fieldTerms]
           | cons f fs ih =>
             intro all done key value pre rest old stack depth
@@ -3276,7 +3275,7 @@ defmodule JsonProofsTest do
             have step := field_step k v (all (k, v) (by simp)) fs (pre ++ [44]) rest
               (.cons (.tuple #[key, value]) (Term.list ((done.map fun p => .tuple #[p.1, p.2]).reverse)))
               (.cons old stack) _ depth rfl
-            simp only [List.append_assoc, List.singleton_append, List.cons_append, List.nil_append,
+            simp only [List.append_assoc, List.cons_append, List.nil_append,
               List.length_append, List.length_singleton] at step
             push_cast at step
             rw [step]
@@ -3293,7 +3292,7 @@ defmodule JsonProofsTest do
                 Term.list (((done ++ [(key, value)]).map fun p => .tuple #[p.1, p.2]).reverse) by
                 rw [List.map_append, List.reverse_append]; rfl,
               next]
-            simp only [Json.fieldTerms, List.append_assoc, List.singleton_append, List.length_cons,
+            simp only [Json.fieldTerms, List.length_cons,
               List.length_append]
             congr 2
             omega
@@ -3336,7 +3335,7 @@ defmodule JsonProofsTest do
                 pre.length + 1 + y.text.length := by simp; omega
             rw [skip] at first
             rw [skip'] at next
-            simp only [List.append_assoc, List.cons_append, List.singleton_append,
+            simp only [List.append_assoc, List.cons_append,
               List.nil_append, List.reverse_append, List.reverse_singleton] at first next
             rw [show Json.tailText (y :: ys) = 44 :: (y.text ++ Json.tailText ys) from rfl]
             simp only [List.cons_append, List.append_assoc]
@@ -3374,24 +3373,24 @@ defmodule JsonProofsTest do
               simp only [List.cons_append, List.nil_append]
               rw [value_false, show (97 :: 108 :: 115 :: 101 :: rest : List UInt8) =
                 [97, 108, 115, 101] ++ rest from rfl, false_rest]
-              simp [Json.term, Int.add_assoc]
+              simp [Json.term]
             · rw [show Json.text (.bool true) = [116, 114, 117, 101] from rfl]
               simp only [List.cons_append, List.nil_append]
               rw [value_true, show (114 :: 117 :: 101 :: rest : List UInt8) =
                 [114, 117, 101] ++ rest from rfl, true_rest]
-              simp [Json.term, Int.add_assoc]
+              simp [Json.term]
           case decodesNull =>
             intro pre rest acc stack depth _
             rw [show Json.text .null = [110, 117, 108, 108] from rfl]
             simp only [List.cons_append, List.nil_append]
             rw [value_null, show (117 :: 108 :: 108 :: rest : List UInt8) =
               [117, 108, 108] ++ rest from rfl, null_rest]
-            simp [Json.term, Int.add_assoc]
+            simp [Json.term]
           case decodesStr =>
             intro s valid
             intro pre rest acc stack depth _
             rw [show Json.text (.str s valid) = 34 :: (escapeText s ++ [34]) from rfl]
-            simp only [List.cons_append, List.append_assoc, List.singleton_append, List.nil_append]
+            simp only [List.cons_append, List.append_assoc, List.nil_append]
             rw [value_quote]
             simp only [Erlang.erlang.«+/2_integers»,
               Lynx.Except.ok_bind]
@@ -3433,7 +3432,7 @@ defmodule JsonProofsTest do
                   pre.length + 1 + x.text.length := by simp; omega
               rw [skip] at first
               rw [skip'] at next
-              simp only [List.append_assoc, List.cons_append, List.singleton_append,
+              simp only [List.append_assoc, List.cons_append,
                 List.nil_append, List.reverse_nil] at first next
               rw [show Json.text (.arr (x :: xs)) = 91 :: (x.text ++ Json.tailText xs) from rfl]
               simp only [List.cons_append, List.append_assoc]
@@ -3460,7 +3459,7 @@ defmodule JsonProofsTest do
                 Lynx.Except.ok_bind]
               have step := field_step k v (ih (k, v) (by simp)) fs (pre ++ [123]) rest .nil
                 (.cons acc stack) _ depth rfl
-              simp only [List.append_assoc, List.singleton_append, List.cons_append,
+              simp only [List.append_assoc, List.cons_append,
                 List.nil_append, List.length_append, List.length_singleton] at step
               push_cast at step
               rw [show (pre.length : Int) + 1 + 1 = pre.length + 1 + 1 by omega, step]
@@ -3495,7 +3494,7 @@ defmodule JsonProofsTest do
                 ⟨v.text.toArray⟩ 0 (valid_aligned _)) = .ok v.term := by
           intro v depth number
           have whole := decodes v [] [] (.atom "ok") .nil depth (Or.inr number)
-          simp only [List.nil_append, List.append_nil, List.length_nil, Int.zero_add] at whole
+          simp only [List.nil_append, List.append_nil, List.length_nil] at whole
           rw [show ((0 : Nat) : Int) = 0 from rfl] at whole
           unfold «decode/1»
           simp only []
@@ -3818,7 +3817,7 @@ defmodule JsonProofsTest do
                 intro returned
                 obtain ⟨key, value⟩ := e
                 rw [«fields?/2».eq_def] at returned
-                simp only [List.map_cons, Term.list_cons] at returned
+                simp only [List.map_cons] at returned
                 rcases key with _ | _ | _ | _ | _ | _ | _ | _ | _ | _ | ⟨bytes, last, valid⟩
                 all_goals try (simp [Erlang.erlang.«is_binary/1»] at returned; done)
                 obtain ⟨_ | k, bound⟩ := last

@@ -47,13 +47,13 @@ defmodule SVBench.GcdTest do
           rw [«gcd/2».eq_def]
           by_cases same : a = b
           · subst same
-            exact ⟨a, by simp [Lynx.Except.guard, Erlang.erlang.«=:=/2», show ¬ a ≤ 0 by omega], by omega⟩
+            exact ⟨a, by simp [Erlang.erlang.«=:=/2», show ¬ a ≤ 0 by omega], by omega⟩
           · by_cases larger : b < a
             · obtain ⟨r, returned, one⟩ := ih (a - b) b (by omega) b0 (by omega)
-              exact ⟨r, by simp [Lynx.Except.guard, Erlang.erlang.«=:=/2», show ¬ a ≤ 0 by omega, show ¬ b ≤ 0 by omega,
+              exact ⟨r, by simp [Erlang.erlang.«=:=/2», show ¬ a ≤ 0 by omega, show ¬ b ≤ 0 by omega,
                 show ¬ b = a by omega, larger, returned], one⟩
             · obtain ⟨r, returned, one⟩ := ih a (b - a) a0 (by omega) (by omega)
-              exact ⟨r, by simp [Lynx.Except.guard, Erlang.erlang.«=:=/2», show ¬ a ≤ 0 by omega, show ¬ b ≤ 0 by omega,
+              exact ⟨r, by simp [Erlang.erlang.«=:=/2», show ¬ a ≤ 0 by omega, show ¬ b ≤ 0 by omega,
                 show ¬ b = a by omega, larger, returned], one⟩
       cases m <;> cases n <;> simp [«gcd01_1:requires/2», Erlang.erlang.«is_integer/1»] at requires
       rename_i m n
@@ -62,10 +62,10 @@ defmodule SVBench.GcdTest do
         · obtain ⟨r, returned, one⟩ := positive (m + n).toNat m n m0 n0 (by omega)
           simp [«gcd01_1:ensures/2», returned, show 1 ≤ r from one]
         · have returned : «gcd/2» (.integer m) (.integer n) = .ok (.integer 0) := by
-            rw [«gcd/2».eq_def]; simp [Lynx.Except.guard, show ¬ m ≤ 0 by omega, show n ≤ 0 by omega]
+            rw [«gcd/2».eq_def]; simp [show ¬ m ≤ 0 by omega, show n ≤ 0 by omega]
           simp [«gcd01_1:ensures/2», returned, show ¬ m ≤ 0 by omega, show n ≤ 0 by omega]
       · have returned : «gcd/2» (.integer m) (.integer n) = .ok (.integer 0) := by
-          rw [«gcd/2».eq_def]; simp [Lynx.Except.guard, show m ≤ 0 by omega]
+          rw [«gcd/2».eq_def]; simp [show m ≤ 0 by omega]
         simp [«gcd01_1:ensures/2», returned, show m ≤ 0 by omega]
       """
 
@@ -83,15 +83,15 @@ defmodule SVBench.GcdTest do
           rw [«checked_gcd/2».eq_def]
           by_cases same : a = b
           · subst same
-            exact ⟨a, by simp [Lynx.Except.guard, show ¬ a ≤ 0 by omega], by omega,
+            exact ⟨a, by simp [show ¬ a ≤ 0 by omega], by omega,
               Int.dvd_refl a, Int.dvd_refl a⟩
           · by_cases larger : b < a
             · obtain ⟨r, returned, one, ra, rb⟩ := ih (a - b) b (by omega) b0 (by omega)
-              refine ⟨r, by simp [Lynx.Except.guard, show ¬ a ≤ 0 by omega, show ¬ b ≤ 0 by omega,
+              refine ⟨r, by simp [show ¬ a ≤ 0 by omega, show ¬ b ≤ 0 by omega,
                 show ¬ b = a by omega, larger, returned], one, ?_, rb⟩
               simpa using Int.dvd_add ra rb
             · obtain ⟨r, returned, one, ra, rb⟩ := ih a (b - a) a0 (by omega) (by omega)
-              refine ⟨r, by simp [Lynx.Except.guard, show ¬ a ≤ 0 by omega, show ¬ b ≤ 0 by omega,
+              refine ⟨r, by simp [show ¬ a ≤ 0 by omega, show ¬ b ≤ 0 by omega,
                 show ¬ b = a by omega, larger, returned], one, ra, ?_⟩
               simpa using Int.dvd_add rb ra
       have divides (k : Nat) : ∀ r m : Int, 1 ≤ r → 0 ≤ m → r ∣ m → m ≤ k →
@@ -113,10 +113,10 @@ defmodule SVBench.GcdTest do
               · subst zero; simp at nonzero
               · omega
             have le : r ≤ m := Int.le_of_dvd positive dvd
-            simp [Lynx.Except.guard, show ¬ m < r by omega]
+            simp [show ¬ m < r by omega]
             exact ih r (m - r) one (by omega) (Int.dvd_sub dvd (Int.dvd_refl r)) (by omega)
       cases m <;> simp [«gcd02:requires/2», Erlang.erlang.«is_integer/1»] at requires
-      cases n <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases n <;> simp at requires
       rename_i m n
       obtain ⟨r, returned, one, rm, _⟩ := gcd (m + n).toNat m n requires.1 requires.2 (by omega)
       simp [«gcd02:ensures/2», returned, divides m.toNat r m one (by omega) rm (by omega)]

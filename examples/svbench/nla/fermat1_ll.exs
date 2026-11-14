@@ -95,8 +95,8 @@ defmodule SVBench.Fermat1LlTest do
           simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«+/2_integers»,
             Erlang.erlang.«-/2_integers», Erlang.erlang.«==/2_integers», Lynx.Except.ok_bind,
             Lynx.Term.true, Erlang.erlang.«>/2_integers»]
-          rw [if_pos invariant]
-          simp only [«check/1», Lynx.Except.ok_bind]
+          rw [ite_eq_left invariant]
+          simp only [«check/1»]
           by_cases more : 0 < w
           · have room := roomV u v w invariant vOdd uLow uHigh vHigh more
             obtain ⟨v', w', ret, h⟩ := ih (a - (v + 2)).toNat (by omega) (v + 2) (w - v) (by omega)
@@ -119,8 +119,8 @@ defmodule SVBench.Fermat1LlTest do
           simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«+/2_integers»,
             Erlang.erlang.«-/2_integers», Erlang.erlang.«==/2_integers», Lynx.Except.ok_bind,
             Lynx.Term.true, Erlang.erlang.«</2_integers»]
-          rw [if_pos invariant]
-          simp only [«check/1», Lynx.Except.ok_bind]
+          rw [ite_eq_left invariant]
+          simp only [«check/1»]
           by_cases less : w < 0
           · have room := roomU u v w invariant uOdd uHigh vLow vHigh less
             obtain ⟨u', w', ret, h⟩ := ih (a + 2 - (u + 2)).toNat (by omega) (u + 2) (w + u)
@@ -141,8 +141,8 @@ defmodule SVBench.Fermat1LlTest do
           simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«+/2_integers»,
             Erlang.erlang.«-/2_integers», Erlang.erlang.«==/2_integers», Lynx.Except.ok_bind,
             Lynx.Term.true]
-          rw [if_pos invariant]
-          simp only [«check/1», Lynx.Except.ok_bind]
+          rw [ite_eq_left invariant]
+          simp only [«check/1»]
           by_cases zero : w = 0
           · exact ⟨u, v, by simp [zero], by subst zero; grind⟩
           · obtain ⟨v₁, w₁, retDown, invDown, vOdd₁, vGrow, vHigh₁, wNonpos, vStep, vStay⟩ :=

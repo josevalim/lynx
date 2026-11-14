@@ -27,8 +27,8 @@ defmodule StringProofsTest do
       have scalar : 0 ≤ n ∧ n ≤ 0x10ffff ∧ (n < 0xd800 ∨ 0xdfff < n) := by
         by_cases a : 0 ≤ n <;> by_cases b : n ≤ 0x10ffff <;>
           by_cases c : n < 0xd800 <;> by_cases d : 0xdfff < n <;>
-          simp [Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
-            Int.compare_eq_gt, a, b, c, d] at requires <;> omega
+          simp [
+            a, b, c, d] at requires <;> omega
       obtain ⟨n, rfl⟩ := Int.eq_ofNat_of_zero_le scalar.1
       have tailBinary : Erlang.erlang.«is_binary/1» tail = .ok Lynx.Term.true := by
         by_cases low : (n : Int) < 0xd800

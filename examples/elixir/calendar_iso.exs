@@ -27,15 +27,15 @@ defmodule CalendarISOProofsTest do
       proof: ~LEAN"""
       cases hour <;> simp [«time_fraction_roundtrips:requires/5»,
         Elixir.Calendar.ISO.«valid_time?/4», Erlang.erlang.«is_integer/1»,
-        Erlang.erlang.«=:=/2»] at requires
+        ] at requires
       rename_i h
-      cases minute <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases minute <;> simp at requires
       rename_i m
-      cases second <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases second <;> simp at requires
       rename_i s
-      cases microsecond <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases microsecond <;> simp at requires
       rename_i u
-      cases precision <;> simp [Erlang.erlang.«is_integer/1», Erlang.erlang.«=:=/2»] at requires
+      cases precision <;> simp at requires
       rename_i p
       by_cases hLo : 0 ≤ h <;> by_cases hHi : h ≤ 23 <;> simp [hLo, hHi] at requires
       by_cases mLo : 0 ≤ m <;> by_cases mHi : m ≤ 59 <;> simp [mLo, mHi] at requires
@@ -85,7 +85,7 @@ defmodule CalendarISOProofsTest do
           simp [Elixir.Calendar.ISO.«time_from_day_fraction/1», zero, hz, mz, sz, uz]
         · simp [Elixir.Calendar.ISO.«time_from_day_fraction/1», zero,
             Elixir.Calendar.ISO.«divide_by_parts_per_day/2», divided,
-            Erlang.erlang.«bsr/2», Erlang.erlang.«is_integer/1», Erlang.erlang.«=:=/2»,
+            Erlang.erlang.«bsr/2», Erlang.erlang.«is_integer/1»,
             xLo, xHi, minute, second, mask, micros]
       have encoded : Elixir.Calendar.ISO.«time_to_day_fraction/4» (.integer h) (.integer m)
           (.integer s) (.tuple #[.integer u, .integer p]) =
@@ -134,7 +134,6 @@ defmodule CalendarISOProofsTest do
             .tuple #[.integer (if month ≤ 2 then year + 1 else year), .integer month, .integer day]) := by
         by_cases sign : 60 ≤ n <;>
           simp [Elixir.Calendar.ISO.«date_from_iso_days/1», Erlang.erlang.«div/2», sign,
-            show (0 ≤ n - 60) ↔ 60 ≤ n by omega,
             show n - 60 - 146097 + 1 = n - 146156 by omega]
         all_goals split <;> simp_all
         all_goals split <;> simp_all
@@ -170,7 +169,7 @@ defmodule CalendarISOProofsTest do
         have choices : mp = 0 ∨ mp = 1 ∨ mp = 2 ∨ mp = 3 ∨ mp = 4 ∨ mp = 5 ∨
             mp = 6 ∨ mp = 7 ∨ mp = 8 ∨ mp = 9 ∨ mp = 10 ∨ mp = 11 := by dsimp [mp]; omega
         rcases choices with h|h|h|h|h|h|h|h|h|h|h|h <;>
-          simp only [← show (5 * d + 2) / 153 = mp from rfl, h] <;>
+          simp only <;>
           dsimp [mp] at h <;> split <;> omega
 
       have adjustedDivision (z : Int) (b : Int) (choice : b = 400 ∨ b = 146097) :
@@ -235,7 +234,6 @@ defmodule CalendarISOProofsTest do
             by_cases positive : 1 ≤ year <;> by_cases nonnegative : 0 ≤ year <;>
             simp [Erlang.erlang.«div/2», Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
               Int.compare_eq_gt, early, positive, nonnegative,
-              show (0 ≤ year - 1) ↔ 1 ≤ year by omega,
               show (2 < month) ↔ ¬ month ≤ 2 by omega]
       have monthModel (year month : Int) (lower : 1 ≤ month) (upper : month ≤ 12) :
           Elixir.Calendar.ISO.«days_in_month/2» (.integer year) (.integer month) =
@@ -249,17 +247,17 @@ defmodule CalendarISOProofsTest do
           by_cases feb : month = 2
           · simpa [feb] using february year
           by_cases april : month = 4
-          · subst month; simp [Elixir.Calendar.ISO.«days_in_month_guarded/2», Erlang.erlang.«=:=/2»]
+          · subst month; simp [Elixir.Calendar.ISO.«days_in_month_guarded/2»]
           by_cases june : month = 6
-          · subst month; simp [Elixir.Calendar.ISO.«days_in_month_guarded/2», Erlang.erlang.«=:=/2»]
+          · subst month; simp [Elixir.Calendar.ISO.«days_in_month_guarded/2»]
           by_cases september : month = 9
-          · subst month; simp [Elixir.Calendar.ISO.«days_in_month_guarded/2», Erlang.erlang.«=:=/2»]
+          · subst month; simp [Elixir.Calendar.ISO.«days_in_month_guarded/2»]
           by_cases november : month = 11
-          · subst month; simp [Elixir.Calendar.ISO.«days_in_month_guarded/2», Erlang.erlang.«=:=/2»]
-          simp [Elixir.Calendar.ISO.«days_in_month_guarded/2», Erlang.erlang.«=:=/2»,
+          · subst month; simp [Elixir.Calendar.ISO.«days_in_month_guarded/2»]
+          simp [Elixir.Calendar.ISO.«days_in_month_guarded/2»,
             feb, april, june, september, november]
         simp [Elixir.Calendar.ISO.«days_in_month/2», Erlang.erlang.«is_integer/1»,
-          Erlang.erlang.«=:=/2», lower, upper, guarded]
+          lower, upper, guarded]
       have checkedForward (year month day total capacity : Int)
           (monthLength : Elixir.Calendar.ISO.«days_in_month/2» (.integer year) (.integer month) =
             .ok (.integer capacity)) (lower : 1 ≤ day) (upper : day ≤ capacity)
@@ -268,7 +266,7 @@ defmodule CalendarISOProofsTest do
           Elixir.Calendar.ISO.«date_to_iso_days/3» (.integer year) (.integer month) (.integer day) =
             .ok (.integer total) := by
         simp [Elixir.Calendar.ISO.«date_to_iso_days/3», Elixir.Calendar.ISO.«ensure_day_in_month!/3»,
-          Erlang.erlang.«is_integer/1», Erlang.erlang.«=:=/2», monthLength,
+          monthLength,
           show ¬ day < 1 by omega, show ¬ capacity < day by omega, encoded,
           Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt, Int.compare_eq_gt]
       have contract (n year month day capacity : Int)
@@ -490,7 +488,7 @@ defmodule CalendarISOProofsTest do
       cases month <;> simp [«valid_month/1», Erlang.erlang.«is_integer/1»] at requires
       rename_i m
       by_cases mLo : 1 ≤ m <;> by_cases mHi : m ≤ 12 <;> simp [mLo, mHi] at requires
-      cases day <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases day <;> simp at requires
       rename_i d
       by_cases dLo : 1 ≤ d <;> by_cases dHi : d ≤ 31 <;> simp [dLo, dHi] at requires
       have nonnegative : 0 ≤ m - 1 := by omega
@@ -499,7 +497,7 @@ defmodule CalendarISOProofsTest do
       have first : (m - 1) / 3 * 3 < m := by omega
       have last : m ≤ ((m - 1) / 3 + 1) * 3 := by omega
       simp [«quarter_contains_month:ensures/3», Elixir.Calendar.ISO.«quarter_of_year/3»,
-        mLo, mHi, dLo, dHi, Erlang.erlang.«is_integer/1», Erlang.erlang.«=:=/2», Erlang.erlang.«div/2»,
+        mLo, mHi, dLo, dHi, Erlang.erlang.«is_integer/1», Erlang.erlang.«div/2»,
         Int.tdiv_eq_ediv_of_nonneg nonnegative, «quarter_contains_month/2», qLo, qHi, first, last]
       """
 
@@ -531,7 +529,7 @@ defmodule CalendarISOProofsTest do
           simp [«days_in_month_bounds:ensures/2», Elixir.Calendar.ISO.«days_in_month/2»,
             Elixir.Calendar.ISO.«days_in_month_guarded/2», mLo, mHi, february,
             april, june, september, november, Erlang.erlang.«is_integer/1»,
-            Erlang.erlang.«=:=/2», «month_length_in_bounds/1»]
+            «month_length_in_bounds/1»]
       """
 
     law date_from_iso_days_total(days),
@@ -545,7 +543,7 @@ defmodule CalendarISOProofsTest do
         simp [«date_from_iso_days_total:ensures/1», Elixir.Calendar.ISO.«date_from_iso_days/1»,
           Erlang.erlang.«div/2», era]
       all_goals split <;> simp_all [Erlang.erlang.«is_tuple/1»]
-      all_goals split <;> simp_all [Erlang.erlang.«is_tuple/1»]
+      all_goals split <;> simp_all
       """
 
     law time_fraction_bounds(hour, minute, second, microsecond, precision),
@@ -556,16 +554,15 @@ defmodule CalendarISOProofsTest do
         ),
       proof: ~LEAN"""
       cases hour <;> simp [«time_fraction_bounds:requires/5»,
-        Elixir.Calendar.ISO.«valid_time?/4», Erlang.erlang.«is_integer/1»,
-        Erlang.erlang.«=:=/2»] at requires
+        Elixir.Calendar.ISO.«valid_time?/4», Erlang.erlang.«is_integer/1»] at requires
       rename_i h
-      cases minute <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases minute <;> simp at requires
       rename_i m
-      cases second <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases second <;> simp at requires
       rename_i s
-      cases microsecond <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases microsecond <;> simp at requires
       rename_i u
-      cases precision <;> simp [Erlang.erlang.«is_integer/1», Erlang.erlang.«=:=/2»] at requires
+      cases precision <;> simp at requires
       rename_i p
       by_cases hLo : 0 ≤ h <;> by_cases hHi : h ≤ 23 <;> simp [hLo, hHi] at requires
       by_cases mLo : 0 ≤ m <;> by_cases mHi : m ≤ 59 <;> simp [mLo, mHi] at requires
@@ -574,8 +571,8 @@ defmodule CalendarISOProofsTest do
       have lo : 0 ≤ (h * 3600 + m * 60 + s) * 1000000 + u := by omega
       have hi : (h * 3600 + m * 60 + s) * 1000000 + u < 86400000000 := by omega
       simp [«time_fraction_bounds:ensures/5», Elixir.Calendar.ISO.«time_to_day_fraction/4»,
-        «fraction_in_day/1», lo, hi]
-      split <;> simp_all [«fraction_in_day/1»]
+        «fraction_in_day/1»]
+      split <;> simp_all
       obtain ⟨hu, hp⟩ := ‹Lynx.Term.integer u = _ ∧ Lynx.Term.integer p = _›
       rw [← hu]
       simp [lo, hi]

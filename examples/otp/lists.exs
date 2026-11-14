@@ -97,11 +97,11 @@ defmodule ListsProofsTest do
               first descending (encode xs) head (encode ys) (encode (x :: acc))
             else second descending (encode xs) head (encode ys) (encode acc) x := by
         cases descending
-        · simp only [first, second, select, Bool.false_eq_true, ite_false, ite_true]
+        · simp only [first, second, select, Bool.false_eq_true, ite_false]
           rw [Erlang.lists.«merge2_1/4».eq_def]
           cases comparison : Lynx.Term.compare (Lynx.Term.fuel x head) x head <;>
             simp [encode, Erlang.erlang.«=</2», comparison]
-        · simp only [first, second, select, Bool.false_eq_true, ite_false, ite_true]
+        · simp only [first, second, select, ite_true]
           rw [Erlang.lists.«rmerge2_1/4».eq_def]
           cases comparison : Lynx.Term.compare (Lynx.Term.fuel x head) x head <;>
             simp [encode, Erlang.erlang.«=</2», comparison]
@@ -111,11 +111,11 @@ defmodule ListsProofsTest do
               first descending (encode xs) y (encode ys) (encode (head :: previous :: acc))
             else second descending (encode xs) y (encode ys) (encode (previous :: acc)) head := by
         cases descending
-        · simp only [first, second, select, Bool.false_eq_true, ite_false, ite_true]
+        · simp only [first, second, select, Bool.false_eq_true, ite_false]
           rw [Erlang.lists.«merge2_2/5».eq_def]
           cases comparison : Lynx.Term.compare (Lynx.Term.fuel head y) head y <;>
             simp [encode, Erlang.erlang.«=</2», comparison]
-        · simp only [first, second, select, Bool.false_eq_true, ite_false, ite_true]
+        · simp only [first, second, select, ite_true]
           rw [Erlang.lists.«rmerge2_2/5».eq_def]
           cases comparison : Lynx.Term.compare (Lynx.Term.fuel head y) head y <;>
             simp [encode, Erlang.erlang.«=</2», comparison]
@@ -484,7 +484,7 @@ defmodule ListsProofsTest do
             schedule false runs (combine false (x :: xs) (y :: ys) (z :: zs) :: acc) := by
         have returned := mergeThreeEval false (x :: xs) ys zs y z
         simp only [f1, Bool.false_eq_true, ite_false, encode, List.foldr_cons, List.foldr_nil] at returned
-        simp only [schedule, Bool.false_eq_true, ite_false, ite_true]
+        simp only [schedule, Bool.false_eq_true, ite_false]
         rw [Erlang.lists.«mergel/2».eq_def]
         simp [pack, encode, returned]
       have descendingThree (x y z : Lynx.Term) (xs ys zs : List Lynx.Term) (runs acc : List (List Lynx.Term)) :
@@ -492,7 +492,7 @@ defmodule ListsProofsTest do
             schedule true runs (combine true (z :: zs) (y :: ys) (x :: xs) :: acc) := by
         have returned := mergeThreeEval true (z :: zs) ys xs y x
         simp only [f1, ite_true, encode, List.foldr_cons, List.foldr_nil] at returned
-        simp only [schedule, Bool.false_eq_true, ite_false, ite_true]
+        simp only [schedule, ite_true]
         rw [Erlang.lists.«rmergel/2».eq_def]
         simp [pack, encode, returned]
       have runsNil (descending : Bool) : runsGood descending [] := by simp [runsGood]
@@ -1157,7 +1157,7 @@ defmodule ListsProofsTest do
             have nEq : n = (n-4)+1+1+1+1 := by omega
             have arith (k : Int) : a + k*d-d = a + (k-1)*d := by simp only [Int.sub_mul, Int.one_mul]; omega
             simp only [Erlang.erlang.«>=/2_integers», Erlang.erlang.«-/2_integers»,
-              show (4 : Int) ≤ n by omega, ite_true, Lynx.Except.tryWith_ok,
+              show (4 : Int) ≤ n by omega, ite_true,
               Lynx.Except.ok_bind]
             simp only [arith]
             have expanded : series n a d = series (n-4) a d ++
@@ -1166,7 +1166,7 @@ defmodule ListsProofsTest do
               conv => lhs; rw [nEq]
               simp only [seriesStep, Int.natCast_add, Int.natCast_sub four,
                 Int.cast_ofNat_Int, List.append_assoc,
-                List.singleton_append, List.cons_append, List.nil_append]
+                List.cons_append, List.nil_append]
               congr 10 <;> omega
             simpa [encode, expanded, Int.natCast_sub four, Int.sub_sub,
               List.append_assoc] using returned
@@ -1177,7 +1177,7 @@ defmodule ListsProofsTest do
               have arith (k : Int) : a + k*d-d = a + (k-1)*d := by simp only [Int.sub_mul, Int.one_mul]; omega
               simp only [Erlang.erlang.«>=/2_integers», Erlang.erlang.«-/2_integers»,
                 show ¬ (4 : Int) ≤ n by omega, show (2 : Int) ≤ n by omega,
-                ite_true, ite_false, Lynx.Except.tryWith_ok,
+                ite_true, ite_false,
                 Lynx.Except.ok_bind]
               simp only [arith]
               have expanded : series n a d = series (n-2) a d ++
@@ -1185,7 +1185,7 @@ defmodule ListsProofsTest do
                 conv => lhs; rw [nEq]
                 simp only [seriesStep, Int.natCast_add, Int.natCast_sub two,
                   Int.cast_ofNat_Int, List.append_assoc,
-                  List.singleton_append, List.cons_append, List.nil_append]
+                  List.cons_append, List.nil_append]
                 congr 10 <;> omega
               simpa [encode, expanded, Int.natCast_sub two, Int.sub_sub,
                 List.append_assoc] using returned
@@ -1211,8 +1211,7 @@ defmodule ListsProofsTest do
             have returned := ih xs (by simpa using bound)
             rw [Erlang.lists.«nth_1/2».eq_def]
             simp only [encode, List.foldr_cons]
-            split <;> simp_all [Erlang.erlang.«-/2_integers», encode,
-              show (↑(i+1)+1 : Int)-1 = ↑i+1 by omega]
+            split <;> simp_all [Erlang.erlang.«-/2_integers», encode]
             omega
       have nthModel (xs : List Int) (i : Nat) (bound : i < xs.length) :
           Erlang.lists.«nth/2» (.integer (i+1)) (encode xs) = .ok (.integer xs[i]) := by
@@ -1231,11 +1230,11 @@ defmodule ListsProofsTest do
             omega
       cases first <;> simp [«sequence_formula:requires/4», Erlang.erlang.«is_integer/1»] at requires
       rename_i a
-      cases last <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases last <;> simp at requires
       rename_i b
-      cases step <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases step <;> simp at requires
       rename_i d
-      cases index <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases index <;> simp at requires
       rename_i i
       have nonnegative : 0 ≤ i := by
         by_cases h : 0 ≤ i <;> simp [h] at requires <;> omega
@@ -1244,21 +1243,17 @@ defmodule ListsProofsTest do
         · by_cases lo : a-d ≤ b
           · exact .inl ⟨pos, lo⟩
           · simp [pos, lo, show ¬ d < 0 by omega, show d ≠ 0 by omega,
-              nonnegative, Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
-              Int.compare_eq_gt, Erlang.erlang.«==/2»] at requires
+              nonnegative] at requires
         · by_cases neg : d < 0
           · by_cases hi : b ≤ a-d
             · exact .inr (.inl ⟨neg, hi⟩)
             · simp [pos, neg, hi, show d ≠ 0 by omega,
-                nonnegative, Erlang.erlang.«>/2», Ordering.isGT_iff_eq_gt,
-                Int.compare_eq_gt, Erlang.erlang.«==/2»] at requires
+                nonnegative] at requires
           · have zero : d = 0 := by omega
             have same : a = b := by
               by_cases same : a = b
               · exact same
-              · simp [pos, neg, zero, same, nonnegative, Erlang.erlang.«>/2»,
-                  Ordering.isGT_iff_eq_gt, Int.compare_eq_gt,
-                  Erlang.erlang.«==/2»] at requires
+              · simp [zero, same, nonnegative] at requires
             exact .inr (.inr ⟨zero, same⟩)
       let count : Int := if d = 0 then 1 else (b-a+d).tdiv d
       have result : ∃ n : Nat, (n : Int) = count ∧
@@ -1270,7 +1265,7 @@ defmodule ListsProofsTest do
           subst b
           refine ⟨1, rfl, ?_⟩
           simp [Erlang.lists.«seq/3», Erlang.erlang.«>/2»,
-            Erlang.erlang.«and/2», Erlang.erlang.«is_integer/1»,
+            Erlang.erlang.«and/2»,
             Erlang.erlang.«=:=/2», series, encode]
         · have nonneg : 0 ≤ (b-a+d).tdiv d := by
             rcases domain with pos | neg | bad
@@ -1287,13 +1282,13 @@ defmodule ListsProofsTest do
           rcases domain with pos | neg | bad
           · simp [Erlang.lists.«seq/3», Erlang.erlang.«>/2»,
               Ordering.isGT_iff_eq_gt, Int.compare_eq_gt,
-              Erlang.erlang.«and/2», Erlang.erlang.«is_integer/1»,
+              Erlang.erlang.«and/2»,
               Erlang.erlang.«=:=/2», Erlang.erlang.«div/2», zero, pos.1, pos.2,
               show d * ((b-a+d).tdiv d-1) + a =
                 a + d * ((b-a+d).tdiv d-1) by omega, returned]
           · simp [Erlang.lists.«seq/3», Erlang.erlang.«>/2»,
               Ordering.isGT_iff_eq_gt, Int.compare_eq_gt,
-              Erlang.erlang.«and/2», Erlang.erlang.«is_integer/1»,
+              Erlang.erlang.«and/2»,
               Erlang.erlang.«=:=/2», Erlang.erlang.«div/2», zero, neg.1, neg.2,
               show ¬ 0 < d by omega,
               show d * ((b-a+d).tdiv d-1) + a =
@@ -1342,7 +1337,7 @@ defmodule ListsProofsTest do
         induction l generalizing tail with
         | nil => simp [Erlang.lists.«reverse/2»]
         | cons x xs ih =>
-          simp only [Lynx.Term.list_cons, Erlang.lists.«reverse/2»]
+          simp only [Erlang.lists.«reverse/2»]
           rw [show Lynx.Term.cons x (Lynx.Term.list tail) = Lynx.Term.list (x :: tail) from rfl, ih]
           simp
       have reverse1 (l : List Lynx.Term) :
@@ -1354,7 +1349,7 @@ defmodule ListsProofsTest do
         | a :: b :: c :: rest =>
           unfold Erlang.lists.«reverse/1»
           have reversed := reverse2 (c :: rest) [b, a]
-          simp only [Lynx.Term.list_cons, Lynx.Term.list_nil] at reversed ⊢
+          simp only at reversed ⊢
           rw [reversed]
           simp
       have unzipModel (ps : List (Lynx.Term × Lynx.Term)) (xs ys : List Lynx.Term) :
@@ -1415,7 +1410,7 @@ defmodule ListsProofsTest do
         induction l generalizing tail with
         | nil => simp [Erlang.lists.«reverse/2»]
         | cons x xs ih =>
-          simp only [Lynx.Term.list_cons, Erlang.lists.«reverse/2»]
+          simp only [Erlang.lists.«reverse/2»]
           rw [show Lynx.Term.cons x (Lynx.Term.list tail) = Lynx.Term.list (x :: tail) from rfl, ih]
           simp
       have reverse1 (l : List Lynx.Term) :
@@ -1427,7 +1422,7 @@ defmodule ListsProofsTest do
         | a :: b :: c :: rest =>
           unfold Erlang.lists.«reverse/1»
           have reversed := reverse2 (c :: rest) [b, a]
-          simp only [Lynx.Term.list_cons, Lynx.Term.list_nil] at reversed ⊢
+          simp only at reversed ⊢
           rw [reversed]
           simp
       have unzipModel (ps : List (Lynx.Term × Lynx.Term)) (xs ys : List Lynx.Term) :
@@ -1467,7 +1462,7 @@ defmodule ListsProofsTest do
       have rezip := List.zip_unzip ps
       simp only [List.unzip_fst, List.unzip_snd] at rezip
       have unzipped := unzipModel ps [] []
-      simp only [List.reverse_nil, List.nil_append, Lynx.Term.list_nil] at unzipped
+      simp only [List.reverse_nil, List.nil_append] at unzipped
       have zipped := zipModel (ps.map Prod.fst) (ps.map Prod.snd) (by simp)
       simp [«zip_unzip:ensures/1», «zip_unzip_contract/1», Erlang.lists.«unzip/1», unzipped,
         zipped, rezip, Erlang.erlang.«=:=/2»]

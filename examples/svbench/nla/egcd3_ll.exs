@@ -67,8 +67,8 @@ defmodule SVBench.Egcd3LlTest do
         rw [«innermost/12».eq_def]
         simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«+/2_integers»,
           Erlang.erlang.«==/2_integers», Erlang.erlang.«>=/2_integers», Lynx.Except.ok_bind]
-        simp (disch := grind) only [if_pos]
-        simp only [«check/1», Lynx.Term.true, Lynx.Except.ok_bind]
+        simp (disch := grind) only [ite_eq_left]
+        simp only [«check/1», Lynx.Term.true]
         by_cases more : 2 * v ≤ c <;> simp [more]
       have innermost (a b p q r s c k : Int) (hb : 1 ≤ b) (ea : a = y * r + x * p)
           (eb : b = x * q + y * s) (ek : a = k * b + c) (m : Nat) :

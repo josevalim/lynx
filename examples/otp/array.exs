@@ -151,7 +151,7 @@ defmodule ArrayProofsTest do
             ∃ tree' n, out = .tuple #[tree', .integer n] := by
           simp only [Erlang.array.«grow/3»] at returned
           split at returned
-          · simp [Erlang.erlang.«is_integer/1», Lynx.Except.bind_eq_ok] at returned
+          · simp [Lynx.Except.bind_eq_ok] at returned
             obtain ⟨bits, found, returned⟩ := returned
             obtain ⟨n, rfl⟩ := findShape _ _ _ found
             exact ⟨.nil, n, by simpa using returned.symm⟩
@@ -178,14 +178,14 @@ defmodule ArrayProofsTest do
             by_cases existing : i < n <;> simp [existing] at returned
             · have maxSize : max n (i + 1) = n := by omega
               by_cases hit : ci ≤ i + z ∧ i + z < ci + 16 <;>
-                simp [hit, boolAnd, andTT, andTF, andFT, masked] at returned
+                simp [hit, masked] at returned
               · obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp returned
                 obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ cacheWrite
                 refine ⟨i, n, z, ci, bits, fixed, default, tree, entries, by omega, rfl,
                   by simp [Erlang.array.«size/1»], nonnegative, hit.1, hit.2, ?_⟩
                 intro replacement
                 simp [Erlang.array.«set/3», nonnegative, existing, hit,
-                  boolAnd, andTT, andTF, andFT, Erlang.erlang.«setelement/3», lo, bound, maxSize, pack]
+                  andTT, Erlang.erlang.«setelement/3», lo, bound, maxSize, pack]
               · obtain ⟨newTree, treeReturned, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp returned
                 obtain ⟨newCache, cacheReturned, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp rest
                 obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp rest
@@ -195,7 +195,7 @@ defmodule ArrayProofsTest do
                   by simp [Erlang.array.«size/1»], nonnegative, by omega, by omega, ?_⟩
                 intro replacement
                 simp [Erlang.array.«set/3», nonnegative, existing, hit,
-                  boolAnd, andTT, andTF, andFT, masked, treeReturned, cacheReturned,
+                  boolAnd, andTT, masked, treeReturned, cacheReturned,
                   Erlang.erlang.«setelement/3», lo, bound, maxSize, pack, position]
             · by_cases fixedTrue : Lynx.Term.compareExact (Lynx.Term.fuel fixed (.atom "true")) fixed (.atom "true") = .eq <;>
                 simp [Erlang.erlang.«=:=/2», fixedTrue] at returned
@@ -207,14 +207,14 @@ defmodule ArrayProofsTest do
               simp [shifted] at returned
               by_cases fits : i + z < capacity <;> simp [fits, masked] at returned
               · by_cases same : i + z - (r : Int) = ci <;>
-                  simp [same, Erlang.erlang.«=/=/2»] at returned
+                  simp [same] at returned
                 · obtain ⟨updatedCache, cacheWrite, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp returned
                   obtain ⟨entries, rfl, lo, bound⟩ := replace _ _ _ _ cacheWrite
                   have position : 1 + (i + z) - ci = 1 + (r : Int) := by omega
                   refine ⟨i, n, z, ci, bits, fixed, default, tree, entries, by omega, rfl,
                     by simp [Erlang.array.«size/1»], nonnegative, by omega, by omega, ?_⟩
                   intro replacement
-                  simp [Erlang.array.«set/3», nonnegative, existing, boolAnd, andTT, andTF, andFT,
+                  simp [Erlang.array.«set/3», nonnegative, existing, andTT,
                     Erlang.erlang.«=:=/2», fixedTrue, shifted, fits, masked, same,
                     Erlang.erlang.«=/=/2», Erlang.erlang.«setelement/3», lo, bound, maxSize, pack, position]
                 · obtain ⟨newTree, treeReturned, rest⟩ := (Lynx.Except.bind_eq_ok _ _ _).mp returned
@@ -225,7 +225,7 @@ defmodule ArrayProofsTest do
                   refine ⟨i, n, z, i + z - r, bits, fixed, default, newTree, entries, by omega, rfl,
                     by simp [Erlang.array.«size/1»], nonnegative, by omega, by omega, ?_⟩
                   intro replacement
-                  simp [Erlang.array.«set/3», nonnegative, existing, boolAnd, andTT, andTF, andFT,
+                  simp [Erlang.array.«set/3», nonnegative, existing, andTT,
                     Erlang.erlang.«=:=/2», fixedTrue, shifted, fits, masked, same,
                     Erlang.erlang.«=/=/2», treeReturned, cacheReturned,
                     Erlang.erlang.«setelement/3», lo, bound, maxSize, pack, position]
@@ -240,7 +240,7 @@ defmodule ArrayProofsTest do
                 refine ⟨i, n, z, i + z - r, grownBits, fixed, default, newTree, entries, by omega, rfl,
                   by simp [Erlang.array.«size/1»], nonnegative, by omega, by omega, ?_⟩
                 intro replacement
-                simp [Erlang.array.«set/3», nonnegative, existing, boolAnd, andTT, andTF, andFT,
+                simp [Erlang.array.«set/3», nonnegative, existing, andTT,
                   Erlang.erlang.«=:=/2», fixedTrue, shifted, fits, masked, grew,
                   treeReturned, cacheReturned, Erlang.erlang.«setelement/3», lo, bound, maxSize, pack, position]
           · simp at returned

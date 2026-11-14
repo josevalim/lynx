@@ -58,8 +58,8 @@ defmodule SVBench.Fermat2LlTest do
         rw [«loop/4».eq_def]
         simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«+/2_integers», Erlang.erlang.«-/2_integers»,
           Erlang.erlang.«==/2_integers», Lynx.Except.ok_bind]
-        simp (disch := grind) only [if_pos]
-        simp only [«check/1», Lynx.Term.true, Lynx.Except.ok_bind]
+        simp (disch := grind) only [ite_eq_left]
+        simp only [«check/1», Lynx.Term.true]
         by_cases zero : w = 0
         · simp [zero]
         · by_cases more : 0 < w <;> simp [zero, more]

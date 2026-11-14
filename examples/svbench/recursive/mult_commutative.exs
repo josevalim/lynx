@@ -26,10 +26,10 @@ defmodule SVBench.MultCommutativeTest do
       have mult (a : Int) (k : Nat) :
           «mult/2» (.integer a) (.integer k) = .ok (.integer (a * k)) := by
         induction k with
-        | zero => rw [«mult/2».eq_def]; simp [Lynx.Except.guard]
+        | zero => rw [«mult/2».eq_def]; simp
         | succ k ih =>
           rw [«mult/2».eq_def]
-          simp only [Lynx.Except.guard, Erlang.erlang.«</2_integers», if_neg (show ¬ (k : Int) + 1 < 0 by omega)]
+          simp only [Lynx.Except.guard, Erlang.erlang.«</2_integers»]
           split
           · omega
           · simp [ih, Int.mul_add, Int.add_comm]
@@ -37,7 +37,7 @@ defmodule SVBench.MultCommutativeTest do
         by_cases nonneg : 0 ≤ b
         · simpa [Int.natAbs_of_nonneg nonneg] using mult a b.natAbs
         · rw [«mult/2».eq_def]
-          simp [Lynx.Except.guard, show b < 0 by omega, Erlang.erlang.«-/1»]
+          simp [show b < 0 by omega, Erlang.erlang.«-/1»]
           simpa [show (-b : Int) = (b.natAbs : Int) by omega] using mult a b.natAbs
       cases m <;> cases n <;> simp [«mult_commutative_2:requires/2», Erlang.erlang.«is_integer/1»] at requires
       rename_i a b

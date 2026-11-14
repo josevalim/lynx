@@ -80,8 +80,8 @@ defmodule SVBench.KnuthTest do
               have := Int.mul_le_mul_of_nonneg_left (show 1 ≤ s + 1 by omega) (show 0 ≤ s + 1 by omega)
               simpa using this
             obtain ⟨v, ret⟩ := ih (n - (s + 1)).toNat (by omega) (s + 1) (by omega) (by omega)
-            exact ⟨v, by simp [Lynx.Except.guard, Lynx.Except.tryWith, more, ret]⟩
-          · exact ⟨s, by simp [Lynx.Except.guard, Lynx.Except.tryWith, more]⟩
+            exact ⟨v, by simp [more, ret]⟩
+          · exact ⟨s, by simp [more]⟩
       have loop (s : Int) (m : Nat) : ∀ d r k q t : Int, (s - d + 2).toNat ≤ m →
           d * d * q - 2 * q * d - 4 * r * d + 4 * k * d + 8 * r = 8 * n →
           k * t = t * t →
@@ -94,7 +94,7 @@ defmodule SVBench.KnuthTest do
           intro d r k q t bound i1 i2 i3 i4
           rw [«knuth/8».eq_def]
           simp only [Erlang.erlang.«*/2_integers», Erlang.erlang.«-/2_integers»,
-            Erlang.erlang.«+/2_integers», Erlang.erlang.«==/2_integers», i1, i2, i3, i4, if_true, «check/1», Lynx.Term.true,
+            Erlang.erlang.«+/2_integers», Erlang.erlang.«==/2_integers», i1, i2, i3, i4, ite_true, «check/1», Lynx.Term.true,
             Lynx.Except.ok_bind, Lynx.Except.pure_eq_ok]
           by_cases go : d ≤ s
           · by_cases zero : r = 0

@@ -113,7 +113,7 @@ defmodule SVBench.AckermannTest do
             rw [«ackermann/2».eq_def]
             split <;> simp_all [ack_succ_succ] <;> omega
       cases m <;> simp [«ackermann01_2:requires/2», Erlang.erlang.«is_integer/1»] at requires
-      cases n <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases n <;> simp at requires
       rename_i m n
       have returned := bridge m.toNat n.toNat
       rw [Int.toNat_of_nonneg (by omega), Int.toNat_of_nonneg (by omega)] at returned
@@ -170,7 +170,7 @@ defmodule SVBench.AckermannTest do
             rw [«ackermann/2».eq_def]
             split <;> simp_all [ack_succ_succ] <;> omega
       cases m <;> simp [«ackermann04:requires/2», Erlang.erlang.«is_integer/1»] at requires
-      cases n <;> simp [Erlang.erlang.«is_integer/1»] at requires
+      cases n <;> simp at requires
       rename_i m n
       have returned := bridge m.toNat n.toNat
       rw [Int.toNat_of_nonneg (by omega), Int.toNat_of_nonneg (by omega)] at returned

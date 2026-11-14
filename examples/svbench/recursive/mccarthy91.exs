@@ -31,15 +31,15 @@ defmodule SVBench.McCarthy91Test do
           rw [«f91/1».eq_def]
           by_cases high : 100 < n
           · simp [high]
-          · simp only [Erlang.erlang.«>/2_integers», high, if_false, Lynx.Except.guard, Erlang.erlang.«+/2_integers»]
+          · simp only [Erlang.erlang.«>/2_integers», high, ite_false, Lynx.Except.guard, Erlang.erlang.«+/2_integers»]
             have inner := ih (k - 1) (by omega) (n + 11) (by omega)
             by_cases near : 89 < n
-            · rw [if_pos (show 100 < n + 11 by omega), show n + 11 - 10 = n + 1 by omega] at inner
+            · rw [ite_eq_left (show 100 < n + 11 by omega), show n + 11 - 10 = n + 1 by omega] at inner
               have outer := ih (k - 1) (by omega) (n + 1) (by omega)
-              by_cases top : 100 < n + 1 <;> simp [inner, outer, top, high] <;> omega
-            · rw [if_neg (show ¬ 100 < n + 11 by omega)] at inner
+              by_cases top : 100 < n + 1 <;> simp [inner, outer, top] <;> omega
+            · rw [ite_eq_right (show ¬ 100 < n + 11 by omega)] at inner
               have outer := ih (k - 1) (by omega) 91 (by omega)
-              simp [inner, outer, high]
+              simp [inner, outer]
       cases x <;> simp [«mccarthy91_2:requires/1», Erlang.erlang.«is_integer/1»] at requires
       rename_i n
       have result := f91 (101 - n).toNat n (by omega)
@@ -61,15 +61,15 @@ defmodule SVBench.McCarthy91Test do
           rw [«f91/1».eq_def]
           by_cases high : 100 < n
           · simp [high]
-          · simp only [Erlang.erlang.«>/2_integers», high, if_false, Lynx.Except.guard, Erlang.erlang.«+/2_integers»]
+          · simp only [Erlang.erlang.«>/2_integers», high, ite_false, Lynx.Except.guard, Erlang.erlang.«+/2_integers»]
             have inner := ih (k - 1) (by omega) (n + 11) (by omega)
             by_cases near : 89 < n
-            · rw [if_pos (show 100 < n + 11 by omega), show n + 11 - 10 = n + 1 by omega] at inner
+            · rw [ite_eq_left (show 100 < n + 11 by omega), show n + 11 - 10 = n + 1 by omega] at inner
               have outer := ih (k - 1) (by omega) (n + 1) (by omega)
-              by_cases top : 100 < n + 1 <;> simp [inner, outer, top, high] <;> omega
-            · rw [if_neg (show ¬ 100 < n + 11 by omega)] at inner
+              by_cases top : 100 < n + 1 <;> simp [inner, outer, top] <;> omega
+            · rw [ite_eq_right (show ¬ 100 < n + 11 by omega)] at inner
               have outer := ih (k - 1) (by omega) 91 (by omega)
-              simp [inner, outer, high]
+              simp [inner, outer]
       cases x <;> simp [«sat_mccarthy91:requires/1», Erlang.erlang.«is_integer/1»] at requires
       rename_i n
       have result := f91 (101 - n).toNat n (by omega)

@@ -77,7 +77,7 @@ defmodule FloatProofsTest do
         induction n using Nat.strongRecOn generalizing e with
         | ind n ih =>
           have bit (n k : Nat) : n &&& (2 ^ k - 1) = n % 2 ^ k := Nat.and_two_pow_sub_one_eq_mod n k
-          have band1 : n &&& 1 = n % 2 := by simpa using bit n 1
+          have band1 : n &&& 1 = n % 2 := by simp
           have band16 : n &&& 65535 = n % 65536 := by simpa using bit n 16
           have band4 : n &&& 15 = n % 16 := by simpa using bit n 4
           have oddInt : (n : Int) % 2 = 1 ↔ n % 2 = 1 := by
@@ -89,7 +89,7 @@ defmodule FloatProofsTest do
             rw [Elixir.Float.«reduce_to_ratio/3».eq_def]
             have mask : n &&& 1 = 1 := by simpa using bit n 1 |>.trans odd
             cases e <;> cases negative <;>
-              simp [ratioPair, not_neg, ← Int.natCast_add, Erlang.erlang.«==/2», Erlang.erlang.«-/1», Erlang.erlang.«band/2», mask, Erlang.erlang.«bsl/2»]
+              simp [ratioPair, not_neg, -Int.natCast_add, Erlang.erlang.«==/2», Erlang.erlang.«-/1», Erlang.erlang.«band/2», mask, Erlang.erlang.«bsl/2»]
           · have advance (chunk : Nat) (nonzero : chunk ≠ 0) (divisible : n % 2 ^ chunk = 0)
                 (recurse : Elixir.Float.«reduce_to_ratio/3» (.integer n) (.integer e)
                     (.integer (if negative then 1 else 0)) =
@@ -116,7 +116,7 @@ defmodule FloatProofsTest do
               rw [Elixir.Float.«reduce_to_ratio/3».eq_def]
               have b1 : n &&& 1 ≠ 1 := by simpa only [band1] using odd
               have b16 : n &&& 65535 = 0 := by simpa using bit n 16 |>.trans mask16
-              simp [oddInt, odd, ← Int.natCast_add, Erlang.erlang.«==/2», Erlang.erlang.«-/1», Erlang.erlang.«band/2», Erlang.erlang.«bsr/2», b1, b16,
+              simp [oddInt, odd, Erlang.erlang.«==/2», Erlang.erlang.«band/2», Erlang.erlang.«bsr/2», b16,
                 Nat.shiftRight_eq_div_pow, ← Int.natCast_shiftRight]
             · by_cases mask4 : n % 16 = 0
               · apply advance 4 (by decide) (by simpa using mask4)
@@ -124,14 +124,14 @@ defmodule FloatProofsTest do
                 have b1 : n &&& 1 ≠ 1 := by simpa only [band1] using odd
                 have b16 : n &&& 65535 ≠ 0 := by simpa only [band16] using mask16
                 have b4 : n &&& 15 = 0 := by simpa using bit n 4 |>.trans mask4
-                simp [oddInt, odd, ← Int.natCast_add, Erlang.erlang.«==/2», Erlang.erlang.«-/1», Erlang.erlang.«band/2», Erlang.erlang.«bsr/2», b1, b16, b4,
+                simp [oddInt, odd, Erlang.erlang.«==/2», Erlang.erlang.«band/2», Erlang.erlang.«bsr/2», b16, b4,
                   Nat.shiftRight_eq_div_pow, ← Int.natCast_shiftRight]
               · apply advance 1 (by decide) (by have := Nat.mod_lt n (by decide : 0 < 2); omega)
                 rw [Elixir.Float.«reduce_to_ratio/3».eq_def]
                 have b1 : n &&& 1 ≠ 1 := by simpa only [band1] using odd
                 have b16 : n &&& 65535 ≠ 0 := by simpa only [band16] using mask16
                 have b4 : n &&& 15 ≠ 0 := by simpa only [band4] using mask4
-                simp [oddInt, odd, ← Int.natCast_add, Erlang.erlang.«==/2», Erlang.erlang.«-/1», Erlang.erlang.«band/2», Erlang.erlang.«bsr/2», b1, b16, b4,
+                simp [oddInt, odd, Erlang.erlang.«==/2», Erlang.erlang.«band/2», Erlang.erlang.«bsr/2», b16, b4,
                   Nat.shiftRight_eq_div_pow, ← Int.natCast_shiftRight]
 
       have pair_properties (m : Nat) (e : Int) (negative : Bool) (odd : m % 2 = 1) :
@@ -154,7 +154,7 @@ defmodule FloatProofsTest do
               Rat.zpow_natCast, Rat.div_def, inverseOne, Rat.intCast_neg, Rat.intCast_natCast, Rat.neg_mul]
         | negSucc k =>
           refine ⟨if negative then -(m : Int) else m, 2 ^ (k + 1), ?_, Nat.two_pow_pos _, ?_, ?_⟩
-          · cases negative <;> simp [ratioPair, Int.shiftLeft_eq, ← Int.natCast_add, ← Int.natCast_pow] <;> rfl
+          · cases negative <;> simp [ratioPair, Int.shiftLeft_eq] <;> rfl
           · cases negative <;> simpa using coprime.pow_right (k + 1)
           · have exponent : Int.negSucc k = -((k + 1 : Nat) : Int) := by omega
             rw [exponent, Rat.zpow_neg, Rat.zpow_natCast]
@@ -176,7 +176,7 @@ defmodule FloatProofsTest do
         rw [exact]
         cases negative <;>
           simp [factor, Rat.natCast_mul, Rat.natCast_pow, Rat.zpow_add (by decide : (2 : Rat) ≠ 0),
-            Rat.zpow_natCast, Rat.mul_assoc, Rat.mul_comm, left_comm, Rat.neg_mul, Rat.mul_neg]
+            Rat.zpow_natCast, Rat.mul_comm, left_comm, Rat.neg_mul, Rat.mul_neg]
 
       have float_zero_iff (value : Lynx.Term.FiniteFloat) :
           value.toRat = 0 ↔ value.exponent.val = 0 ∧ value.fraction.val = 0 := by
@@ -196,7 +196,7 @@ defmodule FloatProofsTest do
         unfold Lynx.Term.FiniteFloat.toRat
         cases hn : value.negative
         · simpa only [hn, Bool.false_eq_true, ↓reduceIte] using magnitude_zero
-        · simp only [hn, ↓reduceIte]
+        · simp only [↓reduceIte]
           have neg_zero : -value.magnitude = 0 ↔ value.magnitude = 0 := by
             constructor
             · intro h
@@ -226,14 +226,14 @@ defmodule FloatProofsTest do
         have zero : (⟨false, 0, 0⟩ : Lynx.Term.FiniteFloat).toRat = 0 := rfl
         have empty : Lynx.Term.Bitstring.matchEnd (Lynx.Term.Bitstring.ofBits []) = true := rfl
         by_cases exp0 : value.exponent.val = 0 <;> by_cases frac0 : value.fraction.val = 0
-        · simp [Elixir.Float.«ratio/1», Erlang.erlang.«is_float/1», Erlang.erlang.«=:=/2», Erlang.erlang.«==/2», zero, float_zero_iff, exp0, frac0]
-        · simp [Elixir.Float.«ratio/1», Erlang.erlang.«is_float/1», Erlang.erlang.«=:=/2», Erlang.erlang.«==/2», zero, Erlang.erlang.«/=/2»,
+        · simp [Elixir.Float.«ratio/1», Erlang.erlang.«is_float/1», Erlang.erlang.«==/2», zero, float_zero_iff, exp0, frac0]
+        · simp [Elixir.Float.«ratio/1», Erlang.erlang.«is_float/1», Erlang.erlang.«==/2», zero, Erlang.erlang.«/=/2»,
             float_zero_iff, exp0, frac0, built, sign, exponent, fraction, empty]
         · rw [ite_eq_right (by simp [exp0]), ite_eq_right exp0, ite_eq_left frac0]
           rw [Elixir.Float.«reduce_to_ratio/3».eq_def]
-          simp [Elixir.Float.«ratio/1», Erlang.erlang.«is_float/1», Erlang.erlang.«=:=/2», Erlang.erlang.«==/2», zero, Erlang.erlang.«/=/2»,
+          simp [Elixir.Float.«ratio/1», Erlang.erlang.«is_float/1», Erlang.erlang.«==/2», zero, Erlang.erlang.«/=/2»,
             Erlang.erlang.«band/2», Erlang.erlang.«-/1», float_zero_iff, exp0, frac0, built, sign, exponent, fraction, empty]
-        · simp [Elixir.Float.«ratio/1», Erlang.erlang.«is_float/1», Erlang.erlang.«=:=/2», Erlang.erlang.«==/2», zero, Erlang.erlang.«/=/2»,
+        · simp [Elixir.Float.«ratio/1», Erlang.erlang.«is_float/1», Erlang.erlang.«==/2», zero, Erlang.erlang.«/=/2»,
             Erlang.erlang.«bor/2», float_zero_iff, exp0, frac0, built, sign, exponent, fraction, empty, bor,
             Int.natCast_add]
 
@@ -255,6 +255,7 @@ defmodule FloatProofsTest do
           refine ⟨num, den, denPos, coprime, ?_, returned⟩
           rw [equality]
           cases hn : value.negative <;>
+            set_option exponentiation.threshold 1074 in
             simp [Lynx.Term.FiniteFloat.toRat, Lynx.Term.FiniteFloat.magnitude, exp0, frac0, hn,
               Rat.neg_mul]
         · rw [ite_eq_right (by simp [exp0]), ite_eq_right exp0, ite_eq_left frac0]
@@ -277,7 +278,7 @@ defmodule FloatProofsTest do
           refine ⟨num, den, denPos, coprime, ?_, returned⟩
           rw [equality]
           cases hn : value.negative <;>
-            simp [Lynx.Term.FiniteFloat.toRat, Lynx.Term.FiniteFloat.magnitude, exp0, frac0, hn,
+            simp [Lynx.Term.FiniteFloat.toRat, Lynx.Term.FiniteFloat.magnitude, exp0, hn,
               Rat.neg_mul]
 
       have rational_cross (num : Int) (den : Nat) (sig shift : Int) (positive : 0 < den)
@@ -327,7 +328,7 @@ defmodule FloatProofsTest do
               simp [aZero]
             · have recurse := ih (a % b) (Nat.mod_lt a (by omega)) b
               rw [Elixir.Integer.«gcd_positive/2».eq_def]
-              simp [aZero, bZero, Erlang.erlang.«rem/2», ← Int.ofNat_tmod, recurse,
+              simp [aZero, bZero, Erlang.erlang.«rem/2», ← Int.ofNat_tmod,
                 Nat.gcd_rec b a, Nat.gcd_comm]
               simpa only [Int.natCast_emod] using recurse
 
@@ -357,7 +358,7 @@ defmodule FloatProofsTest do
           simp only [ite_eq_right negative] at cross
           change num <<< (k + 1) = sig * (den : Int) at cross
           simp [Elixir.FloatProofsTest.«scaled_ratio_matches/4», Erlang.erlang.«bsl/2»,
-            Erlang.erlang.«-/1», Erlang.erlang.«=:=/2», ← Int.natCast_add, cross]
+            Erlang.erlang.«-/1», Erlang.erlang.«=:=/2», -Int.natCast_add, cross]
 
       let floatSignificand (value : Lynx.Term.FiniteFloat) : Int :=
         let n := if value.exponent.val = 0 then value.fraction.val else 2 ^ 52 + value.fraction.val
@@ -439,7 +440,7 @@ defmodule FloatProofsTest do
         have empty : Lynx.Term.Bitstring.matchEnd (Lynx.Term.Bitstring.ofBits []) = true := rfl
         simp [Elixir.Float.«floor/2», Elixir.Float.«ceil/2», Elixir.Float.«round/2», Elixir.Float.«round/3»,
           Erlang.erlang.«is_float/1», Erlang.erlang.«is_integer/1»,
-          Erlang.erlang.«=:=/2», Erlang.erlang.«==/2», nonzero, pNonzero, lower, upper, nonnegative,
+          Erlang.erlang.«==/2», nonzero, pNonzero, upper, nonnegative,
           built, sign, exponent, fraction, empty, notTiny, exact]
       cases number <;> simp [«decimal_rounding_preserves_exact_integers:requires/2»,
         Erlang.erlang.«is_float/1»] at requires

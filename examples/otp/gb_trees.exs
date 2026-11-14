@@ -251,13 +251,13 @@ defmodule GbTreesProofsTest do
       rename_i fields
       rcases fields with ⟨fields⟩
       match fields with
-      | [] | [_] | _ :: _ :: _ :: _ => simp [«valid_tree/1»] at requires
+      | [] | [_] | _ :: _ :: _ :: _ => simp at requires
       | [count, root] =>
         cases count <;> simp [Erlang.erlang.«is_integer/1»] at requires
         rename_i count
         have nonnegative : 0 ≤ count := by
           by_cases h : 0 ≤ count <;> simp [h] at requires <;> omega
-        simp only [nonnegative, ite_true, Lynx.Except.ok_bind] at requires
+        simp only [nonnegative] at requires
         rcases pureCases («nodes/1» root) with returned | failed
         · obtain ⟨output, returned⟩ := returned
           obtain ⟨xs, original⟩ := flatten root output returned

@@ -391,4 +391,26 @@ theorem last_binary (bytes : List UInt8) (nonempty : bytes ≠ []) :
       .ok (.integer (bytes.getLast nonempty).toNat) := by
   simp [«last/1», bytes?_binary, List.getLast?_eq_some_getLast nonempty]
 
+private theorem unsignedBytes_value : ∀ (fuel n : Nat), n < fuel →
+    (unsignedBytes fuel n).foldr (fun byte value => value * 256 + byte.toNat) 0 = n ∧
+      unsignedBytes fuel n ≠ []
+  | 0, _, small => absurd small (Nat.not_lt_zero _)
+  | fuel + 1, n, small => by
+    by_cases byte : n < 256
+    · simp [unsignedBytes, byte, Nat.mod_eq_of_lt byte]
+    · have ih := unsignedBytes_value fuel (n / 256) (by omega)
+      simp [unsignedBytes, byte, ih.1]
+      omega
+
+/-- A non-negative integer encodes to big-endian bytes, at least one, whose value is the integer. -/
+theorem encode_unsigned_bytes (n : Nat) :
+    ∃ bytes : List UInt8, bytes ≠ [] ∧
+      «encode_unsigned/1» (.integer n) =
+        .ok (.bitstring ⟨bytes.toArray⟩ 0 (Term.Bitstring.valid_aligned _)) ∧
+      bytes.foldl (fun value byte => value * 256 + byte.toNat) 0 = n := by
+  have value := unsignedBytes_value (n + 1) n (by omega)
+  refine ⟨(unsignedBytes (n + 1) n).reverse, by simpa using value.2, ?_, ?_⟩
+  · simp [«encode_unsigned/1», binary_eq, Int.not_lt.mpr (Int.natCast_nonneg n)]
+  · simpa [List.foldl_reverse] using value.1
+
 end Erlang.binary

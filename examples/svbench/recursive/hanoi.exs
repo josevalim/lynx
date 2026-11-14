@@ -57,7 +57,7 @@ defmodule SVBench.HanoiTest do
           rw [«hanoi/1».eq_def]
           split
           · simp_all <;> omega
-          · simp [show ((k + 1 : Nat) : Int) + 1 - 1 = (k : Int) + 1 by omega, ih, Int.pow_succ]
+          · simp [ih, Int.pow_succ]
             omega
       have moves (k : Nat) : ∀ source target via,
           «apply_hanoi/4» (.integer k) source target via = .ok (.integer (2 ^ k - 1)) := by
@@ -91,7 +91,7 @@ defmodule SVBench.HanoiTest do
           rw [«hanoi/1».eq_def]
           split
           · simp_all <;> omega
-          · simp [show ((k + 1 : Nat) : Int) + 1 - 1 = (k : Int) + 1 by omega, ih, Int.pow_succ]
+          · simp [ih, Int.pow_succ]
             omega
       cases n <;> simp [«rec_hanoi02_2:requires/1», Erlang.erlang.«is_integer/1»] at requires
       rename_i n
@@ -116,7 +116,7 @@ defmodule SVBench.HanoiTest do
           rw [«hanoi/1».eq_def]
           split
           · simp_all <;> omega
-          · simp [show ((k + 1 : Nat) : Int) + 1 - 1 = (k : Int) + 1 by omega, ih, Int.pow_succ]
+          · simp [ih, Int.pow_succ]
             omega
       cases n <;> simp [«rec_hanoi03_2:requires/1», Erlang.erlang.«is_integer/1»] at requires
       rename_i n
