@@ -133,7 +133,8 @@ end
 `requires:` states the input assumptions and `expects:` must evaluate to `true`
 under those assumptions. Each `laws` block registers one ExUnit test and verifies
 all its laws together. The `~LEAN` sigils contain the proofs checked by Lean.
-Laws also remain callable from ordinary tests.
+Laws also remain callable from ordinary tests, which can be used for fuzzing and
+validation.
 
 Run the example or all law groups with:
 
