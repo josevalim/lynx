@@ -218,6 +218,13 @@ theorem phash2_range (term : Term) :
     ∃ hash : Nat, «phash2/1» term = .ok (.integer hash) ∧ hash < 2 ^ 27 :=
   ⟨_, rfl, Nat.lt_of_le_of_lt (by simpa using Nat.and_le_right) (by decide)⟩
 
+/-- `phash2/2` returns an integer in `[0, Range)` for every `Range` in `[1, 2^32]`. -/
+theorem phash2_range_bounded (term : Term) (range : Nat) (positive : 0 < range)
+    (bounded : range ≤ 2 ^ 32) :
+    ∃ hash : Nat, «phash2/2» term (.integer range) = .ok (.integer hash) ∧ hash < range := by
+  obtain ⟨n, rfl⟩ : ∃ n, range = n + 1 := ⟨range - 1, by omega⟩
+  exact ⟨(hash2 term).toNat % (n + 1), by simp [«phash2/2», bounded], Nat.mod_lt _ positive⟩
+
 /-! Exactly equal terms hash equally. -/
 
 /-- Lists related element by element. -/
