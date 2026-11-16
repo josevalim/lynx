@@ -11,6 +11,7 @@ defmodule Lynx.MixProject do
       deps: [],
       test_ignore_filters: ["test/fixtures/translations/regenerate.exs"],
       aliases: [
+        help: &help/1,
         compile: [&build_lean/1, "compile"],
         precommit: ["format", "test.all"],
         "test.lean": ["cmd --cd Lean lake test"],
@@ -23,6 +24,22 @@ defmodule Lynx.MixProject do
   # test support modules.
   defp elixirc_paths(:prod), do: ["lib"]
   defp elixirc_paths(_), do: ["lib", "test/support"]
+
+  # Module help needs a BEAM with docs, but should not require a Lean build.
+  defp help(args) do
+    path = Mix.Project.compile_path()
+
+    if args == ["Lynx"] and not File.exists?(Path.join(path, "Elixir.Lynx.beam")) do
+      File.mkdir_p!(path)
+
+      {:ok, _, _} =
+        Kernel.ParallelCompiler.compile_to_path([Path.join(__DIR__, "lib/lynx.ex")], path,
+          return_diagnostics: true
+        )
+    end
+
+    Mix.Task.run("help", args)
+  end
 
   defp build_lean(_args) do
     lean_dir = Path.join(__DIR__, "Lean")
