@@ -592,6 +592,8 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Timer.mk",
   "Lynx.Concurrent.Timer.reference",
   "Lynx.Concurrent.Transition",
+  "Lynx.Concurrent.Transition.Shape",
+  "Lynx.Concurrent.Transition.Shapes",
   "Lynx.Concurrent.Transition.apply",
   "Lynx.Concurrent.Transition.event",
   "Lynx.Concurrent.Transition.exhausted",

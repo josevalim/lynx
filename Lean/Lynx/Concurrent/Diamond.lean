@@ -854,4 +854,165 @@ theorem Config.Normalized.step {config next : Config α} {event : Event} (sorted
       obtain ⟨-, rfl⟩ := fired
       exact State.normalize_normalize (sorted.fire _).1
 
+/-! ### What a step continues with -/
+
+/-- Two transitions that leave the same processes and outcome, whatever their states. -/
+def Transition.Shape (transition transition' : Transition α) : Prop :=
+  transition.tasks = transition'.tasks ∧ transition.finished = transition'.finished ∧
+    transition.exhausted = transition'.exhausted
+
+/-- Two lists of transitions, pairwise of the same shape. -/
+def Transition.Shapes : List (Transition α) → List (Transition α) → Prop
+  | [], [] => True
+  | transition :: rest, transition' :: rest' => transition.Shape transition' ∧ Transition.Shapes rest rest'
+  | _, _ => False
+
+theorem Transition.Shape.refl_of {transition transition' : Transition α} (tasks : transition.tasks = transition'.tasks)
+    (finished : transition.finished = transition'.finished) (exhausted : transition.exhausted = transition'.exhausted) :
+    transition.Shape transition' := ⟨tasks, finished, exhausted⟩
+
+theorem Environment.eq_of_identical {first second : Environment}
+    (same : environmentIdentical first second = true) : first = second := by
+  obtain ⟨pid, counter, pdict⟩ := first
+  obtain ⟨pid', counter', pdict'⟩ := second
+  simp only [environmentIdentical, Bool.and_eq_true, beq_iff_eq] at same
+  obtain ⟨⟨rfl, rfl⟩, same⟩ := same
+  rw [Term.eq_of_identicalEntries same]
+
+theorem selectMessage_value {select : Term → Option β} :
+    ∀ {mailbox : List Term} {message : Term} {value : β} {rest : List Term},
+      selectMessage select mailbox = some (message, value, rest) → select message = some value
+  | [], _, _, _, found => by simp [selectMessage] at found
+  | head :: tail, message, value, rest, found => by
+      simp only [selectMessage] at found
+      split at found
+      · rename_i value' selected
+        simp only [Option.some.injEq, Prod.mk.injEq] at found
+        obtain ⟨rfl, rfl, -⟩ := found
+        exact selected
+      · simp only [Option.map_eq_some_iff, Prod.exists, Prod.mk.injEq] at found
+        obtain ⟨_, _, _, found, rfl, rfl, -⟩ := found
+        exact selectMessage_value found
+
+theorem State.spawnWith_child (state : State) (processId : PID) (options : SpawnOptions) :
+    (state.spawnWith processId options).1 = Kernel.append processId [(state.process processId).children + 1] := by
+  unfold State.spawnWith; dsimp only
+
+/-- A request that continues with a computation continues with the same one in every state. -/
+theorem State.request_continue {state state' answered answered' : State} {processId : PID}
+    {next : Term → Result β} {query : Request} {computation computation' : Result β}
+    (continued : state.request processId next query = .continue computation answered)
+    (continued' : state'.request processId next query = .continue computation' answered') :
+    computation = computation' := by
+  cases query <;> simp only [State.request] at continued continued' <;>
+    (repeat' split at continued) <;> (repeat' split at continued') <;>
+    simp_all
+
+theorem Wait.eq_of_identical {first second : Wait} (same : first.identical second = true) : first = second := by
+  cases first <;> cases second <;> simp only [Wait.identical, beq_iff_eq, Bool.false_eq_true] at same <;>
+    first | rfl | rw [Term.eq_of_identical same] | rw [same]
+
+/-- A process's own step leaves the same processes and outcome in two states
+where it reads the same. -/
+theorem Task.own_shape {state state' : State} {processId : PID} {task : Task α}
+    (view : (task.ownView state processId).identical (task.ownView state' processId) = true)
+    (elapsed : state.elapsed = state'.elapsed) :
+    Transition.Shapes (task.own state processId) (task.own state' processId) := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp [Task.own, Transition.Shapes]
+  | none =>
+    cases computation with
+    | ok => simp [Task.own, Task.ended, Transition.Shape, Transition.Shapes]
+    | error exception => cases exception <;> simp [Task.own, Task.ended, Transition.Shape, Transition.Shapes]
+    | get next =>
+      simp only [Task.ownView, OwnView.identical] at view
+      simp [Task.own, Transition.Shape, Transition.Shapes, Environment.eq_of_identical view]
+    | set => simp [Task.own, Transition.Shape, Transition.Shapes]
+    | send => simp [Task.own, Transition.Shape, Transition.Shapes]
+    | schedule options child next =>
+      simp only [Task.ownView, OwnView.identical, beq_iff_eq] at view
+      simp only [Task.own, Transition.Shapes, and_true, Transition.Shape, State.spawnWith_child, view]
+    | receive timeout select next =>
+      simp only [Task.ownView, OwnView.identical, Bool.and_eq_true] at view
+      obtain ⟨⟨environment, message⟩, timesOut⟩ := view
+      have environment := Environment.eq_of_identical environment
+      have message := eq_of_optionIdentical Term.eq_of_identical message
+      simp only [Task.own]
+      rw [← environment] at message ⊢
+      cases found : selectMessage (select (state.view processId)) (state.process processId).mailbox with
+      | some result =>
+        obtain ⟨selected, value, _⟩ := result
+        rw [found] at message
+        cases found' : selectMessage (select (state.view processId)) (state'.process processId).mailbox with
+        | none => rw [found'] at message; simp at message
+        | some result' =>
+          obtain ⟨selected', value', _⟩ := result'
+          rw [found'] at message
+          simp only [Option.map_some, Option.some.injEq] at message
+          subst message
+          have := (selectMessage_value found).symm.trans (selectMessage_value found')
+          simp only [Option.some.injEq] at this
+          subst this
+          simp [Transition.Shape, Transition.Shapes]
+      | none =>
+        rw [found] at message
+        cases found' : selectMessage (select (state.view processId)) (state'.process processId).mailbox with
+        | some _ => rw [found'] at message; simp at message
+        | none =>
+          simp only [found']
+          cases timeout with
+          | infinity => simp [Transition.Shapes]
+          | immediate | finite =>
+            have equal : Kernel.any (state.process processId).queue (state.awaitedEntry processId) =
+                Kernel.any (state'.process processId).queue (state'.awaitedEntry processId) := by
+              simpa using timesOut
+            simp only [equal]
+            split <;> simp [Transition.Shape, Transition.Shapes]
+    | request query next =>
+      cases query
+      case cancelTimer reference =>
+        simp only [Task.ownView, OwnView.identical, Bool.and_eq_true, beq_iff_eq] at view
+        obtain ⟨duration, cancels⟩ := view
+        simp only [Task.own, State.request, elapsed]
+        cases found : Kernel.find? (·.reference == reference) state.timers <;>
+          cases found' : Kernel.find? (·.reference == reference) state'.timers <;>
+          rw [found, found'] at duration <;> simp only [Option.map_none, Option.map_some, reduceCtorEq,
+            Option.some.injEq] at duration <;>
+          simp [Transition.Shape, Transition.Shapes, duration, cancels]
+      all_goals
+        simp only [Task.ownView, OwnView.identical] at view
+        simp only [Task.own]
+        generalize found : state.request processId next _ = answer at view ⊢
+        generalize found' : state'.request processId next _ = answer' at view ⊢
+        cases answer <;> cases answer' <;>
+          simp only [Answer.shape, Answer.Shape.identical, Bool.false_eq_true] at view <;>
+          first
+            | simp [Transition.Shape, Transition.Shapes, Term.eq_of_identical view]
+            | simp [Transition.Shape, Transition.Shapes, Wait.eq_of_identical view]
+            | simp [Transition.Shape, Transition.Shapes, State.request_continue found found']
+
+/-- Handling a signal leaves the same processes and outcome in two states
+where it reads the same. -/
+theorem Task.handle_shape {state state' : State} {processId : PID} {task : Task α}
+    (view : handleViewIdentical (task.handleView state processId) (task.handleView state' processId) = true) :
+    Transition.Shapes (task.handle state processId) (task.handle state' processId) := by
+  simp only [Task.handleView, Task.handle] at view ⊢
+  cases queue : (state.process processId).queue <;> cases queue' : (state'.process processId).queue <;>
+    simp only [queue, queue', handleViewIdentical, Bool.false_eq_true] at view ⊢
+  · trivial
+  · rename_i entry rest entry' rest'
+    generalize (State.set state processId _).handle processId _ entry = result at view ⊢
+    generalize (State.set state' processId _).handle processId _ entry' = result' at view ⊢
+    obtain ⟨handled, resumed, exits⟩ := result
+    obtain ⟨handled', resumed', exits'⟩ := result'
+    simp only [Bool.and_eq_true] at view
+    have exits := eq_of_optionIdentical Term.eq_of_identical view.1
+    have resumed := eq_of_optionIdentical Term.eq_of_identical view.2
+    subst exits; subst resumed
+    dsimp only
+    split
+    · simp [Task.ended, Transition.Shape, Transition.Shapes]
+    · split <;> simp [Transition.Shape, Transition.Shapes]
+
 end Lynx.Concurrent
