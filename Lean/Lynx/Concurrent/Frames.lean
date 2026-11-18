@@ -1721,4 +1721,98 @@ private theorem Effect.InFrames.enqueue (state : State) (source target : PID) (s
     have : state.alive target = false := by simp [State.alive, found]
     exact fallback this
 
+private theorem State.enqueueFrames_congr {state other : State} {source target : PID} (signal : Signal)
+    (alive : other.alive target = state.alive target) :
+    other.enqueueFrames source target signal = state.enqueueFrames source target signal := by
+  simp only [State.enqueueFrames, State.appendFrames, alive]
+
+private theorem State.alive_modify (state : State) (processId target : PID) (change : ProcessState → ProcessState)
+    (live : ∀ process, (change process).exiting.isSome = process.exiting.isSome) :
+    (state.modify processId change).alive target = state.alive target := by
+  unfold State.modify
+  split
+  · rename_i process found
+    simp only [State.alive, State.record_set]
+    by_cases same : target = processId
+    · subst same; simp only [↓reduceIte, found]
+      have := live process
+      cases equal : (change process).exiting <;> cases equal' : process.exiting <;> simp_all
+    · simp [same]
+  · rfl
+
+private theorem State.alive_fallback (state : State) (source target other : PID) (signal : Signal) :
+    (state.fallback source target signal).alive other = state.alive other := by
+  cases signal <;> simp only [State.fallback] <;> first | rfl | exact State.alive_modify _ _ _ _ fun _ => rfl
+
+private theorem State.alive_enqueue (state : State) (source target other : PID) (signal : Signal) :
+    (state.enqueue source target signal).alive other = state.alive other := by
+  unfold State.enqueue
+  split
+  · rename_i process found
+    split
+    · rename_i exiting
+      simp only [State.alive, State.record_set]
+      by_cases same : other = target
+      · subst same; simp [found, exiting]
+      · simp [same]
+    · exact State.alive_fallback _ _ _ _ _
+  · exact State.alive_fallback _ _ _ _ _
+
+private theorem State.alive_unpark (state : State) (processId other : PID) :
+    (state.unpark processId).alive other = state.alive other := by
+  unfold State.unpark
+  split
+  · rw [State.alive_enqueue]; exact State.alive_modify _ _ _ _ fun _ => rfl
+  · rfl
+
+private theorem Effect.InFrames.congr {effect : Effect} {frames : List Frame} {state other : State}
+    (framed : effect.InFrames frames state) (same : ∀ processId, other.record processId = state.record processId) :
+    effect.InFrames frames other := by
+  intro processId
+  rcases framed processId with same' | all | ⟨change, equal, used, inside⟩
+  · exact .inl same'
+  · exact .inr (.inl all)
+  · exact .inr (.inr ⟨change, equal, used, fun process found => inside process (by rw [← same]; exact found)⟩)
+
+/-- Frames that read none of the fields of a mask. -/
+private theorem readsOf_false {frames : List Frame} {processId : PID} {bit : Nat}
+    (none : ∀ entry ∈ frames, entry.2.1.testBit bit = false) : readsOf frames processId bit = false := by
+  simp only [readsOf, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and]
+  intro entry mem _
+  simp [none entry mem]
+
+private theorem writesOf_false {frames : List Frame} {processId : PID} {bit : Nat}
+    (none : ∀ entry ∈ frames, entry.2.2.testBit bit = false) : writesOf frames processId bit = false := by
+  simp only [writesOf, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and]
+  intro entry mem _
+  simp [none entry mem]
+
+/-- The fields of frames as powers of two. -/
+private theorem fields_pow : Field.queueHead = 2 ^ 0 ∧ Field.queueTail = 2 ^ 1 ∧ Field.mailbox = 2 ^ 2 ∧
+    Field.pdict = 2 ^ 3 ∧ Field.refCounter = 2 ^ 4 ∧ Field.children = 2 ^ 5 ∧ Field.links = 2 ^ 6 ∧
+    Field.monitors = 2 ^ 7 ∧ Field.monitoring = 2 ^ 8 ∧ Field.aliases = 2 ^ 9 ∧ Field.trapExit = 2 ^ 10 ∧
+    Field.cancels = 2 ^ 11 ∧ Field.unlinks = 2 ^ 12 ∧ Field.parked = 2 ^ 13 ∧ Field.eagerExits = 2 ^ 14 ∧
+    Field.exiting = 2 ^ 15 ∧ Field.live = 2 ^ 16 := by decide
+
+/-- Read off the fields of a mask built from fields. -/
+local syntax "mask_bits" : tactic
+macro_rules
+  | `(tactic| mask_bits) => `(tactic|
+      (obtain ⟨h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16⟩ := fields_pow
+       simp only [h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, Nat.testBit_or,
+         Nat.testBit_two_pow, Nat.zero_testBit, Bool.or_eq_true, decide_eq_true_eq, Bool.false_eq_true] at *
+       try omega))
+
+/-- The entries of `State.enqueueFrames` read only liveness, links and unlinks,
+and write only the queue's tail and links. -/
+private theorem enqueueFrames_bits {state : State} {source target : PID} {signal : Signal} {entry : Frame}
+    (mem : entry ∈ state.enqueueFrames source target signal) :
+    (∀ bit, entry.2.1.testBit bit → bit = 16 ∨ bit = 6 ∨ bit = 12) ∧
+      ∀ bit, entry.2.2.testBit bit → bit = 1 ∨ bit = 6 := by
+  simp only [State.enqueueFrames, State.appendFrames] at mem
+  split at mem <;> (try split at mem) <;> (try split at mem) <;>
+    simp only [List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at mem <;>
+    (try rcases mem with rfl | rfl) <;> (try subst mem) <;> dsimp only <;>
+    exact ⟨fun bit set => by mask_bits, fun bit set => by mask_bits⟩
+
 end Lynx.Concurrent
