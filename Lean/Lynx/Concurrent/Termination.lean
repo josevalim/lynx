@@ -301,14 +301,22 @@ theorem State.weight_handle (state : State) (processId : PID) (waiting : Option 
       fun _ => ⟨rfl, rfl, rfl⟩
     simp only [State.handle, Signal.weight]; omega
   | down reference reason =>
-    have removed := same (fun process => { process with
+    have cleared := same (fun process => { process with eagerExits := Kernel.filter (· != source) process.eagerExits })
+      fun _ => ⟨rfl, rfl, rfl⟩
+    have removed := fun (base : State) => base.weight_modify_same processId (fun process => { process with
         monitoring := Kernel.filter (·.1 != reference) process.monitoring
         aliases := Kernel.erase process.aliases reference }) fun _ => ⟨rfl, rfl, rfl⟩
-    have appended := State.weight_append (state.modify processId fun process => { process with
+    have appended := fun (base : State) => State.weight_append (base.modify processId fun process => { process with
         monitoring := Kernel.filter (·.1 != reference) process.monitoring
         aliases := Kernel.erase process.aliases reference }) processId
       (.tuple #[.atom "DOWN", .reference reference, .atom "process", .pid source, reason])
-    simp only [State.handle, Signal.weight]; split <;> (try dsimp only) <;> omega
+    have := removed state
+    have := appended state
+    have := removed (state.modify processId fun process =>
+      { process with eagerExits := Kernel.filter (· != source) process.eagerExits })
+    have := appended (state.modify processId fun process =>
+      { process with eagerExits := Kernel.filter (· != source) process.eagerExits })
+    simp only [State.handle, Signal.weight]; (repeat' split) <;> (try dsimp only) <;> omega
   | isAlive =>
     have := state.weight_send processId source (.reply (.atom "true"))
     simp only [State.handle, Signal.weight] at *; omega
@@ -331,7 +339,9 @@ theorem State.weight_answer (state : State) (processId : PID) (entry : Entry) :
 theorem State.weight_linkExit (state : State) (processId target : PID) (reason : Term) :
     (state.linkExit processId target reason).weight ≤ state.weight + 1 := by
   have eager := fun (base : State) => base.weight_modify_same target
-    (fun other => { other with links := Kernel.filter (·.1 != processId) other.links, eagerExits := true })
+    (fun other => { other with
+      links := Kernel.filter (·.1 != processId) other.links
+      eagerExits := insertPid processId other.eagerExits })
     fun _ => ⟨rfl, rfl, rfl⟩
   have sent := state.weight_send processId target (.exit reason true false)
   have unparked := state.weight_unpark processId
@@ -348,18 +358,35 @@ theorem State.weight_linkExit (state : State) (processId target : PID) (reason :
       · have := eager state; omega
   · omega
 
-theorem State.weight_answers (state : State) (processId : PID) (queue : List Entry) :
-    (Kernel.foldl (fun state entry => state.answer processId entry) state queue).weight ≤
-      state.weight + queueWeight queue := by
-  induction queue generalizing state with
-  | nil => simp [queueWeight]
-  | cons entry rest ih =>
-    have := state.weight_answer processId entry
-    have := ih (state.answer processId entry)
-    simp only [Kernel.foldl_eq, List.foldl_cons, queueWeight, List.map_cons, List.sum_cons] at *
-    omega
+/-- A phase signaling a link lowers the weight. -/
+theorem State.weight_linkPhase {state next : State} {processId target : PID}
+    (phase : state.linkPhase processId target = some next) : next.weight < state.weight := by
+  unfold State.linkPhase at phase
+  split at phase
+  · rename_i process found
+    have equal : state.process processId = process := by simp [State.process, found]
+    split at phase
+    · rename_i exiting exits
+      split at phase
+      · rename_i mem
+        simp only [Option.some.injEq] at phase; subst phase
+        simp only [Kernel.contains_eq, List.elem_eq_mem, decide_eq_true_eq] at mem
+        have shorter : (exiting.links.filter (· != target)).length < exiting.links.length :=
+          List.length_filter_lt_length_iff_exists.mpr ⟨target, mem, by simp⟩
+        have set := state.weight_set processId
+          { process with exiting := some { exiting with links := Kernel.filter (· != target) exiting.links } }
+        rw [equal] at set
+        have lighter : ({ process with exiting := some { exiting with
+            links := Kernel.filter (· != target) exiting.links } } : ProcessState).weight + 2 ≤ process.weight := by
+          simp only [ProcessState.weight_eq, exits, Kernel.filter_eq]; omega
+        have sent := (state.set processId { process with exiting := some { exiting with
+          links := Kernel.filter (· != target) exiting.links } }).weight_linkExit processId target exiting.reason
+        omega
+      · simp at phase
+    · simp at phase
+  · simp at phase
 
-/-- A phase of a process that ended lowers the weight. -/
+/-- A phase sending a `DOWN` or answering a request lowers the weight. -/
 theorem State.weight_phase {state next : State} {processId : PID} (phase : state.phase processId = some next) :
     next.weight < state.weight := by
   unfold State.phase at phase
@@ -372,16 +399,7 @@ theorem State.weight_phase {state next : State} {processId : PID} (phase : state
           (2 * (exiting.links.length + exiting.downs.length) + 1) := by
         simp [ProcessState.weight_eq, exits]
       split at phase
-      · rename_i target rest links
-        simp only [Option.some.injEq] at phase; subst phase
-        have set := state.weight_set processId { process with exiting := some { exiting with links := rest } }
-        rw [equal] at set
-        have lighter : ({ process with exiting := some { exiting with links := rest } } : ProcessState).weight + 2 =
-            process.weight := by
-          simp [ProcessState.weight_eq, links] at weight ⊢; omega
-        have sent := (state.set processId { process with exiting := some { exiting with links := rest } }).weight_linkExit
-          processId target exiting.reason
-        omega
+      · simp at phase
       · rename_i reference watcher rest links downs
         simp only [Option.some.injEq] at phase; subst phase
         have set := state.weight_set processId { process with exiting := some { exiting with downs := rest } }
@@ -394,14 +412,31 @@ theorem State.weight_phase {state next : State} {processId : PID} (phase : state
         simp only [Signal.weight] at sent; omega
       · split at phase
         · simp at phase
-        · simp only [Option.some.injEq] at phase; subst phase
-          have removed := state.weight_remove processId
-          rw [equal] at removed
-          have answered := (state.remove processId).weight_answers processId process.queue
-          simp only [Kernel.foldl_eq] at answered ⊢
-          omega
+        · split at phase
+          · rename_i entry rest queue
+            simp only [Option.some.injEq] at phase; subst phase
+            have set := state.weight_set processId { process with queue := rest }
+            rw [equal] at set
+            have lighter : ({ process with queue := rest } : ProcessState).weight + entry.signal.weight =
+                process.weight := by
+              simp only [ProcessState.weight_eq, queueWeight, queue, List.map_cons, List.sum_cons]; omega
+            have answered := (state.set processId { process with queue := rest }).weight_answer processId entry
+            omega
+          · simp at phase
     · simp at phase
   · simp at phase
+
+/-- Every phase of a process that ended lowers the weight. -/
+theorem State.weight_phases {state next : State} {processId : PID} (mem : next ∈ state.phases processId) :
+    next.weight < state.weight := by
+  simp only [State.phases, Kernel.append_eq, Kernel.filterMap_eq, List.mem_append, List.mem_filterMap] at mem
+  rcases mem with ⟨target, -, phase⟩ | mem
+  · exact state.weight_linkPhase phase
+  · split at mem
+    · rename_i found
+      simp only [List.mem_singleton] at mem; subst mem
+      exact state.weight_phase found
+    · simp at mem
 
 theorem mem_firstOfEach {seen : List (List Nat)} {timers : List Timer} {timer : Timer}
     (mem : timer ∈ firstOfEach seen timers) : timer ∈ timers := by
@@ -517,7 +552,6 @@ private theorem request_continue {state answered : State} {processId : PID} {nex
   cases query <;> simp only [State.request] at continued <;> (repeat' split at continued) <;>
     first
       | (simp only [Answer.continue.injEq] at continued; obtain ⟨rfl, -⟩ := continued; first | exact .requestReceive | exact .requestError)
-      | (simp [flushThen] at continued; split at continued <;> simp at continued)
       | simp at continued
 
 /-- What a step of a process itself leaves follows it. -/
@@ -708,14 +742,12 @@ private theorem running_acc :
       split
       · exact exhausted_acc _ _ _
       · exact ih _ (equal ▸ process_step (eq_of_mem_splits split) possible) _ _ _ rfl
-    · cases found : state.phase processId with
-      | none => simp [found] at phased
-      | some next' =>
-        simp only [found, Option.map_some, Option.some.injEq, Prod.mk.injEq] at phased
-        obtain ⟨-, rfl⟩ := phased
-        have := state.weight_phase found
-        have := next'.weight_normalize
-        exact ih _ (equal ▸ .right _ (by omega)) _ _ _ rfl
+    · obtain ⟨next', phase, same⟩ := phased
+      simp only [Prod.mk.injEq] at same
+      obtain ⟨-, rfl⟩ := same
+      have := state.weight_phases phase
+      have := next'.weight_normalize
+      exact ih _ (equal ▸ .right _ (by omega)) _ _ _ rfl
     · cases parked : (state.process processId).parked with
       | none => simp [parked] at unparked
       | some _ =>

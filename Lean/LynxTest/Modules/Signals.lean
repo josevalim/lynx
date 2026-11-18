@@ -331,6 +331,134 @@ theorem relink_may_receive_crash :
             (.tuple #[.atom "EXIT", .pid [1], .tuple #[.atom "boom", .nil]]) == .eq
       | _ => false) = true := by decide +kernel
 
+/-- Receive the oldest message that `accepts` accepts. -/
+private def receiveMatch (accepts : Term → Bool) : Result :=
+  .receive .infinity (fun _ message => if accepts message then some message else none) fun
+    | some message => .ok message
+    | none => .ok .nil
+
+/-- Receive the oldest message that `accepts` accepts, or `timeout` when there is none. -/
+private def pollMatch (accepts : Term → Bool) : Result :=
+  .receive .immediate (fun _ message => if accepts message then some message else none) fun
+    | some message => .ok message
+    | none => .ok (.atom "timeout")
+
+private def isExit : Term → Bool
+  | .tuple ⟨[.atom "EXIT", _, _]⟩ => true
+  | _ => false
+
+private def isDown : Term → Bool
+  | .tuple ⟨[.atom "DOWN", _, _, _, _]⟩ => true
+  | _ => false
+
+private def isAtom (name : String) : Term → Bool
+  | .atom found => found == name
+  | _ => false
+
+private def reasonOf : Term → Term
+  | .tuple ⟨[.atom "EXIT", _, reason]⟩ => reason
+  | other => other
+
+private def plain : Dispatcher := Dispatcher.ofTable [] 1
+
+/-- Whether an `EXIT` is already handled when a message arrives that was sent
+after it: `found`, or `early`. -/
+private def exitHandled : Result := do
+  let found ← pollMatch isExit
+  pure (match found with
+    | .atom "timeout" => .atom "early"
+    | _ => .atom "found")
+
+/-- `[1]` traps exits, and tells the root once it gets an `EXIT`. -/
+private def fanOutFirst : Result := do
+  let _ ← «process_flag/2» plain (.atom "trap_exit") (.atom "true")
+  let _ ← «send/2» plain (.pid []) (.atom "ready")
+  let _ ← receiveMatch isExit
+  «send/2» plain (.pid []) (.atom "hi")
+
+/-- `[2]` links to the root and `[1]`, then crashes. -/
+private def fanOutCrash : Result := do
+  let _ ← «link/1» plain (.pid [])
+  let _ ← «link/1» plain (.pid [1])
+  .error (.error (.atom "boom"))
+
+/-- The root traps exits, and reports whether its `EXIT` from `[2]` is handled
+once `[1]` tells it it got its own. -/
+private def fanOut : Result := do
+  let table := Dispatcher.ofTable [
+    { module := "test", name := "first", arity := 0, entry := .effectful fun _ _ _ => fanOutFirst },
+    { module := "test", name := "crash", arity := 0, entry := .effectful fun _ _ _ => fanOutCrash }] 2
+  let _ ← «process_flag/2» table (.atom "trap_exit") (.atom "true")
+  let _ ← «spawn/1» table (.function "test" "first" 0 #[])
+  let _ ← receiveMatch (isAtom "ready")
+  let _ ← «spawn/1» table (.function "test" "crash" 0 #[])
+  let _ ← receiveMatch (isAtom "hi")
+  exitHandled
+
+/-- A process that ended sends exit signals to its links in any order, as OTP
+walks them in an undefined order (`erl_rbtree.h`), and other processes run in
+between: the root may get its `EXIT` after `[1]` got its own and told it. -/
+theorem link_exits_in_any_order :
+    (match Concurrent.counterexample (only (.ok (.atom "found"))) 128 (.start {} fanOut) with
+      | some (_, .rejected (.ok (.atom "early"))) => true
+      | _ => false) = true := by decide +kernel
+
+/-- `[3]` links to `[1]` and forwards the reason of its `EXIT` to `[2]`. -/
+private def answersFirst : Result := do
+  let _ ← «process_flag/2» plain (.atom "trap_exit") (.atom "true")
+  let _ ← «link/1» plain (.pid [1])
+  let _ ← «send/2» plain (.pid [2]) (.atom "linked")
+  let exit ← receiveMatch isExit
+  «send/2» plain (.pid [2]) (.tuple #[.atom "hi", reasonOf exit])
+
+/-- `[2]` links to `[1]` after `[3]`, and reports whether its `EXIT` is handled
+once `[3]`'s reason arrives. -/
+private def answersLast : Result := do
+  let _ ← «process_flag/2» plain (.atom "trap_exit") (.atom "true")
+  let _ ← receiveMatch (isAtom "linked")
+  let _ ← «link/1» plain (.pid [1])
+  let hi ← receiveMatch (fun | .tuple ⟨[.atom "hi", _]⟩ => true | _ => false)
+  let handled ← exitHandled
+  «send/2» plain (.pid []) (.tuple #[handled, hi])
+
+private def answers : Result := do
+  let table := Dispatcher.ofTable [
+    { module := "test", name := "ends", arity := 0, entry := .effectful fun _ _ _ => .ok (.atom "done") },
+    { module := "test", name := "last", arity := 0, entry := .effectful fun _ _ _ => answersLast },
+    { module := "test", name := "first", arity := 0, entry := .effectful fun _ _ _ => answersFirst }] 2
+  let _ ← «spawn/1» table (.function "test" "ends" 0 #[])
+  let _ ← «spawn/1» table (.function "test" "last" 0 #[])
+  let _ ← «spawn/1» table (.function "test" "first" 0 #[])
+  receiveAny
+
+/-- A process that ended answers its queued requests one at a time, and other
+processes run in between (`erts_proc_sig_handle_exit`): `[2]`'s link may be
+answered with `noproc` after `[3]` got its own answer and forwarded it. -/
+theorem queued_requests_answered_one_at_a_time :
+    (match Concurrent.counterexample (fun
+        | .ok (.tuple ⟨[.atom "early", .tuple ⟨[.atom "hi", .atom "noproc"]⟩]⟩) => false
+        | _ => true) 128 (.start {} answers) with
+      | some (_, .rejected _) => true
+      | _ => false) = true := by decide +kernel
+
+/-- A child that links to the root and returns. -/
+private def linksBack : Result := do
+  let _ ← «link/1» plain (.pid [])
+  .ok .nil
+
+/-- A process that ended sends its link exits before its `DOWN` messages, so
+once its watcher handled the `DOWN` of a `normal` exit, it handled the link
+exit too: trapping exits afterwards receives no `EXIT`. -/
+theorem trap_exit_after_normal_down :
+    Concurrent.check (only (.ok (.tuple #[.atom "false", .atom "timeout"]))) 64 (.start {} (do
+      let table := Dispatcher.ofTable [
+        { module := "test", name := "links", arity := 0, entry := .effectful fun _ _ _ => linksBack }] 1
+      let _ ← «spawn_monitor/1» table (.function "test" "links" 0 #[])
+      let _ ← receiveMatch isDown
+      let previous ← «process_flag/2» table (.atom "trap_exit") (.atom "true")
+      let late ← poll
+      pure (.tuple #[previous, late]))) = true := by decide +kernel
+
 end LynxTest.Modules.Signals
 
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Modules.Signals

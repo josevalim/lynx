@@ -177,8 +177,9 @@ inductive Request where
   | exit (target : PID) (reason : Term) (quirk : Bool)
   /-- Set whether exit signals arrive as messages. Replies the previous value. -/
   | trapExit (enabled : Bool)
-  /-- Reply whether a process is alive, after the signals between the requester
-  and the target sent before it. -/
+  /-- Reply whether a process is alive. A live target handles the request after
+  the signals queued before it, and its reply after what it sent before; a
+  requester otherwise handles everything queued at it before the reply. -/
   | alive (target : PID)
   /-- Send to an alias, discarding the message once the alias is inactive.
   Replies the message. -/

@@ -78,11 +78,12 @@ open Lynx
 /-! ### Keys -/
 
 /-- Which step of a configuration: a process's own step, its handling of the
-oldest signal it queued, a phase of a process that ended, a parked monitor
-signal sent, or a timer firing. -/
+oldest signal it queued, a phase of a process that ended signaling one of its
+links or else its next phase, a parked monitor signal sent, or a timer firing. -/
 inductive Key where
   | own (processId : PID)
   | handle (processId : PID)
+  | link (processId target : PID)
   | phase (processId : PID)
   | unpark (processId : PID)
   | fire (reference : List Nat)
@@ -91,6 +92,7 @@ inductive Key where
 @[expose] def Key.beq : Key → Key → Bool
   | .own processId, .own processId' | .handle processId, .handle processId'
   | .phase processId, .phase processId' | .unpark processId, .unpark processId' => processId == processId'
+  | .link processId target, .link processId' target' => processId == processId' && target == target'
   | .fire reference, .fire reference' => reference == reference'
   | _, _ => false
 
@@ -131,9 +133,14 @@ instance : DecidableEq Key := fun first second => decidable_of_iff (first == sec
             (Kernel.map (fun transition => (Key.handle processId, transition.event,
               transition.apply before after finished false)) (task.handle state processId)))
           (splits tasks))
-        (Kernel.filterMap (fun (processId, _) =>
-          (state.phase processId).map fun next =>
-            (Key.phase processId, Event.phase processId, .running next.normalize tasks finished false))
+        (Kernel.flatMap (fun (processId, _) =>
+          Kernel.append
+            (Kernel.filterMap (fun target => (state.linkPhase processId target).map fun next =>
+              (Key.link processId target, Event.phase processId, .running next.normalize tasks finished false))
+              (state.exitLinks processId))
+            (match state.phase processId with
+              | some next => [(Key.phase processId, Event.phase processId, .running next.normalize tasks finished false)]
+              | none => []))
           state.processes))
         (Kernel.filterMap (fun (processId, _) =>
           (state.process processId).parked.map fun _ =>
@@ -164,6 +171,9 @@ instance : DecidableEq Key := fun first second => decidable_of_iff (first == sec
       (splitAt processId tasks).bind fun (before, task, after) =>
         (task.handle state processId).head?.map fun transition =>
           (transition.event, transition.apply before after finished false)
+  | .running state tasks finished false, .link processId target =>
+      (state.linkPhase processId target).map fun next =>
+        (Event.phase processId, .running next.normalize tasks finished false)
   | .running state tasks finished false, .phase processId =>
       (state.phase processId).map fun next => (Event.phase processId, .running next.normalize tasks finished false)
   | .running state tasks finished false, .unpark processId =>
@@ -240,8 +250,7 @@ inductive OwnView where
         .receive view ((selectMessage (select view) process.mailbox).map (·.1))
           (match timeout with
             | .infinity => false
-            | .immediate => Kernel.all process.queue (state.inertEntry processId)
-            | .finite => true)
+            | _ => !Kernel.any process.queue (state.awaitedEntry processId))
     | .request (.cancelTimer reference) _ =>
         .cancel ((Kernel.find? (·.reference == reference) state.timers).map (·.duration))
           (state.process processId).cancels
@@ -325,14 +334,17 @@ A step that starts or ends a process changes what normalization removes everywhe
           | some (none, _) => some ([processId, entry.source], false)
           | _ => none
       | _, _ => none
+  | .running _ _ _ false, .link processId target => some ([processId, target], false)
   | .running state _ _ false, .phase processId =>
       match state.record processId with
       | some process =>
           match process.exiting with
-          | some { links := target :: _, .. } => some ([processId, target], false)
           | some { links := [], downs := (_, watcher) :: _, .. } => some ([processId, watcher], false)
-          | some _ => some (processId :: Kernel.map (·.source) process.queue, false)
-          | none => none
+          | some { links := [], downs := [], .. } =>
+              match process.queue with
+              | entry :: _ => some ([processId, entry.source], false)
+              | [] => none
+          | _ => none
       | none => none
   | .running state _ _ false, .unpark processId =>
       match (state.process processId).parked with
@@ -452,10 +464,9 @@ again restores, so it reads the links and is always appended. -/
   | .trapExit _ =>
       some ([(processId, Field.trapExit ||| Field.eagerExits, Field.trapExit)], false)
   | .alive target =>
-      if target == processId then some ([], false) else
-      let queue := Field.queueHead ||| Field.queueTail
-      some ((target, Field.live ||| queue, 0) :: (processId, queue, Field.queueTail) ::
-        state.sendFrames processId target .isAlive, false)
+      if target == processId then some ([], false)
+      else if state.alive target then some (state.sendFrames processId target .isAlive, false)
+      else some ([(target, Field.live, 0), (processId, 0, Field.queueTail)], false)
   | .sendAlias alias message =>
       some (state.sendFrames processId alias.dropLast (.aliasMessage alias message), false)
   | .startTimer destination _ _ =>
@@ -502,7 +513,12 @@ process queued and its signals to it. -/
         | some _ => some ([(processId, reads, Field.mailbox)], false)
         | none => match timeout with
           | .infinity => some ([(processId, reads, 0)], false)
-          | _ => some ([(processId, reads ||| Field.queueHead ||| Field.queueTail, 0)], false)
+          | .finite => some ([(processId, reads ||| Field.queueHead ||| Field.queueTail, 0)], false)
+          | .immediate =>
+              -- It clears the link exits applied when sent, which a process
+              -- ending may add to at the same time.
+              some ([(processId, reads ||| Field.queueHead ||| Field.queueTail ||| Field.eagerExits,
+                Field.eagerExits)], false)
     | .request query _ => state.requestFrames processId query
     | .ok _ => some (state.endFrames processId)
     | .error .exhausted => none
@@ -528,48 +544,62 @@ process queued and its signals to it. -/
     | .link | .unlinkAck _ => some ([own Field.links Field.links], false)
     | .unlink id => some (own Field.links Field.links :: state.sendFrames processId entry.source (.unlinkAck id), false)
     | .monitor _ => some ([own Field.monitors Field.monitors], false)
-    | .down .. =>
-        let fields := Field.monitoring ||| Field.aliases
+    | .down _ reason =>
+        let eager := if isNormal reason && Kernel.contains (state.process processId).eagerExits entry.source
+          then Field.eagerExits else 0
+        let fields := Field.monitoring ||| Field.aliases ||| eager
         some ([own fields (fields ||| Field.mailbox)], false)
     | .isAlive => some (own 0 0 :: state.sendFrames processId entry.source (.reply (.atom "true")), false)
     | .reply _ | .flush => some ([own 0 0], false)
 
-/-- The frames of the next phase of a process that ended. -/
+/-- The frames of a phase of a process that ended signaling one of its links.
+Links are removed in any order, which commutes. -/
+@[expose] def State.linkFrames (state : State) (processId target : PID) : Option (List Frame × Bool) :=
+  match state.record processId with
+  | some process =>
+      match process.exiting with
+      | some exiting =>
+          let own : Frame := (processId, 0, Field.commuting Field.exiting)
+          let signal : Signal := .exit exiting.reason true false
+          -- Handling a link from this process changes whether the exit is
+          -- applied when sent, which reads nothing else of the queue.
+          let linking := Kernel.any (state.process target).queue
+            (fun entry => entry.source == processId && entry.signal matches .link)
+          let queue := if linking then Field.queueHead else 0
+          if isNormal exiting.reason && state.alive target && !(state.process target).trapExit && !linking then
+            let unpark := match process.parked with
+              | some (parked, reference) =>
+                  if parked == target then
+                    (processId, Field.parked, Field.parked) ::
+                      state.enqueueFrames processId target (.monitor reference)
+                  else [(processId, Field.parked, 0)]
+              | none => [(processId, Field.parked, 0)]
+            some (own :: (target, Field.live ||| Field.trapExit,
+              Field.commuting (Field.links ||| Field.eagerExits)) :: unpark, false)
+          else some (own :: (target, Field.live ||| Field.trapExit ||| queue, 0) ::
+            state.sendFrames processId target signal, false)
+      | none => none
+  | none => none
+
+/-- The frames of the next phase of a process that ended once it signaled its links. -/
 @[expose] def State.phaseFrames (state : State) (processId : PID) : Option (List Frame × Bool) :=
   match state.record processId with
   | some process =>
       match process.exiting with
       | some exiting =>
           let own : Frame := (processId, Field.exiting, Field.exiting)
-          match exiting.links, exiting.downs with
-          | target :: _, _ =>
-              let signal : Signal := .exit exiting.reason true false
-              -- Handling a link from this process changes whether the exit is
-              -- applied when sent, which reads nothing else of the queue.
-              let linking := Kernel.any (state.process target).queue
-                (fun entry => entry.source == processId && entry.signal matches .link)
-              let queue := if linking then Field.queueHead else 0
-              if isNormal exiting.reason && state.alive target && !(state.process target).trapExit && !linking then
-                let unpark := match process.parked with
-                  | some (parked, reference) =>
-                      if parked == target then
-                        (processId, Field.parked, Field.parked) ::
-                          state.enqueueFrames processId target (.monitor reference)
-                      else [(processId, Field.parked, 0)]
-                  | none => [(processId, Field.parked, 0)]
-                some (own :: (target, Field.live ||| Field.trapExit,
-                  Field.commuting (Field.links ||| Field.eagerExits)) :: unpark, false)
-              else some (own :: (target, Field.live ||| Field.trapExit ||| queue, 0) ::
-                state.sendFrames processId target signal, false)
-          | [], (reference, watcher) :: _ =>
+          match exiting.downs, process.queue with
+          | (reference, watcher) :: _, _ =>
               some (own :: state.sendFrames processId watcher (.down reference exiting.reason), false)
-          | [], [] =>
-              some ((processId, Field.live, Field.live) :: Kernel.flatMap (fun entry =>
-                match entry.signal with
+          | [], entry :: _ =>
+              let own : Frame := (processId, Field.exiting ||| Field.parked ||| Field.queueHead,
+                Field.queueHead ||| Field.live)
+              some (own :: match entry.signal with
                 | .link => state.sendFrames processId entry.source (.exit (.atom "noproc") true false)
                 | .monitor reference => state.sendFrames processId entry.source (.down reference (.atom "noproc"))
                 | .isAlive => state.sendFrames processId entry.source (.reply (.atom "false"))
-                | _ => []) process.queue, false)
+                | _ => [], false)
+          | [], [] => some ([own], false)
       | none => none
   | none => none
 
@@ -580,6 +610,7 @@ as for steps that end or start a process, which change what normalization remove
       (Kernel.lookup processId tasks).bind fun task => task.ownFrames state processId
   | .running state tasks _ false, .handle processId =>
       (Kernel.lookup processId tasks).bind fun task => task.handleFrames state processId
+  | .running state _ _ false, .link processId target => state.linkFrames processId target
   | .running state _ _ false, .phase processId => state.phaseFrames processId
   | .running state _ _ false, .unpark processId =>
       match (state.process processId).parked with

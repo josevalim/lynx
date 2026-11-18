@@ -319,10 +319,12 @@ defmodule Lynx do
   A concurrent law must hold in every run. `Lynx.Concurrent` describes every
   interleaving of a program's processes: a `Lynx.Concurrent.Step` advances one
   process, has a process handle the oldest signal of its queue, takes a step of
-  a process that ended, or fires a timer, and a `Lynx.Concurrent.Run` records
-  consecutive steps. As in OTP, a signal joins its receiver's queue when it is
-  sent, and the receiver handles its queue in order, against its state at that
-  time. A law is proven in one of three ways:
+  a process that ended, sends a parked monitor signal, or fires a timer, and a
+  `Lynx.Concurrent.Run` records consecutive steps. As in OTP, a signal joins its
+  receiver's queue when it is sent, and the receiver handles its queue in order,
+  against its state at that time. This assumes on-heap message queues: with
+  `message_queue_data` set to `off_heap`, OTP may reorder signals from different
+  senders. A law is proven in one of three ways:
 
     * Programs whose processes take the same steps for every input are proven
       by evaluating every run, as described below. See

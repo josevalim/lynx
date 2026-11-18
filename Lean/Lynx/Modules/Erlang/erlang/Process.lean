@@ -130,9 +130,10 @@ The monitor's reference is the caller's next one. -/
         .ok (.tuple #[.pid pid, .reference (env.currentPid ++ [env.refCounter])])
   | _ => .error (.error (.atom "badarg"))
 
-/-- Monitor a process. Monitoring a process that does not exist sends its
-`DOWN` message at once, with reason `noproc`. Registered names are not
-modeled and do not return. -/
+/-- Monitor a process. Monitoring a process that does not exist gets its
+`DOWN` message, with reason `noproc`, once the monitor signal is sent, which
+waits until the process is scheduled out or signals the same target again.
+Registered names are not modeled and do not return. -/
 @[expose] def «monitor/2» (_ : Dispatcher) (kind target : Term) : Result :=
   match kind, target with
   | .atom "process", .pid pid => .request (.monitor pid false) .ok

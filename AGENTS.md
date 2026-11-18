@@ -56,9 +56,12 @@ and for proof audits that inspect private declarations in test modules.
 
 Processes are modeled by the labelled transition system in `Lynx/Concurrent.lean`
 (`Config`, `Step`, `State.request`), and concurrent laws are proven by evaluating
-`Lynx.Concurrent.check` (`Lynx/Concurrent/Reduction.lean`), whose soundness rests
-on footprints (`Lynx/Concurrent/Footprint.lean`). Soundness with what OTP does is
-non-negotiable, so a new process BIF, or a change to one, goes through every layer:
+`Lynx.Concurrent.check` (`Lynx/Concurrent/Reduction.lean`). Exploring with sleep
+sets and forced steps (`checkSleep`, `Lynx/Concurrent/Commute.lean`) rests on
+frames and forced steps. Parity with OTP's behaviour is fundamental: every run OTP
+can take must be a run of the model, and every reply one OTP can give. Precision
+may be traded for proof performance, never parity. So a new process BIF, or a
+change to one, goes through every layer:
 
 1. Model OTP from its source (`../otp`), not its documentation, including the
    corner cases (dead targets, self-targets, exit signals racing the request,
@@ -67,38 +70,37 @@ non-negotiable, so a new process BIF, or a change to one, goes through every lay
 2. Express the BIF in `Lynx/Modules/Erlang/erlang/Process.lean` as a `Result`
    built from existing requests where possible. A new kind of request extends
    `Request` (`Lynx/Term/DataTypes.lean`) and is answered by `State.request`.
-   Keep signals between two processes in order, and put anything that reaches
-   another process in transit (`State.emit`) rather than changing its record.
+   Keep signals between two processes in order: anything that reaches another
+   process joins its queue (`State.send`), and changes its record only when it
+   handles it (`State.handle`).
    Definitions that `check` evaluates use the list functions of
    `Lynx/Concurrent/Kernel.lean` rather than core's, as the kernel evaluates them
    much faster; proofs rewrite them back with their `_eq` lemmas.
-3. Give the request a footprint in `requestFootprint`: what it observes and
-   what it changes. A footprint that observes too little is unsound; one that
-   observes too much only costs exploration. Extend `request_matches` and the
-   commuting proofs, and `Task.local` only for steps that touch nothing but the
-   process's own record. Give it `frames` too: for each process, once, the fields
-   of its record the step reads and writes at the state, with `live` when it ends
-   or starts the process (`Footprint.Framed`), so that steps touching records
-   apart commute without evaluating them; unknown frames only cost evaluation.
+3. Give the request frames in `State.requestFrames`: for each process, once, the
+   fields of its record the step reads and writes at the state, with `live` when
+   it ends or starts the process, so that steps touching records apart commute
+   without evaluating them. Frames that declare too little are unsound, including
+   what normalization (`State.normalize`) removes after the step; frames that
+   declare too much, or unknown frames, only cost exploration. Avoid steps that
+   read whether another process's queue is empty, which every signal changes.
    Termination (`Concurrent/Termination.lean`), traces (`Concurrent/Trace.lean`)
    and the runner (`Lynx/Term/Runner.lean`) must cover it too.
-4. Look for steps that do nothing now and never will. For example, a `DOWN`
-   in transit after its monitor was removed by `demonitor`, a message sent to an
-   alias that was removed by `unalias`, or a message or exit signal to a process
-   that has exited and can never be live again (`State.settled`). `check` takes such
-   steps alone (`Config.forced`), so it never explores their interleavings with other
-   steps. If the new BIF creates steps like these, recognize them from the configuration
-   in `Envelope.inert`, or in a new case of `ForcedStep`. Then prove the obligations of
-   `forced_first`: the step stays enabled, every other step either commutes with it or
-   absorbs it, and the step stays forced.
+4. Look for signals that do nothing now and never will. For example, a queued
+   `DOWN` after its monitor was removed by `demonitor`, a message to an alias that
+   was removed by `unalias`, or a request from a process that is gone
+   (`State.gone`). Normalization removes them (`State.inertEntry`). Other steps
+   every run can take first are taken alone (`Config.forced`, `Task.forcedHead`),
+   so their interleavings are never explored. A forced step must stay enabled
+   and forced, and every other step, now or after any others, including later
+   steps of the same process, must commute with it or absorb it.
    Not every such signal qualifies: a link or monitor signal to a process that has
-   exited is not inert, because its bounce answers with an exit or a `DOWN`.
+   exited is not inert, because it is answered with an exit or a `DOWN`.
 5. Register the BIF's purity in `@runtime_purity` (`lib/lynx/translation.ex`) and
    regenerate `Lean/modules.json` if its signature changed.
 6. Test it in `LynxTest/Modules/Signals.lean` with kernel-checked closed programs
    for each OTP behavior, including races where the order of steps changes the
    reply, and update `LynxTest/PublicApi.lean`.
-7. Before trusting a change to footprints or to how `check` explores, audit it
+7. Before trusting a change to frames or to how `check` explores, audit it
    executably: over every configuration reachable from closed programs that use
    the BIF, check that steps reported as commuting reach the same configuration
    in either order, and that the steps `check` takes alone lose no terminal

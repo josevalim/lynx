@@ -11,6 +11,12 @@ steps of a configuration, a `Step` is one of them, and a `Run` collects the
 `Event`s of consecutive steps as a trace. Concurrent laws are stated over these
 runs (`Lynx.concurrent`).
 
+Parity with OTP's behaviour is fundamental: every run OTP can take must be a
+run here, and every reply must be one OTP can give, as modeled from OTP's
+source rather than its documentation. A law proven here only says something
+about a program on OTP as far as this holds, so precision may be traded for
+proof performance, but never parity.
+
 Processes affect each other only through signals, modeled after OTP's (`erts`
 in OTP 30): messages, exit signals, links, monitors, `DOWN` messages, and
 `is_process_alive` requests and replies. A sender puts a signal in its
@@ -18,11 +24,14 @@ receiver's queue at once, so a process's queue holds the signals of all senders
 in the order they were sent, its own included. The receiver handles them one at
 a time, in that order, against its state at that time, at any point of its own
 computation. A `receive` only sees messages already handled; it times out at
-once only after handling everything queued.
+once only after handling everything queued. Queues are causal as OTP's are with
+on-heap message queues: with `message_queue_data` `off_heap`, OTP may buffer
+signals per sender and reorder signals from different senders, which is not
+modeled.
 
 A process ends in phases: it stops being alive, then sends exit signals to its
-links and `DOWN` messages to its watchers one at a time, then answers the
-requests still queued. Monitor signals wait, as OTP's scheduler parks them,
+links in any order and `DOWN` messages to its watchers in order, one at a time,
+then answers the requests still queued, one at a time. Monitor signals wait, as OTP's scheduler parks them,
 until their sender is scheduled out or signals the same process again.
 
 The scheduler owns the `State` of every process. A running process only
@@ -69,11 +78,6 @@ structure Entry where
   signal : Signal
 deriving Repr
 
-/-- Whether a signal becomes a message, which a process that ended drops. -/
-@[expose] def Signal.isMessage : Signal → Bool
-  | .message _ | .aliasMessage .. | .reply _ => true
-  | _ => false
-
 /-- What a process that ended has left to send: exit signals to its links,
 then `DOWN` messages to its watchers, then answers to its queued requests. -/
 structure Exiting where
@@ -111,9 +115,12 @@ structure ProcessState where
   unlinks : Nat := 0
   /-- A monitor signal waiting for the process to be scheduled out: its target and reference. -/
   parked : Option (PID × List Nat) := none
-  /-- A `normal` link exit removed a link when it was sent rather than handled,
-  which is only exact while the process does not start trapping exits. -/
-  eagerExits : Bool := false
+  /-- The processes whose `normal` link exit removed a link when it was sent
+  rather than handled, in PID order. This is only exact while the process does
+  not start trapping exits before it would have handled the exit: before it
+  handles the `normal` `DOWN` the same process sends after its link exits, or
+  times out a receive with a zero timeout, which handles everything queued. -/
+  eagerExits : List PID := []
   /-- Set once the process ended. -/
   exiting : Option Exiting := none
 deriving Repr, Inhabited
@@ -323,9 +330,9 @@ It has its links and watchers left to signal. -/
 
 /-- An exit signal from a link of a process that ended. A `normal` one to a
 live process not trapping exits only removes its link, so it is applied when
-sent, and the receiver may not start trapping exits afterwards. It is queued
-instead while the receiver has yet to handle a link from the process, which
-would come back otherwise. -/
+sent, and the receiver may not start trapping exits before it would have
+handled it (`ProcessState.eagerExits`). It is queued instead while the receiver
+has yet to handle a link from the process, which would come back otherwise. -/
 @[expose] def State.linkExit (state : State) (processId target : PID) (reason : Term) : State :=
   if isNormal reason && state.alive target && !(state.process target).trapExit &&
       !Kernel.any (state.process target).queue (fun entry => entry.source == processId && entry.signal matches .link) then
@@ -333,7 +340,8 @@ would come back otherwise. -/
       | some (parked, _) => if parked == target then state.unpark processId else state
       | none => state
     state.modify target fun process => { process with
-      links := Kernel.filter (·.1 != processId) process.links, eagerExits := true }
+      links := Kernel.filter (·.1 != processId) process.links
+      eagerExits := insertPid processId process.eagerExits }
   else state.send processId target (.exit reason true false)
 
 /-- Answer a request queued at a process that ended: a link with an exit
@@ -345,27 +353,55 @@ signal `noproc`, a monitor with a `DOWN` `noproc`, and `is_process_alive` with `
   | .isAlive => state.send processId entry.source (.reply (.atom "false"))
   | _ => state
 
-/-- The next phase of a process that ended: an exit signal to a link, a `DOWN`
-to a watcher, or answering the requests still queued and leaving. A parked
-monitor signal is sent first, as the process is scheduled out. -/
+/-- A phase of a process that ended sending an exit signal to one of its links,
+in any order: OTP walks the links in an order it leaves undefined, and other
+processes run in between. -/
+@[expose] def State.linkPhase (state : State) (processId target : PID) : Option State :=
+  match state.record processId with
+  | some process =>
+    match process.exiting with
+    | some exiting =>
+        if Kernel.contains exiting.links target then
+          some ((state.set processId { process with exiting := some { exiting with
+            links := Kernel.filter (· != target) exiting.links } }).linkExit processId target exiting.reason)
+        else none
+    | none => none
+  | none => none
+
+/-- The next phase of a process that ended once it signaled its links: a
+`DOWN` to a watcher, or answering the oldest request still queued. A parked
+monitor signal is sent before the requests are answered, as the process is
+scheduled out. Normalization removes the record once nothing is left. -/
 @[expose] def State.phase (state : State) (processId : PID) : Option State :=
   match state.record processId with
   | some process =>
     match process.exiting with
     | some exiting =>
       match exiting.links, exiting.downs with
-      | target :: rest, _ =>
-          some ((state.set processId { process with exiting := some { exiting with links := rest } }).linkExit
-            processId target exiting.reason)
+      | _ :: _, _ => none
       | [], (reference, watcher) :: rest =>
           some ((state.set processId { process with exiting := some { exiting with downs := rest } }).send
             processId watcher (.down reference exiting.reason))
       | [], [] =>
           if process.parked.isSome then none else
-          some (Kernel.foldl (fun state entry => state.answer processId entry) (state.remove processId)
-            process.queue)
+          match process.queue with
+          | entry :: rest => some ((state.set processId { process with queue := rest }).answer processId entry)
+          | [] => none
     | none => none
   | none => none
+
+/-- The links a process that ended has left to signal. -/
+@[expose] def State.exitLinks (state : State) (processId : PID) : List PID :=
+  match (state.process processId).exiting with
+  | some exiting => exiting.links
+  | none => []
+
+/-- Every next phase of a process that ended. -/
+@[expose] def State.phases (state : State) (processId : PID) : List State :=
+  Kernel.append (Kernel.filterMap (state.linkPhase processId) (state.exitLinks processId))
+    (match state.phase processId with
+      | some next => [next]
+      | none => [])
 
 /-! ### Normalization
 
@@ -432,11 +468,6 @@ inductive Answer (β : Type) : Type 1 where
   | wait (wait : Wait) (state : State)
   | continue (computation : Result β) (state : State)
 
-/-- Reply after handling the signals queued so far, unless there are none. -/
-@[expose] def flushThen (state : State) (processId : PID) (value : Term) : Answer β :=
-  if (state.process processId).queue.isEmpty then .reply value state
-  else .wait (.flush value) (state.enqueue processId processId .flush)
-
 /-- Answer a request from a process. -/
 @[expose] def State.request (state : State) (processId : PID) (next : Term → Result β) :
     Request → Answer β
@@ -491,17 +522,17 @@ inductive Answer (β : Type) : Type 1 where
       else .reply (.atom "true") (state.send processId processId (.exit reason false false))
   | .trapExit enabled =>
       let process := state.process processId
-      if enabled && process.eagerExits then .continue (.error .exhausted) state else
+      if enabled && !process.eagerExits.isEmpty then .continue (.error .exhausted) state else
       .reply (.atom (if process.trapExit then "true" else "false"))
         (state.modify processId fun process => { process with trapExit := enabled })
   | .alive target =>
-      if target = processId then .reply (.atom "true") state else
-      match state.record target with
-      | some process =>
-          if process.exiting.isSome then flushThen state processId (.atom "false")
-          else if process.queue.isEmpty then flushThen state processId (.atom "true")
-          else .wait (.reply target) (state.send processId target .isAlive)
-      | none => flushThen state processId (.atom "false")
+      -- OTP replies `true` at once when the target has no signals queued
+      -- (erl_bif_info.c), as the target handling the request at once would.
+      -- Here the target always handles it, and a request to a process that is
+      -- not alive always flushes, so no step reads whether a queue is empty.
+      if target = processId then .reply (.atom "true") state
+      else if state.alive target then .wait (.reply target) (state.send processId target .isAlive)
+      else .wait (.flush (.atom "false")) (state.enqueue processId processId .flush)
   | .sendAlias alias message =>
       .reply message (state.send processId alias.dropLast (.aliasMessage alias message))
   | .startTimer destination message duration =>
@@ -675,7 +706,11 @@ expires, as sending to a process does not observe whether its timer expired. -/
               (state.modify processId fun process => { process with mailbox := remaining })
               (next (some value))]
         | none =>
-            let timedOut := proceed (.timeout processId) state (next none)
+            -- A zero timeout handles every link exit applied when sent.
+            let timedOut := proceed (.timeout processId)
+              (if timeout matches .immediate && !process.eagerExits.isEmpty then
+                state.modify processId fun process => { process with eagerExits := [] }
+              else state) (next none)
             match timeout with
             | .infinity => []
             | _ => if Kernel.any process.queue (state.awaitedEntry processId) then [] else [timedOut]
@@ -738,6 +773,12 @@ value it resumes with if it was waiting for it, and the reason it exits with, if
       (state.modify processId fun process =>
         { process with monitors := Kernel.append process.monitors [(reference, source)] }, none, none)
   | .down reference reason =>
+      -- A `normal` `DOWN` follows its sender's link exits, so a link exit it
+      -- applied when sent would have been handled.
+      let state := if isNormal reason && Kernel.contains process.eagerExits source then
+          state.modify processId fun process =>
+            { process with eagerExits := Kernel.filter (· != source) process.eagerExits }
+        else state
       if Kernel.any process.monitoring (·.1 == reference) then
         ((state.modify processId fun process =>
           { process with monitoring := Kernel.filter (·.1 != reference) process.monitoring
@@ -845,8 +886,9 @@ A run that a process did not return from has none. -/
         (Kernel.flatMap (fun (before, (processId, task), after) =>
           Kernel.map (fun transition => (transition.event, transition.apply before after finished false))
             (task.transitions state processId)) (splits tasks))
-        (Kernel.filterMap (fun (processId, _) =>
-          (state.phase processId).map fun next => (.phase processId, .running next.normalize tasks finished false))
+        (Kernel.flatMap (fun (processId, _) =>
+          Kernel.map (fun next => (.phase processId, .running next.normalize tasks finished false))
+            (state.phases processId))
           state.processes))
         (Kernel.filterMap (fun (processId, _) =>
           (state.process processId).parked.map fun _ =>
