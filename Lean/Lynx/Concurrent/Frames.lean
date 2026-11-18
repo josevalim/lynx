@@ -586,4 +586,107 @@ private theorem Realizes.send (state : State) (source target : PID) (signal : Si
     · exact (Realizes.unpark _ _).andThen (Realizes.enqueue _ _ _ _)
     · exact Realizes.enqueue _ _ _ _
 
+/-! ### Normalizing a record by which processes are gone -/
+
+/-- `State.inertEntry` for a record, given which processes are gone. -/
+private def inert (gone : PID → Bool) (processId : PID) (process : ProcessState) (entry : Entry) : Bool :=
+  let allocated (reference : List Nat) : Bool := reference.dropLast == processId && match reference.getLast? with
+    | some count => 1 ≤ count && count ≤ process.refCounter
+    | none => false
+  match entry.signal with
+  | .down reference _ => allocated reference && !Kernel.any process.monitoring (·.1 == reference)
+  | .aliasMessage alias _ => allocated alias &&
+      !Kernel.contains process.aliases alias && !Kernel.any process.monitoring (·.1 == alias)
+  | .unlinkAck id => gone entry.source || Kernel.lookup entry.source process.links != some (some id)
+  | .isAlive | .monitor _ => gone entry.source
+  | _ => false
+
+/-- `State.normalizeRecord` for a record, given which processes are gone. -/
+private def normRecord (gone : PID → Bool) (processId : PID) (process : ProcessState) : ProcessState :=
+  match process.exiting with
+  | some exiting =>
+      { queue := Kernel.filter (fun entry => (entry.signal matches .link | .monitor _ | .isAlive) &&
+          !gone entry.source) process.queue
+        refCounter := process.refCounter, children := process.children, parked := process.parked
+        exiting := some { exiting with
+          links := Kernel.filter (fun target => !gone target) exiting.links
+          downs := Kernel.filter (fun down => !gone down.2) exiting.downs } }
+  | none =>
+      { process with
+        queue := Kernel.filter (fun entry => !inert gone processId process entry) process.queue
+        links := Kernel.filter (fun link => !(link.2.isSome && gone link.1)) process.links }
+
+private theorem State.normalizeRecord_eq {state : State} {processId : PID} {process : ProcessState}
+    (found : state.record processId = some process) :
+    state.normalizeRecord processId process = normRecord state.gone processId process := by
+  have same : state.process processId = process := by simp [State.process, found]
+  unfold State.normalizeRecord normRecord
+  cases exiting : process.exiting with
+  | some exiting' => rfl
+  | none =>
+    simp only
+    congr 2
+    funext entry
+    obtain ⟨source, signal⟩ := entry
+    cases signal <;> simp only [State.keepEntry, State.inertEntry, State.allocated, same, inert, exiting,
+      Option.isSome_none, Bool.false_and, Bool.or_false] <;> rfl
+
+private theorem inert_mono {gone gone' : PID → Bool} (more : ∀ processId, gone processId → gone' processId)
+    {processId : PID} {process : ProcessState} {entry : Entry}
+    (inside : inert gone processId process entry = true) : inert gone' processId process entry = true := by
+  obtain ⟨source, signal⟩ := entry
+  cases signal <;> simp only [inert, Bool.or_eq_true] at inside ⊢ <;> try exact inside
+  · rcases inside with left | right
+    · exact .inl (more _ left)
+    · exact .inr right
+  · exact more _ inside
+  · exact more _ inside
+
+/-- Normalizing again, with more processes gone, is normalizing once. -/
+private theorem normRecord_normRecord {gone gone' : PID → Bool} (more : ∀ processId, gone processId → gone' processId)
+    (processId : PID) (process : ProcessState) :
+    normRecord gone' processId (normRecord gone processId process) = normRecord gone' processId process := by
+  have keep : ∀ target, (!gone' target && !gone target) = !gone' target := by
+    intro target
+    cases going : gone' target <;> cases going' : gone target <;> simp
+    exact absurd (more _ going') (by simp [going])
+  unfold normRecord
+  cases exiting : process.exiting with
+  | some exiting' =>
+    simp only [Kernel.filter_eq, List.filter_filter]
+    have queue : ∀ entry : Entry, ((match entry.signal with
+          | .link | .monitor _ | .isAlive => true
+          | _ => false) && !gone' entry.source &&
+        ((match entry.signal with
+          | .link | .monitor _ | .isAlive => true
+          | _ => false) && !gone entry.source)) =
+        ((match entry.signal with
+          | .link | .monitor _ | .isAlive => true
+          | _ => false) && !gone' entry.source) := by
+      intro entry
+      have := keep entry.source
+      cases entry.signal <;> simp_all
+    simp only [queue, keep]
+  | none =>
+    simp only [exiting, Kernel.filter_eq, List.filter_filter]
+    congr 1
+    · refine List.filter_congr fun entry _ => ?_
+      cases inside : inert gone processId process entry
+      · simp only [Bool.not_false, Bool.and_true]
+        obtain ⟨source, signal⟩ := entry
+        cases signal <;> simp only [inert] at inside ⊢
+        cases going : gone' source
+        · have going' : gone source = false := by
+            cases g : gone source
+            · rfl
+            · exact absurd (more _ g) (by simp [going])
+          simp only [Bool.false_or, Kernel.lookup_eq]
+          rw [lookup_filter_of_key fun value _ => by simp [going']]
+        · simp
+      · simp [inert_mono more inside]
+    · refine List.filter_congr fun link _ => ?_
+      cases unlinking : link.2.isSome
+      · simp
+      · simp only [Bool.true_and]; exact keep link.1
+
 end Lynx.Concurrent
