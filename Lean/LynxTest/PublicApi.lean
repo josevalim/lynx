@@ -428,7 +428,6 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Field.all",
   "Lynx.Concurrent.Field.cancels",
   "Lynx.Concurrent.Field.children",
-  "Lynx.Concurrent.Field.commuting",
   "Lynx.Concurrent.Field.eagerExits",
   "Lynx.Concurrent.Field.exiting",
   "Lynx.Concurrent.Field.links",

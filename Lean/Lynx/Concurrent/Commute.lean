@@ -360,10 +360,6 @@ namespace Field
 @[expose] def live : Nat := 65536
 end Field
 
-/-- A write of a field that commutes with itself, as removing different
-entries from a list: bits above the fields'. -/
-@[expose] def Field.commuting (fields : Nat) : Nat := fields <<< 20
-
 /-- A process, and the fields of its record a step reads and writes. -/
 abbrev Frame := PID × Nat × Nat
 
@@ -471,8 +467,8 @@ process queued and its signals to it. -/
   -- signal to the same target.
   let process := state.process processId
   let eager := Kernel.filterMap (fun (target, unlinking) => if unlinking.isNone then
-      some (target, Field.live ||| Field.trapExit ||| Field.queueHead,
-        Field.commuting (Field.links ||| Field.eagerExits))
+      some (target, Field.live ||| Field.trapExit ||| Field.queueHead ||| Field.links ||| Field.eagerExits,
+        Field.links ||| Field.eagerExits)
     else none) process.links
   let unpark := match process.parked with
     | some (target, _) => [(target, Field.live, Field.queueTail)]
@@ -530,14 +526,13 @@ process queued and its signals to it. -/
     | .isAlive => some (own 0 0 :: state.sendFrames processId entry.source (.reply (.atom "true")), false)
     | .reply _ | .flush => some ([own 0 0], false)
 
-/-- The frames of a phase of a process that ended signaling one of its links.
-Links are removed in any order, which commutes. -/
+/-- The frames of a phase of a process that ended signaling one of its links. -/
 @[expose] def State.linkFrames (state : State) (processId target : PID) : Option (List Frame × Bool) :=
   match state.record processId with
   | some process =>
       match process.exiting with
       | some exiting =>
-          let own : Frame := (processId, 0, Field.commuting Field.exiting)
+          let own : Frame := (processId, Field.exiting, Field.exiting)
           let signal : Signal := .exit exiting.reason true false
           -- Handling a link from this process changes whether the exit is
           -- applied when sent, which reads nothing else of the queue.
@@ -552,8 +547,8 @@ Links are removed in any order, which commutes. -/
                       state.enqueueFrames processId target (.monitor reference)
                   else [(processId, Field.parked, 0)]
               | none => [(processId, Field.parked, 0)]
-            some (own :: (target, Field.live ||| Field.trapExit,
-              Field.commuting (Field.links ||| Field.eagerExits)) :: unpark, false)
+            some (own :: (target, Field.live ||| Field.trapExit ||| Field.links ||| Field.eagerExits,
+              Field.links ||| Field.eagerExits) :: unpark, false)
           else some (own :: (target, Field.live ||| Field.trapExit ||| queue, 0) ::
             state.sendFrames processId target signal, false)
       | none => none
@@ -605,10 +600,7 @@ as for steps that end or start a process, which change what normalization remove
 @[expose] def framesApart (frames frames' : List Frame) : Bool :=
   Kernel.all frames fun (processId, reads, writes) => Kernel.all frames' fun (processId', reads', writes') =>
     processId != processId' ||
-      let plain := writes &&& 1048575
-      let plain' := writes' &&& 1048575
-      plain &&& (reads' ||| writes' ||| (writes' >>> 20)) == 0 && (writes >>> 20) &&& (reads' ||| plain') == 0 &&
-        plain' &&& reads == 0 && (writes' >>> 20) &&& reads == 0
+      writes &&& (reads' ||| writes') == 0 && writes' &&& reads == 0
 
 /-- Whether two steps touch records apart and do not both use the timers. -/
 @[expose] def Config.apart (config : Config α) (key other : Key) : Bool :=

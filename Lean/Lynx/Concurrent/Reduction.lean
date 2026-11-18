@@ -4,6 +4,7 @@ public import Lynx.Concurrent
 public import Lynx.Concurrent.Kernel
 public import Lynx.Concurrent.Commute
 public import Lynx.Concurrent.Diamond
+public import Lynx.Concurrent.Frames
 
 /-! Checking every run of a closed program. `check` follows every step of
 every configuration, up to a depth, and `check_sound` shows that every run it
