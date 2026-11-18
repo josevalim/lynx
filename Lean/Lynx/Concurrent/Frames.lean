@@ -1082,4 +1082,226 @@ private theorem Realizes.handle (state : State) (processId : PID) (waiting : Opt
   · split <;> exact Realizes.refl _
   · split <;> exact Realizes.refl _
 
+/-- Remove a link a process that ended has left to signal. -/
+private def unlinkExiting (target : PID) (process : ProcessState) : ProcessState :=
+  { process with exiting := process.exiting.map fun exiting =>
+      { exiting with links := Kernel.filter (· != target) exiting.links } }
+
+/-- The effect of `State.linkPhase`. -/
+private def State.linkPhaseEffect (state : State) (processId target : PID) (reason : Term) : Effect :=
+  (Effect.modify processId (unlinkExiting target)).andThen
+    ((state.modify processId (unlinkExiting target)).linkExitEffect processId target reason)
+
+private theorem Realizes.linkPhase {state next : State} {processId target : PID}
+    (phase : state.linkPhase processId target = some next) :
+    ∃ reason, Realizes (state.linkPhaseEffect processId target reason) state next := by
+  unfold State.linkPhase at phase
+  split at phase
+  · rename_i process found
+    split at phase
+    · rename_i exiting exits
+      split at phase
+      · simp only [Option.some.injEq] at phase; subst phase
+        refine ⟨exiting.reason, ?_⟩
+        have set := Realizes.set found (unlinkExiting target)
+        have equal : unlinkExiting target process = { process with exiting := some { exiting with
+            links := Kernel.filter (· != target) exiting.links } } := by simp [unlinkExiting, exits]
+        rw [equal] at set
+        have modified : state.modify processId (unlinkExiting target) = state.set processId { process with
+            exiting := some { exiting with links := Kernel.filter (· != target) exiting.links } } := by
+          simp [State.modify, found, equal]
+        unfold State.linkPhaseEffect
+        rw [modified]
+        exact set.andThen (Realizes.linkExit _ _ _ _)
+      · simp at phase
+    · simp at phase
+  · simp at phase
+
+/-- Replace the `DOWN`s a process that ended has left to send. -/
+private def setDowns (rest : List (List Nat × PID)) (process : ProcessState) : ProcessState :=
+  { process with exiting := process.exiting.map fun exiting => { exiting with downs := rest } }
+
+/-- The effect of `State.phase`. -/
+private def State.phaseEffect (state : State) (processId : PID) : Effect :=
+  let process := state.process processId
+  match process.exiting with
+  | some exiting =>
+    match exiting.downs with
+    | (reference, watcher) :: rest =>
+        (Effect.modify processId (setDowns rest)).andThen
+          ((state.modify processId (setDowns rest)).sendEffect processId watcher (.down reference exiting.reason))
+    | [] =>
+      match process.queue with
+      | entry :: rest =>
+          let change := fun process : ProcessState => { process with queue := rest }
+          (Effect.modify processId change).andThen ((state.modify processId change).answerEffect processId entry)
+      | [] => {}
+  | none => {}
+
+private theorem Realizes.phase {state next : State} {processId : PID} (phase : state.phase processId = some next) :
+    Realizes (state.phaseEffect processId) state next := by
+  unfold State.phase at phase
+  split at phase
+  · rename_i process found
+    have same : state.process processId = process := by simp [State.process, found]
+    split at phase
+    · rename_i exiting exits
+      split at phase
+      · simp at phase
+      · rename_i reference watcher rest links downs
+        simp only [Option.some.injEq] at phase; subst phase
+        have equal : setDowns rest process = { process with exiting := some { exiting with downs := rest } } := by
+          simp [setDowns, exits]
+        have modified : state.modify processId (setDowns rest) =
+            state.set processId { process with exiting := some { exiting with downs := rest } } := by
+          simp [State.modify, found, equal]
+        simp only [State.phaseEffect, same, exits, downs]
+        rw [modified]
+        have set := Realizes.set found (setDowns rest)
+        rw [equal] at set
+        exact set.andThen (Realizes.send _ _ _ _)
+      · split at phase
+        · simp at phase
+        · rename_i links downs _
+          split at phase
+          · rename_i entry rest queue
+            simp only [Option.some.injEq] at phase; subst phase
+            have modified : state.modify processId (fun process => { process with queue := rest }) =
+                state.set processId { process with queue := rest } := by simp [State.modify, found]
+            simp only [State.phaseEffect, same, exits, downs, queue]
+            rw [modified]
+            have set := Realizes.set found (fun process => { process with queue := rest })
+            simp only [exits] at set ⊢
+            exact set.andThen (Realizes.answer _ _ _)
+          · simp at phase
+    · simp at phase
+  · simp at phase
+
+/-- The effect of `State.fire`. -/
+private def State.fireEffect (state : State) (timer : Timer) : Effect :=
+  (Effect.retime (Kernel.filter (·.reference != timer.reference))).andThen
+    ({ state with timers := Kernel.filter (·.reference != timer.reference) state.timers }.enqueueEffect clock
+      timer.destination (.message timer.message))
+
+private theorem Realizes.fire (state : State) (timer : Timer) :
+    Realizes (state.fireEffect timer) state (state.fire timer) :=
+  (Realizes.retime _ _).andThen (Realizes.enqueue _ _ _ _)
+
+/-- The effect of a process's own step, given its computation. -/
+private def Task.ownEffect (state : State) (processId : PID) : Task α → Effect
+  | ⟨_, _, some _⟩ => {}
+  | ⟨computation, _, none⟩ =>
+    match computation with
+    | .error .exhausted => { records := [(processId, fun _ => none)] }
+    | .ok _ => state.terminateEffect processId (.atom "normal")
+    | .error exception => state.terminateEffect processId (exitReason exception)
+    | .get _ => {}
+    | .set updated _ => .modify processId fun process =>
+        { process with pdict := updated.pdict, refCounter := max process.refCounter updated.refCounter }
+    | Result.schedule options _ _ => state.spawnEffect processId options
+    | .send destination message _ => state.sendEffect processId destination (.message message)
+    | .receive _ select _ =>
+        match selectMessage (select (state.view processId)) (state.process processId).mailbox with
+        | some (_, _, remaining) => .modify processId fun process => { process with mailbox := remaining }
+        | none => {}
+    | .request query _ => state.requestEffect processId query
+
+private theorem Realizes.remove (state : State) (processId : PID) :
+    Realizes { records := [(processId, fun _ => none)] } state (state.remove processId) := by
+  refine ⟨fun other => ?_, rfl, rfl⟩
+  rw [State.record_remove]
+  by_cases same : other = processId
+  · subst same; simp [Effect.record, changeOf]
+  · simp [Effect.record, changeOf, Ne.symm same, same]
+
+private theorem Realizes.own {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.own state processId) :
+    Realizes (task.ownEffect state processId) state transition.state := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp [Task.own] at mem
+  | none =>
+    cases computation with
+    | ok =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem
+      exact Realizes.terminate _ _ _
+    | error exception =>
+      cases exception <;> simp only [Task.own, List.mem_singleton] at mem <;> subst mem <;>
+        first | exact Realizes.remove _ _ | exact Realizes.terminate _ _ _
+    | get =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem
+      exact Realizes.refl _
+    | set =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem
+      exact Realizes.modify _ _ _
+    | schedule =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem
+      exact Realizes.spawn _ _ _
+    | send =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem
+      exact Realizes.send _ _ _ _
+    | receive timeout select next =>
+      simp only [Task.own] at mem
+      simp only [Task.ownEffect]
+      split at mem
+      · rename_i found
+        simp only [List.mem_singleton] at mem; subst mem
+        simp only [found]
+        exact Realizes.modify _ _ _
+      · rename_i found
+        simp only [found]
+        split at mem
+        · simp at mem
+        · split at mem
+          · simp at mem
+          · simp only [List.mem_singleton] at mem; subst mem
+            exact Realizes.refl _
+    | request query next =>
+      have := Realizes.request state processId next query
+      simp only [Task.own] at mem
+      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> rename_i found <;>
+        simpa [Task.ownEffect, found, Answer.state] using this
+
+/-- The effect of handling the oldest queued signal. -/
+private def Task.handleEffect (state : State) (processId : PID) (task : Task α) : Effect :=
+  let process := state.process processId
+  match process.queue with
+  | [] => {}
+  | entry :: rest =>
+    let popped := state.set processId { process with queue := rest }
+    let (_, _, exits) := popped.handle processId (task.wait.map (·.1)) entry
+    let handled := (Effect.modify processId fun process => { process with queue := rest }).andThen
+      (popped.handleEffect processId entry)
+    match exits with
+    | some reason => handled.andThen
+        ((popped.handle processId (task.wait.map (·.1)) entry).1.terminateEffect processId reason)
+    | none => handled
+
+private theorem Realizes.handleStep {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.handle state processId) :
+    Realizes (task.handleEffect state processId) state transition.state := by
+  simp only [Task.handle] at mem
+  simp only [Task.handleEffect]
+  cases queue : (state.process processId).queue with
+  | nil => simp [queue] at mem
+  | cons entry rest =>
+    simp only [queue] at mem ⊢
+    have found : state.record processId = some (state.process processId) := by
+      cases record : state.record processId with
+      | none => simp [State.process, record] at queue
+      | some process => simp [State.process, record]
+    have popped := Realizes.set found (fun process => { process with queue := rest })
+    have handled := popped.andThen (Realizes.handle (state.set processId { state.process processId with queue := rest })
+      processId (task.wait.map (·.1)) entry)
+    generalize (State.set _ _ _).handle _ _ _ = result at mem handled ⊢
+    obtain ⟨handledState, resumed, exits⟩ := result
+    dsimp only at mem handled ⊢
+    cases exits with
+    | some reason =>
+      simp only [List.mem_singleton] at mem; subst mem
+      exact handled.andThen (Realizes.terminate _ _ _)
+    | none =>
+      simp only at mem ⊢
+      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> exact handled
+
 end Lynx.Concurrent
