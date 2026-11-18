@@ -1424,4 +1424,32 @@ private theorem Framed.comp {reads writes reads' writes' : Mask} {base : Process
     simp only [Function.comp]
     rw [live' written.2 _ (through _ same), live written.1 _ same.left]
 
+private theorem ProcessState.Same.mono {mask mask' : Mask} {process base : ProcessState}
+    (same : process.Same mask' base) (fewer : ∀ bit, mask bit → mask' bit) : process.Same mask base :=
+  ⟨fun read => same.1 (fewer _ read), fun read => same.2.1 (fewer _ read),
+    fun part read => same.2.2 part (fewer _ read)⟩
+
+/-- A change within a frame is within a larger one. -/
+private theorem Framed.mono {reads writes reads' writes' : Mask} {base : ProcessState}
+    {change : ProcessState → ProcessState} (framed : Framed reads writes base change)
+    (moreReads : ∀ bit, reads bit → reads' bit) (moreWrites : ∀ bit, writes bit → writes' bit)
+    (tail : reads' tailBit → reads' headBit) (nonempty : reads' headBit → base.queue ≠ [])
+    (pops : writes' headBit → base.queue ≠ []) :
+    Framed reads' writes' base change := by
+  obtain ⟨keeps, depends, ⟨dropped, added, one, noHead, noTail, queue⟩, -, -, -, live⟩ := framed
+  have fewer : ∀ {process : ProcessState}, process.Same reads' base → process.Same reads base :=
+    fun same => same.mono moreReads
+  have unwritten : ∀ {bit}, writes' bit = false → writes bit = false := fun {bit} none => by
+    cases written : writes bit
+    · rfl
+    · simp [moreWrites bit written] at none
+  refine ⟨fun process same part none => keeps process (fewer same) part (unwritten none),
+    fun process process' same same' part _ equal => ?_,
+    ⟨dropped, added, one, fun none => noHead (unwritten none), fun none => noTail (unwritten none),
+      fun process same => queue process (fewer same)⟩, tail, nonempty, pops,
+    fun none process same => live (unwritten none) process (fewer same)⟩
+  cases written : writes part.bit
+  · rw [keeps _ (fewer same) part written, keeps _ (fewer same') part written, equal]
+  · exact depends _ _ (fewer same) (fewer same') part written equal
+
 end Lynx.Concurrent
