@@ -363,20 +363,14 @@ end Field
 /-- A process, and the fields of its record a step reads and writes. -/
 abbrev Frame := PID × Nat × Nat
 
-/-- The frames of appending a signal to a live queue. A `DOWN` or a message to
-an alias that normalization drops at once writes nothing: whether it is
-dropped reads nothing, as no monitor or alias of an allocated reference comes
-back, so a dropped one stays dropped. A link exit from a process that is gone
-is always appended: it is dropped while its receiver has no active link, which
-linking again restores, so it reads the links. Other signals are kept unless
-an acknowledgement no unlink waits for, which reads the links. -/
+/-- The frames of appending a signal to a live queue. A link exit reads the
+receiver's links: it is dropped while the receiver has no active link, which
+linking again restores. An acknowledgement reads them too, and other signals
+read only whether the receiver is live. -/
 @[expose] def State.appendFrames (state : State) (source target : PID) (signal : Signal) : List Frame :=
   match signal with
   | .exit _ true _ => [(target, Field.live ||| Field.links, Field.queueTail)]
-  | .down .. | .aliasMessage .. =>
-      if state.keepEntry target (state.process target) { source, signal } then
-        [(target, Field.live, Field.queueTail)]
-      else [(target, Field.live, 0)]
+  | .down .. | .aliasMessage .. => [(target, Field.live, Field.queueTail)]
   | _ => [(target, Field.live ||| Field.links ||| Field.unlinks, Field.queueTail)]
 
 /-- The frames of queueing a signal, or of its sender's fallback. -/

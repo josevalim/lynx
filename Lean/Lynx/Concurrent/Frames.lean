@@ -514,10 +514,7 @@ private def queueAt (source : PID) (signal : Signal) (process : ProcessState) : 
 /-- The effect of a sender's fallback for a signal to a process that is gone. -/
 private def State.fallbackEffect (state : State) (source target : PID) : Signal → Effect
   | .link => .modify source (queueAt target (.exit (.atom "noproc") true false))
-  | .monitor reference =>
-      if Kernel.any (state.process source).monitoring (·.1 == reference) then
-        .modify source (queueAt target (.down reference (.atom "noproc")))
-      else {}
+  | .monitor reference => .modify source (queueAt target (.down reference (.atom "noproc")))
   | .unlink _ => .modify source fun process => { process with links := Kernel.filter (·.1 != target) process.links }
   | .isAlive => .modify source (queueAt target (.reply (.atom "false")))
   | _ => {}

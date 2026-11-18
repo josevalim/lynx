@@ -281,13 +281,8 @@ do. A link is answered with an exit signal `noproc`, a monitor with a `DOWN`
 @[expose] def State.fallback (state : State) (source target : PID) : Signal → State
   | .link => state.modify source fun process => { process with
       queue := Kernel.append process.queue [{ source := target, signal := .exit (.atom "noproc") true false }] }
-  | .monitor reference =>
-      -- A parked monitor signal can be sent after its monitor was removed,
-      -- and its `DOWN` would then do nothing.
-      if Kernel.any (state.process source).monitoring (·.1 == reference) then
-        state.modify source fun process => { process with
-          queue := Kernel.append process.queue [{ source := target, signal := .down reference (.atom "noproc") }] }
-      else state
+  | .monitor reference => state.modify source fun process => { process with
+      queue := Kernel.append process.queue [{ source := target, signal := .down reference (.atom "noproc") }] }
   | .unlink _ => state.modify source fun process =>
       { process with links := Kernel.filter (·.1 != target) process.links }
   | .isAlive => state.modify source fun process => { process with
