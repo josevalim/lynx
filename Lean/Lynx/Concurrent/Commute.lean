@@ -314,11 +314,13 @@ process exits with, and the value it resumes with. -/
 @[expose] def Config.sameView : Config α → Config α → Key → Bool
   | .running state tasks _ _, .running state' tasks' _ _, .own processId =>
       match Kernel.lookup processId tasks, Kernel.lookup processId tasks' with
-      | some task, some _ => (task.ownView state processId).identical (task.ownView state' processId)
+      | some task, some task' => (task.ownView state processId).identical (task'.ownView state' processId)
       | _, _ => false
   | .running state tasks _ _, .running state' tasks' _ _, .handle processId =>
+      -- Handling reads whether the process waits, which a step of its own may change.
       match Kernel.lookup processId tasks, Kernel.lookup processId tasks' with
-      | some task, some _ => handleViewIdentical (task.handleView state processId) (task.handleView state' processId)
+      | some task, some task' =>
+          handleViewIdentical (task.handleView state processId) (task'.handleView state' processId)
       | _, _ => false
   | _, _, _ => true
 
