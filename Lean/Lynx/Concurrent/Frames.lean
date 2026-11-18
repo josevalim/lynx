@@ -1598,4 +1598,127 @@ private theorem Effect.InFrames.andThen {effect effect' : Effect} {frames frames
             · exact (bits.2 _ found).1 (by simp [Mask.union, read])
             · exact (bits.2 _ found).2 (by simp [Mask.union, written]))
 
+/-! ### Frames of steps -/
+
+private theorem readsOf_cons (entry : Frame) (frames : List Frame) (processId : PID) :
+    readsOf (entry :: frames) processId =
+      fun bit => (entry.1 == processId && entry.2.1.testBit bit) || readsOf frames processId bit := by
+  funext bit; simp [readsOf]
+
+private theorem writesOf_cons (entry : Frame) (frames : List Frame) (processId : PID) :
+    writesOf (entry :: frames) processId =
+      fun bit => (entry.1 == processId && entry.2.2.testBit bit) || writesOf frames processId bit := by
+  funext bit; simp [writesOf]
+
+private theorem readsOf_nil (processId : PID) : readsOf [] processId = fun _ => false := rfl
+private theorem writesOf_nil (processId : PID) : writesOf [] processId = fun _ => false := rfl
+
+/-- An effect changing one record by a change within a frame given by one entry. -/
+private theorem Effect.InFrames.modify {processId : PID} {change : ProcessState → ProcessState}
+    {reads writes : Nat} {state : State} {frames : List Frame}
+    (inside : (processId, reads, writes) ∈ frames)
+    (used : ∃ bit, bit < 17 ∧ (reads.testBit bit ∨ writes.testBit bit))
+    (framed : ∀ process, state.record processId = some process →
+      Framed (readsOf frames processId) (writesOf frames processId) process change) :
+    (Effect.modify processId change).InFrames frames state := by
+  intro other
+  rw [Effect.record_modify]
+  by_cases same : other = processId
+  · subst same
+    simp only [↓reduceIte]
+    refine .inr (.inr ⟨change, rfl, ?_, framed⟩)
+    obtain ⟨bit, lower, read | written⟩ := used
+    · exact ⟨bit, lower, .inl (List.any_eq_true.mpr ⟨_, inside, by simp [read]⟩)⟩
+    · exact ⟨bit, lower, .inr (List.any_eq_true.mpr ⟨_, inside, by simp [written]⟩)⟩
+  · simp [same]
+
+/-- The empty effect is within any frames. -/
+private theorem Effect.InFrames.empty (frames : List Frame) (state : State) : ({} : Effect).InFrames frames state :=
+  fun _ => .inl rfl
+
+/-- A change within the frame of one entry is within all the frames of its
+process, when none of them reads or removes the queue's head. -/
+private theorem Framed.widen {frames : List Frame} {processId : PID} {reads writes reads' writes' : Nat}
+    {base : ProcessState} {change : ProcessState → ProcessState}
+    (framed : Framed (bitsOf reads') (bitsOf writes') base change)
+    (fewerReads : ∀ bit, reads'.testBit bit → reads.testBit bit)
+    (fewerWrites : ∀ bit, writes'.testBit bit → writes.testBit bit)
+    (inside : (processId, reads, writes) ∈ frames)
+    (quiet : ∀ entry ∈ frames, entry.1 = processId →
+      entry.2.1.testBit headBit = false ∧ entry.2.1.testBit tailBit = false ∧ entry.2.2.testBit headBit = false) :
+    Framed (readsOf frames processId) (writesOf frames processId) base change := by
+  have none : ∀ {bit}, (bit = headBit ∨ bit = tailBit) → readsOf frames processId bit = false := by
+    intro bit is
+    simp only [readsOf, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and]
+    intro entry mem same
+    have := quiet entry mem same
+    rcases is with rfl | rfl <;> simp [this]
+  have noPop : writesOf frames processId headBit = false := by
+    simp only [writesOf, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and]
+    intro entry mem same
+    simp [(quiet entry mem same).2.2]
+  refine framed.mono (fun bit read => List.any_eq_true.mpr ⟨_, inside, by simpa [bitsOf] using fewerReads bit read⟩)
+    (fun bit written => List.any_eq_true.mpr ⟨_, inside, by simpa [bitsOf] using fewerWrites bit written⟩)
+    (fun read => by rw [none (.inr rfl)] at read; simp at read)
+    (fun read => by rw [none (.inl rfl)] at read; simp at read)
+    (fun written => by rw [noPop] at written; simp at written)
+
+/-- Queueing a signal is within its frames. -/
+private theorem Effect.InFrames.enqueue (state : State) (source target : PID) (signal : Signal) :
+    (state.enqueueEffect source target signal).InFrames (state.enqueueFrames source target signal) state := by
+  have quiet : ∀ entry ∈ state.enqueueFrames source target signal, ∀ processId, entry.1 = processId →
+      entry.2.1.testBit headBit = false ∧ entry.2.1.testBit tailBit = false ∧ entry.2.2.testBit headBit = false := by
+    intro entry mem _ _
+    simp only [State.enqueueFrames, State.appendFrames] at mem
+    split at mem <;> (try split at mem) <;> (try split at mem) <;>
+      simp only [List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at mem <;>
+      (try rcases mem with rfl | rfl) <;> (try subst mem) <;> (dsimp only; decide)
+  have queued : ∀ (receiver sender : PID) (appended : Signal) (reads : Nat),
+      (receiver, reads, Field.queueTail) ∈ state.enqueueFrames source target signal →
+      (Effect.modify receiver (queueAt sender appended)).InFrames (state.enqueueFrames source target signal) state :=
+    fun receiver sender appended reads inside => Effect.InFrames.modify inside ⟨1, by decide, .inr (by decide)⟩
+      fun process _ => (Framed.queueAt sender appended process).widen (by simp [Nat.zero_testBit])
+        (fun _ written => written) inside (quiet · · receiver)
+  have fallback : state.alive target = false →
+      (state.fallbackEffect source target signal).InFrames (state.enqueueFrames source target signal) state := by
+    intro dead
+    have frames : state.enqueueFrames source target signal = (target, Field.live, 0) :: match signal with
+        | .link => state.appendFrames target source (.exit (.atom "noproc") true false)
+        | .monitor reference => state.appendFrames target source (.down reference (.atom "noproc"))
+        | .unlink _ => [(source, Field.links, Field.links)]
+        | .isAlive => state.appendFrames target source (.reply (.atom "false"))
+        | _ => [] := by unfold State.enqueueFrames; rw [dead]; rfl
+    cases signal <;> simp only [State.fallbackEffect]
+    all_goals first
+      | exact Effect.InFrames.empty _ _
+      | (apply queued source target _ Field.live
+         rw [frames]; simp [State.appendFrames])
+      | skip
+    rename_i id
+    have inside : (source, Field.links, Field.links) ∈ state.enqueueFrames source target (.unlink id) := by
+      rw [frames]; simp
+    refine Effect.InFrames.modify inside ⟨6, by decide, .inl (by decide)⟩ fun process _ => ?_
+    have framed : Framed (bitsOf Field.links) (bitsOf Field.links) process
+        (fun process => { process with links := Kernel.filter (·.1 != target) process.links }) := by
+      framed_update
+    exact framed.widen (fun _ read => read) (fun _ written => written) inside (quiet · · source)
+  unfold State.enqueueEffect
+  cases found : state.record target with
+  | some process =>
+    simp only
+    split
+    · rename_i alive
+      have : state.alive target = true := by simp [State.alive, found, alive]
+      apply queued target source signal (if signal matches .unlinkAck _ then
+        Field.live ||| Field.links ||| Field.unlinks else Field.live)
+      simp only [State.enqueueFrames, this, ↓reduceIte, State.appendFrames]
+      cases signal <;> simp
+    · rename_i exiting
+      have : state.alive target = false := by
+        simp only [State.alive, found]; cases equal : process.exiting <;> simp_all
+      exact fallback this
+  | none =>
+    have : state.alive target = false := by simp [State.alive, found]
+    exact fallback this
+
 end Lynx.Concurrent
