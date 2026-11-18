@@ -510,6 +510,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Signal.unlink",
   "Lynx.Concurrent.Signal.unlinkAck",
   "Lynx.Concurrent.Signal.weight",
+  "Lynx.Concurrent.Sorted",
   "Lynx.Concurrent.State",
   "Lynx.Concurrent.State.alive",
   "Lynx.Concurrent.State.allocate",
