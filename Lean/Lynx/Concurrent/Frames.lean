@@ -153,8 +153,8 @@ private theorem Effect.record_modify (processId other : PID) (change : ProcessSt
 
 /-! ### Fields -/
 
-/-- Whether a mask has the field of a bit. -/
-private def has (mask bit : Nat) : Bool := mask.testBit bit
+/-- Which fields of a record a frame has, by bit: `Field.mailbox` is `2 ^ Part.mailbox.bit`, and so on. -/
+abbrev Mask := Nat → Bool
 
 /-- The bits of the queue's ends and of liveness. -/
 private def headBit : Nat := 0
@@ -197,39 +197,29 @@ private theorem ProcessState.ext_get {first second : ProcessState} (queue : firs
 
 /-- Two records agree on the fields of a mask. Reading the head of a queue
 without its tail reads only its oldest signal. -/
-private def ProcessState.Same (mask : Nat) (first second : ProcessState) : Prop :=
-  (has mask tailBit → first.queue = second.queue) ∧
-  (has mask headBit → first.queue.head? = second.queue.head?) ∧
-  (∀ part, has mask part.bit → first.get part = second.get part)
+private def ProcessState.Same (mask : Mask) (first second : ProcessState) : Prop :=
+  (mask tailBit → first.queue = second.queue) ∧
+  (mask headBit → first.queue.head? = second.queue.head?) ∧
+  (∀ part, mask part.bit → first.get part = second.get part)
 
-private theorem ProcessState.Same.refl (mask : Nat) (process : ProcessState) : process.Same mask process :=
+private theorem ProcessState.Same.refl (mask : Mask) (process : ProcessState) : process.Same mask process :=
   ⟨fun _ => rfl, fun _ => rfl, fun _ _ => rfl⟩
 
-private theorem ProcessState.Same.symm {mask : Nat} {first second : ProcessState}
+private theorem ProcessState.Same.symm {mask : Mask} {first second : ProcessState}
     (same : first.Same mask second) : second.Same mask first :=
   ⟨fun x => (same.1 x).symm, fun x => (same.2.1 x).symm, fun part x => (same.2.2 part x).symm⟩
 
-private theorem ProcessState.Same.trans {mask : Nat} {first second third : ProcessState}
+private theorem ProcessState.Same.trans {mask : Mask} {first second third : ProcessState}
     (one : first.Same mask second) (two : second.Same mask third) : first.Same mask third :=
   ⟨fun x => (one.1 x).trans (two.1 x), fun x => (one.2.1 x).trans (two.2.1 x),
     fun part x => (one.2.2 part x).trans (two.2.2 part x)⟩
-
-/-- Two masks without a common field. -/
-private theorem has_disjoint {first second : Nat} (zero : first &&& second = 0) {bit : Nat}
-    (inside : has first bit = true) (inside' : has second bit = true) : False := by
-  have := congrArg (Nat.testBit · bit) zero
-  simp only [has] at inside inside'
-  simp [Nat.testBit_and, inside, inside'] at this
-
-private theorem has_or (first second bit : Nat) : has (first ||| second) bit = (has first bit || has second bit) := by
-  simp [has, Nat.testBit_or]
 
 /-! ### Changes within frames -/
 
 /-- How a change may change a queue, given which ends its frame writes: not at
 all, by removing the oldest signal, by appending signals, or as its reads and
 the queue decide. -/
-private def QueueChange (head tail : Bool) (reads : Nat) (base : ProcessState)
+private def QueueChange (head tail : Bool) (reads : Mask) (base : ProcessState)
     (change : ProcessState → ProcessState) : Prop :=
   match head, tail with
   | false, false => ∀ process, process.Same reads base → (change process).queue = process.queue
@@ -242,32 +232,32 @@ private def QueueChange (head tail : Bool) (reads : Nat) (base : ProcessState)
 outside `writes`, what it writes of a field depends only on `reads` and the
 field, and it changes the queue as its frame says. Reading the tail of a queue
 reads its head, and reading its head reads a queue that has one. -/
-private def Framed (reads writes : Nat) (base : ProcessState) (change : ProcessState → ProcessState) : Prop :=
-  (∀ process, process.Same reads base → ∀ part, has writes part.bit = false →
+private def Framed (reads writes : Mask) (base : ProcessState) (change : ProcessState → ProcessState) : Prop :=
+  (∀ process, process.Same reads base → ∀ part, writes part.bit = false →
     (change process).get part = process.get part) ∧
-  (∀ process process', process.Same reads base → process'.Same reads base → ∀ part, has writes part.bit →
+  (∀ process process', process.Same reads base → process'.Same reads base → ∀ part, writes part.bit →
     process.get part = process'.get part → (change process).get part = (change process').get part) ∧
-  QueueChange (has writes headBit) (has writes tailBit) reads base change ∧
-  (has reads tailBit → has reads headBit) ∧
-  (has reads headBit → base.queue ≠ []) ∧
-  (has writes headBit → has reads headBit)
+  QueueChange (writes headBit) (writes tailBit) reads base change ∧
+  (reads tailBit → reads headBit) ∧
+  (reads headBit → base.queue ≠ []) ∧
+  (writes headBit → reads headBit)
 
 /-- A change within its frame keeps what a frame it writes nothing of reads. -/
-private theorem Framed.keeps {reads writes reads' : Nat} {base : ProcessState} {change : ProcessState → ProcessState}
-    (framed : Framed reads writes base change) (apart : writes &&& reads' = 0)
-    (nonempty : has reads' headBit → base.queue ≠ []) (tail : has reads' tailBit → has reads' headBit) :
+private theorem Framed.keeps {reads writes reads' : Mask} {base : ProcessState} {change : ProcessState → ProcessState}
+    (framed : Framed reads writes base change) (apart : ∀ bit, writes bit → reads' bit → False)
+    (nonempty : reads' headBit → base.queue ≠ []) (tail : reads' tailBit → reads' headBit) :
     (change base).Same reads' base := by
   obtain ⟨keeps, -, queue, -, -, -⟩ := framed
   have self := ProcessState.Same.refl reads base
   refine ⟨fun inside => ?_, fun inside => ?_, fun part inside => ?_⟩
   · have head := tail inside
-    cases written : has writes headBit
-    · cases written' : has writes tailBit
+    cases written : writes headBit
+    · cases written' : writes tailBit
       · simp only [QueueChange, written, written'] at queue; exact queue base self
-      · exact (has_disjoint apart written' inside).elim
-    · exact (has_disjoint apart written head).elim
-  · cases written : has writes headBit
-    · cases written' : has writes tailBit
+      · exact (apart _ written' inside).elim
+    · exact (apart _ written head).elim
+  · cases written : writes headBit
+    · cases written' : writes tailBit
       · simp only [QueueChange, written, written'] at queue; rw [queue base self]
       · simp only [QueueChange, written, written'] at queue
         obtain ⟨added, queue⟩ := queue
@@ -275,27 +265,19 @@ private theorem Framed.keeps {reads writes reads' : Nat} {base : ProcessState} {
         cases equal : base.queue with
         | nil => exact absurd equal (nonempty inside)
         | cons _ _ => rfl
-    · exact (has_disjoint apart written inside).elim
-  · cases written : has writes part.bit
+    · exact (apart _ written inside).elim
+  · cases written : writes part.bit
     · exact keeps base self part written
-    · exact (has_disjoint apart written inside).elim
+    · exact (apart _ written inside).elim
 
 /-- Two changes within frames apart commute. -/
-private theorem Framed.comm {reads writes reads' writes' : Nat} {base : ProcessState}
+private theorem Framed.comm {reads writes reads' writes' : Mask} {base : ProcessState}
     {change change' : ProcessState → ProcessState}
     (framed : Framed reads writes base change) (framed' : Framed reads' writes' base change')
-    (apart : writes &&& (reads' ||| writes') = 0) (apart' : writes' &&& reads = 0) :
+    (apart : ∀ bit, writes bit → reads' bit ∨ writes' bit → False) (apart' : ∀ bit, writes' bit → reads bit → False) :
     change (change' base) = change' (change base) := by
-  have disjoint : writes &&& writes' = 0 := by
-    apply Nat.eq_of_testBit_eq; intro bit
-    have := congrArg (Nat.testBit · bit) apart
-    simp only [Nat.testBit_and, Nat.testBit_or, Nat.zero_testBit] at this ⊢
-    cases one : writes.testBit bit <;> cases two : writes'.testBit bit <;> simp_all
-  have apartReads : writes &&& reads' = 0 := by
-    apply Nat.eq_of_testBit_eq; intro bit
-    have := congrArg (Nat.testBit · bit) apart
-    simp only [Nat.testBit_and, Nat.testBit_or, Nat.zero_testBit] at this ⊢
-    cases one : writes.testBit bit <;> cases two : reads'.testBit bit <;> simp_all
+  have disjoint : ∀ bit, writes bit → writes' bit → False := fun bit one two => apart bit one (.inr two)
+  have apartReads : ∀ bit, writes bit → reads' bit → False := fun bit one two => apart bit one (.inl two)
   have same : (change' base).Same reads base := framed'.keeps apart' framed.2.2.2.2.1 framed.2.2.2.1
   have same' : (change base).Same reads' base := framed.keeps apartReads framed'.2.2.2.2.1 framed'.2.2.2.1
   have self := ProcessState.Same.refl reads base
@@ -303,12 +285,12 @@ private theorem Framed.comm {reads writes reads' writes' : Nat} {base : ProcessS
   obtain ⟨keeps, depends, queue, -, nonempty, pops⟩ := framed
   obtain ⟨keeps', depends', queue', -, nonempty', pops'⟩ := framed'
   refine ProcessState.ext_get ?_ fun part => ?_
-  · cases head : has writes headBit <;> cases tail : has writes tailBit <;>
-      cases head' : has writes' headBit <;> cases tail' : has writes' tailBit <;>
+  · cases head : writes headBit <;> cases tail : writes tailBit <;>
+      cases head' : writes' headBit <;> cases tail' : writes' tailBit <;>
       simp only [QueueChange, head, tail, head', tail'] at queue queue' <;>
       first
-        | exact (has_disjoint disjoint head head').elim
-        | exact (has_disjoint disjoint tail tail').elim
+        | exact (disjoint _ head head').elim
+        | exact (disjoint _ tail tail').elim
         | skip
     · rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
     · obtain ⟨added', queue'⟩ := queue'
@@ -325,13 +307,54 @@ private theorem Framed.comm {reads writes reads' writes' : Nat} {base : ProcessS
       rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
       exact List.tail_append_of_ne_nil (nonempty (pops head))
     · rw [queue _ _ same self (queue' _ self'), queue' _ same']
-  · cases written : has writes part.bit
-    · cases written' : has writes' part.bit
+  · cases written : writes part.bit
+    · cases written' : writes' part.bit
       · rw [keeps _ same part written, keeps' _ self' part written', keeps' _ same' part written',
           keeps _ self part written]
       · rw [keeps _ same part written, depends' _ _ same' self' part written' (keeps _ self part written)]
-    · cases written' : has writes' part.bit
+    · cases written' : writes' part.bit
       · rw [depends _ _ same self part written (keeps' _ self' part written'), keeps' _ same' part written']
-      · exact (has_disjoint disjoint written written').elim
+      · exact (disjoint _ written written').elim
+
+/-! ### Frames of a step, per process -/
+
+/-- The fields a step reads of a process's record, over all its frames. -/
+private def readsOf (frames : List Frame) (processId : PID) : Mask :=
+  fun bit => frames.any fun entry => entry.1 == processId && entry.2.1.testBit bit
+
+/-- The fields a step writes of a process's record, over all its frames. -/
+private def writesOf (frames : List Frame) (processId : PID) : Mask :=
+  fun bit => frames.any fun entry => entry.1 == processId && entry.2.2.testBit bit
+
+private theorem testBit_and_zero {first second : Nat} (zero : first &&& second = 0) {bit : Nat}
+    (one : first.testBit bit = true) (two : second.testBit bit = true) : False := by
+  have := congrArg (Nat.testBit · bit) zero
+  simp [Nat.testBit_and, one, two] at this
+
+/-- Frames that `framesApart` accepts are apart for every process, over all their frames. -/
+private theorem apart_of_framesApart {frames frames' : List Frame} (apart : framesApart frames frames' = true)
+    (processId : PID) :
+    (∀ bit, writesOf frames processId bit → readsOf frames' processId bit ∨ writesOf frames' processId bit → False) ∧
+    (∀ bit, writesOf frames' processId bit → readsOf frames processId bit → False) := by
+  simp only [framesApart, Kernel.all_eq, List.all_eq_true, Bool.or_eq_true, bne_iff_ne, ne_eq,
+    Bool.and_eq_true, beq_iff_eq] at apart
+  constructor
+  · intro bit written read
+    simp only [writesOf, readsOf, List.any_eq_true, Bool.and_eq_true, beq_iff_eq] at written read
+    obtain ⟨entry, mem, same, bitWritten⟩ := written
+    rcases read with ⟨entry', mem', same', bitRead⟩ | ⟨entry', mem', same', bitRead⟩
+    · rcases apart entry mem entry' mem' with differ | ⟨zero, -⟩
+      · exact differ (same.trans same'.symm)
+      · exact testBit_and_zero zero bitWritten (by simp [Nat.testBit_or, bitRead])
+    · rcases apart entry mem entry' mem' with differ | ⟨zero, -⟩
+      · exact differ (same.trans same'.symm)
+      · exact testBit_and_zero zero bitWritten (by simp [Nat.testBit_or, bitRead])
+  · intro bit written read
+    simp only [writesOf, readsOf, List.any_eq_true, Bool.and_eq_true, beq_iff_eq] at written read
+    obtain ⟨entry', mem', same', bitWritten⟩ := written
+    obtain ⟨entry, mem, same, bitRead⟩ := read
+    rcases apart entry mem entry' mem' with differ | ⟨-, zero⟩
+    · exact differ (same.trans same'.symm)
+    · exact testBit_and_zero zero bitWritten bitRead
 
 end Lynx.Concurrent
