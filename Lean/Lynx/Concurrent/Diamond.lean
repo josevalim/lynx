@@ -1015,4 +1015,59 @@ theorem Task.handle_shape {state state' : State} {processId : PID} {task : Task 
     · simp [Task.ended, Transition.Shape, Transition.Shapes]
     · split <;> simp [Transition.Shape, Transition.Shapes]
 
+/-! ### Steps on the list of processes -/
+
+/-- Replace the first task of a process by what a function of it gives. -/
+def rewriteTask (processId : PID) (change : Task α → List (PID × Task α)) :
+    List (PID × Task α) → List (PID × Task α)
+  | [] => []
+  | (other, task) :: rest =>
+      if other = processId then change task ++ rest else (other, task) :: rewriteTask processId change rest
+
+theorem rewriteTask_of_splitAt {processId : PID} {change : Task α → List (PID × Task α)} :
+    ∀ {tasks before after : List (PID × Task α)} {task : Task α},
+      splitAt processId tasks = some (before, task, after) →
+        rewriteTask processId change tasks = before ++ change task ++ after
+  | [], _, _, _, found => by simp [splitAt] at found
+  | (other, task') :: rest, before, after, task, found => by
+      simp only [splitAt] at found
+      by_cases same : other = processId
+      · subst same
+        simp only [beq_self_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found
+        obtain ⟨rfl, rfl, rfl⟩ := found
+        simp [rewriteTask]
+      · have differ : (other == processId) = false := by simp [same]
+        simp only [differ, Bool.false_eq_true, ↓reduceIte, Option.map_eq_some_iff, Prod.exists,
+          Prod.mk.injEq] at found
+        obtain ⟨before', _, _, found, rfl, rfl, rfl⟩ := found
+        simp [rewriteTask, same, rewriteTask_of_splitAt found]
+
+theorem rewriteTask_append {processId : PID} {change : Task α → List (PID × Task α)}
+    {front rest : List (PID × Task α)} (missing : ∀ entry ∈ front, entry.1 ≠ processId) :
+    rewriteTask processId change (front ++ rest) = front ++ rewriteTask processId change rest := by
+  induction front with
+  | nil => rfl
+  | cons head tail ih =>
+    obtain ⟨other, task⟩ := head
+    have differ : other ≠ processId := missing (other, task) (by simp)
+    simp [rewriteTask, differ, ih fun entry mem => missing entry (by simp [mem])]
+
+/-- Steps of two different processes rewrite the list of processes in either order alike. -/
+theorem rewriteTask_comm {processId other : PID} (differ : processId ≠ other)
+    {change change' : Task α → List (PID × Task α)}
+    (missing : ∀ task, ∀ entry ∈ change task, entry.1 ≠ other)
+    (missing' : ∀ task, ∀ entry ∈ change' task, entry.1 ≠ processId) :
+    ∀ tasks : List (PID × Task α),
+      rewriteTask other change' (rewriteTask processId change tasks) =
+        rewriteTask processId change (rewriteTask other change' tasks)
+  | [] => rfl
+  | (key, task) :: rest => by
+      by_cases first : key = processId
+      · subst first
+        simp only [rewriteTask, ↓reduceIte, differ, rewriteTask_append (missing task)]
+      · by_cases second : key = other
+        · subst second
+          simp only [rewriteTask, ↓reduceIte, first, rewriteTask_append (missing' task)]
+        · simp [rewriteTask, first, second, rewriteTask_comm differ missing missing' rest]
+
 end Lynx.Concurrent
