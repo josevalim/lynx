@@ -217,17 +217,13 @@ private theorem ProcessState.Same.trans {mask : Mask} {first second third : Proc
 
 /-! ### Changes within frames -/
 
-/-- How a change may change a queue, given which ends its frame writes: not at
-all, by removing the oldest signal, by appending signals, or as its reads and
-the queue decide. -/
+/-- How a change may change a queue, given which ends its frame writes: it
+removes at most the oldest signal, only when it writes the head, and appends
+signals, only when it writes the tail. -/
 private def QueueChange (head tail : Bool) (reads : Mask) (base : ProcessState)
     (change : ProcessState → ProcessState) : Prop :=
-  match head, tail with
-  | false, false => ∀ process, process.Same reads base → (change process).queue = process.queue
-  | true, false => ∀ process, process.Same reads base → (change process).queue = process.queue.tail
-  | false, true => ∃ added, ∀ process, process.Same reads base → (change process).queue = process.queue ++ added
-  | true, true => ∀ process process', process.Same reads base → process'.Same reads base →
-      process.queue = process'.queue → (change process).queue = (change process').queue
+  ∃ dropped added, dropped ≤ 1 ∧ (head = false → dropped = 0) ∧ (tail = false → added = []) ∧
+    ∀ process, process.Same reads base → (change process).queue = process.queue.drop dropped ++ added
 
 /-- A change of records agreeing with `base` on `reads`: it keeps the fields
 outside `writes`, what it writes of a field depends only on `reads` and the
@@ -250,28 +246,40 @@ private theorem Framed.keeps {reads writes reads' : Mask} {base : ProcessState} 
     (framed : Framed reads writes base change) (apart : ∀ bit, writes bit → reads' bit → False)
     (nonempty : reads' headBit → base.queue ≠ []) (tail : reads' tailBit → reads' headBit) :
     (change base).Same reads' base := by
-  obtain ⟨keeps, -, queue, -, -, -, -⟩ := framed
+  obtain ⟨keeps, -, ⟨dropped, added, -, noHead, noTail, queue⟩, -, -, -, -⟩ := framed
   have self := ProcessState.Same.refl reads base
   refine ⟨fun inside => ?_, fun inside => ?_, fun part inside => ?_⟩
   · have head := tail inside
     cases written : writes headBit
     · cases written' : writes tailBit
-      · simp only [QueueChange, written, written'] at queue; exact queue base self
+      · rw [queue base self, noHead written, noTail written']; simp
       · exact (apart _ written' inside).elim
     · exact (apart _ written head).elim
   · cases written : writes headBit
-    · cases written' : writes tailBit
-      · simp only [QueueChange, written, written'] at queue; rw [queue base self]
-      · simp only [QueueChange, written, written'] at queue
-        obtain ⟨added, queue⟩ := queue
-        rw [queue base self]
-        cases equal : base.queue with
-        | nil => exact absurd equal (nonempty inside)
-        | cons _ _ => rfl
+    · rw [queue base self, noHead written]
+      cases equal : base.queue with
+      | nil => exact absurd equal (nonempty inside)
+      | cons _ _ => rfl
     · exact (apart _ written inside).elim
   · cases written : writes part.bit
     · exact keeps base self part written
     · exact (apart _ written inside).elim
+
+/-- Removing at most one oldest signal and appending commute, when at most one
+of them removes and at most one appends. -/
+private theorem drop_append_comm {queue added added' : List Entry} {dropped dropped' : Nat}
+    (one : dropped ≤ 1) (one' : dropped' ≤ 1) (drops : dropped = 0 ∨ dropped' = 0)
+    (adds : added = [] ∨ added' = []) (nonempty : dropped = 1 → queue ≠ [])
+    (nonempty' : dropped' = 1 → queue ≠ []) :
+    (queue.drop dropped' ++ added').drop dropped ++ added = (queue.drop dropped ++ added).drop dropped' ++ added' := by
+  rcases (by omega : dropped = 0 ∨ dropped = 1) with rfl | rfl <;>
+    rcases (by omega : dropped' = 0 ∨ dropped' = 1) with rfl | rfl
+  · rcases adds with rfl | rfl <;> simp
+  · obtain ⟨first, rest, rfl⟩ := List.exists_cons_of_ne_nil (nonempty' rfl)
+    rcases adds with rfl | rfl <;> simp
+  · obtain ⟨first, rest, rfl⟩ := List.exists_cons_of_ne_nil (nonempty rfl)
+    rcases adds with rfl | rfl <;> simp
+  · simp at drops
 
 /-- Two changes within frames apart commute. -/
 private theorem Framed.comm {reads writes reads' writes' : Mask} {base : ProcessState}
@@ -285,31 +293,31 @@ private theorem Framed.comm {reads writes reads' writes' : Mask} {base : Process
   have same' : (change base).Same reads' base := framed.keeps apartReads framed'.2.2.2.2.1 framed'.2.2.2.1
   have self := ProcessState.Same.refl reads base
   have self' := ProcessState.Same.refl reads' base
-  obtain ⟨keeps, depends, queue, -, nonempty, pops, -⟩ := framed
-  obtain ⟨keeps', depends', queue', -, nonempty', pops', -⟩ := framed'
+  obtain ⟨keeps, depends, ⟨dropped, added, one, noHead, noTail, queue⟩, -, nonempty, pops, -⟩ := framed
+  obtain ⟨keeps', depends', ⟨dropped', added', one', noHead', noTail', queue'⟩, -, nonempty', pops', -⟩ := framed'
   refine ProcessState.ext_get ?_ fun part => ?_
-  · cases head : writes headBit <;> cases tail : writes tailBit <;>
-      cases head' : writes' headBit <;> cases tail' : writes' tailBit <;>
-      simp only [QueueChange, head, tail, head', tail'] at queue queue' <;>
-      first
-        | exact (disjoint _ head head').elim
-        | exact (disjoint _ tail tail').elim
-        | skip
-    · rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
-    · obtain ⟨added', queue'⟩ := queue'
-      rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
-    · rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
-    · rw [queue _ same, queue' _ _ same' self' (queue _ self)]
-    · obtain ⟨added, queue⟩ := queue
-      rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
-    · obtain ⟨added, queue⟩ := queue
-      rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
-      exact (List.tail_append_of_ne_nil (pops' head')).symm
-    · rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
-    · obtain ⟨added', queue'⟩ := queue'
-      rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
-      exact List.tail_append_of_ne_nil (pops head)
-    · rw [queue _ _ same self (queue' _ self'), queue' _ same']
+  · rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
+    have drops : dropped = 0 ∨ dropped' = 0 := by
+      cases head : writes headBit
+      · exact .inl (noHead head)
+      · cases head' : writes' headBit
+        · exact .inr (noHead' head')
+        · exact (disjoint _ head head').elim
+    have adds : added = [] ∨ added' = [] := by
+      cases tail : writes tailBit
+      · exact .inl (noTail tail)
+      · cases tail' : writes' tailBit
+        · exact .inr (noTail' tail')
+        · exact (disjoint _ tail tail').elim
+    have popsNonempty : dropped = 1 → base.queue ≠ [] := fun is => by
+      cases head : writes headBit
+      · rw [noHead head] at is; simp at is
+      · exact pops head
+    have popsNonempty' : dropped' = 1 → base.queue ≠ [] := fun is => by
+      cases head : writes' headBit
+      · rw [noHead' head] at is; simp at is
+      · exact pops' head
+    exact drop_append_comm one one' drops adds popsNonempty popsNonempty'
   · cases written : writes part.bit
     · cases written' : writes' part.bit
       · rw [keeps _ same part written, keeps' _ self' part written', keeps' _ same' part written',
@@ -421,13 +429,14 @@ private theorem Effect.InFrames.keeps {effect : Effect} {frames frames' : List F
 private theorem Framed.id {reads writes : Mask} {base : ProcessState} {change : ProcessState → ProcessState}
     (framed : Framed reads writes base change) (unused : ∀ bit, bit < 17 → reads bit = false ∧ writes bit = false)
     (process : ProcessState) : change process = process := by
-  obtain ⟨keeps, -, queue, -⟩ := framed
+  obtain ⟨keeps, -, ⟨dropped, added, -, noHead, noTail, queue⟩, -⟩ := framed
   have same : process.Same reads base :=
     ⟨fun read => by simp [(unused tailBit (by decide)).1] at read,
       fun read => by simp [(unused headBit (by decide)).1] at read,
       fun part read => by simp [(unused part.bit part.bit_lt).1] at read⟩
-  simp only [QueueChange, (unused headBit (by decide)).2, (unused tailBit (by decide)).2] at queue
-  exact ProcessState.ext_get (queue process same) fun part => keeps process same part (unused _ part.bit_lt).2
+  have queueSame : (change process).queue = process.queue := by
+    rw [queue process same, noHead (unused headBit (by decide)).2, noTail (unused tailBit (by decide)).2]; simp
+  exact ProcessState.ext_get queueSame fun part => keeps process same part (unused _ part.bit_lt).2
 
 /-- Two effects within frames apart change every record alike in either order. -/
 private theorem Effect.record_comm {effect effect' : Effect} {frames frames' : List Frame} {state : State}
@@ -1133,7 +1142,7 @@ private def State.phaseEffect (state : State) (processId : PID) : Effect :=
     | [] =>
       match process.queue with
       | entry :: rest =>
-          let change := fun process : ProcessState => { process with queue := rest }
+          let change := fun process : ProcessState => { process with queue := process.queue.drop 1 }
           (Effect.modify processId change).andThen ((state.modify processId change).answerEffect processId entry)
       | [] => {}
   | none => {}
@@ -1166,12 +1175,12 @@ private theorem Realizes.phase {state next : State} {processId : PID} (phase : s
           split at phase
           · rename_i entry rest queue
             simp only [Option.some.injEq] at phase; subst phase
-            have modified : state.modify processId (fun process => { process with queue := rest }) =
-                state.set processId { process with queue := rest } := by simp [State.modify, found]
+            have modified : state.modify processId (fun process => { process with queue := process.queue.drop 1 }) =
+                state.set processId { process with queue := rest } := by simp [State.modify, found, queue]
             simp only [State.phaseEffect, same, exits, downs, queue]
             rw [modified]
-            have set := Realizes.set found (fun process => { process with queue := rest })
-            simp only [exits] at set ⊢
+            have set := Realizes.set found (fun process => { process with queue := process.queue.drop 1 })
+            simp only [exits, queue, List.drop_succ_cons, List.drop_zero] at set ⊢
             exact set.andThen (Realizes.answer _ _ _)
           · simp at phase
     · simp at phase
@@ -1270,7 +1279,7 @@ private def Task.handleEffect (state : State) (processId : PID) (task : Task α)
   | entry :: rest =>
     let popped := state.set processId { process with queue := rest }
     let (_, _, exits) := popped.handle processId (task.wait.map (·.1)) entry
-    let handled := (Effect.modify processId fun process => { process with queue := rest }).andThen
+    let handled := (Effect.modify processId fun process => { process with queue := process.queue.drop 1 }).andThen
       (popped.handleEffect processId entry)
     match exits with
     | some reason => handled.andThen
@@ -1290,7 +1299,8 @@ private theorem Realizes.handleStep {state : State} {processId : PID} {task : Ta
       cases record : state.record processId with
       | none => simp [State.process, record] at queue
       | some process => simp [State.process, record]
-    have popped := Realizes.set found (fun process => { process with queue := rest })
+    have popped := Realizes.set found (fun process => { process with queue := process.queue.drop 1 })
+    simp only [queue, List.drop_succ_cons, List.drop_zero] at popped
     have handled := popped.andThen (Realizes.handle (state.set processId { state.process processId with queue := rest })
       processId (task.wait.map (·.1)) entry)
     generalize (State.set _ _ _).handle _ _ _ = result at mem handled ⊢
@@ -1328,29 +1338,17 @@ private theorem Framed.same {reads writes reads' : Mask} {base process : Process
     (covered : ∀ bit, reads' bit → writes bit → reads bit)
     (popped : reads' headBit → writes headBit → reads tailBit) :
     (change process).Same reads' (change base) := by
-  obtain ⟨keeps, depends, queue, -, -, -, -⟩ := framed
+  obtain ⟨keeps, depends, ⟨dropped, added, -, noHead, -, queue⟩, -, -, -, -⟩ := framed
   have mine := same.left
   have self := ProcessState.Same.refl reads base
-  have whole : reads' tailBit → process.queue = base.queue := fun read => same.1 (by simp [Mask.union, read])
   refine ⟨fun read => ?_, fun read => ?_, fun part read => ?_⟩
-  · have equal := whole read
-    cases head : writes headBit <;> cases tail : writes tailBit <;>
-      simp only [QueueChange, head, tail] at queue
-    · rw [queue _ mine, queue _ self, equal]
-    · obtain ⟨added, queue⟩ := queue; rw [queue _ mine, queue _ self, equal]
-    · rw [queue _ mine, queue _ self, equal]
-    · exact queue _ _ mine self equal
-  · have first : process.queue.head? = base.queue.head? := same.2.1 (by simp [Mask.union, read])
-    cases head : writes headBit <;> cases tail : writes tailBit <;>
-      simp only [QueueChange, head, tail] at queue
-    · rw [queue _ mine, queue _ self]; exact first
-    · obtain ⟨added, queue⟩ := queue
-      rw [queue _ mine, queue _ self]
+  · rw [queue _ mine, queue _ self, same.1 (by simp [Mask.union, read])]
+  · rw [queue _ mine, queue _ self]
+    cases head : writes headBit
+    · rw [noHead head]
+      have first : process.queue.head? = base.queue.head? := same.2.1 (by simp [Mask.union, read])
       cases equal : process.queue <;> cases equal' : base.queue <;> simp_all
-    · have equal : process.queue = base.queue := same.1 (by simp [Mask.union, popped read head])
-      rw [queue _ mine, queue _ self, equal]
-    · have equal : process.queue = base.queue := same.1 (by simp [Mask.union, popped read head])
-      rw [queue _ _ mine self equal]
+    · rw [same.1 (by simp [Mask.union, popped read head])]
   · cases written : writes part.bit
     · rw [keeps _ mine part written, keeps _ self part written]
       exact same.right.2.2 part read
@@ -1366,6 +1364,7 @@ private theorem Framed.comp {reads writes reads' writes' : Mask} {base : Process
     (covered : ∀ bit, reads' bit → writes bit → reads bit)
     (popped : reads' headBit → writes headBit → reads tailBit)
     (once : writes headBit → writes' headBit → False)
+    (appended : writes tailBit → writes' headBit → False)
     (nonempty : reads' headBit ∨ writes' headBit → base.queue ≠ []) :
     Framed (reads.union reads') (writes.union writes') base (change' ∘ change) := by
   have through : ∀ process, process.Same (reads.union reads') base →
@@ -1387,46 +1386,28 @@ private theorem Framed.comp {reads writes reads' writes' : Mask} {base : Process
     cases theirs : writes' part.bit
     · rw [keeps' _ (through _ same) part theirs, keeps' _ (through _ same') part theirs, first]
     · exact depends' _ _ (through _ same) (through _ same') part theirs first
-  · -- How each change takes equal queues to equal queues.
-    have step : ∀ process process', process.Same reads base → process'.Same reads base →
-        process.queue = process'.queue → (change process).queue = (change process').queue := by
-      intro process process' same same' equal
-      cases h : writes headBit <;> cases t : writes tailBit <;> simp only [QueueChange, h, t] at queue
-      · rw [queue _ same, queue _ same', equal]
-      · obtain ⟨added, queue⟩ := queue; rw [queue _ same, queue _ same', equal]
-      · rw [queue _ same, queue _ same', equal]
-      · exact queue _ _ same same' equal
-    have step' : ∀ process process', process.Same reads' (change base) → process'.Same reads' (change base) →
-        process.queue = process'.queue → (change' process).queue = (change' process').queue := by
-      intro process process' same same' equal
-      cases h : writes' headBit <;> cases t : writes' tailBit <;> simp only [QueueChange, h, t] at queue'
-      · rw [queue' _ same, queue' _ same', equal]
-      · obtain ⟨added, queue'⟩ := queue'; rw [queue' _ same, queue' _ same', equal]
-      · rw [queue' _ same, queue' _ same', equal]
-      · exact queue' _ _ same same' equal
-    simp only [Mask.union]
-    cases h : writes headBit <;> cases t : writes tailBit <;> cases h' : writes' headBit <;>
-      cases t' : writes' tailBit <;> simp only [QueueChange, h, t, h', t', Bool.or_false, Bool.or_true,
-        Bool.false_or, Function.comp] at queue queue' ⊢
-    all_goals first
-      | exact (once h h').elim
-      | (intro process process' same same' equal
-         exact step' _ _ (through _ same) (through _ same') (step _ _ same.left same'.left equal))
-      | skip
-    · intro process same
-      rw [queue' _ (through _ same), queue _ same.left]
-    · obtain ⟨added', queue'⟩ := queue'
-      exact ⟨added', fun process same => by rw [queue' _ (through _ same), queue _ same.left]⟩
-    · intro process same
-      rw [queue' _ (through _ same), queue _ same.left]
-    · obtain ⟨added, queue⟩ := queue
-      exact ⟨added, fun process same => by rw [queue' _ (through _ same), queue _ same.left]⟩
-    · obtain ⟨added, queue⟩ := queue
-      obtain ⟨added', queue'⟩ := queue'
-      exact ⟨added ++ added', fun process same => by
-        rw [queue' _ (through _ same), queue _ same.left, List.append_assoc]⟩
-    · intro process same
-      rw [queue' _ (through _ same), queue _ same.left]
+  · obtain ⟨dropped, added, one, noHead, noTail, queue⟩ := queue
+    obtain ⟨dropped', added', one', noHead', noTail', queue'⟩ := queue'
+    by_cases popping : writes' headBit = true
+    · have empty : added = [] := by
+        cases tail : writes tailBit
+        · exact noTail tail
+        · exact (appended tail popping).elim
+      have first : dropped = 0 := by
+        cases head : writes headBit
+        · exact noHead head
+        · exact (once head popping).elim
+      refine ⟨dropped', added', one', fun none => ?_, fun none => ?_, fun process same => ?_⟩
+      · simp [Mask.union, popping] at none
+      · simp only [Mask.union, Bool.or_eq_false_iff] at none; exact noTail' none.2
+      · simp only [Function.comp]
+        rw [queue' _ (through _ same), queue _ same.left, empty, first]; simp
+    · have second : dropped' = 0 := noHead' (by simpa using popping)
+      refine ⟨dropped, added ++ added', one, fun none => ?_, fun none => ?_, fun process same => ?_⟩
+      · simp only [Mask.union, Bool.or_eq_false_iff] at none; exact noHead none.1
+      · simp only [Mask.union, Bool.or_eq_false_iff] at none; rw [noTail none.1, noTail' none.2]; rfl
+      · simp only [Function.comp]
+        rw [queue' _ (through _ same), queue _ same.left, second]; simp
   · simp only [Mask.union, Bool.or_eq_true] at read ⊢
     rcases read with read | read
     · exact .inl (tail read)
