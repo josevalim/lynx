@@ -16,6 +16,8 @@ namespace Lynx.Concurrent
 
 open Lynx
 
+attribute [local instance high] Kernel.pidBEq
+
 /-- The steps a signal has left: requests are answered with one more signal. -/
 @[expose] def Signal.weight : Signal → Nat
   | .link | .monitor _ | .isAlive | .unlink _ => 2

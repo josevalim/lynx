@@ -45,6 +45,8 @@ namespace Lynx.Concurrent
 
 open Lynx
 
+attribute [local instance high] Kernel.pidBEq
+
 /-- The sender of timer messages. Children are numbered from one, so no
 process has this PID. -/
 @[expose] def clock : PID := [0]

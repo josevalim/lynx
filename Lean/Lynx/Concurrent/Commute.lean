@@ -17,6 +17,8 @@ namespace Lynx.Concurrent
 
 open Lynx
 
+attribute [local instance high] Kernel.pidBEq
+
 /-! ### Comparing states -/
 
 /-- Whether two lists are the same, comparing their elements with `same`. -/

@@ -151,5 +151,42 @@ universe u v
     rw [List.flatMap_cons, ← ih]
     show append (f head) (flatMap f tail) = _; rw [append_eq]
 
+/-- Equality of PIDs and references, by `List.rec` and `Nat.beq`. -/
+@[expose] noncomputable def pidEq (first second : List Nat) : Bool :=
+  @List.rec Nat (fun _ => List Nat → Bool)
+    (fun other => @List.casesOn Nat (fun _ => Bool) other true (fun _ _ => false))
+    (fun head _ rest other => @List.casesOn Nat (fun _ => Bool) other false
+      (fun head' tail' => Nat.beq head head' && rest tail'))
+    first second
+
+theorem pidEq_iff : ∀ first second : List Nat, pidEq first second = true ↔ first = second
+  | [], [] => by simp [pidEq]
+  | [], _ :: _ => by simp [pidEq]
+  | _ :: _, [] => by simp [pidEq]
+  | head :: tail, head' :: tail' => by
+      have ih := pidEq_iff tail tail'
+      change (Nat.beq head head' && pidEq tail tail') = true ↔ _
+      simp [ih, Nat.beq_eq_true_eq]
+
+/-- Core's equality of lists of naturals, which compiled code uses. -/
+@[expose] def stdEq (first second : List Nat) : Bool := first == second
+
+@[csimp] theorem pidEq_eq_stdEq : @pidEq = @stdEq := by
+  funext first second
+  cases h : stdEq first second with
+  | true => exact (pidEq_iff _ _).2 (by simpa [stdEq] using h)
+  | false =>
+      cases h' : pidEq first second with
+      | false => rfl
+      | true => have := (pidEq_iff _ _).1 h'; subst this; simp [stdEq] at h
+
+@[expose] def pidBEq : BEq (List Nat) := ⟨pidEq⟩
+
+instance pidRefl : @ReflBEq (List Nat) pidBEq :=
+  @ReflBEq.mk (List Nat) pidBEq (fun {a} => (pidEq_iff a a).2 rfl)
+
+instance pidLawful : @LawfulBEq (List Nat) pidBEq :=
+  @LawfulBEq.mk (List Nat) pidBEq pidRefl (fun h => (pidEq_iff _ _).1 h)
+
 end Lynx.Concurrent.Kernel
 end
