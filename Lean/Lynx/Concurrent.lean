@@ -120,9 +120,11 @@ structure ProcessState where
   /-- The processes whose `normal` link exit removed a link when it was sent
   rather than handled, in PID order. This is only exact while the process does
   not start trapping exits, or link to the process again, before it would
-  have handled the exit: before it
-  handles the `normal` `DOWN` the same process sends after its link exits, or
-  times out a receive with a zero timeout, which handles everything queued. -/
+  have handled the exit: before it handles the `normal` `DOWN` the same
+  process sends after its link exits. A process that ended is gone before it
+  sends its link exits (`ERTS_CONTINUE_EXIT_FREE` in OTP), so nothing else
+  shows the exit was handled: a peer may see the process gone and time out a
+  receive with the exit still on its way. -/
   eagerExits : List PID := []
   /-- Set once the process ended. -/
   exiting : Option Exiting := none
@@ -279,8 +281,13 @@ do. A link is answered with an exit signal `noproc`, a monitor with a `DOWN`
 @[expose] def State.fallback (state : State) (source target : PID) : Signal → State
   | .link => state.modify source fun process => { process with
       queue := Kernel.append process.queue [{ source := target, signal := .exit (.atom "noproc") true false }] }
-  | .monitor reference => state.modify source fun process => { process with
-      queue := Kernel.append process.queue [{ source := target, signal := .down reference (.atom "noproc") }] }
+  | .monitor reference =>
+      -- A parked monitor signal can be sent after its monitor was removed,
+      -- and its `DOWN` would then do nothing.
+      if Kernel.any (state.process source).monitoring (·.1 == reference) then
+        state.modify source fun process => { process with
+          queue := Kernel.append process.queue [{ source := target, signal := .down reference (.atom "noproc") }] }
+      else state
   | .unlink _ => state.modify source fun process =>
       { process with links := Kernel.filter (·.1 != target) process.links }
   | .isAlive => state.modify source fun process => { process with
@@ -724,11 +731,7 @@ expires, as sending to a process does not observe whether its timer expired. -/
               (state.modify processId fun process => { process with mailbox := remaining })
               (next (some value))]
         | none =>
-            -- A zero timeout handles every link exit applied when sent.
-            let timedOut := proceed (.timeout processId)
-              (if timeout matches .immediate && !process.eagerExits.isEmpty then
-                state.modify processId fun process => { process with eagerExits := [] }
-              else state) (next none)
+            let timedOut := proceed (.timeout processId) state (next none)
             match timeout with
             | .infinity => []
             | _ => if Kernel.any process.queue (state.awaitedEntry processId) then [] else [timedOut]

@@ -141,7 +141,9 @@ theorem State.weight_fallback (state : State) (source target : PID) (signal : Si
   unfold State.fallback
   split
   · refine Nat.le_trans (state.weight_push source _) ?_; simp [Signal.weight]
-  · refine Nat.le_trans (state.weight_push source _) ?_; simp [Signal.weight]
+  · split
+    · refine Nat.le_trans (state.weight_push source _) ?_; simp [Signal.weight]
+    · omega
   · have := state.weight_modify_same source
       (fun process => { process with links := Kernel.filter (·.1 != target) process.links })
       fun _ => ⟨rfl, rfl, rfl⟩

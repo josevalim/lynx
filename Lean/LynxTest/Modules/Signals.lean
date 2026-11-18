@@ -474,6 +474,23 @@ theorem relink_after_applied_exit_is_exhausted :
       | some (_, .rejected (.error .exhausted)) => true
       | _ => false) = true := by decide +kernel
 
+/-- A process that ended is gone before it sends its link exits, so a linked
+process may see it gone, time out a receive, and only then trap exits, still
+to receive its `EXIT`. A `normal` link exit applied when sent cannot tell, so
+trapping exits then stops with `exhausted` rather than lose that reply. -/
+theorem trap_exit_after_seeing_link_gone_is_exhausted :
+    (match Concurrent.counterexample (fun (outcome : Outcome Term) => match outcome with
+        | .error .exhausted => false
+        | _ => true) 64 (.start {} (do
+      let child ← «spawn_link/1» dispatcher returns
+      let alive ← «is_process_alive/1» dispatcher child
+      let _ ← poll
+      let _ ← «process_flag/2» dispatcher (.atom "trap_exit") (.atom "true")
+      let late ← poll
+      pure (Term.tuple #[alive, late]))) with
+      | some (_, .rejected (.error .exhausted)) => true
+      | _ => false) = true := by decide +kernel
+
 end LynxTest.Modules.Signals
 
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Modules.Signals

@@ -559,12 +559,7 @@ process queued and its signals to it. -/
         | some _ => some ([(processId, reads, Field.mailbox)], false)
         | none => match timeout with
           | .infinity => some ([(processId, reads, 0)], false)
-          | .finite => some ([(processId, reads ||| Field.queueHead ||| Field.queueTail, 0)], false)
-          | .immediate =>
-              -- It clears the link exits applied when sent, which a process
-              -- ending may add to at the same time.
-              some ([(processId, reads ||| Field.queueHead ||| Field.queueTail ||| Field.eagerExits,
-                Field.eagerExits)], false)
+          | _ => some ([(processId, reads ||| Field.queueHead ||| Field.queueTail, 0)], false)
     | .request query _ => state.requestFrames processId query
     | .ok _ => some (state.endFrames processId)
     | .error .exhausted => none
