@@ -1304,4 +1304,143 @@ private theorem Realizes.handleStep {state : State} {processId : PID} {task : Ta
       simp only at mem ⊢
       split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> exact handled
 
+/-! ### Composing changes within frames -/
+
+/-- The union of two masks. -/
+private def Mask.union (first second : Mask) : Mask := fun bit => first bit || second bit
+
+private theorem ProcessState.Same.left {first second : Mask} {process base : ProcessState}
+    (same : process.Same (first.union second) base) : process.Same first base :=
+  ⟨fun read => same.1 (by simp [Mask.union, read]), fun read => same.2.1 (by simp [Mask.union, read]),
+    fun part read => same.2.2 part (by simp [Mask.union, read])⟩
+
+private theorem ProcessState.Same.right {first second : Mask} {process base : ProcessState}
+    (same : process.Same (first.union second) base) : process.Same second base :=
+  ⟨fun read => same.1 (by simp [Mask.union, read]), fun read => same.2.1 (by simp [Mask.union, read]),
+    fun part read => same.2.2 part (by simp [Mask.union, read])⟩
+
+/-- A change within its frame takes records agreeing with the base on its reads
+and another frame's reads to records agreeing with its image on the other's
+reads, when the other's reads of its writes are read by it too. -/
+private theorem Framed.same {reads writes reads' : Mask} {base process : ProcessState}
+    {change : ProcessState → ProcessState} (framed : Framed reads writes base change)
+    (same : process.Same (reads.union reads') base)
+    (covered : ∀ bit, reads' bit → writes bit → reads bit)
+    (popped : reads' headBit → writes headBit → reads tailBit) :
+    (change process).Same reads' (change base) := by
+  obtain ⟨keeps, depends, queue, -, -, -, -⟩ := framed
+  have mine := same.left
+  have self := ProcessState.Same.refl reads base
+  have whole : reads' tailBit → process.queue = base.queue := fun read => same.1 (by simp [Mask.union, read])
+  refine ⟨fun read => ?_, fun read => ?_, fun part read => ?_⟩
+  · have equal := whole read
+    cases head : writes headBit <;> cases tail : writes tailBit <;>
+      simp only [QueueChange, head, tail] at queue
+    · rw [queue _ mine, queue _ self, equal]
+    · obtain ⟨added, queue⟩ := queue; rw [queue _ mine, queue _ self, equal]
+    · rw [queue _ mine, queue _ self, equal]
+    · exact queue _ _ mine self equal
+  · have first : process.queue.head? = base.queue.head? := same.2.1 (by simp [Mask.union, read])
+    cases head : writes headBit <;> cases tail : writes tailBit <;>
+      simp only [QueueChange, head, tail] at queue
+    · rw [queue _ mine, queue _ self]; exact first
+    · obtain ⟨added, queue⟩ := queue
+      rw [queue _ mine, queue _ self]
+      cases equal : process.queue <;> cases equal' : base.queue <;> simp_all
+    · have equal : process.queue = base.queue := same.1 (by simp [Mask.union, popped read head])
+      rw [queue _ mine, queue _ self, equal]
+    · have equal : process.queue = base.queue := same.1 (by simp [Mask.union, popped read head])
+      rw [queue _ _ mine self equal]
+  · cases written : writes part.bit
+    · rw [keeps _ mine part written, keeps _ self part written]
+      exact same.right.2.2 part read
+    · exact depends _ _ mine self part written (same.2.2 part (by simp [Mask.union, covered _ read written]))
+
+/-- Two changes within frames, one after the other, are within the union of
+their frames, when the second reads of what the first writes only what the
+first reads too, they do not both remove a queue's head, and what the second
+reads of a queue is there before the first. -/
+private theorem Framed.comp {reads writes reads' writes' : Mask} {base : ProcessState}
+    {change change' : ProcessState → ProcessState}
+    (framed : Framed reads writes base change) (framed' : Framed reads' writes' (change base) change')
+    (covered : ∀ bit, reads' bit → writes bit → reads bit)
+    (popped : reads' headBit → writes headBit → reads tailBit)
+    (once : writes headBit → writes' headBit → False)
+    (nonempty : reads' headBit ∨ writes' headBit → base.queue ≠ []) :
+    Framed (reads.union reads') (writes.union writes') base (change' ∘ change) := by
+  have through : ∀ process, process.Same (reads.union reads') base →
+      (change process).Same reads' (change base) := fun process same => framed.same same covered popped
+  obtain ⟨keeps, depends, queue, tail, head, pops, live⟩ := framed
+  obtain ⟨keeps', depends', queue', tail', head', pops', live'⟩ := framed'
+  have self := ProcessState.Same.refl reads base
+  have self' := ProcessState.Same.refl reads' (change base)
+  refine ⟨fun process same part written => ?_, fun process process' same same' part written equal => ?_,
+    ?_, fun read => ?_, fun read => ?_, fun written => ?_, fun written process same => ?_⟩
+  · simp only [Mask.union, Bool.or_eq_false_iff] at written
+    simp only [Function.comp]
+    rw [keeps' _ (through _ same) part written.2, keeps _ same.left part written.1]
+  · simp only [Function.comp]
+    have first : (change process).get part = (change process').get part := by
+      cases mine : writes part.bit
+      · rw [keeps _ same.left part mine, keeps _ same'.left part mine, equal]
+      · exact depends _ _ same.left same'.left part mine equal
+    cases theirs : writes' part.bit
+    · rw [keeps' _ (through _ same) part theirs, keeps' _ (through _ same') part theirs, first]
+    · exact depends' _ _ (through _ same) (through _ same') part theirs first
+  · -- How each change takes equal queues to equal queues.
+    have step : ∀ process process', process.Same reads base → process'.Same reads base →
+        process.queue = process'.queue → (change process).queue = (change process').queue := by
+      intro process process' same same' equal
+      cases h : writes headBit <;> cases t : writes tailBit <;> simp only [QueueChange, h, t] at queue
+      · rw [queue _ same, queue _ same', equal]
+      · obtain ⟨added, queue⟩ := queue; rw [queue _ same, queue _ same', equal]
+      · rw [queue _ same, queue _ same', equal]
+      · exact queue _ _ same same' equal
+    have step' : ∀ process process', process.Same reads' (change base) → process'.Same reads' (change base) →
+        process.queue = process'.queue → (change' process).queue = (change' process').queue := by
+      intro process process' same same' equal
+      cases h : writes' headBit <;> cases t : writes' tailBit <;> simp only [QueueChange, h, t] at queue'
+      · rw [queue' _ same, queue' _ same', equal]
+      · obtain ⟨added, queue'⟩ := queue'; rw [queue' _ same, queue' _ same', equal]
+      · rw [queue' _ same, queue' _ same', equal]
+      · exact queue' _ _ same same' equal
+    simp only [Mask.union]
+    cases h : writes headBit <;> cases t : writes tailBit <;> cases h' : writes' headBit <;>
+      cases t' : writes' tailBit <;> simp only [QueueChange, h, t, h', t', Bool.or_false, Bool.or_true,
+        Bool.false_or, Function.comp] at queue queue' ⊢
+    all_goals first
+      | exact (once h h').elim
+      | (intro process process' same same' equal
+         exact step' _ _ (through _ same) (through _ same') (step _ _ same.left same'.left equal))
+      | skip
+    · intro process same
+      rw [queue' _ (through _ same), queue _ same.left]
+    · obtain ⟨added', queue'⟩ := queue'
+      exact ⟨added', fun process same => by rw [queue' _ (through _ same), queue _ same.left]⟩
+    · intro process same
+      rw [queue' _ (through _ same), queue _ same.left]
+    · obtain ⟨added, queue⟩ := queue
+      exact ⟨added, fun process same => by rw [queue' _ (through _ same), queue _ same.left]⟩
+    · obtain ⟨added, queue⟩ := queue
+      obtain ⟨added', queue'⟩ := queue'
+      exact ⟨added ++ added', fun process same => by
+        rw [queue' _ (through _ same), queue _ same.left, List.append_assoc]⟩
+    · intro process same
+      rw [queue' _ (through _ same), queue _ same.left]
+  · simp only [Mask.union, Bool.or_eq_true] at read ⊢
+    rcases read with read | read
+    · exact .inl (tail read)
+    · exact .inr (tail' read)
+  · simp only [Mask.union, Bool.or_eq_true] at read
+    rcases read with read | read
+    · exact head read
+    · exact nonempty (.inl read)
+  · simp only [Mask.union, Bool.or_eq_true] at written
+    rcases written with written | written
+    · exact pops written
+    · exact nonempty (.inr written)
+  · simp only [Mask.union, Bool.or_eq_false_iff] at written
+    simp only [Function.comp]
+    rw [live' written.2 _ (through _ same), live written.1 _ same.left]
+
 end Lynx.Concurrent
