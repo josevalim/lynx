@@ -323,79 +323,12 @@ process exits with, and the value it resumes with. -/
   | _, _, _ => true
 
 /-- Whether two configurations reached by the same steps in different orders
-are the same: the same processes and flags, and identical records for the
-processes in `touched` (all of them when `none`) and timers when `timers`. -/
-@[expose] def Config.sameAfter (touched : Option (List PID)) (timers : Bool) : Config α → Config α → Bool
+are the same: the same processes and flags, and identical states. -/
+@[expose] def Config.sameAfter : Config α → Config α → Bool
   | .running state tasks finished exhausted, .running state' tasks' finished' exhausted' =>
       Kernel.map Prod.fst tasks == Kernel.map Prod.fst tasks' &&
-        finished.isSome == finished'.isSome && exhausted == exhausted' &&
-        (match touched with
-          | none => state.identical state'
-          | some processes =>
-              Kernel.map Prod.fst state.processes == Kernel.map Prod.fst state'.processes &&
-              Kernel.all processes (fun processId =>
-                optionIdentical ProcessState.identical (state.record processId) (state'.record processId)) &&
-              (!timers || identicalLists Timer.identical state.timers state'.timers))
+        finished.isSome == finished'.isSome && exhausted == exhausted' && state.identical state'
   | _, _ => false
-
-/-- The processes whose records a step reads or writes, and whether it reads or
-writes the timers, when the step neither starts nor ends a process; `none` otherwise.
-A step that starts or ends a process changes what normalization removes everywhere. -/
-@[expose] def Config.touches : Config α → Key → Option (List PID × Bool)
-  | .running state tasks _ false, .own processId =>
-      match Kernel.lookup processId tasks with
-      | some ⟨_, _, some _⟩ => some ([processId], false)
-      | some ⟨computation, _, none⟩ =>
-        let parked := match (state.process processId).parked with
-          | some (target, _) => [target]
-          | none => []
-        match computation with
-        | .get _ | .set .. | .receive .. => some ([processId], false)
-        | .send destination _ _ => some ([processId, destination], false)
-        | .request query _ =>
-            match query with
-            | .monitor _ _ | .demonitor .. | .trapExit _ => some (processId :: parked, false)
-            | .link target | .unlink target | .alive target | .exit target _ _ =>
-                some ([processId, target], false)
-            | .sendAlias alias _ => some ([processId, alias.dropLast], false)
-            | .startTimer destination _ _ => some ([processId, destination], true)
-            | .cancelTimer _ => some ([processId], true)
-        | _ => none
-      | none => none
-  | .running state tasks _ false, .handle processId =>
-      match Kernel.lookup processId tasks, (state.process processId).queue with
-      | some task, entry :: _ =>
-          match task.handleView state processId with
-          | some (none, _) => some ([processId, entry.source], false)
-          | _ => none
-      | _, _ => none
-  | .running _ _ _ false, .link processId target => some ([processId, target], false)
-  | .running state _ _ false, .phase processId =>
-      match state.record processId with
-      | some process =>
-          match process.exiting with
-          | some { links := [], downs := (_, watcher) :: _, .. } => some ([processId, watcher], false)
-          | some { links := [], downs := [], .. } =>
-              match process.queue with
-              | entry :: _ => some ([processId, entry.source], false)
-              | [] => none
-          | _ => none
-      | none => none
-  | .running state _ _ false, .unpark processId =>
-      match (state.process processId).parked with
-      | some (target, _) => some ([processId, target], false)
-      | none => none
-  | .running state _ _ false, .fire reference =>
-      match Kernel.find? (·.reference == reference) state.timers with
-      | some timer => some ([timer.destination], true)
-      | none => none
-  | _, _ => none
-
-/-- The records and whether the timers two steps may change, `none` for all records. -/
-@[expose] def Config.touchedBoth (config : Config α) (key other : Key) : Option (List PID) × Bool :=
-  match config.touches key, config.touches other with
-  | some (processes, timers), some (processes', timers') => (some (Kernel.append processes processes'), timers || timers')
-  | _, _ => (none, true)
 
 /-! ### Frames
 
@@ -689,8 +622,7 @@ orders reach the same configuration. -/
   (config.apart key other ||
     match next.stepOf other, next'.stepOf key with
     | some (_, last), some (_, last') =>
-        let (touched, timers) := config.touchedBoth key other
-        config.sameView next' key && config.sameView next other && last.sameAfter touched timers last'
+        config.sameView next' key && config.sameView next other && last.sameAfter last'
     | _, _ => false)
 
 /-- Whether a step leaves every process's computation as it is: it is not a
@@ -713,8 +645,7 @@ which needs `key` to leave every computation as it is. -/
       config.commutesAfter key next other next' || config.keepsTasks key &&
       match next.stepOf other with
       | some (_, last) =>
-          let (touched, timers) := config.touchedBoth key other
-          config.sameView next other && last.sameAfter touched timers next'
+          config.sameView next other && last.sameAfter next'
       | none => false
   | none => false
 

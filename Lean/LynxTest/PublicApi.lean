@@ -394,8 +394,6 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Config.steps",
   "Lynx.Concurrent.Config.successors",
   "Lynx.Concurrent.Config.taggedSteps",
-  "Lynx.Concurrent.Config.touchedBoth",
-  "Lynx.Concurrent.Config.touches",
   "Lynx.Concurrent.Entry",
   "Lynx.Concurrent.Entry.identical",
   "Lynx.Concurrent.Entry.mk",
