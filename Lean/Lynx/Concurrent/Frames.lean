@@ -1,6 +1,7 @@
 module
 
 public import Lynx.Concurrent.Diamond
+import all Lynx.Concurrent.Diamond
 
 /-! Steps that `Config.apart` lets commute without evaluating them. Each step
 does an effect on the records it changes (`Effect`), a function of their old

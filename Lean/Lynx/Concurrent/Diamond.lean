@@ -5,7 +5,7 @@ public import Lynx.Concurrent.Commute
 /-! Foundations for proving that steps `checkSleep` takes as commuting reach
 the same configuration in either order. States keep their records sorted by
 PID, so two states are equal when they have the same record for every process
-and the same timers (`State.ext_record`). -/
+and the same timers (`Sorted.ext`). -/
 
 public section
 
@@ -17,11 +17,11 @@ attribute [local instance high] Kernel.pidBEq
 
 /-! ### PID order -/
 
-theorem pidBefore_irrefl : ∀ processId : PID, pidBefore processId processId = false
+private theorem pidBefore_irrefl : ∀ processId : PID, pidBefore processId processId = false
   | [] => rfl
   | head :: rest => by simp [pidBefore, pidBefore_irrefl rest]
 
-theorem pidBefore_trans : ∀ {first second third : PID}, pidBefore first second = true →
+private theorem pidBefore_trans : ∀ {first second third : PID}, pidBefore first second = true →
     pidBefore second third = true → pidBefore first third = true
   | [], _ :: _, _ :: _, _, _ => rfl
   | _ :: _, _ :: _, _ :: _, one, two => by
@@ -35,7 +35,7 @@ theorem pidBefore_trans : ∀ {first second third : PID}, pidBefore first second
   | _ :: _, [], _, one, _ => by simp [pidBefore] at one
   | _, _ :: _, [], _, two => by simp [pidBefore] at two
 
-theorem pidBefore_asymm {first second : PID} (before : pidBefore first second = true) :
+private theorem pidBefore_asymm {first second : PID} (before : pidBefore first second = true) :
     pidBefore second first = false := by
   cases after : pidBefore second first
   · rfl
@@ -43,7 +43,7 @@ theorem pidBefore_asymm {first second : PID} (before : pidBefore first second = 
     rw [pidBefore_irrefl] at this
     exact absurd this (by simp)
 
-theorem pidBefore_total : ∀ {first second : PID}, first ≠ second →
+private theorem pidBefore_total : ∀ {first second : PID}, first ≠ second →
     pidBefore first second = true ∨ pidBefore second first = true
   | [], [], differ => absurd rfl differ
   | [], _ :: _, _ => .inl rfl
@@ -61,10 +61,10 @@ theorem pidBefore_total : ∀ {first second : PID}, first ≠ second →
 /-! ### Sorted records -/
 
 /-- Records in strictly increasing PID order, hence with distinct PIDs. -/
-def Sorted (records : List (PID × ProcessState)) : Prop :=
+private def Sorted (records : List (PID × ProcessState)) : Prop :=
   records.Pairwise fun first second => pidBefore first.1 second.1 = true
 
-theorem lookup_eq_none_of_before {processId : PID} {records : List (PID × ProcessState)}
+private theorem lookup_eq_none_of_before {processId : PID} {records : List (PID × ProcessState)}
     (sorted : Sorted records) (before : ∀ record ∈ records, pidBefore processId record.1 = true) :
     records.lookup processId = none := by
   induction records with
@@ -80,7 +80,7 @@ theorem lookup_eq_none_of_before {processId : PID} {records : List (PID × Proce
     exact ih (List.Pairwise.of_cons sorted) fun record mem => before record (by simp [mem])
 
 /-- Sorted records with the same record for every process are the same. -/
-theorem Sorted.ext {first second : List (PID × ProcessState)} (sorted : Sorted first)
+private theorem Sorted.ext {first second : List (PID × ProcessState)} (sorted : Sorted first)
     (sorted' : Sorted second) (same : ∀ processId, first.lookup processId = second.lookup processId) :
     first = second := by
   induction first generalizing second with
@@ -130,7 +130,7 @@ theorem Sorted.ext {first second : List (PID × ProcessState)} (sorted : Sorted 
 
 /-! ### Records of a state -/
 
-theorem lookup_insertSorted (processId : PID) (process : ProcessState) :
+private theorem lookup_insertSorted (processId : PID) (process : ProcessState) :
     ∀ (records : List (PID × ProcessState)) (other : PID), (records.lookup processId = none) →
       (insertSorted processId process records).lookup other =
         if other = processId then some process else records.lookup other
@@ -157,7 +157,7 @@ theorem lookup_insertSorted (processId : PID) (process : ProcessState) :
           · have differ' : (other == key) = false := by simp [equal']
             simp [List.lookup_cons, differ', ih, equal]
 
-theorem lookup_filter_ne (processId other : PID) (records : List (PID × ProcessState)) :
+private theorem lookup_filter_ne (processId other : PID) (records : List (PID × ProcessState)) :
     (records.filter (·.1 != processId)).lookup other =
       if other = processId then none else records.lookup other := by
   induction records with
@@ -179,7 +179,7 @@ theorem lookup_filter_ne (processId other : PID) (records : List (PID × Process
         simp [differ]
 
 /-- The record of a process after another's is replaced. -/
-theorem State.record_set (state : State) (processId other : PID) (process : ProcessState) :
+private theorem State.record_set (state : State) (processId other : PID) (process : ProcessState) :
     (state.set processId process).record other =
       if other = processId then some process else state.record other := by
   simp only [State.set, State.record, insertRecord, Kernel.lookup_eq, Kernel.filter_eq]
@@ -187,15 +187,15 @@ theorem State.record_set (state : State) (processId other : PID) (process : Proc
   by_cases equal : other = processId <;> simp [equal]
 
 /-- The record of a process after another's is removed. -/
-theorem State.record_remove (state : State) (processId other : PID) :
+private theorem State.record_remove (state : State) (processId other : PID) :
     (state.remove processId).record other = if other = processId then none else state.record other := by
   simp only [State.remove, State.record, Kernel.lookup_eq, Kernel.filter_eq, lookup_filter_ne]
 
-theorem Sorted.filter {records : List (PID × ProcessState)} (sorted : Sorted records)
+private theorem Sorted.filter {records : List (PID × ProcessState)} (sorted : Sorted records)
     (keep : PID × ProcessState → Bool) : Sorted (records.filter keep) :=
   List.Pairwise.filter keep sorted
 
-theorem mem_insertSorted {processId : PID} {process : ProcessState} {record : PID × ProcessState} :
+private theorem mem_insertSorted {processId : PID} {process : ProcessState} {record : PID × ProcessState} :
     ∀ {records : List (PID × ProcessState)}, record ∈ insertSorted processId process records →
       record = (processId, process) ∨ record ∈ records
   | [], mem => by simpa [insertSorted] using mem
@@ -210,7 +210,7 @@ theorem mem_insertSorted {processId : PID} {process : ProcessState} {record : PI
           · exact .inl rfl
           · exact .inr (by simp [mem])
 
-theorem Sorted.insertSorted {records : List (PID × ProcessState)} (sorted : Sorted records)
+private theorem Sorted.insertSorted {records : List (PID × ProcessState)} (sorted : Sorted records)
     (processId : PID) (process : ProcessState) (missing : ∀ record ∈ records, record.1 ≠ processId) :
     Sorted (insertSorted processId process records) := by
   induction records with
@@ -238,7 +238,7 @@ theorem Sorted.insertSorted {records : List (PID × ProcessState)} (sorted : Sor
       · exact before
       · exact above.1 record mem
 
-theorem Sorted.insertRecord {records : List (PID × ProcessState)} (sorted : Sorted records)
+private theorem Sorted.insertRecord {records : List (PID × ProcessState)} (sorted : Sorted records)
     (processId : PID) (process : ProcessState) : Sorted (insertRecord processId process records) := by
   simp only [Lynx.Concurrent.insertRecord, Kernel.filter_eq]
   exact (sorted.filter _).insertSorted _ _ fun record mem => by
@@ -246,7 +246,7 @@ theorem Sorted.insertRecord {records : List (PID × ProcessState)} (sorted : Sor
     simpa using this
 
 /-- Normalization keeps the records sorted. -/
-theorem Sorted.normalize {state : State} (sorted : Sorted state.processes) : Sorted state.normalize.processes := by
+private theorem Sorted.normalize {state : State} (sorted : Sorted state.processes) : Sorted state.normalize.processes := by
   simp only [State.normalize, Kernel.map_eq, Kernel.filter_eq]
   refine List.Pairwise.filter _ ?_
   exact List.pairwise_map.mpr (sorted.imp id)
@@ -254,38 +254,38 @@ theorem Sorted.normalize {state : State} (sorted : Sorted state.processes) : Sor
 /-! ### Every step keeps the records sorted and the time elapsed -/
 
 /-- A state whose records are sorted. -/
-def State.Sorted (state : State) : Prop := Lynx.Concurrent.Sorted state.processes
+private def State.Sorted (state : State) : Prop := Lynx.Concurrent.Sorted state.processes
 
 variable {elapsed : PID → Nat → Nat}
 
 /-- A state whose records are sorted, with the time elapsed when timers are
 canceled, which no step changes. -/
-def State.Within (elapsed : PID → Nat → Nat) (state : State) : Prop :=
+private def State.Within (elapsed : PID → Nat → Nat) (state : State) : Prop :=
   state.Sorted ∧ state.elapsed = elapsed
 
-theorem State.Within.set {state : State} (sorted : state.Within elapsed) (processId : PID) (process : ProcessState) :
+private theorem State.Within.set {state : State} (sorted : state.Within elapsed) (processId : PID) (process : ProcessState) :
     (state.set processId process).Within elapsed :=
   ⟨Lynx.Concurrent.Sorted.insertRecord sorted.1 processId process, sorted.2⟩
 
-theorem State.Within.remove {state : State} (sorted : state.Within elapsed) (processId : PID) :
+private theorem State.Within.remove {state : State} (sorted : state.Within elapsed) (processId : PID) :
     (state.remove processId).Within elapsed := by
   simp only [State.Within, State.remove, Kernel.filter_eq]; exact ⟨Lynx.Concurrent.Sorted.filter sorted.1 _, sorted.2⟩
 
-theorem State.Within.modify {state : State} (sorted : state.Within elapsed) (processId : PID)
+private theorem State.Within.modify {state : State} (sorted : state.Within elapsed) (processId : PID)
     (change : ProcessState → ProcessState) : (state.modify processId change).Within elapsed := by
   unfold State.modify; split
   · exact sorted.set _ _
   · exact sorted
 
-theorem State.Within.normalize {state : State} (sorted : state.Within elapsed) : state.normalize.Within elapsed :=
+private theorem State.Within.normalize {state : State} (sorted : state.Within elapsed) : state.normalize.Within elapsed :=
   ⟨Lynx.Concurrent.Sorted.normalize sorted.1, sorted.2⟩
 
-theorem State.Within.timers {state : State} (sorted : state.Within elapsed) (timers : List Timer) :
+private theorem State.Within.timers {state : State} (sorted : state.Within elapsed) (timers : List Timer) :
     ({ state with timers } : State).Within elapsed := sorted
 
 /-- Prove that an operation built from replacing, changing and removing
 records keeps them sorted. -/
-syntax "sorted_step" : tactic
+local syntax "sorted_step" : tactic
 macro_rules
   | `(tactic| sorted_step) => `(tactic| first
       | with_reducible assumption
@@ -295,20 +295,20 @@ macro_rules
       | refine State.Within.allocate ?_ _
       | split)
 
-theorem State.Within.allocate {state : State} (sorted : state.Within elapsed) (processId : PID) :
+private theorem State.Within.allocate {state : State} (sorted : state.Within elapsed) (processId : PID) :
     (state.allocate processId).2.Within elapsed := sorted.modify _ _
 
-theorem State.Within.append {state : State} (sorted : state.Within elapsed) (processId : PID) (message : Term) :
+private theorem State.Within.append {state : State} (sorted : state.Within elapsed) (processId : PID) (message : Term) :
     (state.append processId message).Within elapsed := sorted.modify _ _
 
-theorem State.Within.store {state : State} (sorted : state.Within elapsed) (processId : PID) (env : Environment) :
+private theorem State.Within.store {state : State} (sorted : state.Within elapsed) (processId : PID) (env : Environment) :
     (state.store processId env).Within elapsed := sorted.modify _ _
 
-theorem State.Within.fallback {state : State} (sorted : state.Within elapsed) (source target : PID) (signal : Signal) :
+private theorem State.Within.fallback {state : State} (sorted : state.Within elapsed) (source target : PID) (signal : Signal) :
     (state.fallback source target signal).Within elapsed := by
   unfold State.fallback; repeat sorted_step
 
-theorem State.Within.enqueue {state : State} (sorted : state.Within elapsed) (source target : PID) (signal : Signal) :
+private theorem State.Within.enqueue {state : State} (sorted : state.Within elapsed) (source target : PID) (signal : Signal) :
     (state.enqueue source target signal).Within elapsed := by
   unfold State.enqueue
   split
@@ -317,13 +317,13 @@ theorem State.Within.enqueue {state : State} (sorted : state.Within elapsed) (so
     · exact sorted.fallback _ _ _
   · exact sorted.fallback _ _ _
 
-theorem State.Within.unpark {state : State} (sorted : state.Within elapsed) (processId : PID) :
+private theorem State.Within.unpark {state : State} (sorted : state.Within elapsed) (processId : PID) :
     (state.unpark processId).Within elapsed := by
   unfold State.unpark; split
   · exact (sorted.modify _ _).enqueue _ _ _
   · exact sorted
 
-theorem State.Within.send {state : State} (sorted : state.Within elapsed) (source target : PID) (signal : Signal) :
+private theorem State.Within.send {state : State} (sorted : state.Within elapsed) (source target : PID) (signal : Signal) :
     (state.send source target signal).Within elapsed := by
   unfold State.send
   apply State.Within.enqueue
@@ -333,7 +333,7 @@ theorem State.Within.send {state : State} (sorted : state.Within elapsed) (sourc
     · exact sorted
   · exact sorted
 
-theorem State.Within.linkExit {state : State} (sorted : state.Within elapsed) (processId target : PID) (reason : Term) :
+private theorem State.Within.linkExit {state : State} (sorted : state.Within elapsed) (processId target : PID) (reason : Term) :
     (state.linkExit processId target reason).Within elapsed := by
   unfold State.linkExit
   split
@@ -345,7 +345,7 @@ theorem State.Within.linkExit {state : State} (sorted : state.Within elapsed) (p
     · exact sorted
   · exact sorted.send _ _ _
 
-theorem State.Within.terminate {state : State} (sorted : state.Within elapsed) (processId : PID) (reason : Term) :
+private theorem State.Within.terminate {state : State} (sorted : state.Within elapsed) (processId : PID) (reason : Term) :
     (state.terminate processId reason).Within elapsed := by
   unfold State.terminate
   dsimp only
@@ -363,11 +363,11 @@ theorem State.Within.terminate {state : State} (sorted : state.Within elapsed) (
     · exact (this.modify _ _).linkExit _ _ _
     · exact this
 
-theorem State.Within.answer {state : State} (sorted : state.Within elapsed) (processId : PID) (entry : Entry) :
+private theorem State.Within.answer {state : State} (sorted : state.Within elapsed) (processId : PID) (entry : Entry) :
     (state.answer processId entry).Within elapsed := by
   unfold State.answer; split <;> first | exact sorted.send _ _ _ | exact sorted
 
-theorem State.Within.linkPhase {state next : State} (sorted : state.Within elapsed) {processId target : PID}
+private theorem State.Within.linkPhase {state next : State} (sorted : state.Within elapsed) {processId target : PID}
     (phase : state.linkPhase processId target = some next) : next.Within elapsed := by
   unfold State.linkPhase at phase
   repeat' split at phase
@@ -375,7 +375,7 @@ theorem State.Within.linkPhase {state next : State} (sorted : state.Within elaps
     | (simp only [Option.some.injEq] at phase; subst phase; exact (sorted.set _ _).linkExit _ _ _)
     | simp at phase
 
-theorem State.Within.phase {state next : State} (sorted : state.Within elapsed) {processId : PID}
+private theorem State.Within.phase {state next : State} (sorted : state.Within elapsed) {processId : PID}
     (phase : state.phase processId = some next) : next.Within elapsed := by
   unfold State.phase at phase
   repeat' split at phase
@@ -384,7 +384,7 @@ theorem State.Within.phase {state next : State} (sorted : state.Within elapsed) 
     | (simp only [Option.some.injEq] at phase; subst phase; exact (sorted.set _ _).answer _ _)
     | simp at phase
 
-theorem State.Within.phases {state next : State} (sorted : state.Within elapsed) {processId : PID}
+private theorem State.Within.phases {state next : State} (sorted : state.Within elapsed) {processId : PID}
     (mem : next ∈ state.phases processId) : next.Within elapsed := by
   simp only [State.phases, Kernel.append_eq, Kernel.filterMap_eq, List.mem_append, List.mem_filterMap] at mem
   rcases mem with ⟨_, -, phase⟩ | mem
@@ -395,10 +395,10 @@ theorem State.Within.phases {state next : State} (sorted : state.Within elapsed)
       exact sorted.phase found
     · simp at mem
 
-theorem State.Within.fire {state : State} (sorted : state.Within elapsed) (timer : Timer) : (state.fire timer).Within elapsed :=
+private theorem State.Within.fire {state : State} (sorted : state.Within elapsed) (timer : Timer) : (state.fire timer).Within elapsed :=
   (sorted.timers _).enqueue _ _ _
 
-theorem State.Within.spawnWith {state : State} (sorted : state.Within elapsed) (processId : PID) (options : SpawnOptions) :
+private theorem State.Within.spawnWith {state : State} (sorted : state.Within elapsed) (processId : PID) (options : SpawnOptions) :
     (state.spawnWith processId options).2.Within elapsed := by
   unfold State.spawnWith
   dsimp only
@@ -416,7 +416,7 @@ theorem State.Within.spawnWith {state : State} (sorted : state.Within elapsed) (
 
 /-- Close a goal that an operation keeps the records sorted with one of the
 shapes the operations of `State.request` and `State.handle` take. -/
-syntax "sorted_exact" : tactic
+local syntax "sorted_exact" : tactic
 macro_rules
   | `(tactic| sorted_exact) => `(tactic| first
       | assumption
@@ -432,18 +432,18 @@ macro_rules
       | exact (State.Within.timers ‹_› _).modify _ _)
 
 /-- The state an answer leaves. -/
-def Answer.state : Answer β → State
+private def Answer.state : Answer β → State
   | .reply _ state | .wait _ state | .continue _ state => state
 
-theorem State.Within.request {state : State} (sorted : state.Within elapsed) (processId : PID)
+private theorem State.Within.request {state : State} (sorted : state.Within elapsed) (processId : PID)
     (next : Term → Result β) (query : Request) : (state.request processId next query).state.Within elapsed := by
   cases query <;> simp only [State.request] <;> (repeat' split) <;> simp only [Answer.state] <;> sorted_exact
 
-theorem State.Within.exitSignal {state : State} (sorted : state.Within elapsed) (target source : PID) (reason : Term)
+private theorem State.Within.exitSignal {state : State} (sorted : state.Within elapsed) (target source : PID) (reason : Term)
     (linked normalKills : Bool) : (state.exitSignal target source reason linked normalKills).1.Within elapsed := by
   unfold State.exitSignal; dsimp only; (repeat' split) <;> sorted_exact
 
-theorem State.Within.handle {state : State} (sorted : state.Within elapsed) (processId : PID) (waiting : Option Wait)
+private theorem State.Within.handle {state : State} (sorted : state.Within elapsed) (processId : PID) (waiting : Option Wait)
     (entry : Entry) : (state.handle processId waiting entry).1.Within elapsed := by
   unfold State.handle
   split
@@ -466,12 +466,12 @@ theorem State.Within.handle {state : State} (sorted : state.Within elapsed) (pro
   · dsimp only; split <;> sorted_exact
   · dsimp only; split <;> sorted_exact
 
-theorem State.Within.ended {state : State} (sorted : state.Within elapsed) {γ : Type}
+private theorem State.Within.ended {state : State} (sorted : state.Within elapsed) {γ : Type}
     (finish : Except Exception γ → Option (Except Exception α)) (event : Event) (processId : PID)
     (reason : Term) (result : Except Exception γ) :
     (Task.ended finish event state processId reason result).state.Within elapsed := sorted.terminate _ _
 
-theorem State.Within.own {state : State} (sorted : state.Within elapsed) {processId : PID} {task : Task α}
+private theorem State.Within.own {state : State} (sorted : state.Within elapsed) {processId : PID} {task : Task α}
     {transition : Transition α} (mem : transition ∈ task.own state processId) : transition.state.Within elapsed := by
   obtain ⟨computation, finish, wait⟩ := task
   cases wait with
@@ -503,7 +503,7 @@ theorem State.Within.own {state : State} (sorted : state.Within elapsed) {proces
       split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
         rename_i found <;> simpa [found, Answer.state] using this
 
-theorem State.Within.handleStep {state : State} (sorted : state.Within elapsed) {processId : PID} {task : Task α}
+private theorem State.Within.handleStep {state : State} (sorted : state.Within elapsed) {processId : PID} {task : Task α}
     {transition : Transition α} (mem : transition ∈ task.handle state processId) : transition.state.Within elapsed := by
   simp only [Task.handle] at mem
   split at mem
@@ -519,16 +519,16 @@ theorem State.Within.handleStep {state : State} (sorted : state.Within elapsed) 
     · split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> exact handled
 
 /-- A configuration whose records are sorted. -/
-def Config.Within (elapsed : PID → Nat → Nat) : Config α → Prop
+private def Config.Within (elapsed : PID → Nat → Nat) : Config α → Prop
   | .start _ _ elapsed' => elapsed' = elapsed
   | .running state .. => state.Within elapsed
 
-theorem State.Within.initial (env : Environment) (elapsed : PID → Nat → Nat) :
+private theorem State.Within.initial (env : Environment) (elapsed : PID → Nat → Nat) :
     (State.initial env elapsed).Within elapsed :=
   ⟨by simp [State.Sorted, State.initial, Lynx.Concurrent.Sorted], rfl⟩
 
 /-- Every step keeps the records sorted. -/
-theorem Config.Within.step {config next : Config α} {event : Event} (sorted : config.Within elapsed)
+private theorem Config.Within.step {config next : Config α} {event : Event} (sorted : config.Within elapsed)
     (step : Step config event next) : next.Within elapsed := by
   cases config with
   | start env computation elapsed' =>
@@ -576,13 +576,13 @@ theorem Config.Within.step {config next : Config α} {event : Event} (sorted : c
       exact (sorted.fire _).normalize
 
 /-- Every configuration a run reaches has sorted records. -/
-theorem Config.Within.run {config last : Config α} {events : List Event} (sorted : config.Within elapsed)
+private theorem Config.Within.run {config last : Config α} {events : List Event} (sorted : config.Within elapsed)
     (run : Run config events last) : last.Within elapsed :=
   Run.invariant (fun _ _ _ sorted step => sorted.step step) run sorted
 
 /-! ### Comparisons -/
 
-theorem Signal.eq_of_identical {first second : Signal} (same : first.identical second = true) :
+private theorem Signal.eq_of_identical {first second : Signal} (same : first.identical second = true) :
     first = second := by
   cases first <;> cases second <;>
     simp only [Signal.identical, Bool.and_eq_true, beq_iff_eq, Bool.false_eq_true] at same <;>
@@ -594,7 +594,7 @@ theorem Signal.eq_of_identical {first second : Signal} (same : first.identical s
       | (obtain ⟨same, rfl⟩ := same; rw [Term.eq_of_identical same])
       | (obtain ⟨⟨same, rfl⟩, rfl⟩ := same; rw [Term.eq_of_identical same])
 
-theorem eq_of_identicalLists {same : γ → γ → Bool}
+private theorem eq_of_identicalLists {same : γ → γ → Bool}
     (sound : ∀ {first second}, same first second = true → first = second) :
     ∀ {first second : List γ}, identicalLists same first second = true → first = second
   | [], [], _ => rfl
@@ -603,14 +603,14 @@ theorem eq_of_identicalLists {same : γ → γ → Bool}
     rw [sound equal.1, eq_of_identicalLists sound equal.2]
   | [], _ :: _, equal | _ :: _, [], equal => by simp [identicalLists] at equal
 
-theorem eq_of_optionIdentical {same : γ → γ → Bool}
+private theorem eq_of_optionIdentical {same : γ → γ → Bool}
     (sound : ∀ {first second}, same first second = true → first = second) :
     ∀ {first second : Option γ}, optionIdentical same first second = true → first = second
   | some _, some _, equal => by rw [sound equal]
   | none, none, _ => rfl
   | some _, none, equal | none, some _, equal => by simp [optionIdentical] at equal
 
-theorem Entry.eq_of_identical {first second : Entry} (same : first.identical second = true) :
+private theorem Entry.eq_of_identical {first second : Entry} (same : first.identical second = true) :
     first = second := by
   obtain ⟨source, signal⟩ := first
   obtain ⟨source', signal'⟩ := second
@@ -618,7 +618,7 @@ theorem Entry.eq_of_identical {first second : Entry} (same : first.identical sec
   obtain ⟨rfl, same⟩ := same
   rw [Signal.eq_of_identical same]
 
-theorem Exiting.eq_of_identical {first second : Exiting} (same : first.identical second = true) :
+private theorem Exiting.eq_of_identical {first second : Exiting} (same : first.identical second = true) :
     first = second := by
   obtain ⟨reason, links, downs⟩ := first
   obtain ⟨reason', links', downs'⟩ := second
@@ -626,7 +626,7 @@ theorem Exiting.eq_of_identical {first second : Exiting} (same : first.identical
   obtain ⟨⟨same, rfl⟩, rfl⟩ := same
   rw [Term.eq_of_identical same]
 
-theorem ProcessState.eq_of_identical {first second : ProcessState} (same : first.identical second = true) :
+private theorem ProcessState.eq_of_identical {first second : ProcessState} (same : first.identical second = true) :
     first = second := by
   cases first; cases second
   simp only [ProcessState.identical, Bool.and_eq_true, beq_iff_eq] at same
@@ -635,7 +635,7 @@ theorem ProcessState.eq_of_identical {first second : ProcessState} (same : first
   rw [eq_of_identicalLists Entry.eq_of_identical queue, Term.eq_of_identicalList mailbox,
     Term.eq_of_identicalEntries pdict, eq_of_optionIdentical Exiting.eq_of_identical exiting]
 
-theorem Timer.eq_of_identical {first second : Timer} (same : first.identical second = true) :
+private theorem Timer.eq_of_identical {first second : Timer} (same : first.identical second = true) :
     first = second := by
   obtain ⟨reference, destination, message, duration⟩ := first
   obtain ⟨reference', destination', message', duration'⟩ := second
@@ -645,7 +645,7 @@ theorem Timer.eq_of_identical {first second : Timer} (same : first.identical sec
 
 /-! ### Normalizing twice -/
 
-theorem lookup_map_snd (change : PID → ProcessState → ProcessState) (processId : PID) :
+private theorem lookup_map_snd (change : PID → ProcessState → ProcessState) (processId : PID) :
     ∀ records : List (PID × ProcessState),
       (records.map fun record => (record.1, change record.1 record.2)).lookup processId =
         (records.lookup processId).map (change processId)
@@ -656,7 +656,7 @@ theorem lookup_map_snd (change : PID → ProcessState → ProcessState) (process
       · have differ : (processId == key) = false := by simp [equal]
         simp [List.lookup_cons, differ, lookup_map_snd change processId rest]
 
-theorem Sorted.lookup_filter {records : List (PID × ProcessState)} (sorted : Sorted records)
+private theorem Sorted.lookup_filter {records : List (PID × ProcessState)} (sorted : Sorted records)
     (keep : PID × ProcessState → Bool) (processId : PID) :
     (records.filter keep).lookup processId =
       (records.lookup processId).filter fun process => keep (processId, process) := by
@@ -675,7 +675,7 @@ theorem Sorted.lookup_filter {records : List (PID × ProcessState)} (sorted : So
       simp only [List.filter_cons]
       split <;> simp [List.lookup_cons, differ, ih above.2]
 
-theorem Sorted.lookup_of_mem {records : List (PID × ProcessState)} (sorted : Sorted records)
+private theorem Sorted.lookup_of_mem {records : List (PID × ProcessState)} (sorted : Sorted records)
     {processId : PID} {process : ProcessState} (mem : (processId, process) ∈ records) :
     records.lookup processId = some process := by
   induction records with
@@ -694,7 +694,7 @@ theorem Sorted.lookup_of_mem {records : List (PID × ProcessState)} (sorted : So
       simp [List.lookup_cons, differ', ih above.2 mem]
 
 /-- The record of a process after normalizing. -/
-theorem State.record_normalize {state : State} (sorted : state.Sorted) (processId : PID) :
+private theorem State.record_normalize {state : State} (sorted : state.Sorted) (processId : PID) :
     state.normalize.record processId =
       ((state.record processId).map (state.normalizeRecord processId)).filter (!·.finished) := by
   simp only [State.normalize, State.record, Kernel.map_eq, Kernel.filter_eq, Kernel.lookup_eq]
@@ -702,16 +702,16 @@ theorem State.record_normalize {state : State} (sorted : state.Sorted) (processI
       (record.1, state.normalizeRecord record.1 record.2)) := List.pairwise_map.mpr (sorted.imp id)
   rw [mapped.lookup_filter, lookup_map_snd]
 
-theorem State.normalizeRecord_exiting (state : State) (processId : PID) (process : ProcessState) :
+private theorem State.normalizeRecord_exiting (state : State) (processId : PID) (process : ProcessState) :
     (state.normalizeRecord processId process).exiting.isSome = process.exiting.isSome := by
   unfold State.normalizeRecord; split <;> simp_all
 
-theorem ProcessState.finished_exiting {process : ProcessState} (finished : process.finished = true) :
+private theorem ProcessState.finished_exiting {process : ProcessState} (finished : process.finished = true) :
     process.exiting.isSome = true := by
   unfold ProcessState.finished at finished; split at finished <;> simp_all
 
 /-- Normalizing leaves the same processes alive. -/
-theorem State.alive_normalize {state : State} (sorted : state.Sorted) (processId : PID) :
+private theorem State.alive_normalize {state : State} (sorted : state.Sorted) (processId : PID) :
     state.normalize.alive processId = state.alive processId := by
   simp only [State.alive, State.record_normalize sorted]
   cases found : state.record processId with
@@ -725,11 +725,11 @@ theorem State.alive_normalize {state : State} (sorted : state.Sorted) (processId
       have := ProcessState.finished_exiting (by simpa using finished)
       cases exiting : process.exiting <;> simp_all
 
-theorem State.gone_normalize {state : State} (sorted : state.Sorted) (processId : PID) :
+private theorem State.gone_normalize {state : State} (sorted : state.Sorted) (processId : PID) :
     state.normalize.gone processId = state.gone processId := by
   simp [State.gone, State.alive_normalize sorted]
 
-theorem lookup_filter_of_key {β : Type} {key : PID} {keep : PID × β → Bool} :
+private theorem lookup_filter_of_key {β : Type} {key : PID} {keep : PID × β → Bool} :
     ∀ {entries : List (PID × β)}, (∀ value, (key, value) ∈ entries → keep (key, value) = true) →
       (entries.filter keep).lookup key = entries.lookup key
   | [], _ => rfl
@@ -743,12 +743,12 @@ theorem lookup_filter_of_key {β : Type} {key : PID} {keep : PID × β → Bool}
         simp only [List.filter_cons]
         split <;> simp [List.lookup_cons, differ, rest']
 
-theorem State.answersEntry_congr {state other : State} (gone : ∀ processId, other.gone processId = state.gone processId) :
+private theorem State.answersEntry_congr {state other : State} (gone : ∀ processId, other.gone processId = state.gone processId) :
     other.answersEntry = state.answersEntry := by
   funext entry; simp [State.answersEntry, gone]
 
 /-- A normalized record stays the same when normalized again. -/
-theorem State.normalizeRecord_normalize {state : State} (sorted : state.Sorted) {processId : PID}
+private theorem State.normalizeRecord_normalize {state : State} (sorted : state.Sorted) {processId : PID}
     {process : ProcessState} (mem : (processId, process) ∈ state.processes)
     (kept : (state.normalizeRecord processId process).finished = false) :
     state.normalize.normalizeRecord processId (state.normalizeRecord processId process) =
@@ -778,7 +778,7 @@ theorem State.normalizeRecord_normalize {state : State} (sorted : state.Sorted) 
     · simp only [gone, List.filter_filter, Bool.and_self]
 
 /-- Normalizing twice is normalizing once. -/
-theorem State.normalize_normalize {state : State} (sorted : state.Sorted) :
+private theorem State.normalize_normalize {state : State} (sorted : state.Sorted) :
     state.normalize.normalize = state.normalize := by
   have records : ∀ record ∈ state.normalize.processes,
       (record.1, state.normalize.normalizeRecord record.1 record.2) = record ∧ record.2.finished = false := by
@@ -799,17 +799,17 @@ theorem State.normalize_normalize {state : State} (sorted : state.Sorted) :
 
 /-- A running configuration whose state normalizing leaves as it is. A run that
 a process did not return from has no steps, and its state is not normalized. -/
-def Config.Normalized : Config α → Prop
+private def Config.Normalized : Config α → Prop
   | .running state _ _ false => state.normalize = state
   | _ => True
 
-theorem State.normalize_initial (env : Environment) (elapsed : PID → Nat → Nat) :
+private theorem State.normalize_initial (env : Environment) (elapsed : PID → Nat → Nat) :
     (State.initial env elapsed).normalize = State.initial env elapsed := by
   simp [State.initial, State.normalize, State.normalizeRecord, ProcessState.finished, Kernel.map_eq,
     Kernel.filter_eq]
 
 /-- Every step leads to a normalized configuration. -/
-theorem Config.Normalized.step {config next : Config α} {event : Event} (sorted : config.Within elapsed)
+private theorem Config.Normalized.step {config next : Config α} {event : Event} (sorted : config.Within elapsed)
     (step : Step config event next) : next.Normalized := by
   cases config with
   | start env computation elapsed =>
@@ -857,21 +857,21 @@ theorem Config.Normalized.step {config next : Config α} {event : Event} (sorted
 /-! ### What a step continues with -/
 
 /-- Two transitions that leave the same processes and outcome, whatever their states. -/
-def Transition.Shape (transition transition' : Transition α) : Prop :=
+private def Transition.Shape (transition transition' : Transition α) : Prop :=
   transition.tasks = transition'.tasks ∧ transition.finished = transition'.finished ∧
     transition.exhausted = transition'.exhausted
 
 /-- Two lists of transitions, pairwise of the same shape. -/
-def Transition.Shapes : List (Transition α) → List (Transition α) → Prop
+private def Transition.Shapes : List (Transition α) → List (Transition α) → Prop
   | [], [] => True
   | transition :: rest, transition' :: rest' => transition.Shape transition' ∧ Transition.Shapes rest rest'
   | _, _ => False
 
-theorem Transition.Shape.refl_of {transition transition' : Transition α} (tasks : transition.tasks = transition'.tasks)
+private theorem Transition.Shape.refl_of {transition transition' : Transition α} (tasks : transition.tasks = transition'.tasks)
     (finished : transition.finished = transition'.finished) (exhausted : transition.exhausted = transition'.exhausted) :
     transition.Shape transition' := ⟨tasks, finished, exhausted⟩
 
-theorem Environment.eq_of_identical {first second : Environment}
+private theorem Environment.eq_of_identical {first second : Environment}
     (same : environmentIdentical first second = true) : first = second := by
   obtain ⟨pid, counter, pdict⟩ := first
   obtain ⟨pid', counter', pdict'⟩ := second
@@ -879,7 +879,7 @@ theorem Environment.eq_of_identical {first second : Environment}
   obtain ⟨⟨rfl, rfl⟩, same⟩ := same
   rw [Term.eq_of_identicalEntries same]
 
-theorem selectMessage_value {select : Term → Option β} :
+private theorem selectMessage_value {select : Term → Option β} :
     ∀ {mailbox : List Term} {message : Term} {value : β} {rest : List Term},
       selectMessage select mailbox = some (message, value, rest) → select message = some value
   | [], _, _, _, found => by simp [selectMessage] at found
@@ -894,12 +894,12 @@ theorem selectMessage_value {select : Term → Option β} :
         obtain ⟨_, _, _, found, rfl, rfl, -⟩ := found
         exact selectMessage_value found
 
-theorem State.spawnWith_child (state : State) (processId : PID) (options : SpawnOptions) :
+private theorem State.spawnWith_child (state : State) (processId : PID) (options : SpawnOptions) :
     (state.spawnWith processId options).1 = Kernel.append processId [(state.process processId).children + 1] := by
   unfold State.spawnWith; dsimp only
 
 /-- A request that continues with a computation continues with the same one in every state. -/
-theorem State.request_continue {state state' answered answered' : State} {processId : PID}
+private theorem State.request_continue {state state' answered answered' : State} {processId : PID}
     {next : Term → Result β} {query : Request} {computation computation' : Result β}
     (continued : state.request processId next query = .continue computation answered)
     (continued' : state'.request processId next query = .continue computation' answered') :
@@ -908,13 +908,13 @@ theorem State.request_continue {state state' answered answered' : State} {proces
     (repeat' split at continued) <;> (repeat' split at continued') <;>
     simp_all
 
-theorem Wait.eq_of_identical {first second : Wait} (same : first.identical second = true) : first = second := by
+private theorem Wait.eq_of_identical {first second : Wait} (same : first.identical second = true) : first = second := by
   cases first <;> cases second <;> simp only [Wait.identical, beq_iff_eq, Bool.false_eq_true] at same <;>
     first | rfl | rw [Term.eq_of_identical same] | rw [same]
 
 /-- A process's own step leaves the same processes and outcome in two states
 where it reads the same. -/
-theorem Task.own_shape {state state' : State} {processId : PID} {task : Task α}
+private theorem Task.own_shape {state state' : State} {processId : PID} {task : Task α}
     (view : (task.ownView state processId).identical (task.ownView state' processId) = true)
     (elapsed : state.elapsed = state'.elapsed) :
     Transition.Shapes (task.own state processId) (task.own state' processId) := by
@@ -994,7 +994,7 @@ theorem Task.own_shape {state state' : State} {processId : PID} {task : Task α}
 
 /-- Handling a signal leaves the same processes and outcome in two states
 where it reads the same. -/
-theorem Task.handle_shape {state state' : State} {processId : PID} {task : Task α}
+private theorem Task.handle_shape {state state' : State} {processId : PID} {task : Task α}
     (view : handleViewIdentical (task.handleView state processId) (task.handleView state' processId) = true) :
     Transition.Shapes (task.handle state processId) (task.handle state' processId) := by
   simp only [Task.handleView, Task.handle] at view ⊢
@@ -1018,13 +1018,13 @@ theorem Task.handle_shape {state state' : State} {processId : PID} {task : Task 
 /-! ### Steps on the list of processes -/
 
 /-- Replace the first task of a process by what a function of it gives. -/
-def rewriteTask (processId : PID) (change : Task α → List (PID × Task α)) :
+private def rewriteTask (processId : PID) (change : Task α → List (PID × Task α)) :
     List (PID × Task α) → List (PID × Task α)
   | [] => []
   | (other, task) :: rest =>
       if other = processId then change task ++ rest else (other, task) :: rewriteTask processId change rest
 
-theorem rewriteTask_of_splitAt {processId : PID} {change : Task α → List (PID × Task α)} :
+private theorem rewriteTask_of_splitAt {processId : PID} {change : Task α → List (PID × Task α)} :
     ∀ {tasks before after : List (PID × Task α)} {task : Task α},
       splitAt processId tasks = some (before, task, after) →
         rewriteTask processId change tasks = before ++ change task ++ after
@@ -1042,7 +1042,7 @@ theorem rewriteTask_of_splitAt {processId : PID} {change : Task α → List (PID
         obtain ⟨before', _, _, found, rfl, rfl, rfl⟩ := found
         simp [rewriteTask, same, rewriteTask_of_splitAt found]
 
-theorem rewriteTask_append {processId : PID} {change : Task α → List (PID × Task α)}
+private theorem rewriteTask_append {processId : PID} {change : Task α → List (PID × Task α)}
     {front rest : List (PID × Task α)} (missing : ∀ entry ∈ front, entry.1 ≠ processId) :
     rewriteTask processId change (front ++ rest) = front ++ rewriteTask processId change rest := by
   induction front with
@@ -1053,7 +1053,7 @@ theorem rewriteTask_append {processId : PID} {change : Task α → List (PID × 
     simp [rewriteTask, differ, ih fun entry mem => missing entry (by simp [mem])]
 
 /-- Steps of two different processes rewrite the list of processes in either order alike. -/
-theorem rewriteTask_comm {processId other : PID} (differ : processId ≠ other)
+private theorem rewriteTask_comm {processId other : PID} (differ : processId ≠ other)
     {change change' : Task α → List (PID × Task α)}
     (missing : ∀ task, ∀ entry ∈ change task, entry.1 ≠ other)
     (missing' : ∀ task, ∀ entry ∈ change' task, entry.1 ≠ processId) :
@@ -1072,7 +1072,7 @@ theorem rewriteTask_comm {processId other : PID} (differ : processId ≠ other)
 
 /-! ### Steps by key are steps -/
 
-theorem splitAt_eq {processId : PID} : ∀ {tasks before after : List (PID × Task α)} {task : Task α},
+private theorem splitAt_eq {processId : PID} : ∀ {tasks before after : List (PID × Task α)} {task : Task α},
     splitAt processId tasks = some (before, task, after) → tasks = before ++ (processId, task) :: after
   | [], _, _, _, found => by simp [splitAt] at found
   | (other, task') :: rest, before, after, task, found => by
@@ -1086,7 +1086,7 @@ theorem splitAt_eq {processId : PID} : ∀ {tasks before after : List (PID × Ta
         obtain ⟨before', _, _, found, rfl, rfl, rfl⟩ := found
         simp [splitAt_eq found]
 
-theorem State.mem_processes_of_record {state : State} {processId : PID} {process : ProcessState}
+private theorem State.mem_processes_of_record {state : State} {processId : PID} {process : ProcessState}
     (found : state.record processId = some process) : ∃ record, (processId, record) ∈ state.processes := by
   simp only [State.record, Kernel.lookup_eq] at found
   generalize state.processes = records at found ⊢
@@ -1101,7 +1101,7 @@ theorem State.mem_processes_of_record {state : State} {processId : PID} {process
       obtain ⟨record, mem⟩ := ih found
       exact ⟨record, by simp [mem]⟩
 
-theorem State.record_of_linkPhase {state next : State} {processId target : PID}
+private theorem State.record_of_linkPhase {state next : State} {processId target : PID}
     (phase : state.linkPhase processId target = some next) :
     ∃ process, state.record processId = some process ∧ target ∈ state.exitLinks processId := by
   unfold State.linkPhase at phase
@@ -1118,7 +1118,7 @@ theorem State.record_of_linkPhase {state next : State} {processId target : PID}
     · simp at phase
   · simp at phase
 
-theorem State.record_of_phase {state next : State} {processId : PID}
+private theorem State.record_of_phase {state next : State} {processId : PID}
     (phase : state.phase processId = some next) : ∃ process, state.record processId = some process := by
   unfold State.phase at phase
   split at phase
@@ -1126,7 +1126,7 @@ theorem State.record_of_phase {state next : State} {processId : PID}
   · simp at phase
 
 /-- The step with a key is a step. -/
-theorem Config.step_of_stepOf {config next : Config α} {key : Key} {event : Event}
+private theorem Config.step_of_stepOf {config next : Config α} {key : Key} {event : Event}
     (found : config.stepOf key = some (event, next)) : Step config event next := by
   match config, key with
   | .start .., _ => simp [Config.stepOf] at found
@@ -1193,19 +1193,19 @@ theorem Config.step_of_stepOf {config next : Config α} {key : Key} {event : Eve
 /-! ### At most one process finishes the run -/
 
 /-- Whether a process's result can reach the run's outcome. -/
-def Task.Finishes (task : Task α) : Prop := ∃ result, (task.finish result).isSome = true
+private def Task.Finishes (task : Task α) : Prop := ∃ result, (task.finish result).isSome = true
 
 /-- At most one process can finish the run: the root. -/
-def Config.FinishesOnce : Config α → Prop
+private def Config.FinishesOnce : Config α → Prop
   | .start .. => True
   | .running _ tasks _ _ => ∀ entry ∈ tasks, ∀ entry' ∈ tasks, entry.2.Finishes → entry'.2.Finishes →
       entry.1 = entry'.1
 
 /-- What a transition leaves of a process that can finish the run is that process. -/
-def Transition.Keeps (processId : PID) (task : Task α) (transition : Transition α) : Prop :=
+private def Transition.Keeps (processId : PID) (task : Task α) (transition : Transition α) : Prop :=
   ∀ entry ∈ transition.tasks, entry.2.Finishes → entry.1 = processId ∧ task.Finishes
 
-theorem Task.own_keeps {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+private theorem Task.own_keeps {state : State} {processId : PID} {task : Task α} {transition : Transition α}
     (mem : transition ∈ task.own state processId) : transition.Keeps processId task := by
   obtain ⟨computation, finish, wait⟩ := task
   intro entry inside finishes
@@ -1235,7 +1235,7 @@ theorem Task.own_keeps {state : State} {processId : PID} {task : Task α} {trans
       split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
         simp only [List.mem_singleton] at inside <;> subst inside <;> exact ⟨rfl, finishes⟩
 
-theorem Task.handle_keeps {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+private theorem Task.handle_keeps {state : State} {processId : PID} {task : Task α} {transition : Transition α}
     (mem : transition ∈ task.handle state processId) : transition.Keeps processId task := by
   intro entry inside finishes
   simp only [Task.handle] at mem
@@ -1252,7 +1252,7 @@ theorem Task.handle_keeps {state : State} {processId : PID} {task : Task α} {tr
       · exact ⟨rfl, finishes⟩
 
 /-- Every step keeps at most one process able to finish the run. -/
-theorem Config.FinishesOnce.step {config next : Config α} {event : Event} (once : config.FinishesOnce)
+private theorem Config.FinishesOnce.step {config next : Config α} {event : Event} (once : config.FinishesOnce)
     (step : Step config event next) : next.FinishesOnce := by
   cases config with
   | start env computation elapsed =>
@@ -1315,7 +1315,7 @@ theorem Config.FinishesOnce.step {config next : Config α} {event : Event} (once
 
 /-! ### What a step by key does to the processes -/
 
-theorem lookup_of_splitAt {processId : PID} : ∀ {tasks before after : List (PID × Task α)} {task : Task α},
+private theorem lookup_of_splitAt {processId : PID} : ∀ {tasks before after : List (PID × Task α)} {task : Task α},
     splitAt processId tasks = some (before, task, after) → Kernel.lookup processId tasks = some task
   | [], _, _, _, found => by simp [splitAt] at found
   | (other, task') :: rest, before, after, task, found => by
@@ -1338,7 +1338,7 @@ theorem lookup_of_splitAt {processId : PID} : ∀ {tasks before after : List (PI
         simpa [Kernel.lookup_eq, List.lookup_cons, differ'] using this
 
 /-- What a process's own step does, by key. -/
-theorem Config.stepOf_own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+private theorem Config.stepOf_own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {event : Event} {next : Config α}
     (found : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next)) :
     ∃ task transition, Kernel.lookup processId tasks = some task ∧
@@ -1352,7 +1352,7 @@ theorem Config.stepOf_own {state : State} {tasks : List (PID × Task α)} {finis
   simp only [Transition.apply, Kernel.append_eq, rewriteTask_of_splitAt split, List.append_assoc]
 
 /-- What handling a signal does, by key. -/
-theorem Config.stepOf_handle {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+private theorem Config.stepOf_handle {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {event : Event} {next : Config α}
     (found : (Config.running state tasks finished false).stepOf (.handle processId) = some (event, next)) :
     ∃ task transition, Kernel.lookup processId tasks = some task ∧
@@ -1366,7 +1366,7 @@ theorem Config.stepOf_handle {state : State} {tasks : List (PID × Task α)} {fi
   simp only [Transition.apply, Kernel.append_eq, rewriteTask_of_splitAt split, List.append_assoc]
 
 /-- A step that is no process's own nor handling leaves the processes as they are. -/
-theorem Config.stepOf_keeps {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+private theorem Config.stepOf_keeps {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {key : Key} {event : Event} {next : Config α} (owner : key.owner = none)
     (found : (Config.running state tasks finished false).stepOf key = some (event, next)) :
     ∃ state', next = .running state' tasks finished false := by
@@ -1375,7 +1375,7 @@ theorem Config.stepOf_keeps {state : State} {tasks : List (PID × Task α)} {fin
     obtain ⟨_, _, -, rfl⟩ := found <;> exact ⟨_, rfl⟩
 
 /-- How handling a signal changes its process, given what it reads and the process's task. -/
-def handleChange (processId : PID) (view : Option Term × Option Term) (task : Task α) : List (PID × Task α) :=
+private def handleChange (processId : PID) (view : Option Term × Option Term) (task : Task α) : List (PID × Task α) :=
   match view.1 with
   | some _ => []
   | none =>
@@ -1384,12 +1384,12 @@ def handleChange (processId : PID) (view : Option Term × Option Term) (task : T
     | _, _ => [(processId, task)]
 
 /-- The run's result handling a signal leaves, given what it reads and the process's task. -/
-def handleFinished (view : Option Term × Option Term) (task : Task α) : Option (Except Exception α) :=
+private def handleFinished (view : Option Term × Option Term) (task : Task α) : Option (Except Exception α) :=
   match view.1 with
   | some reason => task.finish (.error (.exit reason))
   | none => none
 
-theorem Task.handle_change {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+private theorem Task.handle_change {state : State} {processId : PID} {task : Task α} {transition : Transition α}
     (mem : transition ∈ task.handle state processId) :
     ∃ view, task.handleView state processId = some view ∧
       transition.tasks = handleChange processId view task ∧
@@ -1412,7 +1412,7 @@ theorem Task.handle_change {state : State} {processId : PID} {task : Task α} {t
       cases resumed <;> cases wait <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
         simp [handleChange, handleFinished]
 
-theorem lookup_append_of_missing {β : Type _} {key : PID} {front rest : List (PID × β)}
+private theorem lookup_append_of_missing {β : Type _} {key : PID} {front rest : List (PID × β)}
     (missing : ∀ entry ∈ front, entry.1 ≠ key) : (front ++ rest).lookup key = rest.lookup key := by
   induction front with
   | nil => rfl
@@ -1422,7 +1422,7 @@ theorem lookup_append_of_missing {β : Type _} {key : PID} {front rest : List (P
       have := missing (key', value) (by simp); simp [Ne.symm this]
     simp [List.lookup_cons, differ, ih fun entry mem => missing entry (by simp [mem])]
 
-theorem lookup_rewriteTask {processId other : PID} {change : Task α → List (PID × Task α)}
+private theorem lookup_rewriteTask {processId other : PID} {change : Task α → List (PID × Task α)}
     (differ : other ≠ processId) (missing : ∀ task, ∀ entry ∈ change task, entry.1 ≠ other) :
     ∀ tasks : List (PID × Task α),
       Kernel.lookup other (rewriteTask processId change tasks) = Kernel.lookup other tasks
@@ -1438,7 +1438,7 @@ theorem lookup_rewriteTask {processId other : PID} {change : Task α → List (P
         split <;> simp_all
 
 /-- Rewriting a process's task by itself leaves the list as it is. -/
-theorem rewriteTask_keep (processId : PID) :
+private theorem rewriteTask_keep (processId : PID) :
     ∀ tasks : List (PID × Task α), rewriteTask processId (fun task => [(processId, task)]) tasks = tasks
   | [] => rfl
   | (key, task) :: rest => by
@@ -1446,7 +1446,7 @@ theorem rewriteTask_keep (processId : PID) :
       · subst same; simp [rewriteTask]
       · simp [rewriteTask, same, rewriteTask_keep processId rest]
 
-theorem handleChange_pids {processId : PID} {view : Option Term × Option Term} {task : Task α} :
+private theorem handleChange_pids {processId : PID} {view : Option Term × Option Term} {task : Task α} :
     ∀ entry ∈ handleChange processId view task, entry.1 = processId := by
   intro entry mem
   unfold handleChange at mem
@@ -1454,7 +1454,7 @@ theorem handleChange_pids {processId : PID} {view : Option Term × Option Term} 
   · simp at mem
   · split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> rfl
 
-theorem handleFinished_some {view : Option Term × Option Term} {task : Task α}
+private theorem handleFinished_some {view : Option Term × Option Term} {task : Task α}
     (finished : (handleFinished view task).isSome = true) :
     handleChange processId view task = [] ∧ task.Finishes := by
   unfold handleFinished at finished
@@ -1465,7 +1465,7 @@ theorem handleFinished_some {view : Option Term × Option Term} {task : Task α}
   · simp at finished
 
 /-- A process's own step leaves itself, and the child it spawns. -/
-theorem Task.own_pids {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+private theorem Task.own_pids {state : State} {processId : PID} {task : Task α} {transition : Transition α}
     (mem : transition ∈ task.own state processId) :
     ∀ entry ∈ transition.tasks, entry.1 = processId ∨
       entry.1 = Kernel.append processId [(state.process processId).children + 1] ∧
@@ -1498,7 +1498,7 @@ theorem Task.own_pids {state : State} {processId : PID} {task : Task α} {transi
         simp only [List.mem_singleton] at inside <;> subst inside <;> exact .inl rfl
 
 /-- A process's own step that finishes the run ends the process. -/
-theorem Task.own_finished {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+private theorem Task.own_finished {state : State} {processId : PID} {task : Task α} {transition : Transition α}
     (mem : transition ∈ task.own state processId) (finished : transition.finished.isSome = true) :
     transition.tasks = [] ∧ task.Finishes := by
   obtain ⟨computation, finish, wait⟩ := task
@@ -1524,14 +1524,14 @@ theorem Task.own_finished {state : State} {processId : PID} {task : Task α} {tr
 
 /-- What a step does to the processes: it rewrites its process's task, and
 sets the run's result from it. -/
-structure TaskChange (α : Type) : Type 1 where
+private structure TaskChange (α : Type) : Type 1 where
   processId : PID
   change : Task α → List (PID × Task α)
   finish : Task α → Option (Except Exception α)
 
 /-- The configuration a step leads to, by what it does to the processes: for a
 step of no process, it leaves them as they are. -/
-def Config.Changes (config : Config α) (change : Option (TaskChange α)) (next : Config α) : Prop :=
+private def Config.Changes (config : Config α) (change : Option (TaskChange α)) (next : Config α) : Prop :=
   match config with
   | .running _ tasks finished false => ∃ state', match change with
     | none => next = .running state' tasks finished false
@@ -1541,14 +1541,14 @@ def Config.Changes (config : Config α) (change : Option (TaskChange α)) (next 
   | _ => False
 
 /-- What a process's own step does, given its transition. -/
-def Transition.change (processId : PID) (transition : Transition α) : TaskChange α :=
+private def Transition.change (processId : PID) (transition : Transition α) : TaskChange α :=
   ⟨processId, fun _ => transition.tasks, fun _ => transition.finished⟩
 
 /-- What handling a signal does, given what it reads. -/
-def handleTaskChange (processId : PID) (view : Option Term × Option Term) : TaskChange α :=
+private def handleTaskChange (processId : PID) (view : Option Term × Option Term) : TaskChange α :=
   ⟨processId, handleChange processId view, handleFinished view⟩
 
-theorem Config.changes_own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+private theorem Config.changes_own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {event : Event} {next : Config α} {task : Task α} {transition : Transition α}
     (found : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next))
     (lookup : Kernel.lookup processId tasks = some task) (head : (task.own state processId).head? = some transition)
@@ -1559,7 +1559,7 @@ theorem Config.changes_own {state : State} {tasks : List (PID × Task α)} {fini
   rw [head] at head'; simp only [Option.some.injEq] at head'; subst head'
   exact ⟨transition.state.normalize, task, lookup, by simp [exhausted, Transition.change]⟩
 
-theorem rewriteTask_of_lookup {processId : PID} {change : Task α → List (PID × Task α)} {task : Task α} :
+private theorem rewriteTask_of_lookup {processId : PID} {change : Task α → List (PID × Task α)} {task : Task α} :
     ∀ {tasks : List (PID × Task α)}, Kernel.lookup processId tasks = some task →
       rewriteTask processId change tasks = rewriteTask processId (fun _ => change task) tasks
   | [], found => by simp [Kernel.lookup_eq] at found
@@ -1573,7 +1573,7 @@ theorem rewriteTask_of_lookup {processId : PID} {change : Task α → List (PID 
         simp only [Kernel.lookup_eq, List.lookup_cons, differ] at found
         simp [rewriteTask, same, rewriteTask_of_lookup (by simpa [Kernel.lookup_eq] using found)]
 
-theorem Config.changes_handle {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+private theorem Config.changes_handle {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {event : Event} {next : Config α}
     (found : (Config.running state tasks finished false).stepOf (.handle processId) = some (event, next)) :
     ∃ task view, Kernel.lookup processId tasks = some task ∧ task.handleView state processId = some view ∧
@@ -1583,14 +1583,14 @@ theorem Config.changes_handle {state : State} {tasks : List (PID × Task α)} {f
   refine ⟨task, view, lookup, read, transition.state.normalize, task, lookup, ?_⟩
   simp [exhausted, tasks', finished', handleTaskChange, rewriteTask_of_lookup (change := handleChange processId view) lookup]
 
-theorem Config.changes_keeps {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+private theorem Config.changes_keeps {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {key : Key} {event : Event} {next : Config α} (owner : key.owner = none)
     (found : (Config.running state tasks finished false).stepOf key = some (event, next)) :
     (Config.running state tasks finished false).Changes none next := by
   obtain ⟨state', rfl⟩ := Config.stepOf_keeps owner found
   exact ⟨state', rfl⟩
 
-theorem Transition.Shapes.head {transitions transitions' : List (Transition α)}
+private theorem Transition.Shapes.head {transitions transitions' : List (Transition α)}
     (shapes : Transition.Shapes transitions transitions') {transition : Transition α}
     (head : transitions.head? = some transition) :
     ∃ transition', transitions'.head? = some transition' ∧ transition.Shape transition' := by
@@ -1605,7 +1605,7 @@ theorem Transition.Shapes.head {transitions transitions' : List (Transition α)}
 
 /-- A process's own step makes the same change in two configurations where its
 process has the same task and reads the same. -/
-theorem Config.changes_own_transfer {state state' : State} {tasks tasks' : List (PID × Task α)}
+private theorem Config.changes_own_transfer {state state' : State} {tasks tasks' : List (PID × Task α)}
     {finished finished' : Option (Except Exception α)} {processId : PID} {event event' : Event}
     {next next' : Config α} {task : Task α}
     (found : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next))
@@ -1633,7 +1633,7 @@ theorem Config.changes_own_transfer {state state' : State} {tasks tasks' : List 
     exact Config.changes_own found' lookup' head' (exhaustedEqual ▸ exhausted)
 
 /-- Handling a signal makes the same change in two configurations where it reads the same. -/
-theorem Config.changes_handle_transfer {state state' : State} {tasks tasks' : List (PID × Task α)}
+private theorem Config.changes_handle_transfer {state state' : State} {tasks tasks' : List (PID × Task α)}
     {finished finished' : Option (Except Exception α)} {processId : PID} {event event' : Event}
     {next next' : Config α}
     (found : (Config.running state tasks finished false).stepOf (.handle processId) = some (event, next))
@@ -1654,14 +1654,14 @@ theorem Config.changes_handle_transfer {state state' : State} {tasks tasks' : Li
   subst exitsEqual; subst resumedEqual
   exact ⟨task, _, lookup, reads, changes, changes'⟩
 
-theorem orElse_comm_of_not_both {first second : Option γ} {rest : Option γ}
+private theorem orElse_comm_of_not_both {first second : Option γ} {rest : Option γ}
     (notBoth : first.isSome = true → second.isSome = true → False) :
     (second.orElse fun _ => first.orElse fun _ => rest) = (first.orElse fun _ => second.orElse fun _ => rest) := by
   cases first <;> cases second <;> simp_all
 
 /-- Two steps of different processes, in either order, leave the same
 processes and result, when at most one of them sets the result. -/
-theorem Config.changes_comm {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+private theorem Config.changes_comm {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {change change' : TaskChange α} {next next' last last' : Config α}
     (first : (Config.running state tasks finished false).Changes (some change) next)
     (second : (Config.running state tasks finished false).Changes (some change') next')
@@ -1687,7 +1687,7 @@ theorem Config.changes_comm {state : State} {tasks : List (PID × Task α)} {fin
 
 /-- A step of no process and a step of a process, in either order, leave the
 same processes and result. -/
-theorem Config.changes_comm_keeps {state : State} {tasks : List (PID × Task α)}
+private theorem Config.changes_comm_keeps {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {change : TaskChange α} {next next' last last' : Config α}
     (first : (Config.running state tasks finished false).Changes (some change) next)
     (second : (Config.running state tasks finished false).Changes none next')
@@ -1702,7 +1702,7 @@ theorem Config.changes_comm_keeps {state : State} {tasks : List (PID × Task α)
   exact ⟨_, _, state₃, state₄, rfl, rfl⟩
 
 /-- Two steps of no process, in either order, leave the processes and result. -/
-theorem Config.changes_comm_none {state : State} {tasks : List (PID × Task α)}
+private theorem Config.changes_comm_none {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {next next' last last' : Config α}
     (first : (Config.running state tasks finished false).Changes none next)
     (second : (Config.running state tasks finished false).Changes none next')
@@ -1717,12 +1717,12 @@ theorem Config.changes_comm_none {state : State} {tasks : List (PID × Task α)}
 
 /-! ### Facts the commutation proof uses -/
 
-theorem Config.stepOf_exhausted {state : State} {tasks : List (PID × Task α)}
+private theorem Config.stepOf_exhausted {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} (key : Key) :
     (Config.running state tasks finished true).stepOf key = none := by
   cases key <;> rfl
 
-theorem Config.running_of_stepOf {config : Config α} {key : Key} {step : Event × Config α}
+private theorem Config.running_of_stepOf {config : Config α} {key : Key} {step : Event × Config α}
     (found : config.stepOf key = some step) :
     ∃ state tasks finished, config = .running state tasks finished false := by
   match config with
@@ -1730,12 +1730,12 @@ theorem Config.running_of_stepOf {config : Config α} {key : Key} {step : Event 
   | .running _ _ _ true => simp [Config.stepOf_exhausted] at found
   | .running state tasks finished false => exact ⟨state, tasks, finished, rfl⟩
 
-theorem State.handle_not_waiting (state : State) (processId : PID) (entry : Entry) :
+private theorem State.handle_not_waiting (state : State) (processId : PID) (entry : Entry) :
     (state.handle processId none entry).2.1 = none := by
   obtain ⟨source, signal⟩ := entry
   cases signal <;> simp only [State.handle] <;> (try split) <;> rfl
 
-theorem Task.handleView_not_waiting {state : State} {processId : PID} {task : Task α}
+private theorem Task.handleView_not_waiting {state : State} {processId : PID} {task : Task α}
     {view : Option Term × Option Term} (waiting : task.wait = none)
     (read : task.handleView state processId = some view) : view.2 = none := by
   simp only [Task.handleView, waiting, Option.map_none] at read
@@ -1745,14 +1745,14 @@ theorem Task.handleView_not_waiting {state : State} {processId : PID} {task : Ta
     rw [← read]
     exact State.handle_not_waiting _ _ _
 
-theorem handleChange_keep {processId : PID} {exits : Option Term} :
+private theorem handleChange_keep {processId : PID} {exits : Option Term} :
     exits = none → handleChange (α := α) processId (exits, none) = fun task => [(processId, task)] := by
   intro none'; subst none'
   funext task
   obtain ⟨_, _, wait⟩ := task
   cases wait <;> rfl
 
-theorem mem_of_lookup {β : Type _} {processId : PID} {value : β} :
+private theorem mem_of_lookup {β : Type _} {processId : PID} {value : β} :
     ∀ {entries : List (PID × β)}, Kernel.lookup processId entries = some value → (processId, value) ∈ entries
   | [], found => by simp [Kernel.lookup_eq] at found
   | (key, value') :: rest, found => by
@@ -1764,7 +1764,7 @@ theorem mem_of_lookup {β : Type _} {processId : PID} {value : β} :
         simp only [Kernel.lookup_eq, List.lookup_cons, differ] at found
         exact List.mem_cons_of_mem _ (mem_of_lookup (by simpa [Kernel.lookup_eq] using found))
 
-theorem lookup_eq_none_of_missing {β : Type _} {key : PID} :
+private theorem lookup_eq_none_of_missing {β : Type _} {key : PID} :
     ∀ {entries : List (PID × β)}, (∀ entry ∈ entries, entry.1 ≠ key) → entries.lookup key = none
   | [], _ => rfl
   | (key', value) :: rest, missing => by
@@ -1775,7 +1775,7 @@ theorem lookup_eq_none_of_missing {β : Type _} {key : PID} :
       exact lookup_eq_none_of_missing rest'
 
 /-- No process has two tasks, as `Config.distinctTasks` checks. -/
-theorem distinct_of_distinctTasks {state : State} {tasks : List (PID × Task α)}
+private theorem distinct_of_distinctTasks {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {exhausted : Bool}
     (distinct : (Config.running state tasks finished exhausted).distinctTasks = true) :
     tasks.Pairwise fun entry entry' => entry.1 ≠ entry'.1 := by
@@ -1796,7 +1796,7 @@ theorem distinct_of_distinctTasks {state : State} {tasks : List (PID × Task α)
       exact .inr ⟨(before, (key, task), after), mem', rfl⟩
 
 /-- In a list where no process has two tasks, a process whose task is removed has none. -/
-theorem lookup_rewriteTask_remove {processId : PID} :
+private theorem lookup_rewriteTask_remove {processId : PID} :
     ∀ {tasks : List (PID × Task α)}, tasks.Pairwise (fun entry entry' => entry.1 ≠ entry'.1) →
       Kernel.lookup processId (rewriteTask processId (fun _ => []) tasks) = none
   | [], _ => rfl
@@ -1813,7 +1813,7 @@ theorem lookup_rewriteTask_remove {processId : PID} :
 /-! ### Own steps for the commutation proof -/
 
 /-- A process's own step that another step can follow does not stop the run. -/
-theorem Config.own_step {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+private theorem Config.own_step {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {event : Event} {next : Config α} {key : Key} {step : Event × Config α}
     (found : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next))
     (more : next.stepOf key = some step) :
@@ -1835,7 +1835,7 @@ theorem Config.own_step {state : State} {tasks : List (PID × Task α)} {finishe
 
 /-- A process's own step makes the change it makes at a configuration in
 another where its process has the same task and it reads the same. -/
-theorem Config.own_transfer {state state' : State} {tasks tasks' : List (PID × Task α)}
+private theorem Config.own_transfer {state state' : State} {tasks tasks' : List (PID × Task α)}
     {finished finished' : Option (Except Exception α)} {processId : PID} {event event' : Event}
     {next next' : Config α} {task : Task α} {transition : Transition α}
     (found : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next))
@@ -1852,7 +1852,7 @@ theorem Config.own_transfer {state state' : State} {tasks tasks' : List (PID × 
   exact (changes exhausted).2
 
 /-- The tasks a process's own step leaves are its own and a child no process has yet. -/
-theorem Config.own_missing {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+private theorem Config.own_missing {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId other : PID} {task task' : Task α} {transition : Transition α}
     (fresh : (Config.running state tasks finished false).spawnsFresh (.own processId) = true)
     (lookup : Kernel.lookup processId tasks = some task) (waiting : task.wait = none)
@@ -1869,16 +1869,16 @@ theorem Config.own_missing {state : State} {tasks : List (PID × Task α)} {fini
       List.any_eq_false, beq_iff_eq] at fresh
     exact fresh (other, task') (mem_of_lookup present) (by rw [← same, child])
 
-theorem Config.own_finishes {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+private theorem Config.own_finishes {state : State} {processId : PID} {task : Task α} {transition : Transition α}
     (head : (task.own state processId).head? = some transition)
     (finished : ((transition.change processId).finish task).isSome = true) : task.Finishes :=
   (Task.own_finished (List.mem_of_head? head) finished).2
 
-theorem handleFinishes {processId : PID} {view : Option Term × Option Term} {task : Task α}
+private theorem handleFinishes {processId : PID} {view : Option Term × Option Term} {task : Task α}
     (finished : ((handleTaskChange processId view).finish task).isSome = true) : task.Finishes :=
   (handleFinished_some (processId := processId) finished).2
 
-theorem State.eq_of_identical {first second : State} (same : first.identical second = true)
+private theorem State.eq_of_identical {first second : State} (same : first.identical second = true)
     (elapsed : first.elapsed = second.elapsed) : first = second := by
   obtain ⟨processes, timers, elapsed₁⟩ := first
   obtain ⟨processes', timers', elapsed₂⟩ := second
@@ -1892,13 +1892,13 @@ theorem State.eq_of_identical {first second : State} (same : first.identical sec
   rw [records, eq_of_identicalLists Timer.eq_of_identical same.2, elapsed]
 
 /-- The owners of two keys that `Config.commutesAfter` lets commute. -/
-theorem Key.owners_differ {processId other : PID}
+private theorem Key.owners_differ {processId other : PID}
     (owners : (!((some processId).isSome && some processId == some other && true)) = true) : processId ≠ other := by
   intro same; subst same; simp at owners
 
 /-- A process's own step and another step that `Config.commutesAfter` compares
 in both orders leave the same processes and result. -/
-theorem Config.processes_own {state : State} {tasks : List (PID × Task α)}
+private theorem Config.processes_own {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {processId : PID} {other : Key} {event event' event₃ event₄ : Event}
     {next next' last last' : Config α}
     (within : state.Within elapsed) (once : (Config.running state tasks finished false).FinishesOnce)
@@ -2021,7 +2021,7 @@ theorem Config.processes_own {state : State} {tasks : List (PID × Task α)}
 
 /-- Two steps that `Config.commutesAfter` compares in both orders leave the
 same processes and result. -/
-theorem Config.processes_of_fallback {state : State} {tasks : List (PID × Task α)}
+private theorem Config.processes_of_fallback {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {key other : Key} {event event' event₃ event₄ : Event}
     {next next' last last' : Config α}
     (within : state.Within elapsed) (once : (Config.running state tasks finished false).FinishesOnce)
@@ -2101,7 +2101,7 @@ theorem Config.processes_of_fallback {state : State} {tasks : List (PID × Task 
 
 /-- Two steps that the evaluated comparison of `Config.commutesAfter` accepts
 reach the same configuration in either order. -/
-theorem Config.commutes_of_fallback {state : State} {tasks : List (PID × Task α)}
+private theorem Config.commutes_of_fallback {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {key other : Key} {event event' event₃ event₄ : Event}
     {next next' last last' : Config α}
     (within : state.Within elapsed) (once : (Config.running state tasks finished false).FinishesOnce)
