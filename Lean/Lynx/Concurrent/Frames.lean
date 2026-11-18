@@ -240,14 +240,16 @@ private def Framed (reads writes : Mask) (base : ProcessState) (change : Process
   QueueChange (writes headBit) (writes tailBit) reads base change ∧
   (reads tailBit → reads headBit) ∧
   (reads headBit → base.queue ≠ []) ∧
-  (writes headBit → reads headBit)
+  (writes headBit → reads headBit) ∧
+  (writes liveBit = false → ∀ process, process.Same reads base →
+    (change process).exiting.isSome = process.exiting.isSome)
 
 /-- A change within its frame keeps what a frame it writes nothing of reads. -/
 private theorem Framed.keeps {reads writes reads' : Mask} {base : ProcessState} {change : ProcessState → ProcessState}
     (framed : Framed reads writes base change) (apart : ∀ bit, writes bit → reads' bit → False)
     (nonempty : reads' headBit → base.queue ≠ []) (tail : reads' tailBit → reads' headBit) :
     (change base).Same reads' base := by
-  obtain ⟨keeps, -, queue, -, -, -⟩ := framed
+  obtain ⟨keeps, -, queue, -, -, -, -⟩ := framed
   have self := ProcessState.Same.refl reads base
   refine ⟨fun inside => ?_, fun inside => ?_, fun part inside => ?_⟩
   · have head := tail inside
@@ -282,8 +284,8 @@ private theorem Framed.comm {reads writes reads' writes' : Mask} {base : Process
   have same' : (change base).Same reads' base := framed.keeps apartReads framed'.2.2.2.2.1 framed'.2.2.2.1
   have self := ProcessState.Same.refl reads base
   have self' := ProcessState.Same.refl reads' base
-  obtain ⟨keeps, depends, queue, -, nonempty, pops⟩ := framed
-  obtain ⟨keeps', depends', queue', -, nonempty', pops'⟩ := framed'
+  obtain ⟨keeps, depends, queue, -, nonempty, pops, -⟩ := framed
+  obtain ⟨keeps', depends', queue', -, nonempty', pops', -⟩ := framed'
   refine ProcessState.ext_get ?_ fun part => ?_
   · cases head : writes headBit <;> cases tail : writes tailBit <;>
       cases head' : writes' headBit <;> cases tail' : writes' tailBit <;>
@@ -356,5 +358,103 @@ private theorem apart_of_framesApart {frames frames' : List Frame} (apart : fram
     rcases apart entry mem entry' mem' with differ | ⟨-, zero⟩
     · exact differ (same.trans same'.symm)
     · exact testBit_and_zero zero bitWritten bitRead
+
+/-! ### Effects within frames -/
+
+/-- Two records, or their absence, agree on a mask: alike live, when it reads
+liveness, and agreeing on its fields when both exist. -/
+private def RecordSame (mask : Mask) (record record' : Option ProcessState) : Prop :=
+  (mask liveBit → record.map (·.exiting.isSome) = record'.map (·.exiting.isSome)) ∧
+  ∀ process process', record = some process → record' = some process' → process.Same mask process'
+
+private theorem RecordSame.refl (mask : Mask) (record : Option ProcessState) : RecordSame mask record record :=
+  ⟨fun _ => rfl, fun process process' found found' => by
+    rw [found] at found'; simp only [Option.some.injEq] at found'; subst found'
+    exact ProcessState.Same.refl _ _⟩
+
+private theorem Part.bit_lt (part : Part) : part.bit < 17 := by cases part <;> decide
+
+/-- An effect within the frames of a step at a state: it changes only records
+the frames name, and each within its frame, unless the frames write every
+field of the record, as when the step ends or starts the process. -/
+private def Effect.InFrames (effect : Effect) (frames : List Frame) (state : State) : Prop :=
+  ∀ processId, effect.record processId = id ∨
+    (∀ bit, bit < 17 → writesOf frames processId bit) ∨
+    ∃ change, effect.record processId = Option.map change ∧
+      (∃ bit, bit < 17 ∧ (readsOf frames processId bit ∨ writesOf frames processId bit)) ∧
+      ∀ process, state.record processId = some process →
+        Framed (readsOf frames processId) (writesOf frames processId) process change
+
+/-- An effect keeps what frames it writes nothing of read. -/
+private theorem Effect.InFrames.keeps {effect : Effect} {frames frames' : List Frame} {state : State}
+    (framed : effect.InFrames frames state)
+    (apart : ∀ processId bit, writesOf frames processId bit → readsOf frames' processId bit → False)
+    (nonempty : ∀ processId process, state.record processId = some process →
+      readsOf frames' processId headBit → process.queue ≠ [])
+    (tail : ∀ processId, readsOf frames' processId tailBit → readsOf frames' processId headBit)
+    (processId : PID) :
+    RecordSame (readsOf frames' processId) (state.record processId) ((effect.apply state).record processId) := by
+  rw [Effect.record_apply]
+  rcases framed processId with same | all | ⟨change, equal, -, framed⟩
+  · rw [same]; exact RecordSame.refl _ _
+  · refine ⟨fun read => (apart processId liveBit (all liveBit (by decide)) read).elim,
+      fun process process' _ _ => ⟨fun read => ?_, fun read => ?_, fun part read => ?_⟩⟩
+    · exact (apart processId tailBit (all tailBit (by decide)) read).elim
+    · exact (apart processId headBit (all headBit (by decide)) read).elim
+    · exact (apart processId part.bit (all part.bit part.bit_lt) read).elim
+  · rw [equal]
+    cases found : state.record processId with
+    | none => exact ⟨fun _ => rfl, fun _ _ none => by simp at none⟩
+    | some process =>
+      have keeps := (framed process found).keeps (apart processId)
+        (fun read => nonempty processId process found read) (tail processId)
+      refine ⟨fun read => ?_, fun process₁ process₂ found₁ found₂ => ?_⟩
+      · simp only [Option.map_some, Option.some.injEq]
+        cases written : writesOf frames processId liveBit
+        · exact ((framed process found).2.2.2.2.2.2 written process (ProcessState.Same.refl _ _)).symm
+        · exact (apart processId liveBit written read).elim
+      · simp only [Option.some.injEq, Option.map_some] at found₁ found₂; subst found₁; subst found₂
+        exact keeps.symm
+
+/-- A change within a frame that reads and writes nothing of a record leaves it as it is. -/
+private theorem Framed.id {reads writes : Mask} {base : ProcessState} {change : ProcessState → ProcessState}
+    (framed : Framed reads writes base change) (unused : ∀ bit, bit < 17 → reads bit = false ∧ writes bit = false)
+    (process : ProcessState) : change process = process := by
+  obtain ⟨keeps, -, queue, -⟩ := framed
+  have same : process.Same reads base :=
+    ⟨fun read => by simp [(unused tailBit (by decide)).1] at read,
+      fun read => by simp [(unused headBit (by decide)).1] at read,
+      fun part read => by simp [(unused part.bit part.bit_lt).1] at read⟩
+  simp only [QueueChange, (unused headBit (by decide)).2, (unused tailBit (by decide)).2] at queue
+  exact ProcessState.ext_get (queue process same) fun part => keeps process same part (unused _ part.bit_lt).2
+
+/-- Two effects within frames apart change every record alike in either order. -/
+private theorem Effect.record_comm {effect effect' : Effect} {frames frames' : List Frame} {state : State}
+    (framed : effect.InFrames frames state) (framed' : effect'.InFrames frames' state)
+    (apart : ∀ processId bit, writesOf frames processId bit →
+      readsOf frames' processId bit ∨ writesOf frames' processId bit → False)
+    (apart' : ∀ processId bit, writesOf frames' processId bit → readsOf frames processId bit → False)
+    (processId : PID) :
+    effect.record processId (effect'.record processId (state.record processId)) =
+      effect'.record processId (effect.record processId (state.record processId)) := by
+  rcases framed processId with same | all | ⟨change, equal, used, inside⟩ <;>
+    rcases framed' processId with same' | all' | ⟨change', equal', used', inside'⟩
+  all_goals first
+    | (rw [same]; rfl)
+    | (rw [same']; rfl)
+    | exact (apart processId 0 (all 0 (by decide)) (.inr (all' 0 (by decide)))).elim
+    | skip
+  · obtain ⟨bit, lower, used'⟩ := used'
+    exact (apart processId bit (all bit lower) used').elim
+  · obtain ⟨bit, lower, read | written⟩ := used
+    · exact (apart' processId bit (all' bit lower) read).elim
+    · exact (apart processId bit written (.inr (all' bit lower))).elim
+  · rw [equal, equal']
+    cases found : state.record processId with
+    | none => rfl
+    | some process =>
+      simp only [Option.map_some]
+      exact congrArg some ((inside process found).comm (inside' process found) (apart processId)
+        (apart' processId))
 
 end Lynx.Concurrent
