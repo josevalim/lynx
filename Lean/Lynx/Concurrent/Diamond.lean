@@ -251,30 +251,37 @@ theorem Sorted.normalize {state : State} (sorted : Sorted state.processes) : Sor
   refine List.Pairwise.filter _ ?_
   exact List.pairwise_map.mpr (sorted.imp id)
 
-/-! ### Every step keeps the records sorted -/
+/-! ### Every step keeps the records sorted and the time elapsed -/
 
 /-- A state whose records are sorted. -/
 def State.Sorted (state : State) : Prop := Lynx.Concurrent.Sorted state.processes
 
-theorem State.Sorted.set {state : State} (sorted : state.Sorted) (processId : PID) (process : ProcessState) :
-    (state.set processId process).Sorted :=
-  Lynx.Concurrent.Sorted.insertRecord sorted processId process
+variable {elapsed : PID → Nat → Nat}
 
-theorem State.Sorted.remove {state : State} (sorted : state.Sorted) (processId : PID) :
-    (state.remove processId).Sorted := by
-  simp only [State.Sorted, State.remove, Kernel.filter_eq]; exact Lynx.Concurrent.Sorted.filter sorted _
+/-- A state whose records are sorted, with the time elapsed when timers are
+canceled, which no step changes. -/
+def State.Within (elapsed : PID → Nat → Nat) (state : State) : Prop :=
+  state.Sorted ∧ state.elapsed = elapsed
 
-theorem State.Sorted.modify {state : State} (sorted : state.Sorted) (processId : PID)
-    (change : ProcessState → ProcessState) : (state.modify processId change).Sorted := by
+theorem State.Within.set {state : State} (sorted : state.Within elapsed) (processId : PID) (process : ProcessState) :
+    (state.set processId process).Within elapsed :=
+  ⟨Lynx.Concurrent.Sorted.insertRecord sorted.1 processId process, sorted.2⟩
+
+theorem State.Within.remove {state : State} (sorted : state.Within elapsed) (processId : PID) :
+    (state.remove processId).Within elapsed := by
+  simp only [State.Within, State.remove, Kernel.filter_eq]; exact ⟨Lynx.Concurrent.Sorted.filter sorted.1 _, sorted.2⟩
+
+theorem State.Within.modify {state : State} (sorted : state.Within elapsed) (processId : PID)
+    (change : ProcessState → ProcessState) : (state.modify processId change).Within elapsed := by
   unfold State.modify; split
   · exact sorted.set _ _
   · exact sorted
 
-theorem State.Sorted.normalize {state : State} (sorted : state.Sorted) : state.normalize.Sorted :=
-  Lynx.Concurrent.Sorted.normalize sorted
+theorem State.Within.normalize {state : State} (sorted : state.Within elapsed) : state.normalize.Within elapsed :=
+  ⟨Lynx.Concurrent.Sorted.normalize sorted.1, sorted.2⟩
 
-theorem State.Sorted.timers {state : State} (sorted : state.Sorted) (timers : List Timer) :
-    ({ state with timers } : State).Sorted := sorted
+theorem State.Within.timers {state : State} (sorted : state.Within elapsed) (timers : List Timer) :
+    ({ state with timers } : State).Within elapsed := sorted
 
 /-- Prove that an operation built from replacing, changing and removing
 records keeps them sorted. -/
@@ -282,27 +289,27 @@ syntax "sorted_step" : tactic
 macro_rules
   | `(tactic| sorted_step) => `(tactic| first
       | with_reducible assumption
-      | with_reducible apply State.Sorted.set | with_reducible apply State.Sorted.remove
-      | with_reducible apply State.Sorted.modify | with_reducible apply State.Sorted.normalize
-      | with_reducible apply State.Sorted.allocate
-      | refine State.Sorted.allocate ?_ _
+      | with_reducible apply State.Within.set | with_reducible apply State.Within.remove
+      | with_reducible apply State.Within.modify | with_reducible apply State.Within.normalize
+      | with_reducible apply State.Within.allocate
+      | refine State.Within.allocate ?_ _
       | split)
 
-theorem State.Sorted.allocate {state : State} (sorted : state.Sorted) (processId : PID) :
-    (state.allocate processId).2.Sorted := sorted.modify _ _
+theorem State.Within.allocate {state : State} (sorted : state.Within elapsed) (processId : PID) :
+    (state.allocate processId).2.Within elapsed := sorted.modify _ _
 
-theorem State.Sorted.append {state : State} (sorted : state.Sorted) (processId : PID) (message : Term) :
-    (state.append processId message).Sorted := sorted.modify _ _
+theorem State.Within.append {state : State} (sorted : state.Within elapsed) (processId : PID) (message : Term) :
+    (state.append processId message).Within elapsed := sorted.modify _ _
 
-theorem State.Sorted.store {state : State} (sorted : state.Sorted) (processId : PID) (env : Environment) :
-    (state.store processId env).Sorted := sorted.modify _ _
+theorem State.Within.store {state : State} (sorted : state.Within elapsed) (processId : PID) (env : Environment) :
+    (state.store processId env).Within elapsed := sorted.modify _ _
 
-theorem State.Sorted.fallback {state : State} (sorted : state.Sorted) (source target : PID) (signal : Signal) :
-    (state.fallback source target signal).Sorted := by
+theorem State.Within.fallback {state : State} (sorted : state.Within elapsed) (source target : PID) (signal : Signal) :
+    (state.fallback source target signal).Within elapsed := by
   unfold State.fallback; repeat sorted_step
 
-theorem State.Sorted.enqueue {state : State} (sorted : state.Sorted) (source target : PID) (signal : Signal) :
-    (state.enqueue source target signal).Sorted := by
+theorem State.Within.enqueue {state : State} (sorted : state.Within elapsed) (source target : PID) (signal : Signal) :
+    (state.enqueue source target signal).Within elapsed := by
   unfold State.enqueue
   split
   · split
@@ -310,27 +317,27 @@ theorem State.Sorted.enqueue {state : State} (sorted : state.Sorted) (source tar
     · exact sorted.fallback _ _ _
   · exact sorted.fallback _ _ _
 
-theorem State.Sorted.unpark {state : State} (sorted : state.Sorted) (processId : PID) :
-    (state.unpark processId).Sorted := by
+theorem State.Within.unpark {state : State} (sorted : state.Within elapsed) (processId : PID) :
+    (state.unpark processId).Within elapsed := by
   unfold State.unpark; split
   · exact (sorted.modify _ _).enqueue _ _ _
   · exact sorted
 
-theorem State.Sorted.send {state : State} (sorted : state.Sorted) (source target : PID) (signal : Signal) :
-    (state.send source target signal).Sorted := by
+theorem State.Within.send {state : State} (sorted : state.Within elapsed) (source target : PID) (signal : Signal) :
+    (state.send source target signal).Within elapsed := by
   unfold State.send
-  apply State.Sorted.enqueue
+  apply State.Within.enqueue
   split
   · split
     · exact sorted.unpark _
     · exact sorted
   · exact sorted
 
-theorem State.Sorted.linkExit {state : State} (sorted : state.Sorted) (processId target : PID) (reason : Term) :
-    (state.linkExit processId target reason).Sorted := by
+theorem State.Within.linkExit {state : State} (sorted : state.Within elapsed) (processId target : PID) (reason : Term) :
+    (state.linkExit processId target reason).Within elapsed := by
   unfold State.linkExit
   split
-  · apply State.Sorted.modify
+  · apply State.Within.modify
     split
     · split
       · exact sorted.unpark _
@@ -338,13 +345,13 @@ theorem State.Sorted.linkExit {state : State} (sorted : state.Sorted) (processId
     · exact sorted
   · exact sorted.send _ _ _
 
-theorem State.Sorted.terminate {state : State} (sorted : state.Sorted) (processId : PID) (reason : Term) :
-    (state.terminate processId reason).Sorted := by
+theorem State.Within.terminate {state : State} (sorted : state.Within elapsed) (processId : PID) (reason : Term) :
+    (state.terminate processId reason).Within elapsed := by
   unfold State.terminate
   dsimp only
   generalize (Kernel.foldl _ [] _ : List PID) = links
   generalize hstate : State.set _ _ _ = start
-  have : start.Sorted := hstate ▸ (sorted.timers _).set _ _
+  have : start.Within elapsed := hstate ▸ (sorted.timers _).set _ _
   clear hstate
   simp only [Kernel.foldl_eq]
   induction links generalizing start with
@@ -356,20 +363,20 @@ theorem State.Sorted.terminate {state : State} (sorted : state.Sorted) (processI
     · exact (this.modify _ _).linkExit _ _ _
     · exact this
 
-theorem State.Sorted.answer {state : State} (sorted : state.Sorted) (processId : PID) (entry : Entry) :
-    (state.answer processId entry).Sorted := by
+theorem State.Within.answer {state : State} (sorted : state.Within elapsed) (processId : PID) (entry : Entry) :
+    (state.answer processId entry).Within elapsed := by
   unfold State.answer; split <;> first | exact sorted.send _ _ _ | exact sorted
 
-theorem State.Sorted.linkPhase {state next : State} (sorted : state.Sorted) {processId target : PID}
-    (phase : state.linkPhase processId target = some next) : next.Sorted := by
+theorem State.Within.linkPhase {state next : State} (sorted : state.Within elapsed) {processId target : PID}
+    (phase : state.linkPhase processId target = some next) : next.Within elapsed := by
   unfold State.linkPhase at phase
   repeat' split at phase
   all_goals first
     | (simp only [Option.some.injEq] at phase; subst phase; exact (sorted.set _ _).linkExit _ _ _)
     | simp at phase
 
-theorem State.Sorted.phase {state next : State} (sorted : state.Sorted) {processId : PID}
-    (phase : state.phase processId = some next) : next.Sorted := by
+theorem State.Within.phase {state next : State} (sorted : state.Within elapsed) {processId : PID}
+    (phase : state.phase processId = some next) : next.Within elapsed := by
   unfold State.phase at phase
   repeat' split at phase
   all_goals first
@@ -377,8 +384,8 @@ theorem State.Sorted.phase {state next : State} (sorted : state.Sorted) {process
     | (simp only [Option.some.injEq] at phase; subst phase; exact (sorted.set _ _).answer _ _)
     | simp at phase
 
-theorem State.Sorted.phases {state next : State} (sorted : state.Sorted) {processId : PID}
-    (mem : next ∈ state.phases processId) : next.Sorted := by
+theorem State.Within.phases {state next : State} (sorted : state.Within elapsed) {processId : PID}
+    (mem : next ∈ state.phases processId) : next.Within elapsed := by
   simp only [State.phases, Kernel.append_eq, Kernel.filterMap_eq, List.mem_append, List.mem_filterMap] at mem
   rcases mem with ⟨_, -, phase⟩ | mem
   · exact sorted.linkPhase phase
@@ -388,17 +395,17 @@ theorem State.Sorted.phases {state next : State} (sorted : state.Sorted) {proces
       exact sorted.phase found
     · simp at mem
 
-theorem State.Sorted.fire {state : State} (sorted : state.Sorted) (timer : Timer) : (state.fire timer).Sorted :=
+theorem State.Within.fire {state : State} (sorted : state.Within elapsed) (timer : Timer) : (state.fire timer).Within elapsed :=
   (sorted.timers _).enqueue _ _ _
 
-theorem State.Sorted.spawnWith {state : State} (sorted : state.Sorted) (processId : PID) (options : SpawnOptions) :
-    (state.spawnWith processId options).2.Sorted := by
+theorem State.Within.spawnWith {state : State} (sorted : state.Within elapsed) (processId : PID) (options : SpawnOptions) :
+    (state.spawnWith processId options).2.Within elapsed := by
   unfold State.spawnWith
   dsimp only
   split
-  · apply State.Sorted.modify
-    apply State.Sorted.modify
-    refine State.Sorted.allocate ?_ _
+  · apply State.Within.modify
+    apply State.Within.modify
+    refine State.Within.allocate ?_ _
     split
     · exact ((((sorted.set _ _).set _ _).modify _ _).modify _ _)
     · exact ((sorted.set _ _).set _ _)
@@ -413,31 +420,31 @@ syntax "sorted_exact" : tactic
 macro_rules
   | `(tactic| sorted_exact) => `(tactic| first
       | assumption
-      | exact State.Sorted.modify ‹_› _ _
-      | exact State.Sorted.send ‹_› _ _ _
-      | exact State.Sorted.enqueue ‹_› _ _ _
-      | exact State.Sorted.append ‹_› _ _
-      | exact (State.Sorted.modify ‹_› _ _).send _ _ _
-      | exact (State.Sorted.modify ‹_› _ _).append _ _
-      | exact State.Sorted.allocate ‹_› _
-      | exact ((State.Sorted.allocate ‹_› _).unpark _).modify _ _
-      | exact (State.Sorted.allocate ‹_› _).timers _
-      | exact (State.Sorted.timers ‹_› _).modify _ _)
+      | exact State.Within.modify ‹_› _ _
+      | exact State.Within.send ‹_› _ _ _
+      | exact State.Within.enqueue ‹_› _ _ _
+      | exact State.Within.append ‹_› _ _
+      | exact (State.Within.modify ‹_› _ _).send _ _ _
+      | exact (State.Within.modify ‹_› _ _).append _ _
+      | exact State.Within.allocate ‹_› _
+      | exact ((State.Within.allocate ‹_› _).unpark _).modify _ _
+      | exact (State.Within.allocate ‹_› _).timers _
+      | exact (State.Within.timers ‹_› _).modify _ _)
 
 /-- The state an answer leaves. -/
 def Answer.state : Answer β → State
   | .reply _ state | .wait _ state | .continue _ state => state
 
-theorem State.Sorted.request {state : State} (sorted : state.Sorted) (processId : PID)
-    (next : Term → Result β) (query : Request) : (state.request processId next query).state.Sorted := by
+theorem State.Within.request {state : State} (sorted : state.Within elapsed) (processId : PID)
+    (next : Term → Result β) (query : Request) : (state.request processId next query).state.Within elapsed := by
   cases query <;> simp only [State.request] <;> (repeat' split) <;> simp only [Answer.state] <;> sorted_exact
 
-theorem State.Sorted.exitSignal {state : State} (sorted : state.Sorted) (target source : PID) (reason : Term)
-    (linked normalKills : Bool) : (state.exitSignal target source reason linked normalKills).1.Sorted := by
+theorem State.Within.exitSignal {state : State} (sorted : state.Within elapsed) (target source : PID) (reason : Term)
+    (linked normalKills : Bool) : (state.exitSignal target source reason linked normalKills).1.Within elapsed := by
   unfold State.exitSignal; dsimp only; (repeat' split) <;> sorted_exact
 
-theorem State.Sorted.handle {state : State} (sorted : state.Sorted) (processId : PID) (waiting : Option Wait)
-    (entry : Entry) : (state.handle processId waiting entry).1.Sorted := by
+theorem State.Within.handle {state : State} (sorted : state.Within elapsed) (processId : PID) (waiting : Option Wait)
+    (entry : Entry) : (state.handle processId waiting entry).1.Within elapsed := by
   unfold State.handle
   split
   · exact sorted.append _ _
@@ -451,7 +458,7 @@ theorem State.Sorted.handle {state : State} (sorted : state.Sorted) (processId :
     dsimp only
     have cleared : (if isNormal reason && Kernel.contains (state.process processId).eagerExits entry.source then
         state.modify processId fun process => { process with
-          eagerExits := Kernel.filter (· != entry.source) process.eagerExits } else state).Sorted := by
+          eagerExits := Kernel.filter (· != entry.source) process.eagerExits } else state).Within elapsed := by
       split <;> sorted_exact
     generalize (if isNormal reason && _ then _ else state) = cleared' at cleared
     split <;> sorted_exact
@@ -459,13 +466,13 @@ theorem State.Sorted.handle {state : State} (sorted : state.Sorted) (processId :
   · dsimp only; split <;> sorted_exact
   · dsimp only; split <;> sorted_exact
 
-theorem State.Sorted.ended {state : State} (sorted : state.Sorted) {γ : Type}
+theorem State.Within.ended {state : State} (sorted : state.Within elapsed) {γ : Type}
     (finish : Except Exception γ → Option (Except Exception α)) (event : Event) (processId : PID)
     (reason : Term) (result : Except Exception γ) :
-    (Task.ended finish event state processId reason result).state.Sorted := sorted.terminate _ _
+    (Task.ended finish event state processId reason result).state.Within elapsed := sorted.terminate _ _
 
-theorem State.Sorted.own {state : State} (sorted : state.Sorted) {processId : PID} {task : Task α}
-    {transition : Transition α} (mem : transition ∈ task.own state processId) : transition.state.Sorted := by
+theorem State.Within.own {state : State} (sorted : state.Within elapsed) {processId : PID} {task : Task α}
+    {transition : Transition α} (mem : transition ∈ task.own state processId) : transition.state.Within elapsed := by
   obtain ⟨computation, finish, wait⟩ := task
   cases wait with
   | some => simp [Task.own] at mem
@@ -496,8 +503,8 @@ theorem State.Sorted.own {state : State} (sorted : state.Sorted) {processId : PI
       split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
         rename_i found <;> simpa [found, Answer.state] using this
 
-theorem State.Sorted.handleStep {state : State} (sorted : state.Sorted) {processId : PID} {task : Task α}
-    {transition : Transition α} (mem : transition ∈ task.handle state processId) : transition.state.Sorted := by
+theorem State.Within.handleStep {state : State} (sorted : state.Within elapsed) {processId : PID} {task : Task α}
+    {transition : Transition α} (mem : transition ∈ task.handle state processId) : transition.state.Within elapsed := by
   simp only [Task.handle] at mem
   split at mem
   · simp at mem
@@ -512,29 +519,31 @@ theorem State.Sorted.handleStep {state : State} (sorted : state.Sorted) {process
     · split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> exact handled
 
 /-- A configuration whose records are sorted. -/
-def Config.Sorted : Config α → Prop
-  | .start .. => True
-  | .running state .. => state.Sorted
+def Config.Within (elapsed : PID → Nat → Nat) : Config α → Prop
+  | .start _ _ elapsed' => elapsed' = elapsed
+  | .running state .. => state.Within elapsed
 
-theorem State.Sorted.initial (env : Environment) (elapsed : PID → Nat → Nat) :
-    (State.initial env elapsed).Sorted := by
-  simp [State.Sorted, State.initial, Lynx.Concurrent.Sorted]
+theorem State.Within.initial (env : Environment) (elapsed : PID → Nat → Nat) :
+    (State.initial env elapsed).Within elapsed :=
+  ⟨by simp [State.Sorted, State.initial, Lynx.Concurrent.Sorted], rfl⟩
 
 /-- Every step keeps the records sorted. -/
-theorem Config.Sorted.step {config next : Config α} {event : Event} (sorted : config.Sorted)
-    (step : Step config event next) : next.Sorted := by
+theorem Config.Within.step {config next : Config α} {event : Event} (sorted : config.Within elapsed)
+    (step : Step config event next) : next.Within elapsed := by
   cases config with
-  | start env computation elapsed =>
+  | start env computation elapsed' =>
     simp only [Step, Config.successors] at step
     split at step
-    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
-    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; exact sorted
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; exact sorted
     · split at step
       · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step
-        exact State.Sorted.initial _ _
+        have same : elapsed' = elapsed := sorted
+        subst same
+        exact State.Within.initial _ _
       · simp at step
   | running state tasks finished exhausted =>
-    have sorted : state.Sorted := sorted
+    have sorted : state.Within elapsed := sorted
     cases exhausted
     case true => simp [Step, Config.successors] at step
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
@@ -543,7 +552,7 @@ theorem Config.Sorted.step {config next : Config α} {event : Event} (sorted : c
       ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩
     · simp only [Prod.mk.injEq] at same
       obtain ⟨-, rfl⟩ := same
-      have : transition.state.Sorted := by
+      have : transition.state.Within elapsed := by
         simp only [Task.transitions, Kernel.append_eq, List.mem_append] at possible
         rcases possible with possible | possible
         · exact sorted.own possible
@@ -567,8 +576,8 @@ theorem Config.Sorted.step {config next : Config α} {event : Event} (sorted : c
       exact (sorted.fire _).normalize
 
 /-- Every configuration a run reaches has sorted records. -/
-theorem Config.Sorted.run {config last : Config α} {events : List Event} (sorted : config.Sorted)
-    (run : Run config events last) : last.Sorted :=
+theorem Config.Within.run {config last : Config α} {events : List Event} (sorted : config.Within elapsed)
+    (run : Run config events last) : last.Within elapsed :=
   Run.invariant (fun _ _ _ sorted step => sorted.step step) run sorted
 
 /-! ### Comparisons -/
@@ -800,9 +809,8 @@ theorem State.normalize_initial (env : Environment) (elapsed : PID → Nat → N
     Kernel.filter_eq]
 
 /-- Every step leads to a normalized configuration. -/
-theorem Config.Normalized.step {config next : Config α} {event : Event} (sorted : config.Sorted)
+theorem Config.Normalized.step {config next : Config α} {event : Event} (sorted : config.Within elapsed)
     (step : Step config event next) : next.Normalized := by
-  have sorted' := sorted.step step
   cases config with
   | start env computation elapsed =>
     simp only [Step, Config.successors] at step
@@ -814,7 +822,7 @@ theorem Config.Normalized.step {config next : Config α} {event : Event} (sorted
         exact State.normalize_initial _ _
       · simp at step
   | running state tasks finished exhausted =>
-    have sorted : state.Sorted := sorted
+    have sorted : state.Within elapsed := sorted
     cases exhausted
     case true => simp [Step, Config.successors] at step
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
@@ -823,7 +831,7 @@ theorem Config.Normalized.step {config next : Config α} {event : Event} (sorted
       ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩
     · simp only [Prod.mk.injEq] at same
       obtain ⟨-, rfl⟩ := same
-      have : transition.state.Sorted := by
+      have : transition.state.Within elapsed := by
         simp only [Task.transitions, Kernel.append_eq, List.mem_append] at possible
         rcases possible with possible | possible
         · exact sorted.own possible
@@ -831,19 +839,19 @@ theorem Config.Normalized.step {config next : Config α} {event : Event} (sorted
       unfold Transition.apply
       split
       · trivial
-      · exact State.normalize_normalize this
+      · exact State.normalize_normalize this.1
     · obtain ⟨next', phase, same⟩ := phased
       simp only [Prod.mk.injEq] at same
       obtain ⟨-, rfl⟩ := same
-      exact State.normalize_normalize (sorted.phases phase)
+      exact State.normalize_normalize (sorted.phases phase).1
     · cases parked : (state.process processId).parked with
       | none => simp [parked] at unparked
       | some _ =>
         simp only [parked, Option.map_some, Option.some.injEq, Prod.mk.injEq] at unparked
         obtain ⟨-, rfl⟩ := unparked
-        exact State.normalize_normalize (sorted.unpark _)
+        exact State.normalize_normalize (sorted.unpark _).1
     · simp only [Prod.mk.injEq] at fired
       obtain ⟨-, rfl⟩ := fired
-      exact State.normalize_normalize (sorted.fire _)
+      exact State.normalize_normalize (sorted.fire _).1
 
 end Lynx.Concurrent
