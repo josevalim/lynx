@@ -294,6 +294,43 @@ theorem keyfind_finds_first_match :
       .ok (.atom "false") := by
   constructor <;> cbv
 
+/-- Receive a message, or `timeout` once the timer expires. -/
+private def receiveWithin : Result :=
+  .receive .finite (fun _ message => some message) fun
+    | some message => .ok message
+    | none => .ok (.atom "timeout")
+
+/-- A positive timeout starts once the process handled what was queued, so a
+message queued before the receive is received. -/
+theorem receive_takes_queued_message :
+    Concurrent.check (only (.ok (.atom "hello"))) 32 (.start {} (do
+      let me ← «self/0» dispatcher
+      let _ ← «send/2» dispatcher me (.atom "hello")
+      receiveWithin)) = true := by decide +kernel
+
+/-- An exit signal queued from a linked process that crashed acts on the link
+it finds when handled: relinking while trapping exits after unlinking makes
+it arrive as an `EXIT` message, unless the child handled the unlink first. -/
+private def relinks : Result := do
+  let _ ← «process_flag/2» dispatcher (.atom "trap_exit") (.atom "true")
+  let child ← «spawn_link/1» dispatcher raises
+  let _ ← «unlink/1» dispatcher child
+  let _ ← «link/1» dispatcher child
+  receiveAny
+
+theorem relink_acts_on_queued_exit :
+    Concurrent.check (either (.ok (.tuple #[.atom "EXIT", .pid [1], .atom "noproc"]))
+      (.ok (.tuple #[.atom "EXIT", .pid [1], .tuple #[.atom "boom", .nil]]))) 64 (.start {} relinks) = true := by
+  decide +kernel
+
+theorem relink_may_receive_crash :
+    (match Concurrent.counterexample (only (.ok (.tuple #[.atom "EXIT", .pid [1], .atom "noproc"]))) 64
+        (.start {} relinks) with
+      | some (_, .rejected (.ok result)) =>
+          Term.compareExact (Term.fuel result (.tuple #[.atom "EXIT", .pid [1], .tuple #[.atom "boom", .nil]])) result
+            (.tuple #[.atom "EXIT", .pid [1], .tuple #[.atom "boom", .nil]]) == .eq
+      | _ => false) = true := by decide +kernel
+
 end LynxTest.Modules.Signals
 
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Modules.Signals

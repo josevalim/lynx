@@ -386,13 +386,18 @@ entries from a list: bits above the fields'. -/
 abbrev Frame := PID × Nat × Nat
 
 /-- The frames of appending a signal to a live queue: nothing when normalization
-drops it at once. Whether it is dropped reads nothing: an inert signal stays
-inert, and a step making it inert later drops it from the queue as normalization
-would have when it was appended. -/
+drops it at once. Whether it is dropped reads nothing, as a dropped signal
+stays dropped, and a step dropping it later filters the queue as normalization
+would have when it was appended. A link exit from a process that is gone is the
+exception: it is dropped while its receiver has no active link, which linking
+again restores, so it reads the links and is always appended. -/
 @[expose] def State.appendFrames (state : State) (source target : PID) (signal : Signal) : List Frame :=
-  if state.keepEntry target (state.process target) { source, signal } then
-    [(target, Field.live, Field.queueTail)]
-  else [(target, Field.live, 0)]
+  match signal with
+  | .exit _ true _ => [(target, Field.live ||| Field.links, Field.queueTail)]
+  | _ =>
+      if state.keepEntry target (state.process target) { source, signal } then
+        [(target, Field.live, Field.queueTail)]
+      else [(target, Field.live, 0)]
 
 /-- The frames of queueing a signal, or of its sender's fallback. -/
 @[expose] def State.enqueueFrames (state : State) (source target : PID) (signal : Signal) : List Frame :=
@@ -461,22 +466,24 @@ would have when it was appended. -/
 @[expose] def Field.all : Nat := 131071
 
 /-- The frames of a process ending: its own record, and the records of others
-that mention it, which normalization may change once it is gone, and whether
-it cancels timers. -/
+that normalization changes once it is gone, and whether it cancels timers. A
+live process drops the requests the process queued, which only it can queue,
+and the links it was removing; a process that ended drops everything the
+process queued and its signals to it. -/
 @[expose] def State.endFrames (state : State) (processId : PID) : List Frame × Bool :=
   let others := Kernel.filterMap (fun (other, process) =>
     if other == processId then none else
-    let queue := if Kernel.any process.queue (·.source == processId)
-      then Field.queueHead ||| Field.queueTail else 0
-    let links := if Kernel.any process.links (·.1 == processId) then Field.links else 0
-    let exiting := match process.exiting with
+    let fields := match process.exiting with
       | some exiting =>
-          if Kernel.contains exiting.links processId || Kernel.any exiting.downs (·.2 == processId)
-          then Field.exiting else 0
-      | none => 0
-    let fields := queue ||| links ||| exiting
-    if fields == 0 then none
-    else some (other, fields, fields ||| (if process.exiting.isSome then Field.live else 0))) state.processes
+          (if Kernel.any process.queue (·.source == processId) then Field.queueHead ||| Field.queueTail else 0) |||
+          (if Kernel.contains exiting.links processId || Kernel.any exiting.downs (·.2 == processId)
+            then Field.exiting ||| Field.live else 0)
+      | none =>
+          (if Kernel.any process.queue (fun entry => entry.source == processId && match entry.signal with
+              | .isAlive | .monitor _ | .unlinkAck _ => true
+              | _ => false) then Field.queueHead ||| Field.queueTail else 0) |||
+          (if Kernel.any process.links (fun link => link.1 == processId && link.2.isSome) then Field.links else 0)
+    if fields == 0 then none else some (other, fields, fields)) state.processes
   ((processId, Field.all, Field.all) :: others, Kernel.any state.timers (·.destination == processId))
 
 /-- The frames of a process's own step, `none` when it ends or starts a process. -/
@@ -494,8 +501,8 @@ it cancels timers. -/
         match selectMessage (select (state.view processId)) (state.process processId).mailbox with
         | some _ => some ([(processId, reads, Field.mailbox)], false)
         | none => match timeout with
-          | .immediate => some ([(processId, reads ||| Field.queueHead ||| Field.queueTail, 0)], false)
-          | _ => some ([(processId, reads, 0)], false)
+          | .infinity => some ([(processId, reads, 0)], false)
+          | _ => some ([(processId, reads ||| Field.queueHead ||| Field.queueTail, 0)], false)
     | .request query _ => state.requestFrames processId query
     | .ok _ => some (state.endFrames processId)
     | .error .exhausted => none
@@ -537,10 +544,12 @@ it cancels timers. -/
           match exiting.links, exiting.downs with
           | target :: _, _ =>
               let signal : Signal := .exit exiting.reason true false
-              if isNormal exiting.reason && state.alive target && !(state.process target).trapExit then
-                -- Removing the link only changes the queue through signals of this process.
-                let queue := if Kernel.any (state.process target).queue (·.source == processId)
-                  then Field.queueHead ||| Field.queueTail else 0
+              -- Handling a link from this process changes whether the exit is
+              -- applied when sent, which reads nothing else of the queue.
+              let linking := Kernel.any (state.process target).queue
+                (fun entry => entry.source == processId && entry.signal matches .link)
+              let queue := if linking then Field.queueHead else 0
+              if isNormal exiting.reason && state.alive target && !(state.process target).trapExit && !linking then
                 let unpark := match process.parked with
                   | some (parked, reference) =>
                       if parked == target then
@@ -548,9 +557,10 @@ it cancels timers. -/
                           state.enqueueFrames processId target (.monitor reference)
                       else [(processId, Field.parked, 0)]
                   | none => [(processId, Field.parked, 0)]
-                some (own :: (target, Field.live ||| Field.trapExit ||| queue,
-                  Field.commuting (Field.links ||| Field.eagerExits) ||| queue) :: unpark, false)
-              else some (own :: (target, Field.live ||| Field.trapExit, 0) :: state.sendFrames processId target signal, false)
+                some (own :: (target, Field.live ||| Field.trapExit,
+                  Field.commuting (Field.links ||| Field.eagerExits)) :: unpark, false)
+              else some (own :: (target, Field.live ||| Field.trapExit ||| queue, 0) ::
+                state.sendFrames processId target signal, false)
           | [], (reference, watcher) :: _ =>
               some (own :: state.sendFrames processId watcher (.down reference exiting.reason), false)
           | [], [] =>
@@ -636,53 +646,19 @@ which needs `key` to leave every computation as it is. -/
       | none => false
   | none => false
 
-/-- What a process's next own step reads of its links, monitors and flags. -/
-structure Reads where
-  dies : Bool := false
-  finiteMiss : Bool := false
-  linkOf : Option PID := none
-  trap : Bool := false
-  reference : Option (List Nat) := none
-
-/-- What a process's next own step reads of its links, monitors and flags. -/
-@[expose] def Task.reads (state : State) (processId : PID) (task : Task α) : Reads :=
-  match task.wait, task.computation with
-  | some _, _ => {}
-  | none, .ok _ | none, .error _ => { dies := true }
-  | none, .receive .finite select _ =>
-      { finiteMiss := (selectMessage (select (state.view processId)) (state.process processId).mailbox).isNone }
-  | none, .request (.link target) _ | none, .request (.unlink target) _ => { linkOf := some target }
-  | none, .request (.trapExit _) _ => { trap := true }
-  | none, .request (.demonitor reference _) _ => { reference := some reference }
-  | none, .request (.exit target _ _) _ => { dies := target == processId }
-  | _, _ => {}
-
-/-- Whether handling the oldest queued signal does nothing the process's own
-next step can observe, nor anything another process can. -/
+/-- Whether handling the oldest queued signal commutes with every other step,
+now and after any of them: a signal that does nothing, a message from a
+process, which the process's own steps cannot race with as a receive only
+times out with nothing left to handle, a reply or marker resuming a process
+that waits, or an acknowledgement of an unlink. Other signals race with what
+the process may do before handling them, such as timing out before a timer's
+message, removing a monitor, trapping exits, or ending. -/
 @[expose] def Task.forcedHead (state : State) (processId : PID) (task : Task α) (entry : Entry) : Bool :=
-  let process := state.process processId
-  let reads := task.reads state processId
-  let gone := state.gone entry.source
-  let aboutLink := reads.linkOf == some entry.source
-  if state.inertEntry processId entry then true else
-  match entry.signal with
-  | .message _ => !reads.finiteMiss
-  | .down reference _ | .aliasMessage reference _ => !reads.finiteMiss && reads.reference != some reference
-  | .reply _ | .flush => task.wait.isSome
-  | .exit reason linked normalKills =>
-      !aboutLink && !reads.trap &&
-      match linked, Kernel.lookup entry.source process.links with
-      | true, none | true, some (some _) => true
-      | true, some none =>
-          if process.trapExit then !reads.finiteMiss else isNormal reason && gone
-      | false, _ =>
-          if process.trapExit then !isKill reason && !reads.finiteMiss
-          else isNormal reason && !normalKills
-  | .link => (gone || !reads.dies) && !aboutLink
-  | .unlink _ => gone && !aboutLink
-  | .unlinkAck _ => !aboutLink
-  | .monitor _ => gone || !reads.dies
-  | .isAlive => gone
+  state.inertEntry processId entry || match entry.signal with
+    | .message _ => entry.source != clock
+    | .unlinkAck _ => true
+    | .reply _ | .flush => task.wait.isSome
+    | _ => false
 
 /-- A step every run can take first: a process reading or replacing its
 environment, receiving a message already handled, or handling a queued signal

@@ -257,6 +257,12 @@ acknowledgement, or a request from a process that is gone. -/
   | .isAlive | .monitor _ => state.gone entry.source
   | _ => false
 
+/-- Whether a receive with a timeout handles a queued signal before it can
+time out: it is not inert, nor the message of a timer, which may still be on
+its way after `cancel_timer/1` replied that the timer expired. -/
+@[expose] def State.awaitedEntry (state : State) (processId : PID) (entry : Entry) : Bool :=
+  !(state.inertEntry processId entry || entry.source == clock)
+
 /-- A signal to a process that is gone: the sender falls back as OTP's senders
 do. A link is answered with an exit signal `noproc`, a monitor with a `DOWN`
 `noproc`, an unlink removes the link at once, and the rest are dropped. -/
@@ -317,9 +323,12 @@ It has its links and watchers left to signal. -/
 
 /-- An exit signal from a link of a process that ended. A `normal` one to a
 live process not trapping exits only removes its link, so it is applied when
-sent, and the receiver may not start trapping exits afterwards. -/
+sent, and the receiver may not start trapping exits afterwards. It is queued
+instead while the receiver has yet to handle a link from the process, which
+would come back otherwise. -/
 @[expose] def State.linkExit (state : State) (processId target : PID) (reason : Term) : State :=
-  if isNormal reason && state.alive target && !(state.process target).trapExit then
+  if isNormal reason && state.alive target && !(state.process target).trapExit &&
+      !Kernel.any (state.process target).queue (fun entry => entry.source == processId && entry.signal matches .link) then
     let state := match (state.process processId).parked with
       | some (parked, _) => if parked == target then state.unpark processId else state
       | none => state
@@ -364,17 +373,12 @@ After every step, what nothing can observe any more is removed, so that steps
 whose effects only differ there lead to the same configuration. -/
 
 /-- Whether a queued signal can still be observed: it is not inert, and for a
-process that ended its sender is not gone, nor is a link exit from a process
-that is gone acting on a link that is missing or being removed. -/
+process that ended its sender is not gone. A link exit from a process that is
+gone is kept even without an active link, as linking again before handling it
+makes it act. -/
 @[expose] def State.keepEntry (state : State) (processId : PID) (process : ProcessState) (entry : Entry) :
     Bool :=
-  !(state.inertEntry processId entry || (process.exiting.isSome && state.gone entry.source) ||
-    (match entry.signal with
-      | .exit _ true _ => state.gone entry.source &&
-          (match Kernel.lookup entry.source process.links with
-            | some none => false
-            | _ => true)
-      | _ => false))
+  !(state.inertEntry processId entry || (process.exiting.isSome && state.gone entry.source))
 
 /-- A record without what nothing can observe: queued signals that do nothing,
 links being removed from processes that are gone, and, for a process that
@@ -635,8 +639,11 @@ the root. -/
   { event, state := state.terminate processId reason, tasks := [], finished := finish result }
 
 /-- The steps of a process itself: none while blocked or waiting, one
-otherwise. A receive without a match steps by timing out: at once only with
-nothing left to handle, which it handles first. -/
+otherwise. A receive without a match and with a timeout steps by timing out,
+only with nothing left to handle (`State.awaitedEntry`), which it handles
+first. A positive timeout starts once the process waits after handling its
+queue, and what is queued after it starts can be taken as queued after it
+expires, as sending to a process does not observe whether its timer expired. -/
 @[expose] def Task.own (state : State) (processId : PID) : Task α → List (Transition α)
   | ⟨_, _, some _⟩ => []
   | ⟨computation, finish, none⟩ =>
@@ -671,8 +678,7 @@ nothing left to handle, which it handles first. -/
             let timedOut := proceed (.timeout processId) state (next none)
             match timeout with
             | .infinity => []
-            | .immediate => if Kernel.all process.queue (state.inertEntry processId) then [timedOut] else []
-            | .finite => [timedOut]
+            | _ => if Kernel.any process.queue (state.awaitedEntry processId) then [] else [timedOut]
     | .request query next =>
         match state.request processId next query with
         | .reply value state => [proceed (.request processId query (some value)) state (next value)]

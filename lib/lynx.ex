@@ -170,11 +170,14 @@ defmodule Lynx do
       nodes are not modeled. Sending messages supports local PIDs and aliases;
       registered names and remote destinations are not modeled.
 
-    * Receive timeouts and timers do not measure wall-clock time. Positive
-      timeouts may expire, and timers may fire, at any point of a run, so laws
-      cover every order, including ones elapsed time would rule out. Canceling
-      a timer reports its duration less an unknown elapsed time, and laws
-      cover every elapsed time.
+    * Receive timeouts and timers do not measure wall-clock time. A receive
+      with a timeout handles the signals already queued for it first, then may
+      expire at any later point of a run, and timers may fire at any point, so
+      laws cover every order, including ones elapsed time would rule out. A
+      timer's message may still be on its way when the timer reports it
+      expired, so a receive may expire before it. Canceling a timer reports
+      its duration less an unknown elapsed time, and laws cover every elapsed
+      time.
 
     * Exception stack traces are not recorded and are represented by `[]`.
 
@@ -408,8 +411,9 @@ defmodule Lynx do
       that decides them, as above, which is much faster than deciding them
       with `simp` and resuming `cbv`.
 
-    * Receive timeouts with a positive duration may expire at any step, so a
-      law about `Task.await/2` with a timeout must allow both outcomes.
+    * Receive timeouts with a positive duration may expire at any step once
+      the signals already queued are handled, so a law about `Task.await/2`
+      with a timeout must allow both outcomes.
 
   When a check of a closed program fails, such as a law without parameters,
   `lynx_counterexample` explains why. Run it before evaluating the check, as in
