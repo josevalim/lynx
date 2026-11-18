@@ -621,6 +621,8 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.explore",
   "Lynx.Concurrent.firstOfEach",
   "Lynx.Concurrent.framesApart",
+  "Lynx.Concurrent.handleChange",
+  "Lynx.Concurrent.handleFinished",
   "Lynx.Concurrent.handleViewIdentical",
   "Lynx.Concurrent.identicalLists",
   "Lynx.Concurrent.insertPid",

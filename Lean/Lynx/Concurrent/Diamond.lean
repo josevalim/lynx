@@ -1313,4 +1313,211 @@ theorem Config.FinishesOnce.step {config next : Config α} {event : Event} (once
       obtain ⟨-, rfl⟩ := fired
       exact once
 
+/-! ### What a step by key does to the processes -/
+
+theorem lookup_of_splitAt {processId : PID} : ∀ {tasks before after : List (PID × Task α)} {task : Task α},
+    splitAt processId tasks = some (before, task, after) → Kernel.lookup processId tasks = some task
+  | [], _, _, _, found => by simp [splitAt] at found
+  | (other, task') :: rest, before, after, task, found => by
+      simp only [splitAt] at found
+      split at found
+      · rename_i same
+        simp only [Option.some.injEq, Prod.mk.injEq] at found
+        obtain ⟨rfl, rfl, rfl⟩ := found
+        have : other = processId := eq_of_beq same
+        subst this
+        simp [Kernel.lookup_eq]
+      · rename_i differ
+        simp only [Option.map_eq_some_iff, Prod.exists, Prod.mk.injEq] at found
+        obtain ⟨_, _, _, found, -, rfl, -⟩ := found
+        have := lookup_of_splitAt found
+        have differ' : (processId == other) = false := by
+          cases equal : processId == other
+          · rfl
+          · exact absurd (by rw [eq_of_beq equal]; exact beq_self_eq_true other) differ
+        simpa [Kernel.lookup_eq, List.lookup_cons, differ'] using this
+
+/-- What a process's own step does, by key. -/
+theorem Config.stepOf_own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {processId : PID} {event : Event} {next : Config α}
+    (found : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next)) :
+    ∃ task transition, Kernel.lookup processId tasks = some task ∧
+      (task.own state processId).head? = some transition ∧
+      next = if transition.exhausted then .running transition.state [] finished true
+        else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
+          (transition.finished.orElse fun _ => finished) false := by
+  simp only [Config.stepOf, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq] at found
+  obtain ⟨⟨before, task, after⟩, split, transition, head, -, rfl⟩ := found
+  refine ⟨task, transition, lookup_of_splitAt split, head, ?_⟩
+  simp only [Transition.apply, Kernel.append_eq, rewriteTask_of_splitAt split, List.append_assoc]
+
+/-- What handling a signal does, by key. -/
+theorem Config.stepOf_handle {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {processId : PID} {event : Event} {next : Config α}
+    (found : (Config.running state tasks finished false).stepOf (.handle processId) = some (event, next)) :
+    ∃ task transition, Kernel.lookup processId tasks = some task ∧
+      (task.handle state processId).head? = some transition ∧
+      next = if transition.exhausted then .running transition.state [] finished true
+        else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
+          (transition.finished.orElse fun _ => finished) false := by
+  simp only [Config.stepOf, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq] at found
+  obtain ⟨⟨before, task, after⟩, split, transition, head, -, rfl⟩ := found
+  refine ⟨task, transition, lookup_of_splitAt split, head, ?_⟩
+  simp only [Transition.apply, Kernel.append_eq, rewriteTask_of_splitAt split, List.append_assoc]
+
+/-- A step that is no process's own nor handling leaves the processes as they are. -/
+theorem Config.stepOf_keeps {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {key : Key} {event : Event} {next : Config α} (owner : key.owner = none)
+    (found : (Config.running state tasks finished false).stepOf key = some (event, next)) :
+    ∃ state', next = .running state' tasks finished false := by
+  cases key <;> simp only [Key.owner, reduceCtorEq] at owner <;>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found <;>
+    obtain ⟨_, _, -, rfl⟩ := found <;> exact ⟨_, rfl⟩
+
+/-- How handling a signal changes its process, given what it reads and the process's task. -/
+def handleChange (processId : PID) (view : Option Term × Option Term) (task : Task α) : List (PID × Task α) :=
+  match view.1 with
+  | some _ => []
+  | none =>
+    match view.2, task with
+    | some value, ⟨_, finish, some (_, next)⟩ => [(processId, ⟨next value, finish, none⟩)]
+    | _, _ => [(processId, task)]
+
+/-- The run's result handling a signal leaves, given what it reads and the process's task. -/
+def handleFinished (view : Option Term × Option Term) (task : Task α) : Option (Except Exception α) :=
+  match view.1 with
+  | some reason => task.finish (.error (.exit reason))
+  | none => none
+
+theorem Task.handle_change {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.handle state processId) :
+    ∃ view, task.handleView state processId = some view ∧
+      transition.tasks = handleChange processId view task ∧
+      transition.finished = handleFinished view task ∧ transition.exhausted = false := by
+  simp only [Task.handle, Task.handleView] at mem ⊢
+  cases queue : (state.process processId).queue with
+  | nil => simp [queue] at mem
+  | cons entry rest =>
+    simp only [queue] at mem ⊢
+    generalize (State.set _ _ _).handle _ _ _ = result at mem ⊢
+    obtain ⟨_, resumed, exits⟩ := result
+    dsimp only at mem ⊢
+    refine ⟨(exits, resumed), rfl, ?_⟩
+    obtain ⟨computation, finish, wait⟩ := task
+    cases exits with
+    | some reason =>
+      simp only [List.mem_singleton] at mem; subst mem
+      simp [Task.ended, handleChange, handleFinished]
+    | none =>
+      cases resumed <;> cases wait <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+        simp [handleChange, handleFinished]
+
+theorem lookup_append_of_missing {β : Type _} {key : PID} {front rest : List (PID × β)}
+    (missing : ∀ entry ∈ front, entry.1 ≠ key) : (front ++ rest).lookup key = rest.lookup key := by
+  induction front with
+  | nil => rfl
+  | cons head tail ih =>
+    obtain ⟨key', value⟩ := head
+    have differ : (key == key') = false := by
+      have := missing (key', value) (by simp); simp [Ne.symm this]
+    simp [List.lookup_cons, differ, ih fun entry mem => missing entry (by simp [mem])]
+
+theorem lookup_rewriteTask {processId other : PID} {change : Task α → List (PID × Task α)}
+    (differ : other ≠ processId) (missing : ∀ task, ∀ entry ∈ change task, entry.1 ≠ other) :
+    ∀ tasks : List (PID × Task α),
+      Kernel.lookup other (rewriteTask processId change tasks) = Kernel.lookup other tasks
+  | [] => rfl
+  | (key, task) :: rest => by
+      have ih := lookup_rewriteTask differ missing rest
+      simp only [Kernel.lookup_eq] at ih ⊢
+      by_cases same : key = processId
+      · subst same
+        have differ' : (other == key) = false := by simp [differ]
+        simp only [rewriteTask, ↓reduceIte, List.lookup_cons, differ', lookup_append_of_missing (missing task)]
+      · simp only [rewriteTask, same, ↓reduceIte, List.lookup_cons]
+        split <;> simp_all
+
+/-- Rewriting a process's task by itself leaves the list as it is. -/
+theorem rewriteTask_keep (processId : PID) :
+    ∀ tasks : List (PID × Task α), rewriteTask processId (fun task => [(processId, task)]) tasks = tasks
+  | [] => rfl
+  | (key, task) :: rest => by
+      by_cases same : key = processId
+      · subst same; simp [rewriteTask]
+      · simp [rewriteTask, same, rewriteTask_keep processId rest]
+
+theorem handleChange_pids {processId : PID} {view : Option Term × Option Term} {task : Task α} :
+    ∀ entry ∈ handleChange processId view task, entry.1 = processId := by
+  intro entry mem
+  unfold handleChange at mem
+  split at mem
+  · simp at mem
+  · split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> rfl
+
+theorem handleFinished_some {view : Option Term × Option Term} {task : Task α}
+    (finished : (handleFinished view task).isSome = true) :
+    handleChange processId view task = [] ∧ task.Finishes := by
+  unfold handleFinished at finished
+  unfold handleChange
+  split at finished
+  · rename_i reason found
+    exact ⟨by simp [found], ⟨_, finished⟩⟩
+  · simp at finished
+
+/-- A process's own step leaves itself, and the child it spawns. -/
+theorem Task.own_pids {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.own state processId) :
+    ∀ entry ∈ transition.tasks, entry.1 = processId ∨
+      entry.1 = Kernel.append processId [(state.process processId).children + 1] ∧
+        ∃ options child next, task.computation = .schedule options child next := by
+  obtain ⟨computation, finish, wait⟩ := task
+  intro entry inside
+  cases wait with
+  | some => simp [Task.own] at mem
+  | none =>
+    cases computation with
+    | ok => simp [Task.own, Task.ended] at mem; subst mem; simp at inside
+    | error exception =>
+      cases exception <;> simp [Task.own, Task.ended] at mem <;> subst mem <;> simp at inside
+    | get | set | send =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem
+      simp only [List.mem_singleton] at inside; subst inside; exact .inl rfl
+    | schedule options child next =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at inside
+      rcases inside with rfl | rfl
+      · exact .inl rfl
+      · exact .inr ⟨State.spawnWith_child state processId options, options, child, next, rfl⟩
+    | receive =>
+      simp only [Task.own] at mem
+      (repeat' split at mem) <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;>
+        simp only [List.mem_singleton] at inside <;> subst inside <;> exact .inl rfl
+    | request =>
+      simp only [Task.own] at mem
+      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+        simp only [List.mem_singleton] at inside <;> subst inside <;> exact .inl rfl
+
+/-- A process's own step that finishes the run ends the process. -/
+theorem Task.own_finished {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.own state processId) (finished : transition.finished.isSome = true) :
+    transition.tasks = [] ∧ task.Finishes := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp [Task.own] at mem
+  | none =>
+    cases computation with
+    | ok => simp [Task.own, Task.ended] at mem; subst mem; exact ⟨rfl, _, finished⟩
+    | error exception =>
+      cases exception <;> simp [Task.own, Task.ended] at mem <;> subst mem <;>
+        first | exact ⟨rfl, _, finished⟩ | simp at finished
+    | get | set | send | schedule =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem; simp at finished
+    | receive =>
+      simp only [Task.own] at mem
+      (repeat' split at mem) <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;>
+        simp at finished
+    | request =>
+      simp only [Task.own] at mem
+      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> simp at finished
+
 end Lynx.Concurrent
