@@ -457,4 +457,136 @@ private theorem Effect.record_comm {effect effect' : Effect} {frames frames' : L
       exact congrArg some ((inside process found).comm (inside' process found) (apart processId)
         (apart' processId))
 
+/-! ### Operations as effects -/
+
+/-- A state is an effect applied to another: the same records by PID and timers. -/
+private def Realizes (effect : Effect) (before after : State) : Prop :=
+  (∀ processId, after.record processId = effect.record processId (before.record processId)) ∧
+    after.timers = (effect.timers.getD id) before.timers ∧ after.elapsed = before.elapsed
+
+private theorem Realizes.refl (state : State) : Realizes {} state state :=
+  ⟨fun _ => rfl, rfl, rfl⟩
+
+private theorem Realizes.andThen {first second : Effect} {before middle after : State}
+    (one : Realizes first before middle) (two : Realizes second middle after) :
+    Realizes (first.andThen second) before after :=
+  ⟨fun processId => by rw [two.1, one.1, Effect.record_andThen]; rfl,
+    by rw [two.2.1, one.2.1, Effect.timers_andThen]; rfl, two.2.2.trans one.2.2⟩
+
+private theorem Realizes.modify (state : State) (processId : PID) (change : ProcessState → ProcessState) :
+    Realizes (Effect.modify processId change) state (state.modify processId change) := by
+  refine ⟨fun other => ?_, ?_, ?_⟩
+  · rw [Effect.record_modify]
+    unfold State.modify
+    split
+    · rename_i process found
+      rw [State.record_set]
+      by_cases same : other = processId
+      · subst same; simp [found]
+      · simp [same]
+    · rename_i missing
+      by_cases same : other = processId
+      · subst same; simp [missing]
+      · simp [same]
+  · unfold State.modify; split <;> rfl
+  · unfold State.modify; split <;> rfl
+
+/-- Replacing an existing record by a change of it. -/
+private theorem Realizes.set {state : State} {processId : PID} {process : ProcessState}
+    (found : state.record processId = some process) (change : ProcessState → ProcessState) :
+    Realizes (Effect.modify processId change) state (state.set processId (change process)) := by
+  have := Realizes.modify state processId change
+  unfold State.modify at this
+  rw [found] at this
+  exact this
+
+/-- Changing only the timers. -/
+private def Effect.retime (change : List Timer → List Timer) : Effect := { timers := some change }
+
+private theorem Realizes.retime (state : State) (change : List Timer → List Timer) :
+    Realizes (Effect.retime change) state { state with timers := change state.timers } :=
+  ⟨fun _ => rfl, rfl, rfl⟩
+
+/-- Queue a signal at a record. -/
+private def queueAt (source : PID) (signal : Signal) (process : ProcessState) : ProcessState :=
+  { process with queue := Kernel.append process.queue [{ source, signal }] }
+
+/-- The effect of a sender's fallback for a signal to a process that is gone. -/
+private def State.fallbackEffect (state : State) (source target : PID) : Signal → Effect
+  | .link => .modify source (queueAt target (.exit (.atom "noproc") true false))
+  | .monitor reference =>
+      if Kernel.any (state.process source).monitoring (·.1 == reference) then
+        .modify source (queueAt target (.down reference (.atom "noproc")))
+      else {}
+  | .unlink _ => .modify source fun process => { process with links := Kernel.filter (·.1 != target) process.links }
+  | .isAlive => .modify source (queueAt target (.reply (.atom "false")))
+  | _ => {}
+
+private theorem Realizes.fallback (state : State) (source target : PID) (signal : Signal) :
+    Realizes (state.fallbackEffect source target signal) state (state.fallback source target signal) := by
+  cases signal <;> simp only [State.fallbackEffect, State.fallback] <;>
+    first
+      | exact Realizes.modify _ _ _
+      | exact Realizes.refl _
+      | (split
+         · exact Realizes.modify _ _ _
+         · exact Realizes.refl _)
+
+/-- The effect of `State.enqueue`. -/
+private def State.enqueueEffect (state : State) (source target : PID) (signal : Signal) : Effect :=
+  match state.record target with
+  | some process =>
+      if process.exiting.isNone then .modify target (queueAt source signal)
+      else state.fallbackEffect source target signal
+  | none => state.fallbackEffect source target signal
+
+private theorem Realizes.enqueue (state : State) (source target : PID) (signal : Signal) :
+    Realizes (state.enqueueEffect source target signal) state (state.enqueue source target signal) := by
+  unfold State.enqueueEffect State.enqueue
+  cases found : state.record target with
+  | none => exact Realizes.fallback _ _ _ _
+  | some process =>
+    simp only
+    split
+    · exact Realizes.set found (queueAt source signal)
+    · exact Realizes.fallback _ _ _ _
+
+/-- The effect of `State.unpark`. -/
+private def State.unparkEffect (state : State) (processId : PID) : Effect :=
+  match (state.process processId).parked with
+  | some (target, reference) =>
+      (Effect.modify processId fun process => { process with parked := none }).andThen
+        ((state.modify processId fun process => { process with parked := none }).enqueueEffect processId target
+          (.monitor reference))
+  | none => {}
+
+private theorem Realizes.unpark (state : State) (processId : PID) :
+    Realizes (state.unparkEffect processId) state (state.unpark processId) := by
+  unfold State.unparkEffect State.unpark
+  cases parked : (state.process processId).parked with
+  | none => exact Realizes.refl _
+  | some found =>
+    obtain ⟨target, reference⟩ := found
+    exact (Realizes.modify _ _ _).andThen (Realizes.enqueue _ _ _ _)
+
+/-- The effect of `State.send`. -/
+private def State.sendEffect (state : State) (source target : PID) (signal : Signal) : Effect :=
+  match (state.process source).parked with
+  | some (parked, _) =>
+      if parked == target then (state.unparkEffect source).andThen ((state.unpark source).enqueueEffect source target signal)
+      else state.enqueueEffect source target signal
+  | none => state.enqueueEffect source target signal
+
+private theorem Realizes.send (state : State) (source target : PID) (signal : Signal) :
+    Realizes (state.sendEffect source target signal) state (state.send source target signal) := by
+  unfold State.sendEffect State.send
+  cases parked : (state.process source).parked with
+  | none => exact Realizes.enqueue _ _ _ _
+  | some found =>
+    obtain ⟨other, reference⟩ := found
+    simp only
+    split
+    · exact (Realizes.unpark _ _).andThen (Realizes.enqueue _ _ _ _)
+    · exact Realizes.enqueue _ _ _ _
+
 end Lynx.Concurrent
