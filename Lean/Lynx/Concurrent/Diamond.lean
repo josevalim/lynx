@@ -1715,4 +1715,413 @@ theorem Config.changes_comm_none {state : State} {tasks : List (PID × Task α)}
   obtain ⟨state₄, rfl⟩ := after'
   exact ⟨_, _, state₃, state₄, rfl, rfl⟩
 
+/-! ### Facts the commutation proof uses -/
+
+theorem Config.stepOf_exhausted {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} (key : Key) :
+    (Config.running state tasks finished true).stepOf key = none := by
+  cases key <;> rfl
+
+theorem Config.running_of_stepOf {config : Config α} {key : Key} {step : Event × Config α}
+    (found : config.stepOf key = some step) :
+    ∃ state tasks finished, config = .running state tasks finished false := by
+  match config with
+  | .start .. => simp [Config.stepOf] at found
+  | .running _ _ _ true => simp [Config.stepOf_exhausted] at found
+  | .running state tasks finished false => exact ⟨state, tasks, finished, rfl⟩
+
+theorem State.handle_not_waiting (state : State) (processId : PID) (entry : Entry) :
+    (state.handle processId none entry).2.1 = none := by
+  obtain ⟨source, signal⟩ := entry
+  cases signal <;> simp only [State.handle] <;> (try split) <;> rfl
+
+theorem Task.handleView_not_waiting {state : State} {processId : PID} {task : Task α}
+    {view : Option Term × Option Term} (waiting : task.wait = none)
+    (read : task.handleView state processId = some view) : view.2 = none := by
+  simp only [Task.handleView, waiting, Option.map_none] at read
+  split at read
+  · simp at read
+  · simp only [Option.some.injEq] at read
+    rw [← read]
+    exact State.handle_not_waiting _ _ _
+
+theorem handleChange_keep {processId : PID} {exits : Option Term} :
+    exits = none → handleChange (α := α) processId (exits, none) = fun task => [(processId, task)] := by
+  intro none'; subst none'
+  funext task
+  obtain ⟨_, _, wait⟩ := task
+  cases wait <;> rfl
+
+theorem mem_of_lookup {β : Type _} {processId : PID} {value : β} :
+    ∀ {entries : List (PID × β)}, Kernel.lookup processId entries = some value → (processId, value) ∈ entries
+  | [], found => by simp [Kernel.lookup_eq] at found
+  | (key, value') :: rest, found => by
+      by_cases same : processId = key
+      · subst same
+        simp only [Kernel.lookup_eq, List.lookup_cons, beq_self_eq_true, Option.some.injEq] at found
+        subst found; simp
+      · have differ : (processId == key) = false := by simp [same]
+        simp only [Kernel.lookup_eq, List.lookup_cons, differ] at found
+        exact List.mem_cons_of_mem _ (mem_of_lookup (by simpa [Kernel.lookup_eq] using found))
+
+theorem lookup_eq_none_of_missing {β : Type _} {key : PID} :
+    ∀ {entries : List (PID × β)}, (∀ entry ∈ entries, entry.1 ≠ key) → entries.lookup key = none
+  | [], _ => rfl
+  | (key', value) :: rest, missing => by
+      have differ : (key == key') = false := by
+        have := missing (key', value) (by simp); simp [Ne.symm this]
+      have rest' : ∀ entry ∈ rest, entry.1 ≠ key := fun entry mem => missing entry (List.mem_cons_of_mem _ mem)
+      simp only [List.lookup_cons, differ]
+      exact lookup_eq_none_of_missing rest'
+
+/-- No process has two tasks, as `Config.distinctTasks` checks. -/
+theorem distinct_of_distinctTasks {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {exhausted : Bool}
+    (distinct : (Config.running state tasks finished exhausted).distinctTasks = true) :
+    tasks.Pairwise fun entry entry' => entry.1 ≠ entry'.1 := by
+  simp only [Config.distinctTasks, Kernel.all_eq, List.all_eq_true, Kernel.any_eq, Bool.not_eq_eq_eq_not,
+    Bool.not_true, List.any_eq_false, beq_iff_eq, Prod.forall] at distinct
+  induction tasks with
+  | nil => exact .nil
+  | cons head rest ih =>
+    refine List.pairwise_cons.mpr ⟨fun entry mem same => ?_, ih fun before key task after mem' => ?_⟩
+    · obtain ⟨before, after, rfl⟩ := List.append_of_mem mem
+      have := distinct (head :: before) entry.1 entry.2 after (by
+        have := mem_splits (before := head :: before) (item := entry) (after := after)
+        simpa using this) head.1 head.2 (by simp)
+      exact this same
+    · intro other task' inside
+      refine distinct (head :: before) key task after ?_ other task' (List.mem_cons_of_mem _ inside)
+      simp only [splits, Kernel.map_eq, List.mem_cons, List.mem_map]
+      exact .inr ⟨(before, (key, task), after), mem', rfl⟩
+
+/-- In a list where no process has two tasks, a process whose task is removed has none. -/
+theorem lookup_rewriteTask_remove {processId : PID} :
+    ∀ {tasks : List (PID × Task α)}, tasks.Pairwise (fun entry entry' => entry.1 ≠ entry'.1) →
+      Kernel.lookup processId (rewriteTask processId (fun _ => []) tasks) = none
+  | [], _ => rfl
+  | (key, task) :: rest, distinct => by
+      have above := List.pairwise_cons.mp distinct
+      by_cases same : key = processId
+      · subst same
+        simp only [rewriteTask, ↓reduceIte, List.nil_append, Kernel.lookup_eq]
+        exact lookup_eq_none_of_missing fun entry mem => (above.1 entry mem).symm
+      · simp only [rewriteTask, same, ↓reduceIte, Kernel.lookup_eq, List.lookup_cons]
+        have differ : (processId == key) = false := by simp [Ne.symm same]
+        simpa [differ, Kernel.lookup_eq] using lookup_rewriteTask_remove above.2
+
+/-! ### Own steps for the commutation proof -/
+
+/-- A process's own step that another step can follow does not stop the run. -/
+theorem Config.own_step {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {processId : PID} {event : Event} {next : Config α} {key : Key} {step : Event × Config α}
+    (found : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next))
+    (more : next.stepOf key = some step) :
+    ∃ task transition, Kernel.lookup processId tasks = some task ∧ task.wait = none ∧
+      (task.own state processId).head? = some transition ∧ transition.exhausted = false ∧
+      (Config.running state tasks finished false).Changes (some (transition.change processId)) next := by
+  obtain ⟨task, transition, lookup, head, equal⟩ := Config.stepOf_own found
+  have waiting : task.wait = none := by
+    obtain ⟨_, _, wait⟩ := task
+    cases wait
+    · rfl
+    · simp [Task.own] at head
+  have exhausted : transition.exhausted = false := by
+    cases exhausted : transition.exhausted
+    · rfl
+    · simp only [exhausted, ↓reduceIte] at equal; subst equal
+      simp [Config.stepOf_exhausted] at more
+  exact ⟨task, transition, lookup, waiting, head, exhausted, Config.changes_own found lookup head exhausted⟩
+
+/-- A process's own step makes the change it makes at a configuration in
+another where its process has the same task and it reads the same. -/
+theorem Config.own_transfer {state state' : State} {tasks tasks' : List (PID × Task α)}
+    {finished finished' : Option (Except Exception α)} {processId : PID} {event event' : Event}
+    {next next' : Config α} {task : Task α} {transition : Transition α}
+    (found : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next))
+    (found' : (Config.running state' tasks' finished' false).stepOf (.own processId) = some (event', next'))
+    (lookup : Kernel.lookup processId tasks = some task) (lookup' : Kernel.lookup processId tasks' = some task)
+    (head : (task.own state processId).head? = some transition) (exhausted : transition.exhausted = false)
+    (view : (Config.running state tasks finished false).sameView (.running state' tasks' finished' false)
+      (.own processId) = true)
+    (elapsed : state.elapsed = state'.elapsed) :
+    (Config.running state' tasks' finished' false).Changes (some (transition.change processId)) next' := by
+  simp only [Config.sameView, lookup, lookup'] at view
+  obtain ⟨transition', head', changes, -⟩ := Config.changes_own_transfer found found' lookup lookup' view elapsed
+  rw [head] at head'; simp only [Option.some.injEq] at head'; subst head'
+  exact (changes exhausted).2
+
+/-- The tasks a process's own step leaves are its own and a child no process has yet. -/
+theorem Config.own_missing {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {processId other : PID} {task task' : Task α} {transition : Transition α}
+    (fresh : (Config.running state tasks finished false).spawnsFresh (.own processId) = true)
+    (lookup : Kernel.lookup processId tasks = some task) (waiting : task.wait = none)
+    (head : (task.own state processId).head? = some transition)
+    (differ : processId ≠ other) (present : Kernel.lookup other tasks = some task') :
+    ∀ entry ∈ transition.tasks, entry.1 ≠ other := by
+  intro entry mem same
+  rcases Task.own_pids (List.mem_of_head? head) entry mem with mine | ⟨child, options, spawned, next, schedule⟩
+  · exact differ (mine.symm.trans same)
+  · obtain ⟨computation, finish, wait⟩ := task
+    simp only at waiting schedule
+    rw [waiting, schedule] at lookup
+    simp only [Config.spawnsFresh, lookup, Kernel.any_eq, Bool.not_eq_eq_eq_not, Bool.not_true,
+      List.any_eq_false, beq_iff_eq] at fresh
+    exact fresh (other, task') (mem_of_lookup present) (by rw [← same, child])
+
+theorem Config.own_finishes {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (head : (task.own state processId).head? = some transition)
+    (finished : ((transition.change processId).finish task).isSome = true) : task.Finishes :=
+  (Task.own_finished (List.mem_of_head? head) finished).2
+
+theorem handleFinishes {processId : PID} {view : Option Term × Option Term} {task : Task α}
+    (finished : ((handleTaskChange processId view).finish task).isSome = true) : task.Finishes :=
+  (handleFinished_some (processId := processId) finished).2
+
+theorem State.eq_of_identical {first second : State} (same : first.identical second = true)
+    (elapsed : first.elapsed = second.elapsed) : first = second := by
+  obtain ⟨processes, timers, elapsed₁⟩ := first
+  obtain ⟨processes', timers', elapsed₂⟩ := second
+  simp only [State.identical, Bool.and_eq_true] at same elapsed
+  have records := eq_of_identicalLists (same := fun record record' : PID × ProcessState =>
+      record.1 == record'.1 && record.2.identical record'.2) (fun {record record'} equal => by
+    obtain ⟨key, value⟩ := record
+    obtain ⟨key', value'⟩ := record'
+    simp only [Bool.and_eq_true, beq_iff_eq] at equal
+    rw [equal.1, ProcessState.eq_of_identical equal.2]) same.1
+  rw [records, eq_of_identicalLists Timer.eq_of_identical same.2, elapsed]
+
+/-- The owners of two keys that `Config.commutesAfter` lets commute. -/
+theorem Key.owners_differ {processId other : PID}
+    (owners : (!((some processId).isSome && some processId == some other && true)) = true) : processId ≠ other := by
+  intro same; subst same; simp at owners
+
+/-- A process's own step and another step that `Config.commutesAfter` compares
+in both orders leave the same processes and result. -/
+theorem Config.processes_own {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {other : Key} {event event' event₃ event₄ : Event}
+    {next next' last last' : Config α}
+    (within : state.Within elapsed) (once : (Config.running state tasks finished false).FinishesOnce)
+    (owners : (!((some processId).isSome && some processId == other.owner && true == other.isOwn)) = true)
+    (fresh : (Config.running state tasks finished false).spawnsFresh (.own processId) = true)
+    (fresh' : (Config.running state tasks finished false).spawnsFresh other = true)
+    (distinct : (Config.running state tasks finished false).distinctTasks = true)
+    (step : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next))
+    (step' : (Config.running state tasks finished false).stepOf other = some (event', next'))
+    (after : next.stepOf other = some (event₃, last)) (after' : next'.stepOf (.own processId) = some (event₄, last'))
+    (view : (Config.running state tasks finished false).sameView next' (.own processId) = true)
+    (view' : (Config.running state tasks finished false).sameView next other = true) :
+    ∃ tasks' finished' state₁ state₂, last = .running state₁ tasks' finished' false ∧
+      last' = .running state₂ tasks' finished' false := by
+  obtain ⟨task, transition, lookup, waiting, head, exhausted, changes⟩ := Config.own_step step after
+  obtain ⟨state₁, tasks₁, finished₁, rfl⟩ := Config.running_of_stepOf after
+  obtain ⟨state₂, tasks₂, finished₂, rfl⟩ := Config.running_of_stepOf after'
+  have within₂ : state₂.Within elapsed :=
+    Config.Within.step (config := .running state tasks finished false) within (Config.step_of_stepOf step')
+  have elapsed₂ : state.elapsed = state₂.elapsed := within.2.trans within₂.2.symm
+  have within₁ : state₁.Within elapsed :=
+    Config.Within.step (config := .running state tasks finished false) within (Config.step_of_stepOf step)
+  have elapsed₁ : state.elapsed = state₁.elapsed := within.2.trans within₁.2.symm
+  have pairwise := distinct_of_distinctTasks distinct
+  cases other with
+  | own other =>
+    have differ : processId ≠ other := Key.owners_differ owners
+    obtain ⟨task', transition', lookup', waiting', head', exhausted', changes'⟩ := Config.own_step step' after'
+    have missing := Config.own_missing fresh lookup waiting head differ lookup'
+    have missing' := Config.own_missing fresh' lookup' waiting' head' (Ne.symm differ) lookup
+    have changes₂ := changes'
+    obtain ⟨_, _, _, equal₂⟩ := changes₂
+    simp only [Config.running.injEq] at equal₂
+    obtain ⟨-, rfl, -, -⟩ := equal₂
+    have changes₁ := changes
+    obtain ⟨_, _, _, equal₁⟩ := changes₁
+    simp only [Config.running.injEq] at equal₁
+    obtain ⟨-, rfl, -, -⟩ := equal₁
+    have stays : Kernel.lookup processId (rewriteTask other (fun _ => transition'.tasks) tasks) = some task := by
+      rw [lookup_rewriteTask differ fun _ => missing', lookup]
+    have stays' : Kernel.lookup other (rewriteTask processId (fun _ => transition.tasks) tasks) = some task' := by
+      rw [lookup_rewriteTask (Ne.symm differ) fun _ => missing, lookup']
+    exact Config.changes_comm changes changes'
+      (Config.own_transfer step' after lookup' stays' head' exhausted' view' elapsed₁)
+      (Config.own_transfer step after' lookup stays head exhausted view elapsed₂)
+      differ (fun _ => missing) (fun _ => missing')
+      (fun task task' found found' finishes finishes' => by
+        simp only [Transition.change] at found found' finishes finishes'
+        rw [lookup] at found; rw [lookup'] at found'
+        simp only [Option.some.injEq] at found found'; subst found; subst found'
+        exact differ (once _ (mem_of_lookup lookup) _ (mem_of_lookup lookup')
+          (Config.own_finishes head finishes) (Config.own_finishes head' finishes')))
+  | handle other =>
+    obtain ⟨task', read, lookup', reads, changes', changes₁'⟩ :=
+      Config.changes_handle_transfer step' after view'
+    by_cases same : other = processId
+    · subst same
+      rw [lookup] at lookup'; simp only [Option.some.injEq] at lookup'; subst lookup'
+      obtain ⟨exits, resumed⟩ := read
+      have resumedNone : resumed = none := Task.handleView_not_waiting waiting reads
+      subst resumedNone
+      have changes₂ := changes'
+      obtain ⟨_, _, _, equal₂⟩ := changes₂
+      simp only [Config.running.injEq] at equal₂
+      obtain ⟨-, rfl, rfl, -⟩ := equal₂
+      have keep : ∀ exits : Option Term, exits = none →
+          handleChange (α := α) other (exits, none) = fun task => [(other, task)] := fun _ => handleChange_keep
+      cases exits with
+      | some reason =>
+        exfalso
+        obtain ⟨_, _, found, -, -⟩ := Config.stepOf_own after'
+        simp only [handleTaskChange] at found
+        rw [rewriteTask_of_lookup lookup] at found
+        simp only [handleChange] at found
+        rw [lookup_rewriteTask_remove pairwise] at found
+        simp at found
+      | none =>
+        have stays : Kernel.lookup other (rewriteTask (handleTaskChange (α := α) other (none, none)).processId
+            (handleTaskChange other (none, none)).change tasks) = some task := by
+          simp only [handleTaskChange, keep none rfl, rewriteTask_keep, lookup]
+        have changes₂ := Config.own_transfer step after' lookup stays head exhausted view elapsed₂
+        obtain ⟨_, _, _, equal₁⟩ := changes
+        simp only [Config.running.injEq] at equal₁
+        obtain ⟨rfl, rfl, rfl, -⟩ := equal₁
+        obtain ⟨state₃, task₃, -, rfl⟩ := changes₁'
+        obtain ⟨state₄, task₄, -, rfl⟩ := changes₂
+        refine ⟨rewriteTask other (fun _ => transition.tasks) tasks,
+          transition.finished.orElse fun _ => finished, state₃, state₄, ?_, ?_⟩
+        · simp [handleTaskChange, keep none rfl, rewriteTask_keep, handleFinished, Transition.change]
+        · simp [handleTaskChange, keep none rfl, rewriteTask_keep, handleFinished, Transition.change]
+    · have differ : processId ≠ other := Ne.symm same
+      have missing := Config.own_missing fresh lookup waiting head differ lookup'
+      have missing' : ∀ task, ∀ entry ∈ (handleTaskChange (α := α) other read).change task, entry.1 ≠ processId :=
+        fun _ entry mem => by
+          rw [handleChange_pids entry mem]; exact same
+      have stays : Kernel.lookup processId (rewriteTask other (handleTaskChange other read).change tasks) =
+          some task := by rw [lookup_rewriteTask differ missing', lookup]
+      have changes₂ := changes'
+      obtain ⟨_, _, _, equal₂⟩ := changes₂
+      simp only [Config.running.injEq] at equal₂
+      obtain ⟨-, rfl, -, -⟩ := equal₂
+      exact Config.changes_comm changes changes' changes₁'
+        (Config.own_transfer step after' lookup stays head exhausted view elapsed₂)
+        differ (fun _ => missing) missing'
+        (fun task task' found found' finishes finishes' => by
+          simp only [Transition.change, handleTaskChange] at found found' finishes
+          rw [lookup] at found; rw [lookup'] at found'
+          simp only [Option.some.injEq] at found found'; subst found; subst found'
+          exact differ (once _ (mem_of_lookup lookup) _ (mem_of_lookup lookup')
+            (Config.own_finishes head finishes) (handleFinishes finishes')))
+  | link _ _ | phase _ | unpark _ | fire _ =>
+    have keeps' := Config.changes_keeps rfl step'
+    have keeps₁ := Config.changes_keeps rfl after
+    have keeps₂ := keeps'
+    obtain ⟨_, equal₂⟩ := keeps₂
+    simp only [Config.running.injEq] at equal₂
+    obtain ⟨-, rfl, rfl, -⟩ := equal₂
+    exact Config.changes_comm_keeps changes keeps' keeps₁
+      (Config.own_transfer step after' lookup lookup head exhausted view elapsed₂)
+
+/-- Two steps that `Config.commutesAfter` compares in both orders leave the
+same processes and result. -/
+theorem Config.processes_of_fallback {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key other : Key} {event event' event₃ event₄ : Event}
+    {next next' last last' : Config α}
+    (within : state.Within elapsed) (once : (Config.running state tasks finished false).FinishesOnce)
+    (owners : (!(key.owner.isSome && key.owner == other.owner && key.isOwn == other.isOwn)) = true)
+    (fresh : (Config.running state tasks finished false).spawnsFresh key = true)
+    (fresh' : (Config.running state tasks finished false).spawnsFresh other = true)
+    (distinct : (Config.running state tasks finished false).distinctTasks = true)
+    (step : (Config.running state tasks finished false).stepOf key = some (event, next))
+    (step' : (Config.running state tasks finished false).stepOf other = some (event', next'))
+    (after : next.stepOf other = some (event₃, last)) (after' : next'.stepOf key = some (event₄, last'))
+    (view : (Config.running state tasks finished false).sameView next' key = true)
+    (view' : (Config.running state tasks finished false).sameView next other = true) :
+    ∃ tasks' finished' state₁ state₂, last = .running state₁ tasks' finished' false ∧
+      last' = .running state₂ tasks' finished' false := by
+  have swap : ∀ {tasks' : List (PID × Task α)} {finished' : Option (Except Exception α)},
+      (∃ state₁ state₂, last' = .running state₁ tasks' finished' false ∧
+        last = .running state₂ tasks' finished' false) →
+      ∃ tasks' finished' state₁ state₂, last = .running state₁ tasks' finished' false ∧
+        last' = .running state₂ tasks' finished' false := fun ⟨state₁, state₂, first, second⟩ =>
+    ⟨_, _, state₂, state₁, second, first⟩
+  have swapped : (∃ tasks' finished' state₁ state₂, last' = .running state₁ tasks' finished' false ∧
+      last = .running state₂ tasks' finished' false) → _ := fun ⟨_, _, state₁, state₂, first, second⟩ =>
+    swap ⟨state₁, state₂, first, second⟩
+  cases key with
+  | own processId =>
+    exact Config.processes_own within once owners fresh fresh' distinct step step' after after' view view'
+  | handle processId =>
+    cases other with
+    | own other =>
+      exact swapped (Config.processes_own within once (by simp [Key.owner, Key.isOwn]) fresh' fresh distinct
+        step' step after' after view' view)
+    | handle other =>
+      have differ : processId ≠ other := by
+        intro same; subst same; simp [Key.owner, Key.isOwn] at owners
+      obtain ⟨_, _, _, rfl⟩ := Config.running_of_stepOf after'
+      obtain ⟨_, _, _, rfl⟩ := Config.running_of_stepOf after
+      obtain ⟨task, read, lookup, -, changes, changes₂⟩ := Config.changes_handle_transfer step after' view
+      obtain ⟨task', read', lookup', -, changes', changes₁⟩ := Config.changes_handle_transfer step' after view'
+      exact Config.changes_comm changes changes' changes₁ changes₂ differ
+        (fun _ entry mem => by rw [handleChange_pids entry mem]; exact differ)
+        (fun _ entry mem => by rw [handleChange_pids entry mem]; exact Ne.symm differ)
+        (fun task task' found found' finishes finishes' => by
+          simp only [handleTaskChange] at found found'
+          rw [lookup] at found; rw [lookup'] at found'
+          simp only [Option.some.injEq] at found found'; subst found; subst found'
+          exact differ (once _ (mem_of_lookup lookup) _ (mem_of_lookup lookup')
+            (handleFinishes finishes) (handleFinishes finishes')))
+    | link _ _ | phase _ | unpark _ | fire _ =>
+      have keeps' := Config.changes_keeps rfl step'
+      obtain ⟨_, _, _, rfl⟩ := Config.running_of_stepOf after
+      have keeps₁ := Config.changes_keeps rfl after
+      have keeps₂ := keeps'
+      obtain ⟨_, equal₂⟩ := keeps₂
+      simp only [Config.running.injEq] at equal₂
+      obtain ⟨rfl, rfl, rfl, -⟩ := equal₂
+      obtain ⟨task, read, lookup, -, changes, changes₂⟩ := Config.changes_handle_transfer step after' view
+      exact Config.changes_comm_keeps changes keeps' keeps₁ changes₂
+  | link _ _ | phase _ | unpark _ | fire _ =>
+    have keeps := Config.changes_keeps rfl step
+    obtain ⟨_, _, _, rfl⟩ := Config.running_of_stepOf after'
+    have keeps₂ := Config.changes_keeps rfl after'
+    have keeps₁ := keeps
+    obtain ⟨_, equal₁⟩ := keeps₁
+    simp only [Config.running.injEq] at equal₁
+    obtain ⟨rfl, rfl, rfl, -⟩ := equal₁
+    cases other with
+    | own other =>
+      exact swapped (Config.processes_own within once (by simp [Key.owner]) fresh' fresh distinct
+        step' step after' after view' view)
+    | handle other =>
+      obtain ⟨task, read, lookup, -, changes', changes₁⟩ := Config.changes_handle_transfer step' after view'
+      exact swapped (Config.changes_comm_keeps changes' keeps keeps₂ changes₁)
+    | link _ _ | phase _ | unpark _ | fire _ =>
+      have keeps' := Config.changes_keeps rfl step'
+      have keeps₁ := Config.changes_keeps rfl after
+      exact Config.changes_comm_none keeps keeps' keeps₁ keeps₂
+
+/-- Two steps that the evaluated comparison of `Config.commutesAfter` accepts
+reach the same configuration in either order. -/
+theorem Config.commutes_of_fallback {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key other : Key} {event event' event₃ event₄ : Event}
+    {next next' last last' : Config α}
+    (within : state.Within elapsed) (once : (Config.running state tasks finished false).FinishesOnce)
+    (owners : (!(key.owner.isSome && key.owner == other.owner && key.isOwn == other.isOwn)) = true)
+    (fresh : (Config.running state tasks finished false).spawnsFresh key = true)
+    (fresh' : (Config.running state tasks finished false).spawnsFresh other = true)
+    (distinct : (Config.running state tasks finished false).distinctTasks = true)
+    (step : (Config.running state tasks finished false).stepOf key = some (event, next))
+    (step' : (Config.running state tasks finished false).stepOf other = some (event', next'))
+    (after : next.stepOf other = some (event₃, last)) (after' : next'.stepOf key = some (event₄, last'))
+    (view : (Config.running state tasks finished false).sameView next' key = true)
+    (view' : (Config.running state tasks finished false).sameView next other = true)
+    (same : last.sameAfter last' = true) : last = last' := by
+  obtain ⟨tasks', finished', state₁, state₂, rfl, rfl⟩ :=
+    Config.processes_of_fallback within once owners fresh fresh' distinct step step' after after' view view'
+  have within₁ : state₁.Within elapsed := Config.Within.step (Config.Within.step (config :=
+    .running state tasks finished false) within (Config.step_of_stepOf step)) (Config.step_of_stepOf after)
+  have within₂ : state₂.Within elapsed := Config.Within.step (Config.Within.step (config :=
+    .running state tasks finished false) within (Config.step_of_stepOf step')) (Config.step_of_stepOf after')
+  simp only [Config.sameAfter, Bool.and_eq_true] at same
+  rw [State.eq_of_identical same.2 (within₁.2.trans within₂.2.symm)]
+
 end Lynx.Concurrent
