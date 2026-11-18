@@ -251,4 +251,330 @@ theorem Sorted.normalize {state : State} (sorted : Sorted state.processes) : Sor
   refine List.Pairwise.filter _ ?_
   exact List.pairwise_map.mpr (sorted.imp id)
 
+/-! ### Every step keeps the records sorted -/
+
+/-- A state whose records are sorted. -/
+def State.Sorted (state : State) : Prop := Lynx.Concurrent.Sorted state.processes
+
+theorem State.Sorted.set {state : State} (sorted : state.Sorted) (processId : PID) (process : ProcessState) :
+    (state.set processId process).Sorted :=
+  Lynx.Concurrent.Sorted.insertRecord sorted processId process
+
+theorem State.Sorted.remove {state : State} (sorted : state.Sorted) (processId : PID) :
+    (state.remove processId).Sorted := by
+  simp only [State.Sorted, State.remove, Kernel.filter_eq]; exact Lynx.Concurrent.Sorted.filter sorted _
+
+theorem State.Sorted.modify {state : State} (sorted : state.Sorted) (processId : PID)
+    (change : ProcessState → ProcessState) : (state.modify processId change).Sorted := by
+  unfold State.modify; split
+  · exact sorted.set _ _
+  · exact sorted
+
+theorem State.Sorted.normalize {state : State} (sorted : state.Sorted) : state.normalize.Sorted :=
+  Lynx.Concurrent.Sorted.normalize sorted
+
+theorem State.Sorted.settle {state : State} (sorted : state.Sorted) (event : Event) :
+    (state.settle event).Sorted := by
+  unfold State.settle; split
+  · exact sorted.normalize
+  · exact sorted
+
+theorem State.Sorted.timers {state : State} (sorted : state.Sorted) (timers : List Timer) :
+    ({ state with timers } : State).Sorted := sorted
+
+/-- Prove that an operation built from replacing, changing and removing
+records keeps them sorted. -/
+syntax "sorted_step" : tactic
+macro_rules
+  | `(tactic| sorted_step) => `(tactic| first
+      | with_reducible assumption
+      | with_reducible apply State.Sorted.set | with_reducible apply State.Sorted.remove
+      | with_reducible apply State.Sorted.modify | with_reducible apply State.Sorted.normalize
+      | with_reducible apply State.Sorted.settle | with_reducible apply State.Sorted.allocate
+      | refine State.Sorted.allocate ?_ _
+      | split)
+
+theorem State.Sorted.allocate {state : State} (sorted : state.Sorted) (processId : PID) :
+    (state.allocate processId).2.Sorted := sorted.modify _ _
+
+theorem State.Sorted.append {state : State} (sorted : state.Sorted) (processId : PID) (message : Term) :
+    (state.append processId message).Sorted := sorted.modify _ _
+
+theorem State.Sorted.store {state : State} (sorted : state.Sorted) (processId : PID) (env : Environment) :
+    (state.store processId env).Sorted := sorted.modify _ _
+
+theorem State.Sorted.fallback {state : State} (sorted : state.Sorted) (source target : PID) (signal : Signal) :
+    (state.fallback source target signal).Sorted := by
+  unfold State.fallback; repeat sorted_step
+
+theorem State.Sorted.enqueue {state : State} (sorted : state.Sorted) (source target : PID) (signal : Signal) :
+    (state.enqueue source target signal).Sorted := by
+  unfold State.enqueue
+  split
+  · split
+    · exact sorted.set _ _
+    · exact sorted.fallback _ _ _
+  · exact sorted.fallback _ _ _
+
+theorem State.Sorted.unpark {state : State} (sorted : state.Sorted) (processId : PID) :
+    (state.unpark processId).Sorted := by
+  unfold State.unpark; split
+  · exact (sorted.modify _ _).enqueue _ _ _
+  · exact sorted
+
+theorem State.Sorted.send {state : State} (sorted : state.Sorted) (source target : PID) (signal : Signal) :
+    (state.send source target signal).Sorted := by
+  unfold State.send
+  apply State.Sorted.enqueue
+  split
+  · split
+    · exact sorted.unpark _
+    · exact sorted
+  · exact sorted
+
+theorem State.Sorted.linkExit {state : State} (sorted : state.Sorted) (processId target : PID) (reason : Term) :
+    (state.linkExit processId target reason).Sorted := by
+  unfold State.linkExit
+  split
+  · apply State.Sorted.modify
+    split
+    · split
+      · exact sorted.unpark _
+      · exact sorted
+    · exact sorted
+  · exact sorted.send _ _ _
+
+theorem State.Sorted.terminate {state : State} (sorted : state.Sorted) (processId : PID) (reason : Term) :
+    (state.terminate processId reason).Sorted := by
+  unfold State.terminate
+  dsimp only
+  generalize (Kernel.foldl _ [] _ : List PID) = links
+  generalize hstate : State.set _ _ _ = start
+  have : start.Sorted := hstate ▸ (sorted.timers _).set _ _
+  clear hstate
+  simp only [Kernel.foldl_eq]
+  induction links generalizing start with
+  | nil => exact this
+  | cons target rest ih =>
+    simp only [List.foldl_cons]
+    apply ih
+    split
+    · exact (this.modify _ _).linkExit _ _ _
+    · exact this
+
+theorem State.Sorted.answer {state : State} (sorted : state.Sorted) (processId : PID) (entry : Entry) :
+    (state.answer processId entry).Sorted := by
+  unfold State.answer; split <;> first | exact sorted.send _ _ _ | exact sorted
+
+theorem State.Sorted.linkPhase {state next : State} (sorted : state.Sorted) {processId target : PID}
+    (phase : state.linkPhase processId target = some next) : next.Sorted := by
+  unfold State.linkPhase at phase
+  repeat' split at phase
+  all_goals first
+    | (simp only [Option.some.injEq] at phase; subst phase; exact (sorted.set _ _).linkExit _ _ _)
+    | simp at phase
+
+theorem State.Sorted.phase {state next : State} (sorted : state.Sorted) {processId : PID}
+    (phase : state.phase processId = some next) : next.Sorted := by
+  unfold State.phase at phase
+  repeat' split at phase
+  all_goals first
+    | (simp only [Option.some.injEq] at phase; subst phase; exact (sorted.set _ _).send _ _ _)
+    | (simp only [Option.some.injEq] at phase; subst phase; exact (sorted.set _ _).answer _ _)
+    | simp at phase
+
+theorem State.Sorted.phases {state next : State} (sorted : state.Sorted) {processId : PID}
+    (mem : next ∈ state.phases processId) : next.Sorted := by
+  simp only [State.phases, Kernel.append_eq, Kernel.filterMap_eq, List.mem_append, List.mem_filterMap] at mem
+  rcases mem with ⟨_, -, phase⟩ | mem
+  · exact sorted.linkPhase phase
+  · split at mem
+    · rename_i found
+      simp only [List.mem_singleton] at mem; subst mem
+      exact sorted.phase found
+    · simp at mem
+
+theorem State.Sorted.fire {state : State} (sorted : state.Sorted) (timer : Timer) : (state.fire timer).Sorted :=
+  (sorted.timers _).enqueue _ _ _
+
+theorem State.Sorted.spawnWith {state : State} (sorted : state.Sorted) (processId : PID) (options : SpawnOptions) :
+    (state.spawnWith processId options).2.Sorted := by
+  unfold State.spawnWith
+  dsimp only
+  split
+  · apply State.Sorted.modify
+    apply State.Sorted.modify
+    refine State.Sorted.allocate ?_ _
+    split
+    · exact ((((sorted.set _ _).set _ _).modify _ _).modify _ _)
+    · exact ((sorted.set _ _).set _ _)
+  · split
+    · exact ((((sorted.set _ _).set _ _).modify _ _).modify _ _)
+    · exact ((sorted.set _ _).set _ _)
+
+
+/-- Close a goal that an operation keeps the records sorted with one of the
+shapes the operations of `State.request` and `State.handle` take. -/
+syntax "sorted_exact" : tactic
+macro_rules
+  | `(tactic| sorted_exact) => `(tactic| first
+      | assumption
+      | exact State.Sorted.modify ‹_› _ _
+      | exact State.Sorted.send ‹_› _ _ _
+      | exact State.Sorted.enqueue ‹_› _ _ _
+      | exact State.Sorted.append ‹_› _ _
+      | exact (State.Sorted.modify ‹_› _ _).send _ _ _
+      | exact (State.Sorted.modify ‹_› _ _).append _ _
+      | exact State.Sorted.allocate ‹_› _
+      | exact ((State.Sorted.allocate ‹_› _).unpark _).modify _ _
+      | exact (State.Sorted.allocate ‹_› _).timers _
+      | exact (State.Sorted.timers ‹_› _).modify _ _)
+
+/-- The state an answer leaves. -/
+def Answer.state : Answer β → State
+  | .reply _ state | .wait _ state | .continue _ state => state
+
+theorem State.Sorted.request {state : State} (sorted : state.Sorted) (processId : PID)
+    (next : Term → Result β) (query : Request) : (state.request processId next query).state.Sorted := by
+  cases query <;> simp only [State.request] <;> (repeat' split) <;> simp only [Answer.state] <;> sorted_exact
+
+theorem State.Sorted.exitSignal {state : State} (sorted : state.Sorted) (target source : PID) (reason : Term)
+    (linked normalKills : Bool) : (state.exitSignal target source reason linked normalKills).1.Sorted := by
+  unfold State.exitSignal; dsimp only; (repeat' split) <;> sorted_exact
+
+theorem State.Sorted.handle {state : State} (sorted : state.Sorted) (processId : PID) (waiting : Option Wait)
+    (entry : Entry) : (state.handle processId waiting entry).1.Sorted := by
+  unfold State.handle
+  split
+  · exact sorted.append _ _
+  · dsimp only; split <;> sorted_exact
+  · exact sorted.exitSignal _ _ _ _ _
+  · dsimp only; split <;> sorted_exact
+  · dsimp only; split <;> sorted_exact
+  · dsimp only; split <;> sorted_exact
+  · exact sorted.modify _ _
+  · rename_i reference reason _
+    dsimp only
+    have cleared : (if isNormal reason && Kernel.contains (state.process processId).eagerExits entry.source then
+        state.modify processId fun process => { process with
+          eagerExits := Kernel.filter (· != entry.source) process.eagerExits } else state).Sorted := by
+      split <;> sorted_exact
+    generalize (if isNormal reason && _ then _ else state) = cleared' at cleared
+    split <;> sorted_exact
+  · exact sorted.send _ _ _
+  · dsimp only; split <;> sorted_exact
+  · dsimp only; split <;> sorted_exact
+
+theorem State.Sorted.ended {state : State} (sorted : state.Sorted) {γ : Type}
+    (finish : Except Exception γ → Option (Except Exception α)) (event : Event) (processId : PID)
+    (reason : Term) (result : Except Exception γ) :
+    (Task.ended finish event state processId reason result).state.Sorted := sorted.terminate _ _
+
+theorem State.Sorted.own {state : State} (sorted : state.Sorted) {processId : PID} {task : Task α}
+    {transition : Transition α} (mem : transition ∈ task.own state processId) : transition.state.Sorted := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp [Task.own] at mem
+  | none =>
+    cases computation with
+    | ok =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem; exact sorted.ended _ _ _ _ _
+    | error exception =>
+      cases exception <;> simp only [Task.own, List.mem_singleton] at mem <;> subst mem <;>
+        first | exact sorted.remove _ | exact sorted.ended _ _ _ _ _
+    | get | send =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem
+      first | exact sorted | exact sorted.send _ _ _
+    | set => simp only [Task.own, List.mem_singleton] at mem; subst mem; exact sorted.store _ _
+    | schedule => simp only [Task.own, List.mem_singleton] at mem; subst mem; exact sorted.spawnWith _ _
+    | receive =>
+      simp only [Task.own] at mem
+      split at mem
+      · simp only [List.mem_singleton] at mem; subst mem; exact sorted.modify _ _
+      · split at mem
+        · simp at mem
+        · split at mem
+          · simp at mem
+          · simp only [List.mem_singleton] at mem; subst mem; exact sorted
+    | request query next =>
+      have := sorted.request processId next query
+      simp only [Task.own] at mem
+      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+        rename_i found <;> simpa [found, Answer.state] using this
+
+theorem State.Sorted.handleStep {state : State} (sorted : state.Sorted) {processId : PID} {task : Task α}
+    {transition : Transition α} (mem : transition ∈ task.handle state processId) : transition.state.Sorted := by
+  simp only [Task.handle] at mem
+  split at mem
+  · simp at mem
+  · rename_i entry rest _
+    have handled := (sorted.set processId { state.process processId with queue := rest }).handle processId
+      (task.wait.map (·.1)) entry
+    generalize (State.set _ _ _).handle _ _ _ = result at mem handled
+    obtain ⟨state', resumed, exits⟩ := result
+    dsimp only at mem handled
+    split at mem
+    · simp only [List.mem_singleton] at mem; subst mem; exact handled.ended _ _ _ _ _
+    · split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> exact handled
+
+/-- A configuration whose records are sorted. -/
+def Config.Sorted : Config α → Prop
+  | .start .. => True
+  | .running state .. => state.Sorted
+
+theorem State.Sorted.initial (env : Environment) (elapsed : PID → Nat → Nat) :
+    (State.initial env elapsed).Sorted := by
+  simp [State.Sorted, State.initial, Lynx.Concurrent.Sorted]
+
+/-- Every step keeps the records sorted. -/
+theorem Config.Sorted.step {config next : Config α} {event : Event} (sorted : config.Sorted)
+    (step : Step config event next) : next.Sorted := by
+  cases config with
+  | start env computation elapsed =>
+    simp only [Step, Config.successors] at step
+    split at step
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · split at step
+      · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step
+        exact State.Sorted.initial _ _
+      · simp at step
+  | running state tasks finished exhausted =>
+    have sorted : state.Sorted := sorted
+    cases exhausted
+    case true => simp [Step, Config.successors] at step
+    simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
+      List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists] at step
+    rcases step with ((⟨before, processId, task, after, -, transition, possible, same⟩ |
+      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩
+    · simp only [Prod.mk.injEq] at same
+      obtain ⟨-, rfl⟩ := same
+      have : transition.state.Sorted := by
+        simp only [Task.transitions, Kernel.append_eq, List.mem_append] at possible
+        rcases possible with possible | possible
+        · exact sorted.own possible
+        · exact sorted.handleStep possible
+      unfold Transition.apply
+      split
+      · exact this
+      · exact this.settle _
+    · obtain ⟨next', phase, same⟩ := phased
+      simp only [Prod.mk.injEq] at same
+      obtain ⟨-, rfl⟩ := same
+      exact (sorted.phases phase).normalize
+    · cases parked : (state.process processId).parked with
+      | none => simp [parked] at unparked
+      | some _ =>
+        simp only [parked, Option.map_some, Option.some.injEq, Prod.mk.injEq] at unparked
+        obtain ⟨-, rfl⟩ := unparked
+        exact (sorted.unpark _).normalize
+    · simp only [Prod.mk.injEq] at fired
+      obtain ⟨-, rfl⟩ := fired
+      exact sorted.fire _
+
+/-- Every configuration a run reaches has sorted records. -/
+theorem Config.Sorted.run {config last : Config α} {events : List Event} (sorted : config.Sorted)
+    (run : Run config events last) : last.Sorted :=
+  Run.invariant (fun _ _ _ sorted step => sorted.step step) run sorted
+
 end Lynx.Concurrent
