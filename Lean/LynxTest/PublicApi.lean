@@ -382,6 +382,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Config.Within",
   "Lynx.Concurrent.Config.apart",
   "Lynx.Concurrent.Config.commutesAfter",
+  "Lynx.Concurrent.Config.distinctTasks",
   "Lynx.Concurrent.Config.forced",
   "Lynx.Concurrent.Config.frames",
   "Lynx.Concurrent.Config.keepsTasks",

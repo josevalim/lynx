@@ -626,6 +626,13 @@ holds of every step. -/
       | _ => true
   | _, _ => true
 
+/-- Whether no process has two tasks, which the proofs of commuting steps rely
+on. Each process has one task, so this holds of every configuration. -/
+@[expose] def Config.distinctTasks : Config α → Bool
+  | .running _ tasks _ _ =>
+      Kernel.all (splits tasks) fun (before, (processId, _), _) => !Kernel.any before (·.1 == processId)
+  | _ => true
+
 /-- Whether two steps of different processes commute at a configuration, given
 the configurations each leads to: they touch apart, or each can follow the
 other, neither changes what the other's process continues with, and both
@@ -633,7 +640,7 @@ orders reach the same configuration. -/
 @[expose] def Config.commutesAfter (config : Config α) (key : Key) (next : Config α) (other : Key)
     (next' : Config α) : Bool :=
   !(key.owner.isSome && key.owner == other.owner && key.isOwn == other.isOwn) &&
-  config.spawnsFresh key && config.spawnsFresh other &&
+  config.spawnsFresh key && config.spawnsFresh other && config.distinctTasks &&
   (config.apart key other ||
     match next.stepOf other, next'.stepOf key with
     | some (_, last), some (_, last') =>
