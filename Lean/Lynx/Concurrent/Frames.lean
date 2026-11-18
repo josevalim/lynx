@@ -1815,4 +1815,210 @@ private theorem enqueueFrames_bits {state : State} {source target : PID} {signal
     (try rcases mem with rfl | rfl) <;> (try subst mem) <;> dsimp only <;>
     exact ⟨fun bit set => by mask_bits, fun bit set => by mask_bits⟩
 
+/-- An effect within frames is within larger well-formed frames. -/
+private theorem Effect.InFrames.mono {effect : Effect} {frames frames' : List Frame} {state : State}
+    (framed : effect.InFrames frames state)
+    (moreReads : ∀ processId bit, readsOf frames processId bit → readsOf frames' processId bit)
+    (moreWrites : ∀ processId bit, writesOf frames processId bit → writesOf frames' processId bit)
+    (wellFramed : WellFramed frames' state) : effect.InFrames frames' state := by
+  intro processId
+  rcases framed processId with same | all | ⟨change, equal, used, inside⟩
+  · exact .inl same
+  · exact .inr (.inl fun bit lower => moreWrites _ _ (all bit lower))
+  · refine .inr (.inr ⟨change, equal, ?_, fun process found => ?_⟩)
+    · obtain ⟨bit, lower, read | written⟩ := used
+      · exact ⟨bit, lower, .inl (moreReads _ _ read)⟩
+      · exact ⟨bit, lower, .inr (moreWrites _ _ written)⟩
+    · exact (inside process found).mono (moreReads _) (moreWrites _) (wellFramed processId).1
+        ((wellFramed processId).2 _ found).1 ((wellFramed processId).2 _ found).2
+
+/-- Frames that read no queue's head or tail and remove no head are well formed. -/
+private theorem WellFramed.quiet {frames : List Frame} {state : State}
+    (quiet : ∀ entry ∈ frames, entry.2.1.testBit headBit = false ∧ entry.2.1.testBit tailBit = false ∧
+      entry.2.2.testBit headBit = false) : WellFramed frames state :=
+  fun processId => ⟨fun read => by rw [readsOf_false fun entry mem => (quiet entry mem).2.1] at read; simp at read,
+    fun _ _ => ⟨fun read => by rw [readsOf_false fun entry mem => (quiet entry mem).1] at read; simp at read,
+      fun written => by rw [writesOf_false fun entry mem => (quiet entry mem).2.2] at written; simp at written⟩⟩
+
+private theorem readsOf_mono {frames frames' : List Frame} (sub : ∀ entry ∈ frames, entry ∈ frames')
+    (processId : PID) (bit : Nat) (read : readsOf frames processId bit) : readsOf frames' processId bit := by
+  simp only [readsOf, List.any_eq_true] at read ⊢
+  obtain ⟨entry, mem, set⟩ := read
+  exact ⟨entry, sub entry mem, set⟩
+
+private theorem writesOf_mono {frames frames' : List Frame} (sub : ∀ entry ∈ frames, entry ∈ frames')
+    (processId : PID) (bit : Nat) (written : writesOf frames processId bit) : writesOf frames' processId bit := by
+  simp only [writesOf, List.any_eq_true] at written ⊢
+  obtain ⟨entry, mem, set⟩ := written
+  exact ⟨entry, sub entry mem, set⟩
+
+private theorem readsOf_bits {frames : List Frame} {processId : PID} {bit : Nat}
+    (read : readsOf frames processId bit) : ∃ entry ∈ frames, entry.2.1.testBit bit := by
+  simp only [readsOf, List.any_eq_true, Bool.and_eq_true] at read
+  obtain ⟨entry, mem, -, set⟩ := read
+  exact ⟨entry, mem, set⟩
+
+private theorem writesOf_bits {frames : List Frame} {processId : PID} {bit : Nat}
+    (written : writesOf frames processId bit) : ∃ entry ∈ frames, entry.2.2.testBit bit := by
+  simp only [writesOf, List.any_eq_true, Bool.and_eq_true] at written
+  obtain ⟨entry, mem, -, set⟩ := written
+  exact ⟨entry, mem, set⟩
+
+/-- Queueing a monitor signal writes only the queue's tail. -/
+private theorem enqueueFrames_monitor {state : State} {source target : PID} {reference : List Nat} {entry : Frame}
+    (mem : entry ∈ state.enqueueFrames source target (.monitor reference)) : ∀ bit, entry.2.2.testBit bit → bit = 1 := by
+  simp only [State.enqueueFrames, State.appendFrames] at mem
+  split at mem <;> simp only [List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at mem <;>
+    (try rcases mem with rfl | rfl) <;> (try subst mem) <;> dsimp only <;> intro bit set <;> mask_bits
+
+private theorem Realizes.records {effect : Effect} {before after : State} (realizes : Realizes effect before after) :
+    ∀ processId, after.record processId = (effect.apply before).record processId := fun processId => by
+  rw [realizes.1, Effect.record_apply]
+
+/-- Clearing a parked monitor signal is within a frame writing it. -/
+private theorem Effect.InFrames.unparked (state : State) (processId : PID) :
+    (Effect.modify processId fun process => { process with parked := none }).InFrames
+      [(processId, Field.parked, Field.parked)] state := by
+  refine Effect.InFrames.modify (List.mem_singleton.mpr rfl) ⟨13, by decide, .inl (by decide)⟩ fun process _ => ?_
+  have framed : Framed (bitsOf Field.parked) (bitsOf Field.parked) process
+      (fun process => { process with parked := none }) := by framed_update
+  exact framed.widen (fun _ read => read) (fun _ written => written) (List.mem_singleton.mpr rfl)
+    fun entry mem _ => by simp only [List.mem_singleton] at mem; subst mem; dsimp only; decide
+
+/-- The entries of `State.enqueueFrames` read no queue and remove no head. -/
+private theorem enqueueFrames_quiet {state : State} {source target : PID} {signal : Signal} {entry : Frame}
+    (mem : entry ∈ state.enqueueFrames source target signal) :
+    entry.2.1.testBit headBit = false ∧ entry.2.1.testBit tailBit = false ∧ entry.2.2.testBit headBit = false := by
+  obtain ⟨reads, writes⟩ := enqueueFrames_bits mem
+  refine ⟨?_, ?_, ?_⟩
+  · cases set : entry.2.1.testBit headBit
+    · rfl
+    · have := reads _ set; simp [headBit] at this
+  · cases set : entry.2.1.testBit tailBit
+    · rfl
+    · have := reads _ set; simp [tailBit] at this
+  · cases set : entry.2.2.testBit headBit
+    · rfl
+    · have := writes _ set; simp [headBit] at this
+
+/-- Sending a signal is within its frames. -/
+private theorem Effect.InFrames.send (state : State) (source target : PID) (signal : Signal) :
+    (state.sendEffect source target signal).InFrames (state.sendFrames source target signal) state := by
+  have quietEnqueue : ∀ {signal : Signal} {entry : Frame}, entry ∈ state.enqueueFrames source target signal →
+      entry.2.1.testBit headBit = false ∧ entry.2.1.testBit tailBit = false ∧ entry.2.2.testBit headBit = false :=
+    fun mem => enqueueFrames_quiet mem
+  have quiet : ∀ entry ∈ state.sendFrames source target signal,
+      entry.2.1.testBit headBit = false ∧ entry.2.1.testBit tailBit = false ∧ entry.2.2.testBit headBit = false := by
+    intro entry mem
+    simp only [State.sendFrames] at mem
+    split at mem
+    · split at mem
+      · simp only [List.mem_cons, Kernel.append_eq, List.mem_append] at mem
+        rcases mem with rfl | mem | mem
+        · dsimp only; decide
+        · exact quietEnqueue mem
+        · exact quietEnqueue mem
+      · simp only [List.mem_cons] at mem
+        rcases mem with rfl | mem
+        · dsimp only; decide
+        · exact quietEnqueue mem
+    · simp only [List.mem_cons] at mem
+      rcases mem with rfl | mem
+      · dsimp only; decide
+      · exact quietEnqueue mem
+  have wellFramed : WellFramed (state.sendFrames source target signal) state := WellFramed.quiet quiet
+  have inside : ∀ {signal'} entry, entry ∈ state.enqueueFrames source target signal' →
+      (signal' = signal ∨ ∃ parked reference, (state.process source).parked = some (parked, reference) ∧
+        parked = target ∧ signal' = .monitor reference) →
+      entry ∈ state.sendFrames source target signal := by
+    intro signal' entry mem which
+    simp only [State.sendFrames]
+    rcases which with rfl | ⟨parked, reference, found, rfl, rfl⟩
+    · split
+      · split <;> simp [Kernel.append_eq, mem]
+      · simp [mem]
+    · simp [found, Kernel.append_eq, mem]
+  have direct : (state.enqueueEffect source target signal).InFrames (state.sendFrames source target signal) state :=
+    (Effect.InFrames.enqueue state source target signal).mono
+      (readsOf_mono fun entry mem => inside entry mem (.inl rfl))
+      (writesOf_mono fun entry mem => inside entry mem (.inl rfl)) wellFramed
+  unfold State.sendEffect
+  cases parked : (state.process source).parked with
+  | none => exact direct
+  | some found =>
+    obtain ⟨other, reference⟩ := found
+    simp only
+    split
+    · rename_i same
+      have same : other = target := eq_of_beq same
+      subst same
+      let unparked := state.modify source fun process => { process with parked := none }
+      have first := Effect.InFrames.unparked state source
+      have second : (unparked.enqueueEffect source other (.monitor reference)).InFrames
+          (state.enqueueFrames source other (.monitor reference))
+          ((Effect.modify source fun process => { process with parked := none }).apply state) := by
+        have equal : unparked.enqueueFrames source other (.monitor reference) =
+            state.enqueueFrames source other (.monitor reference) :=
+          State.enqueueFrames_congr _ (State.alive_modify _ _ _ _ fun _ => rfl)
+        rw [← equal]
+        exact (Effect.InFrames.enqueue unparked _ _ _).congr fun processId =>
+          ((Realizes.modify state source _).records processId).symm
+      have parkedBits : ∀ {processId bit}, writesOf [(source, Field.parked, Field.parked)] processId bit → bit = 13 := by
+        intro processId bit written
+        obtain ⟨entry, mem, set⟩ := writesOf_bits written
+        simp only [List.mem_singleton] at mem; subst mem; dsimp only at set; mask_bits
+      have readBits : ∀ {signal : Signal} {processId bit}, readsOf (state.enqueueFrames source other signal) processId bit →
+          bit = 16 ∨ bit = 6 ∨ bit = 12 := by
+        intro signal processId bit read
+        obtain ⟨entry, mem, set⟩ := readsOf_bits read
+        exact (enqueueFrames_bits mem).1 _ set
+      have unparkFramed := first.andThen second
+        (WellFramed.quiet fun entry mem => by
+          simp only [List.mem_append, List.mem_singleton] at mem
+          rcases mem with rfl | mem
+          · dsimp only; decide
+          · exact enqueueFrames_quiet mem)
+        (fun processId bit read written => by have := parkedBits written; have := readBits read; omega)
+        (fun processId _ written => by have := parkedBits written; simp [headBit] at this)
+        (fun processId written _ => by have := parkedBits written; simp [headBit] at this)
+        (fun processId written _ => by have := parkedBits written; simp [tailBit] at this)
+      have unparkEq : state.unparkEffect source = (Effect.modify source fun process => { process with parked := none }).andThen
+          (unparked.enqueueEffect source other (.monitor reference)) := by
+        simp only [State.unparkEffect, parked]; rfl
+      rw [← unparkEq] at unparkFramed
+      have third : ((state.unpark source).enqueueEffect source other signal).InFrames
+          (state.enqueueFrames source other signal) ((state.unparkEffect source).apply state) := by
+        have equal : (state.unpark source).enqueueFrames source other signal = state.enqueueFrames source other signal :=
+          State.enqueueFrames_congr _ (State.alive_unpark _ _ _)
+        rw [← equal]
+        exact (Effect.InFrames.enqueue _ _ _ _).congr fun processId => ((Realizes.unpark state source).records processId).symm
+      have writeBits : ∀ {processId bit}, writesOf ([(source, Field.parked, Field.parked)] ++
+          state.enqueueFrames source other (.monitor reference)) processId bit → bit = 13 ∨ bit = 1 := by
+        intro processId bit written
+        obtain ⟨entry, mem, set⟩ := writesOf_bits written
+        simp only [List.mem_append, List.mem_singleton] at mem
+        rcases mem with rfl | mem
+        · dsimp only at set; left; mask_bits
+        · right; exact enqueueFrames_monitor mem _ set
+      have total := unparkFramed.andThen third
+        (WellFramed.quiet fun entry mem => by
+          simp only [List.mem_append, List.mem_singleton] at mem
+          rcases mem with (rfl | mem) | mem
+          · dsimp only; decide
+          · exact enqueueFrames_quiet mem
+          · exact enqueueFrames_quiet mem)
+        (fun processId bit read written => by have := writeBits written; have := readBits read; omega)
+        (fun processId _ written => by have := writeBits written; simp [headBit] at this)
+        (fun processId written _ => by have := writeBits written; simp [headBit] at this)
+        (fun processId _ written => by
+          obtain ⟨entry, mem, set⟩ := writesOf_bits written
+          have := (enqueueFrames_bits mem).2 _ set; simp [headBit] at this)
+      refine total.mono (readsOf_mono fun entry mem => ?_) (writesOf_mono fun entry mem => ?_) wellFramed <;>
+        (simp only [List.mem_append, List.mem_singleton] at mem
+         rcases mem with (rfl | mem) | mem
+         · simp [State.sendFrames, parked]
+         · exact inside entry mem (.inr ⟨other, reference, parked, rfl, rfl⟩)
+         · exact inside entry mem (.inl rfl))
+    · exact direct
+
 end Lynx.Concurrent
