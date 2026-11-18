@@ -1190,4 +1190,127 @@ theorem Config.step_of_stepOf {config next : Config α} {key : Key} {event : Eve
     simp only [beq_iff_eq] at equal
     exact .inr ⟨timer, mem, by rw [equal]⟩
 
+/-! ### At most one process finishes the run -/
+
+/-- Whether a process's result can reach the run's outcome. -/
+def Task.Finishes (task : Task α) : Prop := ∃ result, (task.finish result).isSome = true
+
+/-- At most one process can finish the run: the root. -/
+def Config.FinishesOnce : Config α → Prop
+  | .start .. => True
+  | .running _ tasks _ _ => ∀ entry ∈ tasks, ∀ entry' ∈ tasks, entry.2.Finishes → entry'.2.Finishes →
+      entry.1 = entry'.1
+
+/-- What a transition leaves of a process that can finish the run is that process. -/
+def Transition.Keeps (processId : PID) (task : Task α) (transition : Transition α) : Prop :=
+  ∀ entry ∈ transition.tasks, entry.2.Finishes → entry.1 = processId ∧ task.Finishes
+
+theorem Task.own_keeps {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.own state processId) : transition.Keeps processId task := by
+  obtain ⟨computation, finish, wait⟩ := task
+  intro entry inside finishes
+  cases wait with
+  | some => simp [Task.own] at mem
+  | none =>
+    cases computation with
+    | ok => simp [Task.own, Task.ended] at mem; subst mem; simp at inside
+    | error exception =>
+      cases exception <;> simp [Task.own, Task.ended] at mem <;> subst mem <;> simp at inside
+    | get | set | send =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem
+      simp only [List.mem_singleton] at inside; subst inside
+      exact ⟨rfl, finishes⟩
+    | schedule =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at inside
+      rcases inside with rfl | rfl
+      · exact ⟨rfl, finishes⟩
+      · obtain ⟨_, finishes⟩ := finishes; simp [Task.child] at finishes
+    | receive =>
+      simp only [Task.own] at mem
+      (repeat' split at mem) <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;>
+        simp only [List.mem_singleton] at inside <;> subst inside <;> exact ⟨rfl, finishes⟩
+    | request =>
+      simp only [Task.own] at mem
+      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+        simp only [List.mem_singleton] at inside <;> subst inside <;> exact ⟨rfl, finishes⟩
+
+theorem Task.handle_keeps {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.handle state processId) : transition.Keeps processId task := by
+  intro entry inside finishes
+  simp only [Task.handle] at mem
+  split at mem
+  · simp at mem
+  · generalize (State.set _ _ _).handle _ _ _ = result at mem
+    obtain ⟨_, resumed, exits⟩ := result
+    dsimp only at mem
+    split at mem
+    · simp only [List.mem_singleton] at mem; subst mem; simp [Task.ended] at inside
+    · split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+        simp only [List.mem_singleton] at inside <;> subst inside
+      · exact ⟨rfl, finishes⟩
+      · exact ⟨rfl, finishes⟩
+
+/-- Every step keeps at most one process able to finish the run. -/
+theorem Config.FinishesOnce.step {config next : Config α} {event : Event} (once : config.FinishesOnce)
+    (step : Step config event next) : next.FinishesOnce := by
+  cases config with
+  | start env computation elapsed =>
+    simp only [Step, Config.successors] at step
+    split at step
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · split at step
+      · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step
+        intro entry inside entry' inside' _ _
+        simp only [List.mem_singleton] at inside inside'
+        rw [inside, inside']
+      · simp at step
+  | running state tasks finished exhausted =>
+    cases exhausted
+    case true => simp [Step, Config.successors] at step
+    simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
+      List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists] at step
+    rcases step with ((⟨before, processId, task, after, split, transition, possible, same⟩ |
+      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩
+    · simp only [Prod.mk.injEq] at same
+      obtain ⟨-, rfl⟩ := same
+      have keeps : transition.Keeps processId task := by
+        simp only [Task.transitions, Kernel.append_eq, List.mem_append] at possible
+        rcases possible with possible | possible
+        · exact Task.own_keeps possible
+        · exact Task.handle_keeps possible
+      have split := eq_of_mem_splits split
+      unfold Transition.apply
+      split
+      · intro _ inside; simp at inside
+      · -- Every entry is one of the old ones, or the process's own, which could finish before.
+        have origin : ∀ entry ∈ Kernel.append (Kernel.append before transition.tasks) after, entry.2.Finishes →
+            ∃ old ∈ tasks, old.1 = entry.1 ∧ old.2.Finishes := by
+          intro entry inside finishes
+          simp only [Kernel.append_eq, List.mem_append] at inside
+          rcases inside with (inside | inside) | inside
+          · exact ⟨entry, by rw [split]; simp [inside], rfl, finishes⟩
+          · obtain ⟨same, finishes'⟩ := keeps entry inside finishes
+            exact ⟨(processId, task), by rw [split]; simp, same.symm, finishes'⟩
+          · exact ⟨entry, by rw [split]; simp [inside], rfl, finishes⟩
+        intro entry inside entry' inside' finishes finishes'
+        obtain ⟨old, mem, same, finishes⟩ := origin entry inside finishes
+        obtain ⟨old', mem', same', finishes'⟩ := origin entry' inside' finishes'
+        rw [← same, ← same']
+        exact once old mem old' mem' finishes finishes'
+    · obtain ⟨_, _, same⟩ := phased
+      simp only [Prod.mk.injEq] at same
+      obtain ⟨-, rfl⟩ := same
+      exact once
+    · cases parked : (state.process processId).parked with
+      | none => simp [parked] at unparked
+      | some _ =>
+        simp only [parked, Option.map_some, Option.some.injEq, Prod.mk.injEq] at unparked
+        obtain ⟨-, rfl⟩ := unparked
+        exact once
+    · simp only [Prod.mk.injEq] at fired
+      obtain ⟨-, rfl⟩ := fired
+      exact once
+
 end Lynx.Concurrent
