@@ -863,29 +863,12 @@ inductive Config (α : Type) : Type 1 where
   | running (state : State) (tasks : List (PID × Task α))
       (finished : Option (Except Exception α)) (exhausted : Bool)
 
-/-- Whether a step may leave something nothing can observe any more, which
-normalization removes. Reading or replacing the environment, spawning,
-sending or receiving a message, timing out, firing a timer, and handling a
-message, a reply, a marker, a monitor or an `is_process_alive` request end no
-process and make no queued signal inert, so they leave nothing. -/
-@[expose] def Event.normalizes : Event → Bool
-  | .internal _ | .spawn .. | .send .. | .receive .. | .timeout _ | .fire _ => false
-  | .handle _ entry => match entry.signal with
-    | .message _ | .reply _ | .flush | .isAlive | .monitor _ => false
-    | _ => true
-  | _ => true
-
-/-- The state after a step, normalized when it may leave something nothing
-can observe any more. -/
-@[expose] def State.settle (state : State) (event : Event) : State :=
-  if event.normalizes then state.normalize else state
-
 /-- The configuration a process step leads to. A process that does not return
 ends the run. -/
 @[expose] def Transition.apply (transition : Transition α) (before after : List (PID × Task α))
     (finished : Option (Except Exception α)) (exhausted : Bool) : Config α :=
   if transition.exhausted then .running transition.state [] finished true
-  else .running (transition.state.settle transition.event) (Kernel.append (Kernel.append before transition.tasks) after)
+  else .running transition.state.normalize (Kernel.append (Kernel.append before transition.tasks) after)
     (transition.finished.orElse fun _ => finished) exhausted
 
 /-- Every way to split a list around one element. -/
@@ -941,7 +924,7 @@ A run that a process did not return from has none. -/
             (.unpark processId, .running (state.unpark processId).normalize tasks finished false))
           state.processes))
         (Kernel.map (fun timer =>
-          (.fire timer.reference, .running (state.fire timer) tasks finished false)) state.firing)
+          (.fire timer.reference, .running (state.fire timer).normalize tasks finished false)) state.firing)
 
 /-- A step of a configuration. -/
 @[expose] def Step (first : Config α) (event : Event) (next : Config α) : Prop :=

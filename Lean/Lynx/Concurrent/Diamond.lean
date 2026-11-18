@@ -273,12 +273,6 @@ theorem State.Sorted.modify {state : State} (sorted : state.Sorted) (processId :
 theorem State.Sorted.normalize {state : State} (sorted : state.Sorted) : state.normalize.Sorted :=
   Lynx.Concurrent.Sorted.normalize sorted
 
-theorem State.Sorted.settle {state : State} (sorted : state.Sorted) (event : Event) :
-    (state.settle event).Sorted := by
-  unfold State.settle; split
-  · exact sorted.normalize
-  · exact sorted
-
 theorem State.Sorted.timers {state : State} (sorted : state.Sorted) (timers : List Timer) :
     ({ state with timers } : State).Sorted := sorted
 
@@ -290,7 +284,7 @@ macro_rules
       | with_reducible assumption
       | with_reducible apply State.Sorted.set | with_reducible apply State.Sorted.remove
       | with_reducible apply State.Sorted.modify | with_reducible apply State.Sorted.normalize
-      | with_reducible apply State.Sorted.settle | with_reducible apply State.Sorted.allocate
+      | with_reducible apply State.Sorted.allocate
       | refine State.Sorted.allocate ?_ _
       | split)
 
@@ -557,7 +551,7 @@ theorem Config.Sorted.step {config next : Config α} {event : Event} (sorted : c
       unfold Transition.apply
       split
       · exact this
-      · exact this.settle _
+      · exact this.normalize
     · obtain ⟨next', phase, same⟩ := phased
       simp only [Prod.mk.injEq] at same
       obtain ⟨-, rfl⟩ := same
@@ -570,7 +564,7 @@ theorem Config.Sorted.step {config next : Config α} {event : Event} (sorted : c
         exact (sorted.unpark _).normalize
     · simp only [Prod.mk.injEq] at fired
       obtain ⟨-, rfl⟩ := fired
-      exact sorted.fire _
+      exact (sorted.fire _).normalize
 
 /-- Every configuration a run reaches has sorted records. -/
 theorem Config.Sorted.run {config last : Config α} {events : List Event} (sorted : config.Sorted)
@@ -639,5 +633,217 @@ theorem Timer.eq_of_identical {first second : Timer} (same : first.identical sec
   simp only [Timer.identical, Bool.and_eq_true, beq_iff_eq] at same
   obtain ⟨⟨⟨rfl, rfl⟩, same⟩, rfl⟩ := same
   rw [Term.eq_of_identical same]
+
+/-! ### Normalizing twice -/
+
+theorem lookup_map_snd (change : PID → ProcessState → ProcessState) (processId : PID) :
+    ∀ records : List (PID × ProcessState),
+      (records.map fun record => (record.1, change record.1 record.2)).lookup processId =
+        (records.lookup processId).map (change processId)
+  | [] => rfl
+  | (key, value) :: rest => by
+      by_cases equal : processId = key
+      · subst equal; simp
+      · have differ : (processId == key) = false := by simp [equal]
+        simp [List.lookup_cons, differ, lookup_map_snd change processId rest]
+
+theorem Sorted.lookup_filter {records : List (PID × ProcessState)} (sorted : Sorted records)
+    (keep : PID × ProcessState → Bool) (processId : PID) :
+    (records.filter keep).lookup processId =
+      (records.lookup processId).filter fun process => keep (processId, process) := by
+  induction records with
+  | nil => rfl
+  | cons head rest ih =>
+    obtain ⟨key, value⟩ := head
+    have above := List.pairwise_cons.mp sorted
+    by_cases equal : processId = key
+    · subst equal
+      have missing : rest.lookup processId = none := lookup_eq_none_of_before above.2 above.1
+      have missing' : (rest.filter keep).lookup processId = none := by rw [ih above.2, missing]; rfl
+      simp only [List.filter_cons]
+      split <;> simp_all [Option.filter] <;> assumption
+    · have differ : (processId == key) = false := by simp [equal]
+      simp only [List.filter_cons]
+      split <;> simp [List.lookup_cons, differ, ih above.2]
+
+theorem Sorted.lookup_of_mem {records : List (PID × ProcessState)} (sorted : Sorted records)
+    {processId : PID} {process : ProcessState} (mem : (processId, process) ∈ records) :
+    records.lookup processId = some process := by
+  induction records with
+  | nil => simp at mem
+  | cons head rest ih =>
+    obtain ⟨key, value⟩ := head
+    have above := List.pairwise_cons.mp sorted
+    simp only [List.mem_cons, Prod.mk.injEq] at mem
+    rcases mem with ⟨rfl, rfl⟩ | mem
+    · simp
+    · have differ : processId ≠ key := by
+        intro same; subst same
+        have := above.1 _ mem
+        rw [pidBefore_irrefl] at this; exact absurd this (by simp)
+      have differ' : (processId == key) = false := by simp [differ]
+      simp [List.lookup_cons, differ', ih above.2 mem]
+
+/-- The record of a process after normalizing. -/
+theorem State.record_normalize {state : State} (sorted : state.Sorted) (processId : PID) :
+    state.normalize.record processId =
+      ((state.record processId).map (state.normalizeRecord processId)).filter (!·.finished) := by
+  simp only [State.normalize, State.record, Kernel.map_eq, Kernel.filter_eq, Kernel.lookup_eq]
+  have mapped : Lynx.Concurrent.Sorted (state.processes.map fun record =>
+      (record.1, state.normalizeRecord record.1 record.2)) := List.pairwise_map.mpr (sorted.imp id)
+  rw [mapped.lookup_filter, lookup_map_snd]
+
+theorem State.normalizeRecord_exiting (state : State) (processId : PID) (process : ProcessState) :
+    (state.normalizeRecord processId process).exiting.isSome = process.exiting.isSome := by
+  unfold State.normalizeRecord; split <;> simp_all
+
+theorem ProcessState.finished_exiting {process : ProcessState} (finished : process.finished = true) :
+    process.exiting.isSome = true := by
+  unfold ProcessState.finished at finished; split at finished <;> simp_all
+
+/-- Normalizing leaves the same processes alive. -/
+theorem State.alive_normalize {state : State} (sorted : state.Sorted) (processId : PID) :
+    state.normalize.alive processId = state.alive processId := by
+  simp only [State.alive, State.record_normalize sorted]
+  cases found : state.record processId with
+  | none => rfl
+  | some process =>
+    simp only [Option.map_some, Option.filter]
+    have := state.normalizeRecord_exiting processId process
+    split
+    · cases exiting : process.exiting <;> simp_all
+    · rename_i finished
+      have := ProcessState.finished_exiting (by simpa using finished)
+      cases exiting : process.exiting <;> simp_all
+
+theorem State.gone_normalize {state : State} (sorted : state.Sorted) (processId : PID) :
+    state.normalize.gone processId = state.gone processId := by
+  simp [State.gone, State.alive_normalize sorted]
+
+theorem lookup_filter_of_key {β : Type} {key : PID} {keep : PID × β → Bool} :
+    ∀ {entries : List (PID × β)}, (∀ value, (key, value) ∈ entries → keep (key, value) = true) →
+      (entries.filter keep).lookup key = entries.lookup key
+  | [], _ => rfl
+  | (key', value) :: rest, kept => by
+      have rest' := lookup_filter_of_key (keep := keep) (entries := rest) fun value mem => kept value (by simp [mem])
+      by_cases equal : key = key'
+      · subst equal
+        have := kept value (by simp)
+        simp [List.filter_cons, this]
+      · have differ : (key == key') = false := by simp [equal]
+        simp only [List.filter_cons]
+        split <;> simp [List.lookup_cons, differ, rest']
+
+theorem State.answersEntry_congr {state other : State} (gone : ∀ processId, other.gone processId = state.gone processId) :
+    other.answersEntry = state.answersEntry := by
+  funext entry; simp [State.answersEntry, gone]
+
+/-- A normalized record stays the same when normalized again. -/
+theorem State.normalizeRecord_normalize {state : State} (sorted : state.Sorted) {processId : PID}
+    {process : ProcessState} (mem : (processId, process) ∈ state.processes)
+    (kept : (state.normalizeRecord processId process).finished = false) :
+    state.normalize.normalizeRecord processId (state.normalizeRecord processId process) =
+      state.normalizeRecord processId process := by
+  have gone := State.gone_normalize sorted
+  have found : state.process processId = process := by
+    simp [State.process, State.record, Kernel.lookup_eq, Lynx.Concurrent.Sorted.lookup_of_mem sorted mem]
+  have found' : state.normalize.process processId = state.normalizeRecord processId process := by
+    simp only [State.process, State.record_normalize sorted]
+    simp [State.record, Kernel.lookup_eq, Lynx.Concurrent.Sorted.lookup_of_mem sorted mem, Option.filter, kept]
+  generalize normalized : state.normalize = next at gone found'
+  unfold State.normalizeRecord
+  cases exiting : process.exiting with
+  | some exiting' =>
+    simp only [Kernel.filter_eq, State.answersEntry_congr gone, List.filter_filter, Bool.and_self, gone]
+  | none =>
+    simp only [Kernel.filter_eq]
+    congr 1
+    · refine List.filter_eq_self.mpr fun entry mem => ?_
+      have keep := (List.mem_filter.mp mem).2
+      simp only [State.keepEntry, State.inertEntry, State.allocated, found, found', exiting,
+        Option.isSome_none, Bool.false_and, Bool.or_false, Bool.not_eq_eq_eq_not, Bool.not_true] at keep ⊢
+      simp only [State.normalizeRecord, exiting, gone, Kernel.filter_eq, Kernel.lookup_eq] at keep ⊢
+      split <;> simp_all
+      rw [lookup_filter_of_key fun value _ => by simp_all]
+      simp_all
+    · simp only [gone, List.filter_filter, Bool.and_self]
+
+/-- Normalizing twice is normalizing once. -/
+theorem State.normalize_normalize {state : State} (sorted : state.Sorted) :
+    state.normalize.normalize = state.normalize := by
+  have records : ∀ record ∈ state.normalize.processes,
+      (record.1, state.normalize.normalizeRecord record.1 record.2) = record ∧ record.2.finished = false := by
+    intro record mem
+    have mem' := mem
+    simp only [State.normalize, Kernel.map_eq, Kernel.filter_eq, List.mem_filter, List.mem_map] at mem'
+    obtain ⟨⟨original, inside, rfl⟩, kept⟩ := mem'
+    simp only [Bool.not_eq_eq_eq_not, Bool.not_true] at kept
+    exact ⟨by rw [State.normalizeRecord_normalize sorted inside kept], kept⟩
+  generalize state.normalize = next at records ⊢
+  cases next with
+  | mk processes timers elapsed =>
+    simp only [State.normalize, Kernel.map_eq, Kernel.filter_eq, State.mk.injEq, and_true]
+    rw [List.map_congr_left fun record mem => (records record mem).1, List.map_id']
+    exact List.filter_eq_self.mpr fun record mem => by simp [(records record mem).2]
+
+/-! ### Every configuration is normalized -/
+
+/-- A running configuration whose state normalizing leaves as it is. A run that
+a process did not return from has no steps, and its state is not normalized. -/
+def Config.Normalized : Config α → Prop
+  | .running state _ _ false => state.normalize = state
+  | _ => True
+
+theorem State.normalize_initial (env : Environment) (elapsed : PID → Nat → Nat) :
+    (State.initial env elapsed).normalize = State.initial env elapsed := by
+  simp [State.initial, State.normalize, State.normalizeRecord, ProcessState.finished, Kernel.map_eq,
+    Kernel.filter_eq]
+
+/-- Every step leads to a normalized configuration. -/
+theorem Config.Normalized.step {config next : Config α} {event : Event} (sorted : config.Sorted)
+    (step : Step config event next) : next.Normalized := by
+  have sorted' := sorted.step step
+  cases config with
+  | start env computation elapsed =>
+    simp only [Step, Config.successors] at step
+    split at step
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · split at step
+      · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step
+        exact State.normalize_initial _ _
+      · simp at step
+  | running state tasks finished exhausted =>
+    have sorted : state.Sorted := sorted
+    cases exhausted
+    case true => simp [Step, Config.successors] at step
+    simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
+      List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists] at step
+    rcases step with ((⟨before, processId, task, after, -, transition, possible, same⟩ |
+      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩
+    · simp only [Prod.mk.injEq] at same
+      obtain ⟨-, rfl⟩ := same
+      have : transition.state.Sorted := by
+        simp only [Task.transitions, Kernel.append_eq, List.mem_append] at possible
+        rcases possible with possible | possible
+        · exact sorted.own possible
+        · exact sorted.handleStep possible
+      unfold Transition.apply
+      split
+      · trivial
+      · exact State.normalize_normalize this
+    · obtain ⟨next', phase, same⟩ := phased
+      simp only [Prod.mk.injEq] at same
+      obtain ⟨-, rfl⟩ := same
+      exact State.normalize_normalize (sorted.phases phase)
+    · cases parked : (state.process processId).parked with
+      | none => simp [parked] at unparked
+      | some _ =>
+        simp only [parked, Option.map_some, Option.some.injEq, Prod.mk.injEq] at unparked
+        obtain ⟨-, rfl⟩ := unparked
+        exact State.normalize_normalize (sorted.unpark _)
+    · simp only [Prod.mk.injEq] at fired
+      obtain ⟨-, rfl⟩ := fired
+      exact State.normalize_normalize (sorted.fire _)
 
 end Lynx.Concurrent

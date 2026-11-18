@@ -180,7 +180,7 @@ environment or receiving a message already handled, handling a signal that
           state.processes))
         (Kernel.map (fun timer =>
           (Key.fire timer.reference, Event.fire timer.reference,
-            .running (state.fire timer) tasks finished false, false)) state.firing)
+            .running (state.fire timer).normalize tasks finished false, false)) state.firing)
 
 /-- The steps of a running configuration, each with its key. -/
 @[expose] def Config.steps (config : Config α) : List (Key × Event × Config α) :=
@@ -216,7 +216,7 @@ environment or receiving a message already handled, handling a signal that
         (Event.unpark processId, .running (state.unpark processId).normalize tasks finished false)
   | .running state tasks finished false, .fire reference =>
       (Kernel.find? (·.reference == reference) state.firing).map fun timer =>
-        (Event.fire reference, .running (state.fire timer) tasks finished false)
+        (Event.fire reference, .running (state.fire timer).normalize tasks finished false)
 
 /-! ### What a process continues with -/
 
