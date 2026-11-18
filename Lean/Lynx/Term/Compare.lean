@@ -2,7 +2,6 @@ module
 
 public import Lynx.Term.DataTypes
 public import Lynx.Term.Bitstring
-import Lynx.Term.Eval
 import all Lynx.Term.FiniteFloat
 
 public section
@@ -81,11 +80,14 @@ kernel can decide it. -/
   compareOfLessAndEq a.toList b.toList
 
 @[simp] private theorem stringCompare_eq (a b : String) : stringCompare a b = Ord.compare a b := by
-  show _ = String.compare a b
-  rw [Term.string_compare_eq]
-  have lt : (a < b) = (a.toList < b.toList) := rfl
-  have eq : (a = b) = (a.toList = b.toList) := propext String.toList_inj.symm
+  have lt : (a.toList < b.toList) = (a < b) := propext String.toList_lt_toList_iff
+  have eq : (a.toList = b.toList) = (a = b) := propext String.toList_inj
   simp only [stringCompare, compareOfLessAndEq, lt, eq]
+  split
+  · exact (Std.compare_eq_lt.mpr ‹_›).symm
+  · split
+    · subst_vars; exact Std.compare_self.symm
+    · exact (Std.compare_eq_gt.mpr (Std.lt_of_le_of_ne (Std.not_lt.mp ‹_›) (Ne.symm ‹_›))).symm
 
 @[simp] theorem stringCompare_eq_iff (a b : String) : stringCompare a b = .eq ↔ a = b := by
   rw [stringCompare_eq, Std.compare_eq_iff_eq]

@@ -128,7 +128,9 @@ When adding simp rules or changing public proof interfaces, check representative
 guarantees and properties. Improving one proof can slow another.
 
 Run examples with `LYNX_DEBUG=lean LYNX_CACHE=0 mix run examples/<name>.exs` to
-measure verification without cached results. Run `lake test` from `Lean/` to
+measure verification without cached results, except those in `examples/deps/`,
+which install their dependencies with `Mix.install/2` and must run with `elixir`
+instead of `mix run`. Run `lake test` from `Lean/` to
 check runtime proofs and axiom audits.
 
 **Proof performance is more important than executable runtime performance.**
