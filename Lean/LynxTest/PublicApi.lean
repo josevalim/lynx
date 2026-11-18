@@ -257,6 +257,7 @@ private def expectedDeclarations : Array String := #[
   "Erlang.erlang.«error/3»",
   "Erlang.erlang.«exit/1»",
   "Erlang.erlang.«exit/2»",
+  "Erlang.erlang.«exit_signal/2»",
   "Erlang.erlang.«float/1»",
   "Erlang.erlang.«float_to_binary/2»",
   "Erlang.erlang.«floor/1»",

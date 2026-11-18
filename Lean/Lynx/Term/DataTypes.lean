@@ -170,7 +170,8 @@ inductive Request where
   | link (target : PID)
   /-- Remove a link. Replies `true`. -/
   | unlink (target : PID)
-  /-- Send an exit signal. Replies `true`. -/
+  /-- Send an exit signal as `exit/2` does. Replies `true`, or `false` without
+  effect when the requester sends itself a signal it traps, which is not modeled. -/
   | exit (target : PID) (reason : Term)
   /-- Set whether exit signals arrive as messages. Replies the previous value. -/
   | trapExit (enabled : Bool)

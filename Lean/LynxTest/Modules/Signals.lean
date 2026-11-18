@@ -39,6 +39,17 @@ private def functions : Term.FunTable := [
 
 private def dispatcher : Dispatcher := Dispatcher.ofTable functions 1
 
+/-- A child that sends itself `alma` with `exit/2`, then tells the root it survived. -/
+private def suicide : Result := do
+  let me ← «self/0» dispatcher
+  let _ ← «exit/2» dispatcher me (.atom "alma")
+  «send/2» dispatcher (.pid []) (.atom "survived")
+
+private def suicides : Term := .function "test" "suicides" 0 #[]
+private def suicidal : Dispatcher := Dispatcher.ofTable [
+  { module := "test", name := "suicides", arity := 0, entry := .effectful fun _ _ _ =>
+      suicide }] 1
+
 private def returns : Term := .function "test" "returns" 0 #[]
 private def raises : Term := .function "test" "raises" 0 #[]
 private def waits : Term := .function "test" "waits" 0 #[]
@@ -49,6 +60,7 @@ private def only (expected : Outcome Term) (actual : Outcome Term) : Bool :=
   | .ok expected, .ok actual => Term.compareExact (Term.fuel expected actual) expected actual == .eq
   | .error (.exit expected), .error (.exit actual) => Term.compareExact (Term.fuel expected actual) expected actual == .eq
   | .error (.error expected), .error (.error actual) => Term.compareExact (Term.fuel expected actual) expected actual == .eq
+  | .error .exhausted, .error .exhausted => true
   | .deadlock, .deadlock => true
   | _, _ => false
 
@@ -153,6 +165,73 @@ theorem normal_exit_signal_is_ignored :
       | .tuple ⟨[pid, _]⟩ =>
         let _ ← «exit/2» dispatcher pid (.atom "normal")
         let _ ← «send/2» dispatcher pid (.atom "stop")
+        receiveAny
+      | _ => pure .nil)) = true := by cbv
+
+/-- With `exit/2`, a process sending itself `normal` ends at once with it,
+unless it traps exits. -/
+theorem exit_self_normal_ends :
+    Concurrent.check (only (.error (.exit (.atom "normal")))) 32 (.start {} (do
+      let me ← «self/0» dispatcher
+      let _ ← «exit/2» dispatcher me (.atom "normal")
+      pure (.atom "survived"))) = true := by cbv
+
+/-- With `exit/2`, a process sending itself `kill` ends at once, even trapping exits. -/
+theorem exit_self_kill_ends_trapping :
+    Concurrent.check (only (.error (.exit (.atom "killed")))) 32 (.start {} (do
+      let _ ← «process_flag/2» dispatcher (.atom "trap_exit") (.atom "true")
+      let me ← «self/0» dispatcher
+      let _ ← «exit/2» dispatcher me (.atom "kill")
+      pure (.atom "survived"))) = true := by cbv
+
+/-- A child ending on its own `exit/2` signal never reports that it survived:
+its trapping parent gets its reason. -/
+theorem exit_self_ends_before_returning :
+    Concurrent.check (only (.ok (.tuple #[.atom "EXIT", .pid [1], .atom "alma"]))) 32 (.start {} (do
+      let _ ← «process_flag/2» dispatcher (.atom "trap_exit") (.atom "true")
+      let _ ← «spawn_link/1» suicidal suicides
+      receiveAny)) = true := by cbv
+
+/-- A process trapping its own `exit/2` signal acts on it later, against its
+flags by then, which is not modeled. -/
+theorem exit_self_trapped_is_exhausted :
+    Concurrent.check (only (.error .exhausted)) 32 (.start {} (do
+      let _ ← «process_flag/2» dispatcher (.atom "trap_exit") (.atom "true")
+      let me ← «self/0» dispatcher
+      let _ ← «exit/2» dispatcher me (.atom "alma")
+      pure (.atom "survived"))) = true := by cbv
+
+/-- A process acts on its own `exit_signal/2` signal later, which is not modeled. -/
+theorem exit_signal_self_is_exhausted :
+    Concurrent.check (only (.error .exhausted)) 32 (.start {} (do
+      let me ← «self/0» dispatcher
+      let _ ← «exit_signal/2» dispatcher me (.atom "alma")
+      pure (.atom "survived"))) = true := by cbv
+
+/-- Exit signals to aliases are not modeled. -/
+theorem exit_alias_is_exhausted :
+    Concurrent.check (only (.error .exhausted)) 32 (.start {} (do
+      let _ ← «exit/2» dispatcher (.reference [0]) (.atom "alma")
+      pure .nil)) = true ∧
+    Concurrent.check (only (.error .exhausted)) 32 (.start {} (do
+      let _ ← «exit_signal/2» dispatcher (.reference [0]) (.atom "alma")
+      pure .nil)) = true := by cbv
+
+/-- `exit_signal/2` sends other processes the signals `exit/2` does. -/
+theorem exit_signal_to_others :
+    Concurrent.check (only (.ok (down [1] [1] (.atom "normal")))) 32 (.start {} (do
+      let child ← «spawn_monitor/1» dispatcher waits
+      match child with
+      | .tuple ⟨[pid, _]⟩ =>
+        let _ ← «exit_signal/2» dispatcher pid (.atom "normal")
+        let _ ← «send/2» dispatcher pid (.atom "stop")
+        receiveAny
+      | _ => pure .nil)) = true ∧
+    Concurrent.check (only (.ok (down [1] [1] (.atom "killed")))) 32 (.start {} (do
+      let child ← «spawn_monitor/1» dispatcher waits
+      match child with
+      | .tuple ⟨[pid, _]⟩ =>
+        let _ ← «exit_signal/2» dispatcher pid (.atom "kill")
         receiveAny
       | _ => pure .nil)) = true := by cbv
 

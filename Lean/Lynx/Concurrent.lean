@@ -324,12 +324,13 @@ process exits with, if any. `none` while the request cannot be answered. -/
         none)
   | .exit target reason =>
       if target = processId then
-        -- A process that sends itself `normal` exits, unless it traps exits.
-        if isNormal reason && !(state.process processId).trapExit then
-          some (.atom "true", state, some reason)
-        else
-          let (state, exits) := state.exitSignal processId processId reason false
-          some (.atom "true", state, exits)
+        -- As `exit/2` does, a process ends at once on its own exit signal,
+        -- even `normal`, unless it traps exits and the signal can be trapped.
+        if isKill reason || !(state.process processId).trapExit then
+          some (.atom "true", state, some (if isKill reason then .atom "killed" else reason))
+        -- Otherwise the process handles the signal later, against its flags
+        -- by then, which is not modeled.
+        else some (.atom "false", state, none)
       else some (.atom "true", state.emit processId target (.exit reason false), none)
   | .trapExit enabled =>
       some (.atom (if (state.process processId).trapExit then "true" else "false"),

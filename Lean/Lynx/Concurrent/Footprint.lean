@@ -416,11 +416,7 @@ canceled, and linked and watching processes get signals. -/
           { observes := trapping.and (.record processId ProcessState.ending)
             effect := .ending processId (state.process processId)
               (if isKill reason then .atom "killed" else reason) }
-        else
-          { observes := trapping
-            effect := .change processId
-              (ProcessState.append (.tuple #[.atom "EXIT", .pid processId, reason]))
-            frames := some [(processId, [.trapExit, .mailbox], [.mailbox])] }
+        else { observes := trapping, frames := some [(processId, [.trapExit], [])] }
       else
         { observes := .record processId ProcessState.live
           effect := .send ⟨processId, target, .exit reason false⟩
@@ -2004,25 +2000,10 @@ private theorem request_matches {state other : State} {processId : PID} {query :
         rw [ite_eq_left condition] at agree
         have ending := (agree.right : (Observes.record target ProcessState.ending).Agree state other).record
         rw [← Effect.apply_ending, Effect.ending_congr ending.2]
-      simp only [State.request, ↓reduceIte, trapping.2, State.exitSignal, Bool.false_and,
-        Bool.false_eq_true, Bool.not_false, Bool.true_and, Kernel.contains_eq]
-      cases kill : isKill reason
-      · cases trap : (state.process target).trapExit
-        · have condition : (isKill reason || !(state.process target).trapExit) = true := by
-            simp [kill, trap]
-          have ending := ends reason condition
-          simp only [↓reduceIte, Bool.false_eq_true, Bool.not_false, Bool.and_true]
-          cases normal : isNormal reason <;> exact .some ⟨rfl, rfl, rfl, rfl, ending⟩
-        · have condition : (isKill reason || !(state.process target).trapExit) = false := by
-            simp [kill, trap]
-          simp only [Bool.false_eq_true, ↓reduceIte, Bool.not_true, Bool.and_false]
-          exact .some ⟨rfl, rfl, by simp [State.append_eq]⟩
-      · have condition : (isKill reason || !(state.process target).trapExit) = true := by simp [kill]
-        have ending := ends (.atom "killed") condition
-        have normal : isNormal reason = false := by
-          unfold isKill at kill; unfold isNormal; split <;> simp_all
-        simp only [↓reduceIte, normal, Bool.false_and, Bool.false_eq_true]
-        exact .some ⟨rfl, rfl, rfl, rfl, ending⟩
+      simp only [State.request, ↓reduceIte, trapping.2]
+      cases condition : (isKill reason || !(state.process target).trapExit)
+      · exact .some ⟨rfl, rfl, by simp⟩
+      · exact .some ⟨rfl, rfl, rfl, rfl, ends _ condition⟩
     · simp only [requestFootprint, State.request, self, ↓reduceIte]
       exact .some ⟨rfl, rfl, by simp⟩
   | trapExit enabled =>

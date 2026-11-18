@@ -202,10 +202,26 @@ on its way. Timers paused by the debugger are not modeled. -/
 
 /-- Send an exit signal. `kill` cannot be trapped, and `normal` is ignored
 unless the target traps exits or is the caller. The target acts on the signal
-when it arrives; the caller acts on its own at once. -/
+when it arrives, and the caller ends at once on its own signal. A caller that
+traps its own signal acts on it later, and aliases receive exit signals too;
+neither is modeled, so neither returns. -/
 @[expose] def «exit/2» (_ : Dispatcher) (target reason : Term) : Result :=
   match target with
-  | .pid pid => .request (.exit pid reason) .ok
+  | .pid pid => .request (.exit pid reason) fun reply =>
+      match reply with
+      | .atom "true" => .ok reply
+      | _ => .error .exhausted
+  | .reference _ => .error .exhausted
+  | _ => .error (.error (.atom "badarg"))
+
+/-- Send an exit signal, as `exit/2` does to other processes. A process acts
+on its own signal later, against its flags by then, and aliases receive exit
+signals too; neither is modeled, so neither returns. -/
+@[expose] def «exit_signal/2» (_ : Dispatcher) (target reason : Term) : Result := do
+  let env ← get
+  match target with
+  | .pid pid => if pid = env.currentPid then .error .exhausted else .request (.exit pid reason) .ok
+  | .reference _ => .error .exhausted
   | _ => .error (.error (.atom "badarg"))
 
 /-- Set whether exit signals arrive as `EXIT` messages, returning the previous

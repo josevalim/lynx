@@ -27,6 +27,7 @@ defmodule Lynx.Translation do
     {:erlang, :link, 1} => {:concurrent, false},
     {:erlang, :unlink, 1} => {:concurrent, false},
     {:erlang, :exit, 2} => {:concurrent, false},
+    {:erlang, :exit_signal, 2} => {:concurrent, false},
     {:erlang, :process_flag, 2} => {:concurrent, false},
     {:erlang, :is_process_alive, 1} => {:concurrent, false},
     {:erlang, :process_info, 2} => {:concurrent, false},

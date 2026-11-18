@@ -107,6 +107,7 @@
   "floor/1": {"pure": true},
   "float_to_binary/2": {"pure": true},
   "float/1": {"pure": true},
+  "exit_signal/2": {"pure": false},
   "exit/2": {"pure": false},
   "exit/1": {"pure": true},
   "error/3": {"pure": true},
