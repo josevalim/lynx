@@ -577,4 +577,67 @@ theorem Config.Sorted.run {config last : Config α} {events : List Event} (sorte
     (run : Run config events last) : last.Sorted :=
   Run.invariant (fun _ _ _ sorted step => sorted.step step) run sorted
 
+/-! ### Comparisons -/
+
+theorem Signal.eq_of_identical {first second : Signal} (same : first.identical second = true) :
+    first = second := by
+  cases first <;> cases second <;>
+    simp only [Signal.identical, Bool.and_eq_true, beq_iff_eq, Bool.false_eq_true] at same <;>
+    first
+      | rfl
+      | rw [Term.eq_of_identical same]
+      | rw [same]
+      | (obtain ⟨rfl, same⟩ := same; rw [Term.eq_of_identical same])
+      | (obtain ⟨same, rfl⟩ := same; rw [Term.eq_of_identical same])
+      | (obtain ⟨⟨same, rfl⟩, rfl⟩ := same; rw [Term.eq_of_identical same])
+
+theorem eq_of_identicalLists {same : γ → γ → Bool}
+    (sound : ∀ {first second}, same first second = true → first = second) :
+    ∀ {first second : List γ}, identicalLists same first second = true → first = second
+  | [], [], _ => rfl
+  | head :: rest, head' :: rest', equal => by
+    simp only [identicalLists, Bool.and_eq_true] at equal
+    rw [sound equal.1, eq_of_identicalLists sound equal.2]
+  | [], _ :: _, equal | _ :: _, [], equal => by simp [identicalLists] at equal
+
+theorem eq_of_optionIdentical {same : γ → γ → Bool}
+    (sound : ∀ {first second}, same first second = true → first = second) :
+    ∀ {first second : Option γ}, optionIdentical same first second = true → first = second
+  | some _, some _, equal => by rw [sound equal]
+  | none, none, _ => rfl
+  | some _, none, equal | none, some _, equal => by simp [optionIdentical] at equal
+
+theorem Entry.eq_of_identical {first second : Entry} (same : first.identical second = true) :
+    first = second := by
+  obtain ⟨source, signal⟩ := first
+  obtain ⟨source', signal'⟩ := second
+  simp only [Entry.identical, Bool.and_eq_true, beq_iff_eq] at same
+  obtain ⟨rfl, same⟩ := same
+  rw [Signal.eq_of_identical same]
+
+theorem Exiting.eq_of_identical {first second : Exiting} (same : first.identical second = true) :
+    first = second := by
+  obtain ⟨reason, links, downs⟩ := first
+  obtain ⟨reason', links', downs'⟩ := second
+  simp only [Exiting.identical, Bool.and_eq_true, beq_iff_eq] at same
+  obtain ⟨⟨same, rfl⟩, rfl⟩ := same
+  rw [Term.eq_of_identical same]
+
+theorem ProcessState.eq_of_identical {first second : ProcessState} (same : first.identical second = true) :
+    first = second := by
+  cases first; cases second
+  simp only [ProcessState.identical, Bool.and_eq_true, beq_iff_eq] at same
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨queue, mailbox⟩, pdict⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩, rfl⟩,
+    rfl⟩, rfl⟩, exiting⟩ := same
+  rw [eq_of_identicalLists Entry.eq_of_identical queue, Term.eq_of_identicalList mailbox,
+    Term.eq_of_identicalEntries pdict, eq_of_optionIdentical Exiting.eq_of_identical exiting]
+
+theorem Timer.eq_of_identical {first second : Timer} (same : first.identical second = true) :
+    first = second := by
+  obtain ⟨reference, destination, message, duration⟩ := first
+  obtain ⟨reference', destination', message', duration'⟩ := second
+  simp only [Timer.identical, Bool.and_eq_true, beq_iff_eq] at same
+  obtain ⟨⟨⟨rfl, rfl⟩, same⟩, rfl⟩ := same
+  rw [Term.eq_of_identical same]
+
 end Lynx.Concurrent
