@@ -925,4 +925,161 @@ private theorem Realizes.request (state : State) (processId : PID) (next : Term 
     | none => exact Realizes.refl _
     | some timer => exact (Realizes.retime _ _).andThen (Realizes.modify _ _ _)
 
+/-- The effect of `State.spawnWith`: the parent's record changes and the child's starts. -/
+private def State.spawnEffect (state : State) (processId : PID) (options : SpawnOptions) : Effect :=
+  let process := state.process processId
+  let child := Kernel.append processId [process.children + 1]
+  let started := (state.set processId { process with children := process.children + 1 }).set child {}
+  let linked := if options.link then
+      (started.modify processId fun process =>
+        { process with links := Kernel.append process.links [(child, none)] }).modify child fun other =>
+          { other with links := [(processId, none)] }
+    else started
+  let linkedEffect : Effect := if options.link then
+      (Effect.modify processId fun process =>
+        { process with links := Kernel.append process.links [(child, none)] }).andThen
+        (Effect.modify child fun other => { other with links := [(processId, none)] })
+    else {}
+  let monitoredEffect : Effect := if options.monitor then
+      let (reference, allocated) := linked.allocate processId
+      (allocateEffect processId).andThen ((Effect.modify processId fun process =>
+        { process with monitoring := Kernel.append process.monitoring [(reference, child)] }).andThen
+        (Effect.modify child fun other => { other with monitors := [(reference, processId)] }))
+    else {}
+  (((Effect.put processId { process with children := process.children + 1 }).andThen (Effect.put child {})).andThen
+    linkedEffect).andThen monitoredEffect
+
+private theorem Realizes.spawn (state : State) (processId : PID) (options : SpawnOptions) :
+    Realizes (state.spawnEffect processId options) state (state.spawnWith processId options).2 := by
+  unfold State.spawnEffect State.spawnWith
+  dsimp only
+  have base := (Realizes.put state processId { state.process processId with
+    children := (state.process processId).children + 1 }).andThen (Realizes.put _ (Kernel.append processId
+    [(state.process processId).children + 1]) {})
+  split <;> split
+  · exact (base.andThen ((Realizes.modify _ _ _).andThen (Realizes.modify _ _ _))).andThen
+      ((Realizes.allocate _ _).andThen ((Realizes.modify _ _ _).andThen (Realizes.modify _ _ _)))
+  · exact (base.andThen ((Realizes.modify _ _ _).andThen (Realizes.modify _ _ _))).andThen (Realizes.refl _)
+  · exact (base.andThen (Realizes.refl _)).andThen
+      ((Realizes.allocate _ _).andThen ((Realizes.modify _ _ _).andThen (Realizes.modify _ _ _)))
+  · exact (base.andThen (Realizes.refl _)).andThen (Realizes.refl _)
+
+/-- The effect of `State.exitSignal`. -/
+private def State.exitSignalEffect (state : State) (target source : PID) (reason : Term) (linked : Bool)
+    (normalKills : Bool) : Effect :=
+  let process := state.process target
+  let link := Kernel.lookup source process.links
+  if linked && link.isNone then {} else
+  let unlinked : Effect := if linked then
+      .modify target fun process => { process with links := Kernel.filter (·.1 != source) process.links }
+    else {}
+  if linked && link != some none then unlinked
+  else if process.trapExit && !(!linked && isKill reason) then
+    unlinked.andThen (.modify target fun process =>
+      { process with mailbox := Kernel.append process.mailbox [.tuple #[.atom "EXIT", .pid source, reason]] })
+  else unlinked
+
+private theorem Realizes.exitSignal (state : State) (target source : PID) (reason : Term) (linked normalKills : Bool) :
+    Realizes (state.exitSignalEffect target source reason linked normalKills) state
+      (state.exitSignal target source reason linked normalKills).1 := by
+  unfold State.exitSignalEffect State.exitSignal
+  dsimp only
+  split
+  · exact Realizes.refl _
+  · split
+    · split
+      · exact Realizes.modify _ _ _
+      · simp_all
+    · cases linked
+      · simp only [Bool.false_eq_true, ↓reduceIte, Bool.false_and, Bool.not_false, Bool.true_and]
+        split
+        · exact (Realizes.refl _).andThen (Realizes.modify _ _ _)
+        · split <;> exact Realizes.refl _
+      · simp only [↓reduceIte, Bool.true_and, Bool.not_true, Bool.and_false, Bool.false_eq_true]
+        split
+        · exact (Realizes.modify _ _ _).andThen (Realizes.modify _ _ _)
+        · split <;> exact Realizes.modify _ _ _
+
+/-- Append a handled message to a mailbox. -/
+private def appendEffect (processId : PID) (message : Term) : Effect :=
+  .modify processId fun process => { process with mailbox := Kernel.append process.mailbox [message] }
+
+private theorem Realizes.append (state : State) (processId : PID) (message : Term) :
+    Realizes (appendEffect processId message) state (state.append processId message) :=
+  Realizes.modify _ _ _
+
+/-- The effect of `State.handle`. -/
+private def State.handleEffect (state : State) (processId : PID) (entry : Entry) : Effect :=
+  let process := state.process processId
+  let source := entry.source
+  match entry.signal with
+  | .message message => appendEffect processId message
+  | .aliasMessage alias message =>
+      if Kernel.contains process.aliases alias then appendEffect processId message else {}
+  | .exit reason linked normalKills => state.exitSignalEffect processId source reason linked normalKills
+  | .link =>
+      if (Kernel.lookup source process.links).isSome then {}
+      else .modify processId fun process => { process with links := Kernel.append process.links [(source, none)] }
+  | .unlink id =>
+      let change := fun process : ProcessState => { process with links := Kernel.filter (·.1 != source) process.links }
+      if Kernel.lookup source process.links == some none then
+        (Effect.modify processId change).andThen ((state.modify processId change).sendEffect processId source (.unlinkAck id))
+      else state.sendEffect processId source (.unlinkAck id)
+  | .unlinkAck id =>
+      if Kernel.lookup source process.links == some (some id) then
+        .modify processId fun process => { process with links := Kernel.filter (·.1 != source) process.links }
+      else {}
+  | .monitor reference =>
+      .modify processId fun process => { process with monitors := Kernel.append process.monitors [(reference, source)] }
+  | .down reference reason =>
+      let cleared : Effect := if isNormal reason && Kernel.contains process.eagerExits source then
+          .modify processId fun process => { process with eagerExits := Kernel.filter (· != source) process.eagerExits }
+        else {}
+      cleared.andThen (if Kernel.any process.monitoring (·.1 == reference) then
+        (Effect.modify processId fun process =>
+          { process with monitoring := Kernel.filter (·.1 != reference) process.monitoring
+                         aliases := Kernel.erase process.aliases reference }).andThen
+          (appendEffect processId (.tuple #[.atom "DOWN", .reference reference, .atom "process", .pid source, reason]))
+        else {})
+  | .isAlive => state.sendEffect processId source (.reply (.atom "true"))
+  | .reply _ | .flush => {}
+
+private theorem Realizes.handle (state : State) (processId : PID) (waiting : Option Wait) (entry : Entry) :
+    Realizes (state.handleEffect processId entry) state (state.handle processId waiting entry).1 := by
+  obtain ⟨source, signal⟩ := entry
+  cases signal <;> simp only [State.handleEffect, State.handle]
+  · exact Realizes.append _ _ _
+  · split
+    · exact Realizes.append _ _ _
+    · exact Realizes.refl _
+  · exact Realizes.exitSignal _ _ _ _ _ _
+  · split
+    · exact Realizes.refl _
+    · exact Realizes.modify _ _ _
+  · split
+    · exact (Realizes.modify _ _ _).andThen (Realizes.send _ _ _ _)
+    · exact Realizes.send _ _ _ _
+  · split
+    · exact Realizes.modify _ _ _
+    · exact Realizes.refl _
+  · exact Realizes.modify _ _ _
+  · rename_i reference reason
+    have cleared : Realizes (if isNormal reason && Kernel.contains (state.process processId).eagerExits source then
+          Effect.modify processId fun process => { process with eagerExits := Kernel.filter (· != source) process.eagerExits }
+        else {}) state (if isNormal reason && Kernel.contains (state.process processId).eagerExits source then
+          state.modify processId fun process =>
+            { process with eagerExits := Kernel.filter (· != source) process.eagerExits }
+        else state) := by
+      split
+      · exact Realizes.modify _ _ _
+      · exact Realizes.refl _
+    by_cases active : Kernel.any (state.process processId).monitoring (·.1 == reference) = true
+    · simp only [active, ↓reduceIte]
+      exact cleared.andThen ((Realizes.modify _ _ _).andThen (Realizes.append _ _ _))
+    · simp only [active, Bool.false_eq_true, ↓reduceIte]
+      exact cleared.andThen (Realizes.refl _)
+  · exact Realizes.send _ _ _ _
+  · split <;> exact Realizes.refl _
+  · split <;> exact Realizes.refl _
+
 end Lynx.Concurrent
