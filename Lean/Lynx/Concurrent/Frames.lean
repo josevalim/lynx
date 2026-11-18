@@ -151,4 +151,187 @@ private theorem Effect.record_modify (processId other : PID) (change : ProcessSt
   · subst equal; simp [Effect.record, Effect.modify, changeOf]
   · simp [Effect.record, Effect.modify, changeOf, Ne.symm equal, equal]
 
+/-! ### Fields -/
+
+/-- Whether a mask has the field of a bit. -/
+private def has (mask bit : Nat) : Bool := mask.testBit bit
+
+/-- The bits of the queue's ends and of liveness. -/
+private def headBit : Nat := 0
+private def tailBit : Nat := 1
+private def liveBit : Nat := 16
+
+/-- A field of a record other than its queue. -/
+private inductive Part where
+  | mailbox | pdict | refCounter | children | links | monitors | monitoring | aliases | trapExit
+  | cancels | unlinks | parked | eagerExits | exiting
+
+/-- The bit of a field in frames: `Field.mailbox` is `2 ^ Part.mailbox.bit`, and so on. -/
+private def Part.bit : Part → Nat
+  | .mailbox => 2 | .pdict => 3 | .refCounter => 4 | .children => 5 | .links => 6 | .monitors => 7
+  | .monitoring => 8 | .aliases => 9 | .trapExit => 10 | .cancels => 11 | .unlinks => 12 | .parked => 13
+  | .eagerExits => 14 | .exiting => 15
+
+private def Part.type : Part → Type
+  | .mailbox => List Term | .pdict => List (Term × Term) | .refCounter | .children | .cancels | .unlinks => Nat
+  | .links => List (PID × Option Nat) | .monitors | .monitoring => List (List Nat × PID)
+  | .aliases => List (List Nat) | .trapExit => Bool | .parked => Option (PID × List Nat)
+  | .eagerExits => List PID | .exiting => Option Exiting
+
+/-- A field of a record. -/
+private def ProcessState.get (process : ProcessState) : (part : Part) → part.type
+  | .mailbox => process.mailbox | .pdict => process.pdict | .refCounter => process.refCounter
+  | .children => process.children | .links => process.links | .monitors => process.monitors
+  | .monitoring => process.monitoring | .aliases => process.aliases | .trapExit => process.trapExit
+  | .cancels => process.cancels | .unlinks => process.unlinks | .parked => process.parked
+  | .eagerExits => process.eagerExits | .exiting => process.exiting
+
+private theorem ProcessState.ext_get {first second : ProcessState} (queue : first.queue = second.queue)
+    (same : ∀ part, first.get part = second.get part) : first = second := by
+  cases first; cases second
+  have := same .mailbox; have := same .pdict; have := same .refCounter; have := same .children
+  have := same .links; have := same .monitors; have := same .monitoring; have := same .aliases
+  have := same .trapExit; have := same .cancels; have := same .unlinks; have := same .parked
+  have := same .eagerExits; have := same .exiting
+  simp_all [ProcessState.get]
+
+/-- Two records agree on the fields of a mask. Reading the head of a queue
+without its tail reads only its oldest signal. -/
+private def ProcessState.Same (mask : Nat) (first second : ProcessState) : Prop :=
+  (has mask tailBit → first.queue = second.queue) ∧
+  (has mask headBit → first.queue.head? = second.queue.head?) ∧
+  (∀ part, has mask part.bit → first.get part = second.get part)
+
+private theorem ProcessState.Same.refl (mask : Nat) (process : ProcessState) : process.Same mask process :=
+  ⟨fun _ => rfl, fun _ => rfl, fun _ _ => rfl⟩
+
+private theorem ProcessState.Same.symm {mask : Nat} {first second : ProcessState}
+    (same : first.Same mask second) : second.Same mask first :=
+  ⟨fun x => (same.1 x).symm, fun x => (same.2.1 x).symm, fun part x => (same.2.2 part x).symm⟩
+
+private theorem ProcessState.Same.trans {mask : Nat} {first second third : ProcessState}
+    (one : first.Same mask second) (two : second.Same mask third) : first.Same mask third :=
+  ⟨fun x => (one.1 x).trans (two.1 x), fun x => (one.2.1 x).trans (two.2.1 x),
+    fun part x => (one.2.2 part x).trans (two.2.2 part x)⟩
+
+/-- Two masks without a common field. -/
+private theorem has_disjoint {first second : Nat} (zero : first &&& second = 0) {bit : Nat}
+    (inside : has first bit = true) (inside' : has second bit = true) : False := by
+  have := congrArg (Nat.testBit · bit) zero
+  simp only [has] at inside inside'
+  simp [Nat.testBit_and, inside, inside'] at this
+
+private theorem has_or (first second bit : Nat) : has (first ||| second) bit = (has first bit || has second bit) := by
+  simp [has, Nat.testBit_or]
+
+/-! ### Changes within frames -/
+
+/-- How a change may change a queue, given which ends its frame writes: not at
+all, by removing the oldest signal, by appending signals, or as its reads and
+the queue decide. -/
+private def QueueChange (head tail : Bool) (reads : Nat) (base : ProcessState)
+    (change : ProcessState → ProcessState) : Prop :=
+  match head, tail with
+  | false, false => ∀ process, process.Same reads base → (change process).queue = process.queue
+  | true, false => ∀ process, process.Same reads base → (change process).queue = process.queue.tail
+  | false, true => ∃ added, ∀ process, process.Same reads base → (change process).queue = process.queue ++ added
+  | true, true => ∀ process process', process.Same reads base → process'.Same reads base →
+      process.queue = process'.queue → (change process).queue = (change process').queue
+
+/-- A change of records agreeing with `base` on `reads`: it keeps the fields
+outside `writes`, what it writes of a field depends only on `reads` and the
+field, and it changes the queue as its frame says. Reading the tail of a queue
+reads its head, and reading its head reads a queue that has one. -/
+private def Framed (reads writes : Nat) (base : ProcessState) (change : ProcessState → ProcessState) : Prop :=
+  (∀ process, process.Same reads base → ∀ part, has writes part.bit = false →
+    (change process).get part = process.get part) ∧
+  (∀ process process', process.Same reads base → process'.Same reads base → ∀ part, has writes part.bit →
+    process.get part = process'.get part → (change process).get part = (change process').get part) ∧
+  QueueChange (has writes headBit) (has writes tailBit) reads base change ∧
+  (has reads tailBit → has reads headBit) ∧
+  (has reads headBit → base.queue ≠ []) ∧
+  (has writes headBit → has reads headBit)
+
+/-- A change within its frame keeps what a frame it writes nothing of reads. -/
+private theorem Framed.keeps {reads writes reads' : Nat} {base : ProcessState} {change : ProcessState → ProcessState}
+    (framed : Framed reads writes base change) (apart : writes &&& reads' = 0)
+    (nonempty : has reads' headBit → base.queue ≠ []) (tail : has reads' tailBit → has reads' headBit) :
+    (change base).Same reads' base := by
+  obtain ⟨keeps, -, queue, -, -, -⟩ := framed
+  have self := ProcessState.Same.refl reads base
+  refine ⟨fun inside => ?_, fun inside => ?_, fun part inside => ?_⟩
+  · have head := tail inside
+    cases written : has writes headBit
+    · cases written' : has writes tailBit
+      · simp only [QueueChange, written, written'] at queue; exact queue base self
+      · exact (has_disjoint apart written' inside).elim
+    · exact (has_disjoint apart written head).elim
+  · cases written : has writes headBit
+    · cases written' : has writes tailBit
+      · simp only [QueueChange, written, written'] at queue; rw [queue base self]
+      · simp only [QueueChange, written, written'] at queue
+        obtain ⟨added, queue⟩ := queue
+        rw [queue base self]
+        cases equal : base.queue with
+        | nil => exact absurd equal (nonempty inside)
+        | cons _ _ => rfl
+    · exact (has_disjoint apart written inside).elim
+  · cases written : has writes part.bit
+    · exact keeps base self part written
+    · exact (has_disjoint apart written inside).elim
+
+/-- Two changes within frames apart commute. -/
+private theorem Framed.comm {reads writes reads' writes' : Nat} {base : ProcessState}
+    {change change' : ProcessState → ProcessState}
+    (framed : Framed reads writes base change) (framed' : Framed reads' writes' base change')
+    (apart : writes &&& (reads' ||| writes') = 0) (apart' : writes' &&& reads = 0) :
+    change (change' base) = change' (change base) := by
+  have disjoint : writes &&& writes' = 0 := by
+    apply Nat.eq_of_testBit_eq; intro bit
+    have := congrArg (Nat.testBit · bit) apart
+    simp only [Nat.testBit_and, Nat.testBit_or, Nat.zero_testBit] at this ⊢
+    cases one : writes.testBit bit <;> cases two : writes'.testBit bit <;> simp_all
+  have apartReads : writes &&& reads' = 0 := by
+    apply Nat.eq_of_testBit_eq; intro bit
+    have := congrArg (Nat.testBit · bit) apart
+    simp only [Nat.testBit_and, Nat.testBit_or, Nat.zero_testBit] at this ⊢
+    cases one : writes.testBit bit <;> cases two : reads'.testBit bit <;> simp_all
+  have same : (change' base).Same reads base := framed'.keeps apart' framed.2.2.2.2.1 framed.2.2.2.1
+  have same' : (change base).Same reads' base := framed.keeps apartReads framed'.2.2.2.2.1 framed'.2.2.2.1
+  have self := ProcessState.Same.refl reads base
+  have self' := ProcessState.Same.refl reads' base
+  obtain ⟨keeps, depends, queue, -, nonempty, pops⟩ := framed
+  obtain ⟨keeps', depends', queue', -, nonempty', pops'⟩ := framed'
+  refine ProcessState.ext_get ?_ fun part => ?_
+  · cases head : has writes headBit <;> cases tail : has writes tailBit <;>
+      cases head' : has writes' headBit <;> cases tail' : has writes' tailBit <;>
+      simp only [QueueChange, head, tail, head', tail'] at queue queue' <;>
+      first
+        | exact (has_disjoint disjoint head head').elim
+        | exact (has_disjoint disjoint tail tail').elim
+        | skip
+    · rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
+    · obtain ⟨added', queue'⟩ := queue'
+      rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
+    · rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
+    · rw [queue _ same, queue' _ _ same' self' (queue _ self)]
+    · obtain ⟨added, queue⟩ := queue
+      rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
+    · obtain ⟨added, queue⟩ := queue
+      rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
+      exact (List.tail_append_of_ne_nil (nonempty' (pops' head'))).symm
+    · rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
+    · obtain ⟨added', queue'⟩ := queue'
+      rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
+      exact List.tail_append_of_ne_nil (nonempty (pops head))
+    · rw [queue _ _ same self (queue' _ self'), queue' _ same']
+  · cases written : has writes part.bit
+    · cases written' : has writes' part.bit
+      · rw [keeps _ same part written, keeps' _ self' part written', keeps' _ same' part written',
+          keeps _ self part written]
+      · rw [keeps _ same part written, depends' _ _ same' self' part written' (keeps _ self part written)]
+    · cases written' : has writes' part.bit
+      · rw [depends _ _ same self part written (keeps' _ self' part written'), keeps' _ same' part written']
+      · exact (has_disjoint disjoint written written').elim
+
 end Lynx.Concurrent
