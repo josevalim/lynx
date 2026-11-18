@@ -154,7 +154,7 @@ private theorem Effect.record_modify (processId other : PID) (change : ProcessSt
 /-! ### Fields -/
 
 /-- Which fields of a record a frame has, by bit: `Field.mailbox` is `2 ^ Part.mailbox.bit`, and so on. -/
-abbrev Mask := Nat → Bool
+private abbrev Mask := Nat → Bool
 
 /-- The bits of the queue's ends and of liveness. -/
 private def headBit : Nat := 0
