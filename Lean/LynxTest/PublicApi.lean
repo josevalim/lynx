@@ -519,6 +519,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.State.appendFrames",
   "Lynx.Concurrent.State.awaitedEntry",
   "Lynx.Concurrent.State.dropsDown",
+  "Lynx.Concurrent.State.eagerLink",
   "Lynx.Concurrent.State.elapsed",
   "Lynx.Concurrent.State.endFrames",
   "Lynx.Concurrent.State.enqueue",

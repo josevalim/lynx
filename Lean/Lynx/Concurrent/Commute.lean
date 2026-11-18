@@ -481,7 +481,7 @@ again restores, so it reads the links and is always appended. -/
   | .link target =>
       if target == processId then some ([], false) else
       let process := state.process processId
-      let reads : List Frame := [(processId, Field.trapExit ||| Field.links, 0), (target, Field.live, 0)]
+      let reads : List Frame := [(processId, Field.trapExit ||| Field.links ||| Field.eagerExits, 0), (target, Field.live, 0)]
       if !state.alive target && !process.trapExit then some (reads, false) else
       match Kernel.lookup target process.links with
       | some none => some (reads, false)
@@ -530,7 +530,18 @@ process queued and its signals to it. -/
               | _ => false) then Field.queueHead ||| Field.queueTail else 0) |||
           (if Kernel.any process.links (fun link => link.1 == processId && link.2.isSome) then Field.links else 0)
     if fields == 0 then none else some (other, fields, fields)) state.processes
-  ((processId, Field.all, Field.all) :: others, Kernel.any state.timers (·.destination == processId))
+  -- It applies the link exits that only remove a link, after a parked monitor
+  -- signal to the same target.
+  let process := state.process processId
+  let eager := Kernel.filterMap (fun (target, unlinking) => if unlinking.isNone then
+      some (target, Field.live ||| Field.trapExit ||| Field.queueHead,
+        Field.commuting (Field.links ||| Field.eagerExits))
+    else none) process.links
+  let unpark := match process.parked with
+    | some (target, _) => [(target, Field.live, Field.queueTail)]
+    | none => []
+  ((processId, Field.all, Field.all) :: Kernel.append others (Kernel.append eager unpark),
+    Kernel.any state.timers (·.destination == processId))
 
 /-- The frames of a process's own step, `none` when it ends or starts a process. -/
 @[expose] def Task.ownFrames (state : State) (processId : PID) : Task α → Option (List Frame × Bool)

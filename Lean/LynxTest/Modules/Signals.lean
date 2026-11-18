@@ -459,6 +459,21 @@ theorem trap_exit_after_normal_down :
       let late ← poll
       pure (.tuple #[previous, late]))) = true := by decide +kernel
 
+/-- Linking again to a process whose `normal` link exit was applied when sent
+is not modeled: OTP holds the link until it handles the exit, so it may reply
+`true` or raise `noproc`, and the model stops with `exhausted`. -/
+theorem relink_after_applied_exit_is_exhausted :
+    (match Concurrent.counterexample (fun
+        | .ok _ | .error (.error _) => true
+        | _ => false) 64 (.start {} (do
+      let table := Dispatcher.ofTable [
+        { module := "test", name := "links", arity := 0, entry := .effectful fun _ _ _ => linksBack }] 1
+      let child ← «spawn/1» table (.function "test" "links" 0 #[])
+      let _ ← «send/2» table child (.atom "ignored")
+      «link/1» table child)) with
+      | some (_, .rejected (.error .exhausted)) => true
+      | _ => false) = true := by decide +kernel
+
 end LynxTest.Modules.Signals
 
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Modules.Signals

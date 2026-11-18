@@ -119,7 +119,8 @@ structure ProcessState where
   parked : Option (PID × List Nat) := none
   /-- The processes whose `normal` link exit removed a link when it was sent
   rather than handled, in PID order. This is only exact while the process does
-  not start trapping exits before it would have handled the exit: before it
+  not start trapping exits, or link to the process again, before it would
+  have handled the exit: before it
   handles the `normal` `DOWN` the same process sends after its link exits, or
   times out a receive with a zero timeout, which handles everything queued. -/
   eagerExits : List PID := []
@@ -316,9 +317,33 @@ do. A link is answered with an exit signal `noproc`, a monitor with a `DOWN`
   | other :: rest => if pidBefore processId other then processId :: other :: rest
       else other :: insertPid processId rest
 
+/-- Whether the exit signal of a process that ended to a link only removes
+the link: it is `normal`, to a live process not trapping exits, which has no
+link from the process left to handle. -/
+@[expose] def State.eagerLink (state : State) (processId target : PID) (reason : Term) : Bool :=
+  isNormal reason && state.alive target && !(state.process target).trapExit &&
+    !Kernel.any (state.process target).queue (fun entry => entry.source == processId && entry.signal matches .link)
+
+/-- An exit signal from a link of a process that ended. A `normal` one to a
+live process not trapping exits only removes its link, so it is applied when
+sent, and the receiver may not start trapping exits before it would have
+handled it (`ProcessState.eagerExits`). It is queued instead while the receiver
+has yet to handle a link from the process, which would come back otherwise. -/
+@[expose] def State.linkExit (state : State) (processId target : PID) (reason : Term) : State :=
+  if state.eagerLink processId target reason then
+    let state := match (state.process processId).parked with
+      | some (parked, _) => if parked == target then state.unpark processId else state
+      | none => state
+    state.modify target fun process => { process with
+      links := Kernel.filter (·.1 != processId) process.links
+      eagerExits := insertPid processId process.eagerExits }
+  else state.send processId target (.exit reason true false)
+
 /-- A process ends: it is no longer alive, timers sending to it are canceled,
 its messages are dropped, and its queue keeps the requests it still answers.
-It has its links and watchers left to signal. -/
+It applies at once the link exits that only remove a link (`State.eagerLink`),
+which nothing observes being sent, and has its other links and its watchers
+left to signal. -/
 @[expose] def State.terminate (state : State) (processId : PID) (reason : Term) : State :=
   let process := state.process processId
   let links := Kernel.foldl (fun links (peer, unlinking) =>
@@ -327,24 +352,12 @@ It has its links and watchers left to signal. -/
     | .link | .monitor _ | .isAlive => true
     | _ => false) process.queue
   let state := { state with timers := Kernel.filter (·.destination != processId) state.timers }
-  state.set processId { process with mailbox := [], queue
-                                     exiting := some { reason, links, downs := process.monitors } }
-
-/-- An exit signal from a link of a process that ended. A `normal` one to a
-live process not trapping exits only removes its link, so it is applied when
-sent, and the receiver may not start trapping exits before it would have
-handled it (`ProcessState.eagerExits`). It is queued instead while the receiver
-has yet to handle a link from the process, which would come back otherwise. -/
-@[expose] def State.linkExit (state : State) (processId target : PID) (reason : Term) : State :=
-  if isNormal reason && state.alive target && !(state.process target).trapExit &&
-      !Kernel.any (state.process target).queue (fun entry => entry.source == processId && entry.signal matches .link) then
-    let state := match (state.process processId).parked with
-      | some (parked, _) => if parked == target then state.unpark processId else state
-      | none => state
-    state.modify target fun process => { process with
-      links := Kernel.filter (·.1 != processId) process.links
-      eagerExits := insertPid processId process.eagerExits }
-  else state.send processId target (.exit reason true false)
+  let state := state.set processId { process with
+    mailbox := [], queue, exiting := some { reason, links, downs := process.monitors } }
+  Kernel.foldl (fun state target => if state.eagerLink processId target reason then
+      (state.modify processId fun process => { process with exiting := process.exiting.map fun exiting =>
+        { exiting with links := Kernel.filter (· != target) exiting.links } }).linkExit processId target reason
+    else state) state links
 
 /-- Answer a request queued at a process that ended: a link with an exit
 signal `noproc`, a monitor with a `DOWN` `noproc`, and `is_process_alive` with `false`. -/
@@ -498,6 +511,9 @@ inductive Answer (β : Type) : Type 1 where
   | .link target =>
       if target = processId then .reply (.atom "true") state else
       let process := state.process processId
+      -- The link was removed when its exit was applied as it was sent; OTP
+      -- may not have handled the exit yet, and then still holds the link.
+      if Kernel.contains process.eagerExits target then .continue (.error .exhausted) state else
       if !state.alive target && !process.trapExit then .reply (.atom "noproc") state else
       match Kernel.lookup target process.links with
       | some none => .reply (.atom "true") state
