@@ -97,7 +97,7 @@ end Exception
 
 /-- Scheduler decisions, consumed after each step of a process other than an
 environment access. They are supplied to the runner, not stored in the
-environment processes observe. Signals in transit arrive before any choice.
+environment processes observe. Queued signals are handled before any choice.
 No remaining choice defaults to the current process when runnable. `swap pid`
 prefers the named process; blocked or finished processes yield automatically.
 Positive receive durations are abstract: timeout choices express expiry
@@ -170,12 +170,15 @@ inductive Request where
   | link (target : PID)
   /-- Remove a link. Replies `true`. -/
   | unlink (target : PID)
-  /-- Send an exit signal as `exit/2` does. Replies `true`, or `false` without
-  effect when the requester sends itself a signal it traps, which is not modeled. -/
-  | exit (target : PID) (reason : Term)
+  /-- Send an exit signal. Replies `true`. With `quirk`, as `exit/2` does, a
+  requester sending itself `kill`, or any reason while not trapping exits, waits
+  until it handles its own signal and ends; otherwise it handles it later, as
+  `exit_signal/2` always does. -/
+  | exit (target : PID) (reason : Term) (quirk : Bool)
   /-- Set whether exit signals arrive as messages. Replies the previous value. -/
   | trapExit (enabled : Bool)
-  /-- Reply whether a process is alive. -/
+  /-- Reply whether a process is alive, after the signals between the requester
+  and the target sent before it. -/
   | alive (target : PID)
   /-- Send to an alias, discarding the message once the alias is inactive.
   Replies the message. -/
@@ -185,7 +188,7 @@ inductive Request where
   | startTimer (destination : PID) (message : Term) (duration : Nat)
   /-- Cancel a timer by its reference. Replies the milliseconds it had left, or
   `false` once it fired, was canceled, or its destination exited. A fired
-  timer's message may still be in transit. -/
+  timer's message may still be queued. -/
   | cancelTimer (reference : List Nat)
 deriving Repr
 
@@ -198,7 +201,7 @@ inductive Result : (α : Type := Term) → Type 1 where
   | set {α : Type} : Environment → Result α → Result α
   /-- A spawned child process, then the continuation receiving its PID. -/
   | schedule {α : Type} : SpawnOptions → Result Term → (PID → Result α) → Result α
-  /-- Local asynchronous send. The message is in transit, and the sender continues at once. -/
+  /-- Local asynchronous send. The message joins the receiver's queue, and the sender continues at once. -/
   | send {α : Type} : PID → Term → Result α → Result α
   /-- A receive with an already validated timeout. Select the oldest matching
   message and schedule before executing its body. `some` carries clause bindings;

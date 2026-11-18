@@ -71,12 +71,12 @@ private def down (reference : List Nat) (processId : PID) (reason : Term) : Term
 theorem monitor_reports_normal_exit :
     Concurrent.check (only (.ok (down [1] [1] (.atom "normal")))) 32 (.start {} (do
       let _ ← «spawn_monitor/1» dispatcher returns
-      receiveAny)) = true := by cbv
+      receiveAny)) = true := by decide +kernel
 
 theorem monitor_reports_raised_reason :
     Concurrent.check (only (.ok (down [1] [1] (.tuple #[.atom "boom", .nil])))) 32 (.start {} (do
       let _ ← «spawn_monitor/1» dispatcher raises
-      receiveAny)) = true := by cbv
+      receiveAny)) = true := by decide +kernel
 
 /-- Monitoring a process that does not exist reports `noproc` at once. -/
 theorem monitor_missing_process :
@@ -113,19 +113,19 @@ theorem demonitor_active_does_not_flush :
         let _ ← «demonitor/2» dispatcher reference (.cons (.atom "flush") .nil)
         let message ← poll
         let _ ← «send/2» dispatcher child (.atom "stop")
-        pure message)) = true := by cbv
+        pure message)) = true := by decide +kernel
 
 /-- A linked process that raises takes its linked parent down with its reason. -/
 theorem linked_crash_kills_parent :
     Concurrent.check (only (.error (.exit (.tuple #[.atom "boom", .nil])))) 32 (.start {} (do
       let _ ← «spawn_link/1» dispatcher raises
-      receiveAny)) = true := by cbv
+      receiveAny)) = true := by decide +kernel
 
 /-- A normal exit does not affect linked processes. -/
 theorem linked_normal_exit_is_ignored :
     Concurrent.check (only (.ok (.atom "done"))) 32 (.start {} (do
       let _ ← «spawn_link/1» dispatcher returns
-      pure (.atom "done"))) = true := by cbv
+      pure (.atom "done"))) = true := by decide +kernel
 
 /-- Trapping exits turns the signal into a message. -/
 theorem trapped_exit_is_a_message :
@@ -133,7 +133,7 @@ theorem trapped_exit_is_a_message :
       32 (.start {} (do
         let _ ← «process_flag/2» dispatcher (.atom "trap_exit") (.atom "true")
         let _ ← «spawn_link/1» dispatcher raises
-        receiveAny)) = true := by cbv
+        receiveAny)) = true := by decide +kernel
 
 /-- A root killed by a signal reports the environment it last had: the
 process dictionary it filled before its linked child raised. -/
@@ -154,7 +154,7 @@ theorem kill_cannot_be_trapped :
       | .tuple ⟨[pid, _]⟩ =>
         let _ ← «exit/2» dispatcher pid (.atom "kill")
         receiveAny
-      | _ => pure .nil)) = true := by cbv
+      | _ => pure .nil)) = true := by decide +kernel
 
 /-- Exit signals with reason `normal` are ignored by processes that do not trap
 exits, so the child keeps waiting until it is told to stop. -/
@@ -166,7 +166,7 @@ theorem normal_exit_signal_is_ignored :
         let _ ← «exit/2» dispatcher pid (.atom "normal")
         let _ ← «send/2» dispatcher pid (.atom "stop")
         receiveAny
-      | _ => pure .nil)) = true := by cbv
+      | _ => pure .nil)) = true := by decide +kernel
 
 /-- With `exit/2`, a process sending itself `normal` ends at once with it,
 unless it traps exits. -/
@@ -174,7 +174,7 @@ theorem exit_self_normal_ends :
     Concurrent.check (only (.error (.exit (.atom "normal")))) 32 (.start {} (do
       let me ← «self/0» dispatcher
       let _ ← «exit/2» dispatcher me (.atom "normal")
-      pure (.atom "survived"))) = true := by cbv
+      pure (.atom "survived"))) = true := by decide +kernel
 
 /-- With `exit/2`, a process sending itself `kill` ends at once, even trapping exits. -/
 theorem exit_self_kill_ends_trapping :
@@ -182,7 +182,7 @@ theorem exit_self_kill_ends_trapping :
       let _ ← «process_flag/2» dispatcher (.atom "trap_exit") (.atom "true")
       let me ← «self/0» dispatcher
       let _ ← «exit/2» dispatcher me (.atom "kill")
-      pure (.atom "survived"))) = true := by cbv
+      pure (.atom "survived"))) = true := by decide +kernel
 
 /-- A child ending on its own `exit/2` signal never reports that it survived:
 its trapping parent gets its reason. -/
@@ -190,23 +190,38 @@ theorem exit_self_ends_before_returning :
     Concurrent.check (only (.ok (.tuple #[.atom "EXIT", .pid [1], .atom "alma"]))) 32 (.start {} (do
       let _ ← «process_flag/2» dispatcher (.atom "trap_exit") (.atom "true")
       let _ ← «spawn_link/1» suicidal suicides
-      receiveAny)) = true := by cbv
+      receiveAny)) = true := by decide +kernel
 
-/-- A process trapping its own `exit/2` signal acts on it later, against its
-flags by then, which is not modeled. -/
-theorem exit_self_trapped_is_exhausted :
-    Concurrent.check (only (.error .exhausted)) 32 (.start {} (do
-      let _ ← «process_flag/2» dispatcher (.atom "trap_exit") (.atom "true")
-      let me ← «self/0» dispatcher
-      let _ ← «exit/2» dispatcher me (.atom "alma")
-      pure (.atom "survived"))) = true := by cbv
+/-- Accept either of two outcomes. -/
+private def either (first second : Outcome Term) (actual : Outcome Term) : Bool :=
+  only first actual || only second actual
 
-/-- A process acts on its own `exit_signal/2` signal later, which is not modeled. -/
-theorem exit_signal_self_is_exhausted :
-    Concurrent.check (only (.error .exhausted)) 32 (.start {} (do
+/-- A process trapping its own `exit/2` signal handles it later, against its flags
+by then: as an `EXIT` message if it handled it before clearing `trap_exit`, and
+exiting otherwise. -/
+theorem exit_self_trapped_is_handled_later :
+    Concurrent.check (either (.ok (.tuple #[.atom "EXIT", .pid [], .atom "alma"])) (.error (.exit (.atom "alma"))))
+      32 (.start {} (do
+        let _ ← «process_flag/2» dispatcher (.atom "trap_exit") (.atom "true")
+        let me ← «self/0» dispatcher
+        let _ ← «exit/2» dispatcher me (.atom "alma")
+        let _ ← «process_flag/2» dispatcher (.atom "trap_exit") (.atom "false")
+        poll)) = true := by decide +kernel
+
+/-- A process handles its own `exit_signal/2` signal later: it may return before. -/
+theorem exit_signal_self_is_handled_later :
+    Concurrent.check (either (.ok (.atom "survived")) (.error (.exit (.atom "alma")))) 32 (.start {} (do
       let me ← «self/0» dispatcher
       let _ ← «exit_signal/2» dispatcher me (.atom "alma")
-      pure (.atom "survived"))) = true := by cbv
+      pure (.atom "survived"))) = true := by decide +kernel
+
+/-- A `receive … after 0` handles everything queued first, so a process sending
+itself `exit_signal/2` never times out. -/
+theorem exit_signal_self_ends_before_timeout :
+    Concurrent.check (only (.error (.exit (.atom "alma")))) 32 (.start {} (do
+      let me ← «self/0» dispatcher
+      let _ ← «exit_signal/2» dispatcher me (.atom "alma")
+      poll)) = true := by decide +kernel
 
 /-- Exit signals to aliases are not modeled. -/
 theorem exit_alias_is_exhausted :
@@ -215,7 +230,7 @@ theorem exit_alias_is_exhausted :
       pure .nil)) = true ∧
     Concurrent.check (only (.error .exhausted)) 32 (.start {} (do
       let _ ← «exit_signal/2» dispatcher (.reference [0]) (.atom "alma")
-      pure .nil)) = true := by cbv
+      pure .nil)) = true := by decide +kernel
 
 /-- `exit_signal/2` sends other processes the signals `exit/2` does. -/
 theorem exit_signal_to_others :
@@ -233,7 +248,7 @@ theorem exit_signal_to_others :
       | .tuple ⟨[pid, _]⟩ =>
         let _ ← «exit_signal/2» dispatcher pid (.atom "kill")
         receiveAny
-      | _ => pure .nil)) = true := by cbv
+      | _ => pure .nil)) = true := by decide +kernel
 
 /-- An alias delivers to its owner until the monitor ends. -/
 theorem alias_ends_with_demonitor :
@@ -247,7 +262,7 @@ theorem alias_ends_with_demonitor :
       let _ ← «send/2» dispatcher alias (.atom "again")
       let second ← poll
       let _ ← «send/2» dispatcher child (.atom "stop")
-      pure (.tuple #[first, second]))) = true := by cbv
+      pure (.tuple #[first, second]))) = true := by decide +kernel
 
 /-- Linking to a process that does not exist raises `noproc`. -/
 theorem link_to_missing_process :
@@ -278,42 +293,6 @@ theorem keyfind_finds_first_match :
     Erlang.lists.«keyfind/3» (.atom "c") (.integer 1) (.cons (.tuple #[.atom "a"]) .nil) =
       .ok (.atom "false") := by
   constructor <;> cbv
-
-/-! Signals that do nothing when they arrive, which `check` takes alone. -/
-
-/-- The root waits for a message, holding the records `[]` maps to, with its first child
-`[1]` already ended, and `signal` in transit from `source` to `target`. -/
-private def waitingWith (root : Concurrent.ProcessState) (source target : PID)
-    (signal : Concurrent.Signal) : Concurrent.Config Term :=
-  .running
-    { processes := fun processId => if processId == [] then some root else none
-      inTransit := [⟨source, target, signal⟩] }
-    [([], .root receiveAny)] none false
-
-/-- A `DOWN` of a monitor that was removed, and a message to an alias that was removed. -/
-theorem inactive_reference_is_forced :
-    (waitingWith { refCounter := 1 } [1] [] (.down [1] (.atom "normal"))).forced =
-      some (.deliver [1] []) ∧
-    (waitingWith { refCounter := 1 } [1] [] (.aliasMessage [1] (.atom "hello"))).forced =
-      some (.deliver [1] []) := by
-  constructor <;> cbv
-
-/-- A `DOWN` of an active monitor, or of a reference the receiver has not allocated yet
-(a later monitor may receive it), does something. -/
-theorem active_reference_is_not_forced :
-    (waitingWith { refCounter := 1, monitoring := [([1], [1])] } [1] []
-      (.down [1] (.atom "normal"))).forced = none ∧
-    (waitingWith {} [1] [] (.down [1] (.atom "normal"))).forced = none := by
-  constructor <;> cbv
-
-/-- A message to a process that ended is dropped, but a link to it answers with an exit
-signal, and a message to a process not spawned yet may still reach it. -/
-theorem ended_process_is_forced :
-    (waitingWith { children := 1 } [] [1] (.message (.atom "hello"))).forced =
-      some (.bounce [] [1]) ∧
-    (waitingWith { children := 1 } [] [1] .link).forced = none ∧
-    (waitingWith {} [] [1] (.message (.atom "hello"))).forced = none := by
-  refine ⟨?_, ?_, ?_⟩ <;> cbv
 
 end LynxTest.Modules.Signals
 

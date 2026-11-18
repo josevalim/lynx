@@ -82,43 +82,55 @@ private partial def showTerm : Term → String
       | some tail => s!"[{shown} | {tail}]"
   | .bitstring bytes lastBits _ => showBitstring bytes lastBits
 
-private def showRequest (processId : PID) (reply : Term) : Request → String
+private def showReply (reply : Option Term) : String :=
+  match reply with
+  | some reply => showTerm reply
+  | none => "nothing yet"
+
+private def showRequest (processId : PID) (reply : Option Term) : Request → String
   | .monitor target alias =>
       let kind := if alias then "monitors with an alias" else "monitors"
-      s!"{showPid processId} {kind} {showPid target}, getting {showTerm reply}"
+      s!"{showPid processId} {kind} {showPid target}, getting {showReply reply}"
   | .demonitor reference flush =>
       let how := if flush then "demonitors and flushes" else "demonitors"
-      let found := match reply with | .atom "true" => "active" | _ => "inactive"
-      s!"{showPid processId} {how} {showReference reference}, which was {found}"
-  | .link target => s!"{showPid processId} links to {showPid target}, getting {showTerm reply}"
+      match reply with
+      | some (.atom "true") => s!"{showPid processId} {how} {showReference reference}, which was active"
+      | _ => s!"{showPid processId} {how} {showReference reference}, which was inactive"
+  | .link target => s!"{showPid processId} links to {showPid target}, getting {showReply reply}"
   | .unlink target => s!"{showPid processId} unlinks from {showPid target}"
-  | .exit target reason =>
+  | .exit target reason _ =>
       s!"{showPid processId} sends exit signal {showTerm reason} to {showPid target}"
   | .trapExit enabled => s!"{showPid processId} sets trap_exit to {enabled}"
   | .alive target =>
-      s!"{showPid processId} checks whether {showPid target} is alive: {showTerm reply}"
+      match reply with
+      | some reply => s!"{showPid processId} checks whether {showPid target} is alive: {showTerm reply}"
+      | none => s!"{showPid processId} asks whether {showPid target} is alive"
   | .sendAlias alias message =>
       s!"{showPid processId} sends {showTerm message} to alias {showReference alias}"
   | .startTimer destination message _ =>
-      s!"{showPid processId} starts timer {showTerm reply} sending {showTerm message} to {showPid destination}"
+      s!"{showPid processId} starts timer {showReply reply} sending {showTerm message} to {showPid destination}"
   | .cancelTimer reference =>
-      s!"{showPid processId} cancels timer {showReference reference}, getting {showTerm reply}"
+      s!"{showPid processId} cancels timer {showReference reference}, getting {showReply reply}"
 
-/-- A signal reaching its receiver. -/
-private def showDelivery (envelope : Envelope) : String :=
-  let receiver := showPid envelope.target
-  let source := if envelope.source == clock then "the timer service" else showPid envelope.source
-  match envelope.signal with
-  | .message message => s!"{receiver} receives {showTerm message} from {source} in its mailbox"
+/-- A process handling a signal from its queue. -/
+private def showHandle (receiver : PID) (entry : Entry) : String :=
+  let receiver := showPid receiver
+  let source := if entry.source == clock then "the timer service" else showPid entry.source
+  match entry.signal with
+  | .message message => s!"{receiver} takes {showTerm message} from {source} into its mailbox"
   | .aliasMessage alias message =>
-      s!"{receiver} gets {showTerm message} from {source} through alias {showReference alias}"
-  | .exit reason true => s!"{receiver} gets exit signal {showTerm reason} from linked {source}"
-  | .exit reason false => s!"{receiver} gets exit signal {showTerm reason} from {source}"
+      s!"{receiver} handles {showTerm message} from {source} through alias {showReference alias}"
+  | .exit reason true _ => s!"{receiver} handles exit signal {showTerm reason} from linked {source}"
+  | .exit reason false _ => s!"{receiver} handles exit signal {showTerm reason} from {source}"
   | .link => s!"{receiver} is linked by {source}"
-  | .unlink => s!"{receiver} is unlinked by {source}"
+  | .unlink _ => s!"{receiver} is unlinked by {source}"
+  | .unlinkAck _ => s!"{receiver} gets the unlink acknowledgement from {source}"
   | .monitor reference => s!"{receiver} is monitored by {source} with {showReference reference}"
   | .down reference reason =>
-      s!"{receiver} gets DOWN for {showReference reference} from {source} with {showTerm reason}"
+      s!"{receiver} handles DOWN for {showReference reference} from {source} with {showTerm reason}"
+  | .isAlive => s!"{receiver} answers {source} that it is alive"
+  | .reply value => s!"{receiver} gets the answer {showTerm value} from {source}"
+  | .flush => s!"{receiver} has handled the signals queued before"
 
 /-- One step of a run, or `none` for environment accesses, which other
 processes cannot observe. -/
@@ -131,13 +143,9 @@ private def showEvent : Event → Option String
   | .timeout processId => some s!"{showPid processId} times out waiting for a message"
   | .exit processId reason => some s!"{showPid processId} exits with {showTerm reason}"
   | .request processId query reply => some (showRequest processId reply query)
-  | .deliver envelope => some (showDelivery envelope)
-  | .bounce envelope =>
-      match envelope.signal with
-      | .link => some s!"{showPid envelope.target} is not alive, so its link from {showPid envelope.source} fails"
-      | .monitor _ =>
-          some s!"{showPid envelope.target} is not alive, so its monitor from {showPid envelope.source} fails"
-      | _ => none
+  | .handle receiver entry => some (showHandle receiver entry)
+  | .phase processId => some s!"{showPid processId}, which ended, signals its links, watchers or requesters"
+  | .unpark processId => some s!"{showPid processId}'s monitor signal is sent"
   | .fire reference => some s!"timer {showReference reference} fires"
 
 private def showException : Exception → String

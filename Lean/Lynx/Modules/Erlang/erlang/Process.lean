@@ -164,7 +164,7 @@ its `DOWN` message. `info` returns whether the monitor was still active. -/
   | _, _ => .error (.error (.atom "badarg"))
 
 /-- Send `message` once a timer of `time` milliseconds fires, replying the
-timer's reference. When it fires, and when its message then arrives, are the
+timer's reference. When it fires, and when its message is then handled, are the
 scheduler's choices. -/
 @[expose] def «send_after/3» (_ : Dispatcher) (time destination message : Term) : Result :=
   Term.sendAfter time destination message
@@ -202,25 +202,21 @@ on its way. Timers paused by the debugger are not modeled. -/
 
 /-- Send an exit signal. `kill` cannot be trapped, and `normal` is ignored
 unless the target traps exits or is the caller. The target acts on the signal
-when it arrives, and the caller ends at once on its own signal. A caller that
-traps its own signal acts on it later, and aliases receive exit signals too;
-neither is modeled, so neither returns. -/
+when it handles it. A caller sending itself `kill`, or any reason while not
+trapping exits, first handles the signals queued before it and ends. Exit
+signals to aliases are not modeled and do not return. -/
 @[expose] def «exit/2» (_ : Dispatcher) (target reason : Term) : Result :=
   match target with
-  | .pid pid => .request (.exit pid reason) fun reply =>
-      match reply with
-      | .atom "true" => .ok reply
-      | _ => .error .exhausted
+  | .pid pid => .request (.exit pid reason true) .ok
   | .reference _ => .error .exhausted
   | _ => .error (.error (.atom "badarg"))
 
-/-- Send an exit signal, as `exit/2` does to other processes. A process acts
-on its own signal later, against its flags by then, and aliases receive exit
-signals too; neither is modeled, so neither returns. -/
-@[expose] def «exit_signal/2» (_ : Dispatcher) (target reason : Term) : Result := do
-  let env ← get
+/-- Send an exit signal, as `exit/2` does, except that a process sending itself
+one handles it later, against its flags by then. Exit signals to aliases are
+not modeled and do not return. -/
+@[expose] def «exit_signal/2» (_ : Dispatcher) (target reason : Term) : Result :=
   match target with
-  | .pid pid => if pid = env.currentPid then .error .exhausted else .request (.exit pid reason) .ok
+  | .pid pid => .request (.exit pid reason false) .ok
   | .reference _ => .error .exhausted
   | _ => .error (.error (.atom "badarg"))
 
