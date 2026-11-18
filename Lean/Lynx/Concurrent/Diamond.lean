@@ -1070,4 +1070,124 @@ theorem rewriteTask_comm {processId other : PID} (differ : processId ≠ other)
           simp only [rewriteTask, ↓reduceIte, first, rewriteTask_append (missing' task)]
         · simp [rewriteTask, first, second, rewriteTask_comm differ missing missing' rest]
 
+/-! ### Steps by key are steps -/
+
+theorem splitAt_eq {processId : PID} : ∀ {tasks before after : List (PID × Task α)} {task : Task α},
+    splitAt processId tasks = some (before, task, after) → tasks = before ++ (processId, task) :: after
+  | [], _, _, _, found => by simp [splitAt] at found
+  | (other, task') :: rest, before, after, task, found => by
+      simp only [splitAt] at found
+      split at found
+      · rename_i same
+        simp only [Option.some.injEq, Prod.mk.injEq] at found
+        obtain ⟨rfl, rfl, rfl⟩ := found
+        simp [eq_of_beq same]
+      · simp only [Option.map_eq_some_iff, Prod.exists, Prod.mk.injEq] at found
+        obtain ⟨before', _, _, found, rfl, rfl, rfl⟩ := found
+        simp [splitAt_eq found]
+
+theorem State.mem_processes_of_record {state : State} {processId : PID} {process : ProcessState}
+    (found : state.record processId = some process) : ∃ record, (processId, record) ∈ state.processes := by
+  simp only [State.record, Kernel.lookup_eq] at found
+  generalize state.processes = records at found ⊢
+  induction records with
+  | nil => simp at found
+  | cons head rest ih =>
+    obtain ⟨key, value⟩ := head
+    by_cases same : processId = key
+    · subst same; exact ⟨value, by simp⟩
+    · have differ : (processId == key) = false := by simp [same]
+      simp only [List.lookup_cons, differ] at found
+      obtain ⟨record, mem⟩ := ih found
+      exact ⟨record, by simp [mem]⟩
+
+theorem State.record_of_linkPhase {state next : State} {processId target : PID}
+    (phase : state.linkPhase processId target = some next) :
+    ∃ process, state.record processId = some process ∧ target ∈ state.exitLinks processId := by
+  unfold State.linkPhase at phase
+  split at phase
+  · rename_i process found
+    split at phase
+    · rename_i exiting exits
+      split at phase
+      · rename_i mem
+        refine ⟨process, found, ?_⟩
+        simp only [State.exitLinks, State.process, found, Option.getD_some, exits]
+        simpa [Kernel.contains_eq] using mem
+      · simp at phase
+    · simp at phase
+  · simp at phase
+
+theorem State.record_of_phase {state next : State} {processId : PID}
+    (phase : state.phase processId = some next) : ∃ process, state.record processId = some process := by
+  unfold State.phase at phase
+  split at phase
+  · rename_i process found; exact ⟨process, found⟩
+  · simp at phase
+
+/-- The step with a key is a step. -/
+theorem Config.step_of_stepOf {config next : Config α} {key : Key} {event : Event}
+    (found : config.stepOf key = some (event, next)) : Step config event next := by
+  match config, key with
+  | .start .., _ => simp [Config.stepOf] at found
+  | .running _ _ _ true, _ => simp [Config.stepOf] at found
+  | .running state tasks finished false, .own processId =>
+    simp only [Config.stepOf, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq] at found
+    obtain ⟨⟨before, task, after⟩, split, transition, head, rfl, rfl⟩ := found
+    simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, List.mem_append,
+      List.mem_flatMap, List.mem_map]
+    refine .inl (.inl (.inl ⟨(before, (processId, task), after), by rw [splitAt_eq split]; exact mem_splits,
+      transition, ?_, rfl⟩))
+    simp only [Task.transitions, Kernel.append_eq, List.mem_append]
+    exact .inl (List.mem_of_head? head)
+  | .running state tasks finished false, .handle processId =>
+    simp only [Config.stepOf, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq] at found
+    obtain ⟨⟨before, task, after⟩, split, transition, head, rfl, rfl⟩ := found
+    simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, List.mem_append,
+      List.mem_flatMap, List.mem_map]
+    refine .inl (.inl (.inl ⟨(before, (processId, task), after), by rw [splitAt_eq split]; exact mem_splits,
+      transition, ?_, rfl⟩))
+    simp only [Task.transitions, Kernel.append_eq, List.mem_append]
+    exact .inr (List.mem_of_head? head)
+  | .running state tasks finished false, .link processId target =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
+    obtain ⟨next', phase, rfl, rfl⟩ := found
+    obtain ⟨process, record, linked⟩ := State.record_of_linkPhase phase
+    obtain ⟨record', mem⟩ := State.mem_processes_of_record record
+    simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, List.mem_append,
+      List.mem_flatMap, List.mem_map]
+    refine .inl (.inl (.inr ⟨(processId, record'), mem, next', ?_, rfl⟩))
+    simp only [State.phases, Kernel.append_eq, Kernel.filterMap_eq, List.mem_append, List.mem_filterMap]
+    exact .inl ⟨target, linked, phase⟩
+  | .running state tasks finished false, .phase processId =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
+    obtain ⟨next', phase, rfl, rfl⟩ := found
+    obtain ⟨process, record⟩ := State.record_of_phase phase
+    obtain ⟨record', mem⟩ := State.mem_processes_of_record record
+    simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, List.mem_append,
+      List.mem_flatMap, List.mem_map]
+    refine .inl (.inl (.inr ⟨(processId, record'), mem, next', ?_, rfl⟩))
+    simp only [State.phases, Kernel.append_eq, Kernel.filterMap_eq, List.mem_append, List.mem_filterMap]
+    exact .inr (by simp [phase])
+  | .running state tasks finished false, .unpark processId =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
+    obtain ⟨parked, found, rfl, rfl⟩ := found
+    have record : ∃ process, state.record processId = some process := by
+      cases record : state.record processId with
+      | none => simp [State.process, record] at found
+      | some process => exact ⟨process, rfl⟩
+    obtain ⟨process, record⟩ := record
+    obtain ⟨record', mem⟩ := State.mem_processes_of_record record
+    simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
+      List.mem_append, List.mem_filterMap]
+    exact .inl (.inr ⟨(processId, record'), mem, by simp [found]⟩)
+  | .running state tasks finished false, .fire reference =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
+    obtain ⟨timer, found, rfl, rfl⟩ := found
+    simp only [Step, Config.successors, Kernel.append_eq, Kernel.map_eq, List.mem_append, List.mem_map]
+    have equal := List.find?_some (by simpa [Kernel.find?_eq] using found)
+    have mem := List.mem_of_find?_eq_some (by simpa [Kernel.find?_eq] using found)
+    simp only [beq_iff_eq] at equal
+    exact .inr ⟨timer, mem, by rw [equal]⟩
+
 end Lynx.Concurrent
