@@ -1512,4 +1512,90 @@ private example (base : ProcessState) (processId : PID) :
           eagerExits := insertPid processId process.eagerExits }) := by
   framed_update
 
+/-! ### Composing effects within frames -/
+
+private theorem readsOf_append (frames frames' : List Frame) (processId : PID) :
+    readsOf (frames ++ frames') processId = (readsOf frames processId).union (readsOf frames' processId) := by
+  funext bit; simp [readsOf, Mask.union, List.any_append]
+
+private theorem writesOf_append (frames frames' : List Frame) (processId : PID) :
+    writesOf (frames ++ frames') processId = (writesOf frames processId).union (writesOf frames' processId) := by
+  funext bit; simp [writesOf, Mask.union, List.any_append]
+
+/-- Frames that read a queue's tail only with its head, and its head, or write
+it, only where there is one. -/
+private def WellFramed (frames : List Frame) (state : State) : Prop :=
+  ∀ processId, (readsOf frames processId tailBit → readsOf frames processId headBit) ∧
+    ∀ process, state.record processId = some process →
+      (readsOf frames processId headBit → process.queue ≠ []) ∧
+      (writesOf frames processId headBit → process.queue ≠ [])
+
+/-- Two effects within frames, one after the other, are within both frames,
+when the second reads of what the first writes only what the first reads, and
+they neither both remove a queue's head nor remove it after appending to it. -/
+private theorem Effect.InFrames.andThen {effect effect' : Effect} {frames frames' : List Frame} {state : State}
+    (framed : effect.InFrames frames state) (framed' : effect'.InFrames frames' (effect.apply state))
+    (wellFramed : WellFramed (frames ++ frames') state)
+    (covered : ∀ processId bit, readsOf frames' processId bit → writesOf frames processId bit →
+      readsOf frames processId bit)
+    (popped : ∀ processId, readsOf frames' processId headBit → writesOf frames processId headBit →
+      readsOf frames processId tailBit)
+    (once : ∀ processId, writesOf frames processId headBit → writesOf frames' processId headBit → False)
+    (appended : ∀ processId, writesOf frames processId tailBit → writesOf frames' processId headBit → False) :
+    (effect.andThen effect').InFrames (frames ++ frames') state := by
+  intro processId
+  rw [Effect.record_andThen, readsOf_append, writesOf_append]
+  have bits := wellFramed processId
+  rw [readsOf_append, writesOf_append] at bits
+  have widen : ∀ {reads writes : Mask} {process : ProcessState} {change : ProcessState → ProcessState},
+      state.record processId = some process → Framed reads writes process change →
+      (∀ bit, reads bit → (readsOf frames processId).union (readsOf frames' processId) bit) →
+      (∀ bit, writes bit → (writesOf frames processId).union (writesOf frames' processId) bit) →
+      Framed ((readsOf frames processId).union (readsOf frames' processId))
+        ((writesOf frames processId).union (writesOf frames' processId)) process change :=
+    fun found framed moreReads moreWrites => framed.mono moreReads moreWrites bits.1
+      (fun read => ((bits.2 _ found).1 read)) (fun written => ((bits.2 _ found).2 written))
+  have left : ∀ bit, readsOf frames processId bit → (readsOf frames processId).union (readsOf frames' processId) bit :=
+    fun bit read => by simp [Mask.union, read]
+  have right : ∀ bit, readsOf frames' processId bit → (readsOf frames processId).union (readsOf frames' processId) bit :=
+    fun bit read => by simp [Mask.union, read]
+  have left' : ∀ bit, writesOf frames processId bit →
+      (writesOf frames processId).union (writesOf frames' processId) bit := fun bit written => by simp [Mask.union, written]
+  have right' : ∀ bit, writesOf frames' processId bit →
+      (writesOf frames processId).union (writesOf frames' processId) bit := fun bit written => by simp [Mask.union, written]
+  rcases framed processId with same | all | ⟨change, equal, used, inside⟩
+  · -- The first leaves the record: the second is within its own frames.
+    have keep : (effect.apply state).record processId = state.record processId := by
+      rw [Effect.record_apply, same]; rfl
+    rw [same]
+    rcases framed' processId with same' | all' | ⟨change', equal', used', inside'⟩
+    · exact .inl (by rw [same']; rfl)
+    · exact .inr (.inl fun bit lower => right' bit (all' bit lower))
+    · refine .inr (.inr ⟨change', by rw [equal']; rfl, ?_, fun process found => ?_⟩)
+      · obtain ⟨bit, lower, read | written⟩ := used'
+        · exact ⟨bit, lower, .inl (right bit read)⟩
+        · exact ⟨bit, lower, .inr (right' bit written)⟩
+      · rw [keep] at inside'
+        exact widen found (inside' process found) right right'
+  · exact .inr (.inl fun bit lower => left' bit (all bit lower))
+  · rcases framed' processId with same' | all' | ⟨change', equal', used', inside'⟩
+    · refine .inr (.inr ⟨change, by rw [same', equal]; rfl, ?_, fun process found => ?_⟩)
+      · obtain ⟨bit, lower, read | written⟩ := used
+        · exact ⟨bit, lower, .inl (left bit read)⟩
+        · exact ⟨bit, lower, .inr (left' bit written)⟩
+      · exact widen found (inside process found) left left'
+    · exact .inr (.inl fun bit lower => right' bit (all' bit lower))
+    · refine .inr (.inr ⟨change' ∘ change, by rw [equal, equal']; funext record; cases record <;> rfl, ?_,
+        fun process found => ?_⟩)
+      · obtain ⟨bit, lower, read | written⟩ := used
+        · exact ⟨bit, lower, .inl (left bit read)⟩
+        · exact ⟨bit, lower, .inr (left' bit written)⟩
+      · have after : (effect.apply state).record processId = some (change process) := by
+          rw [Effect.record_apply, equal, found]; rfl
+        exact (inside process found).comp (inside' _ after) (covered processId) (popped processId)
+          (once processId) (appended processId) (fun read => by
+            rcases read with read | written
+            · exact (bits.2 _ found).1 (by simp [Mask.union, read])
+            · exact (bits.2 _ found).2 (by simp [Mask.union, written]))
+
 end Lynx.Concurrent
