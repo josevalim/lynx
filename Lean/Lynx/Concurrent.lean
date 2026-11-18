@@ -438,21 +438,29 @@ makes it act. -/
     Bool :=
   !(state.inertEntry processId entry || (process.exiting.isSome && state.gone entry.source))
 
+/-- Whether a signal queued at a process that ended is a request it still
+answers: a link, a monitor or an `is_process_alive` request from a process
+that is not gone. Only requests stay queued when a process ends, and no
+signal joins its queue after. -/
+@[expose] def State.answersEntry (state : State) (entry : Entry) : Bool :=
+  (entry.signal matches .link | .monitor _ | .isAlive) && !state.gone entry.source
+
 /-- A record without what nothing can observe: queued signals that do nothing,
 links being removed from processes that are gone, and, for a process that
-ended, everything but what it still sends. -/
+ended, everything but what it still sends and answers. -/
 @[expose] def State.normalizeRecord (state : State) (processId : PID) (process : ProcessState) :
     ProcessState :=
-  let queue := Kernel.filter (state.keepEntry processId process) process.queue
   match process.exiting with
   | some exiting =>
-      { queue, refCounter := process.refCounter, children := process.children, parked := process.parked
+      { queue := Kernel.filter state.answersEntry process.queue
+        refCounter := process.refCounter, children := process.children, parked := process.parked
         exiting := some { exiting with
           links := Kernel.filter (fun target => !state.gone target) exiting.links
           downs := Kernel.filter (fun down => !state.gone down.2) exiting.downs } }
   | none =>
-      { process with queue
-                     links := Kernel.filter (fun link => !(link.2.isSome && state.gone link.1)) process.links }
+      { process with
+        queue := Kernel.filter (state.keepEntry processId process) process.queue
+        links := Kernel.filter (fun link => !(link.2.isSome && state.gone link.1)) process.links }
 
 /-- Whether a process that ended has nothing left to send or answer. -/
 @[expose] def ProcessState.finished (process : ProcessState) : Bool :=

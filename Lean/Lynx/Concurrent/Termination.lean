@@ -233,6 +233,7 @@ theorem sum_map_le {first second : γ → Nat} (items : List γ) (le : ∀ item 
 theorem ProcessState.weight_normalizeRecord (state : State) (processId : PID) (process : ProcessState) :
     (state.normalizeRecord processId process).weight ≤ process.weight := by
   have queue := sum_filter_le (·.signal.weight) (state.keepEntry processId process) process.queue
+  have answers := sum_filter_le (·.signal.weight) state.answersEntry process.queue
   unfold State.normalizeRecord
   simp only [Kernel.filter_eq]
   split
