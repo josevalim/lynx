@@ -122,8 +122,32 @@ instance : DecidableEq Key := fun first second => decidable_of_iff (first == sec
 
 /-! ### Steps by key -/
 
-/-- The steps of a running configuration, each with its key. -/
-@[expose] def Config.steps : Config α → List (Key × Event × Config α)
+/-- Whether handling the oldest queued signal commutes with every other step,
+now and after any of them: a signal that does nothing, a message from a
+process, which the process's own steps cannot race with as a receive only
+times out with nothing left to handle, a reply or marker resuming a process
+that waits, or an acknowledgement of an unlink. Other signals race with what
+the process may do before handling them, such as timing out before a timer's
+message, removing a monitor, trapping exits, or ending. -/
+@[expose] def Task.forcedHead (state : State) (processId : PID) (task : Task α) (entry : Entry) : Bool :=
+  state.inertEntry processId entry || match entry.signal with
+    | .message _ => entry.source != clock
+    | .unlinkAck _ => true
+    | .reply _ | .flush => task.wait.isSome
+    | _ => false
+
+/-- Whether a process that ended sends next a `DOWN` its watcher drops. -/
+@[expose] def State.dropsDown (state : State) (processId : PID) : Bool :=
+  match (state.process processId).exiting with
+  | some { reason, links := [], downs := (reference, watcher) :: _ } =>
+      !state.keepEntry watcher (state.process watcher) { source := processId, signal := .down reference reason }
+  | _ => false
+
+/-- The steps of a running configuration, each with its key and whether every
+run can take it first (`Config.forced`): a process reading or replacing its
+environment or receiving a message already handled, handling a signal that
+`Task.forcedHead` accepts, or sending a `DOWN` its watcher drops. -/
+@[expose] def Config.taggedSteps : Config α → List (Key × Event × Config α × Bool)
   | .start .. => []
   | .running _ _ _ true => []
   | .running state tasks finished false =>
@@ -131,27 +155,36 @@ instance : DecidableEq Key := fun first second => decidable_of_iff (first == sec
         (Kernel.flatMap (fun (before, (processId, task), after) =>
           Kernel.append
             (Kernel.map (fun transition => (Key.own processId, transition.event,
-              transition.apply before after finished false)) (task.own state processId))
+              transition.apply before after finished false,
+              transition.event matches .internal _ | .receive ..)) (task.own state processId))
             (Kernel.map (fun transition => (Key.handle processId, transition.event,
-              transition.apply before after finished false)) (task.handle state processId)))
+              transition.apply before after finished false,
+              match (state.process processId).queue with
+              | entry :: _ => task.forcedHead state processId entry
+              | [] => false)) (task.handle state processId)))
           (splits tasks))
         (Kernel.flatMap (fun (processId, _) =>
           Kernel.append
             (Kernel.filterMap (fun target => (state.linkPhase processId target).map fun next =>
-              (Key.link processId target, Event.phase processId, .running next.normalize tasks finished false))
+              (Key.link processId target, Event.phase processId, .running next.normalize tasks finished false, false))
               (state.exitLinks processId))
             (match state.phase processId with
-              | some next => [(Key.phase processId, Event.phase processId, .running next.normalize tasks finished false)]
+              | some next => [(Key.phase processId, Event.phase processId, .running next.normalize tasks finished false,
+                  state.dropsDown processId)]
               | none => []))
           state.processes))
         (Kernel.filterMap (fun (processId, _) =>
           (state.process processId).parked.map fun _ =>
             (Key.unpark processId, Event.unpark processId,
-              .running (state.unpark processId).normalize tasks finished false))
+              .running (state.unpark processId).normalize tasks finished false, false))
           state.processes))
         (Kernel.map (fun timer =>
           (Key.fire timer.reference, Event.fire timer.reference,
-            .running (state.fire timer).normalize tasks finished false)) state.firing)
+            .running (state.fire timer) tasks finished false, false)) state.firing)
+
+/-- The steps of a running configuration, each with its key. -/
+@[expose] def Config.steps (config : Config α) : List (Key × Event × Config α) :=
+  Kernel.map (fun (key, event, next, _) => (key, event, next)) config.taggedSteps
 
 /-- Where a process is in a list of tasks: the tasks before it, its own, and those after. -/
 @[expose] def splitAt (processId : PID) : List (PID × Task α) →
@@ -183,7 +216,7 @@ instance : DecidableEq Key := fun first second => decidable_of_iff (first == sec
         (Event.unpark processId, .running (state.unpark processId).normalize tasks finished false)
   | .running state tasks finished false, .fire reference =>
       (Kernel.find? (·.reference == reference) state.firing).map fun timer =>
-        (Event.fire reference, .running (state.fire timer).normalize tasks finished false)
+        (Event.fire reference, .running (state.fire timer) tasks finished false)
 
 /-! ### What a process continues with -/
 
@@ -679,20 +712,6 @@ which needs `key` to leave every computation as it is. -/
       | none => false
   | none => false
 
-/-- Whether handling the oldest queued signal commutes with every other step,
-now and after any of them: a signal that does nothing, a message from a
-process, which the process's own steps cannot race with as a receive only
-times out with nothing left to handle, a reply or marker resuming a process
-that waits, or an acknowledgement of an unlink. Other signals race with what
-the process may do before handling them, such as timing out before a timer's
-message, removing a monitor, trapping exits, or ending. -/
-@[expose] def Task.forcedHead (state : State) (processId : PID) (task : Task α) (entry : Entry) : Bool :=
-  state.inertEntry processId entry || match entry.signal with
-    | .message _ => entry.source != clock
-    | .unlinkAck _ => true
-    | .reply _ | .flush => task.wait.isSome
-    | _ => false
-
 /-- A step every run can take first: a process reading or replacing its
 environment, receiving a message already handled, or handling a queued signal
 when neither its own next step nor any other process can tell when, or a
@@ -710,12 +729,8 @@ process that ended sending a `DOWN` its watcher drops. -/
         match process.queue with
         | entry :: _ => if task.forcedHead state processId entry then some (Key.handle processId) else none
         | [] => none) tasks) |>.orElse fun _ =>
-      Kernel.find? (fun _ => true) (Kernel.filterMap (fun (processId, process) =>
-        match process.exiting with
-        | some { reason, links := [], downs := (reference, watcher) :: _ } =>
-            if state.keepEntry watcher (state.process watcher) { source := processId, signal := .down reference reason }
-            then none else some (Key.phase processId)
-        | _ => none) state.processes)
+      Kernel.find? (fun _ => true) (Kernel.filterMap (fun (processId, _) =>
+        if state.dropsDown processId then some (Key.phase processId) else none) state.processes)
   | _ => none
 
 /-! ### Checking with sleep sets -/
@@ -735,14 +750,17 @@ steps along each run, where runs taking a step asleep first are covered elsewher
 @[expose] def checkSleep (accept : Outcome α → Bool) : Nat → List Key → Config α → Bool
   | 0, _, _ => false
   | depth + 1, sleep, config =>
-      match config.steps with
+      match config.taggedSteps with
       | [] =>
           match config.successors with
           | [] => accept config.outcome
           | successors => Kernel.all successors fun (_, next) => checkSleep accept depth [] next
-      | steps =>
-          match config.forced.bind fun key => Kernel.find? (·.1 == key) steps with
-          | some (_, _, next) => checkSleep accept depth sleep next
-          | none => explore (checkSleep accept depth) (config.staysAfter steps) sleep [] steps
+      | tagged =>
+          -- The first forced step, as `Config.forced` finds it.
+          match Kernel.find? (·.2.2.2) tagged with
+          | some (_, _, next, _) => checkSleep accept depth sleep next
+          | none =>
+              let steps := Kernel.map (fun (key, event, next, _) => (key, event, next)) tagged
+              explore (checkSleep accept depth) (config.staysAfter steps) sleep [] steps
 
 end Lynx.Concurrent

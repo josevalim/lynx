@@ -253,6 +253,11 @@ theorem State.weight_normalize (state : State) : state.normalize.weight ≤ stat
     exact sum_map_le _ fun record _ => ProcessState.weight_normalizeRecord state record.1 record.2
   omega
 
+theorem State.weight_settle (state : State) (event : Event) : (state.settle event).weight ≤ state.weight := by
+  unfold State.settle; split
+  · exact state.weight_normalize
+  · exact Nat.le_refl _
+
 /-! ### Steps -/
 
 theorem State.weight_exitSignal (state : State) (target source : PID) (reason : Term) (linked normalKills : Bool) :
@@ -695,10 +700,10 @@ private abbrev Lower : List (Σ β, Result β × Bool) × Nat → List (Σ β, R
 private theorem process_step {state : State} {tasks before after : List (PID × Task α)}
     {processId : PID} {task : Task α} (split : tasks = before ++ (processId, task) :: after)
     {transition : Transition α} (possible : transition ∈ task.transitions state processId) :
-    Lower (measure transition.state.normalize (Kernel.append (Kernel.append before transition.tasks) after))
+    Lower (measure (transition.state.settle transition.event) (Kernel.append (Kernel.append before transition.tasks) after))
       (measure state tasks) := by
   simp only [Task.transitions, Kernel.append_eq, List.mem_append] at possible
-  have normalized := transition.state.weight_normalize
+  have normalized := transition.state.weight_settle transition.event
   rcases possible with possible | possible
   · exact .left _ _ ⟨before.map entry, entry (processId, task), after.map entry,
       transition.tasks.map entry, by simp [split], by simp, fun new mem => by
@@ -762,7 +767,7 @@ private theorem running_acc :
     · simp only [Prod.mk.injEq] at fired
       obtain ⟨-, rfl⟩ := fired
       have := State.weight_fire (mem_firstOfEach mem)
-      have := (state.fire timer).weight_normalize
+      have := Nat.le_refl (state.fire timer).weight
       exact ih _ (equal ▸ .right _ (by omega)) _ _ _ rfl
 
 /-- No run goes on forever: steps are well-founded. -/
