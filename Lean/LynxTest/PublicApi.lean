@@ -388,6 +388,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Config.running",
   "Lynx.Concurrent.Config.sameAfter",
   "Lynx.Concurrent.Config.sameView",
+  "Lynx.Concurrent.Config.spawnsFresh",
   "Lynx.Concurrent.Config.start",
   "Lynx.Concurrent.Config.staysAfter",
   "Lynx.Concurrent.Config.stepOf",

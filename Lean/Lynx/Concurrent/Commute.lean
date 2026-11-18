@@ -612,6 +612,18 @@ as for steps that end or start a process, which change what normalization remove
   | some (frames, timers), some (frames', timers') => !(timers && timers') && framesApart frames frames'
   | _, _ => false
 
+/-- Whether a step spawns no process, or one whose PID no process has yet,
+which the proofs of commuting steps rely on. PIDs are never reused, so this
+holds of every step. -/
+@[expose] def Config.spawnsFresh : Config α → Key → Bool
+  | .running state tasks _ _, .own processId =>
+      match Kernel.lookup processId tasks with
+      | some ⟨Result.schedule .., _, none⟩ =>
+          let child := Kernel.append processId [(state.process processId).children + 1]
+          !Kernel.any tasks (·.1 == child)
+      | _ => true
+  | _, _ => true
+
 /-- Whether two steps of different processes commute at a configuration, given
 the configurations each leads to: they touch apart, or each can follow the
 other, neither changes what the other's process continues with, and both
@@ -619,6 +631,7 @@ orders reach the same configuration. -/
 @[expose] def Config.commutesAfter (config : Config α) (key : Key) (next : Config α) (other : Key)
     (next' : Config α) : Bool :=
   !(key.owner.isSome && key.owner == other.owner && key.isOwn == other.isOwn) &&
+  config.spawnsFresh key && config.spawnsFresh other &&
   (config.apart key other ||
     match next.stepOf other, next'.stepOf key with
     | some (_, last), some (_, last') =>
