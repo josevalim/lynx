@@ -1452,4 +1452,64 @@ private theorem Framed.mono {reads writes reads' writes' : Mask} {base : Process
   · rw [keeps _ (fewer same) part written, keeps _ (fewer same') part written, equal]
   · exact depends _ _ (fewer same) (fewer same') part written equal
 
+/-! ### Frames of record changes -/
+
+/-- The fields of a frame mask, by bit. -/
+private def bitsOf (mask : Nat) : Mask := mask.testBit
+
+/-- Queueing a signal writes the queue's tail and reads nothing. -/
+private theorem Framed.queueAt (source : PID) (signal : Signal) (base : ProcessState) :
+    Framed (bitsOf 0) (bitsOf Field.queueTail) base (queueAt source signal) := by
+  refine ⟨fun process _ part none => ?_, fun process process' _ _ part written _ => ?_,
+    ⟨0, [{ source, signal }], by decide, fun _ => rfl, fun none => ?_, fun process _ => ?_⟩,
+    fun read => ?_, fun read => ?_, fun written => ?_, fun _ process _ => rfl⟩
+  · cases part <;> rfl
+  · cases part <;> simp (config := { decide := true }) [Field.queueTail] at written
+  · simp (config := { decide := true }) [bitsOf, Field.queueTail, tailBit] at none
+  · simp [Concurrent.queueAt, Kernel.append_eq]
+  · simp (config := { decide := true }) [bitsOf, tailBit] at read
+  · simp (config := { decide := true }) [bitsOf, headBit] at read
+  · simp (config := { decide := true }) [bitsOf, Field.queueTail, headBit] at written
+
+/-- Prove that a change updating some fields of a record, as functions of the
+fields its frame reads and of themselves, is within its frame, for masks given
+as numbers. The queue is kept. -/
+local syntax "framed_update" : tactic
+macro_rules
+  | `(tactic| framed_update) => `(tactic|
+      refine ⟨fun process _ part none => ?_, fun process process' same same' part written equal => ?_,
+        ⟨0, [], by decide, fun _ => rfl, fun _ => rfl, fun process _ => by simp⟩,
+        fun read => ?_, fun read => ?_, fun written => ?_, fun _ process _ => ?_⟩ <;>
+      first
+        | (cases part <;> first | rfl | (simp (config := { decide := true }) [bitsOf] at none; done))
+        | (cases part <;> first
+            | ((simp_all [ProcessState.get] <;> rfl); done)
+            | (simp (config := { decide := true }) [bitsOf] at written; done))
+        | (simp (config := { decide := true }) [bitsOf, tailBit, headBit] at read)
+        | (simp (config := { decide := true }) [bitsOf, headBit] at written)
+        | simp)
+
+private example (base : ProcessState) :
+    Framed (bitsOf 0) (bitsOf Field.parked) base (fun process => { process with parked := none }) := by
+  framed_update
+
+private example (base : ProcessState) (target : PID) :
+    Framed (bitsOf Field.links) (bitsOf Field.links) base
+      (fun process => { process with links := Kernel.filter (·.1 != target) process.links }) := by
+  framed_update
+
+private example (base : ProcessState) (target : PID) (reference : List Nat) :
+    Framed (bitsOf (Field.monitoring ||| Field.aliases)) (bitsOf (Field.monitoring ||| Field.aliases)) base
+      (fun process => { process with
+          monitoring := Kernel.filter (·.1 != reference) process.monitoring
+          aliases := Kernel.erase process.aliases reference }) := by
+  framed_update
+
+private example (base : ProcessState) (processId : PID) :
+    Framed (bitsOf (Field.links ||| Field.eagerExits)) (bitsOf (Field.links ||| Field.eagerExits)) base
+      (fun process => { process with
+          links := Kernel.filter (·.1 != processId) process.links
+          eagerExits := insertPid processId process.eagerExits }) := by
+  framed_update
+
 end Lynx.Concurrent
