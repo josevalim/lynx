@@ -240,7 +240,7 @@ private def Framed (reads writes : Mask) (base : ProcessState) (change : Process
   QueueChange (writes headBit) (writes tailBit) reads base change ∧
   (reads tailBit → reads headBit) ∧
   (reads headBit → base.queue ≠ []) ∧
-  (writes headBit → reads headBit) ∧
+  (writes headBit → base.queue ≠ []) ∧
   (writes liveBit = false → ∀ process, process.Same reads base →
     (change process).exiting.isSome = process.exiting.isSome)
 
@@ -303,11 +303,11 @@ private theorem Framed.comm {reads writes reads' writes' : Mask} {base : Process
       rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
     · obtain ⟨added, queue⟩ := queue
       rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
-      exact (List.tail_append_of_ne_nil (nonempty' (pops' head'))).symm
+      exact (List.tail_append_of_ne_nil (pops' head')).symm
     · rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
     · obtain ⟨added', queue'⟩ := queue'
       rw [queue _ same, queue' _ self', queue' _ same', queue _ self]
-      exact List.tail_append_of_ne_nil (nonempty (pops head))
+      exact List.tail_append_of_ne_nil (pops head)
     · rw [queue _ _ same self (queue' _ self'), queue' _ same']
   · cases written : writes part.bit
     · cases written' : writes' part.bit

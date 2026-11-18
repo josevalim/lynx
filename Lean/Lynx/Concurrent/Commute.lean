@@ -363,15 +363,13 @@ end Field
 /-- A process, and the fields of its record a step reads and writes. -/
 abbrev Frame := PID × Nat × Nat
 
-/-- The frames of appending a signal to a live queue. A link exit reads the
-receiver's links: it is dropped while the receiver has no active link, which
-linking again restores. An acknowledgement reads them too, and other signals
-read only whether the receiver is live. -/
+/-- The frames of appending a signal to a live queue: it reads only whether the
+receiver is live, as a live receiver keeps every signal but an acknowledgement
+no unlink waits for, which reads its links. -/
 @[expose] def State.appendFrames (state : State) (source target : PID) (signal : Signal) : List Frame :=
   match signal with
-  | .exit _ true _ => [(target, Field.live ||| Field.links, Field.queueTail)]
-  | .down .. | .aliasMessage .. => [(target, Field.live, Field.queueTail)]
-  | _ => [(target, Field.live ||| Field.links ||| Field.unlinks, Field.queueTail)]
+  | .unlinkAck _ => [(target, Field.live ||| Field.links ||| Field.unlinks, Field.queueTail)]
+  | _ => [(target, Field.live, Field.queueTail)]
 
 /-- The frames of queueing a signal, or of its sender's fallback. -/
 @[expose] def State.enqueueFrames (state : State) (source target : PID) (signal : Signal) : List Frame :=
@@ -461,7 +459,9 @@ process queued and its signals to it. -/
   -- signal to the same target.
   let process := state.process processId
   let eager := Kernel.filterMap (fun (target, unlinking) => if unlinking.isNone then
-      some (target, Field.live ||| Field.trapExit ||| Field.queueHead ||| Field.links ||| Field.eagerExits,
+      let linking := Kernel.any (state.process target).queue
+        (fun entry => entry.source == processId && entry.signal matches .link)
+      some (target, Field.live ||| Field.trapExit ||| (if linking then Field.queueHead else 0) ||| Field.links ||| Field.eagerExits,
         Field.links ||| Field.eagerExits)
     else none) process.links
   let unpark := match process.parked with
@@ -470,7 +470,7 @@ process queued and its signals to it. -/
   ((processId, Field.all, Field.all) :: Kernel.append others (Kernel.append eager unpark),
     Kernel.any state.timers (·.destination == processId))
 
-/-- The frames of a process's own step, `none` when it ends or starts a process. -/
+/-- The frames of a process's own step, `none` when it does not return. -/
 @[expose] def Task.ownFrames (state : State) (processId : PID) : Task α → Option (List Frame × Bool)
   | ⟨_, _, some _⟩ => some ([], false)
   | ⟨computation, _, none⟩ =>
@@ -496,12 +496,12 @@ process queued and its signals to it. -/
         let fields := Field.children ||| Field.refCounter ||| Field.links ||| Field.monitoring
         some ([(processId, fields, fields), (child, Field.all, Field.all)], false)
 
-/-- The frames of handling the oldest queued signal, `none` when the process ends. -/
+/-- The frames of handling the oldest queued signal. -/
 @[expose] def Task.handleFrames (state : State) (processId : PID) (task : Task α) : Option (List Frame × Bool) :=
   match (state.process processId).queue with
   | [] => some ([], false)
   | entry :: _ =>
-    let own (reads writes : Nat) : Frame := (processId, reads, Field.queueHead ||| writes)
+    let own (reads writes : Nat) : Frame := (processId, Field.queueHead ||| reads, Field.queueHead ||| writes)
     match entry.signal with
     | .message _ => some ([own 0 Field.mailbox], false)
     | .aliasMessage .. => some ([own Field.aliases Field.mailbox], false)
@@ -513,8 +513,7 @@ process queued and its signals to it. -/
     | .unlink id => some (own Field.links Field.links :: state.sendFrames processId entry.source (.unlinkAck id), false)
     | .monitor _ => some ([own Field.monitors Field.monitors], false)
     | .down _ reason =>
-        let eager := if isNormal reason && Kernel.contains (state.process processId).eagerExits entry.source
-          then Field.eagerExits else 0
+        let eager := if isNormal reason then Field.eagerExits else 0
         let fields := Field.monitoring ||| Field.aliases ||| eager
         some ([own fields (fields ||| Field.mailbox)], false)
     | .isAlive => some (own 0 0 :: state.sendFrames processId entry.source (.reply (.atom "true")), false)
@@ -571,7 +570,7 @@ process queued and its signals to it. -/
   | none => none
 
 /-- The frames of a step, and whether it uses the timers; `none` when unknown,
-as for steps that end or start a process, which change what normalization removes. -/
+as for a process that does not return. -/
 @[expose] def Config.frames : Config α → Key → Option (List Frame × Bool)
   | .running state tasks _ false, .own processId =>
       (Kernel.lookup processId tasks).bind fun task => task.ownFrames state processId
