@@ -2203,7 +2203,7 @@ process is alive does, is within its frames. -/
 private theorem Effect.InFrames.flushStep (state : State) (processId target : PID)
     (alive : state.alive processId = true) :
     (state.enqueueEffect processId processId .flush).InFrames
-      [(target, Field.live, 0), (processId, 0, Field.queueTail)] state := by
+      [(target, Field.live, 0), (processId, Field.live, Field.queueTail)] state := by
   have effect : state.enqueueEffect processId processId .flush = .modify processId (queueAt processId .flush) := by
     unfold State.enqueueEffect
     simp only [State.alive] at alive
@@ -2213,9 +2213,10 @@ private theorem Effect.InFrames.flushStep (state : State) (processId target : PI
     · rename_i found
       rw [found] at alive; simp at alive
   rw [effect]
-  have inside : (processId, 0, Field.queueTail) ∈ [(target, Field.live, 0), (processId, 0, Field.queueTail)] := by simp
+  have inside : (processId, Field.live, Field.queueTail) ∈ [(target, Field.live, 0), (processId, Field.live, Field.queueTail)] := by simp
   refine Effect.InFrames.modify inside ⟨1, by decide, .inr (by decide)⟩ fun process _ =>
-    (Framed.queueAt processId .flush process).widen (fun _ read => read) (fun _ written => written) inside
+    (Framed.queueAt processId .flush process).widen (reads := Field.live)
+      (fun _ read => by simp [bitsOf, Nat.zero_testBit] at read) (fun _ written => written) inside
       fun entry mem _ => ?_
   simp only [List.mem_cons, List.not_mem_nil, or_false] at mem
   rcases mem with rfl | rfl <;> (dsimp only; decide)
@@ -3400,12 +3401,20 @@ private theorem chainEffect_eagerExit (processId : PID) (reason : Term) :
     funext other
     exact State.eagerLink_exit state processId target other reason ended
 
+private theorem eagerChain_congr {processId : PID} {eager eager' : PID → Bool} :
+    ∀ {targets : List PID}, (∀ target ∈ targets, eager' target = eager target) →
+      eagerChain processId eager' targets = eagerChain processId eager targets
+  | [], _ => rfl
+  | target :: rest, same => by
+    simp only [eagerChain, same target List.mem_cons_self,
+      eagerChain_congr fun target mem => same target (List.mem_cons_of_mem _ mem)]
+
 /-- A process ending decides the same at a state where its record, whether a
 timer is to it, and whether each link exit is applied as it is sent are the same. -/
 private theorem State.terminateEffect_congr {state other : State} {processId : PID} {reason : Term}
     (process : other.process processId = state.process processId)
     (timed : Kernel.any other.timers (·.destination == processId) = Kernel.any state.timers (·.destination == processId))
-    (eager : ∀ target, target ≠ processId →
+    (eager : ∀ target, (target, none) ∈ (state.process processId).links → target ≠ processId →
       other.eagerLink processId target reason = state.eagerLink processId target reason) :
     other.terminateEffect processId reason = state.terminateEffect processId reason := by
   -- The link exits are decided once the process ended, which changes only its own record.
@@ -3425,12 +3434,17 @@ private theorem State.terminateEffect_congr {state other : State} {processId : P
   rw [process, timed]
   erw [chainEffect_eagerExit processId reason _ _ (by simp [State.alive, State.record_set]),
     chainEffect_eagerExit processId reason _ _ (by simp [State.alive, State.record_set])]
-  congr 2
-  funext target
+  congr 1
+  refine eagerChain_congr fun target mem => ?_
   rw [ended _ _ _ rfl, ended _ _ _ rfl]
   split
   · rfl
-  · rename_i differ; exact eager target differ
+  · rename_i differ
+    have linked : (target, none) ∈ (state.process processId).links := by
+      rcases mem_eagerTargets mem with none | linked
+      · simp at none
+      · exact linked
+    exact eager target linked differ
 
 /-- A record agreeing on every field, its queue included, is the same record. -/
 private theorem Agree.process {frames : List Frame} {state other : State} (agree : Agree frames state other)
@@ -3449,10 +3463,10 @@ private theorem Task.ownEffect_agree {state other : State} {tasks : List (PID ×
     (lookup : Kernel.lookup processId tasks = some task)
     (found : task.ownFrames state processId = some (frames, timers)) (agree : Agree frames state other)
     (timed : timers = true → other.timers = state.timers)
-    (self : other.alive processId = state.alive processId)
-    (timedTo : Kernel.any other.timers (·.destination == processId) =
-      Kernel.any state.timers (·.destination == processId))
-    (eager : ∀ target reason, target ≠ processId →
+    (timedTo : frames = (state.endFrames processId).1 →
+      Kernel.any other.timers (·.destination == processId) = Kernel.any state.timers (·.destination == processId))
+    (eager : frames = (state.endFrames processId).1 → ∀ target reason,
+      (target, none) ∈ (state.process processId).links → target ≠ processId →
       other.eagerLink processId target reason = state.eagerLink processId target reason) :
     task.ownEffect other processId = task.ownEffect state processId := by
   obtain ⟨computation, finish, wait⟩ := task
@@ -3467,8 +3481,8 @@ private theorem Task.ownEffect_agree {state other : State} {tasks : List (PID ×
     intro reason equal
     have inside : (processId, Field.all, Field.all) ∈ frames := by
       rw [equal, endFrames_eq]; exact List.mem_cons_self
-    exact State.terminateEffect_congr (agree.process inside rfl) timedTo fun target differ =>
-      eager target reason differ
+    exact State.terminateEffect_congr (agree.process inside rfl) (timedTo equal) fun target linked differ =>
+      eager equal target reason linked differ
   cases computation with
   | ok =>
     simp only [Task.ownFrames, Option.some.injEq] at found
@@ -3583,6 +3597,9 @@ private theorem Task.ownEffect_agree {state other : State} {tasks : List (PID ×
               (by dsimp only; decide)
           simp only [Bool.not_eq_true] at targetDead
           rw [alive, targetDead]
+          have self : other.alive processId = state.alive processId :=
+            agree.alive (entry := (processId, Field.live, Field.queueTail))
+              (by rw [← found.1]; simp) (by dsimp only; decide)
           exact State.enqueueEffect_congr _ self
     | sendAlias alias message =>
       simp only [Task.ownFrames, State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found
@@ -3897,6 +3914,80 @@ private theorem inert_congr {gone gone' : PID → Bool} {processId : PID} {proce
     (aliases : process'.aliases = process.aliases) (links : process'.links = process.links) :
     inert gone' processId process' entry = inert gone processId process entry := by
   simp only [inert, source, refCounter, monitoring, aliases, links]
+
+/-- An effect within frames that do not mention a record leaves it as it is. -/
+private theorem Effect.InFrames.untouched {effect : Effect} {frames : List Frame} {state : State} {processId : PID}
+    (framed : effect.InFrames frames state)
+    (absent : ∀ bit, readsOf frames processId bit = false ∧ writesOf frames processId bit = false) :
+    effect.record processId = id := by
+  rcases framed processId with same | all | ⟨_, _, ⟨bit, _, used⟩, _⟩
+  · exact same
+  · have := all 0 (by decide); rw [(absent 0).2] at this; simp at this
+  · rcases used with read | written
+    · rw [(absent bit).1] at read; simp at read
+    · rw [(absent bit).2] at written; simp at written
+
+/-- Whether a record refers to a process in what normalizing reads of whether
+it is gone, as `State.leavesOthers` checks. -/
+private def Refers (process : ProcessState) (other : PID) : Bool :=
+  match process.exiting with
+  | some exiting =>
+      Kernel.any process.queue (·.source == other) ||
+        Kernel.contains exiting.links other || Kernel.any exiting.downs (·.2 == other)
+  | none =>
+      Kernel.any process.queue (fun entry => entry.source == other && match entry.signal with
+          | .isAlive | .monitor _ | .unlinkAck _ => true
+          | _ => false) ||
+        Kernel.any process.links (fun link => link.1 == other && link.2.isSome)
+
+/-- A clean record stays clean when the processes that become gone are none it refers to. -/
+private theorem Clean.gone {gone gone' : PID → Bool} {processId : PID} {process : ProcessState}
+    (clean : Clean gone processId process)
+    (differ : ∀ other, gone' other ≠ gone other → Refers process other = false) :
+    Clean gone' processId process := by
+  cases exiting : process.exiting with
+  | none =>
+    obtain ⟨queue, links⟩ := clean.live_facts exiting
+    refine Clean.live exiting (fun entry mem => ?_) (fun link mem some => ?_)
+    · rw [← queue entry mem]
+      obtain ⟨source, signal⟩ := entry
+      by_cases same : gone' source = gone source
+      · cases signal <;> simp [inert, same]
+      · have := differ source same
+        simp only [Refers, exiting, Bool.or_eq_false_iff, Kernel.any_eq, List.any_eq_false] at this
+        have := this.1 _ mem
+        cases signal <;> simp_all [inert]
+    · rw [← links link mem some]
+      by_cases same : gone' link.1 = gone link.1
+      · exact same
+      · have := differ link.1 same
+        simp only [Refers, exiting, Bool.or_eq_false_iff, Kernel.any_eq, List.any_eq_false] at this
+        have := this.2 _ mem
+        simp_all
+  | some exiting' =>
+    obtain ⟨same, kept⟩ := clean
+    refine ⟨?_, kept⟩
+    have refers : ∀ other, Refers process other = true → gone' other = gone other := fun other refers => by
+      by_cases equal : gone' other = gone other
+      · exact equal
+      · rw [differ other equal] at refers; simp at refers
+    have queue : ∀ entry ∈ process.queue, gone' entry.source = gone entry.source := fun entry mem =>
+      refers _ (by simp only [Refers, exiting, Kernel.any_eq, Kernel.contains_eq, Bool.or_eq_true, List.any_eq_true,
+        beq_iff_eq]; exact .inl (.inl ⟨entry, mem, rfl⟩))
+    have links : ∀ target ∈ exiting'.links, gone' target = gone target := fun target mem =>
+      refers _ (by simp only [Refers, exiting, Kernel.any_eq, Kernel.contains_eq, Bool.or_eq_true, List.elem_eq_true_of_mem mem,
+        true_or, or_true])
+    have downs : ∀ down ∈ exiting'.downs, gone' down.2 = gone down.2 := fun down mem =>
+      refers _ (by simp only [Refers, exiting, Kernel.any_eq, Kernel.contains_eq, Bool.or_eq_true, List.any_eq_true,
+        beq_iff_eq]; exact .inr ⟨down, mem, rfl⟩)
+    have congruent : normRecord gone' processId process = normRecord gone processId process := by
+      unfold normRecord
+      rw [exiting]
+      simp only [Kernel.filter_eq]
+      rw [List.filter_congr (l := process.queue) fun entry mem => by rw [queue entry mem],
+        List.filter_congr (l := exiting'.links) fun target mem => by rw [links target mem],
+        List.filter_congr (l := exiting'.downs) fun down mem => by rw [downs down mem]]
+    rw [congruent, same]
 
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}

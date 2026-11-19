@@ -423,7 +423,7 @@ no unlink waits for, which reads its links. -/
   | .alive target =>
       if target == processId then some ([], false)
       else if state.alive target then some (state.sendFrames processId target .isAlive, false)
-      else some ([(target, Field.live, 0), (processId, 0, Field.queueTail)], false)
+      else some ([(target, Field.live, 0), (processId, Field.live, Field.queueTail)], false)
   | .sendAlias alias message =>
       some (state.sendFrames processId alias.dropLast (.aliasMessage alias message), false)
   | .startTimer destination _ _ =>
@@ -460,7 +460,7 @@ such a step is not confined (`Config.confined`). -/
     | .send destination message _ =>
         some (state.sendFrames processId destination (.message message), false)
     | .receive timeout select _ =>
-        let reads := view ||| Field.mailbox
+        let reads := view ||| Field.mailbox ||| Field.live
         match selectMessage (select (state.view processId)) (state.process processId).mailbox with
         | some _ => some ([(processId, reads, Field.mailbox)], false)
         | none => match timeout with
@@ -605,7 +605,7 @@ Other steps are compared by evaluating them. -/
           | Result.schedule .. => false
       | _ => false
   | .running state _ _ false, .handle processId =>
-      match (state.process processId).queue with
+      state.alive processId && match (state.process processId).queue with
       | entry :: rest => match entry.signal with
         | .message _ | .monitor _ => true
         | .down reference _ | .aliasMessage reference _ => !Kernel.any rest (·.carries reference)
