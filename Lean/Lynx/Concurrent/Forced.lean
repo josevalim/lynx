@@ -3614,17 +3614,6 @@ private theorem Config.Distinct.step {elapsed : PID → Nat → Nat} {config nex
       obtain ⟨-, rfl⟩ := fired
       exact (distinct.fire _).normalize (within.fire _).1
 
-/-- Every other step absorbs a forced step, or commutes with it into a
-configuration where a forced step closes the square. -/
-private theorem Config.forced_square {elapsed : PID → Nat → Nat} {config : Config α} {key key' : Key}
-    {event event' : Event} {next middle : Config α} (reachable : config.Reachable elapsed) (distinct : config.Distinct)
-    (forced : (key, event, next, true) ∈ config.taggedSteps)
-    (step' : config.stepOf key' = some (event', middle)) (differ : key' ≠ key) :
-    (∃ absorbed, next.stepOf key' = some (absorbed, middle)) ∨
-      ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
-        next.stepOf key' = some (other, last) := by
-  sorry
-
 private theorem QueueChange.hidden {queue : List Entry → List Entry} {mailbox : List Term → List Term}
     {links : List (PID × Option Nat) → List (PID × Option Nat)} {entry : Entry} (change : QueueChange queue mailbox links)
     (linking : ∀ (rest : List Entry) (other : Entry), other.signal = .link →
@@ -4142,6 +4131,66 @@ private theorem Config.forced_handle_own {elapsed : PID → Nat → Nat} {config
   | flush =>
     simp [Task.forcedHead, notInert, running] at flagged
   | _ => simp [Task.forcedHead, notInert] at flagged
+
+/-- Only own steps, handling and phases are forced. -/
+private theorem Config.forced_keys {config : Config α} {key : Key} {event : Event} {next : Config α}
+    (forced : (key, event, next, true) ∈ config.taggedSteps) :
+    (∃ processId, key = .own processId) ∨ (∃ processId, key = .handle processId) ∨
+      ∃ processId, key = .phase processId := by
+  match config with
+  | .start .. => simp [Config.taggedSteps] at forced
+  | .running _ _ _ true => simp [Config.taggedSteps] at forced
+  | .running state tasks finished false =>
+  simp only [Config.taggedSteps, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
+    List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.mk.injEq] at forced
+  rcases forced with (((⟨⟨before, ⟨other, task⟩, after⟩, split, own | handle⟩ | ⟨⟨other, _⟩, -, link | phase⟩) |
+    ⟨⟨other, _⟩, -, unpark⟩) | ⟨timer, firing, key, -, -, flag⟩)
+  · obtain ⟨transition, -, rfl, -⟩ := own; exact .inl ⟨_, rfl⟩
+  · obtain ⟨transition, -, rfl, -⟩ := handle; exact .inr (.inl ⟨_, rfl⟩)
+  · obtain ⟨target, -, found⟩ := link
+    simp only [Option.map_eq_some_iff, Prod.mk.injEq] at found
+    obtain ⟨_, _, -, -, -, flag⟩ := found; cases flag
+  · split at phase
+    · simp only [List.mem_singleton, Prod.mk.injEq] at phase
+      obtain ⟨rfl, -⟩ := phase; exact .inr (.inr ⟨_, rfl⟩)
+    · simp at phase
+  · simp only [Option.map_eq_some_iff, Prod.mk.injEq] at unpark
+    obtain ⟨_, _, -, -, -, flag⟩ := unpark; cases flag
+  · cases flag
+
+/-- A forced phase, a `DOWN` its watcher drops, against any other step. -/
+private theorem Config.forced_phase_square {elapsed : PID → Nat → Nat} {config : Config α} {processId : PID}
+    {key' : Key} {event event' : Event} {next middle : Config α} (reachable : config.Reachable elapsed)
+    (forced : (Key.phase processId, event, next, true) ∈ config.taggedSteps)
+    (step' : config.stepOf key' = some (event', middle)) (differ : key' ≠ .phase processId) :
+    (∃ absorbed, next.stepOf key' = some (absorbed, middle)) ∨
+      ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
+        next.stepOf key' = some (other, last) := by
+  sorry
+
+/-- Every other step absorbs a forced step, or commutes with it into a
+configuration where a forced step closes the square. -/
+private theorem Config.forced_square {elapsed : PID → Nat → Nat} {config : Config α} {key key' : Key}
+    {event event' : Event} {next middle : Config α} (reachable : config.Reachable elapsed) (distinct : config.Distinct)
+    (forced : (key, event, next, true) ∈ config.taggedSteps)
+    (step' : config.stepOf key' = some (event', middle)) (differ : key' ≠ key) :
+    (∃ absorbed, next.stepOf key' = some (absorbed, middle)) ∨
+      ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
+        next.stepOf key' = some (other, last) := by
+  rcases Config.forced_keys forced with ⟨processId, rfl⟩ | ⟨processId, rfl⟩ | ⟨processId, rfl⟩
+  · by_cases handling : key' = .handle processId
+    · subst handling; exact Config.forced_own_handle reachable forced step'
+    · refine Config.forced_own_other reachable forced step' fun owner => ?_
+      cases key' <;> simp only [Key.owner, Option.some.injEq, reduceCtorEq] at owner <;> subst owner
+      · exact differ rfl
+      · exact handling rfl
+  · by_cases owning : key' = .own processId
+    · subst owning; exact Config.forced_handle_own reachable distinct forced step'
+    · refine Config.forced_handle_other reachable forced step' fun owner => ?_
+      cases key' <;> simp only [Key.owner, Option.some.injEq, reduceCtorEq] at owner <;> subst owner
+      · exact owning rfl
+      · exact differ rfl
+  · exact Config.forced_phase_square reachable forced step' differ
 
 /-- What every configuration a run reaches satisfies, with links with distinct processes. -/
 private def Config.Ready (elapsed : PID → Nat → Nat) (config : Config α) : Prop :=
