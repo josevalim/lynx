@@ -5841,4 +5841,286 @@ private theorem Config.noNewLinks {state : State} {tasks : List (PID × Task α)
     · exact NoNewLinks.empty state
   | link => exact NoNewLinks.empty state
 
+/-! ### Assembling: timers -/
+
+/-- An effect leaving the timers as they are. -/
+private def Effect.Untimed (effect : Effect) : Prop := effect.timers = none
+
+private theorem Effect.Untimed.empty : ({} : Effect).Untimed := rfl
+
+private theorem Effect.Untimed.modify (processId : PID) (change : ProcessState → ProcessState) :
+    (Effect.modify processId change).Untimed := rfl
+
+private theorem Effect.Untimed.put (processId : PID) (process : ProcessState) : (Effect.put processId process).Untimed :=
+  rfl
+
+private theorem Effect.Untimed.andThen {first second : Effect} (one : first.Untimed) (two : second.Untimed) :
+    (first.andThen second).Untimed := by
+  simp only [Effect.Untimed, Effect.andThen] at one two ⊢; rw [one, two]
+
+private theorem Effect.Untimed.ite {first second : Effect} (condition : Prop) [Decidable condition]
+    (one : first.Untimed) (two : second.Untimed) : (if condition then first else second).Untimed := by
+  split
+  · exact one
+  · exact two
+
+private theorem State.enqueueEffect_untimed (state : State) (source target : PID) (signal : Signal) :
+    (state.enqueueEffect source target signal).Untimed := by
+  unfold State.enqueueEffect State.fallbackEffect
+  repeat' split
+  all_goals first | exact Effect.Untimed.empty | exact Effect.Untimed.modify _ _
+
+private theorem State.unparkEffect_untimed (state : State) (processId : PID) : (state.unparkEffect processId).Untimed := by
+  unfold State.unparkEffect
+  split
+  · exact (Effect.Untimed.modify _ _).andThen (State.enqueueEffect_untimed _ _ _ _)
+  · exact Effect.Untimed.empty
+
+private theorem State.sendEffect_untimed (state : State) (source target : PID) (signal : Signal) :
+    (state.sendEffect source target signal).Untimed := by
+  unfold State.sendEffect
+  repeat' split
+  all_goals first
+    | exact (State.unparkEffect_untimed _ _).andThen (State.enqueueEffect_untimed _ _ _ _)
+    | exact State.enqueueEffect_untimed _ _ _ _
+
+private theorem eagerChain_untimed (processId : PID) (eager : PID → Bool) :
+    ∀ targets, (eagerChain processId eager targets).Untimed
+  | [] => Effect.Untimed.empty
+  | _ :: rest => (Effect.Untimed.ite _ ((Effect.Untimed.modify _ _).andThen (Effect.Untimed.modify _ _))
+      Effect.Untimed.empty).andThen (eagerChain_untimed processId eager rest)
+
+private theorem Effect.apply_timers (effect : Effect) (state : State) :
+    (effect.apply state).timers = (effect.timers.getD id) state.timers := by
+  have kept : ∀ (pids : List PID) (start : State), (pids.foldl (fun changed processId =>
+      changed.put processId (effect.record processId (state.record processId))) start).timers = start.timers := by
+    intro pids
+    induction pids with
+    | nil => intro _; rfl
+    | cons head rest ih =>
+      intro start
+      rw [List.foldl_cons, ih]
+      cases effect.record head (state.record head) <;> rfl
+  unfold Effect.apply
+  rw [kept]
+
+private theorem mem_insertTimer {timer other : Timer} :
+    ∀ {timers : List Timer}, other ∈ insertTimer timer timers → other = timer ∨ other ∈ timers
+  | [], mem => by simp [insertTimer] at mem; exact .inl mem
+  | head :: rest, mem => by
+    unfold insertTimer at mem
+    split at mem
+    · simpa using mem
+    · simp only [List.mem_cons] at mem
+      rcases mem with rfl | mem
+      · exact .inr List.mem_cons_self
+      · rcases mem_insertTimer mem with same | mem
+        · exact .inl same
+        · exact .inr (List.mem_cons_of_mem _ mem)
+
+/-- What a step does to timers, by its frames: nothing when it does not use
+them, and otherwise it only removes timers or adds one to a process whose
+liveness it reads. -/
+private def TimersFramed (effect : Effect) (frames : List Frame) (timed : Bool) : Prop :=
+  (timed = false → effect.Untimed) ∧
+    ∀ (timers : List Timer) (processId : PID), Kernel.any ((effect.timers.getD id) timers) (·.destination == processId) →
+      Kernel.any timers (·.destination == processId) ∨
+        ∃ entry ∈ frames, entry.1 = processId ∧ entry.2.1.testBit liveBit = true
+
+private theorem TimersFramed.untimed {effect : Effect} {frames : List Frame} (untimed : effect.Untimed) :
+    TimersFramed effect frames false :=
+  ⟨fun _ => untimed, fun timers processId any => .inl (by
+    have none : effect.timers = none := untimed
+    rw [none] at any; exact any)⟩
+
+private theorem any_filter_of {timers : List Timer} {keep : Timer → Bool} {processId : PID}
+    (any : Kernel.any (Kernel.filter keep timers) (·.destination == processId) = true) :
+    Kernel.any timers (·.destination == processId) = true := by
+  simp only [Kernel.any_eq, Kernel.filter_eq, List.any_eq_true, List.mem_filter] at any ⊢
+  obtain ⟨timer, ⟨mem, -⟩, same⟩ := any
+  exact ⟨timer, mem, same⟩
+
+private theorem Effect.Untimed.getD {effect : Effect} (untimed : effect.Untimed) : effect.timers.getD id = id := by
+  have none : effect.timers = none := untimed
+  rw [none]; rfl
+
+/-- What confined steps do to timers is as their frames say. -/
+private theorem Config.timersFramed {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key} {frames : List Frame} {timed : Bool}
+    (confined : Config.confined (.running state tasks finished false) key = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, timed)) :
+    TimersFramed ((Config.running state tasks finished false).effectOf key) frames timed := by
+  cases key with
+  | own processId =>
+    simp only [Config.frames, Option.bind_eq_some_iff] at found
+    obtain ⟨task, lookup, found⟩ := found
+    simp only [Config.effectOf, lookup]
+    obtain ⟨computation, finish, wait⟩ := task
+    cases wait with
+    | some =>
+      simp only [Task.ownFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.2]
+      exact TimersFramed.untimed Effect.Untimed.empty
+    | none =>
+    simp only [Config.confined, lookup, Bool.and_eq_true] at confined
+    have ending : ∀ reason, (state.endFrames processId) = (frames, timed) →
+        TimersFramed (state.terminateEffect processId reason) frames timed := by
+      intro reason equal
+      have flag : timed = Kernel.any state.timers (·.destination == processId) := (congrArg Prod.snd equal).symm
+      have alive := confined.1.1
+      unfold State.terminateEffect
+      dsimp only
+      erw [chainEffect_eagerExit processId reason _ _ (by simp [State.alive, State.record_set])]
+      refine ⟨fun none => ?_, fun timers other any => ?_⟩
+      · rw [flag] at none
+        refine (Effect.Untimed.andThen (Effect.Untimed.andThen ?_ (Effect.Untimed.put _ _)) (eagerChain_untimed _ _ _))
+        rw [if_neg (by rw [none]; exact Bool.false_ne_true)]; exact Effect.Untimed.empty
+      · rw [Effect.timers_andThen, Effect.timers_andThen, (eagerChain_untimed _ _ _).getD,
+          (Effect.Untimed.put _ _).getD] at any
+        simp only [Function.comp, id] at any
+        split at any
+        · exact .inl (any_filter_of any)
+        · exact .inl any
+    cases computation with
+    | ok => simp only [Task.ownFrames, Option.some.injEq] at found; exact ending _ found
+    | error exception =>
+      cases exception with
+      | exhausted => simp at confined
+      | _ => simp only [Task.ownFrames, Option.some.injEq] at found; exact ending _ found
+    | send =>
+      simp only [Task.ownFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.2]
+      exact TimersFramed.untimed (State.sendEffect_untimed _ _ _ _)
+    | receive timeout select next =>
+      simp only [Task.ownFrames] at found
+      have untimed : (Task.ownEffect state processId ⟨Result.receive timeout select next, finish, none⟩).Untimed := by
+        simp only [Task.ownEffect]; split <;> first | exact Effect.Untimed.modify _ _ | exact Effect.Untimed.empty
+      repeat' split at found
+      all_goals (simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.2]; exact TimersFramed.untimed untimed)
+    | request query next =>
+      simp only [Task.ownFrames] at found
+      cases query with
+      | startTimer destination message duration =>
+        simp only [State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1, ← found.2]
+        simp only [Task.ownEffect, State.requestEffect, State.allocate]
+        refine ⟨fun none => by simp at none, fun timers other any => ?_⟩
+        rw [Effect.timers_andThen, (show (allocateEffect processId).Untimed from rfl).getD] at any
+        simp only [Function.comp, id] at any
+        cases alive : (state.modify processId fun process =>
+            { process with refCounter := process.refCounter + 1 }).alive destination <;>
+          simp only [alive, Bool.false_eq_true, ↓reduceIte] at any
+        · exact .inl any
+        · simp only [Effect.retime, Option.getD_some, Kernel.any_eq, List.any_eq_true, beq_iff_eq] at any
+          obtain ⟨timer, mem, same⟩ := any
+          rcases mem_insertTimer mem with rfl | mem
+          · exact .inr ⟨(destination, Field.live, 0), by simp, same, by dsimp only; decide⟩
+          · exact .inl (by simp only [Kernel.any_eq, List.any_eq_true, beq_iff_eq]; exact ⟨timer, mem, same⟩)
+      | cancelTimer reference =>
+        simp only [State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1, ← found.2]
+        simp only [Task.ownEffect, State.requestEffect]
+        refine ⟨fun none => by simp at none, fun timers other any => ?_⟩
+        split at any
+        · rw [Effect.timers_andThen, (Effect.Untimed.modify _ _).getD] at any
+          exact .inl (any_filter_of any)
+        · exact .inl any
+      | monitor target alias =>
+        simp only [State.requestFrames] at found
+        have untimed : (Task.ownEffect state processId ⟨Result.request (.monitor target alias) next, finish, none⟩).Untimed := by
+          simp only [Task.ownEffect, State.requestEffect, State.allocate]
+          refine (Effect.Untimed.modify _ _).andThen (Effect.Untimed.ite _ Effect.Untimed.empty ?_)
+          exact (State.unparkEffect_untimed _ _).andThen (Effect.Untimed.modify _ _)
+        split at found <;> simp only [Option.some.injEq, Prod.mk.injEq] at found <;> rw [← found.2] <;>
+          exact TimersFramed.untimed untimed
+      | demonitor =>
+        simp only [State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.2]
+        exact TimersFramed.untimed (Effect.Untimed.modify _ _)
+      | alive target =>
+        simp only [State.requestFrames] at found
+        have untimed : (Task.ownEffect state processId ⟨Result.request (.alive target) next, finish, none⟩).Untimed := by
+          simp only [Task.ownEffect, State.requestEffect]
+          exact Effect.Untimed.ite _ Effect.Untimed.empty
+            (Effect.Untimed.ite _ (State.sendEffect_untimed _ _ _ _) (State.enqueueEffect_untimed _ _ _ _))
+        repeat' split at found
+        all_goals (simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.2]; exact TimersFramed.untimed untimed)
+      | sendAlias =>
+        simp only [State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.2]
+        exact TimersFramed.untimed (State.sendEffect_untimed _ _ _ _)
+      | _ => simp at confined
+    | _ => simp at confined
+  | handle processId =>
+    simp only [Config.frames, Option.bind_eq_some_iff] at found
+    obtain ⟨task, lookup, found⟩ := found
+    simp only [Task.handleFrames] at found
+    simp only [Config.effectOf, lookup]
+    simp only [Config.confined, Bool.and_eq_true] at confined
+    cases queue : (state.process processId).queue with
+    | nil => simp [queue] at confined
+    | cons entry rest =>
+      simp only [queue] at confined found
+      have kind : entry.signal.handledConfined = true := by
+        obtain ⟨source, signal⟩ := entry; cases signal <;> simp_all [Signal.handledConfined]
+      have flag : timed = false := by
+        obtain ⟨source, signal⟩ := entry
+        cases signal <;> simp only [Option.some.injEq, Prod.mk.injEq] at found <;>
+          first | exact found.2.symm | simp [Signal.handledConfined] at kind
+      rw [flag]
+      refine TimersFramed.untimed ?_
+      rw [Task.handleEffect_of_continues queue (by rw [State.handle_confined _ _ _ _ kind])]
+      refine (Effect.Untimed.modify _ _).andThen ?_
+      obtain ⟨source, signal⟩ := entry
+      cases signal <;> simp only [State.handleEffect, appendEffect] <;>
+        first
+          | exact Effect.Untimed.modify _ _
+          | exact Effect.Untimed.ite _ (Effect.Untimed.modify _ _) Effect.Untimed.empty
+          | exact (Effect.Untimed.ite _ (Effect.Untimed.modify _ _) Effect.Untimed.empty).andThen
+              (Effect.Untimed.ite _ ((Effect.Untimed.modify _ _).andThen (Effect.Untimed.modify _ _)) Effect.Untimed.empty)
+          | simp [Signal.handledConfined] at kind
+  | phase processId =>
+    have flag : timed = false := by
+      simp only [Config.frames] at found
+      unfold State.phaseFrames at found
+      cases record : state.record processId with
+      | none => simp [record] at found
+      | some process =>
+        simp only [record] at found
+        cases exits : process.exiting with
+        | none => simp [exits] at found
+        | some exiting =>
+          simp only [exits] at found
+          cases downs : exiting.downs <;> cases queue : process.queue <;>
+            simp only [downs, queue, Option.some.injEq, Prod.mk.injEq] at found <;> exact found.2.symm
+    rw [flag]
+    refine TimersFramed.untimed ?_
+    simp only [Config.effectOf, State.phaseEffect]
+    split
+    · split
+      · exact (Effect.Untimed.modify _ _).andThen (State.sendEffect_untimed _ _ _ _)
+      · split
+        · rename_i entry rest _
+          refine (Effect.Untimed.modify _ _).andThen ?_
+          obtain ⟨source, signal⟩ := entry
+          cases signal <;> simp only [State.answerEffect] <;>
+            first | exact State.sendEffect_untimed _ _ _ _ | exact Effect.Untimed.empty
+        · exact Effect.Untimed.empty
+    · exact Effect.Untimed.empty
+  | unpark processId =>
+    have flag : timed = false := by
+      simp only [Config.frames] at found
+      split at found
+      · simp only [Option.some.injEq, Prod.mk.injEq] at found; exact found.2.symm
+      · simp at found
+    rw [flag]
+    exact TimersFramed.untimed (State.unparkEffect_untimed _ _)
+  | fire reference =>
+    simp only [Config.effectOf]
+    refine ⟨fun none => ?_, fun timers other any => ?_⟩
+    · simp only [Config.frames] at found
+      split at found
+      · simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.2] at none; simp at none
+      · simp at found
+    · split at any
+      · simp only [State.fireEffect] at any
+        rw [Effect.timers_andThen, (State.enqueueEffect_untimed _ _ _ _).getD] at any
+        exact .inl (any_filter_of any)
+      · exact .inl any
+  | link => simp [Config.frames] at found
+
 end Lynx.Concurrent
