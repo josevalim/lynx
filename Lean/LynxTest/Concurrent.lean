@@ -2,9 +2,10 @@ import LynxTest.ProofAudit
 import Lynx.Concurrent.Forced
 import Lynx.Concurrent.Trace
 import Lynx.Concurrent.Termination
+import Lynx.Concurrent.Confluence
 
 /-! Axiom audits of the concurrent model, of `checkSleep`'s soundness proof,
-and of `check`'s, which rests on it. -/
+of `check`'s, which rests on it, and of programs without races. -/
 
 run_cmd do
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent
@@ -16,5 +17,7 @@ run_cmd do
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Forced
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Reduction
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Trace
+  LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Confluence
   LynxTest.ProofAudit.checkDeclaration ``Lynx.Concurrent.checkSleep_sound
   LynxTest.ProofAudit.checkDeclaration ``Lynx.Concurrent.check_sound
+  LynxTest.ProofAudit.checkDeclaration ``Lynx.Concurrent.RaceFree.of_talks

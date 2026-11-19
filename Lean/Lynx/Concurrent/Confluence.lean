@@ -607,6 +607,331 @@ private theorem Config.apart_of_frames {key other : Key} {frames frames' : List 
 
 end
 
+private theorem Meet.symm {first second : Config α} (meet : Meet first second) : Meet second first := by
+  obtain ⟨last, one, two⟩ := meet
+  exact ⟨last, two, one⟩
+
+/-- A process that does not return ends the run, which another process's step
+before it leaves the same. -/
+private theorem Config.exhausted_meet {elapsed : PID → Nat → Nat} {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId other : PID} {task' : Task α} {β : Type}
+    {finish : Except Exception β → Option (Except Exception α)} {event event' : Event} {next next' : Config α}
+    (ready : (Config.running state tasks finished false).Ready elapsed) (differ : processId ≠ other)
+    (lookup : Kernel.lookup processId tasks = some ⟨(.error .exhausted : Result β), finish, none⟩)
+    (lookup' : Kernel.lookup other tasks = some task')
+    (step : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next))
+    (step' : (Config.running state tasks finished false).stepOf (.own other) = some (event', next')) :
+    next = next' ∨ Meet next next' := by
+  obtain ⟨⟨within, -, -⟩, fresh⟩ := ready.1
+  have canonical : ∀ {first second : State}, first.elapsed = second.elapsed →
+      ({ first with processes := [], timers := [] } : State) = { second with processes := [], timers := [] } := by
+    intro first second same; cases first; cases second; simp_all
+  have exhausts : ∀ state' : State,
+      ((⟨(.error .exhausted : Result β), finish, none⟩ : Task α).own state' processId).head? =
+        some (Transition.mk (.exit processId (.atom "exhausted")) (state'.remove processId) [] none true) :=
+    fun _ => rfl
+  rw [Config.stepOf_own_of lookup (exhausts state)] at step
+  simp only [↓reduceIte, Option.some.injEq, Prod.mk.injEq] at step
+  obtain ⟨-, rfl⟩ := step
+  obtain ⟨task'', transition, found, head, rfl⟩ := Config.stepOf_own step'
+  rw [lookup'] at found; cases found
+  have within' := within.own (List.mem_of_head? head)
+  split
+  · left
+    rw [canonical (show (state.remove processId).elapsed = transition.state.elapsed from
+      within.2.trans within'.2.symm)]
+  · right
+    have kept : Kernel.lookup processId (rewriteTask other (fun _ => transition.tasks) tasks) =
+        some ⟨(.error .exhausted : Result β), finish, none⟩ := by
+      rw [lookup_rewriteTask differ (fun _ entry mem => by
+        rcases Task.own_pids (List.mem_of_head? head) entry mem with same | child
+        · rw [same]; exact Ne.symm differ
+        · rw [child.1]; exact fresh.child lookup' lookup)]
+      exact lookup
+    have after := Config.stepOf_own_of (state := transition.state.normalize)
+      (finished := transition.finished.orElse fun _ => finished) kept (exhausts _)
+    simp only [↓reduceIte] at after
+    rw [canonical (show (transition.state.normalize.remove processId).elapsed = (state.remove processId).elapsed from
+      within'.2.trans within.2.symm)] at after
+    exact ⟨_, .inl rfl, .inr ⟨_, Config.step_of_stepOf after⟩⟩
+
+private theorem State.Quiet.send_live {state : State} (quiet : state.Quiet) {source target : PID}
+    {message : Term} {process : ProcessState} (found : state.record target = some process) :
+    state.send source target (.message message) =
+      state.set target { process with queue := Kernel.append process.queue [⟨source, .message message⟩] } := by
+  unfold State.send
+  rw [quiet.process source]
+  dsimp only
+  unfold State.enqueue
+  rw [found]
+  dsimp only
+  rw [ite_eq_left (by simp [(quiet.2 _ _ found).1])]
+
+private theorem State.Quiet.send_missing {state : State} (quiet : state.Quiet) {source target : PID}
+    {message : Term} (missing : state.record target = none) : state.send source target (.message message) = state := by
+  unfold State.send
+  rw [quiet.process source]
+  dsimp only
+  unfold State.enqueue
+  rw [missing]
+  rfl
+
+private theorem State.remove_set {state : State} (sorted : state.Sorted) (processId : PID) (process : ProcessState) :
+    (state.set processId process).remove processId = state.remove processId := by
+  have sorted' : (state.set processId process).Sorted := Lynx.Concurrent.Sorted.insertRecord sorted processId _
+  refine State.ext_records (State.Within.remove ⟨sorted, rfl⟩ _).1 (State.Within.remove ⟨sorted', rfl⟩ _).1
+    (fun other => ?_) rfl rfl
+  rw [State.record_remove, State.record_remove, State.record_set]
+  split <;> rfl
+
+private theorem State.Quiet.remove {state : State} (quiet : state.Quiet) (processId : PID) :
+    (state.remove processId).Quiet := by
+  refine ⟨quiet.1, fun other process found => ?_⟩
+  rw [State.record_remove] at found
+  split at found
+  · cases found
+  · exact quiet.2 _ _ found
+
+/-- A process that ends, with how it ends and the event of its end. -/
+private theorem Task.ends {β : Type} {computation : Result β} {finish : Except Exception β → Option (Except Exception α)}
+    {processId : PID}
+    (ends : (∃ value, computation = .ok value) ∨ ∃ exception, computation = .error exception ∧ exception ≠ .exhausted) :
+    ∃ event reason result, ∀ state : State,
+      ((⟨computation, finish, none⟩ : Task α).own state processId).head? =
+        some (Task.ended finish event state processId reason result) := by
+  rcases ends with ⟨value, rfl⟩ | ⟨exception, rfl, notExhausted⟩
+  · exact ⟨_, _, _, fun _ => rfl⟩
+  · cases exception
+    case exhausted => exact absurd rfl notExhausted
+    all_goals exact ⟨_, _, _, fun _ => rfl⟩
+
+/-- A message to a process that ends is dropped either way. -/
+private theorem Config.send_end_meet {talk : PID → PID → Prop} (single : Single talk) {elapsed : PID → Nat → Nat}
+    {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)} {sender receiver : PID}
+    {β γ : Type} {message : Term} {continuation : Result β} {finish : Except Exception β → Option (Except Exception α)}
+    {computation : Result γ} {finish' : Except Exception γ → Option (Except Exception α)}
+    {event event' : Event} {next next' : Config α}
+    (ready : (Config.running state tasks finished false).Ready elapsed) (quiet : state.Quiet)
+    (allowed : talk sender receiver) (differ : sender ≠ receiver)
+    (lookup : Kernel.lookup sender tasks = some ⟨.send receiver message continuation, finish, none⟩)
+    (lookup' : Kernel.lookup receiver tasks = some ⟨computation, finish', none⟩)
+    (ends : (∃ value, computation = .ok value) ∨ ∃ exception, computation = .error exception ∧ exception ≠ .exhausted)
+    (step : (Config.running state tasks finished false).stepOf (.own sender) = some (event, next))
+    (step' : (Config.running state tasks finished false).stepOf (.own receiver) = some (event', next')) :
+    Meet next next' := by
+  obtain ⟨⟨within, -, -⟩, fresh⟩ := ready.1
+  have sorted := within.1
+  obtain ⟨receiverProcess, foundReceiver, -⟩ := State.alive_iff.mp (fresh.2.1 _ (mem_of_lookup lookup'))
+  obtain ⟨endEvent, reason, result, ending⟩ := Task.ends (finish := finish') (processId := receiver) ends
+  have sends : ∀ state' : State,
+      ((⟨.send receiver message continuation, finish, none⟩ : Task α).own state' sender).head? =
+        some (Transition.mk (.send sender receiver message) (state'.send sender receiver (.message message))
+          [(sender, ⟨continuation, finish, none⟩)] none false) := fun _ => rfl
+  rw [Config.stepOf_own_of lookup (sends state)] at step
+  rw [Config.stepOf_own_of lookup' (ending state)] at step'
+  simp only [Option.some.injEq, Prod.mk.injEq, Task.ended, Bool.false_eq_true, ↓reduceIte] at step step'
+  obtain ⟨-, rfl⟩ := step
+  obtain ⟨-, rfl⟩ := step'
+  -- After the send, the receiver ends; after it ends, the message is dropped.
+  have sent := quiet.send_live (source := sender) (message := message) foundReceiver
+  have quietSent : (state.send sender receiver (.message message)).Quiet := quiet.send (single.2 _ _ allowed)
+  have sortedSent : (state.send sender receiver (.message message)).Sorted := by
+    rw [sent]; exact Lynx.Concurrent.Sorted.insertRecord sorted receiver _
+  have normalizedSent := quietSent.normalize_eq sortedSent
+  have foundQueued : (state.send sender receiver (.message message)).record receiver =
+      some { receiverProcess with queue := Kernel.append receiverProcess.queue [⟨sender, .message message⟩] } := by
+    rw [sent, State.record_set, ite_eq_left rfl]
+  have ended := quiet.terminate_normalize sorted foundReceiver reason
+  have endedSent := quietSent.terminate_normalize sortedSent foundQueued reason
+  rw [sent, State.remove_set sorted] at endedSent
+  rw [sent] at normalizedSent
+  have missing : (state.remove receiver).record receiver = none := by simp [State.record_remove]
+  have quietRemoved := quiet.remove receiver
+  have sortedRemoved : (state.remove receiver).Sorted := (State.Within.remove ⟨sorted, rfl⟩ _).1
+  have tasksSent : Kernel.lookup receiver (rewriteTask sender (fun _ => [(sender, ⟨continuation, finish, none⟩)]) tasks) =
+      some ⟨computation, finish', none⟩ := by
+    rw [lookup_rewriteTask (Ne.symm differ) (fun _ entry mem => by
+      simp only [List.mem_singleton] at mem; subst mem; exact differ)]
+    exact lookup'
+  have tasksEnded : Kernel.lookup sender (rewriteTask receiver (fun _ => []) tasks) =
+      some ⟨.send receiver message continuation, finish, none⟩ := by
+    rw [lookup_rewriteTask differ (fun _ entry mem => by simp at mem)]
+    exact lookup
+  have afterSend := Config.stepOf_own_of (finished := none.orElse fun _ => finished) tasksSent
+    (ending (state.set receiver { receiverProcess with queue := Kernel.append receiverProcess.queue [⟨sender, .message message⟩] }).normalize)
+  have afterEnd := Config.stepOf_own_of (finished := (finish' result).orElse fun _ => finished) tasksEnded
+    (sends (state.terminate receiver reason).normalize)
+  simp only [Task.ended, Bool.false_eq_true, ↓reduceIte] at afterSend afterEnd
+  rw [normalizedSent, endedSent] at afterSend
+  rw [ended, quietRemoved.send_missing missing, quietRemoved.normalize_eq sortedRemoved] at afterEnd
+  rw [sent, normalizedSent]
+  refine ⟨_, .inr ⟨_, Config.step_of_stepOf afterSend⟩, .inr ⟨.send sender receiver message,
+    Config.step_of_stepOf (key := .own sender) ?_⟩⟩
+  rw [ended, afterEnd, rewriteTask_comm differ (fun _ entry mem => by
+      simp only [List.mem_singleton] at mem; subst mem; exact differ) (fun _ entry mem => by simp at mem)]
+  simp
+
+/-- Two own steps of different talking processes that are not forced meet again. -/
+private theorem Config.unforced_meet {talk : PID → PID → Prop} (single : Single talk) {elapsed : PID → Nat → Nat}
+    {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)} {processId other : PID}
+    {task task' : Task α} {event event' : Event} {next next' : Config α}
+    (ready : (Config.running state tasks finished false).Ready elapsed)
+    (talking : (Config.running state tasks finished false).Talking talk) (differ : processId ≠ other)
+    (lookup : Kernel.lookup processId tasks = some task) (lookup' : Kernel.lookup other tasks = some task')
+    (waits : task.wait = none) (waits' : task'.wait = none)
+    (unforced : task.computation.Unforced) (unforced' : task'.computation.Unforced)
+    (step : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next))
+    (step' : (Config.running state tasks finished false).stepOf (.own other) = some (event', next')) :
+    next = next' ∨ Meet next next' := by
+  obtain ⟨⟨within, normalized, once⟩, fresh⟩ := ready.1
+  obtain ⟨quiet, talks⟩ := talking
+  have sorted := within.1
+  have alive := fresh.2.1 _ (mem_of_lookup lookup)
+  have alive' := fresh.2.1 _ (mem_of_lookup lookup')
+  have talksTask := (talks _ (mem_of_lookup lookup)).2
+  have talksTask' := (talks _ (mem_of_lookup lookup')).2
+  have distinct := distinctTasks_of_pairwise (state := state) (finished := finished) (exhausted := false) fresh.1
+  have owners : ∀ {first second : PID}, first ≠ second →
+      (!((Key.own first).owner.isSome && (Key.own first).owner == (Key.own second).owner &&
+        (Key.own first).isOwn == (Key.own second).isOwn)) = true := by
+    intro first second differ
+    simp [Key.owner, differ]
+  have spawns : ∀ {processId : PID} {task : Task α}, Kernel.lookup processId tasks = some task →
+      task.computation.Unforced → (Config.running state tasks finished false).spawnsFresh (.own processId) = true := by
+    intro processId task lookup unforced
+    obtain ⟨computation, finish, wait⟩ := task
+    simp only [Config.spawnsFresh, lookup]
+    cases computation <;> simp_all [Result.Unforced]
+  -- Steps whose frames are apart meet after one step each.
+  have apart : (Config.running state tasks finished false).apart (.own processId) (.own other) = true →
+      Meet next next' := by
+    intro apart
+    obtain ⟨_, _, last, after, after'⟩ := Config.commutes_of_apart within normalized once (owners differ)
+      (spawns lookup unforced) (spawns lookup' unforced') distinct apart step step'
+    exact ⟨last, .inr ⟨_, Config.step_of_stepOf after⟩, .inr ⟨_, Config.step_of_stepOf after'⟩⟩
+  have apart' : (Config.running state tasks finished false).apart (.own other) (.own processId) = true →
+      Meet next next' := by
+    intro apart
+    obtain ⟨_, _, last, after, after'⟩ := Config.commutes_of_apart within normalized once (owners (Ne.symm differ))
+      (spawns lookup' unforced') (spawns lookup unforced) distinct apart step' step
+    exact ⟨last, .inr ⟨_, Config.step_of_stepOf after'⟩, .inr ⟨_, Config.step_of_stepOf after⟩⟩
+  obtain ⟨computation, finish, wait⟩ := task
+  obtain ⟨computation', finish', wait'⟩ := task'
+  simp only at waits waits' unforced unforced' talksTask talksTask'
+  subst waits waits'
+  -- A process that does not return ends the run either way.
+  by_cases exhausted : computation = .error .exhausted
+  · subst exhausted; exact Config.exhausted_meet ready differ lookup lookup' step step'
+  by_cases exhausted' : computation' = .error .exhausted
+  · subst exhausted'
+    rcases Config.exhausted_meet ready (Ne.symm differ) lookup' lookup step' step with same | meet
+    · exact .inl same.symm
+    · exact .inr (Meet.symm meet)
+  have shape : ∀ {β : Type} {computation : Result β}, computation.Unforced → computation ≠ .error .exhausted →
+      (∃ target message next, computation = .send target message next) ∨
+        (∃ value, computation = .ok value) ∨ ∃ exception, computation = .error exception ∧ exception ≠ .exhausted := by
+    intro β computation unforced notExhausted
+    cases computation <;> simp_all [Result.Unforced]
+  -- Bits of the fields a send reads and writes.
+  have tail : ∀ alive : Bool, (if alive then Field.queueTail else 0) &&& Field.parked = 0 := by
+    intro alive; cases alive <;> decide
+  have tail' : ∀ alive : Bool, (if alive then Field.queueTail else 0) &&& (Field.parked ||| 0) = 0 := by
+    intro alive; cases alive <;> decide
+  rcases shape unforced exhausted with ⟨target, message, continuation, rfl⟩ | ends
+  · cases talksTask with
+    | send allowed _ =>
+    rcases shape unforced' exhausted' with ⟨target', message', continuation', rfl⟩ | ends'
+    · cases talksTask' with
+      | send allowed' _ =>
+      have targets : target ≠ target' := fun same => differ (single.1 _ _ _ allowed (same ▸ allowed'))
+      obtain ⟨confined, frames⟩ := Config.sends_confined (finished := finished) quiet alive lookup
+      obtain ⟨confined', frames'⟩ := Config.sends_confined (finished := finished) quiet alive' lookup'
+      refine .inr (apart (Config.apart_of_frames confined confined' frames frames' (framesApart_send ?_)))
+      simp only [List.mem_cons, List.mem_nil_iff, or_false, forall_eq_or_imp, forall_eq]
+      exact ⟨⟨.inl (Ne.symm differ), .inr ⟨by decide, tail' _⟩⟩, ⟨.inr (tail _), .inl (Ne.symm targets)⟩⟩
+    · by_cases same : target = other
+      · subst same
+        exact .inr (Config.send_end_meet single ready quiet allowed differ lookup lookup' ends' step step')
+      · obtain ⟨confined, frames⟩ := Config.sends_confined (finished := finished) quiet alive lookup
+        obtain ⟨confined', frames'⟩ := Config.ends_confined (finished := finished) sorted quiet alive' lookup' ends'
+        refine .inr (apart (Config.apart_of_frames confined confined' frames frames' (framesApart_send ?_)))
+        simp only [List.mem_cons, List.mem_nil_iff, or_false, forall_eq]
+        exact ⟨.inl (Ne.symm differ), .inl (Ne.symm same)⟩
+  · rcases shape unforced' exhausted' with ⟨target', message', continuation', rfl⟩ | ends'
+    · cases talksTask' with
+      | send allowed' _ =>
+      by_cases same : target' = processId
+      · subst same
+        exact .inr (Meet.symm (Config.send_end_meet single ready quiet allowed' (Ne.symm differ) lookup' lookup ends
+          step' step))
+      · obtain ⟨confined, frames⟩ := Config.ends_confined (finished := finished) sorted quiet alive lookup ends
+        obtain ⟨confined', frames'⟩ := Config.sends_confined (finished := finished) quiet alive' lookup'
+        refine .inr (apart' (Config.apart_of_frames confined' confined frames' frames (framesApart_send ?_)))
+        simp only [List.mem_cons, List.mem_nil_iff, or_false, forall_eq]
+        exact ⟨.inl differ, .inl (Ne.symm same)⟩
+    · obtain ⟨confined, frames⟩ := Config.ends_confined (finished := finished) sorted quiet alive lookup ends
+      obtain ⟨confined', frames'⟩ := Config.ends_confined (finished := finished) sorted quiet alive' lookup' ends'
+      refine .inr (apart (Config.apart_of_frames confined confined' frames frames' ?_))
+      simp [framesApart, Kernel.all_eq, differ]
+
+/-- A forced step and another step meet again. -/
+private theorem Config.forced_meet {elapsed : PID → Nat → Nat} {config : Config α} {key key' : Key}
+    {event event' : Event} {next next' : Config α} (ready : config.Ready elapsed)
+    (forced : (key, event, next, true) ∈ config.taggedSteps)
+    (step' : config.stepOf key' = some (event', next')) (differ : key' ≠ key) : Meet next next' := by
+  have readyNext' := ready.step (Config.step_of_stepOf step')
+  rcases Config.forced_square ready.1 ready.2.1 ready.2.2 forced step' differ with ⟨absorbed, after⟩ |
+      ⟨key'', event'', last, other, forcedLast, after⟩
+  · exact ⟨next', .inr ⟨_, Config.step_of_stepOf after⟩, .inl rfl⟩
+  · exact ⟨last, .inr ⟨_, Config.step_of_stepOf after⟩,
+      .inr ⟨_, Config.step_of_stepOf (readyNext'.1.stepOf forcedLast)⟩⟩
+
+/-- Processes that only message each other, each receiver hearing from a
+single sender, have no races once they run in a quiet state. -/
+public theorem RaceFree.of_talks {talk : PID → PID → Prop} (single : Single talk) {env : Environment}
+    {computation : Result α} {elapsed : PID → Nat → Nat} {events : List Event} {state : State}
+    {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    (run : Run (.start env computation elapsed) events (.running state tasks finished false))
+    (quiet : state.Quiet) (talks : ∀ entry ∈ tasks, entry.2.wait = none ∧ entry.2.computation.Talks talk entry.1) :
+    RaceFree (.running state tasks finished false) := by
+  have readies : ∀ {first last : Config α} {events : List Event}, Run first events last →
+      first.Ready elapsed → last.Ready elapsed := by
+    intro first last events run
+    induction run with
+    | refl => exact id
+    | step step _ ih => exact fun ready => ih (ready.step step)
+  have ready := readies run ⟨⟨⟨rfl, trivial, trivial⟩, trivial⟩, trivial, trivial⟩
+  intro events' reached run' event event' next next' step step'
+  have both : ∀ {first last : Config α} {events : List Event}, Run first events last →
+      first.Ready elapsed ∧ first.Talking talk → last.Ready elapsed ∧ last.Talking talk := by
+    intro first last events run
+    induction run with
+    | refl => exact id
+    | step step _ ih =>
+      exact fun facts => ih ⟨facts.1.step step, Config.Talking.step single facts.1.1 facts.2 step⟩
+  obtain ⟨readyReached, talkingReached⟩ := both run' ⟨ready, quiet, talks⟩
+  match reached, readyReached, talkingReached, step, step' with
+  | .start .., _, talking, _, _ => exact talking.elim
+  | .running _ _ _ true, _, _, step, _ => simp [Step, Config.successors] at step
+  | .running state' tasks' finished' false, readyReached, talkingReached, step, step' =>
+    obtain ⟨key, forced, mem⟩ := Config.tagged_of_step step
+    obtain ⟨key', forced', mem'⟩ := Config.tagged_of_step step'
+    have found := readyReached.1.stepOf mem
+    have found' := readyReached.1.stepOf mem'
+    by_cases same : key = key'
+    · subst same
+      rw [found] at found'
+      simp only [Option.some.injEq, Prod.mk.injEq] at found'
+      exact .inl found'.2
+    cases forced
+    case true => exact .inr (Config.forced_meet readyReached mem found' (Ne.symm same))
+    cases forced'
+    case true => exact .inr (Meet.symm (Config.forced_meet readyReached mem' found same))
+    obtain ⟨processId, task, rfl, lookup, waits, unforced⟩ := Config.unforced readyReached.1 talkingReached mem
+    obtain ⟨other, task', rfl, lookup', waits', unforced'⟩ := Config.unforced readyReached.1 talkingReached mem'
+    exact Config.unforced_meet single readyReached talkingReached (fun equal => same (by rw [equal]))
+      lookup lookup' waits waits' unforced unforced' found found'
+
 /-! ### Evaluating one run
 
 `Config.advance` repeatedly takes the first step of a configuration. Its runs
