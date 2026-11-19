@@ -4347,6 +4347,138 @@ private theorem CleanOutside.send {state : State} {except : PID → Prop} {sourc
     · exact queue state clean rfl fun process found => ⟨process, found, rfl, rfl, rfl, rfl, rfl⟩
   · exact queue state clean rfl fun process found => ⟨process, found, rfl, rfl, rfl, rfl, rfl⟩
 
+/-- A change keeping a live record's queue and what inertness reads keeps it clean. -/
+private theorem Clean.neutral {gone : PID → Bool} {processId : PID} {process process' : ProcessState}
+    (clean : Clean gone processId process) (live : process.exiting = none) (live' : process'.exiting = none)
+    (queue : process'.queue = process.queue) (refCounter : process'.refCounter = process.refCounter)
+    (monitoring : process'.monitoring = process.monitoring) (aliases : process'.aliases = process.aliases)
+    (links : process'.links = process.links) : Clean gone processId process' :=
+  clean.preserve live live' (fun entry mem => .inl ⟨queue ▸ mem, fun inside => by
+    rwa [inert_congr rfl refCounter monitoring aliases links] at inside⟩)
+    (fun link mem _ => ⟨links ▸ mem, id⟩)
+
+/-- Removing the oldest signal of a clean live record keeps it clean. -/
+private theorem Clean.pop {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (clean : Clean gone processId process) (live : process.exiting = none) :
+    Clean gone processId { process with queue := process.queue.drop 1 } :=
+  clean.preserve live live (fun entry mem => .inl ⟨List.mem_of_mem_drop mem, id⟩) (fun link mem _ => ⟨mem, id⟩)
+
+/-- A change that adds monitors and aliases, keeping the queue and the rest of
+what inertness reads, keeps a live record clean. -/
+private theorem Clean.grow {gone : PID → Bool} {processId : PID} {process process' : ProcessState}
+    (clean : Clean gone processId process) (live : process.exiting = none) (live' : process'.exiting = none)
+    (queue : process'.queue = process.queue) (refCounter : process'.refCounter = process.refCounter)
+    (monitoring : ∀ entry ∈ process.monitoring, entry ∈ process'.monitoring)
+    (aliases : ∀ alias ∈ process.aliases, alias ∈ process'.aliases) (links : process'.links = process.links) :
+    Clean gone processId process' := by
+  refine clean.preserve live live' (fun entry mem => .inl ⟨queue ▸ mem, fun inside => ?_⟩)
+    (fun link mem _ => ⟨links ▸ mem, id⟩)
+  have anyMono : ∀ {test : List Nat × PID → Bool},
+      Kernel.any process'.monitoring test = false → Kernel.any process.monitoring test = false := by
+    intro test none
+    simp only [Kernel.any_eq, List.any_eq_false] at none ⊢
+    exact fun entry mem => none entry (monitoring entry mem)
+  have containsMono : ∀ {alias : List Nat},
+      Kernel.contains process'.aliases alias = false → Kernel.contains process.aliases alias = false := by
+    intro alias none
+    cases inside : Kernel.contains process.aliases alias
+    · rfl
+    · simp only [Kernel.contains_eq, List.contains_iff_mem] at inside none
+      exact absurd (aliases _ inside) (by simpa using none)
+  obtain ⟨source, signal⟩ := entry
+  cases signal with
+  | down reference reason =>
+    simp only [inert, refCounter, Bool.and_eq_true, Bool.not_eq_true'] at inside ⊢
+    exact ⟨inside.1, anyMono inside.2⟩
+  | aliasMessage alias message =>
+    simp only [inert, refCounter, Bool.and_eq_true, Bool.not_eq_true'] at inside ⊢
+    exact ⟨⟨inside.1.1, containsMono inside.1.2⟩, anyMono inside.2⟩
+  | _ => simpa only [inert, links] using inside
+
+private theorem reference_eq_of_allocated {reference owner : List Nat} {count : Nat}
+    (owned : reference.dropLast = owner) (last : reference.getLast? = some count) :
+    reference = owner ++ [count] := by
+  obtain ⟨prefix', rfl⟩ := List.getLast?_eq_some_iff.mp last
+  rw [List.dropLast_concat] at owned; rw [owned]
+
+/-- Allocating a reference keeps a live record clean when no queued signal carries it. -/
+private theorem Clean.allocate {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (clean : Clean gone processId process) (live : process.exiting = none)
+    (fresh : ∀ entry ∈ process.queue, entry.carries (Kernel.append processId [process.refCounter + 1]) = false) :
+    Clean gone processId { process with refCounter := process.refCounter + 1 } := by
+  refine clean.preserve live live (fun entry mem => .inl ⟨mem, fun inside => ?_⟩) (fun link mem _ => ⟨mem, id⟩)
+  have carries := fresh entry mem
+  obtain ⟨source, signal⟩ := entry
+  have allocated : ∀ (reference : List Nat), reference ≠ Kernel.append processId [process.refCounter + 1] →
+      (reference.dropLast == processId && match reference.getLast? with
+        | some count => 1 ≤ count && count ≤ process.refCounter + 1
+        | none => false) = true →
+      (reference.dropLast == processId && match reference.getLast? with
+        | some count => 1 ≤ count && count ≤ process.refCounter
+        | none => false) = true := by
+    intro reference differ owned
+    simp only [Bool.and_eq_true, beq_iff_eq] at owned ⊢
+    refine ⟨owned.1, ?_⟩
+    cases last : reference.getLast? with
+    | none => rw [last] at owned; simp at owned
+    | some count =>
+      rw [last] at owned; simp only [Bool.and_eq_true, decide_eq_true_eq] at owned ⊢
+      refine ⟨owned.2.1, ?_⟩
+      rcases Nat.lt_or_ge count (process.refCounter + 1) with lower | upper
+      · omega
+      · exact absurd (by rw [reference_eq_of_allocated owned.1 last, Kernel.append_eq]; congr; omega) differ
+  cases signal with
+  | down reference reason =>
+    simp only [Entry.carries, beq_eq_false_iff_ne] at carries
+    simp only [inert] at inside ⊢
+    obtain ⟨own, rest⟩ := Bool.and_eq_true_iff.mp inside
+    exact Bool.and_eq_true_iff.mpr ⟨allocated reference carries own, rest⟩
+  | aliasMessage alias message =>
+    simp only [Entry.carries, beq_eq_false_iff_ne] at carries
+    simp only [inert] at inside ⊢
+    obtain ⟨⟨own, held⟩, rest⟩ := And.imp_left Bool.and_eq_true_iff.mp (Bool.and_eq_true_iff.mp inside)
+    exact Bool.and_eq_true_iff.mpr ⟨Bool.and_eq_true_iff.mpr ⟨allocated alias carries own, held⟩, rest⟩
+  | _ => simpa only [inert] using inside
+
+/-- Removing a monitor and alias keeps a live record clean when no queued signal carries its reference. -/
+private theorem Clean.demonitor {gone : PID → Bool} {processId : PID} {process process' : ProcessState}
+    {reference : List Nat} (clean : Clean gone processId process) (live : process.exiting = none)
+    (live' : process'.exiting = none) (queue : process'.queue = process.queue)
+    (refCounter : process'.refCounter = process.refCounter) (links : process'.links = process.links)
+    (monitoring : process'.monitoring = Kernel.filter (·.1 != reference) process.monitoring)
+    (aliases : process'.aliases = Kernel.erase process.aliases reference)
+    (fresh : ∀ entry ∈ process.queue, entry.carries reference = false) :
+    Clean gone processId process' := by
+  refine clean.preserve live live' (fun entry mem => .inl ⟨queue ▸ mem, fun inside => ?_⟩)
+    (fun link mem _ => ⟨links ▸ mem, id⟩)
+  have carries := fresh entry (queue ▸ mem)
+  obtain ⟨source, signal⟩ := entry
+  have anyKept : ∀ (other : List Nat), other ≠ reference →
+      Kernel.any process'.monitoring (·.1 == other) = Kernel.any process.monitoring (·.1 == other) := by
+    intro other differ
+    rw [monitoring]
+    simp only [Kernel.any_eq, Kernel.filter_eq, List.any_filter]
+    congr 1; funext entry
+    by_cases same : entry.1 = other
+    · subst same; simp [differ]
+    · simp [same]
+  have containsKept : ∀ (other : List Nat), other ≠ reference →
+      Kernel.contains process'.aliases other = Kernel.contains process.aliases other := by
+    intro other differ
+    rw [aliases]
+    simp only [Kernel.contains_eq, Kernel.erase_eq]
+    rw [Bool.eq_iff_iff, List.contains_iff_mem, List.contains_iff_mem, List.mem_erase_of_ne differ]
+  cases signal with
+  | down reference' reason =>
+    simp only [Entry.carries, beq_eq_false_iff_ne] at carries
+    simp only [inert, refCounter] at inside ⊢
+    rwa [anyKept reference' carries] at inside
+  | aliasMessage alias message =>
+    simp only [Entry.carries, beq_eq_false_iff_ne] at carries
+    simp only [inert, refCounter] at inside ⊢
+    rwa [anyKept alias carries, containsKept alias carries] at inside
+  | _ => simpa only [inert, links] using inside
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
