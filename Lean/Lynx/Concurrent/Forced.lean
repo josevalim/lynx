@@ -1776,6 +1776,25 @@ private theorem handleSelf
     simp only [State.handle]
     split <;> exact ⟨rfl, changed⟩
 
+/-- States that differ only in the record of a process that ended, by a change
+normalizing forgets, normalize alike. -/
+private theorem normalize_ended {change : ProcessState → ProcessState}
+    (changed : state.Changed processId (Same (fun process => process.exiting.isSome = true) change) state')
+    (unseen : Unseen (Same (fun process => process.exiting.isSome = true) change))
+    (forgets : ∀ gone process, process.exiting.isSome = true →
+      normRecord gone processId (change process) = normRecord gone processId process)
+    (sorted : state.Sorted) (sorted' : state'.Sorted) : state'.normalize = state.normalize := by
+  refine State.ext_records (Sorted.normalize sorted) (Sorted.normalize sorted') (fun other => ?_)
+    changed.2.2.1 changed.2.2.2
+  rw [State.record_normalize' sorted', State.record_normalize' sorted, changed.gone unseen]
+  by_cases equal : other = processId
+  · subst equal
+    rcases changed.records with ⟨none₁, none₂⟩ | ⟨record, record', found₁, found₂, exiting, rfl⟩
+    · rw [none₁, none₂]
+    · rw [found₁, found₂]
+      simp only [Option.map_some, forgets _ _ exiting]
+  · rw [changed.record_other equal]
+
 /-- The process itself ends, after a change of its own fields: normalizing
 forgets the fields that differ. -/
 private theorem terminateSelf
@@ -1817,20 +1836,10 @@ private theorem terminateSelf
       exact changed.record_other differ
     · simp only [State.record_set, ↓reduceIte]
       exact .some ⟨rfl, rfl⟩
-  have goneSame := endedChanged.gone unseen
-  refine State.ext_records (Sorted.normalize sorted) (Sorted.normalize sorted') (fun other => ?_)
-    endedChanged.2.2.1 endedChanged.2.2.2
-  rw [State.record_normalize' sorted', State.record_normalize' sorted, goneSame]
-  by_cases equal : other = processId
-  · subst equal
-    rcases endedChanged.records with ⟨none₁, none₂⟩ | ⟨record, record', found₁, found₂, exiting, rfl⟩
-    · rw [none₁, none₂]
-    · rw [found₁, found₂]
-      obtain ⟨reason', exiting'⟩ := Option.isSome_iff_exists.mp exiting
-      simp only [Option.map_some]
-      unfold normRecord
-      simp only [ownChange, exiting']
-  · rw [endedChanged.record_other equal]
+  refine endedChanged.normalize_ended unseen (fun _ process exiting => ?_) sorted sorted'
+  obtain ⟨reason', exiting'⟩ := Option.isSome_iff_exists.mp exiting
+  unfold normRecord
+  simp only [ownChange, exiting']
 
 end State.Changes
 
@@ -2105,21 +2114,11 @@ private theorem terminateQueue
       exact changed.record_other differ
     · simp only [State.record_set, ↓reduceIte]
       exact .some ⟨rfl, rfl⟩
-  have goneSame := endedChanged.gone unseen
-  refine State.ext_records (Sorted.normalize sorted) (Sorted.normalize sorted') (fun other => ?_)
-    endedChanged.2.2.1 endedChanged.2.2.2
-  rw [State.record_normalize' sorted', State.record_normalize' sorted, goneSame]
-  by_cases equal : other = processId
-  · subst equal
-    rcases endedChanged.records with ⟨none₁, none₂⟩ | ⟨record, record', found₁, found₂, exiting, rfl⟩
-    · rw [none₁, none₂]
-    · rw [found₁, found₂]
-      obtain ⟨reason', exiting'⟩ := Option.isSome_iff_exists.mp exiting
-      simp only [Option.map_some]
-      unfold normRecord
-      simp only [queueChange, exiting']
-      rfl
-  · rw [endedChanged.record_other equal]
+  refine endedChanged.normalize_ended unseen (fun _ process exiting => ?_) sorted sorted'
+  obtain ⟨reason', exiting'⟩ := Option.isSome_iff_exists.mp exiting
+  unfold normRecord
+  simp only [queueChange, exiting']
+  rfl
 
 /-- A process's own step, after handling its oldest signal changed its queue,
 mailbox and links: the same transition, with related states unless it ends the process. -/
