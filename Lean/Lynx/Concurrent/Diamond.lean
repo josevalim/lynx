@@ -762,6 +762,7 @@ private theorem State.normalizeRecord_normalize {state : State} (sorted : state.
       simp only [State.normalizeRecord, exiting, gone, Kernel.filter_eq] at keep ⊢
       split <;> simp_all
     · simp only [gone, List.filter_filter, Bool.and_self]
+    · simp only [gone, List.filter_filter, Bool.and_self]
 
 /-- Normalizing twice is normalizing once. -/
 private theorem State.normalize_normalize {state : State} (sorted : state.Sorted) :

@@ -135,13 +135,13 @@ now and after any of them: a signal that does nothing, a message from a
 process, which the process's own steps cannot race with as a receive only
 times out with nothing left to handle, a reply or marker resuming a process
 that waits, or an acknowledgement of an unlink the process started. A timer's
-message, or a message to an alias, is taken alone when the process is blocked.
+message, a message to an alias, or a monitor is taken alone when the process is blocked.
 Other signals race with what the process may do before handling them, such as
 timing out before a timer's message, removing a monitor, trapping exits, or ending. -/
 @[expose] def Task.forcedHead (state : State) (processId : PID) (task : Task α) (entry : Entry) : Bool :=
   state.inertEntry processId entry || match entry.signal with
     | .message _ => entry.source != clock || task.blocked state processId
-    | .aliasMessage .. => task.blocked state processId
+    | .aliasMessage .. | .monitor _ => task.blocked state processId
     | .unlinkAck id => decide (id ≤ (state.process processId).unlinks)
     | .reply _ | .flush => task.wait.isSome
     | _ => false
@@ -568,7 +568,7 @@ as for a process that does not return. -/
 
 /-- Whether no other record holds what normalization drops once a process is
 gone: a live process drops the requests the process queued, which only it can
-queue, and the links it was removing; a process that ended drops everything
+queue, the links it was removing, and its monitors; a process that ended drops everything
 the process queued and its signals to it. -/
 @[expose] def State.leavesOthers (state : State) (processId : PID) : Bool :=
   Kernel.all state.processes fun (other, process) =>
@@ -580,7 +580,8 @@ the process queued and its signals to it. -/
           !Kernel.any process.queue (fun entry => entry.source == processId && match entry.signal with
               | .isAlive | .monitor _ => true
               | _ => false) &&
-          !Kernel.any process.links (fun link => link.1 == processId && link.2.isSome)
+          !Kernel.any process.links (fun link => link.1 == processId && link.2.isSome) &&
+          !Kernel.any process.monitors (·.2 == processId)
 
 /-- Whether a parked monitor signal is of a monitor the process holds, so that
 the `DOWN` a dead target answers it with is not dropped. -/

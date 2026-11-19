@@ -584,7 +584,8 @@ private def normRecord (gone : PID → Bool) (processId : PID) (process : Proces
   | none =>
       { process with
         queue := Kernel.filter (fun entry => !inert gone processId process entry) process.queue
-        links := Kernel.filter (fun link => !(link.2.isSome && gone link.1)) process.links }
+        links := Kernel.filter (fun link => !(link.2.isSome && gone link.1)) process.links
+        monitors := Kernel.filter (fun monitor => !gone monitor.2) process.monitors }
 
 private theorem State.normalizeRecord_eq {state : State} {processId : PID} {process : ProcessState}
     (found : state.record processId = some process) :
@@ -645,6 +646,7 @@ private theorem normRecord_normRecord {gone gone' : PID → Bool} (more : ∀ pr
       cases unlinking : link.2.isSome
       · simp
       · simp only [Bool.true_and]; exact keep link.1
+    · exact List.filter_congr fun monitor _ => keep monitor.2
 
 /-- Replace the record of a process by a given one. -/
 private def Effect.put (processId : PID) (process : ProcessState) : Effect :=
@@ -3863,7 +3865,8 @@ of the links it is removing is to a process that is gone. -/
 private theorem Clean.live {gone : PID → Bool} {processId : PID} {process : ProcessState}
     (live : process.exiting = none)
     (queue : ∀ entry ∈ process.queue, inert gone processId process entry = false)
-    (links : ∀ link ∈ process.links, link.2.isSome = true → gone link.1 = false) :
+    (links : ∀ link ∈ process.links, link.2.isSome = true → gone link.1 = false)
+    (monitors : ∀ monitor ∈ process.monitors, gone monitor.2 = false) :
     Clean gone processId process := by
   refine ⟨?_, by simp [ProcessState.finished, live]⟩
   unfold normRecord
@@ -3871,24 +3874,28 @@ private theorem Clean.live {gone : PID → Bool} {processId : PID} {process : Pr
   simp only [Kernel.filter_eq]
   rw [List.filter_eq_self.mpr fun entry mem => by simp [queue entry mem],
     List.filter_eq_self.mpr fun link mem => by
-      cases some : link.2.isSome <;> simp [some, links link mem]]
+      cases some : link.2.isSome <;> simp [some, links link mem],
+    List.filter_eq_self.mpr fun monitor mem => by simp [monitors monitor mem]]
   cases process; simp_all
 
 /-- What a clean live record satisfies. -/
 private theorem Clean.live_facts {gone : PID → Bool} {processId : PID} {process : ProcessState}
     (clean : Clean gone processId process) (live : process.exiting = none) :
     (∀ entry ∈ process.queue, inert gone processId process entry = false) ∧
-      ∀ link ∈ process.links, link.2.isSome = true → gone link.1 = false := by
+      (∀ link ∈ process.links, link.2.isSome = true → gone link.1 = false) ∧
+      ∀ monitor ∈ process.monitors, gone monitor.2 = false := by
   have equal := clean.1
   unfold normRecord at equal
   rw [live] at equal
   simp only [Kernel.filter_eq] at equal
   have queue := congrArg ProcessState.queue equal
   have links := congrArg ProcessState.links equal
-  simp only at queue links
-  refine ⟨fun entry mem => ?_, fun link mem some => ?_⟩
+  have monitors := congrArg ProcessState.monitors equal
+  simp only at queue links monitors
+  refine ⟨fun entry mem => ?_, fun link mem some => ?_, fun monitor mem => ?_⟩
   · have := List.filter_eq_self.mp queue entry mem; simpa using this
   · have := List.filter_eq_self.mp links link mem; simp [some] at this; exact this
+  · have := List.filter_eq_self.mp monitors monitor mem; simpa using this
 
 /-- A live record stays clean through a change that keeps or removes its queued
 signals and the links it is removing, making none of them inert or gone, and
@@ -3898,10 +3905,12 @@ private theorem Clean.preserve {gone gone' : PID → Bool} {processId : PID} {pr
     (queue : ∀ entry ∈ process'.queue, (entry ∈ process.queue ∧
       (inert gone' processId process' entry = true → inert gone processId process entry = true)) ∨
       inert gone' processId process' entry = false)
-    (links : ∀ link ∈ process'.links, link.2.isSome = true → link ∈ process.links ∧ (gone' link.1 = true → gone link.1 = true)) :
+    (links : ∀ link ∈ process'.links, link.2.isSome = true → link ∈ process.links ∧ (gone' link.1 = true → gone link.1 = true))
+    (monitors : ∀ monitor ∈ process'.monitors, (monitor ∈ process.monitors ∧
+      (gone' monitor.2 = true → gone monitor.2 = true)) ∨ gone' monitor.2 = false) :
     Clean gone' processId process' := by
-  obtain ⟨queueFacts, linkFacts⟩ := clean.live_facts live
-  refine Clean.live live' (fun entry mem => ?_) (fun link mem some => ?_)
+  obtain ⟨queueFacts, linkFacts, monitorFacts⟩ := clean.live_facts live
+  refine Clean.live live' (fun entry mem => ?_) (fun link mem some => ?_) (fun monitor mem => ?_)
   · rcases queue entry mem with ⟨old, more⟩ | fresh
     · cases inside : inert gone' processId process' entry
       · rfl
@@ -3911,6 +3920,11 @@ private theorem Clean.preserve {gone gone' : PID → Bool} {processId : PID} {pr
     cases going : gone' link.1
     · rfl
     · exact absurd (more going) (by simp [linkFacts link old some])
+  · rcases monitors monitor mem with ⟨old, more⟩ | fresh
+    · cases going : gone' monitor.2
+      · rfl
+      · exact absurd (more going) (by simp [monitorFacts monitor old])
+    · exact fresh
 
 /-- Whether a signal is inert reads only whether its sender is gone, and the
 receiver's references, monitors and aliases. -/
@@ -3944,7 +3958,8 @@ private def Refers (process : ProcessState) (other : PID) : Bool :=
       Kernel.any process.queue (fun entry => entry.source == other && match entry.signal with
           | .isAlive | .monitor _ => true
           | _ => false) ||
-        Kernel.any process.links (fun link => link.1 == other && link.2.isSome)
+        Kernel.any process.links (fun link => link.1 == other && link.2.isSome) ||
+        Kernel.any process.monitors (·.2 == other)
 
 /-- A clean record stays clean when the processes that become gone are none it refers to. -/
 private theorem Clean.gone {gone gone' : PID → Bool} {processId : PID} {process : ProcessState}
@@ -3953,20 +3968,27 @@ private theorem Clean.gone {gone gone' : PID → Bool} {processId : PID} {proces
     Clean gone' processId process := by
   cases exiting : process.exiting with
   | none =>
-    obtain ⟨queue, links⟩ := clean.live_facts exiting
-    refine Clean.live exiting (fun entry mem => ?_) (fun link mem some => ?_)
+    obtain ⟨queue, links, monitors⟩ := clean.live_facts exiting
+    refine Clean.live exiting (fun entry mem => ?_) (fun link mem some => ?_) (fun monitor mem => ?_)
     · rw [← queue entry mem]
       obtain ⟨source, signal⟩ := entry
       by_cases same : gone' source = gone source
       · cases signal <;> simp [inert, same]
       · have := differ source same
         simp only [Refers, exiting, Bool.or_eq_false_iff, Kernel.any_eq, List.any_eq_false] at this
-        have := this.1 _ mem
+        have := this.1.1 _ mem
         cases signal <;> simp_all [inert]
     · rw [← links link mem some]
       by_cases same : gone' link.1 = gone link.1
       · exact same
       · have := differ link.1 same
+        simp only [Refers, exiting, Bool.or_eq_false_iff, Kernel.any_eq, List.any_eq_false] at this
+        have := this.1.2 _ mem
+        simp_all
+    · rw [← monitors monitor mem]
+      by_cases same : gone' monitor.2 = gone monitor.2
+      · exact same
+      · have := differ monitor.2 same
         simp only [Refers, exiting, Bool.or_eq_false_iff, Kernel.any_eq, List.any_eq_false] at this
         have := this.2 _ mem
         simp_all
@@ -4106,7 +4128,7 @@ private theorem Clean.queued {gone : PID → Bool} {processId source : PID} {sig
     (clean : Clean gone processId process) (live : process.exiting = none)
     (fresh : inert gone processId (queueAt source signal process) { source, signal } = false) :
     Clean gone processId (queueAt source signal process) := by
-  refine clean.preserve live live (fun entry mem => ?_) (fun link mem _ => ⟨mem, id⟩)
+  refine clean.preserve live live (fun entry mem => ?_) (fun link mem _ => ⟨mem, id⟩) (fun _ mem => .inl ⟨mem, id⟩)
   have mem' : entry ∈ process.queue ∨ entry = { source, signal } := by
     simpa [queueAt, Kernel.append_eq] using mem
   rcases mem' with old | rfl
@@ -4193,6 +4215,7 @@ private theorem CleanOutside.unpark {state : State} {except : PID → Prop} {pro
       (clean processId outside process' found').preserve (by rw [record] at found'; cases found'; exact live)
         (by rw [record] at found'; cases found'; exact live) (fun entry mem => .inl ⟨mem, fun inside => by
           rw [inert_congr rfl rfl rfl rfl] at inside; exact inside⟩) (fun link mem _ => ⟨mem, id⟩)
+          (fun _ mem => .inl ⟨mem, id⟩)
     refine CleanOutside.andThen ?_
     have recordOf : ((Effect.modify processId unparked).apply state).record processId = some (unparked process) := by
       rw [Effect.record_apply, Effect.record_modify, record]; simp
@@ -4319,16 +4342,19 @@ private theorem Clean.neutral {gone : PID → Bool} {processId : PID} {process p
     (clean : Clean gone processId process) (live : process.exiting = none) (live' : process'.exiting = none)
     (queue : process'.queue = process.queue) (refCounter : process'.refCounter = process.refCounter)
     (monitoring : process'.monitoring = process.monitoring) (aliases : process'.aliases = process.aliases)
-    (links : process'.links = process.links) : Clean gone processId process' :=
+    (links : process'.links = process.links)
+    (monitors : ∀ monitor ∈ process'.monitors, monitor ∈ process.monitors ∨ gone monitor.2 = false) :
+    Clean gone processId process' :=
   clean.preserve live live' (fun entry mem => .inl ⟨queue ▸ mem, fun inside => by
     rwa [inert_congr rfl refCounter monitoring aliases] at inside⟩)
-    (fun link mem _ => ⟨links ▸ mem, id⟩)
+    (fun link mem _ => ⟨links ▸ mem, id⟩) (fun monitor mem => (monitors monitor mem).imp (⟨·, id⟩) id)
 
 /-- Removing the oldest signal of a clean live record keeps it clean. -/
 private theorem Clean.pop {gone : PID → Bool} {processId : PID} {process : ProcessState}
     (clean : Clean gone processId process) (live : process.exiting = none) :
     Clean gone processId { process with queue := process.queue.drop 1 } :=
   clean.preserve live live (fun _ mem => .inl ⟨List.mem_of_mem_drop mem, id⟩) (fun _ mem _ => ⟨mem, id⟩)
+    (fun _ mem => .inl ⟨mem, id⟩)
 
 /-- A change that adds monitors and aliases, keeping the queue and the rest of
 what inertness reads, keeps a live record clean. -/
@@ -4336,10 +4362,11 @@ private theorem Clean.grow {gone : PID → Bool} {processId : PID} {process proc
     (clean : Clean gone processId process) (live : process.exiting = none) (live' : process'.exiting = none)
     (queue : process'.queue = process.queue) (refCounter : process'.refCounter = process.refCounter)
     (monitoring : ∀ entry ∈ process.monitoring, entry ∈ process'.monitoring)
-    (aliases : ∀ alias ∈ process.aliases, alias ∈ process'.aliases) (links : process'.links = process.links) :
+    (aliases : ∀ alias ∈ process.aliases, alias ∈ process'.aliases) (links : process'.links = process.links)
+    (monitors : ∀ monitor ∈ process'.monitors, monitor ∈ process.monitors ∨ gone monitor.2 = false) :
     Clean gone processId process' := by
   refine clean.preserve live live' (fun entry mem => .inl ⟨queue ▸ mem, fun inside => ?_⟩)
-    (fun link mem _ => ⟨links ▸ mem, id⟩)
+    (fun link mem _ => ⟨links ▸ mem, id⟩) (fun monitor mem => (monitors monitor mem).imp (⟨·, id⟩) id)
   have anyMono : ∀ {test : List Nat × PID → Bool},
       Kernel.any process'.monitoring test = false → Kernel.any process.monitoring test = false := by
     intro test none
@@ -4374,6 +4401,7 @@ private theorem Clean.allocate {gone : PID → Bool} {processId : PID} {process 
     (fresh : ∀ entry ∈ process.queue, entry.carries (Kernel.append processId [process.refCounter + 1]) = false) :
     Clean gone processId { process with refCounter := process.refCounter + 1 } := by
   refine clean.preserve live live (fun entry mem => .inl ⟨mem, fun inside => ?_⟩) (fun link mem _ => ⟨mem, id⟩)
+    (fun _ mem => .inl ⟨mem, id⟩)
   have carries := fresh entry mem
   obtain ⟨source, signal⟩ := entry
   have allocated : ∀ (reference : List Nat), reference ≠ Kernel.append processId [process.refCounter + 1] →
@@ -4414,10 +4442,11 @@ private theorem Clean.demonitor {gone : PID → Bool} {processId : PID} {process
     (refCounter : process'.refCounter = process.refCounter) (links : process'.links = process.links)
     (monitoring : process'.monitoring = Kernel.filter (·.1 != reference) process.monitoring)
     (aliases : process'.aliases = Kernel.erase process.aliases reference)
-    (fresh : ∀ entry ∈ process.queue, entry.carries reference = false) :
+    (fresh : ∀ entry ∈ process.queue, entry.carries reference = false)
+    (monitors : process'.monitors = process.monitors) :
     Clean gone processId process' := by
   refine clean.preserve live live' (fun entry mem => .inl ⟨queue ▸ mem, fun inside => ?_⟩)
-    (fun link mem _ => ⟨links ▸ mem, id⟩)
+    (fun link mem _ => ⟨links ▸ mem, id⟩) (fun _ mem => .inl ⟨monitors ▸ mem, id⟩)
   have carries := fresh entry (queue ▸ mem)
   obtain ⟨source, signal⟩ := entry
   have anyKept : ∀ (other : List Nat), other ≠ reference →
@@ -4565,7 +4594,7 @@ private theorem Task.ownEffect_clean {state : State} {tasks : List (PID × Task 
       refine CleanOutside.modify (fun _ => rfl) clean fun _ process' found' => ?_
       rw [found] at found'; cases found'
       exact (clean processId (by simp) process found).demonitor (reference := reference) live live rfl rfl rfl rfl rfl
-        fun entry mem => by have := confined entry (same ▸ mem); simpa using this
+        (fun entry mem => by have := confined entry (same ▸ mem); simpa using this) rfl
     | cancelTimer reference =>
       simp only [Task.ownEffect, State.requestEffect]
       split
@@ -4573,7 +4602,7 @@ private theorem Task.ownEffect_clean {state : State} {tasks : List (PID × Task 
           fun _ process' found' => ?_)
         rw [Effect.record_apply, Effect.record_retime, found] at found'; cases found'
         rw [(Effect.KeepsAlive.retime _).gone]
-        exact (clean processId (by simp) process found).neutral live live rfl rfl rfl rfl rfl
+        exact (clean processId (by simp) process found).neutral live live rfl rfl rfl rfl rfl fun _ mem => .inl mem
       · simpa [Effect.apply_empty] using clean
     | alive target =>
       simp only [Task.ownEffect, State.requestEffect]
@@ -4639,7 +4668,7 @@ private theorem Task.ownEffect_clean {state : State} {tasks : List (PID × Task 
               | exact aliveAllocated
               | (rw [Effect.apply_modify_alive]; exact (State.alive_modify _ _ _ _ fun _ => rfl).trans alive))
         refine (unparked processId (by simp) process' found').grow live' live' rfl rfl
-          (fun entry mem => by simp [Kernel.append_eq, mem]) (fun alias' mem => ?_) rfl
+          (fun entry mem => by simp [Kernel.append_eq, mem]) (fun alias' mem => ?_) rfl (fun _ mem => .inl mem)
         split <;> simp [Kernel.append_eq, mem]
     | startTimer destination message duration =>
       simp only [Kernel.any_eq, Bool.not_eq_true', List.any_eq_false, Bool.not_eq_true] at confined
@@ -4659,12 +4688,14 @@ private theorem CleanOutside.neutral {state : State} {except : PID → Prop} {pr
     {change : ProcessState → ProcessState} (clean : CleanOutside state except) (alive : state.alive processId = true)
     (keeps : ∀ process, (change process).queue = process.queue ∧ (change process).refCounter = process.refCounter ∧
       (change process).monitoring = process.monitoring ∧ (change process).aliases = process.aliases ∧
-      (change process).links = process.links ∧ (change process).exiting = process.exiting) :
+      (change process).links = process.links ∧ (change process).exiting = process.exiting ∧
+      (change process).monitors = process.monitors) :
     CleanOutside ((Effect.modify processId change).apply state) except := by
-  refine CleanOutside.modify (fun process => by rw [(keeps process).2.2.2.2.2]) clean fun outside process found => ?_
+  refine CleanOutside.modify (fun process => by rw [(keeps process).2.2.2.2.2.1]) clean fun outside process found => ?_
   have live : process.exiting = none := by simp only [State.alive, found] at alive; simpa using alive
-  obtain ⟨queue, refCounter, monitoring, aliases, links, exiting⟩ := keeps process
+  obtain ⟨queue, refCounter, monitoring, aliases, links, exiting, monitors⟩ := keeps process
   exact (clean _ outside process found).neutral live (exiting.trans live) queue refCounter monitoring aliases links
+    fun _ mem => .inl (monitors ▸ mem)
 
 /-- Removing a monitor and alias of a live process keeps a state clean when no
 queued signal carries its reference. -/
@@ -4678,7 +4709,7 @@ private theorem CleanOutside.demonitor {state : State} {except : PID → Prop} {
   have live : process.exiting = none := by simp only [State.alive, found] at alive; simpa using alive
   have same : state.process processId = process := by simp [State.process, found]
   exact (clean _ outside process found).demonitor (reference := reference) live live rfl rfl rfl rfl rfl
-    fun entry mem => fresh entry (same ▸ mem)
+    (fun entry mem => fresh entry (same ▸ mem)) rfl
 
 /-- Normalizing after handling a confined kind of signal changes no record. -/
 private theorem Task.handleEffect_clean {state : State} {tasks : List (PID × Task α)}
@@ -4715,7 +4746,7 @@ private theorem Task.handleEffect_clean {state : State} {tasks : List (PID × Ta
       rw [Effect.record_apply, Effect.record_modify, found]; simp
     have neutralAppend : ∀ (message : Term) (state' : State), CleanOutside state' (fun _ => False) →
         state'.alive processId = true → CleanOutside ((appendEffect processId message).apply state') (fun _ => False) :=
-      fun message state' clean' alive' => CleanOutside.neutral clean' alive' fun _ => ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
+      fun message state' clean' alive' => CleanOutside.neutral clean' alive' fun _ => ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
     obtain ⟨source, signal⟩ := entry
     cases signal with
     | message message => exact neutralAppend message _ popped alivePopped
@@ -4728,7 +4759,17 @@ private theorem Task.handleEffect_clean {state : State} {tasks : List (PID × Ta
       simp only [State.handleEffect]
       refine CleanOutside.modify (fun _ => rfl) popped fun _ process' found' => ?_
       rw [recordPopped] at found'; cases found'
-      exact (popped processId (by simp) _ recordPopped).grow live live rfl rfl (fun _ mem => mem) (fun _ mem => mem) rfl
+      have fresh : state.gone source = false := by
+        have := ((clean processId (by simp) process found).live_facts live).1 ⟨source, .monitor reference⟩
+          (by rw [← same, queue]; exact List.mem_cons_self)
+        simpa [inert] using this
+      have goneOf := (Effect.KeepsAlive.modify (change := pop) (processId := processId) fun _ => rfl).gone state
+      refine (popped processId (by simp) _ recordPopped).grow live live rfl rfl (fun _ mem => mem) (fun _ mem => mem) rfl
+        fun monitor mem => ?_
+      simp only [Kernel.append_eq, List.mem_append, List.mem_singleton] at mem
+      rcases mem with old | rfl
+      · exact .inl old
+      · exact .inr (by rw [goneOf]; exact fresh)
     | down reference reason =>
       simp only [Kernel.any_eq, Bool.not_eq_true', List.any_eq_false, Bool.not_eq_true] at confined
       simp only [State.handleEffect]
@@ -4750,7 +4791,7 @@ private theorem Task.handleEffect_clean {state : State} {tasks : List (PID × Ta
           show (process.queue.drop 1) = rest
           rw [← same, queue]; rfl
         split
-        · refine ⟨CleanOutside.neutral popped alivePopped fun _ => ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩, ?_, ?_⟩
+        · refine ⟨CleanOutside.neutral popped alivePopped fun _ => ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩, ?_, ?_⟩
           · rw [Effect.apply_modify_alive]
             refine (State.alive_modify _ processId processId _ ?_).trans alivePopped
             intro process; rfl
@@ -5016,9 +5057,14 @@ private theorem State.refers_of_leavesOthers {state : State} {processId other : 
   rcases leaves (other, process) mem with same | kept
   · exact absurd same differ
   unfold Refers
-  cases exiting : process.exiting <;> simp only [exiting] at kept ⊢ <;>
-    simp only [Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_false_iff] at kept <;>
-    simp only [kept, Bool.or_false] <;> exact kept.1
+  cases exiting : process.exiting with
+  | none =>
+    simp only [exiting, Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_false_iff] at kept ⊢
+    exact kept
+  | some =>
+    simp only [exiting] at kept ⊢
+    simp only [Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_false_iff] at kept
+    simp only [kept, Bool.or_false]
 
 /-- Removing the link to a process that ended keeps a live record clean that does not refer to it. -/
 private theorem Clean.unlinked {gone : PID → Bool} {processId target : PID} {process : ProcessState}
@@ -5028,11 +5074,12 @@ private theorem Clean.unlinked {gone : PID → Bool} {processId target : PID} {p
       (entry.signal matches .isAlive | .monitor _) = false := by
     intro entry mem same
     simp only [Refers, live, Bool.or_eq_false_iff, Kernel.any_eq, List.any_eq_false] at refers
-    have := refers.1 entry mem
+    have := refers.1.1 entry mem
     simp only [same, beq_self_eq_true, Bool.true_and] at this
     simpa using this
   refine clean.preserve live live (fun entry mem => .inl ⟨mem, fun inside => ?_⟩)
     (fun link mem _ => ⟨by simp [linkRemoved, Kernel.filter_eq] at mem; exact mem.1, id⟩)
+    (fun _ mem => .inl ⟨mem, id⟩)
   obtain ⟨source, signal⟩ := entry
   cases signal with
   | _ => simp only [inert, linkRemoved] at inside ⊢; exact inside
@@ -5043,7 +5090,7 @@ private theorem Refers.unlinked {process : ProcessState} {processId : PID} (refe
   simp only [linkRemoved]
   cases exiting : process.exiting <;> simp only [exiting] at refers ⊢
   · simp only [Bool.or_eq_false_iff] at refers ⊢
-    refine ⟨refers.1, ?_⟩
+    refine ⟨⟨refers.1.1, ?_⟩, refers.2⟩
     simp only [Kernel.any_eq, Kernel.filter_eq, List.any_filter] at refers ⊢
     simp [List.any_eq_false]
     intros; simp_all

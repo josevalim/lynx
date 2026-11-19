@@ -983,7 +983,8 @@ private theorem normRecord_live {gone : PID → Bool} {processId : PID} {process
     (live : process.exiting = none) :
     normRecord gone processId process = { process with
       queue := Kernel.filter (fun entry => !inert gone processId process entry) process.queue
-      links := Kernel.filter (fun link => !(link.2.isSome && gone link.1)) process.links } := by
+      links := Kernel.filter (fun link => !(link.2.isSome && gone link.1)) process.links
+      monitors := Kernel.filter (fun monitor => !gone monitor.2) process.monitors } := by
   unfold normRecord; rw [live]
 
 private theorem lookup_filter_congr {β : Type} {key : PID} {keep keep' : PID × β → Bool} :
@@ -1079,6 +1080,7 @@ private theorem normRecord_eagerExit {gone : PID → Bool} {processId : PID} {pr
       simp [inert']
   · refine List.filter_congr fun entry _ => ?_
     cases gone entry.fst <;> cases entry.snd.isSome <;> simp
+  · simp only [Bool.and_self]
 
 private theorem normRecord_unpark {gone : PID → Bool} {processId : PID} {process : ProcessState}
     (live : process.exiting = none) :
@@ -1174,10 +1176,13 @@ private theorem normRecord_any {gone : PID → Bool} {processId : PID} {process 
     (live : process.exiting = none)
     (inert' : ∀ entry ∈ process.queue, inert gone processId process entry = true →
       ∀ gone', inert gone' processId process entry = true)
-    (links : ∀ link ∈ process.links, (link.2.isSome && gone link.1) = false) (gone' : PID → Bool) :
+    (links : ∀ link ∈ process.links, (link.2.isSome && gone link.1) = false)
+    (monitors : ∀ monitor ∈ process.monitors, gone monitor.2 = false) (gone' : PID → Bool) :
     normRecord gone' processId (normRecord gone processId process) = normRecord gone' processId process := by
   have kept : Kernel.filter (fun link => !(link.2.isSome && gone link.1)) process.links = process.links := by
     rw [Kernel.filter_eq]; exact List.filter_eq_self.mpr fun link mem => by simp [links link mem]
+  have keptMonitors : Kernel.filter (fun monitor => !gone monitor.2) process.monitors = process.monitors := by
+    rw [Kernel.filter_eq]; exact List.filter_eq_self.mpr fun monitor mem => by simp [monitors monitor mem]
   have live₁ : (normRecord gone processId process).exiting = none := by rw [normRecord_live live]; exact live
   have same : inert gone' processId (normRecord gone processId process) = inert gone' processId process := by
     funext entry
@@ -1185,7 +1190,8 @@ private theorem normRecord_any {gone : PID → Bool} {processId : PID} {process 
     · rw [normRecord_live live]
     · rw [normRecord_live live]
     · rw [normRecord_live live]
-  rw [normRecord_live live₁, same, normRecord_live (gone := gone) live, normRecord_live (gone := gone') live, kept]
+  rw [normRecord_live live₁, same, normRecord_live (gone := gone) live, normRecord_live (gone := gone') live, kept,
+    keptMonitors]
   simp only [Kernel.filter_eq, List.filter_filter]
   congr 1
   refine List.filter_congr fun entry mem => ?_
@@ -1329,6 +1335,14 @@ private theorem clean_live {gone : PID → Bool} {processId : PID} {process : Pr
   have links := congrArg ProcessState.links clean
   simp only [Kernel.filter_eq, List.filter_eq_self, Bool.not_eq_eq_eq_not, Bool.not_true] at queue links
   exact ⟨queue, links⟩
+
+private theorem clean_monitors {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (clean : normRecord gone processId process = process) (live : process.exiting = none) :
+    ∀ monitor ∈ process.monitors, gone monitor.2 = false := by
+  rw [normRecord_live live] at clean
+  have monitors := congrArg ProcessState.monitors clean
+  simp only [Kernel.filter_eq, List.filter_eq_self, Bool.not_eq_eq_eq_not, Bool.not_true] at monitors
+  exact monitors
 
 /-- A change normalizing leaves as it is when it leaves the record as it is. -/
 private theorem renormalize_of_clean {gone : PID → Bool} {processId : PID} {change : ProcessState → ProcessState}
@@ -1556,10 +1570,15 @@ private theorem normRecord_popped {gone : PID → Bool} {processId : PID} {proce
     (clean : normRecord gone processId process = process) (live : process.exiting = none)
     {change : ProcessState → ProcessState} (queue : (change process).queue = process.queue.tail)
     (same : ∀ entry, inert gone processId (change process) entry = inert gone processId process entry)
-    (links : (change process).links = process.links) (live' : (change process).exiting = none) :
+    (links : (change process).links = process.links)
+    (monitors : ∀ monitor ∈ (change process).monitors, gone monitor.2 = false)
+    (live' : (change process).exiting = none) :
     normRecord gone processId (change process) = change process := by
   have cleaned := clean_live clean live
-  rw [normRecord_live live', funext same, queue, links]
+  have keepMonitors : Kernel.filter (fun monitor => !gone monitor.2) (change process).monitors =
+      (change process).monitors := by
+    rw [Kernel.filter_eq]; exact List.filter_eq_self.mpr fun monitor mem => by simp [monitors monitor mem]
+  rw [normRecord_live live', keepMonitors, funext same, queue, links]
   have keepQueue : Kernel.filter (fun entry => !inert gone processId process entry) process.queue.tail =
       process.queue.tail := by
     rw [Kernel.filter_eq]
@@ -2487,7 +2506,7 @@ private theorem Config.forced_own_other {elapsed : PID → Nat → Nat} {config 
     refine Config.forced_other (key := .own processId) reachable lookup found live ⟨rfl, rfl, rfl⟩
       (hidden_store process updated) (normRecord_any live (fun entry mem inert' gone' =>
         inert_any (process := process) (process' := storeChange updated process) (cleaned.1 entry mem)
-          inert' gone') cleaned.2) owner step' ?_
+          inert' gone') cleaned.2 fun monitor mem => clean_monitors clean live monitor mem) owner step' ?_
     intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ keeps₁ live₁
     obtain ⟨record, -, -, counter₁⟩ := later within found₁ live₁ keeps₁
     have tagged := Config.tagged_own_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
@@ -2676,12 +2695,15 @@ private theorem normRecord_ack_clean {gone : PID → Bool} {processId source : P
       process.queue.tail := by
     rw [Kernel.filter_eq]
     exact List.filter_eq_self.mpr fun entry mem => by simp [cleaned.1 entry (List.mem_of_mem_tail mem)]
+  have keepMonitors : Kernel.filter (fun monitor => !gone monitor.2) process.monitors = process.monitors := by
+    rw [Kernel.filter_eq]
+    exact List.filter_eq_self.mpr fun monitor mem => by simp [clean_monitors clean live monitor mem]
   unfold ackChange ackedChange popChange
   split
   · rw [keepLinks _ fun link mem => by
         simp only [Kernel.filter_eq, List.mem_filter] at mem; exact mem.1]
-    simp only [keepQueue]
-  · simp only [keepQueue, keepLinks _ fun _ mem => mem]
+    simp only [keepQueue, keepMonitors]
+  · simp only [keepQueue, keepMonitors, keepLinks _ fun _ mem => mem]
 
 /-- Normalizing before handling a queued acknowledgement reaches what handling it reaches. -/
 private theorem normRecord_ack_kept {gone : PID → Bool} {processId source : PID} {id : Nat} {process : ProcessState}
@@ -2730,9 +2752,13 @@ private theorem normRecord_ack_kept {gone : PID → Bool} {processId source : PI
     have kept : inert gone processId process ⟨source, .unlinkAck id⟩ = false := by simp [inert]
     split <;> split <;> simp [queue, kept, Kernel.filter_eq, List.filter_filter]
   rw [links, queues]
+  have twice : Kernel.filter (fun monitor : List Nat × PID => !gone monitor.2)
+      (Kernel.filter (fun monitor => !gone monitor.2) process.monitors) =
+      Kernel.filter (fun monitor => !gone monitor.2) process.monitors := by
+    simp only [Kernel.filter_eq, List.filter_filter, Bool.and_self]
   unfold ackChange ackedChange popChange
   rw [normRecord_live live]
-  split <;> split <;> rfl
+  split <;> split <;> (simp only [twice]; try rfl)
 
 /-- Handling the oldest signal, a message to an alias: delivered while the alias is active. -/
 private def aliasChange (alias : List Nat) (message : Term) (process : ProcessState) : ProcessState :=
@@ -2795,6 +2821,60 @@ private theorem hidden_alias {entry : Entry} (notLink : entry.signal ≠ .link) 
     unfold aliasChange
     rw [same]
     split <;> rfl
+
+/-- Handling the oldest signal, a monitor: the process records its watcher. -/
+private def monitorChange (reference : List Nat) (source : PID) (process : ProcessState) : ProcessState :=
+  { process with queue := process.queue.tail, monitors := Kernel.append process.monitors [(reference, source)] }
+
+private theorem Task.handle_monitor {state : State} {processId : PID} {task : Task α} {process : ProcessState}
+    {source : PID} {reference : List Nat} {rest : List Entry} (sorted : state.Sorted)
+    (found : state.record processId = some process)
+    (queue : process.queue = ⟨source, .monitor reference⟩ :: rest) :
+    task.handle state processId = [Transition.mk (.handle processId ⟨source, .monitor reference⟩)
+      (state.set processId (monitorChange reference source process)) [(processId, task)] none false] := by
+  have processOf : state.process processId = process := by simp [State.process, found]
+  simp only [Task.handle, processOf, queue, State.handle]
+  rw [State.modify_found (process := { process with queue := rest }) (by simp [State.record_set]),
+    State.set_set sorted]
+  simp [monitorChange, queue]
+
+private theorem hidden_monitor {entry : Entry} (notLink : entry.signal ≠ .link) (reference : List Nat) (source : PID) :
+    Hidden (Heads entry) (monitorChange reference source) where
+  exiting _ := rfl
+  trapExit _ := rfl
+  parked _ := rfl
+  links heads other link := (hidden_pop notLink).links heads other link
+  push other heads := by
+    obtain ⟨heads', tail⟩ := heads.push other
+    exact ⟨heads', by simp only [monitorChange, tail]; rfl⟩
+  eagerExit _ heads := ⟨heads, rfl⟩
+  unpark heads := ⟨heads, rfl⟩
+
+private theorem normRecord_monitor {gone : PID → Bool} {processId : PID} {process : ProcessState} {entry : Entry}
+    (live : process.exiting = none) (heads : Heads entry process) (kept : inert gone processId process entry = false)
+    (reference : List Nat) (source : PID) :
+    normRecord gone processId (monitorChange reference source (normRecord gone processId process)) =
+      normRecord gone processId (monitorChange reference source process) := by
+  obtain ⟨rest, queue⟩ := heads
+  have live₁ : (monitorChange reference source (normRecord gone processId process)).exiting = none := by
+    rw [normRecord_live live]; exact live
+  rw [normRecord_live live₁, normRecord_live (show (monitorChange reference source process).exiting = none from live)]
+  have same : ∀ other : ProcessState,
+      inert gone processId (monitorChange reference source other) = inert gone processId other := fun _ => rfl
+  rw [same, same, funext (inert_normRecord (gone := gone) (processId := processId) live), normRecord_live live]
+  simp [monitorChange, queue, kept, Kernel.filter_eq, Kernel.append_eq, List.filter_filter, List.filter_append]
+
+/-- A monitor from a process that is gone does nothing, and neither does handling it. -/
+private theorem normRecord_monitor_gone {gone : PID → Bool} {processId source : PID} {process : ProcessState}
+    {reference : List Nat} (live : process.exiting = none) (heads : Heads ⟨source, .monitor reference⟩ process)
+    (goneSource : gone source = true) :
+    normRecord gone processId (monitorChange reference source process) = normRecord gone processId process := by
+  obtain ⟨rest, queue⟩ := heads
+  rw [normRecord_live (show (monitorChange reference source process).exiting = none from live), normRecord_live live]
+  have same : inert gone processId (monitorChange reference source process) = inert gone processId process := rfl
+  have inert' : inert gone processId process ⟨source, .monitor reference⟩ = true := by simp [inert, goneSource]
+  rw [same]
+  simp [monitorChange, queue, inert', goneSource, Kernel.filter_eq, Kernel.append_eq, List.filter_append]
 
 /-- Records whose process sees the same environment and mailbox as `base`, and
 holds the same monitors and aliases. -/
@@ -2924,7 +3004,7 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
     simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
     refine Config.forced_other (key := .handle processId) (task' := resumeTask (resumedBy task entry) task) reachable
       lookup found live ⟨heads, rfl, rfl, rfl, rfl, rfl⟩ ((hidden_pop notLink).viewed process)
-      (renormalize_of_clean (normRecord_popped clean live (by simp [popChange]) (fun _ => rfl) rfl live)) owner step' ?_
+      (renormalize_of_clean (normRecord_popped clean live (by simp [popChange]) (fun _ => rfl) rfl (fun monitor mem => clean_monitors clean live monitor mem) live)) owner step' ?_
     intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁
     obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ (kept _ _)
     have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
@@ -2947,7 +3027,7 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
     simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
     refine Config.forced_other (key := .handle processId) (task' := task) reachable lookup found live
       ⟨heads, rfl, rfl, rfl, rfl, rfl⟩ ((hidden_message (by simp) message).viewed process)
-      (renormalize_of_clean (normRecord_popped clean live (by simp [messageChange]) (fun _ => rfl) rfl live))
+      (renormalize_of_clean (normRecord_popped clean live (by simp [messageChange]) (fun _ => rfl) rfl (fun monitor mem => clean_monitors clean live monitor mem) live))
       owner step' ?_
     intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁
     obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ (by simp [inert])
@@ -2979,6 +3059,7 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
       ⟨heads, rfl, rfl, rfl, rfl, rfl⟩ ((hidden_alias (by simp) alias message).viewed process)
       (renormalize_of_clean (normRecord_popped clean live (by unfold aliasChange; split <;> rfl)
         (fun _ => by unfold aliasChange; split <;> rfl) (by unfold aliasChange; split <;> rfl)
+        (fun monitor mem => clean_monitors clean live monitor (by unfold aliasChange at mem; split at mem <;> exact mem))
         (liveChange _ live))) owner step' ?_
     intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁
     have kept : inert raw.gone processId process₁ ⟨source, .aliasMessage alias message⟩ = false := by
@@ -2999,6 +3080,42 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
     simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
     exact .inl ⟨_, tagged, liveChange _ (by rw [normRecord_live live₁]; exact live₁),
       normRecord_alias live₁ heads₁ kept alias message⟩
+  | monitor reference =>
+    have blockedNow : task.blocked state processId = true := by
+      simpa [Task.forcedHead, notInert] using flagged
+    have notGone : state.gone source = false := by
+      have := notInert; rw [State.inertEntry_eq, processOf] at this; simpa [inert] using this
+    rw [Task.handle_monitor sorted found queue] at head
+    simp only [List.head?_cons, Option.some.injEq] at head
+    subst head
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
+    refine Config.forced_other (key := .handle processId) (task' := task) reachable lookup found live
+      ⟨heads, rfl, rfl, rfl, rfl, rfl⟩ ((hidden_monitor (by simp) reference source).viewed process)
+      (renormalize_of_clean (normRecord_popped clean live rfl (fun _ => rfl) rfl (fun monitor mem => ?_) live))
+      owner step' ?_
+    · simp only [monitorChange, Kernel.append_eq, List.mem_append, List.mem_singleton] at mem
+      rcases mem with old | rfl
+      · exact clean_monitors clean live monitor old
+      · exact notGone
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁
+    cases goneSource : raw.gone source
+    · have kept : inert raw.gone processId process₁ ⟨source, .monitor reference⟩ = false := by
+        simp [inert, goneSource]
+      obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ kept
+      have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
+        simp [State.process, record]
+      have blocked := Task.blocked_of_viewed (task := task) processOf processOf₁ (viewed₁.normRecord live₁)
+      have tagged := Config.tagged_handle_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1
+        lookup₁ (by rw [processOf₁, queue₁])
+        (transition := Transition.mk (.handle processId ⟨source, .monitor reference⟩)
+          (raw.normalize.set processId (monitorChange reference source (normRecord raw.gone processId process₁)))
+          [(processId, task)] none false)
+        (by rw [Task.handle_monitor (Sorted.normalize within.1) record queue₁]; rfl)
+        (by simp only [Task.forcedHead, blocked, blockedNow, Bool.or_true])
+      simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
+      exact .inl ⟨_, tagged, by rw [monitorChange, normRecord_live live₁]; exact live₁,
+        normRecord_monitor live₁ heads₁ kept reference source⟩
+    · exact .inr ⟨rfl, normRecord_monitor_gone live₁ heads₁ goneSource⟩
   | reply value => exact quietCase rfl
   | flush => exact quietCase rfl
   | unlinkAck id =>
@@ -5121,12 +5238,15 @@ private theorem ackChange_clean {gone : PID → Bool} {processId source : PID} {
       process.queue.tail := by
     rw [Kernel.filter_eq]
     exact List.filter_eq_self.mpr fun entry mem => by simp [cleaned.1 entry (List.mem_of_mem_tail mem)]
+  have keepMonitors : Kernel.filter (fun monitor => !gone monitor.2) process.monitors = process.monitors := by
+    rw [Kernel.filter_eq]
+    exact List.filter_eq_self.mpr fun monitor mem => by simp [clean_monitors clean live monitor mem]
   unfold ackChange ackedChange popChange
   split
   · rw [keepLinks _ fun link mem => by
         simp only [Kernel.filter_eq, List.mem_filter] at mem; exact mem.1]
-    simp only [keepQueue]
-  · simp only [keepQueue, keepLinks _ fun _ mem => mem]
+    simp only [keepQueue, keepMonitors]
+  · simp only [keepQueue, keepMonitors, keepLinks _ fun _ mem => mem]
 
 /-- Exit links skip the link being removed. -/
 private theorem exitLinks_unacked (source : PID) (id : Nat) :
@@ -5261,7 +5381,7 @@ private theorem Config.forced_handle_own {elapsed : PID → Nat → Nat} {config
     have changed : messageChange message process =
         queueChange List.tail (fun messages => Kernel.append messages [message]) id process := rfl
     rw [rewriteTask_same lookup, State.normalize_set_clean (process' := messageChange message process) sorted
-      normalized found live live (normRecord_popped clean live (by simp [messageChange]) (fun _ => rfl) rfl live),
+      normalized found live live (normRecord_popped clean live (by simp [messageChange]) (fun _ => rfl) rfl (fun monitor mem => clean_monitors clean live monitor mem) live),
       changed]
     refine Config.handle_own_square reachable lookup found queue (fun _ signal => by cases signal)
       (messageChange_queue message) ?_ ?_

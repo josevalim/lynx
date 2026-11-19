@@ -146,7 +146,7 @@ whose queue holds messages from processes. -/
 /-- Normalizing keeps a quiet record. -/
 public theorem ProcessState.Quiet.normalizeRecord {process : ProcessState} (quiet : process.Quiet) (state : State)
     (processId : PID) : state.normalizeRecord processId process = process := by
-  obtain ⟨live, links, -, -, -, -, queue⟩ := quiet
+  obtain ⟨live, links, monitors, -, -, -, queue⟩ := quiet
   unfold State.normalizeRecord
   rw [live]
   dsimp only
@@ -157,11 +157,11 @@ public theorem ProcessState.Quiet.normalizeRecord {process : ProcessState} (quie
     obtain ⟨source, signal'⟩ := entry
     simp only at signal; subst signal
     simp [State.keepEntry, State.inertEntry, live]
-  rw [kept, links]
+  rw [kept, links, monitors]
   simp only [Kernel.filter_eq, List.filter_nil]
   cases process
-  simp only at links live ⊢
-  subst links live
+  simp only at links live monitors ⊢
+  subst links live monitors
   rfl
 
 /-- Normalizing keeps a state whose records are quiet. -/
@@ -197,8 +197,8 @@ private def State.Calm (state : State) : Prop :=
 
 private theorem ProcessState.Quiet.normRecord {gone : PID → Bool} {processId : PID} {process : ProcessState}
     (quiet : process.Quiet) : Lynx.Concurrent.normRecord gone processId process = process := by
-  obtain ⟨live, links, -, -, -, -, queue⟩ := quiet
-  rw [normRecord_live live, links]
+  obtain ⟨live, links, monitors, -, -, -, queue⟩ := quiet
+  rw [normRecord_live live, links, monitors]
   have kept : Kernel.filter (fun entry => !inert gone processId process entry) process.queue = process.queue := by
     rw [Kernel.filter_eq]
     refine List.filter_eq_self.mpr fun entry mem => ?_
@@ -208,8 +208,8 @@ private theorem ProcessState.Quiet.normRecord {gone : PID → Bool} {processId :
     simp [inert]
   rw [kept]
   cases process
-  simp only at links ⊢
-  subst links
+  simp only at links monitors ⊢
+  subst links monitors
   rfl
 
 private theorem State.Quiet.calm {state : State} (quiet : state.Quiet) : state.Calm :=
@@ -543,8 +543,8 @@ private theorem State.Quiet.leavesOthers {state : State} (sorted : state.Sorted)
   intro other process mem
   have found : state.record other = some process := by
     simpa [State.record, Kernel.lookup_eq] using Sorted.lookup_of_mem sorted mem
-  obtain ⟨live, links, -, -, -, -, queue⟩ := quiet.2 _ _ found
-  simp only [live, links, Kernel.any_eq, List.any_nil, Bool.not_false, Bool.and_true, Bool.or_eq_true,
+  obtain ⟨live, links, monitors, -, -, -, queue⟩ := quiet.2 _ _ found
+  simp only [live, links, monitors, Kernel.any_eq, List.any_nil, Bool.not_false, Bool.and_true, Bool.or_eq_true,
     beq_iff_eq, Bool.not_eq_true', List.any_eq_false]
   refine .inr fun entry mem' => ?_
   obtain ⟨⟨message, signal⟩, -⟩ := queue entry mem'

@@ -453,7 +453,8 @@ ended, everything but what it still sends and answers. -/
   | none =>
       { process with
         queue := Kernel.filter (state.keepEntry processId process) process.queue
-        links := Kernel.filter (fun link => !(link.2.isSome && state.gone link.1)) process.links }
+        links := Kernel.filter (fun link => !(link.2.isSome && state.gone link.1)) process.links
+        monitors := Kernel.filter (fun monitor => !state.gone monitor.2) process.monitors }
 
 /-- Whether a process that ended has nothing left to send or answer. -/
 @[expose] def ProcessState.finished (process : ProcessState) : Bool :=
@@ -462,10 +463,11 @@ ended, everything but what it still sends and answers. -/
   | _ => false
 
 /-- Whether normalizing keeps a record as it is: a live process that keeps
-every queued signal and link. -/
+every queued signal, link and monitor. -/
 @[expose] def State.keepsRecord (state : State) (processId : PID) (process : ProcessState) : Bool :=
   process.exiting.isNone && Kernel.all process.queue (state.keepEntry processId process) &&
-    Kernel.all process.links (fun link => !(link.2.isSome && state.gone link.1))
+    Kernel.all process.links (fun link => !(link.2.isSome && state.gone link.1)) &&
+    Kernel.all process.monitors (fun monitor => !state.gone monitor.2)
 
 /-- Remove what nothing can observe any more. -/
 @[expose] def State.normalize (state : State) : State :=
@@ -492,12 +494,13 @@ theorem State.normalize_eq (state : State) : state.normalize =
     · have keeps := kept
       simp only [State.keepsRecord, Bool.and_eq_true, Option.isNone_iff_eq_none, Kernel.all_eq,
         List.all_eq_true] at keeps
-      obtain ⟨⟨live, queue⟩, links⟩ := keeps
+      obtain ⟨⟨⟨live, queue⟩, links⟩, monitors⟩ := keeps
       have same : state.normalizeRecord record.1 record.2 = record.2 := by
         unfold State.normalizeRecord
         rw [live]
         dsimp only
-        rw [Kernel.filter_eq, List.filter_eq_self.mpr queue, List.filter_eq_self.mpr links]
+        rw [Kernel.filter_eq, List.filter_eq_self.mpr queue, List.filter_eq_self.mpr links,
+          List.filter_eq_self.mpr monitors]
         obtain ⟨processId, process⟩ := record
         cases process
         simp only at live ⊢
