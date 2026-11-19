@@ -5006,6 +5006,29 @@ private theorem State.phaseEffect_clean {state : State} {tasks : List (PID × Ta
               rw [found] at found'; cases found'
               exact here fun last => outside ⟨rfl, last⟩
 
+/-- Normalizing after a confined unparking changes no record. -/
+private theorem State.unparkEffect_clean {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID}
+    (sorted : state.Sorted) (normalized : state.normalize = state)
+    (confined : Config.confined (.running state tasks finished false) (.unpark processId) = true) :
+    CleanOutside ((state.unparkEffect processId).apply state) (fun _ => False) := by
+  simp only [Config.confined, Bool.and_eq_true] at confined
+  exact CleanOutside.unpark (fun _ _ _ found => Clean.of_normalized sorted normalized found) (by simp)
+    confined.1 confined.2
+
+/-- Normalizing after firing a timer changes no record. -/
+private theorem State.fireEffect_clean {state : State} (timer : Timer) (sorted : state.Sorted)
+    (normalized : state.normalize = state) :
+    CleanOutside ((state.fireEffect timer).apply state) (fun _ => False) := by
+  have clean : CleanOutside state (fun _ => False) := fun _ _ _ found => Clean.of_normalized sorted normalized found
+  simp only [State.fireEffect]
+  refine CleanOutside.andThen ?_
+  have retimed := CleanOutside.retime (Kernel.filter (·.reference != timer.reference)) clean
+  rw [State.enqueueEffect_congr (state := (Effect.retime (Kernel.filter (·.reference != timer.reference))).apply state)
+    _ (by simp only [State.alive, Effect.record_apply, Effect.record_retime]; rfl)]
+  exact CleanOutside.enqueue retimed (fun _ _ _ => by simp [inert]) (fun _ kind => by simp at kind) (by simp)
+    (fun _ _ equal => by simp at equal)
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
