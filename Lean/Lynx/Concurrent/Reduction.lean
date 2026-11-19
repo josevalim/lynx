@@ -28,9 +28,9 @@ steps along each run. -/
       | [] => accept config.outcome
       | successors => Kernel.all successors fun (_, next) => checkFrom accept depth next
 
-/-- Whether every run of a program ends in an accepted outcome, following at
-most `depth` steps along each run it explores, and one run of those that
-differ only in the order of steps that commute (`check_sound`). -/
+/-- Whether every run of a program ends in an accepted outcome. Of the runs
+that differ only in the order of steps that commute it follows one, taking at
+most `depth` steps along it (`check_sound`). -/
 @[expose] def check (accept : Outcome α → Bool) (depth : Nat) (config : Config α) : Bool :=
   checkSleep accept depth [] config
 
