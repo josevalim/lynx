@@ -101,7 +101,7 @@ private theorem find?_firstOfEach :
           firstOfEach_unseen mem (same ▸ List.mem_cons_self)
         have found := find?_firstOfEach mem
         simp only [Kernel.find?_eq] at found ⊢
-        simp [List.find?_cons, differ, found]
+        simp [differ, found]
 
 /-- A tagged step of a configuration whose processes have one task each is the
 step with its key. -/
@@ -214,24 +214,6 @@ private theorem Config.tagged_of_stepOf {state : State} {tasks : List (PID × Ta
 
 /-! ### Absorbing a step -/
 
-private theorem lookup_rewriteTask_removed {processId : PID} :
-    ∀ {tasks : List (PID × Task α)}, tasks.Pairwise (fun entry entry' => entry.1 ≠ entry'.1) →
-      Kernel.lookup processId (rewriteTask processId (fun _ => []) tasks) = none
-  | [], _ => rfl
-  | (other, task) :: rest, distinct => by
-    simp only [rewriteTask]
-    split
-    · rename_i same; subst same
-      simp only [List.nil_append, Kernel.lookup_eq]
-      apply List.lookup_eq_none_iff.mpr
-      intro entry mem
-      simpa [bne_iff_ne] using List.rel_of_pairwise_cons distinct mem
-    · rename_i differ
-      have rest' := lookup_rewriteTask_removed (processId := processId) (List.pairwise_cons.mp distinct).2
-      simp only [Kernel.lookup_eq] at rest' ⊢
-      have differ' : (processId == other) = false := by simpa using Ne.symm differ
-      simp [List.lookup_cons, differ', rest']
-
 /-- A step that leaves every process's computation as it is leaves the tasks
 and the result as they are. -/
 private theorem Config.next_of_keepsTasks {state : State} {tasks : List (PID × Task α)}
@@ -252,7 +234,7 @@ private theorem Config.next_of_keepsTasks {state : State} {tasks : List (PID × 
     cases exits with
     | some reason =>
       have removed : handleChange (α := α) processId (some reason, resumed) = fun _ => [] := rfl
-      rw [removed, lookup_rewriteTask_removed (distinct_of_distinctTasks distinct)] at kept
+      rw [removed, lookup_rewriteTask_remove (distinct_of_distinctTasks distinct)] at kept
       simp at kept
     | none =>
       refine ⟨state', ?_⟩
@@ -338,8 +320,8 @@ private theorem Reaches.step {first next last : Config α} {event : Event}
     (step : Step first event next) (reaches : Reaches next last) : Reaches first last :=
   let ⟨events, run⟩ := reaches; ⟨event :: events, .step step run⟩
 
-/-- A step that stays asleep after another is still enabled after it, and
-reaches what it reaches then, or one step before it, taking it first. -/
+/-- A step that stays asleep after another is enabled before and after it,
+and after it reaches what it reaches alone, or what the other reaches after it. -/
 private theorem Config.stays {elapsed : PID → Nat → Nat} {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {steps : List (Key × Event × Config α)} {key other : Key}
     {event : Event} {next : Config α}
@@ -860,8 +842,8 @@ private theorem State.linkPhase_keepsLive {state next : State} {processId target
     · simp at phase
   · simp at phase
 
-/-- Each process has one task and is live, and no task's PID extends a PID
-its parent has not spawned yet. -/
+/-- No process has two tasks, every process with a task is live, and no
+task's PID extends a PID its parent has not spawned yet. -/
 private def TasksFresh (state : State) (tasks : List (PID × Task α)) : Prop :=
   tasks.Pairwise (fun entry entry' => entry.1 ≠ entry'.1) ∧ (∀ entry ∈ tasks, state.alive entry.1 = true) ∧
     ∀ entry ∈ tasks, ∀ entry' ∈ tasks, ∀ index, (state.process entry.1).children < index →
@@ -1041,7 +1023,7 @@ private theorem Task.own_pairwise {state : State} {processId : PID} {task : Task
     cases computation with
     | schedule options child next =>
       simp only [Task.own, List.mem_singleton] at mem; subst mem
-      simp [Ne.symm (append_ne_self _ _), State.spawnWith]
+      simp [State.spawnWith]
     | receive =>
       simp only [Task.own] at mem
       repeat' split at mem
@@ -1169,7 +1151,7 @@ private theorem TasksFresh.handle {elapsed : PID → Nat → Nat} {state : State
     rw [pids entry inside] at same
     exact append_ne_self _ _ same.symm
 
-/-- Each process has one task, along every run. -/
+/-- Whether the tasks of a running configuration are fresh (`TasksFresh`). -/
 private def Config.Fresh : Config α → Prop
   | .start .. => True
   | .running state tasks _ _ => TasksFresh state tasks
