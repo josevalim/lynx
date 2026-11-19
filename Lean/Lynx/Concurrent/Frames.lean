@@ -3805,6 +3805,99 @@ private theorem State.fire_agree {state other : State} {timer : Timer}
   congr 1
   exact State.enqueueEffect_congr _ alive
 
+/-! ### Normalization after a confined step is local -/
+
+/-- A record normalizing leaves as it is, given which processes are gone. -/
+private def Clean (gone : PID → Bool) (processId : PID) (process : ProcessState) : Prop :=
+  normRecord gone processId process = process ∧ process.finished = false
+
+/-- Every record of a normalized state is clean. -/
+private theorem Clean.of_normalized {state : State} (sorted : state.Sorted) (normalized : state.normalize = state)
+    {processId : PID} {process : ProcessState} (found : state.record processId = some process) :
+    Clean state.gone processId process := by
+  have equal := congrArg (·.record processId) normalized
+  simp only [State.record_normalize sorted, found, Option.map_some, Option.filter] at equal
+  split at equal
+  · rename_i kept
+    simp only [Option.some.injEq] at equal
+    refine ⟨by rw [← State.normalizeRecord_eq found]; exact equal, ?_⟩
+    rw [← equal]; simpa using kept
+  · simp at equal
+
+/-- Normalizing leaves clean records as they are. -/
+private theorem State.record_normalize_clean {state : State} (sorted : state.Sorted) {processId : PID}
+    (clean : ∀ process, state.record processId = some process → Clean state.gone processId process) :
+    state.normalize.record processId = state.record processId := by
+  rw [State.record_normalize sorted]
+  cases found : state.record processId with
+  | none => rfl
+  | some process =>
+    obtain ⟨same, kept⟩ := clean process found
+    simp [Option.filter, State.normalizeRecord_eq found, same, kept]
+
+/-- A live record is clean when none of its queued signals is inert and none
+of the links it is removing is to a process that is gone. -/
+private theorem Clean.live {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (live : process.exiting = none)
+    (queue : ∀ entry ∈ process.queue, inert gone processId process entry = false)
+    (links : ∀ link ∈ process.links, link.2.isSome = true → gone link.1 = false) :
+    Clean gone processId process := by
+  refine ⟨?_, by simp [ProcessState.finished, live]⟩
+  unfold normRecord
+  rw [live]
+  simp only [Kernel.filter_eq]
+  rw [List.filter_eq_self.mpr fun entry mem => by simp [queue entry mem],
+    List.filter_eq_self.mpr fun link mem => by
+      cases some : link.2.isSome <;> simp [some, links link mem]]
+  cases process; simp_all
+
+/-- What a clean live record satisfies. -/
+private theorem Clean.live_facts {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (clean : Clean gone processId process) (live : process.exiting = none) :
+    (∀ entry ∈ process.queue, inert gone processId process entry = false) ∧
+      ∀ link ∈ process.links, link.2.isSome = true → gone link.1 = false := by
+  have equal := clean.1
+  unfold normRecord at equal
+  rw [live] at equal
+  simp only [Kernel.filter_eq] at equal
+  have queue := congrArg ProcessState.queue equal
+  have links := congrArg ProcessState.links equal
+  simp only at queue links
+  refine ⟨fun entry mem => ?_, fun link mem some => ?_⟩
+  · have := List.filter_eq_self.mp queue entry mem; simpa using this
+  · have := List.filter_eq_self.mp links link mem; simp [some] at this; exact this
+
+/-- A live record stays clean through a change that keeps or removes its queued
+signals and the links it is removing, making none of them inert or gone, and
+appends signals that are not inert. -/
+private theorem Clean.preserve {gone gone' : PID → Bool} {processId : PID} {process process' : ProcessState}
+    (clean : Clean gone processId process) (live : process.exiting = none) (live' : process'.exiting = none)
+    (queue : ∀ entry ∈ process'.queue, (entry ∈ process.queue ∧
+      (inert gone' processId process' entry = true → inert gone processId process entry = true)) ∨
+      inert gone' processId process' entry = false)
+    (links : ∀ link ∈ process'.links, link.2.isSome = true → link ∈ process.links ∧ (gone' link.1 = true → gone link.1 = true)) :
+    Clean gone' processId process' := by
+  obtain ⟨queueFacts, linkFacts⟩ := clean.live_facts live
+  refine Clean.live live' (fun entry mem => ?_) (fun link mem some => ?_)
+  · rcases queue entry mem with ⟨old, more⟩ | fresh
+    · cases inside : inert gone' processId process' entry
+      · rfl
+      · exact absurd (more inside) (by simp [queueFacts entry old])
+    · exact fresh
+  · obtain ⟨old, more⟩ := links link mem some
+    cases going : gone' link.1
+    · rfl
+    · exact absurd (more going) (by simp [linkFacts link old some])
+
+/-- Whether a signal is inert reads only whether its sender is gone, and the
+receiver's references, monitors, aliases and links. -/
+private theorem inert_congr {gone gone' : PID → Bool} {processId : PID} {process process' : ProcessState}
+    {entry : Entry} (source : gone' entry.source = gone entry.source)
+    (refCounter : process'.refCounter = process.refCounter) (monitoring : process'.monitoring = process.monitoring)
+    (aliases : process'.aliases = process.aliases) (links : process'.links = process.links) :
+    inert gone' processId process' entry = inert gone processId process entry := by
+  simp only [inert, source, refCounter, monitoring, aliases, links]
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}

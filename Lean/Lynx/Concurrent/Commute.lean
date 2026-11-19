@@ -613,7 +613,7 @@ Other steps are compared by evaluating them. -/
       | [] => false
   | .running state _ _ false, .phase processId =>
       let process := state.process processId
-      match process.exiting with
+      process.parked.isNone && match process.exiting with
       | some { reason, links := [], downs := (reference, watcher) :: _, .. } =>
           !state.inertEntry watcher { source := processId, signal := .down reference reason }
       | some { links := [], downs := [], .. } => match process.queue with
