@@ -258,8 +258,9 @@ monitor and alias it will ever hold with it. -/
     | none => false
 
 /-- A queued signal that does nothing when handled, now or later: a `DOWN` of a
-monitor or a message to an alias its receiver no longer holds, an unmatched
-acknowledgement, or a request from a process that is gone. -/
+monitor or a message to an alias its receiver no longer holds, or a request
+from a process that is gone. An acknowledgement of an unlink is handled even
+when it no longer matches a link, which then does nothing. -/
 @[expose] def State.inertEntry (state : State) (processId : PID) (entry : Entry) : Bool :=
   let process := state.process processId
   match entry.signal with
@@ -267,8 +268,6 @@ acknowledgement, or a request from a process that is gone. -/
       !Kernel.any process.monitoring (·.1 == reference)
   | .aliasMessage alias _ => state.allocated processId alias &&
       !Kernel.contains process.aliases alias && !Kernel.any process.monitoring (·.1 == alias)
-  | .unlinkAck id => state.gone entry.source ||
-      Kernel.lookup entry.source process.links != some (some id)
   | .isAlive | .monitor _ => state.gone entry.source
   | _ => false
 

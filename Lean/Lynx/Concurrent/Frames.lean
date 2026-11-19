@@ -568,7 +568,6 @@ private def inert (gone : PID → Bool) (processId : PID) (process : ProcessStat
   | .down reference _ => allocated reference && !Kernel.any process.monitoring (·.1 == reference)
   | .aliasMessage alias _ => allocated alias &&
       !Kernel.contains process.aliases alias && !Kernel.any process.monitoring (·.1 == alias)
-  | .unlinkAck id => gone entry.source || Kernel.lookup entry.source process.links != some (some id)
   | .isAlive | .monitor _ => gone entry.source
   | _ => false
 
@@ -606,12 +605,7 @@ private theorem inert_mono {gone gone' : PID → Bool} (more : ∀ processId, go
     {processId : PID} {process : ProcessState} {entry : Entry}
     (inside : inert gone processId process entry = true) : inert gone' processId process entry = true := by
   obtain ⟨source, signal⟩ := entry
-  cases signal <;> simp only [inert, Bool.or_eq_true] at inside ⊢ <;> try exact inside
-  · rcases inside with left | right
-    · exact .inl (more _ left)
-    · exact .inr right
-  · exact more _ inside
-  · exact more _ inside
+  cases signal <;> simp only [inert] at inside ⊢ <;> first | exact inside | exact more _ inside
 
 /-- Normalizing again, with more processes gone, is normalizing once. -/
 private theorem normRecord_normRecord {gone gone' : PID → Bool} (more : ∀ processId, gone processId → gone' processId)
@@ -646,14 +640,6 @@ private theorem normRecord_normRecord {gone gone' : PID → Bool} (more : ∀ pr
       · simp only [Bool.not_false, Bool.and_true]
         obtain ⟨source, signal⟩ := entry
         cases signal <;> simp only [inert] at inside ⊢
-        cases going : gone' source
-        · have going' : gone source = false := by
-            cases g : gone source
-            · rfl
-            · exact absurd (more _ g) (by simp [going])
-          simp only [Bool.false_or, Kernel.lookup_eq]
-          rw [lookup_filter_of_key fun value _ => by simp [going']]
-        · simp
       · simp [inert_mono more inside]
     · refine List.filter_congr fun link _ => ?_
       cases unlinking : link.2.isSome
@@ -5007,11 +4993,6 @@ private theorem Clean.unlinked {gone : PID → Bool} {processId target : PID} {p
     (fun link mem _ => ⟨by simp [linkRemoved, Kernel.filter_eq] at mem; exact mem.1, id⟩)
   obtain ⟨source, signal⟩ := entry
   cases signal with
-  | unlinkAck id =>
-    by_cases same : source = processId
-    · have := noAcks _ mem same; simp at this
-    · simp only [inert, linkRemoved, Kernel.lookup_eq, Kernel.filter_eq] at inside ⊢
-      rwa [lookup_filter_ne, ite_eq_right_iff.mpr (fun h => absurd h same)] at inside
   | _ => simp only [inert, linkRemoved] at inside ⊢; exact inside
 
 private theorem Refers.unlinked {process : ProcessState} {processId : PID} (refers : Refers process processId = false) :

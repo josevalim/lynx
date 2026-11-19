@@ -761,8 +761,6 @@ private theorem State.normalizeRecord_normalize {state : State} (sorted : state.
         Option.isSome_none, Bool.false_and, Bool.or_false, Bool.not_eq_eq_eq_not, Bool.not_true] at keep ⊢
       simp only [State.normalizeRecord, exiting, gone, Kernel.filter_eq, Kernel.lookup_eq] at keep ⊢
       split <;> simp_all
-      rw [lookup_filter_of_key fun value _ => by simp_all]
-      simp_all
     · simp only [gone, List.filter_filter, Bool.and_self]
 
 /-- Normalizing twice is normalizing once. -/
