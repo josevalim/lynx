@@ -6484,4 +6484,78 @@ private theorem Config.eager_after {state : State} {tasks : List (PID × Task α
     simp only [Kernel.any_eq, List.any_eq_true]
     exact ⟨entry, stays entry entryMem linking, isLink⟩
 
+/-! ### Assembling: normalizing early is absorbed -/
+
+/-- A record finished when normalized is finished when normalized with more processes gone. -/
+private theorem normRecord_finished {gone gone' : PID → Bool} (more : ∀ processId, gone processId → gone' processId)
+    {processId : PID} {process : ProcessState} (finished : (normRecord gone processId process).finished = true) :
+    (normRecord gone' processId process).finished = true := by
+  unfold normRecord at finished ⊢
+  cases exiting : process.exiting with
+  | none => simp [exiting, ProcessState.finished] at finished
+  | some exiting' =>
+    simp only [exiting, ProcessState.finished, Kernel.filter_eq] at finished ⊢
+    have empty : ∀ {γ : Type} (list : List γ) (keep keep' : γ → Bool), (∀ item, keep' item → keep item) →
+        list.filter keep = [] → list.filter keep' = [] := by
+      intro γ list keep keep' fewer none
+      rw [List.filter_eq_nil_iff] at none ⊢
+      exact fun item mem kept => none item mem (fewer item kept)
+    cases links : List.filter (fun target => !gone target) exiting'.links with
+    | cons => simp [links, ProcessState.finished] at finished
+    | nil =>
+    cases downs : List.filter (fun down => !gone down.2) exiting'.downs with
+    | cons => simp [links, downs, ProcessState.finished] at finished
+    | nil =>
+    simp only [links, downs, ProcessState.finished, List.isEmpty_iff] at finished
+    have notGone : ∀ other, (!gone' other) = true → (!gone other) = true := fun other kept => by
+      cases going : gone other
+      · rfl
+      · rw [more other going] at kept; exact kept
+    have links' := empty _ _ (fun target => !gone' target) (fun target kept => notGone target kept) links
+    have downs' := empty _ _ (fun down => !gone' down.2) (fun down kept => notGone down.2 kept) downs
+    have queue' := empty _ _ (fun entry => (match entry.signal with
+        | .link | .monitor _ | .isAlive => true
+        | _ => false) && !gone' entry.source) (fun entry kept => by
+      rw [Bool.and_eq_true] at kept ⊢; exact ⟨kept.1, notGone _ kept.2⟩) finished
+    simp only [links', downs', ProcessState.finished, List.isEmpty_iff, queue']
+
+private theorem State.record_normalize' {state : State} (sorted : state.Sorted) (processId : PID) :
+    state.normalize.record processId =
+      ((state.record processId).map (normRecord state.gone processId)).filter (!·.finished) := by
+  rw [State.record_normalize sorted]
+  cases found : state.record processId with
+  | none => rfl
+  | some process => simp only [Option.map_some, State.normalizeRecord_eq found]
+
+/-- Normalizing a state whose records are those of another, but for some
+already normalized with fewer processes gone, is normalizing the other. -/
+private theorem State.normalize_absorbs {state other : State} (sorted : state.Sorted) (sorted' : other.Sorted)
+    (timers : other.timers = state.timers) (elapsed : other.elapsed = state.elapsed)
+    (gone : other.gone = state.gone)
+    (records : ∀ processId, other.record processId = state.record processId ∨
+      ∃ fewer : PID → Bool, (∀ processId, fewer processId → state.gone processId) ∧
+        other.record processId = ((state.record processId).map (normRecord fewer processId)).filter (!·.finished)) :
+    other.normalize = state.normalize := by
+  have same : ∀ processId, other.normalize.record processId = state.normalize.record processId := by
+    intro processId
+    rw [State.record_normalize' sorted', State.record_normalize' sorted, gone]
+    rcases records processId with equal | ⟨fewer, more, equal⟩
+    · rw [equal]
+    · rw [equal]
+      cases state.record processId with
+      | none => rfl
+      | some process =>
+        simp only [Option.map_some, Option.filter]
+        by_cases finished : (normRecord fewer processId process).finished = true
+        · simp [finished, normRecord_finished more finished]
+        · simp only [Bool.not_eq_true] at finished
+          simp only [finished, Bool.not_false, ↓reduceIte, Option.map_some, normRecord_normRecord more]
+  have processes : other.normalize.processes = state.normalize.processes :=
+    Sorted.ext (Sorted.normalize sorted') (Sorted.normalize sorted) fun processId => by
+      have := same processId; simpa [State.record, Kernel.lookup_eq] using this
+  cases state; cases other
+  simp only [State.normalize] at processes timers elapsed ⊢
+  simp only [State.mk.injEq] at processes ⊢
+  exact ⟨processes, timers, elapsed⟩
+
 end Lynx.Concurrent
