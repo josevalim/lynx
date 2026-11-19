@@ -1760,8 +1760,8 @@ private def queueChange (queue : List Entry → List Entry) (mailbox : List Term
     (links : List (PID × Option Nat) → List (PID × Option Nat)) (process : ProcessState) : ProcessState :=
   { process with queue := queue process.queue, mailbox := mailbox process.mailbox, links := links process.links }
 
-/-- Records with a signal queued. -/
-private def Queued (process : ProcessState) : Prop := process.queue ≠ []
+/-- Records whose oldest queued signal is the one being handled. -/
+private def Queued (entry : Entry) (process : ProcessState) : Prop := Heads entry process
 
 /-- How handling the oldest signal changes the queue, mailbox and links, in a
 way that a process's own steps commute with. -/
@@ -1780,17 +1780,21 @@ private structure QueueChange (queue : List Entry → List Entry) (mailbox : Lis
       selectMessage select (mailbox messages) = some (message, value, mailbox remaining)
 
 private theorem QueueChange.unseen {queue : List Entry → List Entry} {mailbox : List Term → List Term}
-    {links : List (PID × Option Nat) → List (PID × Option Nat)} (change : QueueChange queue mailbox links)
-    (linking : ∀ (entries : List Entry) entry, entries ≠ [] → entry.signal = .link →
-      (entry ∈ queue entries ↔ entry ∈ entries)) :
-    Unseen (Same Queued (queueChange queue mailbox links)) where
+    {links : List (PID × Option Nat) → List (PID × Option Nat)} {entry : Entry} (change : QueueChange queue mailbox links)
+    (linking : ∀ (rest : List Entry) (other : Entry), other.signal = .link →
+      (other ∈ queue (entry :: rest) ↔ other ∈ entry :: rest)) :
+    Unseen (Same (Queued entry) (queueChange queue mailbox links)) where
   outside := by
-    rintro first second ⟨queued, rfl⟩
-    exact ⟨rfl, rfl, rfl, fun entry link => linking _ entry queued link⟩
-  push := fun entry ⟨queued, same⟩ => by
+    rintro first second ⟨⟨rest, queued⟩, rfl⟩
+    refine ⟨rfl, rfl, rfl, fun other link => ?_⟩
+    show other ∈ queue first.queue ↔ other ∈ first.queue
+    rw [queued]; exact linking rest other link
+  push := fun {first second} other ⟨queued, same⟩ => by
     subst same
-    refine ⟨by simp [Queued, ProcessState.push, Kernel.append_eq], ?_⟩
-    simp only [queueChange, ProcessState.push, change.push entry queued]
+    refine ⟨(Heads.push queued other).1, ?_⟩
+    obtain ⟨rest, nonempty⟩ := queued
+    have pushed := change.push (entries := first.queue) other (by rw [nonempty]; simp)
+    simp only [queueChange, ProcessState.push, pushed]
   eagerExit := fun source ⟨queued, same⟩ => by
     subst same
     exact ⟨queued, by simp only [queueChange, ProcessState.eagerExit, change.filtered]⟩
@@ -1799,29 +1803,29 @@ private theorem QueueChange.unseen {queue : List Entry → List Entry} {mailbox 
 namespace State.Changed
 
 variable {processId : PID} {state state' : State} {queue : List Entry → List Entry} {mailbox : List Term → List Term}
-  {links : List (PID × Option Nat) → List (PID × Option Nat)}
+  {links : List (PID × Option Nat) → List (PID × Option Nat)} {entry : Entry}
 
 private theorem queue_modify
-    (changed : state.Changed processId (Same Queued (queueChange queue mailbox links)) state')
+    (changed : state.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) state')
     (change : ProcessState → ProcessState) (queued : ∀ process, (change process).queue = process.queue)
-    (commutes : ∀ process, Queued process →
+    (commutes : ∀ process, Queued entry process →
       change (queueChange queue mailbox links process) = queueChange queue mailbox links (change process)) :
-    (state.modify processId change).Changed processId (Same Queued (queueChange queue mailbox links))
+    (state.modify processId change).Changed processId (Same (Queued entry) (queueChange queue mailbox links))
       (state'.modify processId change) :=
   changed.modifyRelated fun ⟨ok', same⟩ => by
     subst same
-    exact ⟨by simp only [Queued, queued]; exact ok', commutes _ ok'⟩
+    exact ⟨by simp only [Queued, Heads, queued]; exact ok', commutes _ ok'⟩
 
 /-- A process's request, after handling its oldest signal changed its queue, mailbox and links. -/
 private theorem requestSelf
-    (changed : state.Changed processId (Same Queued (queueChange queue mailbox links)) state')
-    (unseen : Unseen (Same Queued (queueChange queue mailbox links))) (change : QueueChange queue mailbox links)
+    (changed : state.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) state')
+    (unseen : Unseen (Same (Queued entry) (queueChange queue mailbox links))) (change : QueueChange queue mailbox links)
     {process : ProcessState} (found : state.record processId = some process)
     (unlinked : ∀ (target : PID) (id : Nat), Kernel.lookup target process.links = some none →
       links (Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) process.links) =
         Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) (links process.links))
     {β : Type} (next : Term → Result β) (query : Request) :
-    Answer.Changed processId (Same Queued (queueChange queue mailbox links)) (state.request processId next query)
+    Answer.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) (state.request processId next query)
       (state'.request processId next query) := by
   rcases changed.records with ⟨missing, -⟩ | ⟨first, second, found', found'', queued, rfl⟩
   · rw [found] at missing; cases missing
@@ -1830,7 +1834,7 @@ private theorem requestSelf
   have processOf' : state'.process processId = queueChange queue mailbox links process := by
     simp [State.process, found'']
   have allocated : (state'.allocate processId).1 = (state.allocate processId).1 ∧
-      (state.allocate processId).2.Changed processId (Same Queued (queueChange queue mailbox links))
+      (state.allocate processId).2.Changed processId (Same (Queued entry) (queueChange queue mailbox links))
         (state'.allocate processId).2 := by
     refine ⟨by simp only [State.allocate, processOf, processOf']; rfl, ?_⟩
     exact changed.queue_modify _ (fun _ => rfl) (fun _ _ => rfl)
@@ -1919,12 +1923,12 @@ private theorem requestSelf
 
 /-- A process spawns a child, after handling its oldest signal changed its queue, mailbox and links. -/
 private theorem spawnSelf
-    (changed : state.Changed processId (Same Queued (queueChange queue mailbox links)) state')
+    (changed : state.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) state')
     (change : QueueChange queue mailbox links) {process : ProcessState}
     (found : state.record processId = some process) (options : SpawnOptions)
     (fresh : Kernel.append processId [process.children + 1] ≠ processId) :
     (state'.spawnWith processId options).1 = (state.spawnWith processId options).1 ∧
-      (state.spawnWith processId options).2.Changed processId (Same Queued (queueChange queue mailbox links))
+      (state.spawnWith processId options).2.Changed processId (Same (Queued entry) (queueChange queue mailbox links))
         (state'.spawnWith processId options).2 := by
   rcases changed.records with ⟨missing, -⟩ | ⟨first, second, found', found'', queued, rfl⟩
   · rw [found] at missing; cases missing
@@ -1944,7 +1948,7 @@ private theorem spawnSelf
       { process with links := Kernel.append (Kernel.filter (·.1 != child) process.links) [(child, none)] })
       (fun _ => rfl) (fun _ _ => by simp only [queueChange, change.relink])).modify fresh
     fun child => { child with links := [(processId, none)] }
-  have counter : ∀ {first second : State}, first.Changed processId (Same Queued (queueChange queue mailbox links))
+  have counter : ∀ {first second : State}, first.Changed processId (Same (Queued entry) (queueChange queue mailbox links))
       second → (second.process processId).refCounter = (first.process processId).refCounter :=
     fun {first second} changed' => by
       rcases changed'.records with ⟨one, two⟩ | ⟨a, b, one, two, -, rfl⟩
@@ -1964,11 +1968,11 @@ private theorem spawnSelf
 /-- The process ends, after handling its oldest signal changed its queue,
 mailbox and links in a way ending forgets. -/
 private theorem terminateQueue
-    (changed : state.Changed processId (Same Queued (queueChange queue mailbox links)) state')
+    (changed : state.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) state')
     (change : QueueChange queue mailbox links)
-    (requests : ∀ (entries : List Entry) (keep : Entry → Bool), entries ≠ [] →
+    (requests : ∀ (rest : List Entry) (keep : Entry → Bool),
       (∀ entry, keep entry = true → (entry.signal matches .link | .monitor _ | .isAlive) = true) →
-      Kernel.filter keep (queue entries) = Kernel.filter keep entries)
+      Kernel.filter keep (queue (entry :: rest)) = Kernel.filter keep (entry :: rest))
     (exitLinks : ∀ entries : List (PID × Option Nat),
       Kernel.foldl (fun links (peer, unlinking) => if unlinking.isNone then insertPid peer links else links) []
         (links entries) =
@@ -1996,7 +2000,8 @@ private theorem terminateQueue
       (state'.terminate processId reason) := by
     unfold State.terminate
     simp only [processOf, processOf', changed.2.2.1, queueChange, exitLinks]
-    rw [requests _ _ queued fun entry kept => by
+    obtain ⟨rest, queued⟩ := queued
+    rw [queued, requests _ _ fun entry kept => by
       obtain ⟨_, signal⟩ := entry; cases signal <;> simp_all]
     refine State.Changed.foldl (fun target changed' => ?_) _ ⟨fun other differ => ?_, ?_, rfl, changed.2.2.2⟩
     · rw [changed'.eagerLink unseen]
@@ -2030,8 +2035,8 @@ private theorem terminateQueue
 /-- A process's own step, after handling its oldest signal changed its queue,
 mailbox and links: the same transition, with related states unless it ends the process. -/
 private theorem ownSelf
-    (changed : state.Changed processId (Same Queued (queueChange queue mailbox links)) state')
-    (unseen : Unseen (Same Queued (queueChange queue mailbox links))) (change : QueueChange queue mailbox links)
+    (changed : state.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) state')
+    (unseen : Unseen (Same (Queued entry) (queueChange queue mailbox links))) (change : QueueChange queue mailbox links)
     {process : ProcessState} (found : state.record processId = some process)
     (unlinked : ∀ (target : PID) (id : Nat), Kernel.lookup target process.links = some none →
       links (Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) process.links) =
@@ -2046,7 +2051,7 @@ private theorem ownSelf
     ∃ transition' : Transition α, (task.own state' processId).head? = some transition' ∧
       transition'.event = transition.event ∧ transition'.tasks = transition.tasks ∧
       transition'.finished = transition.finished ∧ transition'.exhausted = transition.exhausted ∧
-      (transition.state.Changed processId (Same Queued (queueChange queue mailbox links)) transition'.state ∨
+      (transition.state.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) transition'.state ∨
         (∃ reason, transition.state = state.terminate processId reason ∧
           transition'.state = state'.terminate processId reason) ∨
         transition.exhausted = true) := by
