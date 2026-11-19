@@ -6123,4 +6123,108 @@ private theorem Config.timersFramed {state : State} {tasks : List (PID × Task �
       · exact .inl any
   | link => simp [Config.frames] at found
 
+/-! ### Assembling: locality by frames -/
+
+/-- Frames writing every field of a record. -/
+private def WholeOf (frames : List Frame) (processId : PID) : Prop :=
+  ∀ bit, bit < 17 → writesOf frames processId bit
+
+private theorem WholeOf.of_mem {frames : List Frame} {processId : PID}
+    (mem : (processId, Field.all, Field.all) ∈ frames) : WholeOf frames processId := fun bit lower =>
+  List.any_eq_true.mpr ⟨_, mem, by simp [all_testBit lower]⟩
+
+private theorem CleanOutside.weaken {state : State} {except except' : PID → Prop} (clean : CleanOutside state except)
+    (more : ∀ processId, except processId → except' processId) : CleanOutside state except' :=
+  fun processId outside => clean processId fun inside => outside (more processId inside)
+
+/-- The last phase of a process that ended writes its whole record. -/
+private theorem State.wholeOf_lastPhase {state : State} {processId : PID} {frames : List Frame} {timers : Bool}
+    (found : state.phaseFrames processId = some (frames, timers)) (last : state.lastPhase processId) :
+    WholeOf frames processId := by
+  unfold State.phaseFrames at found
+  cases record : state.record processId with
+  | none => simp [record] at found
+  | some process =>
+    have same : state.process processId = process := by simp [State.process, record]
+    simp only [record] at found
+    cases exits : process.exiting with
+    | none => simp [exits] at found
+    | some exiting =>
+      simp only [exits] at found
+      simp only [State.lastPhase, same, exits] at last
+      refine WholeOf.of_mem ?_
+      cases downs : exiting.downs with
+      | cons down rest =>
+        simp only [downs] at found last
+        simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+        obtain ⟨rfl, empty⟩ := last
+        simp [empty]
+      | nil =>
+        cases queue : process.queue with
+        | nil => simp only [downs, queue, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]; simp
+        | cons entry rest =>
+          simp only [downs, queue] at found last
+          simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+          subst last; simp
+
+/-- Normalizing after a confined step changes no record but those its frames write whole. -/
+private theorem Config.clean {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key} {frames : List Frame} {timers : Bool}
+    (sorted : state.Sorted) (normalized : state.normalize = state)
+    (confined : Config.confined (.running state tasks finished false) key = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, timers)) :
+    CleanOutside (((Config.running state tasks finished false).effectOf key).apply state) (WholeOf frames) := by
+  cases key with
+  | own processId =>
+    simp only [Config.frames, Option.bind_eq_some_iff] at found
+    obtain ⟨task, lookup, found⟩ := found
+    simp only [Config.effectOf, lookup]
+    have confined' := confined
+    simp only [Config.confined, lookup] at confined'
+    obtain ⟨computation, finish, wait⟩ := task
+    cases wait with
+    | some => simp at confined'
+    | none =>
+    simp only [Bool.and_eq_true] at confined'
+    have ending : ∀ (reason : Term), state.leavesOthers processId = true →
+        (state.endFrames processId) = (frames, timers) →
+        CleanOutside ((state.terminateEffect processId reason).apply state) (WholeOf frames) := by
+      intro reason leaves equal
+      refine (State.terminateEffect_clean reason sorted normalized confined'.1.1 leaves).weaken fun other same => ?_
+      subst same
+      have frames' : frames = (state.endFrames other).1 := by rw [equal]
+      exact WholeOf.of_mem (by rw [frames', endFrames_eq]; exact List.mem_cons_self)
+    have other : (∀ value, computation ≠ .ok value) → (∀ exception, computation ≠ .error exception) →
+        CleanOutside ((Task.ownEffect state processId ⟨computation, finish, none⟩).apply state) (WholeOf frames) :=
+      fun continues raises => (Task.ownEffect_clean sorted normalized confined lookup continues raises).weaken
+        fun _ inside => inside.elim
+    cases computation with
+    | ok value =>
+      simp only [Task.ownFrames, Option.some.injEq] at found
+      exact ending _ confined'.2 found
+    | error exception =>
+      cases exception with
+      | exhausted => simp at confined'
+      | _ =>
+        simp only [Task.ownFrames, Option.some.injEq] at found
+        exact ending _ confined'.2 found
+    | _ => exact other (by simp) (by simp)
+  | handle processId =>
+    simp only [Config.frames, Option.bind_eq_some_iff] at found
+    obtain ⟨task, lookup, -⟩ := found
+    simp only [Config.effectOf, lookup]
+    exact (Task.handleEffect_clean sorted normalized confined).weaken fun _ inside => inside.elim
+  | phase processId =>
+    simp only [Config.frames] at found
+    exact (State.phaseEffect_clean sorted normalized confined).weaken fun other inside => by
+      obtain ⟨rfl, last⟩ := inside; exact State.wholeOf_lastPhase found last
+  | unpark processId =>
+    exact (State.unparkEffect_clean sorted normalized confined).weaken fun _ inside => inside.elim
+  | fire reference =>
+    simp only [Config.effectOf]
+    split
+    · exact (State.fireEffect_clean _ sorted normalized).weaken fun _ inside => inside.elim
+    · rw [Effect.apply_empty]; exact fun _ _ _ found => Clean.of_normalized sorted normalized found
+  | link => simp [Config.frames] at found
+
 end Lynx.Concurrent
