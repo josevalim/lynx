@@ -511,19 +511,20 @@ such a step is not confined (`Config.confined`). -/
   | some process =>
       match process.exiting with
       | some exiting =>
-          let own : Frame := (processId, Field.exiting, Field.exiting)
+          -- The last phase leaves nothing, so normalization removes the record.
+          let own (reads writes : Nat) (last : Bool) : Frame :=
+            if last then (processId, Field.all, Field.all) else (processId, reads, writes)
           match exiting.downs, process.queue with
-          | (reference, watcher) :: _, _ =>
-              some (own :: state.sendFrames processId watcher (.down reference exiting.reason), false)
-          | [], entry :: _ =>
-              let own : Frame := (processId, Field.exiting ||| Field.queueHead,
-                Field.queueHead ||| Field.live)
-              some (own :: match entry.signal with
+          | (reference, watcher) :: rest, queue =>
+              some (own Field.exiting Field.exiting (rest.isEmpty && queue.isEmpty) ::
+                state.sendFrames processId watcher (.down reference exiting.reason), false)
+          | [], entry :: rest =>
+              some (own (Field.exiting ||| Field.queueHead) Field.queueHead rest.isEmpty :: match entry.signal with
                 | .link => state.sendFrames processId entry.source (.exit (.atom "noproc") true false)
                 | .monitor reference => state.sendFrames processId entry.source (.down reference (.atom "noproc"))
                 | .isAlive => state.sendFrames processId entry.source (.reply (.atom "false"))
                 | _ => [], false)
-          | [], [] => some ([own], false)
+          | [], [] => some ([own Field.exiting Field.exiting true], false)
       | none => none
   | none => none
 
