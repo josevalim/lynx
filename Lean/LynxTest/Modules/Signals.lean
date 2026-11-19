@@ -331,6 +331,24 @@ theorem relink_may_receive_crash :
             (.tuple #[.atom "EXIT", .pid [1], .tuple #[.atom "boom", .nil]]) == .eq
       | _ => false) = true := by decide +kernel
 
+/-- Linking again after unlinking keeps the new link when the acknowledgement of
+the unlink arrives after it: it names an unlink the link superseded, so it
+removes nothing (`erl_proc_sig_queue.c`, `unlinking` must match the id). The
+child handles the unlink, the link and the kill in order, so its `EXIT` always
+arrives. -/
+private def relinksBeforeAck : Result := do
+  let _ ← «process_flag/2» dispatcher (.atom "trap_exit") (.atom "true")
+  let child ← «spawn_link/1» dispatcher waits
+  let _ ← «unlink/1» dispatcher child
+  let _ ← «link/1» dispatcher child
+  let _ ← «exit/2» dispatcher child (.atom "kill")
+  receiveAny
+
+theorem stale_unlink_ack_keeps_new_link :
+    Concurrent.check (only (.ok (.tuple #[.atom "EXIT", .pid [1], .atom "killed"]))) 64
+      (.start {} relinksBeforeAck) = true := by
+  decide +kernel
+
 /-- Receive the oldest message that `accepts` accepts. -/
 private def receiveMatch (accepts : Term → Bool) : Result :=
   .receive .infinity (fun _ message => if accepts message then some message else none) fun
