@@ -538,6 +538,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.State.inertEntry",
   "Lynx.Concurrent.State.initial",
   "Lynx.Concurrent.State.keepEntry",
+  "Lynx.Concurrent.State.keepsRecord",
   "Lynx.Concurrent.State.leavesOthers",
   "Lynx.Concurrent.State.linkExit",
   "Lynx.Concurrent.State.linkPhase",

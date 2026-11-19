@@ -240,7 +240,7 @@ private theorem Sorted.insertRecord {records : List (PID × ProcessState)} (sort
 
 /-- Normalization keeps the records sorted. -/
 private theorem Sorted.normalize {state : State} (sorted : Sorted state.processes) : Sorted state.normalize.processes := by
-  simp only [State.normalize, Kernel.map_eq, Kernel.filter_eq]
+  simp only [State.normalize_eq, Kernel.map_eq, Kernel.filter_eq]
   refine List.Pairwise.filter _ ?_
   exact List.pairwise_map.mpr (sorted.imp id)
 
@@ -685,7 +685,7 @@ private theorem Sorted.lookup_of_mem {records : List (PID × ProcessState)} (sor
 private theorem State.record_normalize {state : State} (sorted : state.Sorted) (processId : PID) :
     state.normalize.record processId =
       ((state.record processId).map (state.normalizeRecord processId)).filter (!·.finished) := by
-  simp only [State.normalize, State.record, Kernel.map_eq, Kernel.filter_eq, Kernel.lookup_eq]
+  simp only [State.normalize_eq, State.record, Kernel.map_eq, Kernel.filter_eq, Kernel.lookup_eq]
   have mapped : Lynx.Concurrent.Sorted (state.processes.map fun record =>
       (record.1, state.normalizeRecord record.1 record.2)) := List.pairwise_map.mpr (sorted.imp id)
   rw [mapped.lookup_filter, lookup_map_snd]
@@ -770,14 +770,14 @@ private theorem State.normalize_normalize {state : State} (sorted : state.Sorted
       (record.1, state.normalize.normalizeRecord record.1 record.2) = record ∧ record.2.finished = false := by
     intro record mem
     have mem' := mem
-    simp only [State.normalize, Kernel.map_eq, Kernel.filter_eq, List.mem_filter, List.mem_map] at mem'
+    simp only [State.normalize_eq, Kernel.map_eq, Kernel.filter_eq, List.mem_filter, List.mem_map] at mem'
     obtain ⟨⟨original, inside, rfl⟩, kept⟩ := mem'
     simp only [Bool.not_eq_eq_eq_not, Bool.not_true] at kept
     exact ⟨by rw [State.normalizeRecord_normalize sorted inside kept], kept⟩
   generalize state.normalize = next at records ⊢
   cases next with
   | mk processes timers elapsed =>
-    simp only [State.normalize, Kernel.map_eq, Kernel.filter_eq, State.mk.injEq, and_true]
+    simp only [State.normalize_eq, Kernel.map_eq, Kernel.filter_eq, State.mk.injEq, and_true]
     rw [List.map_congr_left fun record mem => (records record mem).1, List.map_id']
     exact List.filter_eq_self.mpr fun record mem => by simp [(records record mem).2]
 
@@ -791,7 +791,7 @@ private def Config.Normalized : Config α → Prop
 
 private theorem State.normalize_initial (env : Environment) (elapsed : PID → Nat → Nat) :
     (State.initial env elapsed).normalize = State.initial env elapsed := by
-  simp [State.initial, State.normalize, State.normalizeRecord, ProcessState.finished, Kernel.map_eq,
+  simp [State.initial, State.normalize_eq, State.normalizeRecord, ProcessState.finished, Kernel.map_eq,
     Kernel.filter_eq]
 
 /-- Every step leads to a normalized configuration. -/

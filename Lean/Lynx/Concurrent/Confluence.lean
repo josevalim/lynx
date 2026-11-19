@@ -168,7 +168,7 @@ public theorem ProcessState.Quiet.normalizeRecord {process : ProcessState} (quie
 public theorem State.normalize_of_quiet {state : State} (quiet : ∀ entry ∈ state.processes, entry.2.Quiet) :
     state.normalize = state := by
   obtain ⟨processes, timers, elapsed⟩ := state
-  simp only [State.normalize, Kernel.map_eq, Kernel.filter_eq, State.mk.injEq, and_true]
+  simp only [State.normalize_eq, Kernel.map_eq, Kernel.filter_eq, State.mk.injEq, and_true]
   have mapped : processes.map (fun record => (record.1,
       ({ processes, timers, elapsed } : State).normalizeRecord record.1 record.2)) = processes := by
     conv => rhs; rw [← List.map_id processes]
@@ -596,8 +596,8 @@ private theorem State.Quiet.terminate_normalize {state : State} (sorted : state.
       | some process' =>
         have quiet' := quiet.2 _ _ record
         simp [quiet'.normRecord, Option.filter, ProcessState.finished, quiet'.1]
-  · simp [State.normalize, equal, State.set, State.remove, quiet.1]
-  · simp [State.normalize, equal, State.set, State.remove]
+  · simp [State.normalize_eq, equal, State.set, State.remove, quiet.1]
+  · simp [State.normalize_eq, equal, State.set, State.remove]
 
 section
 variable {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}

@@ -238,7 +238,7 @@ theorem ProcessState.weight_normalizeRecord (state : State) (processId : PID) (p
     omega
 
 theorem State.weight_normalize (state : State) : state.normalize.weight ≤ state.weight := by
-  simp only [State.normalize, State.weight, recordsWeight, Kernel.map_eq, Kernel.filter_eq]
+  simp only [State.normalize_eq, State.weight, recordsWeight, Kernel.map_eq, Kernel.filter_eq]
   have filtered := sum_filter_le (·.2.weight) (fun record : PID × ProcessState => !record.2.finished)
     (state.processes.map fun record => (record.1, state.normalizeRecord record.1 record.2))
   have mapped : ((state.processes.map fun record => (record.1, state.normalizeRecord record.1 record.2)).map

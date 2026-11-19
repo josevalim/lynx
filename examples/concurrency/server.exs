@@ -359,7 +359,7 @@ defmodule ServerProofsTest do
           Task.transitions, Task.own, Task.ended, Task.handle, Task.child, «serve/2», Transition.apply, State.terminate,
           State.process, State.record, Kernel.lookup_eq, List.lookup, root_server,
           State.set, insertRecord, insertSorted, Kernel.filter_eq, pidBefore, Kernel.append_eq, Kernel.flatMap_eq,
-          Kernel.map_eq, Kernel.filterMap_eq, Kernel.foldl_eq, State.normalize, State.normalizeRecord, State.phases,
+          Kernel.map_eq, Kernel.filterMap_eq, Kernel.foldl_eq, State.normalize_eq, State.normalizeRecord, State.phases,
           State.exitLinks, State.phase, State.firing, firstOfEach, Config.outcome, Lynx.Term.true, ProcessState.finished]
       """
   end

@@ -460,11 +460,49 @@ ended, everything but what it still sends and answers. -/
   | some { links := [], downs := [], .. } => process.queue.isEmpty
   | _ => false
 
+/-- Whether normalizing keeps a record as it is: a live process that keeps
+every queued signal and link. -/
+@[expose] def State.keepsRecord (state : State) (processId : PID) (process : ProcessState) : Bool :=
+  process.exiting.isNone && Kernel.all process.queue (state.keepEntry processId process) &&
+    Kernel.all process.links (fun link => !(link.2.isSome && state.gone link.1))
+
 /-- Remove what nothing can observe any more. -/
 @[expose] def State.normalize (state : State) : State :=
-  let processes := Kernel.map (fun record => (record.1, state.normalizeRecord record.1 record.2))
-    state.processes
-  { state with processes := Kernel.filter (fun record => !record.2.finished) processes }
+  { state with processes := Kernel.filterMap (fun record =>
+      bif state.keepsRecord record.1 record.2 then some record else
+      let process := state.normalizeRecord record.1 record.2
+      bif process.finished then none else some (record.1, process)) state.processes }
+
+/-- Normalizing, record by record. -/
+theorem State.normalize_eq (state : State) : state.normalize =
+    { state with processes := (Kernel.filter (fun record => !record.2.finished)
+      (Kernel.map (fun record => (record.1, state.normalizeRecord record.1 record.2)) state.processes)) } := by
+  unfold State.normalize
+  congr 1
+  simp only [Kernel.filterMap_eq, Kernel.filter_eq, Kernel.map_eq]
+  induction state.processes with
+  | nil => rfl
+  | cons record rest ih =>
+    simp only [List.filterMap_cons, List.map_cons, List.filter_cons]
+    rw [ih]
+    cases kept : state.keepsRecord record.1 record.2
+    · simp only [cond_false]
+      cases (state.normalizeRecord record.1 record.2).finished <;> rfl
+    · have keeps := kept
+      simp only [State.keepsRecord, Bool.and_eq_true, Option.isNone_iff_eq_none, Kernel.all_eq,
+        List.all_eq_true] at keeps
+      obtain ⟨⟨live, queue⟩, links⟩ := keeps
+      have same : state.normalizeRecord record.1 record.2 = record.2 := by
+        unfold State.normalizeRecord
+        rw [live]
+        dsimp only
+        rw [Kernel.filter_eq, List.filter_eq_self.mpr queue, List.filter_eq_self.mpr links]
+        obtain ⟨processId, process⟩ := record
+        cases process
+        simp only at live ⊢
+        subst live
+        rfl
+      simp [same, ProcessState.finished, live]
 
 /-! ### Requests -/
 

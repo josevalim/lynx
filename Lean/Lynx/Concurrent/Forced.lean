@@ -5696,7 +5696,7 @@ private theorem Config.forced_phase_square {elapsed : PID → Nat → Nat} {conf
     have keptPop : popDown kept = normRecord raw.gone processId (popDown process) :=
       (normRecord_popDown_kept ended rfl watcherGone).symm
     refine State.ext_records (Sorted.normalize sortedPopped) (Sorted.normalize withinRaw'.1) (fun other => ?_)
-      (by simp [State.normalize, State.set, timersRaw]) (by simp [State.normalize, State.set, elapsedRaw])
+      (by simp [State.normalize_eq, State.set, timersRaw]) (by simp [State.normalize_eq, State.set, elapsedRaw])
     rw [State.record_normalize' sortedPopped, gonePopped, State.record_set]
     split
     · rename_i same; subst same
