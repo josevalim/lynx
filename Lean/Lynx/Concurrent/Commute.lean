@@ -436,7 +436,7 @@ receiver is live, as a live receiver keeps every signal. -/
       else some ([(target, Field.live, 0), (processId, Field.live, Field.queueTail)], false)
   | .processInfo target =>
       if target == processId then some ([], false)
-      else if state.alive target then some ([(target, Field.live, 0), (processId, Field.live, Field.queueTail)], false)
+      else if state.alive target then some (state.enqueueFrames processId target .isAlive, false)
       else some ([(target, Field.live, 0)], false)
   | .sendAlias alias message =>
       some (state.sendFrames processId alias.dropLast (.aliasMessage alias message), false)

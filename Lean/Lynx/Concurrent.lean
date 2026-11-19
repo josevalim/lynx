@@ -33,7 +33,8 @@ A process ends in phases: it stops being alive, then sends exit signals to its
 links in any order and `DOWN` messages to its watchers in order, one at a time,
 then answers the requests still queued, one at a time. Monitor signals wait, as OTP's scheduler parks them,
 until their sender is scheduled out or signals the same process again, except
-by `is_process_alive/1`, which OTP may answer without a signal. A
+by `is_process_alive/1` and `process_info/2`, which OTP may answer without a
+signal. A
 parked monitor signal of a process that ends, or of a monitor it removes, is
 dropped: its target would only remove the monitor again, and a `DOWN` it
 answers with only reaches a process that drops it.
@@ -439,8 +440,9 @@ signal joins its queue after. -/
   (entry.signal matches .link | .monitor _ | .isAlive) && !state.gone entry.source
 
 /-- A record without what nothing can observe: queued signals that do nothing,
-links being removed from processes that are gone, and, for a process that
-ended, everything but what it still sends and answers. -/
+links being removed from processes that are gone, monitors of watchers that are
+gone, whose `DOWN` would be dropped, and, for a process that ended, everything
+but what it still sends and answers. -/
 @[expose] def State.normalizeRecord (state : State) (processId : PID) (process : ProcessState) :
     ProcessState :=
   match process.exiting with
@@ -605,11 +607,12 @@ inductive Answer (β : Type) : Type 1 where
       else if state.alive target then .wait (.reply target) (state.enqueue processId target .isAlive)
       else .wait (.flush (.atom "false")) (state.enqueue processId processId .flush)
   | .processInfo target =>
-      -- OTP reads a live target without signaling it, then handles the signals
-      -- from it, and finds no dead one without handling any (process_info_bif
-      -- in erl_bif_info.c).
+      -- OTP reads an idle target without signaling it, then handles the
+      -- signals from it, and otherwise sends the request after a monitor
+      -- parked for it, as `is_process_alive/1` does; it finds no dead target
+      -- without handling any signal (process_info_bif in erl_bif_info.c).
       if target = processId then .reply (.atom "true") state
-      else if state.alive target then .wait (.flush (.atom "true")) (state.enqueue processId processId .flush)
+      else if state.alive target then .wait (.reply target) (state.enqueue processId target .isAlive)
       else .reply (.atom "false") state
   | .sendAlias alias message =>
       .reply message (state.send processId alias.dropLast (.aliasMessage alias message))

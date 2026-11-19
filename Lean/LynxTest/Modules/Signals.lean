@@ -537,6 +537,14 @@ theorem process_info_of_dead_does_not_flush :
       | some (_, .rejected (.ok (.atom "undefined"))) => true
       | _ => false) = true := by decide +kernel
 
+/-- `process_info/2` signals a target with signals queued, which handles them
+first: after a `kill` is queued at it, it is always `undefined`. -/
+theorem process_info_after_kill_is_undefined :
+    Concurrent.check (only (.ok (.atom "undefined"))) 64 (.start {} (do
+      let child ← «spawn/1» dispatcher waits
+      let _ ← «exit/2» dispatcher child (.atom "kill")
+      «process_info/2» dispatcher child (.atom "registered_name"))) = true := by decide +kernel
+
 end LynxTest.Modules.Signals
 
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Modules.Signals

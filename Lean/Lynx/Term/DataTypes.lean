@@ -182,9 +182,9 @@ inductive Request where
   monitor signal parked for it, and its reply after what it sent before; a
   requester otherwise handles everything queued at it before the reply. -/
   | alive (target : PID)
-  /-- Reply whether a process is alive, as `process_info/2` does: a live target
-  is read without signaling it, and the requester then handles everything queued
-  at it before the reply; a dead one replies at once. -/
+  /-- Reply whether a process is alive, as `process_info/2` does: as `alive`
+  for a live target, while a dead one replies at once, without the requester
+  handling what is queued at it. -/
   | processInfo (target : PID)
   /-- Send to an alias, discarding the message once the alias is inactive.
   Replies the message. -/
