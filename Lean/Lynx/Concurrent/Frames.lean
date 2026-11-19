@@ -4088,6 +4088,114 @@ private theorem Clean.appended {state : State} (sorted : state.Sorted) (normaliz
         rw [inert_congr rfl rfl rfl rfl rfl] at inside; exact inside⟩
     · exact .inr (fresh original record)
 
+private theorem Effect.apply_empty (state : State) : ({} : Effect).apply state = state := by
+  cases state; rfl
+
+/-- Every record of a state is clean, but those of some processes. -/
+private def CleanOutside (state : State) (except : PID → Prop) : Prop :=
+  ∀ processId, ¬ except processId → ∀ process, state.record processId = some process →
+    Clean state.gone processId process
+
+private theorem Effect.apply_andThen_record (first second : Effect) (state : State) (processId : PID) :
+    ((first.andThen second).apply state).record processId = (second.apply (first.apply state)).record processId := by
+  simp only [Effect.record_apply, Effect.record_andThen, Function.comp]
+
+private theorem Effect.apply_andThen_gone (first second : Effect) (state : State) :
+    ((first.andThen second).apply state).gone = (second.apply (first.apply state)).gone := by
+  funext processId
+  simp only [State.gone, State.alive, Effect.apply_andThen_record]
+
+private theorem CleanOutside.andThen {first second : Effect} {state : State} {except : PID → Prop}
+    (clean : CleanOutside (second.apply (first.apply state)) except) :
+    CleanOutside ((first.andThen second).apply state) except := by
+  intro processId outside process found
+  rw [Effect.apply_andThen_record] at found
+  rw [Effect.apply_andThen_gone]
+  exact clean processId outside process found
+
+/-- Changing one record, keeping every process alive or gone, keeps the others
+clean, and that one when the change is clean. -/
+private theorem CleanOutside.modify {state : State} {except : PID → Prop} {processId : PID}
+    {change : ProcessState → ProcessState}
+    (live : ∀ process, (change process).exiting.isSome = process.exiting.isSome)
+    (clean : CleanOutside state except)
+    (here : ¬ except processId → ∀ process, state.record processId = some process →
+      Clean state.gone processId (change process)) :
+    CleanOutside ((Effect.modify processId change).apply state) except := by
+  intro other outside process found
+  rw [(Effect.KeepsAlive.modify live).gone]
+  rw [Effect.record_apply, Effect.record_modify] at found
+  split at found
+  · rename_i same; subst same
+    cases record : state.record other with
+    | none => rw [record] at found; simp at found
+    | some original =>
+      rw [record] at found; simp only [Option.map_some, Option.some.injEq] at found; subst found
+      exact here outside original record
+  · exact clean other outside process found
+
+/-- Appending a signal that is not inert to a clean live record keeps it clean. -/
+private theorem Clean.queued {gone : PID → Bool} {processId source : PID} {signal : Signal} {process : ProcessState}
+    (clean : Clean gone processId process) (live : process.exiting = none)
+    (fresh : inert gone processId (queueAt source signal process) { source, signal } = false) :
+    Clean gone processId (queueAt source signal process) := by
+  refine clean.preserve live live (fun entry mem => ?_) (fun link mem _ => ⟨mem, id⟩)
+  have mem' : entry ∈ process.queue ∨ entry = { source, signal } := by
+    simpa [queueAt, Kernel.append_eq] using mem
+  rcases mem' with old | rfl
+  · exact .inl ⟨old, fun inside => by rw [inert_congr rfl rfl rfl rfl rfl] at inside; exact inside⟩
+  · exact .inr fresh
+
+/-- Queueing a signal keeps a state clean, when the signal is not inert at a
+live target, and, when the target is gone, the sender falling back is live and
+the `DOWN` it queues for a monitor is not inert. -/
+private theorem CleanOutside.enqueue {state : State} {except : PID → Prop} {source target : PID} {signal : Signal}
+    (clean : CleanOutside state except)
+    (fresh : ∀ process, state.record target = some process → process.exiting = none →
+      inert state.gone target (queueAt source signal process) { source, signal } = false)
+    (fallback : state.alive target = false → (signal matches .link | .monitor _ | .isAlive | .unlink _) →
+      ¬ except source ∧ ∀ process, state.record source = some process → process.exiting = none)
+    (notUnlink : ∀ id, signal ≠ .unlink id)
+    (down : state.alive target = false → ∀ reference, signal = .monitor reference →
+      ∀ process, state.record source = some process →
+        inert state.gone source (queueAt target (.down reference (.atom "noproc")) process)
+          { source := target, signal := .down reference (.atom "noproc") } = false) :
+    CleanOutside ((state.enqueueEffect source target signal).apply state) except := by
+  have viaFallback : state.alive target = false →
+      CleanOutside ((state.fallbackEffect source target signal).apply state) except := by
+    intro dead
+    cases signal with
+    | link =>
+      obtain ⟨outside, live⟩ := fallback dead rfl
+      refine CleanOutside.modify (fun _ => rfl) clean fun _ process found =>
+        (clean source outside process found).queued (live process found) ?_
+      simp [inert]
+    | monitor reference =>
+      obtain ⟨outside, live⟩ := fallback dead rfl
+      exact CleanOutside.modify (fun _ => rfl) clean fun _ process found =>
+        (clean source outside process found).queued (live process found) (down dead reference rfl process found)
+    | isAlive =>
+      obtain ⟨outside, live⟩ := fallback dead rfl
+      refine CleanOutside.modify (fun _ => rfl) clean fun _ process found =>
+        (clean source outside process found).queued (live process found) ?_
+      simp [inert]
+    | unlink id => exact absurd rfl (notUnlink id)
+    | _ => simpa [State.fallbackEffect, Effect.apply_empty] using clean
+  unfold State.enqueueEffect
+  cases found : state.record target with
+  | none => exact viaFallback (by simp [State.alive, found])
+  | some process =>
+    simp only
+    split
+    · rename_i live
+      refine CleanOutside.modify (fun _ => rfl) clean fun outside _ found' => ?_
+      rw [found] at found'; cases found'
+      have exiting : process.exiting = none := by simpa using live
+      exact (clean target outside process found).queued exiting (fresh process found exiting)
+    · rename_i exiting
+      exact viaFallback (by
+        simp only [State.alive, found]; cases equal : process.exiting <;> simp_all)
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
