@@ -578,7 +578,7 @@ private def normRecord (gone : PID → Bool) (processId : PID) (process : Proces
   | some exiting =>
       { queue := Kernel.filter (fun entry => (entry.signal matches .link | .monitor _ | .isAlive) &&
           !gone entry.source) process.queue
-        refCounter := process.refCounter, children := process.children
+        children := process.children
         exiting := some { exiting with
           links := Kernel.filter (fun target => !gone target) exiting.links
           downs := Kernel.filter (fun down => !gone down.2) exiting.downs } }
@@ -4749,7 +4749,7 @@ private def Signal.request : Signal → Bool
 
 /-- What normalizing keeps of a record that ended. -/
 private def endedShape (process : ProcessState) : ProcessState :=
-  { queue := process.queue, refCounter := process.refCounter, children := process.children, exiting := process.exiting }
+  { queue := process.queue, children := process.children, exiting := process.exiting }
 
 /-- What a clean record that ended satisfies: only requests from processes not
 gone queued, links and watchers not gone, and every other field empty. -/
@@ -4776,7 +4776,7 @@ private theorem Clean.exiting_facts {gone : PID → Bool} {processId : PID} {pro
   · have := List.filter_eq_self.mp links target mem; simpa using this
   · have := List.filter_eq_self.mp downs down mem; simpa using this
 
-/-- A record that ended with every field but its queue, references, children
+/-- A record that ended with every field but its queue, children
 and exiting empty, holding only what normalizing keeps, is clean while something is left. -/
 private theorem Clean.exiting {gone : PID → Bool} {processId : PID} {process : ProcessState} {exiting : Exiting}
     (ended : process.exiting = some exiting)

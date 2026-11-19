@@ -446,7 +446,7 @@ ended, everything but what it still sends and answers. -/
   match process.exiting with
   | some exiting =>
       { queue := Kernel.filter state.answersEntry process.queue
-        refCounter := process.refCounter, children := process.children
+        children := process.children
         exiting := some { exiting with
           links := Kernel.filter (fun target => !state.gone target) exiting.links
           downs := Kernel.filter (fun down => !state.gone down.2) exiting.downs } }
@@ -860,10 +860,10 @@ inductive Config (α : Type) : Type 1 where
       (finished : Option (Except Exception α)) (exhausted : Bool)
 
 /-- The configuration a process step leads to. A process that does not return
-ends the run. -/
+ends the run, which keeps no records or timers, as nothing observes them. -/
 @[expose] def Transition.apply (transition : Transition α) (before after : List (PID × Task α))
     (finished : Option (Except Exception α)) (exhausted : Bool) : Config α :=
-  if transition.exhausted then .running transition.state [] finished true
+  if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] finished true
   else .running transition.state.normalize (Kernel.append (Kernel.append before transition.tasks) after)
     (transition.finished.orElse fun _ => finished) exhausted
 
