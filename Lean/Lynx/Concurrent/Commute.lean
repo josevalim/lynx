@@ -665,15 +665,17 @@ orders reach the same configuration. -/
         config.sameView next' key && config.sameView next other && last.sameAfter last'
     | _, _ => false)
 
-/-- Whether a step leaves every process's computation as it is: it is not a
-process's own step, nor handling a signal by a process that waits, which may resume it. -/
-@[expose] def Config.keepsTasks : Config α → Key → Bool
-  | .running _ tasks _ _, .handle processId =>
+/-- Whether a step, leading to a configuration, leaves every process's
+computation as it is: it is not a process's own step, nor handling a signal by
+a process that waits, which may resume it, or that ends handling it. -/
+@[expose] def Config.keepsTasks : Config α → Key → Config α → Bool
+  | .running _ tasks _ _, .handle processId, .running _ tasks' _ _ =>
       match Kernel.lookup processId tasks with
-      | some task => task.wait.isNone
+      | some task => task.wait.isNone && (Kernel.lookup processId tasks').isSome
       | none => false
-  | _, .own _ => false
-  | _, _ => true
+  | _, .handle _, _ => false
+  | _, .own _, _ => false
+  | _, _, _ => true
 
 /-- Whether a step `other` explored before stays asleep after `key`: they
 commute, or `other` absorbs `key`, reaching after it what it reaches alone,
@@ -682,7 +684,7 @@ which needs `key` to leave every computation as it is. -/
     (next : Config α) (other : Key) : Bool :=
   match Kernel.find? (·.1 == other) steps with
   | some (_, _, next') =>
-      config.commutesAfter key next other next' || config.keepsTasks key &&
+      config.commutesAfter key next other next' || config.keepsTasks key next &&
       match next.stepOf other with
       | some (_, last) =>
           config.sameView next other && last.sameAfter next'
@@ -706,7 +708,8 @@ steps along each run, where runs taking a step asleep first are covered elsewher
 @[expose] def checkSleep (accept : Outcome α → Bool) : Nat → List Key → Config α → Bool
   | 0, _, _ => false
   | depth + 1, sleep, config =>
-      match config.taggedSteps with
+      -- The steps of a process are named by its key only while it has one task.
+      config.distinctTasks && match config.taggedSteps with
       | [] =>
           match config.successors with
           | [] => accept config.outcome
