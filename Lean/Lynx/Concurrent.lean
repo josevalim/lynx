@@ -100,7 +100,7 @@ structure ProcessState where
   /-- Messages handled, which `receive` scans. -/
   mailbox : List Term := []
   pdict : List (Term × Term) := []
-  /-- Number of references the process allocated. -/
+  /-- Number of references the process allocated, forgotten once it ends. -/
   refCounter : Nat := 0
   /-- Number of processes the process spawned. -/
   children : Nat := 0

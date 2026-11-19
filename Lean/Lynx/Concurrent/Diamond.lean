@@ -786,7 +786,7 @@ private theorem State.normalize_normalize {state : State} (sorted : state.Sorted
 /-! ### Every configuration is normalized -/
 
 /-- A running configuration whose state normalizing leaves as it is. A run that
-a process did not return from has no steps, and its state is not normalized. -/
+a process did not return from has no steps, so nothing is required of it. -/
 private def Config.Normalized : Config α → Prop
   | .running state _ _ false => state.normalize = state
   | _ => True
