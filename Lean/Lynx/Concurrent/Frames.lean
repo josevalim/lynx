@@ -6273,4 +6273,42 @@ private theorem Config.inFrames {state : State} {tasks : List (PID × Task α)}
     · simp at found
   | link => simp [Config.frames] at found
 
+/-! ### Assembling: agreeing after the other step -/
+
+/-- After a confined step, normalized, the state agrees with the one before on
+what a step apart from it reads. -/
+private theorem Config.agree_after {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key other : Key} {frames frames' : List Frame} {timers timers' : Bool}
+    {raw : State} (sorted : state.Sorted) (normalized : state.normalize = state)
+    (confined : Config.confined (.running state tasks finished false) key = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, timers))
+    (confined' : Config.confined (.running state tasks finished false) other = true)
+    (found' : (Config.running state tasks finished false).frames other = some (frames', timers'))
+    (apart : framesApart frames frames' = true)
+    (realizes : Realizes ((Config.running state tasks finished false).effectOf key) state raw) (sortedRaw : raw.Sorted) :
+    Agree frames' state raw.normalize := by
+  intro processId ⟨bit, lower, read⟩
+  have notWhole : ¬ WholeOf frames processId := fun whole =>
+    (apart_of_framesApart apart processId).1 bit (whole bit lower) (.inl read)
+  have clean := Config.clean sorted normalized confined found
+  have framed := Config.inFrames confined found
+  have records : ∀ processId, raw.record processId =
+      (((Config.running state tasks finished false).effectOf key).apply state).record processId :=
+    realizes.records
+  have gone : raw.gone = (((Config.running state tasks finished false).effectOf key).apply state).gone := by
+    funext other; simp only [State.gone, State.alive, records]
+  have normalizedRecord : raw.normalize.record processId = raw.record processId :=
+    State.record_normalize_clean sortedRaw fun process found => by
+      rw [records] at found; rw [gone]; exact clean processId notWhole process found
+  rw [normalizedRecord, records]
+  obtain ⟨nonempty, tail⟩ := (Config.headSafe confined' found').reads
+  have keeps := framed.keeps (fun processId bit written read =>
+    (apart_of_framesApart apart processId).1 bit written (.inl read)) nonempty tail processId
+  refine ⟨?_, keeps⟩
+  rw [Effect.record_apply]
+  rcases framed processId with same | all | ⟨change, equal, -, -⟩
+  · rw [same]; rfl
+  · exact absurd all notWhole
+  · rw [equal]; cases state.record processId <;> rfl
+
 end Lynx.Concurrent
