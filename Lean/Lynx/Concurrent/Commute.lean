@@ -144,7 +144,7 @@ message, removing a monitor, trapping exits, or ending. -/
   | _ => false
 
 /-- The steps of a running configuration, each with its key and whether every
-run can take it first (`Config.forced`): a process reading or replacing its
+run can take it first, the forced steps: a process reading or replacing its
 environment or receiving a message already handled, handling a signal that
 `Task.forcedHead` accepts, or sending a `DOWN` its watcher drops. -/
 @[expose] def Config.taggedSteps : Config α → List (Key × Event × Config α × Bool)
@@ -181,10 +181,6 @@ environment or receiving a message already handled, handling a signal that
         (Kernel.map (fun timer =>
           (Key.fire timer.reference, Event.fire timer.reference,
             .running (state.fire timer).normalize tasks finished false, false)) state.firing)
-
-/-- The steps of a running configuration, each with its key. -/
-@[expose] def Config.steps (config : Config α) : List (Key × Event × Config α) :=
-  Kernel.map (fun (key, event, next, _) => (key, event, next)) config.taggedSteps
 
 /-- Where a process is in a list of tasks: the tasks before it, its own, and those after. -/
 @[expose] def splitAt (processId : PID) : List (PID × Task α) →
@@ -445,12 +441,11 @@ no unlink waits for, which reads its links. -/
 @[expose] def Field.all : Nat := 131071
 
 /-- The frames of a process ending: its own record, the link exits that only
-remove a link, and a parked monitor signal, and whether it cancels timers.
+remove a link, and whether it cancels timers.
 What normalization drops from other records once it is gone is not among them:
 such a step is not confined (`Config.confined`). -/
 @[expose] def State.endFrames (state : State) (processId : PID) : List Frame × Bool :=
-  -- It applies the link exits that only remove a link, after a parked monitor
-  -- signal to the same target.
+  -- It applies the link exits that only remove a link.
   let process := state.process processId
   let eager := Kernel.filterMap (fun (target, unlinking) => if unlinking.isNone then
       let linking := Kernel.any (state.process target).queue
@@ -458,10 +453,7 @@ such a step is not confined (`Config.confined`). -/
       some (target, Field.live ||| Field.trapExit ||| (if linking then Field.queueHead else 0) ||| Field.links ||| Field.eagerExits,
         Field.links ||| Field.eagerExits)
     else none) process.links
-  let unpark := match process.parked with
-    | some (target, _) => [(target, Field.live, Field.queueTail)]
-    | none => []
-  ((processId, Field.all, Field.all) :: Kernel.append eager unpark,
+  ((processId, Field.all, Field.all) :: eager,
     Kernel.any state.timers (·.destination == processId))
 
 /-- The frames of a process's own step, `none` when it does not return. -/
@@ -513,34 +505,6 @@ such a step is not confined (`Config.confined`). -/
     | .isAlive => some (own 0 0 :: state.sendFrames processId entry.source (.reply (.atom "true")), false)
     | .reply _ | .flush => some ([own 0 0], false)
 
-/-- The frames of a phase of a process that ended signaling one of its links. -/
-@[expose] def State.linkFrames (state : State) (processId target : PID) : Option (List Frame × Bool) :=
-  match state.record processId with
-  | some process =>
-      match process.exiting with
-      | some exiting =>
-          let own : Frame := (processId, Field.exiting, Field.exiting)
-          let signal : Signal := .exit exiting.reason true false
-          -- Handling a link from this process changes whether the exit is
-          -- applied when sent, which reads nothing else of the queue.
-          let linking := Kernel.any (state.process target).queue
-            (fun entry => entry.source == processId && entry.signal matches .link)
-          let queue := if linking then Field.queueHead else 0
-          if isNormal exiting.reason && state.alive target && !(state.process target).trapExit && !linking then
-            let unpark := match process.parked with
-              | some (parked, reference) =>
-                  if parked == target then
-                    (processId, Field.parked, Field.parked) ::
-                      state.enqueueFrames processId target (.monitor reference)
-                  else [(processId, Field.parked, 0)]
-              | none => [(processId, Field.parked, 0)]
-            some (own :: (target, Field.live ||| Field.trapExit ||| Field.links ||| Field.eagerExits,
-              Field.links ||| Field.eagerExits) :: unpark, false)
-          else some (own :: (target, Field.live ||| Field.trapExit ||| queue, 0) ::
-            state.sendFrames processId target signal, false)
-      | none => none
-  | none => none
-
 /-- The frames of the next phase of a process that ended once it signaled its links. -/
 @[expose] def State.phaseFrames (state : State) (processId : PID) : Option (List Frame × Bool) :=
   match state.record processId with
@@ -552,7 +516,7 @@ such a step is not confined (`Config.confined`). -/
           | (reference, watcher) :: _, _ =>
               some (own :: state.sendFrames processId watcher (.down reference exiting.reason), false)
           | [], entry :: _ =>
-              let own : Frame := (processId, Field.exiting ||| Field.parked ||| Field.queueHead,
+              let own : Frame := (processId, Field.exiting ||| Field.queueHead,
                 Field.queueHead ||| Field.live)
               some (own :: match entry.signal with
                 | .link => state.sendFrames processId entry.source (.exit (.atom "noproc") true false)
@@ -570,7 +534,6 @@ as for a process that does not return. -/
       (Kernel.lookup processId tasks).bind fun task => task.ownFrames state processId
   | .running state tasks _ false, .handle processId =>
       (Kernel.lookup processId tasks).bind fun task => task.handleFrames state processId
-  | .running state _ _ false, .link processId target => state.linkFrames processId target
   | .running state _ _ false, .phase processId => state.phaseFrames processId
   | .running state _ _ false, .unpark processId =>
       match (state.process processId).parked with
@@ -722,27 +685,6 @@ which needs `key` to leave every computation as it is. -/
       | none => false
   | none => false
 
-/-- A step every run can take first: a process reading or replacing its
-environment, receiving a message already handled, or handling a queued signal
-when neither its own next step nor any other process can tell when, or a
-process that ended sending a `DOWN` its watcher drops. -/
-@[expose] def Config.forced : Config α → Option Key
-  | .running state tasks _ false =>
-      Kernel.find? (fun _ => true) (Kernel.filterMap (fun (processId, task) =>
-        let process := state.process processId
-        let own : Bool := match task.wait, task.computation with
-          | none, .get _ | none, .set .. => true
-          | none, .receive _ select _ =>
-              (selectMessage (select (state.view processId)) process.mailbox).isSome
-          | _, _ => false
-        if own then some (Key.own processId) else
-        match process.queue with
-        | entry :: _ => if task.forcedHead state processId entry then some (Key.handle processId) else none
-        | [] => none) tasks) |>.orElse fun _ =>
-      Kernel.find? (fun _ => true) (Kernel.filterMap (fun (processId, _) =>
-        if state.dropsDown processId then some (Key.phase processId) else none) state.processes)
-  | _ => none
-
 /-! ### Checking with sleep sets -/
 
 /-- Follow every step not asleep. A step is followed with the steps asleep and
@@ -766,7 +708,7 @@ steps along each run, where runs taking a step asleep first are covered elsewher
           | [] => accept config.outcome
           | successors => Kernel.all successors fun (_, next) => checkSleep accept depth [] next
       | tagged =>
-          -- The first forced step, as `Config.forced` finds it.
+          -- The first forced step.
           match Kernel.find? (·.2.2.2) tagged with
           | some (_, _, next, _) => checkSleep accept depth sleep next
           | none =>

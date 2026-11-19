@@ -32,7 +32,10 @@ modeled.
 A process ends in phases: it stops being alive, then sends exit signals to its
 links in any order and `DOWN` messages to its watchers in order, one at a time,
 then answers the requests still queued, one at a time. Monitor signals wait, as OTP's scheduler parks them,
-until their sender is scheduled out or signals the same process again.
+until their sender is scheduled out or signals the same process again. A
+parked monitor signal of a process that ends, or of a monitor it removes, is
+dropped: its target would only remove the monitor again, and a `DOWN` it
+answers with only reaches a process that drops it.
 
 The scheduler owns the `State` of every process. A running process only
 observes and replaces its own `Environment`: its identity, its process
@@ -333,9 +336,6 @@ handled it (`ProcessState.eagerExits`). It is queued instead while the receiver
 has yet to handle a link from the process, which would come back otherwise. -/
 @[expose] def State.linkExit (state : State) (processId target : PID) (reason : Term) : State :=
   if state.eagerLink processId target reason then
-    let state := match (state.process processId).parked with
-      | some (parked, _) => if parked == target then state.unpark processId else state
-      | none => state
     state.modify target fun process => { process with
       links := Kernel.filter (·.1 != processId) process.links
       eagerExits := insertPid processId process.eagerExits }
@@ -386,9 +386,8 @@ processes run in between. -/
   | none => none
 
 /-- The next phase of a process that ended once it signaled its links: a
-`DOWN` to a watcher, or answering the oldest request still queued. A parked
-monitor signal is sent before the requests are answered, as the process is
-scheduled out. Normalization removes the record once nothing is left. -/
+`DOWN` to a watcher, or answering the oldest request still queued.
+Normalization removes the record once nothing is left. -/
 @[expose] def State.phase (state : State) (processId : PID) : Option State :=
   match state.record processId with
   | some process =>
@@ -400,7 +399,6 @@ scheduled out. Normalization removes the record once nothing is left. -/
           some ((state.set processId { process with exiting := some { exiting with downs := rest } }).send
             processId watcher (.down reference exiting.reason))
       | [], [] =>
-          if process.parked.isSome then none else
           match process.queue with
           | entry :: rest => some ((state.set processId { process with queue := rest }).answer processId entry)
           | [] => none
@@ -448,7 +446,7 @@ ended, everything but what it still sends and answers. -/
   match process.exiting with
   | some exiting =>
       { queue := Kernel.filter state.answersEntry process.queue
-        refCounter := process.refCounter, children := process.children, parked := process.parked
+        refCounter := process.refCounter, children := process.children
         exiting := some { exiting with
           links := Kernel.filter (fun target => !state.gone target) exiting.links
           downs := Kernel.filter (fun down => !state.gone down.2) exiting.downs } }
@@ -460,7 +458,7 @@ ended, everything but what it still sends and answers. -/
 /-- Whether a process that ended has nothing left to send or answer. -/
 @[expose] def ProcessState.finished (process : ProcessState) : Bool :=
   match process.exiting with
-  | some { links := [], downs := [], .. } => process.queue.isEmpty && process.parked.isNone
+  | some { links := [], downs := [], .. } => process.queue.isEmpty
   | _ => false
 
 /-- Remove what nothing can observe any more. -/

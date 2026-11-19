@@ -84,13 +84,6 @@ theorem State.weight_set (state : State) (processId : PID) (process : ProcessSta
   | none => simp only [found, Option.map_none, Option.getD_none] at filtered; simp [ProcessState.weight]; omega
   | some record => simp only [found, Option.map_some, Option.getD_some] at filtered; simp; omega
 
-theorem State.weight_remove (state : State) (processId : PID) :
-    (state.remove processId).weight + (state.process processId).weight ≤ state.weight := by
-  have filtered := recordsWeight_filter processId state.processes
-  simp only [State.weight, State.remove, Kernel.filter_eq, State.process, State.record, Kernel.lookup_eq]
-  cases found : state.processes.lookup processId with
-  | none => simp only [found, Option.map_none, Option.getD_none] at filtered; simp [ProcessState.weight]; omega
-  | some record => simp only [found, Option.map_some, Option.getD_some] at filtered; simp; omega
 
 /-- A change that adds at most `extra` to a record adds at most that to the state. -/
 theorem State.weight_modify (state : State) (processId : PID) (change : ProcessState → ProcessState)
@@ -347,18 +340,10 @@ theorem State.weight_linkExit (state : State) (processId target : PID) (reason :
       eagerExits := insertPid processId other.eagerExits })
     fun _ => ⟨rfl, rfl, rfl⟩
   have sent := state.weight_send processId target (.exit reason true false)
-  have unparked := state.weight_unpark processId
   simp only [Signal.weight] at sent
   unfold State.linkExit
   split
-  · cases parked : (state.process processId).parked with
-    | none => simp only; have := eager state; omega
-    | some found =>
-      obtain ⟨other, reference⟩ := found
-      simp only
-      split
-      · have := eager (state.unpark processId); omega
-      · have := eager state; omega
+  · have := eager state; omega
   · omega
 
 /-- A phase signaling a link lowers the weight. -/
@@ -414,18 +399,16 @@ theorem State.weight_phase {state next : State} {processId : PID} (phase : state
           processId watcher (.down reference exiting.reason)
         simp only [Signal.weight] at sent; omega
       · split at phase
+        · rename_i entry rest queue
+          simp only [Option.some.injEq] at phase; subst phase
+          have set := state.weight_set processId { process with queue := rest }
+          rw [equal] at set
+          have lighter : ({ process with queue := rest } : ProcessState).weight + entry.signal.weight =
+              process.weight := by
+            simp only [ProcessState.weight_eq, queueWeight, queue, List.map_cons, List.sum_cons]; omega
+          have answered := (state.set processId { process with queue := rest }).weight_answer processId entry
+          omega
         · simp at phase
-        · split at phase
-          · rename_i entry rest queue
-            simp only [Option.some.injEq] at phase; subst phase
-            have set := state.weight_set processId { process with queue := rest }
-            rw [equal] at set
-            have lighter : ({ process with queue := rest } : ProcessState).weight + entry.signal.weight =
-                process.weight := by
-              simp only [ProcessState.weight_eq, queueWeight, queue, List.map_cons, List.sum_cons]; omega
-            have answered := (state.set processId { process with queue := rest }).weight_answer processId entry
-            omega
-          · simp at phase
     · simp at phase
   · simp at phase
 

@@ -79,9 +79,12 @@ change to one, goes through every layer:
 3. Give the request frames in `State.requestFrames`: for each process, once, the
    fields of its record the step reads and writes at the state, with `live` when
    it ends or starts the process, so that steps touching records apart commute
-   without evaluating them. Frames that declare too little are unsound, including
-   what normalization (`State.normalize`) removes after the step; frames that
-   declare too much, or unknown frames, only cost exploration. Avoid steps that
+   without evaluating them. Frames are trusted only for steps `Config.confined`
+   accepts: a step opts in once `Lynx/Concurrent/Frames.lean` proves it within
+   its frames, and only where normalization (`State.normalize`) after it changes
+   no other record; other steps are compared by evaluating them. Frames that
+   declare too little are unsound; frames that declare too much, or unknown
+   frames, only cost exploration. Avoid steps that
    read whether another process's queue is empty, which every signal changes.
    Termination (`Concurrent/Termination.lean`), traces (`Concurrent/Trace.lean`)
    and the runner (`Lynx/Term/Runner.lean`) must cover it too.
@@ -89,7 +92,7 @@ change to one, goes through every layer:
    `DOWN` after its monitor was removed by `demonitor`, a message to an alias that
    was removed by `unalias`, or a request from a process that is gone
    (`State.gone`). Normalization removes them (`State.inertEntry`). Other steps
-   every run can take first are taken alone (`Config.forced`, `Task.forcedHead`),
+   every run can take first are taken alone (`Config.taggedSteps`, `Task.forcedHead`),
    so their interleavings are never explored. A forced step must stay enabled
    and forced, and every other step, now or after any others, including later
    steps of the same process, must commute with it or absorb it.

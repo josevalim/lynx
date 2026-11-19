@@ -80,35 +80,7 @@ private theorem Effect.record_apply (effect : Effect) (state : State) (processId
     simp only [Effect.record, changeOf_of_missing missing]
     rfl
 
-private theorem Effect.timers_apply (effect : Effect) (state : State) :
-    (effect.apply state).timers = (effect.timers.getD id) state.timers := by
-  simp only [Effect.apply]
-  generalize (effect.records.map (·.1)) = processes
-  have : ∀ (start : State), (processes.foldl (fun changed other =>
-      changed.put other (effect.record other (state.record other))) start).timers = start.timers := by
-    induction processes with
-    | nil => intro; rfl
-    | cons head rest ih =>
-      intro start
-      simp only [List.foldl_cons]
-      rw [ih]
-      cases effect.record head (state.record head) <;> rfl
-  rw [this]
 
-private theorem Effect.elapsed_apply (effect : Effect) (state : State) :
-    (effect.apply state).elapsed = state.elapsed := by
-  simp only [Effect.apply]
-  generalize (effect.records.map (·.1)) = processes
-  have : ∀ (start : State), (processes.foldl (fun changed other =>
-      changed.put other (effect.record other (state.record other))) start).elapsed = start.elapsed := by
-    induction processes with
-    | nil => intro; rfl
-    | cons head rest ih =>
-      intro start
-      simp only [List.foldl_cons]
-      rw [ih]
-      cases effect.record head (state.record head) <;> rfl
-  rw [this]
 
 /-- One effect after another. -/
 private def Effect.andThen (first second : Effect) : Effect where
@@ -210,10 +182,6 @@ private theorem ProcessState.Same.symm {mask : Mask} {first second : ProcessStat
     (same : first.Same mask second) : second.Same mask first :=
   ⟨fun x => (same.1 x).symm, fun x => (same.2.1 x).symm, fun part x => (same.2.2 part x).symm⟩
 
-private theorem ProcessState.Same.trans {mask : Mask} {first second third : ProcessState}
-    (one : first.Same mask second) (two : second.Same mask third) : first.Same mask third :=
-  ⟨fun x => (one.1 x).trans (two.1 x), fun x => (one.2.1 x).trans (two.2.1 x),
-    fun part x => (one.2.2 part x).trans (two.2.2 part x)⟩
 
 /-! ### Changes within frames -/
 
@@ -543,9 +511,6 @@ private theorem Realizes.fallback (state : State) (source target : PID) (signal 
     first
       | exact Realizes.modify _ _ _
       | exact Realizes.refl _
-      | (split
-         · exact Realizes.modify _ _ _
-         · exact Realizes.refl _)
 
 /-- The effect of `State.enqueue`. -/
 private def State.enqueueEffect (state : State) (source target : PID) (signal : Signal) : Effect :=
@@ -625,7 +590,7 @@ private def normRecord (gone : PID → Bool) (processId : PID) (process : Proces
   | some exiting =>
       { queue := Kernel.filter (fun entry => (entry.signal matches .link | .monitor _ | .isAlive) &&
           !gone entry.source) process.queue
-        refCounter := process.refCounter, children := process.children, parked := process.parked
+        refCounter := process.refCounter, children := process.children
         exiting := some { exiting with
           links := Kernel.filter (fun target => !gone target) exiting.links
           downs := Kernel.filter (fun down => !gone down.2) exiting.downs } }
@@ -722,30 +687,16 @@ private theorem Realizes.put (state : State) (processId : PID) (process : Proces
 /-- The effect of `State.linkExit`. -/
 private def State.linkExitEffect (state : State) (processId target : PID) (reason : Term) : Effect :=
   if state.eagerLink processId target reason then
-    let unparked := match (state.process processId).parked with
-      | some (parked, _) => if parked == target then state.unpark processId else state
-      | none => state
-    let unpark : Effect := match (state.process processId).parked with
-      | some (parked, _) => if parked == target then state.unparkEffect processId else {}
-      | none => {}
-    unpark.andThen (Effect.modify target fun process => { process with
+    Effect.modify target fun process => { process with
       links := Kernel.filter (·.1 != processId) process.links
-      eagerExits := insertPid processId process.eagerExits })
+      eagerExits := insertPid processId process.eagerExits }
   else state.sendEffect processId target (.exit reason true false)
 
 private theorem Realizes.linkExit (state : State) (processId target : PID) (reason : Term) :
     Realizes (state.linkExitEffect processId target reason) state (state.linkExit processId target reason) := by
   unfold State.linkExitEffect State.linkExit
   split
-  · simp only
-    cases parked : (state.process processId).parked with
-    | none => simpa [Effect.andThen, Effect.record, changeOf] using Realizes.modify state target _
-    | some found =>
-      obtain ⟨other, reference⟩ := found
-      simp only
-      split
-      · exact (Realizes.unpark _ _).andThen (Realizes.modify _ _ _)
-      · simpa [Effect.andThen, Effect.record, changeOf] using Realizes.modify state target _
+  · exact Realizes.modify _ _ _
   · exact Realizes.send _ _ _ _
 
 /-- The effect of `State.answer`. -/
@@ -1115,40 +1066,8 @@ private theorem Realizes.handle (state : State) (processId : PID) (waiting : Opt
   · split <;> exact Realizes.refl _
   · split <;> exact Realizes.refl _
 
-/-- Remove a link a process that ended has left to signal. -/
-private def unlinkExiting (target : PID) (process : ProcessState) : ProcessState :=
-  { process with exiting := process.exiting.map fun exiting =>
-      { exiting with links := Kernel.filter (· != target) exiting.links } }
 
-/-- The effect of `State.linkPhase`. -/
-private def State.linkPhaseEffect (state : State) (processId target : PID) (reason : Term) : Effect :=
-  (Effect.modify processId (unlinkExiting target)).andThen
-    ((state.modify processId (unlinkExiting target)).linkExitEffect processId target reason)
 
-private theorem Realizes.linkPhase {state next : State} {processId target : PID}
-    (phase : state.linkPhase processId target = some next) :
-    ∃ reason, Realizes (state.linkPhaseEffect processId target reason) state next := by
-  unfold State.linkPhase at phase
-  split at phase
-  · rename_i process found
-    split at phase
-    · rename_i exiting exits
-      split at phase
-      · simp only [Option.some.injEq] at phase; subst phase
-        refine ⟨exiting.reason, ?_⟩
-        have set := Realizes.set found (unlinkExiting target)
-        have equal : unlinkExiting target process = { process with exiting := some { exiting with
-            links := Kernel.filter (· != target) exiting.links } } := by simp [unlinkExiting, exits]
-        rw [equal] at set
-        have modified : state.modify processId (unlinkExiting target) = state.set processId { process with
-            exiting := some { exiting with links := Kernel.filter (· != target) exiting.links } } := by
-          simp [State.modify, found, equal]
-        unfold State.linkPhaseEffect
-        rw [modified]
-        exact set.andThen (Realizes.linkExit _ _ _ _)
-      · simp at phase
-    · simp at phase
-  · simp at phase
 
 /-- Replace the `DOWN`s a process that ended has left to send. -/
 private def setDowns (rest : List (List Nat × PID)) (process : ProcessState) : ProcessState :=
@@ -1193,20 +1112,18 @@ private theorem Realizes.phase {state next : State} {processId : PID} (phase : s
         have set := Realizes.set found (setDowns rest)
         rw [equal] at set
         exact set.andThen (Realizes.send _ _ _ _)
-      · split at phase
+      · rename_i links downs
+        split at phase
+        · rename_i entry rest queue
+          simp only [Option.some.injEq] at phase; subst phase
+          have modified : state.modify processId (fun process => { process with queue := process.queue.drop 1 }) =
+              state.set processId { process with queue := rest } := by simp [State.modify, found, queue]
+          simp only [State.phaseEffect, same, exits, downs, queue]
+          rw [modified]
+          have set := Realizes.set found (fun process => { process with queue := process.queue.drop 1 })
+          simp only [exits, queue, List.drop_succ_cons, List.drop_zero] at set ⊢
+          exact set.andThen (Realizes.answer _ _ _)
         · simp at phase
-        · rename_i links downs _
-          split at phase
-          · rename_i entry rest queue
-            simp only [Option.some.injEq] at phase; subst phase
-            have modified : state.modify processId (fun process => { process with queue := process.queue.drop 1 }) =
-                state.set processId { process with queue := rest } := by simp [State.modify, found, queue]
-            simp only [State.phaseEffect, same, exits, downs, queue]
-            rw [modified]
-            have set := Realizes.set found (fun process => { process with queue := process.queue.drop 1 })
-            simp only [exits, queue, List.drop_succ_cons, List.drop_zero] at set ⊢
-            exact set.andThen (Realizes.answer _ _ _)
-          · simp at phase
     · simp at phase
   · simp at phase
 
@@ -1631,18 +1548,8 @@ private theorem Effect.InFrames.andThen {effect effect' : Effect} {frames frames
 
 /-! ### Frames of steps -/
 
-private theorem readsOf_cons (entry : Frame) (frames : List Frame) (processId : PID) :
-    readsOf (entry :: frames) processId =
-      fun bit => (entry.1 == processId && entry.2.1.testBit bit) || readsOf frames processId bit := by
-  funext bit; simp [readsOf]
 
-private theorem writesOf_cons (entry : Frame) (frames : List Frame) (processId : PID) :
-    writesOf (entry :: frames) processId =
-      fun bit => (entry.1 == processId && entry.2.2.testBit bit) || writesOf frames processId bit := by
-  funext bit; simp [writesOf]
 
-private theorem readsOf_nil (processId : PID) : readsOf [] processId = fun _ => false := rfl
-private theorem writesOf_nil (processId : PID) : writesOf [] processId = fun _ => false := rfl
 
 /-- An effect changing one record by a change within a frame given by one entry. -/
 private theorem Effect.InFrames.modify {processId : PID} {change : ProcessState → ProcessState}
@@ -1885,11 +1792,6 @@ private theorem writesOf_mono {frames frames' : List Frame} (sub : ∀ entry ∈
   obtain ⟨entry, mem, set⟩ := written
   exact ⟨entry, sub entry mem, set⟩
 
-private theorem readsOf_bits {frames : List Frame} {processId : PID} {bit : Nat}
-    (read : readsOf frames processId bit) : ∃ entry ∈ frames, entry.2.1.testBit bit := by
-  simp only [readsOf, List.any_eq_true, Bool.and_eq_true] at read
-  obtain ⟨entry, mem, -, set⟩ := read
-  exact ⟨entry, mem, set⟩
 
 private theorem writesOf_bits {frames : List Frame} {processId : PID} {bit : Nat}
     (written : writesOf frames processId bit) : ∃ entry ∈ frames, entry.2.2.testBit bit := by
@@ -2164,9 +2066,6 @@ private theorem Effect.InFrames.cover {effect : Effect} {frames frames' : List F
     obtain ⟨entry', mem', same', set'⟩ := (covered entry mem bit).2 set
     exact ⟨entry', mem', same'.trans same, set'⟩
 
-private theorem Covered.self {frames frames' : List Frame} (sub : ∀ entry ∈ frames, entry ∈ frames') :
-    Covered frames frames' := fun entry mem _ =>
-  ⟨fun set => ⟨entry, sub entry mem, rfl, set⟩, fun set => ⟨entry, sub entry mem, rfl, set⟩⟩
 
 private theorem State.process_modify_keeps {β : Type} {state : State} {processId other : PID}
     {change : ProcessState → ProcessState} {get : ProcessState → β}

@@ -35,13 +35,6 @@ private theorem pidBefore_trans : ∀ {first second third : PID}, pidBefore firs
   | _ :: _, [], _, one, _ => by simp [pidBefore] at one
   | _, _ :: _, [], _, two => by simp [pidBefore] at two
 
-private theorem pidBefore_asymm {first second : PID} (before : pidBefore first second = true) :
-    pidBefore second first = false := by
-  cases after : pidBefore second first
-  · rfl
-  · have := pidBefore_trans before after
-    rw [pidBefore_irrefl] at this
-    exact absurd this (by simp)
 
 private theorem pidBefore_total : ∀ {first second : PID}, first ≠ second →
     pidBefore first second = true ∨ pidBefore second first = true
@@ -337,12 +330,7 @@ private theorem State.Within.linkExit {state : State} (sorted : state.Within ela
     (state.linkExit processId target reason).Within elapsed := by
   unfold State.linkExit
   split
-  · apply State.Within.modify
-    split
-    · split
-      · exact sorted.unpark _
-      · exact sorted
-    · exact sorted
+  · exact State.Within.modify sorted _ _
   · exact sorted.send _ _ _
 
 private theorem State.Within.terminate {state : State} (sorted : state.Within elapsed) (processId : PID) (reason : Term) :
@@ -867,9 +855,6 @@ private def Transition.Shapes : List (Transition α) → List (Transition α) �
   | transition :: rest, transition' :: rest' => transition.Shape transition' ∧ Transition.Shapes rest rest'
   | _, _ => False
 
-private theorem Transition.Shape.refl_of {transition transition' : Transition α} (tasks : transition.tasks = transition'.tasks)
-    (finished : transition.finished = transition'.finished) (exhausted : transition.exhausted = transition'.exhausted) :
-    transition.Shape transition' := ⟨tasks, finished, exhausted⟩
 
 private theorem Environment.eq_of_identical {first second : Environment}
     (same : environmentIdentical first second = true) : first = second := by
@@ -992,28 +977,6 @@ private theorem Task.own_shape {state state' : State} {processId : PID} {task : 
             | simp [Transition.Shape, Transition.Shapes, Wait.eq_of_identical view]
             | simp [Transition.Shape, Transition.Shapes, State.request_continue found found']
 
-/-- Handling a signal leaves the same processes and outcome in two states
-where it reads the same. -/
-private theorem Task.handle_shape {state state' : State} {processId : PID} {task : Task α}
-    (view : handleViewIdentical (task.handleView state processId) (task.handleView state' processId) = true) :
-    Transition.Shapes (task.handle state processId) (task.handle state' processId) := by
-  simp only [Task.handleView, Task.handle] at view ⊢
-  cases queue : (state.process processId).queue <;> cases queue' : (state'.process processId).queue <;>
-    simp only [queue, queue', handleViewIdentical, Bool.false_eq_true] at view ⊢
-  · trivial
-  · rename_i entry rest entry' rest'
-    generalize (State.set state processId _).handle processId _ entry = result at view ⊢
-    generalize (State.set state' processId _).handle processId _ entry' = result' at view ⊢
-    obtain ⟨handled, resumed, exits⟩ := result
-    obtain ⟨handled', resumed', exits'⟩ := result'
-    simp only [Bool.and_eq_true] at view
-    have exits := eq_of_optionIdentical Term.eq_of_identical view.1
-    have resumed := eq_of_optionIdentical Term.eq_of_identical view.2
-    subst exits; subst resumed
-    dsimp only
-    split
-    · simp [Task.ended, Transition.Shape, Transition.Shapes]
-    · split <;> simp [Transition.Shape, Transition.Shapes]
 
 /-! ### Steps on the list of processes -/
 
