@@ -32,7 +32,8 @@ modeled.
 A process ends in phases: it stops being alive, then sends exit signals to its
 links in any order and `DOWN` messages to its watchers in order, one at a time,
 then answers the requests still queued, one at a time. Monitor signals wait, as OTP's scheduler parks them,
-until their sender is scheduled out or signals the same process again. A
+until their sender is scheduled out or signals the same process again, except
+by `is_process_alive/1`, which OTP may answer without a signal. A
 parked monitor signal of a process that ends, or of a monitor it removes, is
 dropped: its target would only remove the monitor again, and a `DOWN` it
 answers with only reaches a process that drops it.
@@ -559,9 +560,8 @@ inductive Answer (β : Type) : Type 1 where
   | .link target =>
       if target = processId then .reply (.atom "true") state else
       let process := state.process processId
-      -- The link was removed when its exit was applied as it was sent; OTP
-      -- may not have handled the exit yet, and then still holds the link.
-      if Kernel.contains process.eagerExits target then .continue (.error .exhausted) state else
+      -- OTP finds no exiting target before looking at the links (link_opt in
+      -- bif.c), so this also covers a link whose exit was applied as it was sent.
       if !state.alive target && !process.trapExit then .reply (.atom "noproc") state else
       match Kernel.lookup target process.links with
       | some none => .reply (.atom "true") state
@@ -592,13 +592,22 @@ inductive Answer (β : Type) : Type 1 where
       .reply (.atom (if process.trapExit then "true" else "false"))
         (state.modify processId fun process => { process with trapExit := enabled })
   | .alive target =>
-      -- OTP replies `true` at once when the target has no signals queued
-      -- (erl_bif_info.c), as the target handling the request at once would.
-      -- Here the target always handles it, and a request to a process that is
-      -- not alive always flushes, so no step reads whether a queue is empty.
+      -- OTP replies `true` at once, leaving a monitor parked for the target,
+      -- when the target has no signals queued, and otherwise sends the request
+      -- after the parked monitor (is_process_alive_1 in erl_bif_info.c). Here
+      -- the target always handles the request, ahead of a parked monitor: the
+      -- target may handle its queue first, and the parked monitor may be sent
+      -- before the request, so no step reads whether a queue is empty.
       if target = processId then .reply (.atom "true") state
-      else if state.alive target then .wait (.reply target) (state.send processId target .isAlive)
+      else if state.alive target then .wait (.reply target) (state.enqueue processId target .isAlive)
       else .wait (.flush (.atom "false")) (state.enqueue processId processId .flush)
+  | .processInfo target =>
+      -- OTP reads a live target without signaling it, then handles the signals
+      -- from it, and finds no dead one without handling any (process_info_bif
+      -- in erl_bif_info.c).
+      if target = processId then .reply (.atom "true") state
+      else if state.alive target then .wait (.flush (.atom "true")) (state.enqueue processId processId .flush)
+      else .reply (.atom "false") state
   | .sendAlias alias message =>
       .reply message (state.send processId alias.dropLast (.aliasMessage alias message))
   | .startTimer destination message duration =>

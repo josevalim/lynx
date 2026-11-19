@@ -704,6 +704,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Request.exit",
   "Lynx.Request.link",
   "Lynx.Request.monitor",
+  "Lynx.Request.processInfo",
   "Lynx.Request.sendAlias",
   "Lynx.Request.startTimer",
   "Lynx.Request.trapExit",

@@ -46,10 +46,8 @@ universe u v
 @[expose] noncomputable def contains {α : Type u} [BEq α] (l : List α) (a : α) : Bool :=
   @List.rec α (fun _ => Bool) false (fun head _ rest => cond (a == head) true rest) l
 
-
 @[expose] noncomputable def erase {α : Type u} [BEq α] (l : List α) (a : α) : List α :=
   @List.rec α (fun _ => List α) [] (fun head tail rest => cond (head == a) tail (head :: rest)) l
-
 
 @[expose] noncomputable def flatMap {α : Type u} {β : Type v} (f : α → List β) (l : List α) :
     List β :=
@@ -121,14 +119,12 @@ universe u v
     rw [List.contains, List.elem, ← List.contains, ← ih]
     show cond (a == head) _ _ = _; cases a == head <;> rfl
 
-
 @[csimp, simp] theorem erase_eq : @erase = @List.erase := by
   funext α _ l a; induction l with
   | nil => rfl
   | cons head tail ih =>
     rw [List.erase, ← ih]
     show cond (head == a) _ _ = _; cases head == a <;> rfl
-
 
 @[csimp, simp] theorem flatMap_eq : @flatMap = @List.flatMap := by
   funext α β f l; induction l with

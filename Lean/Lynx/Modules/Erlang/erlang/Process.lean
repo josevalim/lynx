@@ -239,7 +239,7 @@ value. Other flags are not modeled and do not return. -/
 registered names, so it is `[]` for live processes. Other items do not return. -/
 @[expose] def «process_info/2» (_ : Dispatcher) (target item : Term) : Result :=
   match target, item with
-  | .pid pid, .atom "registered_name" => .request (.alive pid) fun alive =>
+  | .pid pid, .atom "registered_name" => .request (.processInfo pid) fun alive =>
       .ok (match alive with
         | .atom "true" => .nil
         | _ => .atom "undefined")

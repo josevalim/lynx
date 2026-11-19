@@ -105,6 +105,10 @@ private def showRequest (processId : PID) (reply : Option Term) : Request → St
       match reply with
       | some reply => s!"{showPid processId} checks whether {showPid target} is alive: {showTerm reply}"
       | none => s!"{showPid processId} asks whether {showPid target} is alive"
+  | .processInfo target =>
+      match reply with
+      | some reply => s!"{showPid processId} reads whether {showPid target} is alive: {showTerm reply}"
+      | none => s!"{showPid processId} reads whether {showPid target} is alive"
   | .sendAlias alias message =>
       s!"{showPid processId} sends {showTerm message} to alias {showReference alias}"
   | .startTimer destination message _ =>

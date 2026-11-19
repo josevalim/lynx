@@ -78,7 +78,7 @@ theorem monitor_reports_raised_reason :
       let _ ← «spawn_monitor/1» dispatcher raises
       receiveAny)) = true := by decide +kernel
 
-/-- Monitoring a process that does not exist reports `noproc` at once. -/
+/-- Monitoring a process that does not exist reports `noproc`. -/
 theorem monitor_missing_process :
     Lynx.sequential (do
       let _ ← «monitor/2» dispatcher (.atom "process") (.pid [99])
@@ -478,19 +478,17 @@ theorem trap_exit_after_normal_down :
       pure (.tuple #[previous, late]))) = true := by decide +kernel
 
 /-- Linking again to a process whose `normal` link exit was applied when sent
-is not modeled: OTP holds the link until it handles the exit, so it may reply
-`true` or raise `noproc`, and the model stops with `exhausted`. -/
-theorem relink_after_applied_exit_is_exhausted :
-    (match Concurrent.counterexample (fun
-        | .ok _ | .error (.error _) => true
+raises `noproc`: OTP may still hold the link, but finds no exiting process
+before it looks at its links. -/
+theorem relink_after_applied_exit_raises_noproc :
+    Concurrent.check (fun
+        | .ok (.atom "true") | .error (.error (.atom "noproc")) => true
         | _ => false) 64 (.start {} (do
       let table := Dispatcher.ofTable [
         { module := "test", name := "links", arity := 0, entry := .effectful fun _ _ _ => linksBack }] 1
       let child ← «spawn/1» table (.function "test" "links" 0 #[])
       let _ ← «send/2» table child (.atom "ignored")
-      «link/1» table child)) with
-      | some (_, .rejected (.error .exhausted)) => true
-      | _ => false) = true := by decide +kernel
+      «link/1» table child)) = true := by decide +kernel
 
 /-- A process that ended is gone before it sends its link exits, so a linked
 process may see it gone, time out a receive, and only then trap exits, still
@@ -507,6 +505,36 @@ theorem trap_exit_after_seeing_link_gone_is_exhausted :
       let late ← poll
       pure (Term.tuple #[alive, late]))) with
       | some (_, .rejected (.error .exhausted)) => true
+      | _ => false) = true := by decide +kernel
+
+/-- `is_process_alive/1` may reply `true` without signaling its target, leaving
+a monitor parked for it, which then finds the target gone. -/
+theorem alive_may_leave_monitor_parked :
+    (match Concurrent.counterexample (fun (outcome : Outcome Term) => match outcome with
+        | .ok (.tuple ⟨[.atom "true", .tuple ⟨[_, _, _, _, .atom "noproc"]⟩]⟩) => false
+        | _ => true) 64 (.start {} (do
+      let child ← «spawn/1» dispatcher returns
+      let _ ← «monitor/2» dispatcher (.atom "process") child
+      let alive ← «is_process_alive/1» dispatcher child
+      let down ← receiveMatch isDown
+      pure (Term.tuple #[alive, down]))) with
+      | some (_, .rejected _) => true
+      | _ => false) = true := by decide +kernel
+
+/-- A child that sends the root `kill`. -/
+private def killsRoot : Dispatcher := Dispatcher.ofTable [
+  { module := "test", name := "kills", arity := 0, entry := .effectful fun _ _ _ =>
+      «exit/2» dispatcher (.pid []) (.atom "kill") }] 1
+
+/-- `process_info/2` finds a dead process without handling what is queued, so
+the root may see its killer gone and return before handling the `kill`. -/
+theorem process_info_of_dead_does_not_flush :
+    (match Concurrent.counterexample (fun (outcome : Outcome Term) => match outcome with
+        | .ok (.atom "undefined") => false
+        | _ => true) 64 (.start {} (do
+      let killer ← «spawn/1» killsRoot (.function "test" "kills" 0 #[])
+      «process_info/2» killsRoot killer (.atom "registered_name"))) with
+      | some (_, .rejected (.ok (.atom "undefined"))) => true
       | _ => false) = true := by decide +kernel
 
 end LynxTest.Modules.Signals

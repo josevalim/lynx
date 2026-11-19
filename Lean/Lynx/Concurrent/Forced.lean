@@ -511,8 +511,6 @@ private theorem request (changed : state.Changes processId related state') (unse
     · exact ⟨rfl, changed⟩
     split
     · exact ⟨rfl, changed⟩
-    split
-    · exact ⟨rfl, changed⟩
     · exact ⟨rfl, (changed.modify differ _).send unseen (fun same => absurd same differ) fun same => absurd same differ⟩
   | unlink target =>
     simp only [State.request, changed.process_other differ]
@@ -538,8 +536,15 @@ private theorem request (changed : state.Changes processId related state') (unse
     split
     · exact ⟨rfl, changed⟩
     split
-    · exact ⟨rfl, changed.send unseen (fun same => absurd same differ) fun same => absurd same differ⟩
     · exact ⟨rfl, changed.enqueue unseen (fun same => absurd same differ) fun same => absurd same differ⟩
+    · exact ⟨rfl, changed.enqueue unseen (fun same => absurd same differ) fun same => absurd same differ⟩
+  | processInfo target =>
+    simp only [State.request, changed.alive unseen]
+    split
+    · exact ⟨rfl, changed⟩
+    split
+    · exact ⟨rfl, changed.enqueue unseen (fun same => absurd same differ) fun same => absurd same differ⟩
+    · exact ⟨rfl, changed⟩
   | sendAlias alias message =>
     exact ⟨rfl, changed.send unseen (fun same => absurd same differ) fun same => absurd same differ⟩
   | startTimer destination message duration =>
@@ -1951,9 +1956,6 @@ private theorem requestSelf
     by_cases self : target = processId
     · simp only [self, ↓reduceIte]; exact ⟨rfl, changed⟩
     simp only [self, ↓reduceIte]
-    by_cases eager : Kernel.contains process.eagerExits target = true
-    · simp only [eager, ↓reduceIte]; exact ⟨rfl, changed⟩
-    simp only [eager, ↓reduceIte, Bool.false_eq_true]
     by_cases gone : (!state.alive target && !process.trapExit) = true
     · simp only [gone, ↓reduceIte]; exact ⟨rfl, changed⟩
     simp only [gone, ↓reduceIte, Bool.false_eq_true]
@@ -2001,8 +2003,15 @@ private theorem requestSelf
     split
     · exact ⟨rfl, changed⟩
     split
-    · exact ⟨rfl, changed.send unseen fun _ _ => by simp⟩
     · exact ⟨rfl, changed.enqueue unseen fun _ _ => by simp⟩
+    · exact ⟨rfl, changed.enqueue unseen fun _ _ => by simp⟩
+  | processInfo target =>
+    simp only [State.request, changed.alive unseen]
+    split
+    · exact ⟨rfl, changed⟩
+    split
+    · exact ⟨rfl, changed.enqueue unseen fun _ _ => by simp⟩
+    · exact ⟨rfl, changed⟩
   | sendAlias alias message =>
     exact ⟨rfl, changed.send unseen fun _ _ => by simp⟩
   | startTimer destination message duration =>
@@ -3452,7 +3461,7 @@ private theorem request (distinct : state.Distinct) (processId : PID) {β : Type
     split
     · exact distinct
     · exact distinct.modify fun _ _ nodup => nodup
-  | alive target =>
+  | alive target | processInfo target =>
     simp only [State.request]
     repeat' split
     all_goals first | exact distinct | exact distinct.send _ _ _ | exact distinct.enqueue _ _ _
@@ -3863,7 +3872,7 @@ private theorem request (unborn : state.Unborn) (processId : PID) {β : Type} (n
     split
     · exact unborn
     · exact keep unborn fun _ => ⟨rfl, rfl⟩
-  | alive target =>
+  | alive target | processInfo target =>
     simp only [State.request]
     repeat' split
     all_goals first | exact unborn | exact unborn.send _ _ _ | exact unborn.enqueue _ _ _
@@ -4474,7 +4483,7 @@ private theorem request (covers : state.Covers watcher reference count) (shape :
     split
     · exact covers
     · exact covers.same (fun _ => rfl) (fun _ => rfl) (fun _ => rfl)
-  | alive target =>
+  | alive target | processInfo target =>
     simp only [State.request]
     repeat' split
     all_goals first | exact covers | exact covers.send _ _ _ | exact covers.enqueue _ _ _

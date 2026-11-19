@@ -403,7 +403,7 @@ receiver is live, as a live receiver keeps every signal. -/
   | .link target =>
       if target == processId then some ([], false) else
       let process := state.process processId
-      let reads : List Frame := [(processId, Field.trapExit ||| Field.links ||| Field.eagerExits, 0), (target, Field.live, 0)]
+      let reads : List Frame := [(processId, Field.trapExit ||| Field.links, 0), (target, Field.live, 0)]
       if !state.alive target && !process.trapExit then some (reads, false) else
       match Kernel.lookup target process.links with
       | some none => some (reads, false)
@@ -422,8 +422,12 @@ receiver is live, as a live receiver keeps every signal. -/
       some ([(processId, Field.trapExit ||| Field.eagerExits, Field.trapExit)], false)
   | .alive target =>
       if target == processId then some ([], false)
-      else if state.alive target then some (state.sendFrames processId target .isAlive, false)
+      else if state.alive target then some (state.enqueueFrames processId target .isAlive, false)
       else some ([(target, Field.live, 0), (processId, Field.live, Field.queueTail)], false)
+  | .processInfo target =>
+      if target == processId then some ([], false)
+      else if state.alive target then some ([(target, Field.live, 0), (processId, Field.live, Field.queueTail)], false)
+      else some ([(target, Field.live, 0)], false)
   | .sendAlias alias message =>
       some (state.sendFrames processId alias.dropLast (.aliasMessage alias message), false)
   | .startTimer destination _ _ =>
@@ -600,7 +604,7 @@ Other steps are compared by evaluating them. -/
             | .sendAlias alias message => !(state.alive alias.dropLast &&
                 state.inertEntry alias.dropLast { source := processId, signal := .aliasMessage alias message })
             | .cancelTimer _ => true
-            | .alive _ => true
+            | .alive _ | .processInfo _ => true
             | _ => false
           | Result.schedule .. => false
       | _ => false

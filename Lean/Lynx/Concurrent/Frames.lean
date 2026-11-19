@@ -778,7 +778,6 @@ private def State.requestEffect (state : State) (processId : PID) : Request → 
   | .link target =>
       if target = processId then {} else
       let process := state.process processId
-      if Kernel.contains process.eagerExits target then {} else
       if !state.alive target && !process.trapExit then {} else
       match Kernel.lookup target process.links with
       | some none => {}
@@ -809,8 +808,12 @@ private def State.requestEffect (state : State) (processId : PID) : Request → 
       .modify processId fun process => { process with trapExit := enabled }
   | .alive target =>
       if target = processId then {}
-      else if state.alive target then state.sendEffect processId target .isAlive
+      else if state.alive target then state.enqueueEffect processId target .isAlive
       else state.enqueueEffect processId processId .flush
+  | .processInfo target =>
+      if target = processId then {}
+      else if state.alive target then state.enqueueEffect processId processId .flush
+      else {}
   | .sendAlias alias message => state.sendEffect processId alias.dropLast (.aliasMessage alias message)
   | .startTimer destination message duration =>
       let (reference, allocated) := state.allocate processId
@@ -839,18 +842,15 @@ private theorem Realizes.request (state : State) (processId : PID) (next : Term 
     by_cases self : target = processId
     · simp only [self, ↓reduceIte]; exact Realizes.refl _
     · simp only [self, ↓reduceIte]
-      by_cases eager : Kernel.contains (state.process processId).eagerExits target = true
-      · simp only [eager, ↓reduceIte]; exact Realizes.refl _
-      · simp only [eager, Bool.false_eq_true, ↓reduceIte]
-        by_cases dead : (!state.alive target && !(state.process processId).trapExit) = true
-        · simp only [dead, ↓reduceIte]; exact Realizes.refl _
-        · simp only [dead, Bool.false_eq_true, ↓reduceIte]
-          cases found : Kernel.lookup target (state.process processId).links with
-          | none => exact (Realizes.modify _ _ _).andThen (Realizes.send _ _ _ _)
-          | some unlinking =>
-            cases unlinking with
-            | none => exact Realizes.refl _
-            | some _ => exact (Realizes.modify _ _ _).andThen (Realizes.send _ _ _ _)
+      by_cases dead : (!state.alive target && !(state.process processId).trapExit) = true
+      · simp only [dead, ↓reduceIte]; exact Realizes.refl _
+      · simp only [dead, Bool.false_eq_true, ↓reduceIte]
+        cases found : Kernel.lookup target (state.process processId).links with
+        | none => exact (Realizes.modify _ _ _).andThen (Realizes.send _ _ _ _)
+        | some unlinking =>
+          cases unlinking with
+          | none => exact Realizes.refl _
+          | some _ => exact (Realizes.modify _ _ _).andThen (Realizes.send _ _ _ _)
   | unlink target =>
     simp only [State.requestEffect, State.request]
     by_cases self : target = processId
@@ -871,10 +871,10 @@ private theorem Realizes.request (state : State) (processId : PID) (next : Term 
     split
     · exact Realizes.refl _
     · exact Realizes.modify _ _ _
-  | alive target =>
+  | alive target | processInfo target =>
     simp only [State.requestEffect, State.request]
     repeat' split
-    all_goals first | exact Realizes.refl _ | exact Realizes.send _ _ _ _ | exact Realizes.enqueue _ _ _ _
+    all_goals first | exact Realizes.refl _ | exact Realizes.enqueue _ _ _ _
   | sendAlias alias message => exact Realizes.send _ _ _ _
   | startTimer destination message duration =>
     simp only [State.requestEffect, State.request]
@@ -3245,13 +3245,27 @@ private theorem Task.ownView_agree {state other : State} {tasks : List (PID × T
         simp only [differ, self, Bool.false_eq_true, ↓reduceIte] at found ⊢
         have alive : other.alive target = state.alive target := by
           split at found
+          · rename_i targetAlive
+            simp only [State.enqueueFrames, targetAlive, ↓reduceIte, State.appendFrames, Option.some.injEq,
+              Prod.mk.injEq] at found
+            exact agree.alive (entry := (target, Field.live, Field.queueTail))
+              (by rw [← found.1]; exact List.mem_cons_self) (by dsimp only; decide)
           · simp only [Option.some.injEq, Prod.mk.injEq] at found
-            obtain ⟨-, ⟨entry, mem, same, read⟩⟩ := sendFrames_reads state processId target .isAlive
-            rw [← same]; exact agree.alive (found.1 ▸ mem) read
-          · simp only [Option.some.injEq, Prod.mk.injEq] at found
-            have := agree.alive (entry := (target, Field.live, 0)) (by rw [← found.1]; exact List.mem_cons_self)
+            exact agree.alive (entry := (target, Field.live, 0)) (by rw [← found.1]; exact List.mem_cons_self)
               (by dsimp only; decide)
-            exact this
+        rw [alive]
+        split <;> simp [Answer.shape]
+    | processInfo target =>
+      simp only [Task.ownFrames, State.requestFrames] at found
+      simp only [Task.ownView, State.request]
+      by_cases self : target = processId
+      · subst self; simp [Answer.shape]
+      · have differ : (target == processId) = false := by simpa using self
+        simp only [differ, self, Bool.false_eq_true, ↓reduceIte] at found ⊢
+        have alive : other.alive target = state.alive target := by
+          split at found <;> simp only [Option.some.injEq, Prod.mk.injEq] at found <;>
+            exact agree.alive (entry := (target, Field.live, 0)) (by rw [← found.1]; exact List.mem_cons_self)
+              (by dsimp only; decide)
         rw [alive]
         split <;> simp [Answer.shape]
     | sendAlias alias message => rfl
@@ -3556,11 +3570,12 @@ private theorem Task.ownEffect_agree {state other : State} {tasks : List (PID ×
         split at found
         · rename_i targetAlive
           simp only [Option.some.injEq, Prod.mk.injEq] at found
-          have alive : other.alive target = state.alive target := by
-            obtain ⟨-, ⟨entry, mem, same, read⟩⟩ := sendFrames_reads state processId target .isAlive
-            rw [← same]; exact agree.alive (found.1 ▸ mem) read
+          simp only [State.enqueueFrames, targetAlive, ↓reduceIte, State.appendFrames] at found
+          have alive : other.alive target = state.alive target :=
+            agree.alive (entry := (target, Field.live, Field.queueTail)) (by rw [← found.1]; exact List.mem_cons_self)
+              (by dsimp only; decide)
           rw [alive, targetAlive]
-          exact State.sendEffect_agree agree fun entry mem => found.1 ▸ mem
+          exact State.enqueueEffect_congr _ alive
         · rename_i targetDead
           simp only [Option.some.injEq, Prod.mk.injEq] at found
           have alive : other.alive target = state.alive target :=
@@ -3572,6 +3587,26 @@ private theorem Task.ownEffect_agree {state other : State} {tasks : List (PID ×
             agree.alive (entry := (processId, Field.live, Field.queueTail))
               (by rw [← found.1]; simp) (by dsimp only; decide)
           exact State.enqueueEffect_congr _ self
+    | processInfo target =>
+      simp only [Task.ownFrames, State.requestFrames] at found
+      simp only [Task.ownEffect, State.requestEffect]
+      by_cases same : target = processId
+      · simp [same]
+      · have differ : (target == processId) = false := by simpa using same
+        simp only [differ, same, Bool.false_eq_true, ↓reduceIte] at found ⊢
+        have alive : other.alive target = state.alive target := by
+          split at found <;> simp only [Option.some.injEq, Prod.mk.injEq] at found <;>
+            exact agree.alive (entry := (target, Field.live, 0)) (by rw [← found.1]; exact List.mem_cons_self)
+              (by dsimp only; decide)
+        rw [alive]
+        split at found
+        · rename_i targetAlive
+          simp only [Option.some.injEq, Prod.mk.injEq] at found
+          simp only [targetAlive, ↓reduceIte]
+          exact State.enqueueEffect_congr _ (agree.alive (entry := (processId, Field.live, Field.queueTail))
+            (by rw [← found.1]; simp) (by dsimp only; decide))
+        · rename_i targetDead
+          simp [targetDead]
     | sendAlias alias message =>
       simp only [Task.ownFrames, State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found
       exact State.sendEffect_agree agree fun entry mem => found.1 ▸ mem
@@ -4545,11 +4580,22 @@ private theorem Task.ownEffect_clean {state : State} {tasks : List (PID × Task 
       split
       · simpa [Effect.apply_empty] using clean
       · split
-        · exact CleanOutside.send clean (by simp) alive monitored (fun _ _ _ => by simp [inert, notGone])
-            (by simp) (by simp)
+        · rename_i targetAlive
+          refine CleanOutside.enqueue clean (fun _ _ _ => by simp [inert, notGone]) (fun dead => ?_) (by simp)
+            (fun _ _ equal => by simp at equal)
+          rw [targetAlive] at dead; simp at dead
         · refine CleanOutside.enqueue clean (fun _ _ _ => by simp [inert]) (fun dead => ?_) (by simp)
             (fun _ _ equal => by simp at equal)
           rw [alive] at dead; simp at dead
+    | processInfo target =>
+      simp only [Task.ownEffect, State.requestEffect]
+      split
+      · simpa [Effect.apply_empty] using clean
+      · split
+        · refine CleanOutside.enqueue clean (fun _ _ _ => by simp [inert]) (fun dead => ?_) (by simp)
+            (fun _ _ equal => by simp at equal)
+          rw [alive] at dead; simp at dead
+        · simpa [Effect.apply_empty] using clean
     | sendAlias alias message =>
       simp only [Task.ownEffect, State.requestEffect]
       refine CleanOutside.send clean (by simp) alive monitored (fun process' found' live' => ?_) (by simp) (by simp)
@@ -5192,11 +5238,26 @@ private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task �
           · rename_i targetAlive
             simp only [targetAlive, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found ⊢
             rw [← found.1]
-            exact Effect.InFrames.send state processId target _
+            exact Effect.InFrames.enqueue state processId target _
           · rename_i targetDead
             simp only [targetDead, Bool.false_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found ⊢
             rw [← found.1]
             exact Effect.InFrames.flushStep state processId target alive
+      | processInfo target =>
+        simp only [Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames] at found ⊢
+        by_cases self : target = processId
+        · simp only [self, ↓reduceIte]; exact Effect.InFrames.empty _ _
+        · have : (target == processId) = false := by simpa using self
+          simp only [this, self, Bool.false_eq_true, ↓reduceIte] at found ⊢
+          split at found
+          · rename_i targetAlive
+            simp only [targetAlive, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found ⊢
+            rw [← found.1]
+            exact Effect.InFrames.flushStep state processId target alive
+          · rename_i targetDead
+            simp only [targetDead, Bool.false_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found ⊢
+            rw [← found.1]
+            exact Effect.InFrames.empty _ _
       | sendAlias alias message =>
         simp only [Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames,
           Option.some.injEq, Prod.mk.injEq] at found ⊢
@@ -5452,8 +5513,17 @@ private theorem Config.headSafe {state : State} {tasks : List (PID × Task α)}
         split at found
         · simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]; exact empty
         · split at found <;> simp only [Option.some.injEq, Prod.mk.injEq] at found <;> rw [← found.1]
-          · exact sendFrames_headSafe _ _ _ _ _
+          · rename_i targetAlive
+            simp only [State.enqueueFrames, targetAlive, ↓reduceIte, State.appendFrames]
+            exact HeadSafe.cons (by quiet_entry) empty
           · exact HeadSafe.cons (by quiet_entry) (HeadSafe.cons (by quiet_entry) empty)
+      | processInfo target =>
+        simp only [State.requestFrames] at found
+        split at found
+        · simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]; exact empty
+        · split at found <;> simp only [Option.some.injEq, Prod.mk.injEq] at found <;> rw [← found.1]
+          · exact HeadSafe.cons (by quiet_entry) (HeadSafe.cons (by quiet_entry) empty)
+          · exact HeadSafe.cons (by quiet_entry) empty
       | sendAlias =>
         simp only [State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
         exact sendFrames_headSafe _ _ _ _ _
@@ -5713,8 +5783,15 @@ private theorem Config.noNewLinks {state : State} {tasks : List (PID × Task α)
           split
           · exact NoNewLinks.empty state
           · split
-            · exact NoNewLinks.send _ _ _ _ _ (by simp)
             · exact NoNewLinks.enqueue _ _ _ _ _ (by simp)
+            · exact NoNewLinks.enqueue _ _ _ _ _ (by simp)
+        | processInfo target =>
+          simp only [Task.ownEffect, State.requestEffect]
+          split
+          · exact NoNewLinks.empty state
+          · split
+            · exact NoNewLinks.enqueue _ _ _ _ _ (by simp)
+            · exact NoNewLinks.empty state
         | sendAlias => exact NoNewLinks.send _ _ _ _ _ (by simp)
         | _ => simp at confined
       | _ => simp at confined
@@ -5970,7 +6047,15 @@ private theorem Config.timersFramed {state : State} {tasks : List (PID × Task �
         have untimed : (Task.ownEffect state processId ⟨Result.request (.alive target) next, finish, none⟩).Untimed := by
           simp only [Task.ownEffect, State.requestEffect]
           exact Effect.Untimed.ite _ Effect.Untimed.empty
-            (Effect.Untimed.ite _ (State.sendEffect_untimed _ _ _ _) (State.enqueueEffect_untimed _ _ _ _))
+            (Effect.Untimed.ite _ (State.enqueueEffect_untimed _ _ _ _) (State.enqueueEffect_untimed _ _ _ _))
+        repeat' split at found
+        all_goals (simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.2]; exact TimersFramed.untimed untimed)
+      | processInfo target =>
+        simp only [State.requestFrames] at found
+        have untimed : (Task.ownEffect state processId ⟨Result.request (.processInfo target) next, finish, none⟩).Untimed := by
+          simp only [Task.ownEffect, State.requestEffect]
+          exact Effect.Untimed.ite _ Effect.Untimed.empty
+            (Effect.Untimed.ite _ (State.enqueueEffect_untimed _ _ _ _) Effect.Untimed.empty)
         repeat' split at found
         all_goals (simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.2]; exact TimersFramed.untimed untimed)
       | sendAlias =>
@@ -6618,7 +6703,11 @@ private theorem Config.noRevive {state : State} {tasks : List (PID × Task α)}
         | alive target =>
           simp only [Task.ownEffect, State.requestEffect]
           exact Effect.KeepsAlive.ite _ Effect.KeepsAlive.empty (Effect.KeepsAlive.ite _
-            (State.sendEffect_keepsAlive _ _ _ _) (State.enqueueEffect_keepsAlive _ _ _ _))
+            (State.enqueueEffect_keepsAlive _ _ _ _) (State.enqueueEffect_keepsAlive _ _ _ _))
+        | processInfo target =>
+          simp only [Task.ownEffect, State.requestEffect]
+          exact Effect.KeepsAlive.ite _ Effect.KeepsAlive.empty (Effect.KeepsAlive.ite _
+            (State.enqueueEffect_keepsAlive _ _ _ _) Effect.KeepsAlive.empty)
         | sendAlias => exact State.sendEffect_keepsAlive _ _ _ _
         | _ => simp at confined
       | _ => simp at confined

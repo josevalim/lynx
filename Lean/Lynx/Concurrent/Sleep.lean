@@ -586,7 +586,10 @@ private theorem State.requestEffect_steady (state : State) (processId : PID) (qu
   · repeat' split
     all_goals first
       | exact Effect.Steady.empty
-      | exact State.sendEffect_steady _ _ _ _
+      | exact State.enqueueEffect_steady _ _ _ _
+  · repeat' split
+    all_goals first
+      | exact Effect.Steady.empty
       | exact State.enqueueEffect_steady _ _ _ _
   · exact State.sendEffect_steady _ _ _ _
   · exact allocated.andThen (Effect.Steady.ite _ (Effect.Steady.retime _) Effect.Steady.empty)

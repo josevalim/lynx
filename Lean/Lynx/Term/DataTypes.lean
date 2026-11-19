@@ -177,10 +177,15 @@ inductive Request where
   | exit (target : PID) (reason : Term) (quirk : Bool)
   /-- Set whether exit signals arrive as messages. Replies the previous value. -/
   | trapExit (enabled : Bool)
-  /-- Reply whether a process is alive. A live target handles the request after
-  the signals queued before it, and its reply after what it sent before; a
+  /-- Reply whether a process is alive, as `is_process_alive/1` does. A live
+  target handles the request after the signals queued before it, but ahead of a
+  monitor signal parked for it, and its reply after what it sent before; a
   requester otherwise handles everything queued at it before the reply. -/
   | alive (target : PID)
+  /-- Reply whether a process is alive, as `process_info/2` does: a live target
+  is read without signaling it, and the requester then handles everything queued
+  at it before the reply; a dead one replies at once. -/
+  | processInfo (target : PID)
   /-- Send to an alias, discarding the message once the alias is inactive.
   Replies the message. -/
   | sendAlias (alias : List Nat) (message : Term)
