@@ -5129,6 +5129,58 @@ private theorem CleanOutside.eagerExits {processId : PID} {eager : PID → Bool}
     · rw [Effect.apply_empty]
       exact CleanOutside.eagerExits rest state clean refers eagerAlive
 
+/-- Normalizing after a confined ending changes no record but the process's own. -/
+private theorem State.terminateEffect_clean {state : State} {processId : PID} (reason : Term)
+    (sorted : state.Sorted) (normalized : state.normalize = state) (alive : state.alive processId = true)
+    (leaves : state.leavesOthers processId = true) :
+    CleanOutside ((state.terminateEffect processId reason).apply state) (· = processId) := by
+  unfold State.terminateEffect
+  dsimp only
+  refine CleanOutside.andThen ?_
+  generalize hfirst : (if Kernel.any state.timers (·.destination == processId) = true then
+      Effect.retime (Kernel.filter (·.destination != processId)) else {}) = retime
+  have untimed : ∀ other, retime.record other = id := fun other => by rw [← hfirst]; split <;> rfl
+  -- After the process ends: its record is replaced by one that ended, and the others are as they were.
+  have recordOf : ∀ (record : ProcessState) other, other ≠ processId →
+      ((retime.andThen (Effect.put processId record)).apply state).record other = state.record other := by
+    intro record other differ
+    rw [Effect.record_apply, Effect.record_andThen, Function.comp, untimed]
+    simp [Effect.put, Effect.record, changeOf, differ, Ne.symm differ]
+  have recordOwn : ∀ (record : ProcessState),
+      ((retime.andThen (Effect.put processId record)).apply state).record processId = some record := by
+    intro record
+    rw [Effect.record_apply, Effect.record_andThen, Function.comp, untimed]
+    simp [Effect.put, Effect.record, changeOf]
+  have goneOf : ∀ (record : ProcessState), record.exiting.isSome = true → ∀ other,
+      ((retime.andThen (Effect.put processId record)).apply state).gone other =
+        if other = processId then true else state.gone other := by
+    intro record ended other
+    split
+    · rename_i same; subst same
+      simp only [State.gone, State.alive, recordOwn]
+      cases equal : record.exiting <;> simp_all
+    · rename_i differ
+      simp only [State.gone, State.alive, recordOf record other differ]
+  erw [chainEffect_eagerExit processId reason _ _ (by simp [State.alive, State.record_set])]
+  refine CleanOutside.eagerExits _ _ (fun other differ process found => ?_)
+    (fun other process differ found => ?_) (fun target eager => ?_)
+  · rw [recordOf _ other differ] at found
+    refine (Clean.of_normalized sorted normalized found).gone fun other' changed => ?_
+    rw [goneOf _ rfl] at changed
+    split at changed
+    · rename_i same; subst same; exact State.refers_of_leavesOthers leaves differ found
+    · exact absurd rfl changed
+  · rw [recordOf _ other differ] at found
+    exact State.refers_of_leavesOthers leaves differ found
+  · have differ : target ≠ processId := fun same => by
+      subst same; simp [State.eagerLink, State.alive, State.record_set] at eager
+    refine ⟨differ, ?_⟩
+    simp only [State.eagerLink, Bool.and_eq_true] at eager
+    have aliveEnded := eager.1.1.2
+    simp only [State.alive, State.record_set, differ, ↓reduceIte] at aliveEnded
+    simp only [State.alive, recordOf _ target differ]
+    exact aliveEnded
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
