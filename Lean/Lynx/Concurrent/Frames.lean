@@ -2430,3 +2430,239 @@ private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task �
           rw [← found.1]
           exact Effect.InFrames.send state processId _ _
       | _ => simp at confined
+
+/-! ### Frames of handling a signal -/
+
+private theorem Effect.InFrames.ite {first second : Effect} {frames : List Frame} {state : State} (condition : Prop)
+    [Decidable condition] (framed : first.InFrames frames state) (framed' : second.InFrames frames state) :
+    (if condition then first else second).InFrames frames state := by
+  split
+  · exact framed
+  · exact framed'
+
+/-- Frames that read and remove no queue. -/
+private def QuietFrames (frames : List Frame) : Prop :=
+  ∀ entry ∈ frames, entry.2.1.testBit headBit = false ∧ entry.2.1.testBit tailBit = false ∧
+    entry.2.2.testBit headBit = false ∧ entry.2.2.testBit tailBit = false
+
+/-- Two effects within frames reading and changing no queue compose within both. -/
+private theorem Effect.InFrames.andThen_quiet {effect effect' : Effect} {frames frames' : List Frame} {state : State}
+    (framed : effect.InFrames frames state) (framed' : effect'.InFrames frames' (effect.apply state))
+    (quiet : QuietFrames frames) (quiet' : QuietFrames frames') :
+    (effect.andThen effect').InFrames (frames ++ frames') state := by
+  have both : QuietFrames (frames ++ frames') := fun entry mem => by
+    rcases List.mem_append.mp mem with mem | mem
+    · exact quiet entry mem
+    · exact quiet' entry mem
+  refine framed.andThen framed' (WellFramed.quiet fun entry mem => ⟨(both entry mem).1, (both entry mem).2.1,
+      (both entry mem).2.2.1⟩) (fun processId read _ => ?_) (fun processId written _ => ?_) (fun processId written _ => ?_)
+  · rw [readsOf_false fun entry mem => (quiet' entry mem).1] at read; simp at read
+  · rw [writesOf_false fun entry mem => (quiet entry mem).2.2.1] at written; simp at written
+  · rw [writesOf_false fun entry mem => (quiet entry mem).2.2.2] at written; simp at written
+
+/-- Removing the oldest signal of a queue that has one reads and writes its head. -/
+private theorem Framed.pop (base : ProcessState) (nonempty : base.queue ≠ []) :
+    Framed (bitsOf Field.queueHead) (bitsOf Field.queueHead) base
+      (fun process => { process with queue := process.queue.drop 1 }) := by
+  refine ⟨fun process _ part none => ?_, fun process process' _ _ part written _ => ?_,
+    ⟨1, [], by decide, fun none => by simp [bitsOf] at none; contradiction, fun _ => rfl, fun process _ => by simp⟩,
+    fun read => by simp [bitsOf, tailBit] at read; contradiction, fun _ => .inr nonempty, fun _ => nonempty,
+    fun _ process _ => rfl⟩
+  · cases part <;> first | rfl | (simp [bitsOf, Part.bit] at none; contradiction)
+  · cases part <;> simp [bitsOf, Part.bit] at written <;> contradiction
+
+private theorem readsOf_single (processId : PID) (reads writes : Nat) :
+    readsOf [(processId, reads, writes)] processId = bitsOf reads := by
+  funext bit; simp [readsOf, bitsOf]
+
+private theorem writesOf_single (processId : PID) (reads writes : Nat) :
+    writesOf [(processId, reads, writes)] processId = bitsOf writes := by
+  funext bit; simp [writesOf, bitsOf]
+
+/-- Handling the oldest queued signal by a change reading and writing no queue
+is within the frames of the change and of the head. -/
+private theorem Effect.InFrames.handleWith {state : State} {processId : PID} {entry : Entry} {rest : List Entry}
+    {effect : Effect} {frames : List Frame} (queue : (state.process processId).queue = entry :: rest)
+    (framed : effect.InFrames frames
+      ((Effect.modify processId fun process => { process with queue := process.queue.drop 1 }).apply state))
+    (quiet : QuietFrames frames) :
+    ((Effect.modify processId fun process => { process with queue := process.queue.drop 1 }).andThen effect).InFrames
+      ([(processId, Field.queueHead, Field.queueHead)] ++ frames) state := by
+  have nonempty : ∀ process, state.record processId = some process → process.queue ≠ [] := fun process found => by
+    simp [State.process, found] at queue; simp [queue]
+  have first : (Effect.modify processId fun process => { process with queue := process.queue.drop 1 }).InFrames
+      [(processId, Field.queueHead, Field.queueHead)] state :=
+    Effect.InFrames.modify (List.mem_singleton.mpr rfl) ⟨0, by decide, .inl (by decide)⟩ fun process found => by
+      rw [readsOf_single, writesOf_single]; exact Framed.pop process (nonempty process found)
+  have headOnly : ∀ {other bit}, (readsOf [(processId, Field.queueHead, Field.queueHead)] other bit ∨
+      writesOf [(processId, Field.queueHead, Field.queueHead)] other bit) → other = processId ∧ bit = 0 := by
+    intro other bit set
+    simp only [readsOf, writesOf, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, beq_iff_eq] at set
+    rcases set with ⟨same, set⟩ | ⟨same, set⟩ <;> exact ⟨same.symm, by mask_bits⟩
+  refine first.andThen framed (fun other => ⟨fun read => ?_, fun process found _ => ⟨fun read => ?_, fun written => ?_⟩⟩)
+    (fun other read _ => ?_) (fun other _ written => ?_) (fun other written _ => ?_)
+  · rw [readsOf_append] at read ⊢
+    simp only [Mask.union, Bool.or_eq_true] at read ⊢
+    rcases read with read | read
+    · have := (headOnly (.inl read)).2; simp [tailBit] at this
+    · rw [readsOf_false fun entry mem => (quiet entry mem).2.1] at read; simp at read
+  · rw [readsOf_append] at read
+    simp only [Mask.union, Bool.or_eq_true] at read
+    rcases read with read | read
+    · obtain ⟨rfl, -⟩ := headOnly (.inl read); exact .inr (nonempty process found)
+    · rw [readsOf_false fun entry mem => (quiet entry mem).1] at read; simp at read
+  · rw [writesOf_append] at written
+    simp only [Mask.union, Bool.or_eq_true] at written
+    rcases written with written | written
+    · obtain ⟨rfl, -⟩ := headOnly (.inr written); exact nonempty process found
+    · rw [writesOf_false fun entry mem => (quiet entry mem).2.2.1] at written; simp at written
+  · rw [readsOf_false fun entry mem => (quiet entry mem).1] at read; simp at read
+  · rw [writesOf_false fun entry mem => (quiet entry mem).2.2.1] at written; simp at written
+  · have := (headOnly (.inr written)).2; simp [tailBit] at this
+
+/-- Frames for one process within the fields of one entry for it. -/
+private theorem Covered.single {frames : List Frame} {processId : PID} {reads writes : Nat}
+    (inside : ∀ entry ∈ frames, entry.1 = processId ∧
+      ∀ bit, (entry.2.1.testBit bit → reads.testBit bit) ∧ (entry.2.2.testBit bit → writes.testBit bit)) :
+    Covered frames [(processId, reads, writes)] := fun entry mem bit =>
+  ⟨fun set => ⟨_, List.mem_singleton.mpr rfl, (inside entry mem).1.symm, ((inside entry mem).2 bit).1 set⟩,
+    fun set => ⟨_, List.mem_singleton.mpr rfl, (inside entry mem).1.symm, ((inside entry mem).2 bit).2 set⟩⟩
+
+/-- The frame of handling a signal: the head, and fields reading and writing no queue. -/
+private theorem WellFramed.handle {state : State} {processId : PID} {entry : Entry} {rest : List Entry}
+    {reads writes : Nat} (queue : (state.process processId).queue = entry :: rest)
+    (quiet : reads.testBit tailBit = false) :
+    WellFramed [(processId, Field.queueHead ||| reads, Field.queueHead ||| writes)] state := by
+  have nonempty : ∀ process, state.record processId = some process → process.queue ≠ [] := fun process found => by
+    simp [State.process, found] at queue; simp [queue]
+  intro other
+  refine ⟨fun read => ?_, fun process found _ => ⟨fun read => ?_, fun written => ?_⟩⟩
+  · simp only [readsOf, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, beq_iff_eq] at read
+    have := read.2; rw [Nat.testBit_or, quiet] at this
+    have : Field.queueHead.testBit tailBit = false := by decide
+    simp_all
+  · simp only [readsOf, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, beq_iff_eq] at read
+    obtain ⟨rfl, -⟩ := read; exact .inr (nonempty process found)
+  · simp only [writesOf, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, beq_iff_eq] at written
+    obtain ⟨rfl, -⟩ := written; exact nonempty process found
+
+
+
+/-- Handling a signal that does not end the process removes it, then handles it. -/
+private theorem Task.handleEffect_of_continues {state : State} {processId : PID} {task : Task α} {entry : Entry}
+    {rest : List Entry} (queue : (state.process processId).queue = entry :: rest)
+    (continues : ((state.set processId { state.process processId with queue := rest }).handle processId
+      (task.wait.map (·.1)) entry).2.2 = none) :
+    task.handleEffect state processId =
+      (Effect.modify processId fun process => { process with queue := process.queue.drop 1 }).andThen
+        ((state.set processId { state.process processId with queue := rest }).handleEffect processId entry) := by
+  simp only [Task.handleEffect, queue]
+  split
+  · rename_i equal; rw [equal] at continues; simp at continues
+  · rfl
+
+/-- Frames, listed, that read and remove no queue. -/
+local syntax "quiet_frames" : tactic
+macro_rules
+  | `(tactic| quiet_frames) => `(tactic|
+      (intro entry mem
+       simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_singleton] at mem
+       repeat' (first | (subst mem) | (rcases mem with mem | mem))
+       all_goals (dsimp only; decide)))
+
+/-- Read off that every field of frames for one process is a field of an entry. -/
+local syntax "covered_single" : tactic
+macro_rules
+  | `(tactic| covered_single) => `(tactic|
+      (intro entry mem
+       simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_singleton] at mem
+       repeat' (first | (subst mem) | (rcases mem with mem | mem))
+       all_goals exact ⟨rfl, fun bit => ⟨fun set => by dsimp only at set ⊢; mask_bits,
+         fun set => by dsimp only at set ⊢; mask_bits⟩⟩))
+
+/-- Handling a signal in a confined step is within its frames. -/
+private theorem Effect.InFrames.handle {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
+    (confined : Config.confined (.running state tasks finished false) (.handle processId) = true)
+    (found : task.handleFrames state processId = some (frames, timers)) :
+    (task.handleEffect state processId).InFrames frames state := by
+  simp only [Config.confined] at confined
+  simp only [Task.handleFrames] at found
+  cases queue : (state.process processId).queue with
+  | nil => simp [queue] at confined
+  | cons entry rest =>
+    simp only [queue] at confined found ⊢
+    obtain ⟨source, signal⟩ := entry
+    let popped := state.set processId { state.process processId with queue := rest }
+    cases signal with
+    | message message =>
+      rw [Task.handleEffect_of_continues queue (by simp only [State.handle]; try split <;> rfl)]
+      simp only [Option.some.injEq, Prod.mk.injEq] at found
+      rw [← found.1]
+      refine (Effect.InFrames.handleWith queue (frames := [(processId, 0, Field.mailbox)])
+        (Effect.InFrames.single (fun _ => by framed_update) ⟨2, by decide, .inr (by decide)⟩ (by decide))
+        (by intro entry mem; simp only [List.mem_singleton] at mem; subst mem; dsimp only; decide)).cover
+        (Covered.single (by covered_single)) (WellFramed.handle queue (by decide))
+    | aliasMessage alias message =>
+      rw [Task.handleEffect_of_continues queue (by simp only [State.handle]; try split <;> rfl)]
+      simp only [Option.some.injEq, Prod.mk.injEq] at found
+      rw [← found.1]
+      refine (Effect.InFrames.handleWith queue (frames := [(processId, 0, Field.mailbox)]) ?_
+        (by intro entry mem; simp only [List.mem_singleton] at mem; subst mem; dsimp only; decide)).cover
+        (Covered.single (by covered_single)) (WellFramed.handle queue (by decide))
+      simp only [State.handleEffect]
+      split
+      · exact Effect.InFrames.single (fun _ => by framed_update) ⟨2, by decide, .inr (by decide)⟩ (by decide)
+      · exact Effect.InFrames.empty _ _
+    | monitor reference =>
+      rw [Task.handleEffect_of_continues queue (by simp only [State.handle]; try split <;> rfl)]
+      simp only [Option.some.injEq, Prod.mk.injEq] at found
+      rw [← found.1]
+      refine (Effect.InFrames.handleWith queue (frames := [(processId, Field.monitors, Field.monitors)])
+        (Effect.InFrames.single (fun _ => by framed_update) ⟨7, by decide, .inr (by decide)⟩ (by decide))
+        (by intro entry mem; simp only [List.mem_singleton] at mem; subst mem; dsimp only; decide)).cover
+        (Covered.single (by covered_single)) (WellFramed.handle queue (by decide))
+    | down reference reason =>
+      rw [Task.handleEffect_of_continues queue (by simp only [State.handle]; try split <;> rfl)]
+      simp only [Option.some.injEq, Prod.mk.injEq] at found
+      rw [← found.1]
+      have restFramed : ∀ (state' : State) (monitored : Bool),
+          (if monitored then
+            (Effect.modify processId fun process =>
+              { process with monitoring := Kernel.filter (·.1 != reference) process.monitoring
+                             aliases := Kernel.erase process.aliases reference }).andThen
+              (appendEffect processId (.tuple #[.atom "DOWN", .reference reference, .atom "process", .pid source, reason]))
+            else {}).InFrames ([(processId, Field.monitoring ||| Field.aliases, Field.monitoring ||| Field.aliases)] ++
+              [(processId, 0, Field.mailbox)]) state' := by
+        intro state' monitored
+        split
+        · exact Effect.InFrames.andThen_quiet
+            (Effect.InFrames.single (fun _ => by framed_update) ⟨8, by decide, .inr (by decide)⟩ (by decide))
+            (Effect.InFrames.single (fun _ => by framed_update) ⟨2, by decide, .inr (by decide)⟩ (by decide))
+            (by quiet_frames) (by quiet_frames)
+        · exact Effect.InFrames.empty _ _
+      cases normal : isNormal reason
+      · simp only [normal, Bool.false_eq_true, ↓reduceIte, Nat.or_zero] at found ⊢
+        apply Effect.InFrames.cover (Effect.InFrames.handleWith queue (frames := [] ++
+          ([(processId, Field.monitoring ||| Field.aliases, Field.monitoring ||| Field.aliases)] ++
+            [(processId, 0, Field.mailbox)])) ?inner (by quiet_frames))
+        · exact Covered.single (by covered_single)
+        · exact WellFramed.handle queue (by decide)
+        case inner =>
+          simp only [State.handleEffect, normal, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
+          exact Effect.InFrames.andThen_quiet (Effect.InFrames.empty _ _) (restFramed _ _) (by quiet_frames) (by quiet_frames)
+      · simp only [normal, ↓reduceIte] at found ⊢
+        apply Effect.InFrames.cover (Effect.InFrames.handleWith queue (frames := [(processId, Field.eagerExits, Field.eagerExits)] ++
+          ([(processId, Field.monitoring ||| Field.aliases, Field.monitoring ||| Field.aliases)] ++
+            [(processId, 0, Field.mailbox)])) ?inner (by quiet_frames))
+        · exact Covered.single (by covered_single)
+        · exact WellFramed.handle queue (by decide)
+        case inner =>
+          simp only [State.handleEffect, normal, Bool.true_and]
+          refine Effect.InFrames.andThen_quiet ?_ (restFramed _ _) (by quiet_frames) (by quiet_frames)
+          split
+          · exact Effect.InFrames.single (fun _ => by framed_update) ⟨14, by decide, .inr (by decide)⟩ (by decide)
+          · exact Effect.InFrames.empty _ _
+    | _ => simp at confined
+
+end Lynx.Concurrent
