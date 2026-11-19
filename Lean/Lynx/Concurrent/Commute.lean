@@ -425,14 +425,7 @@ no unlink waits for, which reads its links. -/
       else if state.alive target then some (state.sendFrames processId target .isAlive, false)
       else some ([(target, Field.live, 0), (processId, 0, Field.queueTail)], false)
   | .sendAlias alias message =>
-      -- A message to an alias its receiver no longer holds does nothing, once
-      -- normalized: the step reads only what makes it so.
-      let target := alias.dropLast
-      if (state.process processId).parked.isNone && state.alive target &&
-          state.inertEntry target { source := processId, signal := .aliasMessage alias message } then
-        some ([(processId, Field.parked, 0),
-          (target, Field.live ||| Field.aliases ||| Field.monitoring ||| Field.refCounter, 0)], false)
-      else some (state.sendFrames processId target (.aliasMessage alias message), false)
+      some (state.sendFrames processId alias.dropLast (.aliasMessage alias message), false)
   | .startTimer destination _ _ =>
       some ([(processId, Field.refCounter, Field.refCounter), (destination, Field.live, 0)], true)
   | .cancelTimer _ => some ([(processId, Field.cancels, Field.cancels)], true)
@@ -586,7 +579,7 @@ Other steps are compared by evaluating them. -/
           let process := state.process processId
           match computation with
           | .error .exhausted => false
-          | .ok _ | .error _ => state.leavesOthers processId
+          | .ok _ | .error _ => state.alive processId && state.leavesOthers processId
           | .send .. => true
           -- A matching receive is forced, as reading or replacing the environment are.
           | .get _ | .set .. => false
@@ -595,9 +588,11 @@ Other steps are compared by evaluating them. -/
             | .demonitor reference _ => !Kernel.any process.queue (·.carries reference)
             | .monitor .. | .startTimer .. =>
                 !Kernel.any process.queue (·.carries (Kernel.append processId [process.refCounter + 1]))
-            | .sendAlias alias message => process.parked.isNone || !state.alive alias.dropLast ||
-                !state.inertEntry alias.dropLast { source := processId, signal := .aliasMessage alias message }
-            | .cancelTimer _ | .alive _ => true
+            -- A message to an alias its receiver no longer holds is dropped once queued.
+            | .sendAlias alias message => !(state.alive alias.dropLast &&
+                state.inertEntry alias.dropLast { source := processId, signal := .aliasMessage alias message })
+            | .cancelTimer _ => true
+            | .alive _ => state.alive processId
             | _ => false
           | Result.schedule .. => false
       | _ => false

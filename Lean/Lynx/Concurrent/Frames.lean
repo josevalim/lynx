@@ -2872,16 +2872,6 @@ private theorem State.sendEffect_congr {state other : State} {source target : PI
     · rw [State.enqueueEffect_congr _ alive]
   · rw [State.enqueueEffect_congr _ alive]
 
-/-- The effect of a confined own step as normalization leaves it: a message to
-an alias its receiver no longer holds is dropped. -/
-private def Task.confinedOwnEffect (state : State) (processId : PID) (task : Task α) : Effect :=
-  match task with
-  | ⟨.request (.sendAlias alias message) _, _, none⟩ =>
-      if (state.process processId).parked.isNone && state.alive alias.dropLast &&
-          state.inertEntry alias.dropLast { source := processId, signal := .aliasMessage alias message } then {}
-      else task.ownEffect state processId
-  | _ => task.ownEffect state processId
-
 private theorem State.alive_send (state : State) (source target other : PID) (signal : Signal) :
     (state.send source target signal).alive other = state.alive other := by
   unfold State.send
@@ -3060,32 +3050,32 @@ private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task �
     (alive : state.alive processId = true) (lookup : Kernel.lookup processId tasks = some task)
     (confined : Config.confined (.running state tasks finished false) (.own processId) = true)
     (found : task.ownFrames state processId = some (frames, timers)) :
-    (task.confinedOwnEffect state processId).InFrames frames state := by
+    (task.ownEffect state processId).InFrames frames state := by
   obtain ⟨computation, finish, wait⟩ := task
   cases wait with
-  | some => simp only [Task.confinedOwnEffect, Task.ownEffect]; exact Effect.InFrames.empty _ _
+  | some => simp only [Task.ownEffect]; exact Effect.InFrames.empty _ _
   | none =>
     simp only [Config.confined, lookup] at confined
     cases computation with
     | ok =>
-      simp only [Task.confinedOwnEffect, Task.ownEffect, Task.ownFrames, Option.some.injEq] at found ⊢
+      simp only [Task.ownEffect, Task.ownFrames, Option.some.injEq] at found ⊢
       have := congrArg Prod.fst found; simp only at this; rw [← this]
       exact Effect.InFrames.terminateStep state processId _ alive
     | error exception =>
       cases exception with
       | exhausted => simp at confined
       | _ =>
-        simp only [Task.confinedOwnEffect, Task.ownEffect, Task.ownFrames, Option.some.injEq] at found ⊢
+        simp only [Task.ownEffect, Task.ownFrames, Option.some.injEq] at found ⊢
         have := congrArg Prod.fst found; simp only at this; rw [← this]
         exact Effect.InFrames.terminateStep state processId _ alive
     | get | set => simp at confined
     | schedule => simp at confined
     | send destination message =>
-      simp only [Task.confinedOwnEffect, Task.ownEffect, Task.ownFrames, Option.some.injEq, Prod.mk.injEq] at found ⊢
+      simp only [Task.ownEffect, Task.ownFrames, Option.some.injEq, Prod.mk.injEq] at found ⊢
       rw [← found.1]
       exact Effect.InFrames.send state processId destination _
     | receive timeout select =>
-      simp only [Task.confinedOwnEffect, Task.ownEffect, Task.ownFrames] at found ⊢
+      simp only [Task.ownEffect, Task.ownFrames] at found ⊢
       split at found
       · rename_i selected
         simp only [Option.some.injEq, Prod.mk.injEq] at found
@@ -3098,12 +3088,12 @@ private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task �
     | request query =>
       cases query with
       | demonitor reference flush =>
-        simp only [Task.confinedOwnEffect, Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames,
+        simp only [Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames,
           Option.some.injEq, Prod.mk.injEq] at found ⊢
         rw [← found.1]
         exact Effect.InFrames.demonitorStep state processId reference
       | monitor target alias =>
-        simp only [Task.confinedOwnEffect, Task.ownEffect, Task.ownFrames, State.requestFrames] at found ⊢
+        simp only [Task.ownEffect, Task.ownFrames, State.requestFrames] at found ⊢
         by_cases self : target = processId
         · subst self
           simp only [beq_self_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found
@@ -3117,19 +3107,19 @@ private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task �
           rw [← found.1]
           exact Effect.InFrames.monitorStep state processId target alias self
       | startTimer destination message duration =>
-        simp only [Task.confinedOwnEffect, Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames,
+        simp only [Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames,
           Option.some.injEq, Prod.mk.injEq] at found ⊢
         rw [← found.1]
         exact Effect.InFrames.startTimerStep state processId destination _ fun _ => by split <;> rfl
       | cancelTimer reference =>
-        simp only [Task.confinedOwnEffect, Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames,
+        simp only [Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames,
           Option.some.injEq, Prod.mk.injEq] at found ⊢
         rw [← found.1]
         split
         · exact Effect.InFrames.cancelTimerStep state processId _
         · exact Effect.InFrames.empty _ _
       | alive target =>
-        simp only [Task.confinedOwnEffect, Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames] at found ⊢
+        simp only [Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames] at found ⊢
         by_cases self : target = processId
         · simp only [self, ↓reduceIte]; exact Effect.InFrames.empty _ _
         · have : (target == processId) = false := by simpa using self
@@ -3144,13 +3134,10 @@ private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task �
             rw [← found.1]
             exact Effect.InFrames.flushStep state processId target alive
       | sendAlias alias message =>
-        simp only [Task.confinedOwnEffect, Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames] at found ⊢
-        split
-        · exact Effect.InFrames.empty _ _
-        · rename_i live
-          simp only [live, Bool.false_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found
-          rw [← found.1]
-          exact Effect.InFrames.send state processId _ _
+        simp only [Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames,
+          Option.some.injEq, Prod.mk.injEq] at found ⊢
+        rw [← found.1]
+        exact Effect.InFrames.send state processId _ _
       | _ => simp at confined
 
 end Lynx.Concurrent
