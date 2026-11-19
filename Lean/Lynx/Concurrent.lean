@@ -355,7 +355,7 @@ left to signal. -/
     | _ => false) process.queue
   let state := { state with timers := Kernel.filter (·.destination != processId) state.timers }
   let state := state.set processId { process with
-    mailbox := [], queue, exiting := some { reason, links, downs := process.monitors } }
+    mailbox := [], queue, parked := none, exiting := some { reason, links, downs := process.monitors } }
   Kernel.foldl (fun state target => if state.eagerLink processId target reason then
       (state.modify processId fun process => { process with exiting := process.exiting.map fun exiting =>
         { exiting with links := Kernel.filter (· != target) exiting.links } }).linkExit processId target reason
@@ -513,7 +513,10 @@ inductive Answer (β : Type) : Type 1 where
       let state := state.modify processId fun process =>
         { process with
           monitoring := Kernel.filter (·.1 != reference) process.monitoring
-          aliases := Kernel.erase process.aliases reference }
+          aliases := Kernel.erase process.aliases reference
+          parked := match process.parked with
+            | some (_, parked) => if parked == reference then none else process.parked
+            | none => none }
       if flush && !active then
         .continue (.receive .immediate (fun _ message =>
           if isMonitorMessage reference message then some () else none) fun _ => next (.atom "false")) state

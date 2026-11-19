@@ -402,7 +402,8 @@ no unlink waits for, which reads its links. -/
         | none => []
       some ((processId, fields, fields) :: unpark, false)
   | .demonitor .. =>
-      some ([(processId, Field.monitoring ||| Field.aliases, Field.monitoring ||| Field.aliases)], false)
+      let fields := Field.monitoring ||| Field.aliases ||| Field.parked
+      some ([(processId, fields, fields)], false)
   | .link target =>
       if target == processId then some ([], false) else
       let process := state.process processId
@@ -431,7 +432,7 @@ no unlink waits for, which reads its links. -/
       -- A message to an alias its receiver no longer holds does nothing, once
       -- normalized: the step reads only what makes it so.
       let target := alias.dropLast
-      if (state.process processId).parked.isNone &&
+      if (state.process processId).parked.isNone && state.alive target &&
           state.inertEntry target { source := processId, signal := .aliasMessage alias message } then
         some ([(processId, Field.parked, 0),
           (target, Field.live ||| Field.aliases ||| Field.monitoring ||| Field.refCounter, 0)], false)
@@ -622,12 +623,15 @@ Other steps are compared by evaluating them. -/
           match computation with
           | .error .exhausted => false
           | .ok _ | .error _ => state.leavesOthers processId
-          | .get _ | .set .. | .send .. | .receive .. => true
+          | .send .. => true
+          -- A matching receive is forced, as reading or replacing the environment are.
+          | .get _ | .set .. => false
+          | .receive _ select _ => (selectMessage (select (state.view processId)) process.mailbox).isNone
           | .request query _ => match query with
             | .demonitor reference _ => !Kernel.any process.queue (·.carries reference)
             | .monitor .. | .startTimer .. =>
                 !Kernel.any process.queue (·.carries (Kernel.append processId [process.refCounter + 1]))
-            | .sendAlias alias message => process.parked.isNone ||
+            | .sendAlias alias message => process.parked.isNone || !state.alive alias.dropLast ||
                 !state.inertEntry alias.dropLast { source := processId, signal := .aliasMessage alias message }
             | .cancelTimer _ | .alive _ => true
             | _ => false

@@ -783,7 +783,7 @@ private def State.terminateEffect (state : State) (processId : PID) (reason : Te
     | _ => false) process.queue
   let retimed : State := { state with timers := Kernel.filter (·.destination != processId) state.timers }
   let ended := retimed.set processId { process with
-    mailbox := [], queue, exiting := some { reason, links, downs := process.monitors } }
+    mailbox := [], queue, parked := none, exiting := some { reason, links, downs := process.monitors } }
   let exit (state : State) (target : PID) : State := if state.eagerLink processId target reason then
       (state.modify processId fun process => { process with exiting := process.exiting.map fun exiting =>
         { exiting with links := Kernel.filter (· != target) exiting.links } }).linkExit processId target reason
@@ -798,7 +798,7 @@ private def State.terminateEffect (state : State) (processId : PID) (reason : Te
   let retime := if Kernel.any state.timers (·.destination == processId) then
       Effect.retime (Kernel.filter (·.destination != processId)) else {}
   (retime.andThen (Effect.put processId { process with
-    mailbox := [], queue, exiting := some { reason, links, downs := process.monitors } })).andThen
+    mailbox := [], queue, parked := none, exiting := some { reason, links, downs := process.monitors } })).andThen
     (chainEffect exit exitEffect ended links)
 
 private theorem Realizes.terminate (state : State) (processId : PID) (reason : Term) :
@@ -842,7 +842,10 @@ private def State.requestEffect (state : State) (processId : PID) : Request → 
       .modify processId fun process =>
         { process with
           monitoring := Kernel.filter (·.1 != reference) process.monitoring
-          aliases := Kernel.erase process.aliases reference }
+          aliases := Kernel.erase process.aliases reference
+          parked := match process.parked with
+            | some (_, parked) => if parked == reference then none else process.parked
+            | none => none }
   | .link target =>
       if target = processId then {} else
       let process := state.process processId
@@ -2088,12 +2091,6 @@ private theorem Effect.InFrames.more {effect : Effect} {frames more : List Frame
   framed.mono (readsOf_mono fun _ mem => List.mem_append_left _ mem)
     (writesOf_mono fun _ mem => List.mem_append_left _ mem) (WellFramed.quiet quiet)
 
-private theorem Effect.InFrames.setStep (state : State) (processId : PID) (updated : Environment) :
-    (Effect.modify processId fun process =>
-      { process with pdict := updated.pdict, refCounter := max process.refCounter updated.refCounter }).InFrames
-      [(processId, Field.refCounter, Field.pdict ||| Field.refCounter)] state :=
-  Effect.InFrames.single (fun _ => by framed_update) ⟨4, by decide, .inl (by decide)⟩ (by decide)
-
 private theorem Effect.InFrames.receiveStep (state : State) (processId : PID) (reads : Nat) (remaining : List Term)
     (quiet : reads.testBit headBit = false ∧ reads.testBit tailBit = false)
     (mailbox : reads.testBit 2 = true) :
@@ -2113,8 +2110,12 @@ private theorem Effect.InFrames.demonitorStep (state : State) (processId : PID) 
     (Effect.modify processId fun process =>
       { process with
         monitoring := Kernel.filter (·.1 != reference) process.monitoring
-        aliases := Kernel.erase process.aliases reference }).InFrames
-      [(processId, Field.monitoring ||| Field.aliases, Field.monitoring ||| Field.aliases)] state :=
+        aliases := Kernel.erase process.aliases reference
+        parked := match process.parked with
+          | some (_, parked) => if parked == reference then none else process.parked
+          | none => none }).InFrames
+      [(processId, Field.monitoring ||| Field.aliases ||| Field.parked,
+        Field.monitoring ||| Field.aliases ||| Field.parked)] state :=
   Effect.InFrames.single (fun _ => by framed_update) ⟨8, by decide, .inl (by decide)⟩ (by decide)
 
 /-- Effects changing records alike are within the same frames. -/
@@ -2143,4 +2144,289 @@ private theorem Effect.InFrames.startTimerStep (state : State) (processId destin
     rcases mem with rfl | rfl <;> (dsimp only; decide)
   · rw [Effect.record_andThen, untimed]; rfl
 
-end Lynx.Concurrent
+/-- Frames whose every field is a field of some entry of other frames for the same process. -/
+private def Covered (frames frames' : List Frame) : Prop :=
+  ∀ entry ∈ frames, ∀ bit,
+    (entry.2.1.testBit bit → ∃ entry' ∈ frames', entry'.1 = entry.1 ∧ entry'.2.1.testBit bit) ∧
+    (entry.2.2.testBit bit → ∃ entry' ∈ frames', entry'.1 = entry.1 ∧ entry'.2.2.testBit bit)
+
+/-- An effect within frames is within well-formed frames covering them. -/
+private theorem Effect.InFrames.cover {effect : Effect} {frames frames' : List Frame} {state : State}
+    (framed : effect.InFrames frames state) (covered : Covered frames frames') (wellFramed : WellFramed frames' state) :
+    effect.InFrames frames' state := by
+  refine framed.mono (fun processId bit read => ?_) (fun processId bit written => ?_) wellFramed
+  · simp only [readsOf, List.any_eq_true, Bool.and_eq_true, beq_iff_eq] at read ⊢
+    obtain ⟨entry, mem, same, set⟩ := read
+    obtain ⟨entry', mem', same', set'⟩ := (covered entry mem bit).1 set
+    exact ⟨entry', mem', same'.trans same, set'⟩
+  · simp only [writesOf, List.any_eq_true, Bool.and_eq_true, beq_iff_eq] at written ⊢
+    obtain ⟨entry, mem, same, set⟩ := written
+    obtain ⟨entry', mem', same', set'⟩ := (covered entry mem bit).2 set
+    exact ⟨entry', mem', same'.trans same, set'⟩
+
+private theorem Covered.self {frames frames' : List Frame} (sub : ∀ entry ∈ frames, entry ∈ frames') :
+    Covered frames frames' := fun entry mem _ =>
+  ⟨fun set => ⟨entry, sub entry mem, rfl, set⟩, fun set => ⟨entry, sub entry mem, rfl, set⟩⟩
+
+private theorem State.process_modify_keeps {β : Type} {state : State} {processId other : PID}
+    {change : ProcessState → ProcessState} {get : ProcessState → β}
+    (keeps : ∀ process, get (change process) = get process) :
+    get ((state.modify processId change).process other) = get (state.process other) := by
+  unfold State.modify
+  split
+  · rename_i process found
+    simp only [State.process, State.record_set]
+    by_cases same : other = processId
+    · subst same; simp [found, keeps]
+    · simp [same]
+  · rfl
+
+/-- Frames that remove no queue's head. -/
+private theorem noPop {frames : List Frame} (none : ∀ entry ∈ frames, entry.2.2.testBit headBit = false)
+    (processId : PID) (written : writesOf frames processId headBit) : False := by
+  rw [writesOf_false none] at written; simp at written
+
+/-- Requesting a monitor of another process is within its frames. -/
+private theorem Effect.InFrames.monitorStep (state : State) (processId target : PID) (alias : Bool)
+    (other : ¬ target = processId) :
+    (state.requestEffect processId (.monitor target alias)).InFrames
+      ((processId, Field.refCounter ||| Field.parked ||| Field.monitoring ||| Field.aliases,
+        Field.refCounter ||| Field.parked ||| Field.monitoring ||| Field.aliases) ::
+        match (state.process processId).parked with
+        | some (parked, reference) => state.enqueueFrames processId parked (.monitor reference)
+        | none => []) state := by
+  let allocated := (state.allocate processId).2
+  let reference := (state.allocate processId).1
+  let change := fun process : ProcessState => { process with
+    monitoring := Kernel.append process.monitoring [(reference, target)]
+    aliases := if alias then Kernel.append process.aliases [reference] else process.aliases
+    parked := some (target, reference) }
+  have unfolded : state.requestEffect processId (.monitor target alias) =
+      (allocateEffect processId).andThen ((allocated.unparkEffect processId).andThen (.modify processId change)) := by
+    simp only [State.requestEffect, other, ↓reduceIte]; rfl
+  have parkedSame : (allocated.process processId).parked = (state.process processId).parked :=
+    State.process_modify_keeps (get := (·.parked)) fun _ => rfl
+  have first : (allocateEffect processId).InFrames [(processId, Field.refCounter, Field.refCounter)] state :=
+    Effect.InFrames.single (fun _ => by framed_update) ⟨4, by decide, .inl (by decide)⟩ (by decide)
+  let unparkFrames : List Frame := match (state.process processId).parked with
+    | some (parked, reference) =>
+        [(processId, Field.parked, Field.parked)] ++ state.enqueueFrames processId parked (.monitor reference)
+    | none => []
+  have second : (allocated.unparkEffect processId).InFrames unparkFrames ((allocateEffect processId).apply state) := by
+    have back : ∀ other, ((allocateEffect processId).apply state).record other = allocated.record other :=
+      fun other => ((Realizes.allocate state processId).records other).symm
+    cases parked : (state.process processId).parked with
+    | none =>
+      have : allocated.unparkEffect processId = {} := by simp only [State.unparkEffect, parkedSame, parked]
+      rw [this]; exact Effect.InFrames.empty _ _
+    | some found =>
+      obtain ⟨parkedTarget, parkedReference⟩ := found
+      have framed := Effect.InFrames.unpark allocated processId parkedTarget parkedReference (parkedSame.trans parked)
+      have equal : allocated.enqueueFrames processId parkedTarget (.monitor parkedReference) =
+          state.enqueueFrames processId parkedTarget (.monitor parkedReference) :=
+        State.enqueueFrames_congr _ (State.alive_modify _ _ _ _ fun _ => rfl)
+      simp only [unparkFrames, parked]
+      rw [← equal]
+      exact framed.congr back
+  have third : (Effect.modify processId change).InFrames
+      [(processId, Field.parked ||| Field.monitoring ||| Field.aliases, Field.parked ||| Field.monitoring ||| Field.aliases)]
+      (((allocateEffect processId).andThen (allocated.unparkEffect processId)).apply state) :=
+    Effect.InFrames.single (fun _ => by simp only [change]; framed_update) ⟨8, by decide, .inl (by decide)⟩ (by decide)
+  have quietUnpark : ∀ entry ∈ unparkFrames,
+      entry.2.1.testBit headBit = false ∧ entry.2.1.testBit tailBit = false ∧ entry.2.2.testBit headBit = false := by
+    intro entry mem
+    simp only [unparkFrames] at mem
+    split at mem
+    · simp only [List.mem_append, List.mem_singleton] at mem
+      rcases mem with rfl | mem
+      · dsimp only; decide
+      · exact enqueueFrames_quiet mem
+    · simp at mem
+  have quiet : ∀ entry ∈ [(processId, Field.refCounter, Field.refCounter)] ++ unparkFrames ++
+      [(processId, Field.parked ||| Field.monitoring ||| Field.aliases, Field.parked ||| Field.monitoring ||| Field.aliases)],
+      entry.2.1.testBit headBit = false ∧ entry.2.1.testBit tailBit = false ∧ entry.2.2.testBit headBit = false := by
+    intro entry mem
+    simp only [List.mem_append, List.mem_singleton] at mem
+    rcases mem with (rfl | mem) | rfl
+    · dsimp only; decide
+    · exact quietUnpark entry mem
+    · dsimp only; decide
+  have total := (first.andThen second
+    (WellFramed.quiet fun entry mem => quiet entry (List.mem_append_left _ mem))
+    (fun processId _ written => (noPop (fun entry mem => by simp only [List.mem_singleton] at mem; subst mem; dsimp only; decide) processId written).elim)
+    (fun processId written _ => (noPop (fun entry mem => by simp only [List.mem_singleton] at mem; subst mem; dsimp only; decide) processId written).elim)
+    (fun processId _ written => (noPop (fun entry mem => (quietUnpark entry mem).2.2) processId written).elim)).andThen third
+    (WellFramed.quiet quiet)
+    (fun processId _ written => (noPop (fun entry mem => (quiet entry (List.mem_append_left _ mem)).2.2) processId written).elim)
+    (fun processId written _ => (noPop (fun entry mem => (quiet entry (List.mem_append_left _ mem)).2.2) processId written).elim)
+    (fun processId _ written => (noPop (fun entry mem => by simp only [List.mem_singleton] at mem; subst mem; dsimp only; decide) processId written).elim)
+  rw [unfolded]
+  refine (total.of_record fun other => ?_).cover ?_ (WellFramed.quiet fun entry mem => ?_)
+  · simp only [Effect.record_andThen]; rfl
+  · intro entry mem bit
+    have head : (processId, Field.refCounter ||| Field.parked ||| Field.monitoring ||| Field.aliases,
+        Field.refCounter ||| Field.parked ||| Field.monitoring ||| Field.aliases) ∈
+        (processId, Field.refCounter ||| Field.parked ||| Field.monitoring ||| Field.aliases,
+          Field.refCounter ||| Field.parked ||| Field.monitoring ||| Field.aliases) ::
+          (match (state.process processId).parked with
+          | some (parked, reference) => state.enqueueFrames processId parked (.monitor reference)
+          | none => []) := List.mem_cons_self
+    simp only [List.mem_append, List.mem_singleton] at mem
+    rcases mem with (rfl | mem) | rfl
+    · exact ⟨fun set => ⟨_, head, rfl, by dsimp only at set ⊢; mask_bits⟩,
+        fun set => ⟨_, head, rfl, by dsimp only at set ⊢; mask_bits⟩⟩
+    · simp only [unparkFrames] at mem
+      split at mem
+      · rename_i parked
+        simp only [List.mem_append, List.mem_singleton] at mem
+        rcases mem with rfl | mem
+        · exact ⟨fun set => ⟨_, List.mem_cons_self, rfl, by dsimp only at set ⊢; mask_bits⟩,
+            fun set => ⟨_, List.mem_cons_self, rfl, by dsimp only at set ⊢; mask_bits⟩⟩
+        · exact ⟨fun set => ⟨entry, List.mem_cons_of_mem _ mem, rfl, set⟩,
+            fun set => ⟨entry, List.mem_cons_of_mem _ mem, rfl, set⟩⟩
+      · simp at mem
+    · exact ⟨fun set => ⟨_, head, rfl, by dsimp only at set ⊢; mask_bits⟩,
+        fun set => ⟨_, head, rfl, by dsimp only at set ⊢; mask_bits⟩⟩
+  · simp only [List.mem_cons] at mem
+    rcases mem with rfl | mem
+    · dsimp only; decide
+    · split at mem
+      · exact enqueueFrames_quiet mem
+      · simp at mem
+
+/-- Queueing a `flush` to a live process itself, as asking whether a dead
+process is alive does, is within its frames. -/
+private theorem Effect.InFrames.flushStep (state : State) (processId target : PID)
+    (alive : state.alive processId = true) :
+    (state.enqueueEffect processId processId .flush).InFrames
+      [(target, Field.live, 0), (processId, 0, Field.queueTail)] state := by
+  have effect : state.enqueueEffect processId processId .flush = .modify processId (queueAt processId .flush) := by
+    unfold State.enqueueEffect
+    simp only [State.alive] at alive
+    split
+    · rename_i process found
+      rw [found] at alive; simp only at alive; simp [alive]
+    · rename_i found
+      rw [found] at alive; simp at alive
+  rw [effect]
+  have inside : (processId, 0, Field.queueTail) ∈ [(target, Field.live, 0), (processId, 0, Field.queueTail)] := by simp
+  refine Effect.InFrames.modify inside ⟨1, by decide, .inr (by decide)⟩ fun process _ =>
+    (Framed.queueAt processId .flush process).widen (fun _ read => read) (fun _ written => written) inside
+      fun entry mem _ => ?_
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at mem
+  rcases mem with rfl | rfl <;> (dsimp only; decide)
+
+/-- The effect of a confined own step as normalization leaves it: a message to
+an alias its receiver no longer holds is dropped. -/
+private def Task.confinedOwnEffect (state : State) (processId : PID) (task : Task α) : Effect :=
+  match task with
+  | ⟨.request (.sendAlias alias message) _, _, none⟩ =>
+      if (state.process processId).parked.isNone && state.alive alias.dropLast &&
+          state.inertEntry alias.dropLast { source := processId, signal := .aliasMessage alias message } then {}
+      else task.ownEffect state processId
+  | _ => task.ownEffect state processId
+
+/-- A process ending is within its frames. -/
+private theorem Effect.InFrames.terminateStep (state : State) (processId : PID) (reason : Term)
+    (alive : state.alive processId = true) :
+    (state.terminateEffect processId reason).InFrames (state.endFrames processId).1 state := by
+  sorry
+
+/-- A confined own step of a live process is within its frames. -/
+private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+    {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
+    (alive : state.alive processId = true) (lookup : Kernel.lookup processId tasks = some task)
+    (confined : Config.confined (.running state tasks finished false) (.own processId) = true)
+    (found : task.ownFrames state processId = some (frames, timers)) :
+    (task.confinedOwnEffect state processId).InFrames frames state := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp only [Task.confinedOwnEffect, Task.ownEffect]; exact Effect.InFrames.empty _ _
+  | none =>
+    simp only [Config.confined, lookup] at confined
+    cases computation with
+    | ok =>
+      simp only [Task.confinedOwnEffect, Task.ownEffect, Task.ownFrames, Option.some.injEq] at found ⊢
+      have := congrArg Prod.fst found; simp only at this; rw [← this]
+      exact Effect.InFrames.terminateStep state processId _ alive
+    | error exception =>
+      cases exception with
+      | exhausted => simp at confined
+      | _ =>
+        simp only [Task.confinedOwnEffect, Task.ownEffect, Task.ownFrames, Option.some.injEq] at found ⊢
+        have := congrArg Prod.fst found; simp only at this; rw [← this]
+        exact Effect.InFrames.terminateStep state processId _ alive
+    | get | set => simp at confined
+    | schedule => simp at confined
+    | send destination message =>
+      simp only [Task.confinedOwnEffect, Task.ownEffect, Task.ownFrames, Option.some.injEq, Prod.mk.injEq] at found ⊢
+      rw [← found.1]
+      exact Effect.InFrames.send state processId destination _
+    | receive timeout select =>
+      simp only [Task.confinedOwnEffect, Task.ownEffect, Task.ownFrames] at found ⊢
+      split at found
+      · rename_i selected
+        simp only [Option.some.injEq, Prod.mk.injEq] at found
+        rw [← found.1]
+        simp only [selected]
+        exact Effect.InFrames.receiveStep state processId _ _ (by decide) (by decide)
+      · rename_i none
+        simp only [none]
+        exact Effect.InFrames.empty _ _
+    | request query =>
+      cases query with
+      | demonitor reference flush =>
+        simp only [Task.confinedOwnEffect, Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames,
+          Option.some.injEq, Prod.mk.injEq] at found ⊢
+        rw [← found.1]
+        exact Effect.InFrames.demonitorStep state processId reference
+      | monitor target alias =>
+        simp only [Task.confinedOwnEffect, Task.ownEffect, Task.ownFrames, State.requestFrames] at found ⊢
+        by_cases self : target = processId
+        · subst self
+          simp only [beq_self_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found
+          rw [← found.1]
+          have first : (allocateEffect target).InFrames [(target, Field.refCounter, Field.refCounter)] state :=
+            Effect.InFrames.single (fun _ => by framed_update) ⟨4, by decide, .inl (by decide)⟩ (by decide)
+          refine first.of_record fun other => ?_
+          simp only [State.requestEffect, ↓reduceIte, Effect.record_andThen]; rfl
+        · have : (target == processId) = false := by simpa using self
+          simp only [this, Bool.false_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found
+          rw [← found.1]
+          exact Effect.InFrames.monitorStep state processId target alias self
+      | startTimer destination message duration =>
+        simp only [Task.confinedOwnEffect, Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames,
+          Option.some.injEq, Prod.mk.injEq] at found ⊢
+        rw [← found.1]
+        exact Effect.InFrames.startTimerStep state processId destination _ fun _ => by split <;> rfl
+      | cancelTimer reference =>
+        simp only [Task.confinedOwnEffect, Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames,
+          Option.some.injEq, Prod.mk.injEq] at found ⊢
+        rw [← found.1]
+        split
+        · exact Effect.InFrames.cancelTimerStep state processId _
+        · exact Effect.InFrames.empty _ _
+      | alive target =>
+        simp only [Task.confinedOwnEffect, Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames] at found ⊢
+        by_cases self : target = processId
+        · simp only [self, ↓reduceIte]; exact Effect.InFrames.empty _ _
+        · have : (target == processId) = false := by simpa using self
+          simp only [this, self, Bool.false_eq_true, ↓reduceIte] at found ⊢
+          split at found
+          · rename_i targetAlive
+            simp only [targetAlive, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found ⊢
+            rw [← found.1]
+            exact Effect.InFrames.send state processId target _
+          · rename_i targetDead
+            simp only [targetDead, Bool.false_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found ⊢
+            rw [← found.1]
+            exact Effect.InFrames.flushStep state processId target alive
+      | sendAlias alias message =>
+        simp only [Task.confinedOwnEffect, Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames] at found ⊢
+        split
+        · exact Effect.InFrames.empty _ _
+        · rename_i live
+          simp only [live, Bool.false_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found
+          rw [← found.1]
+          exact Effect.InFrames.send state processId _ _
+      | _ => simp at confined
