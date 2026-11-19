@@ -535,7 +535,7 @@ as for a process that does not return. -/
           some ((processId, Field.parked, Field.parked) :: state.enqueueFrames processId target (.monitor reference), false)
       | none => none
   | .running state _ _ false, .fire reference =>
-      match Kernel.find? (·.reference == reference) state.timers with
+      match Kernel.find? (·.reference == reference) state.firing with
       | some timer => some (state.enqueueFrames clock timer.destination (.message timer.message), true)
       | none => none
   | _, _ => none

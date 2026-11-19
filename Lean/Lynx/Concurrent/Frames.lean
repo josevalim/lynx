@@ -6227,4 +6227,50 @@ private theorem Config.clean {state : State} {tasks : List (PID × Task α)}
     · rw [Effect.apply_empty]; exact fun _ _ _ found => Clean.of_normalized sorted normalized found
   | link => simp [Config.frames] at found
 
+/-! ### Assembling: effects within frames by key -/
+
+/-- A confined step's effect is within its frames. -/
+private theorem Config.inFrames {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key} {frames : List Frame} {timers : Bool}
+    (confined : Config.confined (.running state tasks finished false) key = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, timers)) :
+    ((Config.running state tasks finished false).effectOf key).InFrames frames state := by
+  cases key with
+  | own processId =>
+    simp only [Config.frames, Option.bind_eq_some_iff] at found
+    obtain ⟨task, lookup, found⟩ := found
+    simp only [Config.effectOf, lookup]
+    have alive : state.alive processId = true := by
+      have confined' := confined
+      simp only [Config.confined, lookup] at confined'
+      obtain ⟨computation, finish, wait⟩ := task
+      cases wait with
+      | some => simp at confined'
+      | none => simp only [Bool.and_eq_true] at confined'; exact confined'.1.1
+    exact Effect.InFrames.own alive lookup confined found
+  | handle processId =>
+    simp only [Config.frames, Option.bind_eq_some_iff] at found
+    obtain ⟨task, lookup, found⟩ := found
+    simp only [Config.effectOf, lookup]
+    exact Effect.InFrames.handle confined found
+  | phase processId =>
+    simp only [Config.frames] at found
+    exact Effect.InFrames.phaseStep found
+  | unpark processId =>
+    simp only [Config.frames] at found
+    split at found
+    · rename_i target reference parked
+      simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+      exact Effect.InFrames.unpark state processId target reference parked
+    · simp at found
+  | fire reference =>
+    simp only [Config.frames] at found
+    simp only [Config.effectOf]
+    split at found
+    · rename_i timer timerFound
+      simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1, timerFound]
+      exact Effect.InFrames.fire state timer
+    · simp at found
+  | link => simp [Config.frames] at found
+
 end Lynx.Concurrent
