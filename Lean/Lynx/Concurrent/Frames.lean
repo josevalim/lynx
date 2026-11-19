@@ -7021,4 +7021,85 @@ private theorem Config.keeps_after {elapsed : PID → Nat → Nat} {state state'
       simp only [Config.effectOf, timerFound]; rw [← effect]; exact Realizes.fire state' timer
     · simp at found
 
+/-! ### Assembling: the state after both steps -/
+
+private theorem State.liveOf_normalized {gone : PID → Bool} {processId : PID} {process : ProcessState} :
+    liveOf ((some process).map (normRecord gone processId) |>.filter (!·.finished)) = liveOf (some process) := by
+  simp only [Option.map_some, Option.filter]
+  have exiting : (normRecord gone processId process).exiting.isSome = process.exiting.isSome := by
+    unfold normRecord; split <;> simp_all
+  split
+  · simp only [liveOf]
+    cases equal : process.exiting <;> cases equal' : (normRecord gone processId process).exiting <;> simp_all
+  · rename_i finished
+    simp only [Bool.not_eq_true', Bool.not_eq_false] at finished
+    have := ProcessState.finished_exiting (by simpa using finished)
+    simp only [liveOf]
+    cases equal : process.exiting <;> simp_all
+
+private theorem Effect.apply_elapsed (effect : Effect) (state : State) :
+    (effect.apply state).elapsed = state.elapsed := by
+  have kept : ∀ (pids : List PID) (start : State), (pids.foldl (fun changed processId =>
+      changed.put processId (effect.record processId (state.record processId))) start).elapsed = start.elapsed := by
+    intro pids
+    induction pids with
+    | nil => intro _; rfl
+    | cons head rest ih =>
+      intro start
+      rw [List.foldl_cons, ih]
+      cases effect.record head (state.record head) <;> rfl
+  unfold Effect.apply
+  rw [kept]
+
+/-- A step apart from a first one, taken after it, normalized, reaches both
+effects applied in order, normalized. -/
+private theorem State.normalize_after {state raw raw' : State} {first second : Effect} {frames frames' : List Frame}
+    (sorted : state.Sorted) (framed : first.InFrames frames state)
+    (clean : CleanOutside (first.apply state) (WholeOf frames))
+    (realizes : Realizes first state raw) (sortedRaw : raw.Sorted)
+    (untouched : ∀ processId, WholeOf frames processId → ∀ bit,
+      readsOf frames' processId bit = false ∧ writesOf frames' processId bit = false)
+    (framed' : second.InFrames frames' state) (revives : second.NoRevive)
+    (realizes' : Realizes second raw.normalize raw') (sortedRaw' : raw'.Sorted) :
+    raw'.normalize = (second.apply (first.apply state)).normalize := by
+  have untouched' : ∀ processId, WholeOf frames processId → second.record processId = id :=
+    fun processId whole => framed'.untouched (untouched processId whole)
+  have recordsRaw : ∀ processId, raw.record processId = (first.apply state).record processId := realizes.records
+  have goneRaw : raw.gone = (first.apply state).gone := by funext processId; simp only [State.gone, State.alive, recordsRaw]
+  -- Each record after both steps, as normalizing early leaves it.
+  have records : ∀ processId, raw'.record processId = (second.apply (first.apply state)).record processId ∨
+      ∃ fewer : PID → Bool, (∀ other, fewer other → (second.apply (first.apply state)).gone other) ∧
+        raw'.record processId = (((second.apply (first.apply state)).record processId).map
+          (normRecord fewer processId)).filter (!·.finished) := by
+    intro processId
+    rw [realizes'.records processId, Effect.record_apply, Effect.record_apply (second)]
+    by_cases whole : WholeOf frames processId
+    · right
+      refine ⟨(first.apply state).gone, fun other gone => revives.gone _ other gone, ?_⟩
+      rw [untouched' processId whole, State.record_normalize' sortedRaw, recordsRaw, goneRaw]; rfl
+    · left
+      have kept : raw.normalize.record processId = raw.record processId :=
+        State.record_normalize_clean sortedRaw fun process found => by
+          rw [recordsRaw] at found; rw [goneRaw]; exact clean processId whole process found
+      rw [kept, recordsRaw]
+  have live : ∀ processId, liveOf (raw'.record processId) = liveOf ((second.apply (first.apply state)).record processId) := by
+    intro processId
+    rcases records processId with equal | ⟨fewer, -, equal⟩
+    · rw [equal]
+    · rw [equal]
+      cases (second.apply (first.apply state)).record processId with
+      | none => rfl
+      | some process => exact State.liveOf_normalized
+  refine State.normalize_absorbs (Effect.apply_sorted _ (Effect.apply_sorted _ sorted)) sortedRaw' ?_ ?_ ?_ records
+  · rw [realizes'.2.1, Effect.apply_timers, Effect.apply_timers]
+    show (second.timers.getD id) raw.timers = _
+    rw [realizes.2.1]
+  · rw [realizes'.2.2, Effect.apply_elapsed, Effect.apply_elapsed]
+    exact realizes.2.2
+  · funext processId
+    simp only [State.gone, State.alive]
+    have := live processId
+    cases found : raw'.record processId <;> cases found' : (second.apply (first.apply state)).record processId <;>
+      simp_all [liveOf]
+
 end Lynx.Concurrent
