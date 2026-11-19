@@ -726,7 +726,7 @@ private theorem lookup_filter_of_key {β : Type} {key : PID} {keep : PID × β �
       by_cases equal : key = key'
       · subst equal
         have := kept value (by simp)
-        simp [List.filter_cons, this]
+        simp [this]
       · have differ : (key == key') = false := by simp [equal]
         simp only [List.filter_cons]
         split <;> simp [List.lookup_cons, differ, rest']
@@ -759,7 +759,7 @@ private theorem State.normalizeRecord_normalize {state : State} (sorted : state.
       have keep := (List.mem_filter.mp mem).2
       simp only [State.keepEntry, State.inertEntry, State.allocated, found, found', exiting,
         Option.isSome_none, Bool.false_and, Bool.or_false, Bool.not_eq_eq_eq_not, Bool.not_true] at keep ⊢
-      simp only [State.normalizeRecord, exiting, gone, Kernel.filter_eq, Kernel.lookup_eq] at keep ⊢
+      simp only [State.normalizeRecord, exiting, gone, Kernel.filter_eq] at keep ⊢
       split <;> simp_all
     · simp only [gone, List.filter_filter, Bool.and_self]
 
@@ -943,7 +943,7 @@ private theorem Task.own_shape {state state' : State} {processId : PID} {task : 
         cases found' : selectMessage (select (state.view processId)) (state'.process processId).mailbox with
         | some _ => rw [found'] at message; simp at message
         | none =>
-          simp only [found']
+          simp only
           cases timeout with
           | infinity => simp [Transition.Shapes]
           | immediate | finite =>
@@ -1422,7 +1422,7 @@ private theorem handleFinished_some {view : Option Term × Option Term} {task : 
   unfold handleChange
   split at finished
   · rename_i reason found
-    exact ⟨by simp [found], ⟨_, finished⟩⟩
+    exact ⟨by simp, ⟨_, finished⟩⟩
   · simp at finished
 
 /-- A process's own step leaves itself, and the child it spawns. -/
@@ -2036,7 +2036,7 @@ private theorem Config.processes_of_fallback {state : State} {tasks : List (PID 
       have keeps₁ := Config.changes_keeps rfl after
       have keeps₂ := keeps'
       obtain ⟨_, equal₂⟩ := keeps₂
-      simp only [Config.running.injEq] at equal₂
+      simp only at equal₂
       obtain ⟨rfl, rfl, rfl, -⟩ := equal₂
       obtain ⟨task, read, lookup, -, changes, changes₂⟩ := Config.changes_handle_transfer step after' view
       exact Config.changes_comm_keeps changes keeps' keeps₁ changes₂
@@ -2046,7 +2046,7 @@ private theorem Config.processes_of_fallback {state : State} {tasks : List (PID 
     have keeps₂ := Config.changes_keeps rfl after'
     have keeps₁ := keeps
     obtain ⟨_, equal₁⟩ := keeps₁
-    simp only [Config.running.injEq] at equal₁
+    simp only at equal₁
     obtain ⟨rfl, rfl, rfl, -⟩ := equal₁
     cases other with
     | own other =>

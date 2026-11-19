@@ -569,14 +569,9 @@ private theorem framesApart_send {sender receiver : PID} {write : Nat} {frames :
 
 /-- Normalizing leaves a quiet state as it is. -/
 private theorem State.Quiet.normalize_eq {state : State} (sorted : state.Sorted) (quiet : state.Quiet) :
-    state.normalize = state := by
-  refine State.ext_records sorted (Sorted.normalize sorted) (fun processId => ?_) rfl rfl
-  rw [State.record_normalize' sorted]
-  cases found : state.record processId with
-  | none => rfl
-  | some process =>
-    have quiet' := quiet.2 _ _ found
-    simp [quiet'.normRecord, Option.filter, ProcessState.finished, quiet'.1]
+    state.normalize = state :=
+  State.normalize_of_quiet fun _ mem =>
+    quiet.2 _ _ (by simpa [State.record, Kernel.lookup_eq] using Sorted.lookup_of_mem sorted mem)
 
 /-- A quiet process ending, normalized, only removes its record. -/
 private theorem State.Quiet.terminate_normalize {state : State} (sorted : state.Sorted) (quiet : state.Quiet)

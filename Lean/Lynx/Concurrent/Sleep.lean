@@ -1237,7 +1237,7 @@ private theorem Config.Reachable.step {elapsed : PID → Nat → Nat} {config ne
   ⟨⟨reachable.1.1.step step, Config.Normalized.step reachable.1.1 step, reachable.1.2.2.step step⟩,
     Config.Fresh.step reachable.1.1 reachable.2 step⟩
 
-private theorem Config.Reachable.running {elapsed : PID → Nat → Nat} {config : Config α} {key : Key}
+private theorem Config.Reachable.running {config : Config α} {key : Key}
     {event : Event} {next : Config α} {forced : Bool} (mem : (key, event, next, forced) ∈ config.taggedSteps) :
     ∃ state tasks finished, config = .running state tasks finished false := by
   match config with
@@ -1249,7 +1249,7 @@ private theorem Config.Reachable.running {elapsed : PID → Nat → Nat} {config
 private theorem Config.Reachable.stepOf {elapsed : PID → Nat → Nat} {config : Config α} {key : Key}
     {event : Event} {next : Config α} {forced : Bool} (reachable : config.Reachable elapsed)
     (mem : (key, event, next, forced) ∈ config.taggedSteps) : config.stepOf key = some (event, next) := by
-  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running (elapsed := elapsed) mem
+  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running mem
   exact Config.stepOf_of_tagged reachable.2.1 mem
 
 end Lynx.Concurrent

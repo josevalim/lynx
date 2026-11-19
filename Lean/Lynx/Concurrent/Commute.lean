@@ -364,7 +364,7 @@ abbrev Frame := PID × Nat × Nat
 
 /-- The frames of appending a signal to a live queue: it reads only whether the
 receiver is live, as a live receiver keeps every signal. -/
-@[expose] def State.appendFrames (state : State) (source target : PID) (signal : Signal) : List Frame :=
+@[expose] def State.appendFrames (_state : State) (_source target : PID) (_signal : Signal) : List Frame :=
   [(target, Field.live, Field.queueTail)]
 
 /-- The frames of queueing a signal, or of its sender's fallback. -/

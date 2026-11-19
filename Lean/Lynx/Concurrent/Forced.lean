@@ -2418,7 +2418,7 @@ private theorem Config.forced_own_other {elapsed : PID → Nat → Nat} {config 
     (∃ absorbed, next.stepOf key' = some (absorbed, middle)) ∨
       ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
         next.stepOf key' = some (other, last) := by
-  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running (elapsed := elapsed) forced
+  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running forced
   have step := reachable.stepOf forced
   obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_own step
   have flagged := Config.forced_own reachable.2.1 lookup head forced
@@ -2759,7 +2759,7 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
     (∃ absorbed, next.stepOf key' = some (absorbed, middle)) ∨
       ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
         next.stepOf key' = some (other, last) := by
-  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running (elapsed := elapsed) forced
+  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running forced
   have step := reachable.stepOf forced
   obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_handle step
   have flagged := Config.forced_handle reachable.2.1 lookup forced
@@ -3078,7 +3078,7 @@ private theorem Config.forced_own_handle {elapsed : PID → Nat → Nat} {config
     (∃ absorbed, next.stepOf (.handle processId) = some (absorbed, middle)) ∨
       ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
         next.stepOf (.handle processId) = some (other, last) := by
-  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running (elapsed := elapsed) forced
+  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running forced
   have step := reachable.stepOf forced
   obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_own step
   have flagged := Config.forced_own reachable.2.1 lookup head forced
@@ -4814,8 +4814,7 @@ private theorem Config.handle_own_square {elapsed : PID → Nat → Nat} {state 
   have unseen := change.unseen linking
   have within' : (state.set processId (change' process)).Within elapsed := within.set _ _
   have fresh : Kernel.append processId [process.children + 1] ≠ processId := by
-    have := reachable.2.child lookup lookup
-    simpa [State.process, found] using this
+    simp
   obtain ⟨task₀, transition, lookup₀, head, rfl⟩ := Config.stepOf_own step'
   rw [lookup] at lookup₀; cases lookup₀
   obtain ⟨transition', head', event₁, tasks₁, finished₁, exhausted₁, related⟩ :=
@@ -5054,7 +5053,7 @@ private theorem Config.forced_handle_own {elapsed : PID → Nat → Nat} {config
     (∃ absorbed, next.stepOf (.own processId) = some (absorbed, middle)) ∨
       ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
         next.stepOf (.own processId) = some (other, last) := by
-  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running (elapsed := elapsed) forced
+  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running forced
   have step := reachable.stepOf forced
   obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_handle step
   have flagged := Config.forced_handle reachable.2.1 lookup forced
@@ -5421,7 +5420,7 @@ private theorem Config.forced_phase_square {elapsed : PID → Nat → Nat} {conf
     (∃ absorbed, next.stepOf key' = some (absorbed, middle)) ∨
       ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
         next.stepOf key' = some (other, last) := by
-  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running (elapsed := elapsed) forced
+  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running forced
   have reachable₀ := reachable
   obtain ⟨⟨within, normalized, -⟩, fresh⟩ := reachable
   have unborn : state.Unborn := unborn
@@ -5716,7 +5715,7 @@ private theorem forced_first {elapsed : PID → Nat → Nat} {outcome : Outcome 
   | step step rest ih =>
     rename_i first event' middle events last
     intro key event next ready forced terminal
-    obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running (elapsed := elapsed) forced
+    obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running forced
     obtain ⟨key', forced', mem'⟩ := Config.tagged_of_step step
     have step' := ready.1.stepOf mem'
     by_cases same : key' = key
@@ -5780,7 +5779,7 @@ private theorem checkSleep_reaches {elapsed : PID → Nat → Nat} {accept : Out
       | step step rest =>
       obtain ⟨state, tasks, finished, rfl⟩ : ∃ state tasks finished, first = .running state tasks finished false := by
         obtain ⟨⟨key, event, next, forced⟩, mem⟩ := List.exists_mem_of_ne_nil _ nonempty
-        exact Config.Reachable.running (elapsed := elapsed) mem
+        exact Config.Reachable.running mem
       split at checked
       · -- A step every run can take first, keeping the same steps asleep.
         rename_i key event next forced found

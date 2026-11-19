@@ -486,7 +486,7 @@ private def queueAt (source : PID) (signal : Signal) (process : ProcessState) : 
   { process with queue := Kernel.append process.queue [{ source, signal }] }
 
 /-- The effect of a sender's fallback for a signal to a process that is gone. -/
-private def State.fallbackEffect (state : State) (source target : PID) : Signal → Effect
+private def State.fallbackEffect (_state : State) (source target : PID) : Signal → Effect
   | .link => .modify source (queueAt target (.exit (.atom "noproc") true false))
   | .monitor reference => .modify source (queueAt target (.down reference (.atom "noproc")))
   | .unlink _ => .modify source fun process => { process with links := Kernel.filter (·.1 != target) process.links }
@@ -633,7 +633,7 @@ private theorem normRecord_normRecord {gone gone' : PID → Bool} (more : ∀ pr
       cases entry.signal <;> simp_all
     simp only [queue, keep]
   | none =>
-    simp only [exiting, Kernel.filter_eq, List.filter_filter]
+    simp only [Kernel.filter_eq, List.filter_filter]
     congr 1
     · refine List.filter_congr fun entry _ => ?_
       cases inside : inert gone processId process entry
@@ -903,7 +903,7 @@ private def State.spawnEffect (state : State) (processId : PID) (options : Spawn
         (Effect.modify child fun other => { other with links := [(processId, none)] })
     else {}
   let monitoredEffect : Effect := if options.monitor then
-      let (reference, allocated) := linked.allocate processId
+      let (reference, _) := linked.allocate processId
       (allocateEffect processId).andThen ((Effect.modify processId fun process =>
         { process with monitoring := Kernel.append process.monitoring [(reference, child)] }).andThen
         (Effect.modify child fun other => { other with monitors := [(reference, processId)] }))
@@ -928,7 +928,7 @@ private theorem Realizes.spawn (state : State) (processId : PID) (options : Spaw
 
 /-- The effect of `State.exitSignal`. -/
 private def State.exitSignalEffect (state : State) (target source : PID) (reason : Term) (linked : Bool)
-    (normalKills : Bool) : Effect :=
+    (_normalKills : Bool) : Effect :=
   let process := state.process target
   let link := Kernel.lookup source process.links
   if linked && link.isNone then {} else
@@ -953,11 +953,11 @@ private theorem Realizes.exitSignal (state : State) (target source : PID) (reaso
       · exact Realizes.modify _ _ _
       · simp_all
     · cases linked
-      · simp only [Bool.false_eq_true, ↓reduceIte, Bool.false_and, Bool.not_false, Bool.true_and]
+      · simp only [Bool.false_eq_true, ↓reduceIte, Bool.not_false, Bool.true_and]
         split
         · exact (Realizes.refl _).andThen (Realizes.modify _ _ _)
         · split <;> exact Realizes.refl _
-      · simp only [↓reduceIte, Bool.true_and, Bool.not_true, Bool.and_false, Bool.false_eq_true]
+      · simp only [↓reduceIte, Bool.not_true]
         split
         · exact (Realizes.modify _ _ _).andThen (Realizes.modify _ _ _)
         · split <;> exact Realizes.modify _ _ _
@@ -1062,7 +1062,7 @@ private def State.phaseEffect (state : State) (processId : PID) : Effect :=
           ((state.modify processId (setDowns rest)).sendEffect processId watcher (.down reference exiting.reason))
     | [] =>
       match process.queue with
-      | entry :: rest =>
+      | entry :: _ =>
           let change := fun process : ProcessState => { process with queue := process.queue.drop 1 }
           (Effect.modify processId change).andThen ((state.modify processId change).answerEffect processId entry)
       | [] => {}
@@ -1392,12 +1392,12 @@ private theorem Framed.queueAt (source : PID) (signal : Signal) (base : ProcessS
     ⟨0, [{ source, signal }], by decide, fun _ => rfl, fun none => ?_, fun process _ => ?_⟩,
     fun read => ?_, fun read => ?_, fun written => ?_, fun _ process _ => rfl⟩
   · cases part <;> rfl
-  · cases part <;> simp (config := { decide := true }) [Field.queueTail] at written
-  · simp (config := { decide := true }) [bitsOf, Field.queueTail, tailBit] at none
+  · cases part <;> simp (config := { decide := true }) at written
+  · simp (config := { decide := true }) at none
   · simp [Concurrent.queueAt, Kernel.append_eq]
-  · simp (config := { decide := true }) [bitsOf, tailBit] at read
-  · simp (config := { decide := true }) [bitsOf, headBit] at read
-  · simp (config := { decide := true }) [bitsOf, Field.queueTail, headBit] at written
+  · simp (config := { decide := true }) at read
+  · simp (config := { decide := true }) at read
+  · simp (config := { decide := true }) at written
 
 /-- Prove that a change updating some fields of a record, as functions of the
 fields its frame reads and of themselves, is within its frame, for masks given
@@ -1426,7 +1426,7 @@ private example (base : ProcessState) (target : PID) :
       (fun process => { process with links := Kernel.filter (·.1 != target) process.links }) := by
   framed_update
 
-private example (base : ProcessState) (target : PID) (reference : List Nat) :
+private example (base : ProcessState) (reference : List Nat) :
     Framed (bitsOf (Field.monitoring ||| Field.aliases)) (bitsOf (Field.monitoring ||| Field.aliases)) base
       (fun process => { process with
           monitoring := Kernel.filter (·.1 != reference) process.monitoring
@@ -1587,7 +1587,7 @@ private theorem Effect.InFrames.enqueue (state : State) (source target : PID) (s
     intro entry mem _ _
     simp only [State.enqueueFrames, State.appendFrames] at mem
     split at mem <;> (try split at mem) <;> (try split at mem) <;>
-      simp only [List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at mem <;>
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at mem <;>
       (try rcases mem with rfl | rfl) <;> (try subst mem) <;> (dsimp only; decide)
   have queued : ∀ (receiver sender : PID) (appended : Signal) (reads : Nat),
       (receiver, reads, Field.queueTail) ∈ state.enqueueFrames source target signal →
@@ -1725,7 +1725,7 @@ private theorem enqueueFrames_bits {state : State} {source target : PID} {signal
       ∀ bit, entry.2.2.testBit bit → bit = 1 ∨ bit = 6 := by
   simp only [State.enqueueFrames, State.appendFrames] at mem
   split at mem <;> (try split at mem) <;> (try split at mem) <;>
-    simp only [List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at mem <;>
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at mem <;>
     (try rcases mem with rfl | rfl) <;> (try subst mem) <;> dsimp only <;>
     exact ⟨fun bit set => by mask_bits, fun bit set => by mask_bits⟩
 
@@ -1779,7 +1779,7 @@ private theorem writesOf_bits {frames : List Frame} {processId : PID} {bit : Nat
 private theorem enqueueFrames_monitor {state : State} {source target : PID} {reference : List Nat} {entry : Frame}
     (mem : entry ∈ state.enqueueFrames source target (.monitor reference)) : ∀ bit, entry.2.2.testBit bit → bit = 1 := by
   simp only [State.enqueueFrames, State.appendFrames] at mem
-  split at mem <;> simp only [List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at mem <;>
+  split at mem <;> simp only [List.mem_cons, List.not_mem_nil, or_false] at mem <;>
     (try rcases mem with rfl | rfl) <;> (try subst mem) <;> dsimp only <;> intro bit set <;> mask_bits
 
 private theorem Realizes.records {effect : Effect} {before after : State} (realizes : Realizes effect before after) :
@@ -2187,7 +2187,7 @@ private theorem Effect.InFrames.flushStep (state : State) (processId target : PI
   have inside : (processId, Field.live, Field.queueTail) ∈ [(target, Field.live, 0), (processId, Field.live, Field.queueTail)] := by simp
   refine Effect.InFrames.modify inside ⟨1, by decide, .inr (by decide)⟩ fun process _ =>
     (Framed.queueAt processId .flush process).widen (reads := Field.live)
-      (fun _ read => by simp [bitsOf, Nat.zero_testBit] at read) (fun _ written => written) inside
+      (fun _ read => by simp [Nat.zero_testBit] at read) (fun _ written => written) inside
       fun entry mem _ => ?_
   simp only [List.mem_cons, List.not_mem_nil, or_false] at mem
   rcases mem with rfl | rfl <;> (dsimp only; decide)
@@ -2932,7 +2932,7 @@ private theorem Effect.InFrames.terminateStep (state : State) (processId : PID) 
     intro other differ
     rw [Effect.record_andThen]
     have put : ∀ (process : ProcessState), (Effect.put processId process).record other = id := fun _ => by
-      simp [Effect.put, Effect.record, changeOf, Ne.symm differ, differ]
+      simp [Effect.put, Effect.record, changeOf, Ne.symm differ]
     rw [put]
     split <;> rfl
   case chain =>
@@ -3502,7 +3502,7 @@ private theorem Task.ownEffect_agree {state other : State} {tasks : List (PID ×
       · subst self
         simp only [beq_self_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found
         have same := counter found.1.symm (by decide)
-        simp only [same, ↓reduceIte]
+        simp only [↓reduceIte]
       · have differ : (target == processId) = false := by simpa using self
         simp only [differ, Bool.false_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found
         have same := counter found.1.symm (by decide)
@@ -3878,13 +3878,13 @@ private theorem Clean.preserve {gone gone' : PID → Bool} {processId : PID} {pr
     · exact absurd (more going) (by simp [linkFacts link old some])
 
 /-- Whether a signal is inert reads only whether its sender is gone, and the
-receiver's references, monitors, aliases and links. -/
+receiver's references, monitors and aliases. -/
 private theorem inert_congr {gone gone' : PID → Bool} {processId : PID} {process process' : ProcessState}
     {entry : Entry} (source : gone' entry.source = gone entry.source)
     (refCounter : process'.refCounter = process.refCounter) (monitoring : process'.monitoring = process.monitoring)
-    (aliases : process'.aliases = process.aliases) (links : process'.links = process.links) :
+    (aliases : process'.aliases = process.aliases) :
     inert gone' processId process' entry = inert gone processId process entry := by
-  simp only [inert, source, refCounter, monitoring, aliases, links]
+  simp only [inert, source, refCounter, monitoring, aliases]
 
 /-- An effect within frames that do not mention a record leaves it as it is. -/
 private theorem Effect.InFrames.untouched {effect : Effect} {frames : List Frame} {state : State} {processId : PID}
@@ -4075,7 +4075,7 @@ private theorem Clean.queued {gone : PID → Bool} {processId source : PID} {sig
   have mem' : entry ∈ process.queue ∨ entry = { source, signal } := by
     simpa [queueAt, Kernel.append_eq] using mem
   rcases mem' with old | rfl
-  · exact .inl ⟨old, fun inside => by rw [inert_congr rfl rfl rfl rfl rfl] at inside; exact inside⟩
+  · exact .inl ⟨old, fun inside => by rw [inert_congr rfl rfl rfl rfl] at inside; exact inside⟩
   · exact .inr fresh
 
 /-- Queueing a signal keeps a state clean, when the signal is not inert at a
@@ -4157,7 +4157,7 @@ private theorem CleanOutside.unpark {state : State} {except : PID → Prop} {pro
     have cleaned := CleanOutside.modify (change := unparked) (fun _ => rfl) clean fun _ process' found' =>
       (clean processId outside process' found').preserve (by rw [record] at found'; cases found'; exact live)
         (by rw [record] at found'; cases found'; exact live) (fun entry mem => .inl ⟨mem, fun inside => by
-          rw [inert_congr rfl rfl rfl rfl rfl] at inside; exact inside⟩) (fun link mem _ => ⟨mem, id⟩)
+          rw [inert_congr rfl rfl rfl rfl] at inside; exact inside⟩) (fun link mem _ => ⟨mem, id⟩)
     refine CleanOutside.andThen ?_
     have recordOf : ((Effect.modify processId unparked).apply state).record processId = some (unparked process) := by
       rw [Effect.record_apply, Effect.record_modify, record]; simp
@@ -4192,7 +4192,7 @@ private def Effect.KeepsInert (effect : Effect) : Prop :=
     process'.refCounter = process.refCounter ∧ process'.monitoring = process.monitoring ∧
     process'.aliases = process.aliases ∧ process'.links = process.links ∧ process.exiting = process'.exiting
 
-private theorem Effect.KeepsInert.empty : ({} : Effect).KeepsInert := fun _ record process' found =>
+private theorem Effect.KeepsInert.empty : ({} : Effect).KeepsInert := fun _ _ process' found =>
   ⟨process', found, rfl, rfl, rfl, rfl, rfl⟩
 
 private theorem Effect.KeepsInert.modify {processId : PID} {change : ProcessState → ProcessState}
@@ -4258,7 +4258,7 @@ private theorem CleanOutside.send {state : State} {except : PID → Prop} {sourc
       (fun _ reference equal => absurd equal (notMonitor reference))
     · obtain ⟨process, found, refCounter, monitoring, aliases, links, exiting⟩ := fields process' found'
       rw [gone', inert_congr (process' := queueAt source signal process') (process := queueAt source signal process)
-        rfl refCounter monitoring aliases links]
+        rfl refCounter monitoring aliases]
       exact fresh process found (exiting.trans exiting')
     · have aliveOf : state'.alive source = true := by
         have := congrFun gone' source; simp only [State.gone] at this
@@ -4286,14 +4286,14 @@ private theorem Clean.neutral {gone : PID → Bool} {processId : PID} {process p
     (monitoring : process'.monitoring = process.monitoring) (aliases : process'.aliases = process.aliases)
     (links : process'.links = process.links) : Clean gone processId process' :=
   clean.preserve live live' (fun entry mem => .inl ⟨queue ▸ mem, fun inside => by
-    rwa [inert_congr rfl refCounter monitoring aliases links] at inside⟩)
+    rwa [inert_congr rfl refCounter monitoring aliases] at inside⟩)
     (fun link mem _ => ⟨links ▸ mem, id⟩)
 
 /-- Removing the oldest signal of a clean live record keeps it clean. -/
 private theorem Clean.pop {gone : PID → Bool} {processId : PID} {process : ProcessState}
     (clean : Clean gone processId process) (live : process.exiting = none) :
     Clean gone processId { process with queue := process.queue.drop 1 } :=
-  clean.preserve live live (fun entry mem => .inl ⟨List.mem_of_mem_drop mem, id⟩) (fun link mem _ => ⟨mem, id⟩)
+  clean.preserve live live (fun _ mem => .inl ⟨List.mem_of_mem_drop mem, id⟩) (fun _ mem _ => ⟨mem, id⟩)
 
 /-- A change that adds monitors and aliases, keeping the queue and the rest of
 what inertness reads, keeps a live record clean. -/
@@ -4560,7 +4560,7 @@ private theorem Task.ownEffect_clean {state : State} {tasks : List (PID × Task 
       · rw [State.inertEntry_eq] at notInert
         have : state.process alias.dropLast = process' := by simp [State.process, found']
         rw [this] at notInert
-        rwa [inert_congr (process' := queueAt _ _ process') (process := process') rfl rfl rfl rfl rfl]
+        rwa [inert_congr (process' := queueAt _ _ process') (process := process') rfl rfl rfl rfl]
     | monitor target alias =>
       simp only [Kernel.any_eq, Bool.not_eq_true', List.any_eq_false, Bool.not_eq_true] at confined
       let allocate := fun process : ProcessState => { process with refCounter := process.refCounter + 1 }
@@ -4751,7 +4751,7 @@ private theorem Clean.exiting_facts {gone : PID → Bool} {processId : PID} {pro
   have downs := congrArg Exiting.downs exiting'
   simp only at links downs
   refine ⟨?_, fun entry mem => ?_, fun target mem => ?_, fun down mem => ?_⟩
-  · rw [← equal]; simp [endedShape, ended]
+  · rw [← equal]; simp [endedShape]
   · have := List.filter_eq_self.mp queue entry mem
     obtain ⟨source, signal⟩ := entry
     cases signal <;> simp_all [Signal.request]
@@ -4877,7 +4877,7 @@ private theorem State.phaseEffect_clean {state : State} {tasks : List (PID × Ta
       rw [State.inertEntry_eq] at notInert
       have : state.process target = process' := by simp [State.process, found']
       rw [this] at notInert
-      rwa [inert_congr (process' := queueAt _ _ process') (process := process') rfl rfl rfl rfl rfl]
+      rwa [inert_congr (process' := queueAt _ _ process') (process := process') rfl rfl rfl rfl]
     obtain ⟨reason, links, downs⟩ := exiting
     cases downs with
     | cons down rest =>
@@ -4885,7 +4885,7 @@ private theorem State.phaseEffect_clean {state : State} {tasks : List (PID × Ta
       cases links with
       | cons => simp at confined
       | nil =>
-        simp only [Bool.not_eq_true', Bool.not_eq_eq_eq_not, Bool.not_true] at confined
+        simp only [Bool.not_eq_eq_eq_not, Bool.not_true] at confined
         refine sends (setDowns rest) watcher (.down reference reason)
           (fun process => by simp only [setDowns]; cases process.exiting <;> rfl) (fun _ => rfl)
           (freshOf watcher _ confined) (by simp) (by simp) (by simp) (by simp) fun notLast => ?_
@@ -4906,7 +4906,7 @@ private theorem State.phaseEffect_clean {state : State} {tasks : List (PID × Ta
       | cons => simp at confined
       | nil =>
         cases queue : process.queue with
-        | nil => simp only [queue]; rw [Effect.apply_empty]; exact clean
+        | nil => simp only; rw [Effect.apply_empty]; exact clean
         | cons entry rest =>
           simp only [queue] at confined ⊢
           let pop := fun process : ProcessState => { process with queue := process.queue.drop 1 }
@@ -5072,7 +5072,7 @@ private theorem State.terminateEffect_clean {state : State} {processId : PID} (r
       ((retime.andThen (Effect.put processId record)).apply state).record other = state.record other := by
     intro record other differ
     rw [Effect.record_apply, Effect.record_andThen, Function.comp, untimed]
-    simp [Effect.put, Effect.record, changeOf, differ, Ne.symm differ]
+    simp [Effect.put, Effect.record, changeOf, Ne.symm differ]
   have recordOwn : ∀ (record : ProcessState),
       ((retime.andThen (Effect.put processId record)).apply state).record processId = some record := by
     intro record
@@ -5532,7 +5532,7 @@ private def NoNewLinks (state state' : State) : Prop :=
     ∃ process, state.record processId = some process ∧ entry ∈ process.queue
 
 private theorem NoNewLinks.refl (state : State) : NoNewLinks state state :=
-  fun _ process found entry mem _ => ⟨process, found, mem⟩
+  fun _ process found _ mem _ => ⟨process, found, mem⟩
 
 private theorem NoNewLinks.trans {first second third : State} (one : NoNewLinks first second)
     (two : NoNewLinks second third) : NoNewLinks first third := fun processId process found entry mem link => by
@@ -5616,12 +5616,12 @@ private theorem NoNewLinks.put {state : State} {processId : PID} {process origin
   rw [Effect.record_apply] at found'
   by_cases self : other = processId
   · subst self
-    simp only [Effect.put, Effect.record, changeOf, List.lookup_cons, beq_self_eq_true, Option.some.injEq,
+    simp only [Effect.put, Effect.record, changeOf, Option.some.injEq,
       ite_true] at found'
     subst found'
     exact ⟨original, found, kept entry mem link⟩
   · have : (Effect.put processId process).record other = id := by
-      simp [Effect.put, Effect.record, changeOf, self, Ne.symm self]
+      simp [Effect.put, Effect.record, changeOf, Ne.symm self]
     rw [this] at found'
     exact ⟨process', found', mem⟩
 
@@ -6434,12 +6434,12 @@ private theorem normRecord_finished {gone gone' : PID → Bool} (more : ∀ proc
       rw [List.filter_eq_nil_iff] at none ⊢
       exact fun item mem kept => none item mem (fewer item kept)
     cases links : List.filter (fun target => !gone target) exiting'.links with
-    | cons => simp [links, ProcessState.finished] at finished
+    | cons => simp [links] at finished
     | nil =>
     cases downs : List.filter (fun down => !gone down.2) exiting'.downs with
-    | cons => simp [links, downs, ProcessState.finished] at finished
+    | cons => simp [links, downs] at finished
     | nil =>
-    simp only [links, downs, ProcessState.finished, List.isEmpty_iff] at finished
+    simp only [links, downs, List.isEmpty_iff] at finished
     have notGone : ∀ other, (!gone' other) = true → (!gone other) = true := fun other kept => by
       cases going : gone other
       · rfl
@@ -6450,7 +6450,7 @@ private theorem normRecord_finished {gone gone' : PID → Bool} (more : ∀ proc
         | .link | .monitor _ | .isAlive => true
         | _ => false) && !gone' entry.source) (fun entry kept => by
       rw [Bool.and_eq_true] at kept ⊢; exact ⟨kept.1, notGone _ kept.2⟩) finished
-    simp only [links', downs', ProcessState.finished, List.isEmpty_iff, queue']
+    simp only [links', downs', List.isEmpty_iff, queue']
 
 private theorem State.record_normalize' {state : State} (sorted : state.Sorted) (processId : PID) :
     state.normalize.record processId =
@@ -6562,7 +6562,7 @@ private theorem State.terminateEffect_noRevive (state : State) (processId : PID)
     by_cases same : other = processId
     · subst same; simp [Effect.put, Effect.record, changeOf, liveOf] at live
     · have : ∀ process : ProcessState, (Effect.put processId process).record other = id := fun _ => by
-        simp [Effect.put, Effect.record, changeOf, same, Ne.symm same]
+        simp [Effect.put, Effect.record, changeOf, Ne.symm same]
       rw [this] at live; exact live
 
 /-- A record change keeping whether the process ended keeps every process alive or gone. -/

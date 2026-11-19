@@ -486,7 +486,7 @@ theorem State.normalize_eq (state : State) : state.normalize =
     simp only [List.filterMap_cons, List.map_cons, List.filter_cons]
     rw [ih]
     cases kept : state.keepsRecord record.1 record.2
-    · simp only [cond_false]
+    · simp only [Bool.cond_false]
       cases (state.normalizeRecord record.1 record.2).finished <;> rfl
     · have keeps := kept
       simp only [State.keepsRecord, Bool.and_eq_true, Option.isNone_iff_eq_none, Kernel.all_eq,

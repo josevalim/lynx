@@ -152,7 +152,7 @@ theorem pidEq_iff : ∀ first second : List Nat, pidEq first second = true ↔ f
   | head :: tail, head' :: tail' => by
       have ih := pidEq_iff tail tail'
       change (Nat.beq head head' && pidEq tail tail') = true ↔ _
-      simp [ih, Nat.beq_eq_true_eq]
+      simp [ih]
 
 /-- Core's equality of lists of naturals, which compiled code uses. -/
 @[expose] def stdEq (first second : List Nat) : Bool := first == second
@@ -166,7 +166,7 @@ theorem pidEq_iff : ∀ first second : List Nat, pidEq first second = true ↔ f
       | false => rfl
       | true => have := (pidEq_iff _ _).1 h'; subst this; simp [stdEq] at h
 
-@[expose] def pidBEq : BEq (List Nat) := ⟨pidEq⟩
+@[expose, instance_reducible] def pidBEq : BEq (List Nat) := ⟨pidEq⟩
 
 instance pidRefl : @ReflBEq (List Nat) pidBEq :=
   @ReflBEq.mk (List Nat) pidBEq (fun {a} => (pidEq_iff a a).2 rfl)
