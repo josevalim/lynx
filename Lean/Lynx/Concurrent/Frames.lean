@@ -3150,6 +3150,142 @@ private theorem Agree.mono {frames frames' : List Frame} {state other : State} (
   refine ⟨exists', fun read => same.1 (readsOf_mono sub _ _ read), fun process process' found found' => ?_⟩
   exact (same.2 process process' found found').mono (readsOf_mono sub processId)
 
+/-- What the frames of sending read: the sender's parked monitor signal, and whether the target is alive. -/
+private theorem enqueueFrames_live (state : State) (source target : PID) (signal : Signal) :
+    ∃ entry ∈ state.enqueueFrames source target signal, entry.1 = target ∧ entry.2.1.testBit liveBit = true := by
+  simp only [State.enqueueFrames, State.appendFrames]
+  split
+  · split <;> exact ⟨_, List.mem_cons_self, rfl, by dsimp only; decide⟩
+  · exact ⟨_, List.mem_cons_self, rfl, by dsimp only; decide⟩
+
+private theorem sendFrames_reads (state : State) (source target : PID) (signal : Signal) :
+    (∃ entry ∈ state.sendFrames source target signal, entry.1 = source ∧ entry.2.1.testBit 13 = true) ∧
+    ∃ entry ∈ state.sendFrames source target signal, entry.1 = target ∧ entry.2.1.testBit liveBit = true := by
+  obtain ⟨entry, mem, same, read⟩ := enqueueFrames_live state source target signal
+  simp only [State.sendFrames]
+  split
+  · split
+    · exact ⟨⟨_, List.mem_cons_self, rfl, by dsimp only; decide⟩,
+        ⟨entry, List.mem_cons_of_mem _ (by simp [Kernel.append_eq, mem]), same, read⟩⟩
+    · exact ⟨⟨_, List.mem_cons_self, rfl, by dsimp only; decide⟩, ⟨entry, List.mem_cons_of_mem _ mem, same, read⟩⟩
+  · exact ⟨⟨_, List.mem_cons_self, rfl, by dsimp only; decide⟩, ⟨entry, List.mem_cons_of_mem _ mem, same, read⟩⟩
+
+/-- Sending decides the same at a state agreeing on what its frames read. -/
+private theorem State.sendEffect_agree {state other : State} {source target : PID} {signal : Signal}
+    {frames : List Frame} (agree : Agree frames state other)
+    (sub : ∀ entry ∈ state.sendFrames source target signal, entry ∈ frames) :
+    other.sendEffect source target signal = state.sendEffect source target signal := by
+  obtain ⟨⟨parkedEntry, parkedMem, parkedSame, parkedRead⟩, ⟨liveEntry, liveMem, liveSame, liveRead⟩⟩ :=
+    sendFrames_reads state source target signal
+  have parked := agree.get (sub _ parkedMem) .parked parkedRead
+  have alive := agree.alive (sub _ liveMem) liveRead
+  rw [parkedSame] at parked; rw [liveSame] at alive
+  exact State.sendEffect_congr _ parked alive
+
+/-- A confined own step reads the same view at a state agreeing on what its
+frames read, with the same timers when it uses them, and queued signals none of
+which are inert in either. -/
+private theorem Task.ownView_agree {state other : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {frames : List Frame}
+    {timers : Bool} (confined : Config.confined (.running state tasks finished false) (.own processId) = true)
+    (lookup : Kernel.lookup processId tasks = some task)
+    (found : task.ownFrames state processId = some (frames, timers)) (agree : Agree frames state other)
+    (timed : timers = true → other.timers = state.timers)
+    (awaited : readsOf frames processId tailBit →
+      Kernel.any (other.process processId).queue (other.awaitedEntry processId) =
+        Kernel.any (state.process processId).queue (state.awaitedEntry processId)) :
+    task.ownView other processId = task.ownView state processId := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => rfl
+  | none =>
+  simp only [Config.confined, lookup] at confined
+  have head : ∀ {reads writes : Nat} {rest : List Frame}, frames = (processId, reads, writes) :: rest →
+      (processId, reads, writes) ∈ frames := fun equal => equal ▸ List.mem_cons_self
+  cases computation with
+  | receive timeout select next =>
+    simp only [Task.ownFrames] at found
+    dsimp only at confined
+    cases selected : selectMessage (select (state.view processId)) (state.process processId).mailbox with
+    | some => simp [selected] at confined
+    | none =>
+      simp only [selected] at found
+      -- Every frame of the receive reads the environment and the mailbox.
+      have facts : ∀ {reads : Nat}, frames = [(processId, reads, 0)] → reads.testBit 3 = true →
+          reads.testBit 4 = true → reads.testBit 2 = true →
+          other.view processId = state.view processId ∧
+            (other.process processId).mailbox = (state.process processId).mailbox := by
+        intro reads equal pdict refCounter mailbox
+        have inside : (processId, reads, 0) ∈ frames := by rw [equal]; exact List.mem_cons_self
+        have samePdict := agree.get inside .pdict pdict
+        have sameCounter := agree.get inside .refCounter refCounter
+        have sameMailbox := agree.get inside .mailbox mailbox
+        simp only [ProcessState.get] at samePdict sameCounter sameMailbox
+        exact ⟨by simp [State.view, samePdict, sameCounter], sameMailbox⟩
+      cases timeout with
+      | infinity =>
+        simp only [Option.some.injEq, Prod.mk.injEq] at found
+        obtain ⟨view, mailbox⟩ := facts found.1.symm (by decide) (by decide) (by decide)
+        simp only [Task.ownView, view, mailbox]
+      | _ =>
+        simp only [Option.some.injEq, Prod.mk.injEq] at found
+        obtain ⟨view, mailbox⟩ := facts found.1.symm (by decide) (by decide) (by decide)
+        have tail : readsOf frames processId tailBit := by
+          rw [← found.1]; simp [readsOf]; decide
+        simp only [Task.ownView, view, mailbox, awaited tail]
+  | request query next =>
+    have counter : ∀ {reads writes : Nat} {rest : List Frame}, frames = (processId, reads, writes) :: rest →
+        reads.testBit 4 = true → (other.process processId).refCounter = (state.process processId).refCounter :=
+      fun equal set => agree.get (head equal) .refCounter set
+    cases query with
+    | monitor target alias =>
+      simp only [Task.ownFrames, State.requestFrames] at found
+      have same : (other.process processId).refCounter = (state.process processId).refCounter := by
+        split at found
+        · simp only [Option.some.injEq, Prod.mk.injEq] at found
+          exact counter found.1.symm (by decide)
+        · simp only [Option.some.injEq, Prod.mk.injEq] at found
+          exact counter found.1.symm (by decide)
+      simp only [Task.ownView, State.request, State.allocate, same]
+      split <;> rfl
+    | demonitor reference flush =>
+      simp only [Task.ownFrames, State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found
+      have same := agree.get (head found.1.symm) .monitoring (by dsimp only [Part.bit]; decide)
+      simp only [ProcessState.get] at same
+      simp only [Task.ownView, State.request, same]
+      split <;> simp [Answer.shape]
+    | startTimer destination message duration =>
+      simp only [Task.ownFrames, State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found
+      have same := counter found.1.symm (by decide)
+      simp only [Task.ownView, State.request, State.allocate, same]
+      split <;> simp [Answer.shape]
+    | cancelTimer reference =>
+      simp only [Task.ownFrames, State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found
+      have same := agree.get (head found.1.symm) .cancels (by dsimp only [Part.bit]; decide)
+      simp only [ProcessState.get] at same
+      simp only [Task.ownView, same, timed found.2.symm]
+    | alive target =>
+      simp only [Task.ownFrames, State.requestFrames] at found
+      simp only [Task.ownView, State.request]
+      by_cases self : target = processId
+      · subst self; simp [Answer.shape]
+      · have differ : (target == processId) = false := by simpa using self
+        simp only [differ, self, Bool.false_eq_true, ↓reduceIte] at found ⊢
+        have alive : other.alive target = state.alive target := by
+          split at found
+          · simp only [Option.some.injEq, Prod.mk.injEq] at found
+            obtain ⟨-, ⟨entry, mem, same, read⟩⟩ := sendFrames_reads state processId target .isAlive
+            rw [← same]; exact agree.alive (found.1 ▸ mem) read
+          · simp only [Option.some.injEq, Prod.mk.injEq] at found
+            have := agree.alive (entry := (target, Field.live, 0)) (by rw [← found.1]; exact List.mem_cons_self)
+              (by dsimp only; decide)
+            exact this
+        rw [alive]
+        split <;> simp [Answer.shape]
+    | sendAlias alias message => rfl
+    | _ => simp at confined
+  | _ => first | rfl | simp at confined
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
