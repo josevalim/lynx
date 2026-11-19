@@ -527,6 +527,316 @@ private theorem fire (changed : state.Changed processId related state') (unseen 
 
 end State.Changed
 
+/-- Two transitions that agree but for a process's record. -/
+private def Transition.Changed (processId : PID) (related : ProcessState → ProcessState → Prop)
+    (transition transition' : Transition α) : Prop :=
+  transition'.event = transition.event ∧ transition'.tasks = transition.tasks ∧
+    transition'.finished = transition.finished ∧ transition'.exhausted = transition.exhausted ∧
+    transition.state.Changed processId related transition'.state
+
+namespace State.Changed
+
+variable {processId : PID} {related : ProcessState → ProcessState → Prop} {state state' : State}
+
+private theorem inertEntry (changed : state.Changed processId related state') (unseen : Unseen related)
+    {other : PID} (differ : other ≠ processId) (entry : Entry) :
+    state'.inertEntry other entry = state.inertEntry other entry := by
+  simp only [State.inertEntry, State.allocated, changed.process_other differ, changed.gone unseen]
+
+private theorem ended (changed : state.Changed processId related state') (unseen : Unseen related)
+    {other : PID} (differ : other ≠ processId) {γ : Type}
+    (finish : Except Exception γ → Option (Except Exception α)) (event : Event) (reason : Term)
+    (result : Except Exception γ) :
+    Transition.Changed processId related (Task.ended finish event state other reason result)
+      (Task.ended finish event state' other reason result) :=
+  ⟨rfl, rfl, rfl, rfl, changed.terminate unseen differ reason⟩
+
+private theorem own (changed : state.Changed processId related state') (unseen : Unseen related)
+    {other : PID} (differ : other ≠ processId) (task : Task α)
+    (fresh : Kernel.append other [(state.process other).children + 1] ≠ processId) :
+    Option.Rel (Transition.Changed processId related) (task.own state other).head? (task.own state' other).head? := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => exact .none
+  | none =>
+  have view : state'.view other = state.view other := by simp only [State.view, changed.process_other differ]
+  cases computation with
+  | ok value => exact .some (changed.ended unseen differ _ _ _ _)
+  | error exception =>
+    cases exception with
+    | exhausted => exact .some ⟨rfl, rfl, rfl, rfl, changed.remove differ⟩
+    | _ => exact .some (changed.ended unseen differ _ _ _ _)
+  | get next =>
+    simp only [Task.own, view, List.head?_cons]
+    exact .some ⟨rfl, rfl, rfl, rfl, changed⟩
+  | set updated next =>
+    simp only [Task.own, List.head?_cons]
+    exact .some ⟨rfl, rfl, rfl, rfl, changed.modify differ _⟩
+  | schedule options child next =>
+    obtain ⟨same, spawned⟩ := changed.spawnWith differ options fresh
+    simp only [Task.own, same, List.head?_cons]
+    exact .some ⟨rfl, rfl, rfl, rfl, spawned⟩
+  | send destination message next =>
+    simp only [Task.own, List.head?_cons]
+    exact .some ⟨rfl, rfl, rfl, rfl, changed.send unseen fun same => absurd same differ⟩
+  | receive timeout select next =>
+    simp only [Task.own, view, changed.process_other differ]
+    split
+    · exact .some ⟨rfl, rfl, rfl, rfl, changed.modify differ _⟩
+    · have awaited : state'.awaitedEntry other = state.awaitedEntry other := funext fun entry => by
+        simp only [State.awaitedEntry, changed.inertEntry unseen differ]
+      rw [awaited]
+      split
+      · exact .none
+      · split
+        · exact .none
+        · exact .some ⟨rfl, rfl, rfl, rfl, changed⟩
+  | request query next =>
+    simp only [Task.own]
+    have answered := changed.request unseen differ next query
+    revert answered
+    generalize state.request other next query = answer
+    generalize state'.request other next query = answer'
+    intro answered
+    cases answer <;> cases answer' <;> simp only [Answer.Changed] at answered
+    all_goals obtain ⟨rfl, answered⟩ := answered
+    all_goals exact .some ⟨rfl, rfl, rfl, rfl, answered⟩
+
+private theorem handleTask (changed : state.Changed processId related state') (unseen : Unseen related)
+    {other : PID} (differ : other ≠ processId) (task : Task α) :
+    Option.Rel (Transition.Changed processId related) (task.handle state other).head?
+      (task.handle state' other).head? := by
+  simp only [Task.handle, changed.process_other differ]
+  split
+  · exact .none
+  · rename_i entry rest _
+    obtain ⟨same, handled⟩ := (changed.set differ { state.process other with queue := rest }).handle unseen differ
+      (task.wait.map (·.1)) entry
+    revert same handled
+    generalize ((state.set other { state.process other with queue := rest }).handle other (task.wait.map (·.1)) entry) = first
+    generalize ((state'.set other { state.process other with queue := rest }).handle other (task.wait.map (·.1)) entry) = second
+    obtain ⟨handled, resumed, exits⟩ := first
+    obtain ⟨handled', resumed', exits'⟩ := second
+    intro same changed'
+    simp only [Prod.mk.injEq] at same
+    obtain ⟨rfl, rfl⟩ := same
+    dsimp only
+    split
+    · exact .some (changed'.ended unseen differ _ _ _ _)
+    · split
+      · exact .some ⟨rfl, rfl, rfl, rfl, changed'⟩
+      · exact .some ⟨rfl, rfl, rfl, rfl, changed'⟩
+
+end State.Changed
+
+/-- A process's own step leaves tasks of itself and of the child it spawns. -/
+private theorem Task.own_pids {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.own state processId) :
+    ∀ entry ∈ transition.tasks, entry.1 = processId ∨
+      entry.1 = Kernel.append processId [(state.process processId).children + 1] := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp [Task.own] at mem
+  | none =>
+    cases computation with
+    | schedule options child next =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem
+      simp [State.spawnWith]
+    | receive =>
+      simp only [Task.own] at mem
+      repeat' split at mem
+      all_goals (simp only [List.mem_singleton, List.not_mem_nil] at mem; try (subst mem; simp))
+    | request =>
+      simp only [Task.own] at mem
+      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> simp
+    | error exception =>
+      cases exception <;> simp only [Task.own, List.mem_singleton] at mem <;> subst mem <;> simp [Task.ended]
+    | _ => simp only [Task.own, List.mem_singleton] at mem; subst mem; simp [Task.ended]
+
+/-- A process's own step, by its task. -/
+private theorem Config.stepOf_own_of {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
+    (lookup : Kernel.lookup processId tasks = some task) (head : (task.own state processId).head? = some transition) :
+    (Config.running state tasks finished false).stepOf (.own processId) = some (transition.event,
+      if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] finished true
+      else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
+        (transition.finished.orElse fun _ => finished) false) := by
+  obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
+  simp [Config.stepOf, split, head, Transition.apply, rewriteTask_of_splitAt split]
+
+/-- Handling a signal, by the process's task. -/
+private theorem Config.stepOf_handle_of {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
+    (lookup : Kernel.lookup processId tasks = some task) (head : (task.handle state processId).head? = some transition) :
+    (Config.running state tasks finished false).stepOf (.handle processId) = some (transition.event,
+      if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] finished true
+      else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
+        (transition.finished.orElse fun _ => finished) false) := by
+  obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
+  simp [Config.stepOf, split, head, Transition.apply, rewriteTask_of_splitAt split]
+
+private theorem rel_of_some {β γ : Type _} {relate : β → γ → Prop} {first : β} {second : Option γ}
+    (rel : Option.Rel relate (some first) second) : ∃ second', second = some second' ∧ relate first second' := by
+  cases rel with
+  | some related => exact ⟨_, rfl, related⟩
+
+/-- The child a process with a task spawns next has no task. -/
+private theorem TasksFresh.child {state : State} {tasks : List (PID × Task α)} (fresh : TasksFresh state tasks)
+    {processId other : PID} {task task' : Task α} (lookup : Kernel.lookup processId tasks = some task)
+    (lookup' : Kernel.lookup other tasks = some task') :
+    Kernel.append processId [(state.process processId).children + 1] ≠ other := fun same =>
+  fresh.2.2 _ (mem_of_lookup lookup) _ (mem_of_lookup lookup') _ (Nat.lt_succ_self _)
+    (by rw [same]; exact List.prefix_refl _)
+
+/-- A step of a process's task after a change of another process's record
+and task: the same transition, then the change. -/
+private theorem Config.transition_changed {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId other : PID}
+    {related : ProcessState → ProcessState → Prop} {task' : Task α} {first : Transition α}
+    {firsts seconds : List (Transition α)} (differ : other ≠ processId)
+    (pids : ∀ entry ∈ first.tasks, entry.1 ≠ processId)
+    (related' : Option.Rel (Transition.Changed processId related) firsts.head? seconds.head?)
+    (head : firsts.head? = some first) :
+    ∃ second : Transition α, seconds.head? = some second ∧ second.event = first.event ∧
+      ((if second.exhausted then Config.running { second.state with processes := [], timers := [] } [] finished true
+        else .running second.state.normalize
+          (rewriteTask other (fun _ => second.tasks) (rewriteTask processId (fun _ => [(processId, task')]) tasks))
+          (second.finished.orElse fun _ => finished) false) =
+        (if first.exhausted then Config.running { first.state with processes := [], timers := [] } [] finished true
+        else .running first.state.normalize (rewriteTask other (fun _ => first.tasks) tasks)
+          (first.finished.orElse fun _ => finished) false) ∨
+      ∃ (raw raw' : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α)),
+        raw.Changed processId related raw' ∧
+        (if first.exhausted then Config.running { first.state with processes := [], timers := [] } [] finished true
+          else .running first.state.normalize (rewriteTask other (fun _ => first.tasks) tasks)
+            (first.finished.orElse fun _ => finished) false) = .running raw.normalize tasks₁ finished₁ false ∧
+        (if second.exhausted then Config.running { second.state with processes := [], timers := [] } [] finished true
+          else .running second.state.normalize
+            (rewriteTask other (fun _ => second.tasks) (rewriteTask processId (fun _ => [(processId, task')]) tasks))
+            (second.finished.orElse fun _ => finished) false) =
+          .running raw'.normalize (rewriteTask processId (fun _ => [(processId, task')]) tasks₁) finished₁ false) := by
+  obtain ⟨second, head', event', tasks', finished', exhausted', changed'⟩ := rel_of_some (head ▸ related')
+  refine ⟨second, head', event', ?_⟩
+  rw [exhausted', tasks', finished']
+  split
+  · left
+    have elapsed := changed'.2.2.2
+    revert elapsed
+    cases first.state; cases second.state
+    intro elapsed
+    simp only at elapsed
+    rw [elapsed]
+  · right
+    refine ⟨first.state, second.state, _, _, changed', rfl, ?_⟩
+    rw [rewriteTask_comm (Ne.symm differ) (fun _ entry mem => by
+        simp only [List.mem_singleton] at mem; subst mem; exact Ne.symm differ) (fun _ => pids)]
+
+/-- The step of another key, after a change of a live process's record that
+the step cannot see and of its task: the same step, then the change. -/
+private theorem Config.step_changed {state state' : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {related : ProcessState → ProcessState → Prop}
+    {task task' : Task α} {key : Key} {event : Event} {next : Config α}
+    (changed : state.Changed processId related state') (unseen : Unseen related) (fresh : TasksFresh state tasks)
+    (lookup : Kernel.lookup processId tasks = some task) (clockless : clock ≠ processId)
+    (owner : key.owner ≠ some processId)
+    (step : (Config.running state tasks finished false).stepOf key = some (event, next)) :
+    ∃ next', (Config.running state' (rewriteTask processId (fun _ => [(processId, task')]) tasks) finished false).stepOf
+        key = some (event, next') ∧
+      (next' = next ∨ ∃ (raw raw' : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α)),
+        raw.Changed processId related raw' ∧
+        next = .running raw.normalize tasks₁ finished₁ false ∧
+        next' = .running raw'.normalize (rewriteTask processId (fun _ => [(processId, task')]) tasks₁) finished₁ false) := by
+  have alive : state.alive processId = true := fresh.2.1 _ (mem_of_lookup lookup)
+  have exiting : ∀ {process : ProcessState}, state.record processId = some process → process.exiting = none :=
+    fun found => by simpa [State.alive, found] using alive
+  have tasks' : ∀ {other : PID}, other ≠ processId → ∀ {other' : Task α}, Kernel.lookup other tasks = some other' →
+      Kernel.lookup other (rewriteTask processId (fun _ => [(processId, task')]) tasks) = some other' := by
+    intro other differ other' found
+    rw [lookup_rewriteTask differ (fun _ entry mem => by
+      simp only [List.mem_singleton] at mem; subst mem; exact Ne.symm differ)]
+    exact found
+  -- Steps that keep the tasks.
+  have kept : ∀ {first second : Option State} {event' : Event},
+      Option.Rel (State.Changed processId related) first second →
+      first.map (fun raw => (event', Config.running raw.normalize tasks finished false)) = some (event, next) →
+      ∃ next', second.map (fun raw => (event', Config.running raw.normalize
+          (rewriteTask processId (fun _ => [(processId, task')]) tasks) finished false)) = some (event, next') ∧
+        (next' = next ∨ ∃ (raw raw' : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α)),
+          raw.Changed processId related raw' ∧ next = .running raw.normalize tasks₁ finished₁ false ∧
+          next' = .running raw'.normalize (rewriteTask processId (fun _ => [(processId, task')]) tasks₁) finished₁ false) := by
+    intro first second event' rel found
+    cases rel with
+    | none => simp at found
+    | some changed' =>
+      simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at found
+      obtain ⟨rfl, rfl⟩ := found
+      exact ⟨_, rfl, .inr ⟨_, _, _, _, changed', rfl, rfl⟩⟩
+  cases key with
+  | own other =>
+    have differ : other ≠ processId := fun same => owner (by simp [Key.owner, same])
+    obtain ⟨other', first, found, head, -⟩ := Config.stepOf_own step
+    rw [Config.stepOf_own_of (finished := finished) found head] at step
+    simp only [Option.some.injEq, Prod.mk.injEq] at step
+    obtain ⟨rfl, rfl⟩ := step
+    obtain ⟨second, head', event', result⟩ := Config.transition_changed (finished := finished) (task' := task') differ
+      (fun entry inside => by
+        rcases Task.own_pids (List.mem_of_head? head) entry inside with same | child
+        · rw [same]; exact differ
+        · rw [child]; exact fresh.child found lookup)
+      (changed.own unseen differ other' (fresh.child found lookup)) head
+    rw [← event']
+    exact ⟨_, Config.stepOf_own_of (tasks' differ found) head', result⟩
+  | handle other =>
+    have differ : other ≠ processId := fun same => owner (by simp [Key.owner, same])
+    obtain ⟨other', first, found, head, -⟩ := Config.stepOf_handle step
+    rw [Config.stepOf_handle_of (finished := finished) found head] at step
+    simp only [Option.some.injEq, Prod.mk.injEq] at step
+    obtain ⟨rfl, rfl⟩ := step
+    obtain ⟨second, head', event', result⟩ := Config.transition_changed (finished := finished) (task' := task') differ
+      (fun entry inside => by rw [(Task.handle_pids (List.mem_of_head? head)).1 entry inside]; exact differ)
+      (changed.handleTask unseen differ other') head
+    rw [← event']
+    exact ⟨_, Config.stepOf_handle_of (tasks' differ found) head', result⟩
+  | phase other =>
+    by_cases same : other = processId
+    · subst same
+      simp only [Config.stepOf, State.phase, Option.map_eq_some_iff] at step
+      obtain ⟨_, found, -⟩ := step
+      split at found
+      · rename_i process record
+        rw [exiting record] at found
+        simp at found
+      · simp at found
+    · exact kept (changed.phase unseen same) step
+  | link other target =>
+    by_cases same : other = processId
+    · subst same
+      simp only [Config.stepOf, State.linkPhase, Option.map_eq_some_iff] at step
+      obtain ⟨_, found, -⟩ := step
+      split at found
+      · rename_i process record
+        rw [exiting record] at found
+        simp at found
+      · simp at found
+    · exact kept (changed.linkPhase unseen same target) step
+  | unpark other =>
+    simp only [Config.stepOf, changed.parked unseen] at step ⊢
+    cases parked : (state.process other).parked with
+    | none => simp [parked] at step
+    | some pair =>
+      simp only [parked, Option.map_some, Option.some.injEq, Prod.mk.injEq] at step ⊢
+      obtain ⟨rfl, rfl⟩ := step
+      exact ⟨_, ⟨rfl, rfl⟩, .inr ⟨_, _, _, _, changed.unpark unseen other, rfl, rfl⟩⟩
+  | fire reference =>
+    have firing : state'.firing = state.firing := by simp only [State.firing, changed.2.2.1]
+    simp only [Config.stepOf, firing, Kernel.find?_eq] at step ⊢
+    cases timer : List.find? (·.reference == reference) state.firing with
+    | none => simp [timer] at step
+    | some timer' =>
+      simp only [timer, Option.map_some, Option.some.injEq, Prod.mk.injEq] at step ⊢
+      obtain ⟨rfl, rfl⟩ := step
+      exact ⟨_, ⟨rfl, rfl⟩, .inr ⟨_, _, _, _, changed.fire unseen clockless timer', rfl, rfl⟩⟩
+
 /-- Every other step absorbs a forced step, or commutes with it into a
 configuration where a forced step closes the square. -/
 private theorem Config.forced_square {elapsed : PID → Nat → Nat} {config : Config α} {key key' : Key}
