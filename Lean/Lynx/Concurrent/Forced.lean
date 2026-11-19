@@ -1760,8 +1760,10 @@ private def queueChange (queue : List Entry → List Entry) (mailbox : List Term
     (links : List (PID × Option Nat) → List (PID × Option Nat)) (process : ProcessState) : ProcessState :=
   { process with queue := queue process.queue, mailbox := mailbox process.mailbox, links := links process.links }
 
-/-- Records whose oldest queued signal is the one being handled. -/
-private def Queued (entry : Entry) (process : ProcessState) : Prop := Heads entry process
+/-- Records whose oldest queued signal is the one being handled, which, if it
+acknowledges an unlink, acknowledges one the process started. -/
+private def Queued (entry : Entry) (process : ProcessState) : Prop :=
+  Heads entry process ∧ ∀ id, entry.signal = .unlinkAck id → id ≤ process.unlinks
 
 /-- How handling the oldest signal changes the queue, mailbox and links, in a
 way that a process's own steps commute with. -/
@@ -1783,13 +1785,13 @@ private theorem QueueChange.unseen {queue : List Entry → List Entry} {mailbox 
       (other ∈ queue (entry :: rest) ↔ other ∈ entry :: rest)) :
     Unseen (Same (Queued entry) (queueChange queue mailbox links)) where
   outside := by
-    rintro first second ⟨⟨rest, queued⟩, rfl⟩
+    rintro first second ⟨⟨⟨rest, queued⟩, -⟩, rfl⟩
     refine ⟨rfl, rfl, rfl, fun other link => ?_⟩
     show other ∈ queue first.queue ↔ other ∈ first.queue
     rw [queued]; exact linking rest other link
-  push := fun {first second} other ⟨queued, same⟩ => by
+  push := fun {first second} other ⟨⟨queued, bound⟩, same⟩ => by
     subst same
-    refine ⟨(Heads.push queued other).1, ?_⟩
+    refine ⟨⟨(Heads.push queued other).1, bound⟩, ?_⟩
     obtain ⟨rest, nonempty⟩ := queued
     have pushed := change.push (entries := first.queue) other (by rw [nonempty]; simp)
     simp only [queueChange, ProcessState.push, pushed]
@@ -1805,23 +1807,27 @@ variable {processId : PID} {state state' : State} {queue : List Entry → List E
 
 private theorem queue_modify
     (changed : state.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) state')
-    (change : ProcessState → ProcessState) (queued : ∀ process, (change process).queue = process.queue)
+    (change : ProcessState → ProcessState)
+    (queued : ∀ process, (change process).queue = process.queue ∧ (change process).unlinks = process.unlinks)
     (commutes : ∀ process, Queued entry process →
       change (queueChange queue mailbox links process) = queueChange queue mailbox links (change process)) :
     (state.modify processId change).Changed processId (Same (Queued entry) (queueChange queue mailbox links))
       (state'.modify processId change) :=
   changed.modifyRelated fun ⟨ok', same⟩ => by
     subst same
-    exact ⟨by simp only [Queued, Heads, queued]; exact ok', commutes _ ok'⟩
+    refine ⟨?_, commutes _ ok'⟩
+    simp only [Queued, Heads, (queued _).1, (queued _).2]; exact ok'
 
 /-- A process's request, after handling its oldest signal changed its queue, mailbox and links. -/
 private theorem requestSelf
     (changed : state.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) state')
     (unseen : Unseen (Same (Queued entry) (queueChange queue mailbox links))) (change : QueueChange queue mailbox links)
     {process : ProcessState} (found : state.record processId = some process)
-    (unlinked : ∀ (target : PID) (id : Nat), Kernel.lookup target process.links = some none →
-      links (Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) process.links) =
-        Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) (links process.links))
+    (unlinked : ∀ target : PID, Kernel.lookup target process.links = some none →
+      links (Kernel.map (fun link => if link.1 == target then (link.1, some (process.unlinks + 1)) else link)
+        process.links) =
+        Kernel.map (fun link => if link.1 == target then (link.1, some (process.unlinks + 1)) else link)
+          (links process.links))
     (lookups : ∀ target : PID,
       (Kernel.lookup target (links process.links) == some none) = (Kernel.lookup target process.links == some none))
     {β : Type} (next : Term → Result β) (query : Request) :
@@ -1837,7 +1843,7 @@ private theorem requestSelf
       (state.allocate processId).2.Changed processId (Same (Queued entry) (queueChange queue mailbox links))
         (state'.allocate processId).2 := by
     refine ⟨by simp only [State.allocate, processOf, processOf']; rfl, ?_⟩
-    exact changed.queue_modify _ (fun _ => rfl) (fun _ _ => rfl)
+    exact changed.queue_modify _ (fun _ => ⟨rfl, rfl⟩) (fun _ _ => rfl)
   cases query with
   | monitor target alias =>
     simp only [State.request]
@@ -1845,10 +1851,10 @@ private theorem requestSelf
     rw [same]
     split
     · exact ⟨rfl, allocated⟩
-    · exact ⟨rfl, (allocated.unpark unseen processId).queue_modify _ (fun _ => rfl) (fun _ _ => rfl)⟩
+    · exact ⟨rfl, (allocated.unpark unseen processId).queue_modify _ (fun _ => ⟨rfl, rfl⟩) (fun _ _ => rfl)⟩
   | demonitor reference flush =>
     simp only [State.request, processOf, processOf', queueChange]
-    split <;> exact ⟨rfl, changed.queue_modify _ (fun _ => rfl) (fun _ _ => rfl)⟩
+    split <;> exact ⟨rfl, changed.queue_modify _ (fun _ => ⟨rfl, rfl⟩) (fun _ _ => rfl)⟩
   | link target =>
     simp only [State.request, processOf, processOf', changed.alive unseen, queueChange]
     by_cases self : target = processId
@@ -1861,7 +1867,7 @@ private theorem requestSelf
     · simp only [gone, ↓reduceIte]; exact ⟨rfl, changed⟩
     simp only [gone, ↓reduceIte, Bool.false_eq_true]
     have relinked := changed.queue_modify (fun process => { process with
-        links := Kernel.append (Kernel.filter (·.1 != target) process.links) [(target, none)] }) (fun _ => rfl)
+        links := Kernel.append (Kernel.filter (·.1 != target) process.links) [(target, none)] }) (fun _ => ⟨rfl, rfl⟩)
       fun _ _ => by simp only [queueChange, change.relink]
     have lookups := lookups target
     generalize Kernel.lookup target process.links = found₁ at lookups ⊢
@@ -1876,7 +1882,7 @@ private theorem requestSelf
     · simp only [self, ↓reduceIte]; exact ⟨rfl, changed⟩
     simp only [self, ↓reduceIte]
     have lookups := lookups target
-    have unlinking := unlinked target (process.unlinks + 1)
+    have unlinking := unlinked target
     generalize Kernel.lookup target process.links = found₁ at lookups unlinking ⊢
     generalize Kernel.lookup target (links process.links) = found₂ at lookups ⊢
     rcases found₁ with _ | _ | id <;> rcases found₂ with _ | _ | id' <;> simp at lookups <;>
@@ -1884,7 +1890,8 @@ private theorem requestSelf
         | exact ⟨rfl, changed⟩
         | (rw [State.modify_found found, State.modify_found found'']
            refine ⟨rfl, State.Changed.send ?_ unseen fun _ _ _ _ _ ⟨queued', same⟩ => ?_⟩
-           · exact changed.setRelated ⟨queued, by simp only [queueChange, unlinking rfl]⟩
+           · exact changed.setRelated ⟨⟨queued.1, fun id signal => Nat.le_succ_of_le (queued.2 id signal)⟩,
+               by simp only [queueChange, unlinking rfl]⟩
            · subst same; exact ⟨queued', by simp only [queueChange, change.filtered]⟩)
   | exit target reason quirk =>
     simp only [State.request, processOf, processOf', queueChange]
@@ -1897,7 +1904,7 @@ private theorem requestSelf
     simp only [State.request, processOf, processOf', queueChange]
     split
     · exact ⟨rfl, changed⟩
-    · exact ⟨rfl, changed.queue_modify _ (fun _ => rfl) (fun _ _ => rfl)⟩
+    · exact ⟨rfl, changed.queue_modify _ (fun _ => ⟨rfl, rfl⟩) (fun _ _ => rfl)⟩
   | alive target =>
     simp only [State.request, changed.alive unseen]
     split
@@ -1918,7 +1925,7 @@ private theorem requestSelf
   | cancelTimer reference =>
     simp only [State.request, changed.2.2.1, processOf, processOf', queueChange]
     split
-    · exact ⟨by rw [changed.2.2.2], (changed.timers _).queue_modify _ (fun _ => rfl) (fun _ _ => rfl)⟩
+    · exact ⟨by rw [changed.2.2.2], (changed.timers _).queue_modify _ (fun _ => ⟨rfl, rfl⟩) (fun _ _ => rfl)⟩
     · exact ⟨rfl, changed⟩
 
 /-- A process spawns a child, after handling its oldest signal changed its queue, mailbox and links. -/
@@ -1946,7 +1953,7 @@ private theorem spawnSelf
   let child := Kernel.append processId [process.children + 1]
   have linked := (started.queue_modify (fun process =>
       { process with links := Kernel.append (Kernel.filter (·.1 != child) process.links) [(child, none)] })
-      (fun _ => rfl) (fun _ _ => by simp only [queueChange, change.relink])).modify fresh
+      (fun _ => ⟨rfl, rfl⟩) (fun _ _ => by simp only [queueChange, change.relink])).modify fresh
     fun child => { child with links := [(processId, none)] }
   have counter : ∀ {first second : State}, first.Changed processId (Same (Queued entry) (queueChange queue mailbox links))
       second → (second.process processId).refCounter = (first.process processId).refCounter :=
@@ -1958,10 +1965,10 @@ private theorem spawnSelf
     simp only [monitor, link, ↓reduceIte, Bool.false_eq_true, State.allocate]
   · simp only [State.process, State.record_modify, State.record_set, ↓reduceIte, Ne.symm fresh, Option.map_some,
       Option.getD_some, queueChange]
-    refine ((linked.queue_modify _ ?_ ?_).queue_modify _ ?_ ?_).modify fresh _ <;> intros <;> rfl
+    refine ((linked.queue_modify _ ?_ ?_).queue_modify _ ?_ ?_).modify fresh _ <;> intros <;> first | rfl | exact ⟨rfl, rfl⟩
   · simp only [State.process, State.record_modify, State.record_set, ↓reduceIte, Ne.symm fresh, Option.map_some,
       Option.getD_some, queueChange]
-    refine ((started.queue_modify _ ?_ ?_).queue_modify _ ?_ ?_).modify fresh _ <;> intros <;> rfl
+    refine ((started.queue_modify _ ?_ ?_).queue_modify _ ?_ ?_).modify fresh _ <;> intros <;> first | rfl | exact ⟨rfl, rfl⟩
   · exact linked
   · exact started
 
@@ -2000,7 +2007,7 @@ private theorem terminateQueue
       (state'.terminate processId reason) := by
     unfold State.terminate
     simp only [processOf, processOf', changed.2.2.1, queueChange, exitLinks]
-    obtain ⟨rest, queued⟩ := queued
+    obtain ⟨⟨rest, queued⟩, -⟩ := queued
     rw [queued, requests _ _ fun entry kept => by
       obtain ⟨_, signal⟩ := entry; cases signal <;> simp_all]
     refine State.Changed.foldl (fun target changed' => ?_) _ ⟨fun other differ => ?_, ?_, rfl, changed.2.2.2⟩
@@ -2038,9 +2045,11 @@ private theorem ownSelf
     (changed : state.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) state')
     (unseen : Unseen (Same (Queued entry) (queueChange queue mailbox links))) (change : QueueChange queue mailbox links)
     {process : ProcessState} (found : state.record processId = some process)
-    (unlinked : ∀ (target : PID) (id : Nat), Kernel.lookup target process.links = some none →
-      links (Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) process.links) =
-        Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) (links process.links))
+    (unlinked : ∀ target : PID, Kernel.lookup target process.links = some none →
+      links (Kernel.map (fun link => if link.1 == target then (link.1, some (process.unlinks + 1)) else link)
+        process.links) =
+        Kernel.map (fun link => if link.1 == target then (link.1, some (process.unlinks + 1)) else link)
+          (links process.links))
     (lookups : ∀ target : PID,
       (Kernel.lookup target (links process.links) == some none) = (Kernel.lookup target process.links == some none))
     (awaited : Kernel.any (queue process.queue) (state'.awaitedEntry processId) = true →
@@ -2086,7 +2095,7 @@ private theorem ownSelf
   | set updated next =>
     simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
     exact ⟨Transition.mk (.internal processId) (state'.store processId updated) [(processId, ⟨next, finish, none⟩)]
-      none false, rfl, rfl, rfl, rfl, rfl, .inl ⟨changed.queue_modify _ (fun _ => rfl) (fun _ _ => rfl), _, _, rfl⟩⟩
+      none false, rfl, rfl, rfl, rfl, rfl, .inl ⟨changed.queue_modify _ (fun _ => ⟨rfl, rfl⟩) (fun _ _ => rfl), _, _, rfl⟩⟩
   | schedule options child next =>
     have spawned := changed.spawnSelf change found options fresh
     simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
@@ -2641,6 +2650,22 @@ private theorem Task.forcedHead_transfer {state state' : State} {processId : PID
   obtain ⟨source, signal⟩ := entry
   cases signal <;> simp_all [Task.forcedHead]
 
+private theorem hidden_ack_queued (source : PID) (id : Nat) :
+    Hidden (Queued ⟨source, .unlinkAck id⟩) (ackChange source id) where
+  exiting ok := (hidden_ack (by simp) source id).exiting ok.1
+  trapExit ok := (hidden_ack (by simp) source id).trapExit ok.1
+  parked ok := (hidden_ack (by simp) source id).parked ok.1
+  links ok := (hidden_ack (by simp) source id).links ok.1
+  push other ok := by
+    obtain ⟨heads, pushed⟩ := (hidden_ack (by simp) source id).push other ok.1
+    exact ⟨⟨heads, ok.2⟩, pushed⟩
+  eagerExit exited ok := by
+    obtain ⟨heads, exited'⟩ := (hidden_ack (by simp) source id).eagerExit exited ok.1
+    exact ⟨⟨heads, ok.2⟩, exited'⟩
+  unpark ok := by
+    obtain ⟨heads, unparked⟩ := (hidden_ack (by simp) source id).unpark ok.1
+    exact ⟨⟨heads, ok.2⟩, unparked⟩
+
 /-- A forced handling of the oldest signal against a step of another key. -/
 private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {config : Config α} {processId : PID}
     {event event' : Event} {next middle : Config α} {key' : Key} (reachable : config.Reachable elapsed)
@@ -2732,13 +2757,15 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
   | reply value => exact quietCase rfl
   | flush => exact quietCase rfl
   | unlinkAck id =>
+    have bound : id ≤ process.unlinks := by simpa [Task.forcedHead, notInert, processOf] using flagged
     rw [Task.handle_ack sorted found queue] at head
     simp only [List.head?_cons, Option.some.injEq] at head
     subst head
     simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
-    refine Config.forced_other (key := .handle processId) (task' := task) reachable lookup found live heads
-      (hidden_ack (by simp) source id) (normRecord_ack_clean clean live) owner step' ?_
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ heads₁ live₁
+    refine Config.forced_other (key := .handle processId) (task' := task) (ok := Queued ⟨source, .unlinkAck id⟩)
+      reachable lookup found live ⟨heads, fun _ signal => by cases signal; exact bound⟩
+      (hidden_ack_queued source id) (normRecord_ack_clean clean live) owner step' ?_
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, bound₁⟩ live₁
     have kept : inert raw.gone processId process₁ ⟨source, .unlinkAck id⟩ = false := by simp [inert]
     obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ kept
     have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
@@ -2746,7 +2773,7 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
     have tagged := Config.tagged_handle_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1
       lookup₁ (by rw [processOf₁, queue₁])
       (by rw [Task.handle_ack (Sorted.normalize within.1) record queue₁]; rfl)
-      (by simp [Task.forcedHead])
+      (by simp [Task.forcedHead, processOf₁, normRecord_live live₁, bound₁ id rfl])
     simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
     exact .inl ⟨_, tagged, by rw [(ackChange_fields source id _).1, normRecord_live live₁]; exact live₁,
       normRecord_ack_kept live₁ heads₁⟩
@@ -3606,12 +3633,12 @@ private theorem QueueChange.hidden {queue : List Entry → List Entry} {mailbox 
   exiting _ := rfl
   trapExit _ := rfl
   parked _ := rfl
-  links := fun {process} ⟨rest, queued⟩ other link => by
+  links := fun {process} ⟨⟨rest, queued⟩, _⟩ other link => by
     show other ∈ queue process.queue ↔ other ∈ process.queue
     rw [queued]; exact linking rest other link
   push := fun {process} other queued => by
-    refine ⟨(Heads.push queued other).1, ?_⟩
-    obtain ⟨rest, nonempty⟩ := queued
+    refine ⟨⟨(Heads.push queued.1 other).1, queued.2⟩, ?_⟩
+    obtain ⟨⟨rest, nonempty⟩, -⟩ := queued
     have pushed := change.push (entries := process.queue) other (by rw [nonempty]; simp)
     simp only [queueChange, ProcessState.push, pushed]
   eagerExit := fun _ queued => ⟨queued, by simp only [queueChange, ProcessState.eagerExit, change.filtered]⟩
@@ -3646,7 +3673,8 @@ private theorem Config.handle_own_square {elapsed : PID → Nat → Nat} {state 
     (reachable : (Config.running state tasks finished false).Reachable elapsed)
     (lookup : Kernel.lookup processId tasks = some task)
     (found : state.record processId = some process) (live : process.exiting = none)
-    (queued : process.queue = entry :: rest) (change : QueueChange queue mailbox links)
+    (queued : process.queue = entry :: rest)
+    (bound : ∀ id, entry.signal = .unlinkAck id → id ≤ process.unlinks) (change : QueueChange queue mailbox links)
     (linking : ∀ (rest : List Entry) (other : Entry), other.signal = .link →
       (other ∈ queue (entry :: rest) ↔ other ∈ entry :: rest))
     (requests : ∀ (rest : List Entry) (keep : Entry → Bool),
@@ -3656,9 +3684,11 @@ private theorem Config.handle_own_square {elapsed : PID → Nat → Nat} {state 
       Kernel.foldl (fun links (peer, unlinking) => if unlinking.isNone then insertPid peer links else links) []
         (links entries) =
       Kernel.foldl (fun links (peer, unlinking) => if unlinking.isNone then insertPid peer links else links) [] entries)
-    (unlinked : ∀ (target : PID) (id : Nat), Kernel.lookup target process.links = some none →
-      links (Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) process.links) =
-        Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) (links process.links))
+    (unlinked : ∀ target : PID, Kernel.lookup target process.links = some none →
+      links (Kernel.map (fun link => if link.1 == target then (link.1, some (process.unlinks + 1)) else link)
+        process.links) =
+        Kernel.map (fun link => if link.1 == target then (link.1, some (process.unlinks + 1)) else link)
+          (links process.links))
     (lookups : ∀ target : PID,
       (Kernel.lookup target (links process.links) == some none) = (Kernel.lookup target process.links == some none))
     (awaited : Kernel.any (queue process.queue)
@@ -3687,7 +3717,7 @@ private theorem Config.handle_own_square {elapsed : PID → Nat → Nat} {state 
   let change' := queueChange queue mailbox links
   have changed : state.Changed processId (Same (Queued entry) change') (state.set processId (change' process)) :=
     ⟨fun other differ => by rw [State.record_set, if_neg differ],
-      by rw [State.record_set, if_pos rfl, found]; exact .some ⟨⟨rest, queued⟩, rfl⟩, rfl, rfl⟩
+      by rw [State.record_set, if_pos rfl, found]; exact .some ⟨⟨⟨rest, queued⟩, bound⟩, rfl⟩, rfl, rfl⟩
   have unseen := change.unseen linking
   have within' : (state.set processId (change' process)).Within elapsed := within.set _ _
   have fresh : Kernel.append processId [process.children + 1] ≠ processId := by
@@ -3751,6 +3781,178 @@ private theorem messageChange_queue (message : Term) :
     intro β select messages remaining selected value found
     exact selectMessage_append found
 
+/-- The links after handling an acknowledgement of an unlink. -/
+private def ackLinks (source : PID) (id : Nat) (links : List (PID × Option Nat)) : List (PID × Option Nat) :=
+  if Kernel.lookup source links == some (some id) then Kernel.filter (unacked source id) links else links
+
+private theorem ackChange_eq (source : PID) (id : Nat) (process : ProcessState) :
+    ackChange source id process = queueChange List.tail _root_.id (ackLinks source id) process := by
+  unfold ackChange ackedChange popChange queueChange ackLinks
+  split <;> rfl
+
+private theorem lookup_unacked_other {source target : PID} (differ : target ≠ source) (id : Nat) :
+    ∀ links : List (PID × Option Nat), Kernel.lookup target (Kernel.filter (unacked source id) links) =
+      Kernel.lookup target links := by
+  intro links
+  simp only [Kernel.lookup_eq, Kernel.filter_eq]
+  exact lookup_filter_of_keep fun link _ same => by simp [unacked, same, differ]
+
+private theorem ackLinks_queue (source : PID) (id : Nat) :
+    QueueChange List.tail _root_.id (ackLinks source id) where
+  push := fun {entries} other nonempty => by
+    cases entries with
+    | nil => exact absurd rfl nonempty
+    | cons head rest => simp [Kernel.append_eq]
+  filtered target links := by
+    unfold ackLinks
+    by_cases same : target = source
+    · subst same
+      have none : Kernel.lookup target (Kernel.filter (·.1 != target) links) = none := lookup_filter_self _ _
+      simp only [none, reduceCtorEq, beq_iff_eq, ↓reduceIte]
+      split
+      · simp only [Kernel.filter_eq, List.filter_filter]
+        refine List.filter_congr fun link _ => ?_
+        by_cases key : link.1 = target <;> simp [unacked, key]
+      · rfl
+    · have kept : Kernel.lookup source (Kernel.filter (·.1 != target) links) = Kernel.lookup source links := by
+        simp only [Kernel.lookup_eq, Kernel.filter_eq]
+        exact lookup_filter_of_keep fun link _ equal => by simp [equal, Ne.symm same]
+      rw [kept]
+      split
+      · simp only [Kernel.filter_eq, List.filter_filter, Bool.and_comm]
+      · rfl
+  relink target links := by
+    unfold ackLinks
+    by_cases same : target = source
+    · subst same
+      have relinked : Kernel.lookup target (Kernel.append (Kernel.filter (·.1 != target) links) [(target, none)]) =
+          some none := by
+        have none : Kernel.lookup target (Kernel.filter (·.1 != target) links) = none := lookup_filter_self _ _
+        simp only [Kernel.lookup_eq, Kernel.append_eq, Kernel.filter_eq] at none ⊢
+        rw [List.lookup_append, none]; simp
+      simp only [relinked, reduceCtorEq, beq_iff_eq, Option.some.injEq, ↓reduceIte]
+      split
+      · congr 1
+        simp only [Kernel.filter_eq, List.filter_filter]
+        refine List.filter_congr fun link _ => ?_
+        by_cases key : link.1 = target <;> simp [unacked, key]
+      · rfl
+    · have kept : Kernel.lookup source (Kernel.append (Kernel.filter (·.1 != target) links) [(target, none)]) =
+          Kernel.lookup source links := by
+        simp only [Kernel.lookup_eq, Kernel.append_eq, Kernel.filter_eq]
+        rw [List.lookup_append]
+        rw [lookup_filter_of_keep fun link _ equal => by simp [equal, Ne.symm same]]
+        cases found : List.lookup source links with
+        | some _ => rfl
+        | none =>
+          have differ : (source == target) = false := by simp [Ne.symm same]
+          simp [List.lookup_cons, differ]
+      rw [kept]
+      split
+      · simp only [Kernel.filter_eq, Kernel.append_eq, List.filter_append, List.filter_filter, Bool.and_comm]
+        simp [unacked, Ne.symm same]
+      · rfl
+  select := by
+    intro β select messages remaining selected value found
+    exact found
+
+private theorem ackChange_clean {gone : PID → Bool} {processId source : PID} {id : Nat} {process : ProcessState}
+    (clean : normRecord gone processId process = process) (live : process.exiting = none) :
+    normRecord gone processId (ackChange source id process) = ackChange source id process := by
+  have cleaned := clean_live clean live
+  have live' : (ackChange source id process).exiting = none := (ackChange_fields source id process).1.trans live
+  rw [normRecord_live live', inert_ack]
+  have keepLinks : ∀ links : List (PID × Option Nat), (∀ link ∈ links, link ∈ process.links) →
+      Kernel.filter (fun link => !(link.2.isSome && gone link.1)) links = links := fun links sub => by
+    rw [Kernel.filter_eq]; exact List.filter_eq_self.mpr fun link mem => by simp [cleaned.2 link (sub link mem)]
+  have keepQueue : Kernel.filter (fun entry => !inert gone processId process entry) process.queue.tail =
+      process.queue.tail := by
+    rw [Kernel.filter_eq]
+    exact List.filter_eq_self.mpr fun entry mem => by simp [cleaned.1 entry (List.mem_of_mem_tail mem)]
+  unfold ackChange ackedChange popChange
+  split
+  · rw [keepLinks _ fun link mem => by
+        simp only [Kernel.filter_eq, List.mem_filter] at mem; exact mem.1]
+    simp only [keepQueue]
+  · simp only [keepQueue, keepLinks _ fun _ mem => mem]
+
+/-- Exit links skip the link being removed. -/
+private theorem exitLinks_unacked (source : PID) (id : Nat) :
+    ∀ (links : List (PID × Option Nat)) (start : List PID),
+      Kernel.foldl (fun links (peer, unlinking) => if unlinking.isNone then insertPid peer links else links) start
+        (Kernel.filter (unacked source id) links) =
+      Kernel.foldl (fun links (peer, unlinking) => if unlinking.isNone then insertPid peer links else links) start links
+  | [], _ => rfl
+  | (peer, unlinking) :: rest, start => by
+    have ih := exitLinks_unacked source id rest
+    simp only [Kernel.foldl_eq, Kernel.filter_eq] at ih ⊢
+    by_cases kept : unacked source id (peer, unlinking) = true
+    · simp only [List.filter_cons, kept, ↓reduceIte, List.foldl_cons]; exact ih _
+    · have removed : peer = source ∧ unlinking = some id := by
+        cases h₁ : peer == source <;> cases h₂ : unlinking == some id <;> simp_all [unacked]
+      obtain ⟨rfl, rfl⟩ := removed
+      simp only [List.filter_cons, unacked, beq_self_eq_true, Bool.and_self, Bool.not_true, Bool.false_eq_true,
+        ↓reduceIte, List.foldl_cons, Option.isNone_some]
+      exact ih start
+
+/-- Marking a link being removed changes only its value. -/
+private theorem lookup_unlinking {target : PID} {id : Nat} :
+    ∀ (links : List (PID × Option Nat)) (other : PID),
+      Kernel.lookup other (Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) links) =
+        if other = target then (Kernel.lookup other links).map fun _ => some id else Kernel.lookup other links
+  | [], _ => by simp [Kernel.lookup_eq, Kernel.map_eq]
+  | (peer, value) :: rest, other => by
+    have ih := lookup_unlinking (target := target) (id := id) rest other
+    simp only [Kernel.lookup_eq, Kernel.map_eq] at ih ⊢
+    rw [List.map_cons]
+    by_cases equal : peer = target
+    · subst equal
+      rw [if_pos (by simp), List.lookup_cons, List.lookup_cons]
+      by_cases same : other = peer
+      · subst same; simp
+      · have differ : (other == peer) = false := by simp [same]
+        rw [differ]; simp only [same, ↓reduceIte] at ih ⊢; exact ih
+    · rw [if_neg (by simp [equal]), List.lookup_cons, List.lookup_cons]
+      by_cases same : other = peer
+      · subst same
+        have differ : other ≠ target := equal
+        simp [differ]
+      · have differ : (other == peer) = false := by simp [same]
+        rw [differ]; exact ih
+
+private theorem lookup_none_of_not_mem {β : Type} {key : PID} :
+    ∀ {entries : List (PID × β)}, key ∉ entries.map (·.1) → entries.lookup key = none
+  | [], _ => rfl
+  | (other, value) :: rest, missing => by
+    simp only [List.map_cons, List.mem_cons, not_or] at missing
+    have differ : (key == other) = false := by simp [missing.1]
+    simp [List.lookup_cons, differ, lookup_none_of_not_mem missing.2]
+
+/-- Removing the only link with a process leaves none. -/
+private theorem lookup_unacked_self {source : PID} {id : Nat} :
+    ∀ {links : List (PID × Option Nat)}, (links.map (·.1)).Nodup →
+      Kernel.lookup source links = some (some id) → Kernel.lookup source (Kernel.filter (unacked source id) links) = none
+  | [], _, found => by simp [Kernel.lookup_eq] at found
+  | (peer, value) :: rest, nodup, found => by
+    simp only [List.map_cons, List.nodup_cons] at nodup
+    simp only [Kernel.lookup_eq, Kernel.filter_eq, List.lookup_cons] at found ⊢
+    by_cases same : source = peer
+    · subst same
+      simp only [beq_self_eq_true, Option.some.injEq] at found
+      subst found
+      simp only [List.filter_cons, unacked, beq_self_eq_true, Bool.and_self, Bool.not_true, Bool.false_eq_true,
+        ↓reduceIte]
+      refine lookup_none_of_not_mem fun mem => nodup.1 ?_
+      simp only [List.mem_map, List.mem_filter] at mem ⊢
+      obtain ⟨link, ⟨inside, -⟩, same⟩ := mem
+      exact ⟨link, inside, same⟩
+    · have differ : (source == peer) = false := by simp [same]
+      simp only [differ] at found
+      have unacked' : unacked source id (peer, value) = true := by simp [unacked, Ne.symm same]
+      simp only [List.filter_cons, unacked', ↓reduceIte, List.lookup_cons, differ]
+      have := lookup_unacked_self (source := source) (id := id) nodup.2 (by simpa [Kernel.lookup_eq] using found)
+      simpa [Kernel.lookup_eq, Kernel.filter_eq] using this
+
 /-- A forced handling of the oldest signal against the process's own step. -/
 private theorem Config.forced_handle_own {elapsed : PID → Nat → Nat} {config : Config α} {processId : PID}
     {event event' : Event} {next middle : Config α} (reachable : config.Reachable elapsed) (distinct : config.Distinct)
@@ -3803,8 +4005,9 @@ private theorem Config.forced_handle_own {elapsed : PID → Nat → Nat} {config
     rw [rewriteTask_same lookup, State.normalize_set_clean (process' := messageChange message process) sorted
       normalized found live live (normRecord_popped clean live (by simp [messageChange]) (fun _ => rfl) rfl live),
       changed]
-    refine Config.handle_own_square reachable lookup found live queue (messageChange_queue message) ?_ ?_
-      (fun _ => rfl) (fun _ _ _ => rfl) (fun _ => rfl) ?_ ?_ step' ?_
+    refine Config.handle_own_square reachable lookup found live queue (fun _ signal => by cases signal)
+      (messageChange_queue message) ?_ ?_
+      (fun _ => rfl) (fun _ _ => rfl) (fun _ => rfl) ?_ ?_ step' ?_
     · intro rest' other link
       simp only [List.tail_cons, List.mem_cons]
       constructor
@@ -3825,7 +4028,7 @@ private theorem Config.forced_handle_own {elapsed : PID → Nat → Nat} {config
       exact absurd (quiet ⟨source, .message message⟩ (by simp [queue]))
         (by simp [State.awaitedEntry, notInert, notClock])
     · intro raw tasks₁ finished₁ process₁ within reachable₁ ⟨task₁, lookup₁⟩ found₁ heads₁ live₁
-      obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ (by simp [inert])
+      obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁.1 (by simp [inert])
       have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
         simp [State.process, record]
       have tagged := Config.tagged_handle_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1
@@ -3836,8 +4039,104 @@ private theorem Config.forced_handle_own {elapsed : PID → Nat → Nat} {config
         (by rw [Task.handle_message (Sorted.normalize within.1) record queue₁]; rfl)
         (by simp only [Task.forcedHead, fromProcess, Bool.or_true])
       simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none, rewriteTask_same lookup₁] at tagged
-      exact ⟨_, tagged, normRecord_message live₁ heads₁ (by simp [inert]) message⟩
-  | unlinkAck id => sorry
+      exact ⟨_, tagged, normRecord_message live₁ heads₁.1 (by simp [inert]) message⟩
+  | unlinkAck id =>
+    have bound : id ≤ process.unlinks := by simpa [Task.forcedHead, notInert, processOf] using flagged
+    rw [Task.handle_ack sorted found queue] at head
+    simp only [List.head?_cons, Option.some.injEq] at head
+    subst head
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
+    rw [rewriteTask_same lookup, State.normalize_set_clean (process' := ackChange source id process) sorted
+      normalized found live ((ackChange_fields source id process).1.trans live) (ackChange_clean clean live),
+      ackChange_eq]
+    have nodup : (process.links.map (·.1)).Nodup := distinct _ _ found
+    refine Config.handle_own_square reachable lookup found live queue (fun _ signal => by cases signal; exact bound)
+      (ackLinks_queue source id) ?_ ?_ ?_ ?_ ?_ ?_ (fun _ selected _ => selected) step' ?_
+    · intro rest' other link
+      simp only [List.tail_cons, List.mem_cons]
+      constructor
+      · exact .inr
+      · rintro (same | inside)
+        · subst same; cases link
+        · exact inside
+    · intro rest' keep requests'
+      simp only [List.tail_cons, Kernel.filter_eq, List.filter_cons]
+      cases kept : keep ⟨source, .unlinkAck id⟩
+      · rfl
+      · simpa using requests' _ kept
+    · intro links
+      unfold ackLinks; split
+      · exact exitLinks_unacked source id links []
+      · rfl
+    · -- A process unlinks with a new id, which no acknowledgement it has carries.
+      intro target unlinked'
+      unfold ackLinks
+      have mapped := lookup_unlinking (target := target) (id := process.unlinks + 1) process.links source
+      by_cases same : source = target
+      · subst same
+        rw [if_pos rfl, unlinked'] at mapped
+        rw [mapped, unlinked']
+        have fresh : process.unlinks + 1 ≠ id := by omega
+        simp [fresh]
+      · rw [if_neg same] at mapped
+        rw [mapped]
+        split
+        · simp only [Kernel.filter_eq, Kernel.map_eq, List.filter_map]
+          congr 1
+          refine List.filter_congr fun link _ => ?_
+          simp only [Function.comp]
+          split
+          · rename_i key
+            simp only [beq_iff_eq] at key
+            have differ : (target == source) = false := by simp [Ne.symm same]
+            simp [unacked, key, differ]
+          · rfl
+        · rfl
+    · intro target
+      unfold ackLinks
+      split
+      · rename_i linked
+        by_cases same : target = source
+        · subst same
+          have found' : Kernel.lookup target process.links = some (some id) := by simpa using linked
+          rw [lookup_unacked_self nodup found', found']
+          rfl
+        · rw [lookup_unacked_other same]
+      · rfl
+    · intro more
+      simp only [Kernel.any_eq, List.any_eq_true] at more ⊢
+      obtain ⟨other, inside, awaited'⟩ := more
+      refine ⟨other, List.mem_of_mem_tail (by simpa [queueChange] using inside), ?_⟩
+      have gone : (state.set processId (queueChange List.tail _root_.id (ackLinks source id) process)).gone =
+          state.gone := by
+        funext peer
+        simp only [State.gone, State.alive, State.record_set]
+        by_cases equal : peer = processId
+        · subst equal; simp [found, queueChange]
+        · simp [equal]
+      have processSet : (state.set processId (queueChange List.tail _root_.id (ackLinks source id) process)).process
+          processId = queueChange List.tail _root_.id (ackLinks source id) process := by
+        simp [State.process, State.record_set]
+      simp only [State.awaitedEntry, State.inertEntry_eq, gone, processSet] at awaited' ⊢
+      rw [processOf]
+      exact awaited'
+    · intro raw tasks₁ finished₁ process₁ within reachable₁ ⟨task₁, lookup₁⟩ found₁ ⟨heads₁, bound₁⟩ live₁
+      have kept : inert raw.gone processId process₁ ⟨source, .unlinkAck id⟩ = false := by simp [inert]
+      obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ kept
+      have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
+        simp [State.process, record]
+      have tagged := Config.tagged_handle_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1
+        lookup₁ (by rw [processOf₁, queue₁])
+        (transition := Transition.mk (.handle processId ⟨source, .unlinkAck id⟩)
+          (raw.normalize.set processId (ackChange source id (normRecord raw.gone processId process₁)))
+          [(processId, task₁)] none false)
+        (by rw [Task.handle_ack (Sorted.normalize within.1) record queue₁]; rfl)
+        (by simp [Task.forcedHead, processOf₁, normRecord_live live₁, bound₁ id rfl])
+      simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none, rewriteTask_same lookup₁, ackChange_eq]
+        at tagged
+      refine ⟨_, tagged, ?_⟩
+      rw [← ackChange_eq, ← ackChange_eq]
+      exact normRecord_ack_kept live₁ heads₁
   | reply value =>
     simp [Task.forcedHead, notInert, running] at flagged
   | flush =>
