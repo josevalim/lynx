@@ -3192,7 +3192,7 @@ private theorem Task.ownView_agree {state other : State} {tasks : List (PID × T
     (lookup : Kernel.lookup processId tasks = some task)
     (found : task.ownFrames state processId = some (frames, timers)) (agree : Agree frames state other)
     (timed : timers = true → other.timers = state.timers)
-    (awaited : readsOf frames processId tailBit →
+    (awaited : readsOf frames processId tailBit → readsOf frames processId liveBit →
       Kernel.any (other.process processId).queue (other.awaitedEntry processId) =
         Kernel.any (state.process processId).queue (state.awaitedEntry processId)) :
     task.ownView other processId = task.ownView state processId := by
@@ -3233,7 +3233,9 @@ private theorem Task.ownView_agree {state other : State} {tasks : List (PID × T
         obtain ⟨view, mailbox⟩ := facts found.1.symm (by decide) (by decide) (by decide)
         have tail : readsOf frames processId tailBit := by
           rw [← found.1]; simp [readsOf]; decide
-        simp only [Task.ownView, view, mailbox, awaited tail]
+        have live : readsOf frames processId liveBit := by
+          rw [← found.1]; simp [readsOf]; decide
+        simp only [Task.ownView, view, mailbox, awaited tail live]
   | request query next =>
     have counter : ∀ {reads writes : Nat} {rest : List Frame}, frames = (processId, reads, writes) :: rest →
         reads.testBit 4 = true → (other.process processId).refCounter = (state.process processId).refCounter :=
@@ -5335,10 +5337,11 @@ private theorem Task.handle_not_exhausted {state : State} {processId : PID} {tas
 /-- A confined step leads to its effect's state, normalized. -/
 private theorem Config.stepOf_effect {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {key : Key} {event : Event} {next : Config α}
+    {elapsed : PID → Nat → Nat} (within : state.Within elapsed)
     (confined : Config.confined (.running state tasks finished false) key = true)
     (step : (Config.running state tasks finished false).stepOf key = some (event, next)) :
     ∃ raw tasks' finished', Realizes ((Config.running state tasks finished false).effectOf key) state raw ∧
-      next = .running raw.normalize tasks' finished' false := by
+      raw.Within elapsed ∧ next = .running raw.normalize tasks' finished' false := by
   cases key with
   | own processId =>
     obtain ⟨task, transition, lookup, head, rfl⟩ := Config.stepOf_own step
@@ -5353,28 +5356,28 @@ private theorem Config.stepOf_effect {state : State} {tasks : List (PID × Task 
       rw [lookup] at confined
       simp at confined
     refine ⟨transition.state, rewriteTask processId (fun _ => transition.tasks) tasks,
-      transition.finished.orElse fun _ => finished, ?_, by simp [exhausted]⟩
+      transition.finished.orElse fun _ => finished, ?_, within.own (List.mem_of_head? head), by simp [exhausted]⟩
     simp only [Config.effectOf, lookup]
     exact Realizes.own (List.mem_of_head? head)
   | handle processId =>
     obtain ⟨task, transition, lookup, head, rfl⟩ := Config.stepOf_handle step
     have exhausted : transition.exhausted = false := Task.handle_not_exhausted (List.mem_of_head? head)
     refine ⟨transition.state, rewriteTask processId (fun _ => transition.tasks) tasks,
-      transition.finished.orElse fun _ => finished, ?_, by simp [exhausted]⟩
+      transition.finished.orElse fun _ => finished, ?_, within.handleStep (List.mem_of_head? head), by simp [exhausted]⟩
     simp only [Config.effectOf, lookup]
     exact Realizes.handleStep (List.mem_of_head? head)
   | phase processId =>
     simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at step
     obtain ⟨raw, phase, -, rfl⟩ := step
-    exact ⟨raw, _, _, Realizes.phase phase, rfl⟩
+    exact ⟨raw, _, _, Realizes.phase phase, within.phase phase, rfl⟩
   | unpark processId =>
     simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at step
     obtain ⟨-, -, -, rfl⟩ := step
-    exact ⟨_, _, _, Realizes.unpark state processId, rfl⟩
+    exact ⟨_, _, _, Realizes.unpark state processId, within.unpark processId, rfl⟩
   | fire reference =>
     simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at step
     obtain ⟨timer, found, -, rfl⟩ := step
-    refine ⟨_, _, _, ?_, rfl⟩
+    refine ⟨_, _, _, ?_, within.fire timer, rfl⟩
     simp only [Config.effectOf, found]
     exact Realizes.fire state timer
   | link => simp [Config.confined] at confined
