@@ -901,16 +901,6 @@ private theorem inert_normRecord {gone : PID → Bool} {processId : PID} {proces
     simp only [Kernel.lookup_eq, Kernel.filter_eq]
     exact lookup_filter_of_keep fun entry _ same => by simp [same, notGone]
 
-private theorem normRecord_normRecord {gone : PID → Bool} {processId : PID} {process : ProcessState}
-    (live : process.exiting = none) :
-    normRecord gone processId (normRecord gone processId process) = normRecord gone processId process := by
-  have live' : (normRecord gone processId process).exiting = none := by rw [normRecord_live live]; exact live
-  conv => lhs; rw [normRecord_live live']
-  have inertSame := funext (inert_normRecord (gone := gone) (processId := processId) live)
-  simp only [inertSame]
-  rw [normRecord_live live]
-  simp [Kernel.filter_eq, List.filter_filter]
-
 private theorem normRecord_push {gone : PID → Bool} {processId : PID} {process : ProcessState}
     (live : process.exiting = none) (entry : Entry) :
     normRecord gone processId ((normRecord gone processId process).push entry) =
@@ -1050,6 +1040,126 @@ private theorem Hidden.unseen {processId : PID} {ok : ProcessState → Prop} {ch
     obtain ⟨ok'', unparked⟩ := hidden.unpark ok'
     refine ⟨ok'', live, live', fun gone => ?_⟩
     rw [← normRecord_unpark live', same gone, normRecord_unpark ((hidden.exiting ok').trans live), unparked]
+
+/-! ### Normalizing around a forced change -/
+
+/-- Sorted states with the same records, timers and elapsed times are equal. -/
+private theorem State.ext_records {state state' : State} (sorted : state.Sorted) (sorted' : state'.Sorted)
+    (records : ∀ processId, state'.record processId = state.record processId)
+    (timers : state'.timers = state.timers) (elapsed : state'.elapsed = state.elapsed) : state' = state := by
+  have processes : state'.processes = state.processes :=
+    Sorted.ext sorted' sorted fun processId => by
+      have := records processId; simpa [State.record, Kernel.lookup_eq] using this
+  cases state; cases state'
+  simp only at processes timers elapsed
+  simp only [State.mk.injEq]
+  exact ⟨processes, timers, elapsed⟩
+
+private theorem ProcessState.finished_live {process : ProcessState} (live : process.exiting = none) :
+    process.finished = false := by
+  simp [ProcessState.finished, live]
+
+/-- Normalizing drops from a record, for which processes are gone, only what it
+drops for whichever processes are gone. -/
+private theorem normRecord_any {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (live : process.exiting = none)
+    (inert' : ∀ entry ∈ process.queue, inert gone processId process entry = true →
+      ∀ gone', inert gone' processId process entry = true)
+    (links : ∀ link ∈ process.links, (link.2.isSome && gone link.1) = false) (gone' : PID → Bool) :
+    normRecord gone' processId (normRecord gone processId process) = normRecord gone' processId process := by
+  have kept : Kernel.filter (fun link => !(link.2.isSome && gone link.1)) process.links = process.links := by
+    rw [Kernel.filter_eq]; exact List.filter_eq_self.mpr fun link mem => by simp [links link mem]
+  have live₁ : (normRecord gone processId process).exiting = none := by rw [normRecord_live live]; exact live
+  have same : inert gone' processId (normRecord gone processId process) = inert gone' processId process := by
+    funext entry
+    apply inert_congr
+    · rw [normRecord_live live]
+    · rw [normRecord_live live]
+    · rw [normRecord_live live]
+    · intro source _; rw [normRecord_live live]; simp only [kept]
+  rw [normRecord_live live₁, same, normRecord_live (gone := gone) live, normRecord_live (gone := gone') live, kept]
+  simp only [Kernel.filter_eq, List.filter_filter]
+  congr 1
+  refine List.filter_congr fun entry mem => ?_
+  cases first : inert gone' processId process entry
+  · cases second : inert gone processId process entry
+    · rfl
+    · simp [inert' entry mem second gone'] at first
+  · rfl
+
+/-- After a forced change of a live record at a normalized state, the
+normalized state differs only in that record, by the change. -/
+private theorem State.changed_forced {state : State} {processId : PID} {process : ProcessState}
+    {ok : ProcessState → Prop} {change : ProcessState → ProcessState} (sorted : state.Sorted)
+    (normalized : state.normalize = state) (found : state.record processId = some process)
+    (live : process.exiting = none) (ok' : ok process) (hidden : Hidden ok change)
+    (renormalize : ∀ gone, normRecord gone processId (normRecord state.gone processId (change process)) =
+      normRecord gone processId (change process)) :
+    state.Changed processId (Forced processId ok change) (state.set processId (change process)).normalize := by
+  have sorted' : (state.set processId (change process)).Sorted := Sorted.insertRecord sorted _ _
+  have live' : (change process).exiting = none := (hidden.exiting ok').trans live
+  have gone : (state.set processId (change process)).gone = state.gone := by
+    funext other
+    simp only [State.gone, State.alive, State.record_set]
+    by_cases same : other = processId
+    · subst same; simp [found, live, live']
+    · simp [same]
+  refine ⟨fun other differ => ?_, ?_, rfl, rfl⟩
+  · rw [State.record_normalize' sorted', gone, State.record_set, if_neg differ]
+    conv => rhs; rw [← normalized]
+    rw [State.record_normalize' sorted]
+  · rw [State.record_normalize' sorted', gone, State.record_set, if_pos rfl, found]
+    simp only [Option.map_some, Option.filter, ProcessState.finished_live
+      (show (normRecord state.gone processId (change process)).exiting = none by rw [normRecord_live live']; exact live'),
+      Bool.not_false, ↓reduceIte]
+    refine .some ⟨ok', live, ?_, renormalize⟩
+    rw [normRecord_live live']; exact live'
+
+/-- A forced change taken after another step reaches what the other step
+reaches after the change, when normalizing before the change drops nothing
+it reads. -/
+private theorem State.forced_close {raw raw' : State} {processId : PID} {process : ProcessState}
+    {ok : ProcessState → Prop} {change : ProcessState → ProcessState} (sorted : raw.Sorted) (sorted' : raw'.Sorted)
+    (changed : raw.Changed processId (Forced processId ok change) raw') (unseen : Unseen (Forced processId ok change))
+    (found : raw.record processId = some process)
+    (live : (change (normRecord raw.gone processId process)).exiting = none)
+    (renormalize : normRecord raw.gone processId (change (normRecord raw.gone processId process)) =
+      normRecord raw.gone processId (change process)) :
+    (raw.normalize.set processId (change (normRecord raw.gone processId process))).normalize = raw'.normalize := by
+  rcases changed.records with ⟨missing, -⟩ | ⟨first, second, found', found'', -, live₀, live', same⟩
+  · rw [found] at missing; cases missing
+  rw [found] at found'; cases found'
+  have sortedNormal : raw.normalize.Sorted := Sorted.normalize sorted
+  have sortedSet : (raw.normalize.set processId (change (normRecord raw.gone processId process))).Sorted :=
+    Sorted.insertRecord sortedNormal _ _
+  have gone : (raw.normalize.set processId (change (normRecord raw.gone processId process))).gone = raw.gone := by
+    funext other
+    simp only [State.gone, State.alive, State.record_set]
+    by_cases equal : other = processId
+    · subst equal
+      simp [live, found, live₀]
+    · simp only [equal, ↓reduceIte]
+      have := State.gone_normalize sorted other
+      simp only [State.gone, State.alive] at this
+      exact this
+  refine (State.ext_records (Sorted.normalize sorted') (Sorted.normalize sortedSet) (fun other => ?_)
+    changed.2.2.1.symm changed.2.2.2.symm)
+  rw [State.record_normalize' sortedSet, gone, State.record_normalize' sorted', changed.gone unseen]
+  by_cases equal : other = processId
+  · subst equal
+    rw [State.record_set, if_pos rfl, found'']
+    simp only [Option.map_some, Option.filter, ProcessState.finished_live (show
+      (normRecord raw.gone other (change (normRecord raw.gone other process))).exiting = none by
+        rw [normRecord_live live]; exact live),
+      ProcessState.finished_live (show (normRecord raw.gone other second).exiting = none by
+        rw [normRecord_live live']; exact live'),
+      Bool.not_false, ↓reduceIte, same, renormalize]
+  · rw [State.record_set, if_neg equal, changed.record_other equal]
+    have goneNormal : raw.normalize.gone = raw.gone := funext (State.gone_normalize sorted)
+    have again : ((raw.normalize.record other).map (normRecord raw.gone other)).filter (!·.finished) =
+        raw.normalize.record other := by
+      rw [← goneNormal, ← State.record_normalize' sortedNormal, State.normalize_normalize sorted]
+    rw [again, State.record_normalize' sorted]
 
 /-- Every other step absorbs a forced step, or commutes with it into a
 configuration where a forced step closes the square. -/
