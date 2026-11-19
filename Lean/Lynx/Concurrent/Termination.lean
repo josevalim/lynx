@@ -289,7 +289,7 @@ theorem State.weight_handle (state : State) (processId : PID) (waiting : Option 
       { process with links := Kernel.filter (·.1 != source) process.links }).weight_send processId source (.unlinkAck id)
     simp only [State.handle, Signal.weight] at *; split <;> (try dsimp only) <;> omega
   | unlinkAck id =>
-    have := same (fun process => { process with links := Kernel.filter (·.1 != source) process.links })
+    have := same (fun process => { process with links := Kernel.filter (fun link => !(link.1 == source && link.2 == some id)) process.links })
       fun _ => ⟨rfl, rfl, rfl⟩
     simp only [State.handle, Signal.weight]; split <;> (try dsimp only) <;> omega
   | monitor reference =>

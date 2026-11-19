@@ -903,10 +903,6 @@ private theorem inert_congr {gone : PID → Bool} {processId : PID} {process pro
     (entry : Entry) : inert gone processId process' entry = inert gone processId process entry := by
   obtain ⟨source, signal⟩ := entry
   cases signal <;> simp only [inert, refCounter, monitoring, aliases]
-  rename_i id
-  cases gone' : gone source
-  · rw [links source gone']
-  · simp
 
 private theorem inert_normRecord {gone : PID → Bool} {processId : PID} {process : ProcessState}
     (live : process.exiting = none) (entry : Entry) :
@@ -945,26 +941,7 @@ private theorem normRecord_eagerExit {gone : PID → Bool} {processId : PID} {pr
       inert gone processId (process.eagerExit source) entry = true := by
     intro entry inert'
     obtain ⟨from', signal⟩ := entry
-    cases signal <;> simp only [inert, ProcessState.eagerExit] at inert' ⊢ <;> try exact inert'
-    rename_i id
-    simp only [Bool.or_eq_true, bne_iff_ne, ne_eq, Kernel.lookup_eq, Kernel.filter_eq] at inert' ⊢
-    rcases inert' with gone' | missing
-    · exact .inl gone'
-    · right
-      by_cases same : from' = source
-      · subst same
-        rw [show List.lookup from' (process.links.filter (·.1 != from')) = none from by
-          induction process.links with
-          | nil => rfl
-          | cons head rest ih =>
-            obtain ⟨key, value⟩ := head
-            by_cases equal : key = from'
-            · subst equal; simpa [List.filter_cons] using ih
-            · have differ : (from' == key) = false := by simp [Ne.symm equal]
-              simp [equal, List.lookup_cons, differ, ih]]
-        simp
-      · rw [lookup_filter_of_keep fun entry _ equal => by simp [equal, same]]
-        exact missing
+    cases signal <;> simp only [inert, ProcessState.eagerExit] at inert' ⊢ <;> exact inert'
   have same : inert gone processId ((normRecord gone processId process).eagerExit source) =
       inert gone processId (process.eagerExit source) := by
     funext entry
@@ -1376,13 +1353,17 @@ private def popChange (process : ProcessState) : ProcessState :=
 private def messageChange (message : Term) (process : ProcessState) : ProcessState :=
   { process with queue := process.queue.tail, mailbox := Kernel.append process.mailbox [message] }
 
-/-- Handling the oldest signal, removing the links with a process. -/
-private def ackedChange (source : PID) (process : ProcessState) : ProcessState :=
-  { process with queue := process.queue.tail, links := Kernel.filter (·.1 != source) process.links }
+/-- Whether a link is not the one an acknowledgement removes. -/
+private def unacked (source : PID) (id : Nat) (link : PID × Option Nat) : Bool :=
+  !(link.1 == source && link.2 == some id)
+
+/-- Handling the oldest signal, removing the link being removed. -/
+private def ackedChange (source : PID) (id : Nat) (process : ProcessState) : ProcessState :=
+  { process with queue := process.queue.tail, links := Kernel.filter (unacked source id) process.links }
 
 /-- Handling the oldest signal, an acknowledgement of an unlink. -/
 private def ackChange (source : PID) (id : Nat) (process : ProcessState) : ProcessState :=
-  if Kernel.lookup source process.links == some (some id) then ackedChange source process else popChange process
+  if Kernel.lookup source process.links == some (some id) then ackedChange source id process else popChange process
 
 /-- Records whose oldest queued signal is a signal. -/
 private def Heads (entry : Entry) (process : ProcessState) : Prop :=
@@ -1458,7 +1439,10 @@ private theorem hidden_ack {entry : Entry} (notLink : entry.signal ≠ .link) (s
     · subst same
       simp only [lookup_filter_self, reduceCtorEq, beq_iff_eq, ↓reduceIte]
       split
-      · simp [Kernel.filter_eq, List.filter_filter]
+      · congr 1
+        simp only [Kernel.filter_eq, List.filter_filter]
+        refine List.filter_congr fun link _ => ?_
+        by_cases key : link.1 = exited <;> simp [unacked, key]
       · rfl
     · have kept : Kernel.lookup source (Kernel.filter (·.1 != exited) process.links) =
           Kernel.lookup source process.links := by
@@ -1688,7 +1672,8 @@ private theorem handleSelf
   | unlinkAck id =>
     simp only [State.handle, links]
     exact ⟨by first | rfl | trivial, either (modified (fun process =>
-      { process with links := Kernel.filter (·.1 != source) process.links }) (fun _ => ⟨rfl, rfl, rfl, rfl⟩) changed) changed⟩
+      { process with links := Kernel.filter (fun link => !(link.1 == source && link.2 == some id)) process.links })
+      (fun _ => ⟨rfl, rfl, rfl, rfl⟩) changed) changed⟩
   | monitor reference => exact ⟨rfl, modified (fun process =>
       { process with monitors := Kernel.append process.monitors [(reference, source)] }) (fun _ => ⟨rfl, rfl, rfl, rfl⟩) changed⟩
   | down reference reason =>
@@ -2548,215 +2533,96 @@ private theorem Task.handle_ack {state : State} {processId : PID} {task : Task �
   · have linked' : List.lookup source process.links = some (some id) := by
       simpa [Kernel.lookup_eq] using linked
     simp only [Task.handle, processOf, queue, State.handle, processSet, linked, ↓reduceIte, modified]
-    simp [ackChange, ackedChange, popChange, linked', queue]
+    have unacked' : unacked source id = fun link => !link.1 == source || !link.2 == some id := by
+      funext link; simp [unacked, Bool.not_and]
+    simp [ackChange, ackedChange, unacked', linked', queue, Bool.not_and]
   · have linked' : ¬List.lookup source process.links = some (some id) := by
       simpa [Kernel.lookup_eq] using linked
     simp only [Task.handle, processOf, queue, State.handle, processSet, linked, ↓reduceIte, Bool.false_eq_true]
     simp [ackChange, ackedChange, popChange, linked', queue]
 
-/-- The links a record has with a process. -/
-private def linksWith (source : PID) (process : ProcessState) : Nat :=
-  (Kernel.filter (·.1 == source) process.links).length
-
-private theorem linksWith_filter (source : PID) {process process' : ProcessState} {keep : PID × Option Nat → Bool}
-    (links : process'.links = Kernel.filter keep process.links) : linksWith source process' ≤ linksWith source process := by
-  simp only [linksWith, links, Kernel.filter_eq]
-  exact (List.Sublist.filter _ List.filter_sublist).length_le
-
-/-- After removing links alone, a signal that does nothing does so whichever
-processes are gone, when it did not before. -/
-private theorem inert_any_links {gone : PID → Bool} {processId : PID} {process process' : ProcessState} {entry : Entry}
-    (refCounter : process'.refCounter = process.refCounter) (monitoring : process'.monitoring = process.monitoring)
-    (aliases : process'.aliases = process.aliases) (clean : inert gone processId process entry = false)
-    (inert' : inert gone processId process' entry = true) (gone' : PID → Bool) :
-    inert gone' processId process' entry = true := by
-  obtain ⟨source, signal⟩ := entry
-  by_cases ack : ∃ id, signal = .unlinkAck id
-  · obtain ⟨id, rfl⟩ := ack
-    simp only [inert] at clean inert' ⊢
-    cases goneSource : gone source
-    · rw [goneSource, Bool.false_or] at inert'
-      rw [inert', Bool.or_true]
-    · rw [goneSource] at clean; simp at clean
-  · exfalso
-    have same : inert gone processId process' ⟨source, signal⟩ = inert gone processId process ⟨source, signal⟩ := by
-      cases signal <;> simp only [inert, refCounter, monitoring, aliases]
-      exact absurd ⟨_, rfl⟩ ack
-    rw [same, clean] at inert'
-    cases inert'
-
 private theorem ackChange_fields (source : PID) (id : Nat) (process : ProcessState) :
-    (ackChange source id process).refCounter = process.refCounter ∧
-      (ackChange source id process).monitoring = process.monitoring ∧
-      (ackChange source id process).aliases = process.aliases ∧
-      (ackChange source id process).exiting = process.exiting ∧
-      (ackChange source id process).queue = process.queue.tail ∧
-      ((ackChange source id process).links = process.links ∨
-        (ackChange source id process).links = Kernel.filter (·.1 != source) process.links) := by
-  unfold ackChange; split
-  · exact ⟨rfl, rfl, rfl, rfl, rfl, .inr rfl⟩
-  · exact ⟨rfl, rfl, rfl, rfl, rfl, .inl rfl⟩
+    (ackChange source id process).exiting = process.exiting ∧
+      inert = inert := ⟨by unfold ackChange ackedChange popChange; split <;> rfl, rfl⟩
 
-/-- Normalizing after handling an acknowledgement drops only what it drops for
-whichever processes are gone. -/
+/-- Whether a queued signal does nothing depends on neither the queue nor the links. -/
+private theorem inert_ack {gone : PID → Bool} {processId source : PID} {id : Nat} {process : ProcessState} :
+    inert gone processId (ackChange source id process) = inert gone processId process := by
+  unfold ackChange ackedChange popChange; split <;> rfl
+
+/-- Handling an acknowledgement at a clean record leaves it clean. -/
 private theorem normRecord_ack_clean {gone : PID → Bool} {processId source : PID} {id : Nat} {process : ProcessState}
     (clean : normRecord gone processId process = process) (live : process.exiting = none) (gone' : PID → Bool) :
     normRecord gone' processId (normRecord gone processId (ackChange source id process)) =
       normRecord gone' processId (ackChange source id process) := by
   have cleaned := clean_live clean live
-  obtain ⟨refCounter, monitoring, aliases, exiting, queue, links⟩ := ackChange_fields source id process
-  refine normRecord_any (exiting.trans live) (fun entry mem inert' gone'' =>
-    inert_any_links refCounter monitoring aliases (cleaned.1 entry ?_) inert' gone'') (fun link mem => ?_) gone'
-  · rw [queue] at mem; exact List.mem_of_mem_tail mem
-  · rcases links with same | filtered
-    · rw [same] at mem; exact cleaned.2 link mem
-    · rw [filtered, Kernel.filter_eq] at mem; exact cleaned.2 link (List.mem_filter.mp mem).1
+  have live' : (ackChange source id process).exiting = none := (ackChange_fields source id process).1.trans live
+  congr 1
+  rw [normRecord_live live', inert_ack]
+  have keepLinks : ∀ links : List (PID × Option Nat), (∀ link ∈ links, link ∈ process.links) →
+      Kernel.filter (fun link => !(link.2.isSome && gone link.1)) links = links := fun links sub => by
+    rw [Kernel.filter_eq]; exact List.filter_eq_self.mpr fun link mem => by simp [cleaned.2 link (sub link mem)]
+  have keepQueue : Kernel.filter (fun entry => !inert gone processId process entry) process.queue.tail =
+      process.queue.tail := by
+    rw [Kernel.filter_eq]
+    exact List.filter_eq_self.mpr fun entry mem => by simp [cleaned.1 entry (List.mem_of_mem_tail mem)]
+  unfold ackChange ackedChange popChange
+  split
+  · rw [keepLinks _ fun link mem => by
+        simp only [Kernel.filter_eq, List.mem_filter] at mem; exact mem.1]
+    simp only [keepQueue]
+  · simp only [keepQueue, keepLinks _ fun _ mem => mem]
 
-/-- Removing links only makes more signals inert. -/
-private theorem inert_unlinked {gone : PID → Bool} {processId source : PID} {process : ProcessState} {entry : Entry}
-    (inert' : inert gone processId process entry = true) :
-    inert gone processId { process with links := Kernel.filter (·.1 != source) process.links } entry = true := by
-  obtain ⟨from', signal⟩ := entry
-  cases signal <;> simp only [inert] at inert' ⊢ <;> try exact inert'
-  rename_i id
-  simp only [Bool.or_eq_true, bne_iff_ne, ne_eq, Kernel.lookup_eq, Kernel.filter_eq] at inert' ⊢
-  rcases inert' with gone' | missing
-  · exact .inl gone'
-  · right
-    by_cases same : from' = source
-    · subst same
-      have := lookup_filter_self from' process.links
-      simp only [Kernel.lookup_eq, Kernel.filter_eq] at this
-      rw [this]; simp
-    · rw [lookup_filter_of_keep fun entry _ equal => by simp [equal, same]]
-      exact missing
-
-/-- The only link a record has with a process is the one it looks up. -/
-private theorem lookup_single {β : Type} {key : PID} {value : β} :
-    ∀ {entries : List (PID × β)}, (entries.filter (·.1 == key)).length ≤ 1 → entries.lookup key = some value →
-      ∀ entry ∈ entries, entry.1 = key → entry.2 = value
-  | [], _, found => by simp at found
-  | (other, value') :: rest, single, found => by
-      intro entry mem same
-      by_cases equal : other = key
-      · subst equal
-        simp only [List.lookup_cons, beq_self_eq_true, Option.some.injEq] at found
-        subst found
-        simp only [List.filter_cons, beq_self_eq_true, ↓reduceIte, List.length_cons] at single
-        have empty : (rest.filter (·.1 == other)).length = 0 := by omega
-        rw [List.length_eq_zero_iff] at empty
-        rcases List.mem_cons.mp mem with rfl | mem
-        · rfl
-        · have := List.filter_eq_nil_iff.mp empty entry mem
-          simp [same] at this
-      · have differ : (key == other) = false := by simp [Ne.symm equal]
-        simp only [List.lookup_cons, differ] at found
-        simp only [List.filter_cons, show (other == key) = false by simp [equal], Bool.false_eq_true,
-          ↓reduceIte] at single
-        rcases List.mem_cons.mp mem with rfl | mem
-        · exact absurd same equal
-        · exact lookup_single single found entry mem same
-
+/-- Normalizing before handling a queued acknowledgement reaches what handling it reaches. -/
 private theorem normRecord_ack_kept {gone : PID → Bool} {processId source : PID} {id : Nat} {process : ProcessState}
-    (live : process.exiting = none) (heads : Heads ⟨source, .unlinkAck id⟩ process)
-    (kept : inert gone processId process ⟨source, .unlinkAck id⟩ = false) :
+    (live : process.exiting = none) (heads : Heads ⟨source, .unlinkAck id⟩ process) :
     normRecord gone processId (ackChange source id (normRecord gone processId process)) =
       normRecord gone processId (ackChange source id process) := by
   obtain ⟨rest, queue⟩ := heads
-  have keptHead := kept
-  simp only [inert, Bool.or_eq_false_iff, bne_eq_false_iff_eq] at kept
-  obtain ⟨notGone, linked⟩ := kept
-  have linked' : Kernel.lookup source (normRecord gone processId process).links = some (some id) := by
+  have liveNormal : (normRecord gone processId process).exiting = none := by rw [normRecord_live live]; exact live
+  rw [normRecord_live ((ackChange_fields source id _).1.trans liveNormal),
+    normRecord_live ((ackChange_fields source id _).1.trans live), inert_ack, inert_ack,
+    funext (inert_normRecord (gone := gone) (processId := processId) live)]
+  let keep := fun link : PID × Option Nat => !(link.2.isSome && gone link.1)
+  -- Normalizing, then handling, keeps the same links as handling, then normalizing.
+  have links : Kernel.filter keep (ackChange source id (normRecord gone processId process)).links =
+      Kernel.filter keep (ackChange source id process).links := by
+    have normal : (normRecord gone processId process).links = Kernel.filter keep process.links := by
+      rw [normRecord_live live]
+    have dropped : ∀ entries : List (PID × Option Nat), gone source = true →
+        Kernel.filter keep (Kernel.filter (unacked source id) entries) = Kernel.filter keep entries := by
+      intro entries goneSource
+      simp only [Kernel.filter_eq, List.filter_filter]
+      refine List.filter_congr fun link _ => ?_
+      by_cases key : link.1 = source <;> by_cases value : link.2 = some id <;>
+        simp_all [keep, unacked]
+    unfold ackChange ackedChange popChange
+    simp only [normal]
+    cases goneSource : gone source
+    · have lookups : Kernel.lookup source (Kernel.filter keep process.links) = Kernel.lookup source process.links := by
+        simp only [Kernel.lookup_eq, Kernel.filter_eq]
+        exact lookup_filter_of_keep fun link _ same => by simp [keep, same, goneSource]
+      rw [lookups]
+      split
+      · simp only [Kernel.filter_eq, List.filter_filter]
+        refine List.filter_congr fun link _ => ?_
+        cases keep link <;> cases unacked source id link <;> rfl
+      · simp only [Kernel.filter_eq, List.filter_filter, Bool.and_self]
+    · split <;> split <;> simp only [Kernel.filter_eq, List.filter_filter] <;>
+        refine List.filter_congr fun link _ => ?_ <;>
+        by_cases key : link.1 = source <;> rcases link with ⟨peer, _ | value⟩ <;> simp_all [keep, unacked] <;>
+        cases gone peer <;> simp
+  have queues : Kernel.filter (fun entry => !inert gone processId process entry)
+        (ackChange source id (normRecord gone processId process)).queue =
+      Kernel.filter (fun entry => !inert gone processId process entry) (ackChange source id process).queue := by
+    unfold ackChange ackedChange popChange
     rw [normRecord_live live]
-    simp only [Kernel.lookup_eq, Kernel.filter_eq] at linked ⊢
-    rw [lookup_filter_of_keep fun entry _ same => by simp [same, notGone]]
-    exact linked
-  unfold ackChange
-  simp only [beq_iff_eq.mpr linked, beq_iff_eq.mpr linked', ↓reduceIte]
-  have live₁ : (ackedChange source (normRecord gone processId process)).exiting = none := by
-    rw [ackedChange, normRecord_live live]; exact live
-  rw [normRecord_live live₁, normRecord_live (show (ackedChange source process).exiting = none from live)]
-  have same : inert gone processId (ackedChange source (normRecord gone processId process)) =
-      inert gone processId (ackedChange source process) := by
-    funext entry
-    apply inert_congr
-    · rw [ackedChange, normRecord_live live]; rfl
-    · rw [ackedChange, normRecord_live live]; rfl
-    · rw [ackedChange, normRecord_live live]; rfl
-    · intro from' notGone'
-      rw [ackedChange, normRecord_live live]
-      simp only [ackedChange, Kernel.lookup_eq, Kernel.filter_eq, List.filter_filter]
-      exact lookup_filter_congr _ fun entry _ equal => by simp [equal, notGone']
-  have more : ∀ entry, inert gone processId process entry = true →
-      inert gone processId (ackedChange source process) entry = true :=
-    fun entry inert' => inert_unlinked (source := source) inert'
-  rw [same, normRecord_live live]
-  simp only [ackedChange, queue, Kernel.filter_eq, List.filter_cons, keptHead, Bool.not_false, ↓reduceIte,
-    List.tail_cons, List.filter_filter]
-  congr 1
-  · refine List.filter_congr fun entry _ => ?_
-    cases inert' : inert gone processId (ackedChange source process) entry
-    · have := mt (more entry) (by simp [inert'])
-      simp only [ackedChange, queue, List.tail_cons, Kernel.filter_eq] at inert' this
-      simp [inert', this]
-    · simp only [ackedChange, queue, List.tail_cons, Kernel.filter_eq] at inert'
-      simp [inert']
-  · refine List.filter_congr fun entry _ => ?_
-    cases gone entry.fst <;> cases entry.snd.isSome <;> simp
-
-private theorem normRecord_ack_inert {gone : PID → Bool} {processId source : PID} {id : Nat} {process : ProcessState}
-    (live : process.exiting = none) (heads : Heads ⟨source, .unlinkAck id⟩ process)
-    (inert' : inert gone processId process ⟨source, .unlinkAck id⟩ = true) (single : linksWith source process ≤ 1) :
-    normRecord gone processId (ackChange source id process) = normRecord gone processId process := by
-  obtain ⟨rest, queue⟩ := heads
-  unfold ackChange
-  split
-  · rename_i linked
-    have linked' : Kernel.lookup source process.links = some (some id) := by simpa using linked
-    have goneSource : gone source = true := by
-      simp only [inert, Bool.or_eq_true, bne_iff_ne, ne_eq] at inert'
-      rcases inert' with gone' | missing
-      · exact gone'
-      · exact absurd linked' missing
-    rw [normRecord_live (show (ackedChange source process).exiting = none from live), normRecord_live live]
-    have same : inert gone processId (ackedChange source process) = inert gone processId process := by
-      funext entry
-      refine inert_congr (process := process) (process' := ackedChange source process) rfl rfl rfl
-        (fun from' notGone => ?_) entry
-      have differ : from' ≠ source := fun equal => by rw [equal, goneSource] at notGone; cases notGone
-      simp only [ackedChange, Kernel.lookup_eq, Kernel.filter_eq]
-      exact lookup_filter_of_keep fun entry _ equal => by simp [equal, differ]
-    rw [same]
-    simp only [ackedChange, queue, Kernel.filter_eq, List.filter_cons, inert', Bool.not_true, Bool.false_eq_true,
-      ↓reduceIte, List.tail_cons, List.filter_filter]
-    congr 1
-    refine List.filter_congr fun entry mem => ?_
-    by_cases equal : entry.1 = source
-    · have only := lookup_single (by simpa [linksWith, Kernel.filter_eq] using single)
-        (by simpa [Kernel.lookup_eq] using linked') entry mem equal
-      simp [equal, only, goneSource]
-    · simp [equal]
-  · rw [normRecord_live (show (popChange process).exiting = none from live), normRecord_live live]
-    have same : inert gone processId (popChange process) = inert gone processId process := rfl
-    rw [same]
-    simp [popChange, queue, Kernel.filter_eq, List.filter_cons, inert']
-
-private theorem hidden_ack_single {entry : Entry} (notLink : entry.signal ≠ .link) (source : PID) (id : Nat) :
-    Hidden (fun process => Heads entry process ∧ linksWith source process ≤ 1) (ackChange source id) where
-  exiting ok := (hidden_ack notLink source id).exiting ok.1
-  trapExit ok := (hidden_ack notLink source id).trapExit ok.1
-  parked ok := (hidden_ack notLink source id).parked ok.1
-  links ok := (hidden_ack notLink source id).links ok.1
-  push other ok := by
-    obtain ⟨heads, pushed⟩ := (hidden_ack notLink source id).push other ok.1
-    exact ⟨⟨heads, ok.2⟩, pushed⟩
-  eagerExit exited ok := by
-    obtain ⟨heads, exited'⟩ := (hidden_ack notLink source id).eagerExit exited ok.1
-    exact ⟨⟨heads, Nat.le_trans (linksWith_filter source (process := _) (process' := ProcessState.eagerExit _ exited)
-      rfl) ok.2⟩, exited'⟩
-  unpark ok := by
-    obtain ⟨heads, unparked⟩ := (hidden_ack notLink source id).unpark ok.1
-    exact ⟨⟨heads, ok.2⟩, unparked⟩
+    have kept : inert gone processId process ⟨source, .unlinkAck id⟩ = false := by simp [inert]
+    split <;> split <;> simp [queue, kept, Kernel.filter_eq, List.filter_filter]
+  rw [links, queues]
+  unfold ackChange ackedChange popChange
+  rw [normRecord_live live]
+  split <;> split <;> rfl
 
 /-- Whether a signal other than an acknowledgement that does nothing yet is forced does not
 depend on the state. -/
@@ -2858,31 +2724,24 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
   | reply value => exact quietCase rfl
   | flush => exact quietCase rfl
   | unlinkAck id =>
-    have single : linksWith source process ≤ 1 := by
-      simpa [Task.forcedHead, notInert, processOf, linksWith] using flagged
     rw [Task.handle_ack sorted found queue] at head
     simp only [List.head?_cons, Option.some.injEq] at head
     subst head
     simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
-    refine Config.forced_other (key := .handle processId) (task' := task) reachable lookup found live ⟨heads, single⟩
-      (hidden_ack_single (by simp) source id) (normRecord_ack_clean clean live) owner step' ?_
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, single₁⟩ live₁
-    cases kept : inert raw.gone processId process₁ ⟨source, .unlinkAck id⟩
-    · obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ kept
-      have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
-        simp [State.process, record]
-      have tagged := Config.tagged_handle_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1
-        lookup₁ (by rw [processOf₁, queue₁])
-        (by rw [Task.handle_ack (Sorted.normalize within.1) record queue₁]; rfl)
-        (by
-          have fewer := linksWith_filter source (process := process₁)
-            (process' := normRecord raw.gone processId process₁) (by rw [normRecord_live live₁])
-          simp only [Task.forcedHead, processOf₁, Bool.or_eq_true, decide_eq_true_eq]
-          exact .inr (by simpa [linksWith] using Nat.le_trans fewer single₁))
-      simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
-      exact .inl ⟨_, tagged, by rw [(ackChange_fields source id _).2.2.2.1, normRecord_live live₁]; exact live₁,
-        normRecord_ack_kept live₁ heads₁ kept⟩
-    · exact .inr ⟨rfl, normRecord_ack_inert live₁ heads₁ kept single₁⟩
+    refine Config.forced_other (key := .handle processId) (task' := task) reachable lookup found live heads
+      (hidden_ack (by simp) source id) (normRecord_ack_clean clean live) owner step' ?_
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ heads₁ live₁
+    have kept : inert raw.gone processId process₁ ⟨source, .unlinkAck id⟩ = false := by simp [inert]
+    obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ kept
+    have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
+      simp [State.process, record]
+    have tagged := Config.tagged_handle_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1
+      lookup₁ (by rw [processOf₁, queue₁])
+      (by rw [Task.handle_ack (Sorted.normalize within.1) record queue₁]; rfl)
+      (by simp [Task.forcedHead])
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
+    exact .inl ⟨_, tagged, by rw [(ackChange_fields source id _).1, normRecord_live live₁]; exact live₁,
+      normRecord_ack_kept live₁ heads₁⟩
   | _ => simp [Task.forcedHead, notInert] at flagged
 
 private theorem normRecord_ownChange {gone : PID → Bool} {processId : PID} {process : ProcessState}

@@ -989,7 +989,7 @@ private def State.handleEffect (state : State) (processId : PID) (entry : Entry)
       else state.sendEffect processId source (.unlinkAck id)
   | .unlinkAck id =>
       if Kernel.lookup source process.links == some (some id) then
-        .modify processId fun process => { process with links := Kernel.filter (·.1 != source) process.links }
+        .modify processId fun process => { process with links := Kernel.filter (fun link => !(link.1 == source && link.2 == some id)) process.links }
       else {}
   | .monitor reference =>
       .modify processId fun process => { process with monitors := Kernel.append process.monitors [(reference, source)] }

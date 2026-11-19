@@ -790,9 +790,10 @@ value it resumes with if it was waiting for it, and the reason it exits with, if
         else state
       (state.send processId source (.unlinkAck id), none, none)
   | .unlinkAck id =>
+      -- Only the link being removed goes, which a link made again since keeps.
       (if Kernel.lookup source process.links == some (some id) then
         state.modify processId fun process =>
-          { process with links := Kernel.filter (·.1 != source) process.links }
+          { process with links := Kernel.filter (fun link => !(link.1 == source && link.2 == some id)) process.links }
         else state, none, none)
   | .monitor reference =>
       (state.modify processId fun process =>
