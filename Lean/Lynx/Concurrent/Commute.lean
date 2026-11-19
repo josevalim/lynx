@@ -363,12 +363,9 @@ end Field
 abbrev Frame := PID × Nat × Nat
 
 /-- The frames of appending a signal to a live queue: it reads only whether the
-receiver is live, as a live receiver keeps every signal but an acknowledgement
-no unlink waits for, which reads its links. -/
+receiver is live, as a live receiver keeps every signal. -/
 @[expose] def State.appendFrames (state : State) (source target : PID) (signal : Signal) : List Frame :=
-  match signal with
-  | .unlinkAck _ => [(target, Field.live ||| Field.links ||| Field.unlinks, Field.queueTail)]
-  | _ => [(target, Field.live, Field.queueTail)]
+  [(target, Field.live, Field.queueTail)]
 
 /-- The frames of queueing a signal, or of its sender's fallback. -/
 @[expose] def State.enqueueFrames (state : State) (source target : PID) (signal : Signal) : List Frame :=
@@ -567,7 +564,7 @@ the process queued and its signals to it. -/
           !(Kernel.contains exiting.links processId || Kernel.any exiting.downs (·.2 == processId))
       | none =>
           !Kernel.any process.queue (fun entry => entry.source == processId && match entry.signal with
-              | .isAlive | .monitor _ | .unlinkAck _ => true
+              | .isAlive | .monitor _ => true
               | _ => false) &&
           !Kernel.any process.links (fun link => link.1 == processId && link.2.isSome)
 

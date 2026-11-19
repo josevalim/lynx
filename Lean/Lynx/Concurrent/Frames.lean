@@ -1625,10 +1625,8 @@ private theorem Effect.InFrames.enqueue (state : State) (source target : PID) (s
     split
     · rename_i alive
       have : state.alive target = true := by simp [State.alive, found, alive]
-      apply queued target source signal (if signal matches .unlinkAck _ then
-        Field.live ||| Field.links ||| Field.unlinks else Field.live)
-      simp only [State.enqueueFrames, this, ↓reduceIte, State.appendFrames]
-      cases signal <;> simp
+      apply queued target source signal Field.live
+      simp only [State.enqueueFrames, this, ↓reduceIte, State.appendFrames, List.mem_singleton]
     · rename_i exiting
       have : state.alive target = false := by
         simp only [State.alive, found]; cases equal : process.exiting <;> simp_all
@@ -3128,9 +3126,7 @@ private theorem Agree.mono {frames frames' : List Frame} {state other : State} (
 private theorem enqueueFrames_live (state : State) (source target : PID) (signal : Signal) :
     ∃ entry ∈ state.enqueueFrames source target signal, entry.1 = target ∧ entry.2.1.testBit liveBit = true := by
   simp only [State.enqueueFrames, State.appendFrames]
-  split
-  · split <;> exact ⟨_, List.mem_cons_self, rfl, by dsimp only; decide⟩
-  · exact ⟨_, List.mem_cons_self, rfl, by dsimp only; decide⟩
+  split <;> exact ⟨_, List.mem_cons_self, rfl, by dsimp only; decide⟩
 
 private theorem sendFrames_reads (state : State) (source target : PID) (signal : Signal) :
     (∃ entry ∈ state.sendFrames source target signal, entry.1 = source ∧ entry.2.1.testBit 13 = true) ∧
@@ -3911,7 +3907,7 @@ private def Refers (process : ProcessState) (other : PID) : Bool :=
         Kernel.contains exiting.links other || Kernel.any exiting.downs (·.2 == other)
   | none =>
       Kernel.any process.queue (fun entry => entry.source == other && match entry.signal with
-          | .isAlive | .monitor _ | .unlinkAck _ => true
+          | .isAlive | .monitor _ => true
           | _ => false) ||
         Kernel.any process.links (fun link => link.1 == other && link.2.isSome)
 
@@ -4983,7 +4979,7 @@ private theorem Clean.unlinked {gone : PID → Bool} {processId target : PID} {p
     (clean : Clean gone target process) (live : process.exiting = none)
     (refers : Refers process processId = false) : Clean gone target (linkRemoved processId process) := by
   have noAcks : ∀ entry ∈ process.queue, entry.source = processId →
-      (entry.signal matches .isAlive | .monitor _ | .unlinkAck _) = false := by
+      (entry.signal matches .isAlive | .monitor _) = false := by
     intro entry mem same
     simp only [Refers, live, Bool.or_eq_false_iff, Kernel.any_eq, List.any_eq_false] at refers
     have := refers.1 entry mem
