@@ -5379,4 +5379,216 @@ private theorem Config.stepOf_effect {state : State} {tasks : List (PID × Task 
     exact Realizes.fire state timer
   | link => simp [Config.confined] at confined
 
+/-! ### Assembling: frames that read heads only where there are some -/
+
+/-- Each entry of frames reads a queue's tail only with its head, and its head
+without its tail only where the queue has a signal. -/
+private def HeadSafe (frames : List Frame) (state : State) : Prop :=
+  ∀ entry ∈ frames, (entry.2.1.testBit tailBit = true → entry.2.1.testBit headBit = true) ∧
+    (entry.2.1.testBit headBit = true → entry.2.1.testBit tailBit = true ∨ (state.process entry.1).queue ≠ [])
+
+private theorem HeadSafe.quiet {frames : List Frame} {state : State}
+    (quiet : ∀ entry ∈ frames, entry.2.1.testBit headBit = false ∧ entry.2.1.testBit tailBit = false) :
+    HeadSafe frames state := fun entry mem =>
+  ⟨fun read => by rw [(quiet entry mem).2] at read; simp at read,
+    fun read => by rw [(quiet entry mem).1] at read; simp at read⟩
+
+private theorem HeadSafe.cons {entry : Frame} {frames : List Frame} {state : State}
+    (first : (entry.2.1.testBit tailBit = true → entry.2.1.testBit headBit = true) ∧
+      (entry.2.1.testBit headBit = true → entry.2.1.testBit tailBit = true ∨ (state.process entry.1).queue ≠ []))
+    (rest : HeadSafe frames state) : HeadSafe (entry :: frames) state := fun entry' mem => by
+  rcases List.mem_cons.mp mem with rfl | mem
+  · exact first
+  · exact rest entry' mem
+
+/-- Frames reading heads only where there are some meet what keeping their reads needs. -/
+private theorem HeadSafe.reads {frames : List Frame} {state : State} (safe : HeadSafe frames state) :
+    (∀ processId process, state.record processId = some process → readsOf frames processId headBit →
+      readsOf frames processId tailBit ∨ process.queue ≠ []) ∧
+    (∀ processId, readsOf frames processId tailBit → readsOf frames processId headBit) := by
+  refine ⟨fun processId process found read => ?_, fun processId read => ?_⟩
+  · simp only [readsOf, List.any_eq_true, Bool.and_eq_true, beq_iff_eq] at read
+    obtain ⟨entry, mem, same, set⟩ := read
+    rcases (safe entry mem).2 set with tail | nonempty
+    · exact .inl (List.any_eq_true.mpr ⟨entry, mem, by simp [same, tail]⟩)
+    · rw [same] at nonempty
+      exact .inr (by simpa [State.process, found] using nonempty)
+  · simp only [readsOf, List.any_eq_true, Bool.and_eq_true, beq_iff_eq] at read
+    obtain ⟨entry, mem, same, set⟩ := read
+    exact List.any_eq_true.mpr ⟨entry, mem, by simp [same, (safe entry mem).1 set]⟩
+
+private theorem sendFrames_headSafe (state other : State) (source target : PID) (signal : Signal) :
+    HeadSafe (state.sendFrames source target signal) other :=
+  HeadSafe.quiet fun _ mem => ⟨(sendFrames_quiet mem).1, (sendFrames_quiet mem).2.1⟩
+
+private theorem enqueueFrames_headSafe (state other : State) (source target : PID) (signal : Signal) :
+    HeadSafe (state.enqueueFrames source target signal) other :=
+  HeadSafe.quiet fun _ mem => ⟨(enqueueFrames_quiet mem).1, (enqueueFrames_quiet mem).2.1⟩
+
+private theorem HeadSafe.literal {processId : PID} {reads writes : Nat} {state : State}
+    (tail : reads.testBit tailBit = true → reads.testBit headBit = true)
+    (head : reads.testBit headBit = true → reads.testBit tailBit = true ∨ (state.process processId).queue ≠ []) :
+    (((processId, reads, writes) : Frame).2.1.testBit tailBit = true →
+      ((processId, reads, writes) : Frame).2.1.testBit headBit = true) ∧
+    (((processId, reads, writes) : Frame).2.1.testBit headBit = true →
+      ((processId, reads, writes) : Frame).2.1.testBit tailBit = true ∨
+        (state.process ((processId, reads, writes) : Frame).1).queue ≠ []) := ⟨tail, head⟩
+
+/-- An entry reading no queue. -/
+local syntax "quiet_entry" : tactic
+macro_rules
+  | `(tactic| quiet_entry) => `(tactic|
+      (exact HeadSafe.literal (fun read => absurd read (by decide)) (fun read => absurd read (by decide))))
+
+/-- An entry reading a queue's head and tail. -/
+local syntax "both_entry" : tactic
+macro_rules
+  | `(tactic| both_entry) => `(tactic|
+      (exact HeadSafe.literal (fun _ => by decide) (fun _ => .inl (by decide))))
+
+/-- The frames of a process ending read heads only where there are some. -/
+private theorem endFrames_headSafe (state : State) (processId : PID) :
+    HeadSafe (state.endFrames processId).1 state := by
+  rw [endFrames_eq]
+  refine HeadSafe.cons (by both_entry) fun entry mem => ?_
+  obtain ⟨target, rfl⟩ := mem_eagerFrame mem
+  obtain ⟨tail, -, head, -⟩ := eagerFrame_bits state processId target
+  exact ⟨fun read => by rw [tail] at read; simp at read, fun read => .inr (head read)⟩
+
+/-- The frames of a confined step read heads only where there are some. -/
+private theorem Config.headSafe {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key} {frames : List Frame} {timers : Bool}
+    (confined : Config.confined (.running state tasks finished false) key = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, timers)) :
+    HeadSafe frames state := by
+  cases key with
+  | own processId =>
+    simp only [Config.frames, Option.bind_eq_some_iff] at found
+    obtain ⟨task, lookup, found⟩ := found
+    obtain ⟨computation, finish, wait⟩ := task
+    cases wait with
+    | some => simp only [Task.ownFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]; intro _ mem; simp at mem
+    | none =>
+    simp only [Config.confined, lookup, Bool.and_eq_true] at confined
+    cases computation with
+    | ok =>
+      simp only [Task.ownFrames, Option.some.injEq] at found
+      have := congrArg Prod.fst found; simp only at this; rw [← this]
+      exact endFrames_headSafe state processId
+    | error exception =>
+      cases exception with
+      | exhausted => simp at confined
+      | _ =>
+        simp only [Task.ownFrames, Option.some.injEq] at found
+        have := congrArg Prod.fst found; simp only at this; rw [← this]
+        exact endFrames_headSafe state processId
+    | send => simp only [Task.ownFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]; exact sendFrames_headSafe _ _ _ _ _
+    | receive timeout select next =>
+      simp only [Task.ownFrames] at found
+      split at found
+      · simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+        exact HeadSafe.cons (by quiet_entry) (fun _ mem => by simp at mem)
+      · cases timeout <;> simp only [Option.some.injEq, Prod.mk.injEq] at found <;> rw [← found.1]
+        · exact HeadSafe.cons (by quiet_entry) (fun _ mem => by simp at mem)
+        all_goals exact HeadSafe.cons (by both_entry) (fun _ mem => by simp at mem)
+    | request query next =>
+      simp only [Task.ownFrames] at found
+      have empty : HeadSafe ([] : List Frame) state := fun _ mem => by simp at mem
+      cases query with
+      | monitor target alias =>
+        simp only [State.requestFrames] at found
+        split at found
+        · simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+          exact HeadSafe.cons (by quiet_entry) empty
+        · simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+          refine HeadSafe.cons (by quiet_entry) ?_
+          split
+          · exact enqueueFrames_headSafe _ _ _ _ _
+          · exact empty
+      | demonitor =>
+        simp only [State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+        exact HeadSafe.cons (by quiet_entry) empty
+      | startTimer =>
+        simp only [State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+        exact HeadSafe.cons (by quiet_entry) (HeadSafe.cons (by quiet_entry) empty)
+      | cancelTimer =>
+        simp only [State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+        exact HeadSafe.cons (by quiet_entry) empty
+      | alive target =>
+        simp only [State.requestFrames] at found
+        split at found
+        · simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]; exact empty
+        · split at found <;> simp only [Option.some.injEq, Prod.mk.injEq] at found <;> rw [← found.1]
+          · exact sendFrames_headSafe _ _ _ _ _
+          · exact HeadSafe.cons (by quiet_entry) (HeadSafe.cons (by quiet_entry) empty)
+      | sendAlias =>
+        simp only [State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+        exact sendFrames_headSafe _ _ _ _ _
+      | _ => simp at confined
+    | _ => simp at confined
+  | handle processId =>
+    simp only [Config.frames, Option.bind_eq_some_iff] at found
+    obtain ⟨task, -, found⟩ := found
+    simp only [Task.handleFrames] at found
+    cases queue : (state.process processId).queue with
+    | nil => simp only [queue, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]; intro _ mem; simp at mem
+    | cons entry rest =>
+      simp only [queue] at found
+      have own : ∀ {reads writes : Nat}, reads.testBit tailBit = false →
+          HeadSafe [(processId, Field.queueHead ||| reads, Field.queueHead ||| writes)] state := fun tail =>
+        HeadSafe.cons ⟨fun read => by simp [Nat.testBit_or, tail] at read; exact absurd read (by decide),
+          fun _ => .inr (by simp [queue])⟩ (fun _ mem => by simp at mem)
+      simp only [Config.confined, Bool.and_eq_true, queue] at confined
+      obtain ⟨source, signal⟩ := entry
+      cases signal <;> simp at confined <;> simp only [Option.some.injEq, Prod.mk.injEq] at found <;>
+        rw [← found.1] <;> first | exact own (by decide) | exact own (by split <;> decide)
+  | phase processId =>
+    simp only [Config.frames] at found
+    unfold State.phaseFrames at found
+    have empty : HeadSafe ([] : List Frame) state := fun _ mem => by simp at mem
+    cases record : state.record processId with
+    | none => simp [record] at found
+    | some process =>
+      have same : state.process processId = process := by simp [State.process, record]
+      simp only [record] at found
+      cases exits : process.exiting with
+      | none => simp [exits] at found
+      | some exiting =>
+        simp only [exits] at found
+        cases downs : exiting.downs with
+        | cons down rest =>
+          simp only [downs, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+          refine HeadSafe.cons ?_ (sendFrames_headSafe _ _ _ _ _)
+          split
+          · both_entry
+          · quiet_entry
+        | nil =>
+          cases queue : process.queue with
+          | nil =>
+            simp only [downs, queue, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+            refine HeadSafe.cons ?_ empty
+            split
+            · both_entry
+            · quiet_entry
+          | cons entry rest =>
+            simp only [downs, queue, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+            refine HeadSafe.cons ?_ ?_
+            · split
+              · both_entry
+              · exact HeadSafe.literal (fun read => absurd read (by decide)) fun _ => .inr (by simp [same, queue])
+            · obtain ⟨source, signal⟩ := entry
+              cases signal <;> first | exact sendFrames_headSafe _ _ _ _ _ | exact empty
+  | unpark processId =>
+    simp only [Config.frames] at found
+    split at found
+    · simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+      exact HeadSafe.cons (by quiet_entry) (enqueueFrames_headSafe _ _ _ _ _)
+    · simp at found
+  | fire reference =>
+    simp only [Config.frames] at found
+    split at found
+    · simp only [Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]; exact enqueueFrames_headSafe _ _ _ _ _
+    · simp at found
+  | link => simp [Config.frames] at found
+
 end Lynx.Concurrent
