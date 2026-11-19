@@ -6382,4 +6382,106 @@ private theorem State.awaited_of_normalized {state : State} (sorted : state.Sort
   constructor <;> rintro ⟨entry, mem, holds⟩ <;> refine ⟨entry, mem, ?_⟩ <;>
     simpa [State.awaitedEntry, State.inertEntry_of_normalized sorted normalized found live mem] using holds
 
+/-- A link signal from a process. -/
+private def linkFrom (processId : PID) (entry : Entry) : Bool :=
+  entry.source == processId && match entry.signal with
+    | .link => true
+    | _ => false
+
+private theorem State.eagerLink_eq (state : State) (processId target : PID) (reason : Term) :
+    state.eagerLink processId target reason = (isNormal reason && state.alive target &&
+      !(state.process target).trapExit && !Kernel.any (state.process target).queue (linkFrom processId)) := rfl
+
+private theorem eagerFrame_eq (state : State) (processId target : PID) :
+    eagerFrame state processId target = (target, Field.live ||| Field.trapExit |||
+      (if Kernel.any (state.process target).queue (linkFrom processId) then Field.queueHead else 0) |||
+      Field.links ||| Field.eagerExits, Field.links ||| Field.eagerExits) := rfl
+
+/-- Whether a link exit of an ending process is applied as it is sent, after a
+step apart from its end, normalized, is as it was. -/
+private theorem Config.eager_after {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key other : Key} {frames : List Frame} {timers timers' : Bool}
+    {raw : State} {processId : PID} (sorted : state.Sorted) (normalized : state.normalize = state)
+    (confined : Config.confined (.running state tasks finished false) key = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, timers))
+    (confined' : Config.confined (.running state tasks finished false) other = true)
+    (found' : (Config.running state tasks finished false).frames other = some ((state.endFrames processId).1, timers'))
+    (apart : framesApart frames (state.endFrames processId).1 = true)
+    (realizes : Realizes ((Config.running state tasks finished false).effectOf key) state raw) (sortedRaw : raw.Sorted)
+    {target : PID} (reason : Term) (linked : (target, none) ∈ (state.process processId).links) :
+    raw.normalize.eagerLink processId target reason = state.eagerLink processId target reason := by
+  have agree := Config.agree_after sorted normalized confined found confined' found' apart realizes sortedRaw
+  have mem : eagerFrame state processId target ∈ (state.endFrames processId).1 := by
+    rw [endFrames_eq]; exact List.mem_cons_of_mem _ (eagerFrame_mem linked)
+  obtain ⟨-, -, -, reads⟩ := eagerFrame_bits state processId target
+  have alive := agree.alive mem ((reads 16).1 (.inl rfl))
+  have trap := agree.get mem .trapExit ((reads 10).1 (.inr (.inl rfl)))
+  simp only [eagerFrame, ProcessState.get] at alive trap
+  -- The queue: a link from the process stays queued, and none is queued.
+  have notWhole : ¬ WholeOf frames target := fun whole =>
+    (apart_of_framesApart apart target).1 16 (whole 16 (by decide))
+      (.inl (readsOf_of_mem mem ((reads 16).1 (.inl rfl))))
+  have records : ∀ other, raw.record other =
+      (((Config.running state tasks finished false).effectOf key).apply state).record other := realizes.records
+  have clean := Config.clean sorted normalized confined found
+  have kept : raw.normalize.record target = raw.record target :=
+    State.record_normalize_clean sortedRaw fun process found => by
+      rw [records] at found
+      have gone : raw.gone = (((Config.running state tasks finished false).effectOf key).apply state).gone := by
+        funext other; simp only [State.gone, State.alive, records]
+      rw [gone]; exact clean target notWhole process found
+  have queue : ∀ entry ∈ (raw.normalize.process target).queue, entry.signal = .link →
+      entry ∈ (state.process target).queue := by
+    intro entry entryMem link
+    simp only [State.process, kept, records] at entryMem
+    cases found'' : (((Config.running state tasks finished false).effectOf key).apply state).record target with
+    | none => rw [found''] at entryMem; simp at entryMem
+    | some process' =>
+      rw [found''] at entryMem
+      obtain ⟨process, before, inside⟩ := Config.noNewLinks confined target process' found'' entry entryMem link
+      simp only [State.process, before]; exact inside
+  -- A link from the process queued before stays queued: the step does not remove the head it reads.
+  have stays : ∀ entry ∈ (state.process target).queue,
+      Kernel.any (state.process target).queue (linkFrom processId) = true →
+      entry ∈ (raw.normalize.process target).queue := by
+    intro entry entryMem linking
+    have headRead : (eagerFrame state processId target).2.1.testBit headBit = true := by
+      rw [eagerFrame_eq]; simp only [linking, ↓reduceIte]; decide
+    have noPop : writesOf frames target headBit = false := by
+      cases written : writesOf frames target headBit
+      · rfl
+      · exact ((apart_of_framesApart apart target).1 headBit written (.inl (readsOf_of_mem mem headRead))).elim
+    simp only [State.process, kept, records, Effect.record_apply]
+    cases original : state.record target with
+    | none => simp [State.process, original] at entryMem
+    | some process =>
+      simp only [State.process, original, Option.getD_some] at entryMem
+      rcases (Config.inFrames confined found) target with same | all | ⟨change, equal, -, framed⟩
+      · rw [same]; exact entryMem
+      · exact absurd all notWhole
+      · rw [equal]
+        obtain ⟨-, -, ⟨dropped, added, -, noHead, -, change'⟩, -⟩ := framed process original
+        simp only [Option.map_some, Option.getD_some]
+        rw [change' process (ProcessState.Same.refl _ _), noHead noPop]
+        simp [entryMem]
+  rw [State.eagerLink_eq, State.eagerLink_eq, alive, trap]
+  congr 2
+  cases linking : Kernel.any (state.process target).queue (linkFrom processId)
+  · cases after : Kernel.any (raw.normalize.process target).queue (linkFrom processId)
+    · rfl
+    · simp only [Kernel.any_eq, List.any_eq_true] at after
+      obtain ⟨entry, entryMem, isLink⟩ := after
+      have link : entry.signal = .link := by
+        simp only [linkFrom, Bool.and_eq_true] at isLink
+        obtain ⟨source, signal⟩ := entry; cases signal <;> simp_all
+      have before := queue entry entryMem link
+      have : Kernel.any (state.process target).queue (linkFrom processId) = true := by
+        simp only [Kernel.any_eq, List.any_eq_true]; exact ⟨entry, before, isLink⟩
+      rw [linking] at this; simp at this
+  · have := linking
+    simp only [Kernel.any_eq, List.any_eq_true] at this
+    obtain ⟨entry, entryMem, isLink⟩ := this
+    simp only [Kernel.any_eq, List.any_eq_true]
+    exact ⟨entry, stays entry entryMem linking, isLink⟩
+
 end Lynx.Concurrent
