@@ -7382,4 +7382,32 @@ private theorem Config.commutes_of_apart {elapsed : PID → Nat → Nat} {state 
       simp only [State.gone, State.alive, records]
   rw [one, two, states]
 
+/-- Two steps that `Config.commutesAfter` accepts, by their frames or by
+evaluating both orders, reach the same configuration in either order. -/
+private theorem Config.commutes_of_commutesAfter {elapsed : PID → Nat → Nat} {state : State}
+    {tasks : List (PID × Task α)} {finished : Option (Except Exception α)} {key other : Key} {event event' : Event}
+    {next next' : Config α} (within : state.Within elapsed) (normalized : state.normalize = state)
+    (once : (Config.running state tasks finished false).FinishesOnce)
+    (commutes : (Config.running state tasks finished false).commutesAfter key next other next' = true)
+    (step : (Config.running state tasks finished false).stepOf key = some (event, next))
+    (step' : (Config.running state tasks finished false).stepOf other = some (event', next')) :
+    ∃ event₃ event₄ last, next.stepOf other = some (event₃, last) ∧ next'.stepOf key = some (event₄, last) := by
+  simp only [Config.commutesAfter, Bool.and_eq_true, Bool.or_eq_true] at commutes
+  obtain ⟨⟨⟨⟨owners, fresh⟩, fresh'⟩, distinct⟩, apart | evaluated⟩ := commutes
+  · exact Config.commutes_of_apart within normalized once owners fresh fresh' distinct apart step step'
+  · cases after : next.stepOf other with
+    | none => simp [after] at evaluated
+    | some third =>
+    cases after' : next'.stepOf key with
+    | none => simp [after, after'] at evaluated
+    | some fourth =>
+    obtain ⟨event₃, last⟩ := third
+    obtain ⟨event₄, last'⟩ := fourth
+    simp only [after, after', Bool.and_eq_true] at evaluated
+    obtain ⟨⟨view, view'⟩, same⟩ := evaluated
+    have equal := Config.commutes_of_fallback within once owners fresh fresh' distinct step step' after after'
+      view view' same
+    subst equal
+    exact ⟨_, _, _, rfl, rfl⟩
+
 end Lynx.Concurrent
