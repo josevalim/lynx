@@ -4479,6 +4479,203 @@ private theorem Clean.demonitor {gone : PID → Bool} {processId : PID} {process
     rwa [anyKept alias carries, containsKept alias carries] at inside
   | _ => simpa only [inert, links] using inside
 
+private theorem CleanOutside.retime {state : State} {except : PID → Prop} (change : List Timer → List Timer)
+    (clean : CleanOutside state except) : CleanOutside ((Effect.retime change).apply state) except := by
+  intro processId outside process found
+  rw [(Effect.KeepsAlive.retime change).gone]
+  rw [Effect.record_apply, Effect.record_retime] at found
+  exact clean processId outside process found
+
+/-- Changing a record by an effect or by `State.modify` gives the same records. -/
+private theorem Effect.apply_modify_record (state : State) (processId other : PID) (change : ProcessState → ProcessState) :
+    ((Effect.modify processId change).apply state).record other = (state.modify processId change).record other :=
+  ((Realizes.modify state processId change).records other).symm
+
+private theorem Effect.apply_modify_alive (state : State) (processId other : PID) (change : ProcessState → ProcessState) :
+    ((Effect.modify processId change).apply state).alive other = (state.modify processId change).alive other := by
+  simp only [State.alive, Effect.apply_modify_record]
+
+private theorem Effect.apply_modify_process (state : State) (processId other : PID) (change : ProcessState → ProcessState) :
+    ((Effect.modify processId change).apply state).process other = (state.modify processId change).process other := by
+  simp only [State.process, Effect.apply_modify_record]
+
+private theorem Effect.apply_modify_parkedMonitored (state : State) (processId other : PID)
+    (change : ProcessState → ProcessState) :
+    ((Effect.modify processId change).apply state).parkedMonitored other =
+      (state.modify processId change).parkedMonitored other := by
+  simp only [State.parkedMonitored, Effect.apply_modify_process]
+
+private theorem State.record_modify_of_records {state other : State} {processId target : PID}
+    {change : ProcessState → ProcessState}
+    (records : ∀ processId, other.record processId = state.record processId) :
+    (other.modify processId change).record target = (state.modify processId change).record target := by
+  unfold State.modify
+  rw [records]
+  split
+  · simp only [State.record_set, records]
+  · exact records target
+
+/-- Unparking decides alike at states with the same records. -/
+private theorem State.unparkEffect_records {state other : State} (processId : PID)
+    (records : ∀ processId, other.record processId = state.record processId) :
+    other.unparkEffect processId = state.unparkEffect processId := by
+  have process : ∀ processId, other.process processId = state.process processId := fun processId => by
+    simp [State.process, records]
+  refine State.unparkEffect_congr (by rw [process]) fun target _ _ => ?_
+  simp only [State.alive]
+  rw [State.record_modify_of_records records]
+
+private theorem CleanOutside.retimeIf {state : State} {except : PID → Prop} (condition : Prop) [Decidable condition]
+    (change : List Timer → List Timer) (clean : CleanOutside state except) :
+    CleanOutside ((if condition then Effect.retime change else {}).apply state) except := by
+  split
+  · exact CleanOutside.retime change clean
+  · simpa [Effect.apply_empty] using clean
+
+private theorem State.parkedMonitored_modify (state : State) (changed processId : PID)
+    (change : ProcessState → ProcessState) (parked : ∀ process, (change process).parked = process.parked)
+    (monitoring : ∀ process, (change process).monitoring = process.monitoring) :
+    (state.modify changed change).parkedMonitored processId = state.parkedMonitored processId := by
+  have parked' := State.process_modify_keeps (state := state) (processId := changed) (other := processId)
+    (get := (·.parked)) parked
+  have monitoring' := State.process_modify_keeps (state := state) (processId := changed) (other := processId)
+    (get := (·.monitoring)) monitoring
+  simp only [State.parkedMonitored]
+  rw [parked', monitoring']
+
+private theorem Effect.KeepsAlive.live_of_record {effect : Effect} (keeps : effect.KeepsAlive) {state : State}
+    {processId : PID} {process : ProcessState} (found : (effect.apply state).record processId = some process)
+    (alive : state.alive processId = true) : process.exiting = none := by
+  have := keeps processId (state.record processId)
+  rw [← Effect.record_apply, found] at this
+  simp only [State.alive] at alive
+  cases record : state.record processId with
+  | none => rw [record] at alive; simp at alive
+  | some original =>
+    rw [record] at alive this
+    simp only [liveOf] at this alive
+    rw [alive] at this; simpa using this
+
+/-- Normalizing after a confined own step that does not end the process changes no record. -/
+private theorem Task.ownEffect_clean {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {task : Task α}
+    (sorted : state.Sorted) (normalized : state.normalize = state)
+    (confined : Config.confined (.running state tasks finished false) (.own processId) = true)
+    (lookup : Kernel.lookup processId tasks = some task)
+    (continues : ∀ value, task.computation ≠ .ok value) (raises : ∀ exception, task.computation ≠ .error exception) :
+    CleanOutside ((task.ownEffect state processId).apply state) (fun _ => False) := by
+  have clean : CleanOutside state (fun _ => False) := fun _ _ _ found => Clean.of_normalized sorted normalized found
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simpa [Task.ownEffect, Effect.apply_empty] using clean
+  | none =>
+  simp only [Config.confined, lookup, Bool.and_eq_true] at confined
+  obtain ⟨⟨alive, monitored⟩, confined⟩ := confined
+  have record : ∃ process, state.record processId = some process ∧ process.exiting = none := by
+    simp only [State.alive] at alive
+    cases found : state.record processId with
+    | none => rw [found] at alive; simp at alive
+    | some process => rw [found] at alive; exact ⟨process, rfl, by simpa using alive⟩
+  obtain ⟨process, found, live⟩ := record
+  have same : state.process processId = process := by simp [State.process, found]
+  have notGone : state.gone processId = false := by simp [State.gone, alive]
+  cases computation with
+  | ok value => exact absurd rfl (continues value)
+  | error exception => exact absurd rfl (raises exception)
+  | get | set | schedule => simp at confined
+  | send destination message =>
+    exact CleanOutside.send clean (by simp) alive monitored (fun _ _ _ => by simp [inert]) (by simp) (by simp)
+  | receive timeout select next =>
+    simp only at confined
+    simp only [Task.ownEffect]
+    rw [show selectMessage (select (state.view processId)) (state.process processId).mailbox = none by simpa using confined]
+    simpa [Effect.apply_empty] using clean
+  | request query next =>
+    cases query with
+    | demonitor reference flush =>
+      simp only [Kernel.any_eq, Bool.not_eq_true', List.any_eq_false, Bool.not_eq_true] at confined
+      simp only [Task.ownEffect, State.requestEffect]
+      refine CleanOutside.modify (fun _ => rfl) clean fun _ process' found' => ?_
+      rw [found] at found'; cases found'
+      exact (clean processId (by simp) process found).demonitor (reference := reference) live live rfl rfl rfl rfl rfl
+        fun entry mem => by have := confined entry (same ▸ mem); simpa using this
+    | cancelTimer reference =>
+      simp only [Task.ownEffect, State.requestEffect]
+      split
+      · refine CleanOutside.andThen (CleanOutside.modify (fun _ => rfl) (CleanOutside.retime _ clean)
+          fun _ process' found' => ?_)
+        rw [Effect.record_apply, Effect.record_retime, found] at found'; cases found'
+        rw [(Effect.KeepsAlive.retime _).gone]
+        exact (clean processId (by simp) process found).neutral live live rfl rfl rfl rfl rfl
+      · simpa [Effect.apply_empty] using clean
+    | alive target =>
+      simp only [Task.ownEffect, State.requestEffect]
+      split
+      · simpa [Effect.apply_empty] using clean
+      · split
+        · exact CleanOutside.send clean (by simp) alive monitored (fun _ _ _ => by simp [inert, notGone])
+            (by simp) (by simp)
+        · refine CleanOutside.enqueue clean (fun _ _ _ => by simp [inert]) (fun dead => ?_) (by simp)
+            (fun _ _ equal => by simp at equal)
+          rw [alive] at dead; simp at dead
+    | sendAlias alias message =>
+      simp only [Task.ownEffect, State.requestEffect]
+      refine CleanOutside.send clean (by simp) alive monitored (fun process' found' live' => ?_) (by simp) (by simp)
+      simp only [Bool.not_eq_true', Bool.and_eq_false_iff] at confined
+      have alive' : state.alive alias.dropLast = true := by simp [State.alive, found', live']
+      rcases confined with dead | notInert
+      · rw [alive'] at dead; simp at dead
+      · rw [State.inertEntry_eq] at notInert
+        have : state.process alias.dropLast = process' := by simp [State.process, found']
+        rw [this] at notInert
+        rwa [inert_congr (process' := queueAt _ _ process') (process := process') rfl rfl rfl rfl rfl]
+    | monitor target alias =>
+      simp only [Kernel.any_eq, Bool.not_eq_true', List.any_eq_false, Bool.not_eq_true] at confined
+      let allocate := fun process : ProcessState => { process with refCounter := process.refCounter + 1 }
+      have allocated : CleanOutside ((allocateEffect processId).apply state) (fun _ => False) :=
+        CleanOutside.modify (change := allocate) (fun _ => rfl) clean fun _ process' found' => by
+          rw [found] at found'; cases found'
+          exact (clean processId (by simp) process found).allocate live fun entry mem => by
+            have := confined entry (same ▸ mem); simpa [same] using this
+      simp only [Task.ownEffect, State.requestEffect, State.allocate]
+      refine CleanOutside.andThen ?_
+      split
+      · simpa [Effect.apply_empty] using allocated
+      · refine CleanOutside.andThen ?_
+        have records := Effect.apply_modify_record state processId (change := allocate)
+        rw [← State.unparkEffect_records processId records]
+        have aliveAllocated : ((allocateEffect processId).apply state).alive processId = true := by
+          unfold allocateEffect
+          rw [Effect.apply_modify_alive]
+          exact (State.alive_modify _ _ _ allocate fun _ => rfl).trans alive
+        have monitoredAllocated : ((allocateEffect processId).apply state).parkedMonitored processId = true := by
+          unfold allocateEffect
+          rw [Effect.apply_modify_parkedMonitored]
+          refine (State.parkedMonitored_modify state processId processId _ ?_ ?_).trans monitored <;>
+            intro process <;> rfl
+        have unparked := CleanOutside.unpark allocated (by simp) aliveAllocated monitoredAllocated
+        refine CleanOutside.modify (fun _ => rfl) unparked fun _ process' found' => ?_
+        have live' : process'.exiting = none :=
+          Effect.KeepsAlive.live_of_record (State.unparkEffect_keepsAlive _ _) found' (by
+            first
+              | exact aliveAllocated
+              | (rw [Effect.apply_modify_alive]; exact (State.alive_modify _ _ _ _ fun _ => rfl).trans alive))
+        refine (unparked processId (by simp) process' found').grow live' live' rfl rfl
+          (fun entry mem => by simp [Kernel.append_eq, mem]) (fun alias' mem => ?_) rfl
+        split <;> simp [Kernel.append_eq, mem]
+    | startTimer destination message duration =>
+      simp only [Kernel.any_eq, Bool.not_eq_true', List.any_eq_false, Bool.not_eq_true] at confined
+      let allocate := fun process : ProcessState => { process with refCounter := process.refCounter + 1 }
+      have allocated : CleanOutside ((allocateEffect processId).apply state) (fun _ => False) :=
+        CleanOutside.modify (change := allocate) (fun _ => rfl) clean fun _ process' found' => by
+          rw [found] at found'; cases found'
+          exact (clean processId (by simp) process found).allocate live fun entry mem => by
+            have := confined entry (same ▸ mem); simpa [same] using this
+      simp only [Task.ownEffect, State.requestEffect, State.allocate]
+      refine CleanOutside.andThen ?_
+      exact CleanOutside.retimeIf _ _ allocated
+    | _ => simp at confined
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
