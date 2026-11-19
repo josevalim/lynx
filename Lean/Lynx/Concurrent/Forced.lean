@@ -1768,8 +1768,6 @@ way that a process's own steps commute with. -/
 private structure QueueChange (queue : List Entry → List Entry) (mailbox : List Term → List Term)
     (links : List (PID × Option Nat) → List (PID × Option Nat)) : Prop where
   push : ∀ {entries} entry, entries ≠ [] → queue (Kernel.append entries [entry]) = Kernel.append (queue entries) [entry]
-  lookupNone : ∀ (target : PID) (entries : List (PID × Option Nat)),
-    (Kernel.lookup target (links entries) == some none) = (Kernel.lookup target entries == some none)
   filtered : ∀ (target : PID) (entries : List (PID × Option Nat)),
     links (Kernel.filter (·.1 != target) entries) = Kernel.filter (·.1 != target) (links entries)
   relink : ∀ (target : PID) (entries : List (PID × Option Nat)),
@@ -1824,6 +1822,8 @@ private theorem requestSelf
     (unlinked : ∀ (target : PID) (id : Nat), Kernel.lookup target process.links = some none →
       links (Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) process.links) =
         Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) (links process.links))
+    (lookups : ∀ target : PID,
+      (Kernel.lookup target (links process.links) == some none) = (Kernel.lookup target process.links == some none))
     {β : Type} (next : Term → Result β) (query : Request) :
     Answer.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) (state.request processId next query)
       (state'.request processId next query) := by
@@ -1863,7 +1863,7 @@ private theorem requestSelf
     have relinked := changed.queue_modify (fun process => { process with
         links := Kernel.append (Kernel.filter (·.1 != target) process.links) [(target, none)] }) (fun _ => rfl)
       fun _ _ => by simp only [queueChange, change.relink]
-    have lookups := change.lookupNone target process.links
+    have lookups := lookups target
     generalize Kernel.lookup target process.links = found₁ at lookups ⊢
     generalize Kernel.lookup target (links process.links) = found₂ at lookups ⊢
     rcases found₁ with _ | _ | id <;> rcases found₂ with _ | _ | id' <;> simp at lookups <;>
@@ -1875,7 +1875,7 @@ private theorem requestSelf
     by_cases self : target = processId
     · simp only [self, ↓reduceIte]; exact ⟨rfl, changed⟩
     simp only [self, ↓reduceIte]
-    have lookups := change.lookupNone target process.links
+    have lookups := lookups target
     have unlinking := unlinked target (process.unlinks + 1)
     generalize Kernel.lookup target process.links = found₁ at lookups unlinking ⊢
     generalize Kernel.lookup target (links process.links) = found₂ at lookups ⊢
@@ -2041,6 +2041,8 @@ private theorem ownSelf
     (unlinked : ∀ (target : PID) (id : Nat), Kernel.lookup target process.links = some none →
       links (Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) process.links) =
         Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) (links process.links))
+    (lookups : ∀ target : PID,
+      (Kernel.lookup target (links process.links) == some none) = (Kernel.lookup target process.links == some none))
     (awaited : Kernel.any (queue process.queue) (state'.awaitedEntry processId) = true →
       Kernel.any process.queue (state.awaitedEntry processId) = true)
     (noMatch : ∀ {β : Type} (select : Term → Option β), selectMessage select process.mailbox = none →
@@ -2051,7 +2053,8 @@ private theorem ownSelf
     ∃ transition' : Transition α, (task.own state' processId).head? = some transition' ∧
       transition'.event = transition.event ∧ transition'.tasks = transition.tasks ∧
       transition'.finished = transition.finished ∧ transition'.exhausted = transition.exhausted ∧
-      (transition.state.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) transition'.state ∨
+      ((transition.state.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) transition'.state ∧
+          ∃ task₁ more, transition.tasks = (processId, task₁) :: more) ∨
         (∃ reason, transition.state = state.terminate processId reason ∧
           transition'.state = state'.terminate processId reason) ∨
         transition.exhausted = true) := by
@@ -2079,23 +2082,23 @@ private theorem ownSelf
   | get next =>
     simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
     exact ⟨Transition.mk (.internal processId) state' [(processId, ⟨next (state.view processId), finish, none⟩)]
-      none false, by simp [Task.own, view], rfl, rfl, rfl, rfl, .inl changed⟩
+      none false, by simp [Task.own, view], rfl, rfl, rfl, rfl, .inl ⟨changed, _, _, rfl⟩⟩
   | set updated next =>
     simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
     exact ⟨Transition.mk (.internal processId) (state'.store processId updated) [(processId, ⟨next, finish, none⟩)]
-      none false, rfl, rfl, rfl, rfl, rfl, .inl (changed.queue_modify _ (fun _ => rfl) (fun _ _ => rfl))⟩
+      none false, rfl, rfl, rfl, rfl, rfl, .inl ⟨changed.queue_modify _ (fun _ => rfl) (fun _ _ => rfl), _, _, rfl⟩⟩
   | schedule options child next =>
     have spawned := changed.spawnSelf change found options fresh
     simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
     refine ⟨Transition.mk (.spawn processId (state.spawnWith processId options).1) (state'.spawnWith processId options).2
       [(processId, ⟨next (state.spawnWith processId options).1, finish, none⟩),
         ((state.spawnWith processId options).1, Task.child child)] none false,
-      by simp only [Task.own, List.head?_cons, spawned.1], rfl, rfl, rfl, rfl, .inl spawned.2⟩
+      by simp only [Task.own, List.head?_cons, spawned.1], rfl, rfl, rfl, rfl, .inl ⟨spawned.2, _, _, rfl⟩⟩
   | send destination message next =>
     simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
     exact ⟨Transition.mk (.send processId destination message)
       (state'.send processId destination (.message message)) [(processId, ⟨next, finish, none⟩)] none false,
-      rfl, rfl, rfl, rfl, rfl, .inl (changed.send unseen fun _ _ => by simp)⟩
+      rfl, rfl, rfl, rfl, rfl, .inl ⟨changed.send unseen fun _ _ => by simp, _, _, rfl⟩⟩
   | receive timeout select next =>
     simp only [Task.own, processOf] at head
     simp only [Task.own, processOf', view]
@@ -2106,7 +2109,7 @@ private theorem ownSelf
       simp only [selected, List.head?_cons, Option.some.injEq] at head; subst head
       refine ⟨Transition.mk (.receive processId message)
         (state'.modify processId fun process => { process with mailbox := mailbox remaining })
-        [(processId, ⟨next (some value), finish, none⟩)] none false, ?_, rfl, rfl, rfl, rfl, .inl ?_⟩
+        [(processId, ⟨next (some value), finish, none⟩)] none false, ?_, rfl, rfl, rfl, rfl, .inl ⟨?_, _, _, rfl⟩⟩
       · simp [queueChange, selected']
       · rw [State.modify_found found, State.modify_found found'']
         exact changed.setRelated ⟨queued, rfl⟩
@@ -2129,12 +2132,12 @@ private theorem ownSelf
             · rfl
             · rw [awaited more] at quiet; cases quiet
           refine ⟨Transition.mk (.timeout processId) state' [(processId, ⟨next none, finish, none⟩)] none false,
-            ?_, rfl, rfl, rfl, rfl, .inl changed⟩
+            ?_, rfl, rfl, rfl, rfl, .inl ⟨changed, _, _, rfl⟩⟩
           have quietE' : ¬∃ entry, entry ∈ queue process.queue ∧ state'.awaitedEntry processId entry = true := by
             simpa [Kernel.any_eq, List.any_eq_true] using quiet'
           simp [queueChange, noMatch _ selected quiet, quiet', quietE']
   | request query next =>
-    have answered := changed.requestSelf unseen change found unlinked next query
+    have answered := changed.requestSelf unseen change found unlinked lookups next query
     simp only [Task.own] at head ⊢
     revert answered head
     generalize state.request processId next query = answer
@@ -2146,7 +2149,7 @@ private theorem ownSelf
       | (obtain ⟨rfl, answered⟩ := answered
          simp only [List.head?_cons, Option.some.injEq] at head
          subst head
-         exact ⟨_, rfl, rfl, rfl, rfl, rfl, .inl answered⟩)
+         exact ⟨_, rfl, rfl, rfl, rfl, rfl, .inl ⟨answered, _, _, rfl⟩⟩)
 
 end State.Changed
 
@@ -3594,6 +3597,147 @@ private theorem Config.forced_square {elapsed : PID → Nat → Nat} {config : C
       ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
         next.stepOf key' = some (other, last) := by
   sorry
+
+private theorem QueueChange.hidden {queue : List Entry → List Entry} {mailbox : List Term → List Term}
+    {links : List (PID × Option Nat) → List (PID × Option Nat)} {entry : Entry} (change : QueueChange queue mailbox links)
+    (linking : ∀ (rest : List Entry) (other : Entry), other.signal = .link →
+      (other ∈ queue (entry :: rest) ↔ other ∈ entry :: rest)) :
+    Hidden (Queued entry) (queueChange queue mailbox links) where
+  exiting _ := rfl
+  trapExit _ := rfl
+  parked _ := rfl
+  links := fun {process} ⟨rest, queued⟩ other link => by
+    show other ∈ queue process.queue ↔ other ∈ process.queue
+    rw [queued]; exact linking rest other link
+  push := fun {process} other queued => by
+    refine ⟨(Heads.push queued other).1, ?_⟩
+    obtain ⟨rest, nonempty⟩ := queued
+    have pushed := change.push (entries := process.queue) other (by rw [nonempty]; simp)
+    simp only [queueChange, ProcessState.push, pushed]
+  eagerExit := fun _ queued => ⟨queued, by simp only [queueChange, ProcessState.eagerExit, change.filtered]⟩
+  unpark := fun queued => ⟨queued, rfl⟩
+
+private theorem lookup_rewriteTask_head {processId : PID} {task : Task α} {more : List (PID × Task α)} :
+    ∀ {tasks : List (PID × Task α)} {original : Task α}, Kernel.lookup processId tasks = some original →
+      Kernel.lookup processId (rewriteTask processId (fun _ => (processId, task) :: more) tasks) = some task
+  | [], _, found => by simp [Kernel.lookup_eq] at found
+  | (key, task') :: rest, original, found => by
+    simp only [Kernel.lookup_eq, List.lookup_cons] at found
+    by_cases same : key = processId
+    · subst same; simp [rewriteTask, Kernel.lookup_eq]
+    · have differ : (processId == key) = false := by simp [Ne.symm same]
+      simp only [differ] at found
+      have := lookup_rewriteTask_head (task := task) (more := more) (by simpa [Kernel.lookup_eq] using found)
+      simp only [Kernel.lookup_eq] at this
+      simp [rewriteTask, same, Kernel.lookup_eq, List.lookup_cons, differ, this]
+
+/-- Clearing the records and timers of states with the same elapsed times. -/
+private theorem State.cleared {state state' : State} (elapsed : state'.elapsed = state.elapsed) :
+    ({ state' with processes := [], timers := [] } : State) = { state with processes := [], timers := [] } := by
+  cases state; cases state'; simp_all
+
+/-- A forced handling of the oldest signal, a change of the queue, mailbox and
+links, against the process's own step: the own step absorbs it when it ends the
+process, and the forced handling closes the square otherwise. -/
+private theorem Config.handle_own_square {elapsed : PID → Nat → Nat} {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {process : ProcessState} {task : Task α}
+    {entry : Entry} {rest : List Entry} {queue : List Entry → List Entry} {mailbox : List Term → List Term}
+    {links : List (PID × Option Nat) → List (PID × Option Nat)} {event' : Event} {middle : Config α}
+    (reachable : (Config.running state tasks finished false).Reachable elapsed)
+    (lookup : Kernel.lookup processId tasks = some task)
+    (found : state.record processId = some process) (live : process.exiting = none)
+    (queued : process.queue = entry :: rest) (change : QueueChange queue mailbox links)
+    (linking : ∀ (rest : List Entry) (other : Entry), other.signal = .link →
+      (other ∈ queue (entry :: rest) ↔ other ∈ entry :: rest))
+    (requests : ∀ (rest : List Entry) (keep : Entry → Bool),
+      (∀ entry, keep entry = true → (entry.signal matches .link | .monitor _ | .isAlive) = true) →
+      Kernel.filter keep (queue (entry :: rest)) = Kernel.filter keep (entry :: rest))
+    (exitLinks : ∀ entries : List (PID × Option Nat),
+      Kernel.foldl (fun links (peer, unlinking) => if unlinking.isNone then insertPid peer links else links) []
+        (links entries) =
+      Kernel.foldl (fun links (peer, unlinking) => if unlinking.isNone then insertPid peer links else links) [] entries)
+    (unlinked : ∀ (target : PID) (id : Nat), Kernel.lookup target process.links = some none →
+      links (Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) process.links) =
+        Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) (links process.links))
+    (lookups : ∀ target : PID,
+      (Kernel.lookup target (links process.links) == some none) = (Kernel.lookup target process.links == some none))
+    (awaited : Kernel.any (queue process.queue)
+        ((state.set processId (queueChange queue mailbox links process)).awaitedEntry processId) = true →
+      Kernel.any process.queue (state.awaitedEntry processId) = true)
+    (noMatch : ∀ {β : Type} (select : Term → Option β), selectMessage select process.mailbox = none →
+      Kernel.any process.queue (state.awaitedEntry processId) = false →
+      selectMessage select (mailbox process.mailbox) = none)
+    (step' : (Config.running state tasks finished false).stepOf (.own processId) = some (event', middle))
+    (atMiddle : ∀ (raw : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α))
+      (process₁ : ProcessState), raw.Within elapsed →
+      (Config.running raw.normalize tasks₁ finished₁ false).Reachable elapsed →
+      (∃ task₁, Kernel.lookup processId tasks₁ = some task₁) → raw.record processId = some process₁ →
+      Queued entry process₁ → process₁.exiting = none →
+      ∃ event'', (Key.handle processId, event'', .running (raw.normalize.set processId
+          (queueChange queue mailbox links (normRecord raw.gone processId process₁))).normalize tasks₁ finished₁ false,
+          true) ∈ (Config.running raw.normalize tasks₁ finished₁ false).taggedSteps ∧
+        normRecord raw.gone processId (queueChange queue mailbox links (normRecord raw.gone processId process₁)) =
+          normRecord raw.gone processId (queueChange queue mailbox links process₁)) :
+    (∃ absorbed, (Config.running (state.set processId (queueChange queue mailbox links process)) tasks finished
+        false).stepOf (.own processId) = some (absorbed, middle)) ∨
+      ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
+        (Config.running (state.set processId (queueChange queue mailbox links process)) tasks finished false).stepOf
+          (.own processId) = some (other, last) := by
+  have within := reachable.1.1
+  let change' := queueChange queue mailbox links
+  have changed : state.Changed processId (Same (Queued entry) change') (state.set processId (change' process)) :=
+    ⟨fun other differ => by rw [State.record_set, if_neg differ],
+      by rw [State.record_set, if_pos rfl, found]; exact .some ⟨⟨rest, queued⟩, rfl⟩, rfl, rfl⟩
+  have unseen := change.unseen linking
+  have within' : (state.set processId (change' process)).Within elapsed := within.set _ _
+  have fresh : Kernel.append processId [process.children + 1] ≠ processId := by
+    have := reachable.2.child lookup lookup
+    simpa [State.process, found] using this
+  obtain ⟨task₀, transition, lookup₀, head, rfl⟩ := Config.stepOf_own step'
+  rw [lookup] at lookup₀; cases lookup₀
+  obtain ⟨transition', head', event₁, tasks₁, finished₁, exhausted₁, related⟩ :=
+    changed.ownSelf unseen change found unlinked lookups awaited noMatch fresh head
+  have stepped := Config.stepOf_own_of (state := state.set processId (change' process)) (finished := finished) lookup
+    head'
+  rw [event₁, tasks₁, finished₁, exhausted₁] at stepped
+  have sortedOwn := within.own (List.mem_of_head? head)
+  have sortedOwn' := within'.own (List.mem_of_head? head')
+  by_cases exhausted : transition.exhausted = true
+  · left
+    refine ⟨transition.event, ?_⟩
+    rw [stepped]
+    simp only [exhausted, ↓reduceIte, State.cleared (sortedOwn'.2.trans sortedOwn.2.symm)]
+  simp only [exhausted, Bool.false_eq_true, ↓reduceIte] at stepped step' ⊢
+  rcases related with ⟨changedRaw, task₁, more, continues⟩ | ⟨reason, ended, ended'⟩ | exhausted'
+  · right
+    have reachableMiddle := reachable.step (Config.step_of_stepOf step')
+    have lookupMiddle : Kernel.lookup processId (rewriteTask processId (fun _ => transition.tasks) tasks) =
+        some task₁ := by
+      rw [continues]; exact lookup_rewriteTask_head lookup
+    have alive := reachableMiddle.2.2.1 _ (mem_of_lookup lookupMiddle)
+    rw [State.alive_normalize sortedOwn.1] at alive
+    obtain ⟨process₁, found₁, live₁⟩ := State.alive_iff.mp alive
+    have queued₁ : Queued entry process₁ := by
+      rcases changedRaw.records with ⟨missing, -⟩ | ⟨first, second, found₂, -, ok₁, -⟩
+      · rw [found₁] at missing; cases missing
+      · rw [found₁] at found₂; cases found₂; exact ok₁
+    obtain ⟨event'', mem, renormalized⟩ := atMiddle transition.state _ _ process₁ sortedOwn reachableMiddle
+      ⟨_, lookupMiddle⟩ found₁ queued₁ live₁
+    have forcedChanged := changedRaw.forced_of_same (fun _ found₂ => by
+      rw [found₁] at found₂; cases found₂; exact live₁) (fun _ => rfl)
+    have liveNormal : (normRecord transition.state.gone processId process₁).exiting = none := by
+      rw [normRecord_live live₁]; exact live₁
+    rw [State.forced_close sortedOwn.1 sortedOwn'.1 forcedChanged (change.hidden linking).unseen found₁ liveNormal
+      renormalized] at mem
+    exact ⟨.handle processId, event'', _, transition.event, mem, stepped⟩
+  · left
+    refine ⟨transition.event, ?_⟩
+    rw [stepped, ended, ended']
+    have sortedEnded := ended ▸ sortedOwn
+    have sortedEnded' := ended' ▸ sortedOwn'
+    rw [State.Changed.terminateQueue changed change requests exitLinks reason within.1 within'.1 sortedEnded.1
+      sortedEnded'.1]
+  · exact absurd exhausted' exhausted
 
 /-- What every configuration a run reaches satisfies, with links with distinct processes. -/
 private def Config.Ready (elapsed : PID → Nat → Nat) (config : Config α) : Prop :=
