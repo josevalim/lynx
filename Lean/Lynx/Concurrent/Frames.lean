@@ -6921,4 +6921,49 @@ private theorem Config.own_after {elapsed : PID → Nat → Nat} {state state' :
   · simp only [Config.sameView, lookup, lookup']
     rw [view]; exact OwnView.identical_refl _
 
+/-- Handling a confined kind of signal, at a state agreeing with the original on
+what its frames read, is enabled, has the same effect, and reads the same view. -/
+private theorem Config.handle_after {elapsed : PID → Nat → Nat} {state state' : State}
+    {tasks tasks' : List (PID × Task α)} {finished finished' : Option (Except Exception α)} {processId : PID}
+    {frames : List Frame} {timers : Bool} {event : Event} {next : Config α} {task' : Task α}
+    (within' : state'.Within elapsed)
+    (confined : Config.confined (.running state tasks finished false) (.handle processId) = true)
+    (found : (Config.running state tasks finished false).frames (.handle processId) = some (frames, timers))
+    (step : (Config.running state tasks finished false).stepOf (.handle processId) = some (event, next))
+    (lookup' : Kernel.lookup processId tasks' = some task') (agree : Agree frames state state') :
+    ∃ event' raw' tasks'' finished'',
+      (Config.running state' tasks' finished' false).stepOf (.handle processId) =
+        some (event', .running raw'.normalize tasks'' finished'' false) ∧
+      Realizes ((Config.running state tasks finished false).effectOf (.handle processId)) state' raw' ∧
+      raw'.Within elapsed ∧
+      (Config.running state tasks finished false).sameView (.running state' tasks' finished' false)
+        (.handle processId) = true := by
+  obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_handle step
+  have found' : task.handleFrames state processId = some (frames, timers) := by
+    simp only [Config.frames, lookup, Option.bind_some] at found; exact found
+  obtain ⟨view, effect⟩ := Task.handle_agree (task' := task') confined found' agree
+  -- The queue still has a signal, so handling is enabled.
+  obtain ⟨entry, rest, queue'⟩ : ∃ entry rest, (state'.process processId).queue = entry :: rest := by
+    have viewed : (task.handleView state processId).isSome = true := by
+      cases queue : (state.process processId).queue with
+      | nil => simp [Task.handle, queue] at head
+      | cons => simp [Task.handleView, queue]
+    rw [← view] at viewed
+    cases queue' : (state'.process processId).queue with
+    | nil => simp [Task.handleView, queue'] at viewed
+    | cons entry rest => exact ⟨entry, rest, rfl⟩
+  obtain ⟨transition', head'⟩ : ∃ transition', (task'.handle state' processId).head? = some transition' := by
+    simp only [Task.handle, queue']
+    split <;> (try split) <;> exact ⟨_, rfl⟩
+  have mem' := List.mem_of_head? head'
+  obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup'
+  refine ⟨transition'.event, transition'.state, Kernel.append (Kernel.append before transition'.tasks) after,
+    transition'.finished.orElse fun _ => finished', ?_, ?_, within'.handleStep mem', ?_⟩
+  · simp [Config.stepOf, split, head', Transition.apply, Task.handle_not_exhausted mem']
+  · simp only [Config.effectOf, lookup]
+    rw [← effect]
+    exact Realizes.handleStep mem'
+  · simp only [Config.sameView, lookup, lookup']
+    rw [view]; exact handleViewIdentical_refl _
+
 end Lynx.Concurrent
