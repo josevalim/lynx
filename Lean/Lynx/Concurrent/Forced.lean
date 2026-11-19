@@ -2660,6 +2660,195 @@ private theorem Config.own_handle_square {elapsed : PID → Nat → Nat} {state 
     simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none, rewriteTask_twice]
     rfl
 
+/-- Replacing a live record of a normalized state by one normalizing keeps as it
+is leaves the state normalized. -/
+private theorem State.normalize_set_clean {state : State} {processId : PID} {process process' : ProcessState}
+    (sorted : state.Sorted) (normalized : state.normalize = state) (found : state.record processId = some process)
+    (live : process.exiting = none) (live' : process'.exiting = none)
+    (clean : normRecord state.gone processId process' = process') :
+    (state.set processId process').normalize = state.set processId process' := by
+  have sorted' : (state.set processId process').Sorted := Sorted.insertRecord sorted _ _
+  have gone : (state.set processId process').gone = state.gone := by
+    funext other
+    simp only [State.gone, State.alive, State.record_set]
+    by_cases same : other = processId
+    · subst same; simp [found, live, live']
+    · simp [same]
+  refine State.ext_records sorted' (Sorted.normalize sorted') (fun other => ?_) rfl rfl
+  rw [State.record_normalize' sorted', gone, State.record_set]
+  by_cases same : other = processId
+  · subst same
+    simp [clean, Option.filter, ProcessState.finished_live live']
+  · simp only [same, ↓reduceIte]
+    conv => rhs; rw [← normalized]
+    rw [State.record_normalize' sorted]
+
+/-- Selecting a message from a mailbox, or leaving it as it is without one. -/
+private def selectFrom {β : Type} (select : Term → Option β) (messages : List Term) : List Term :=
+  match selectMessage select messages with
+  | some (_, _, remaining) => remaining
+  | none => messages
+
+private theorem ownChange_select {β : Type} (select : Term → Option β) (message : Term) (value : β) :
+    OwnChange (fun messages => ∃ remaining, selectMessage select messages = some (message, value, remaining))
+      (selectFrom select) where
+  append other := by
+    rintro ⟨remaining, selected⟩
+    have appended := selectMessage_append (message := other) selected
+    refine ⟨⟨_, appended⟩, ?_⟩
+    simp only [Kernel.append_eq] at appended ⊢
+    simp [selectFrom, selected, appended]
+
+private theorem ownChange_true : OwnChange (fun _ => True) id where
+  append _ _ := ⟨trivial, rfl⟩
+
+/-- A process's own forced step against handling its oldest signal. -/
+private theorem Config.forced_own_handle {elapsed : PID → Nat → Nat} {config : Config α} {processId : PID}
+    {event event' : Event} {next middle : Config α} (reachable : config.Reachable elapsed)
+    (forced : (Key.own processId, event, next, true) ∈ config.taggedSteps)
+    (step' : config.stepOf (.handle processId) = some (event', middle)) :
+    (∃ absorbed, next.stepOf (.handle processId) = some (absorbed, middle)) ∨
+      ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
+        next.stepOf (.handle processId) = some (other, last) := by
+  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running (elapsed := elapsed) forced
+  have step := reachable.stepOf forced
+  obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_own step
+  have flagged := Config.forced_own reachable.2.1 lookup head forced
+  simp only [Bool.true_eq, Bool.and_eq_true, beq_iff_eq] at flagged
+  obtain ⟨isLocal, counter⟩ := flagged
+  rw [Config.stepOf_own_of (finished := finished) lookup head] at step
+  simp only [Option.some.injEq, Prod.mk.injEq] at step
+  obtain ⟨rfl, rfl⟩ := step
+  have sorted := reachable.1.1.1
+  have normalized := reachable.1.2.1
+  have alive := reachable.2.2.1 _ (mem_of_lookup lookup)
+  obtain ⟨process, found, live⟩ := State.alive_iff.mp alive
+  have clean := (Clean.of_normalized sorted normalized found).1
+  have processOf : state.process processId = process := by simp [State.process, found]
+  -- At a later configuration where the process keeps its fields, it reads the same view.
+  have later : ∀ {raw : State} {process₁ : ProcessState} {ok : List Term → Prop}, raw.Within elapsed →
+      raw.record processId = some process₁ → process₁.exiting = none →
+      OwnOk ok process.pdict process.refCounter process₁ →
+      raw.normalize.record processId = some (normRecord raw.gone processId process₁) ∧
+        raw.normalize.view processId = state.view processId ∧
+        (raw.normalize.process processId).mailbox = process₁.mailbox ∧
+        (raw.normalize.process processId).refCounter = process.refCounter := fun within found₁ live₁ ok₁ => by
+    have record := State.record_normalize_live within.1 found₁ live₁
+    refine ⟨record, ?_, ?_, ?_⟩
+    · simp only [State.view, State.process, record, found, Option.getD_some]
+      rw [normRecord_live live₁, ok₁.2.1, ok₁.2.2]
+    · simp only [State.process, record, Option.getD_some]; rw [normRecord_live live₁]
+    · simp only [State.process, record, Option.getD_some]; rw [normRecord_live live₁]; exact ok₁.2.2
+  have cleanOwn : ∀ (pdict : List (Term × Term) → List (Term × Term)) (mailbox : List Term → List Term),
+      normRecord state.gone processId (ownChange pdict id mailbox process) = ownChange pdict id mailbox process :=
+    fun pdict mailbox => by rw [normRecord_ownChange live, clean]
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp [Task.own] at head
+  | none =>
+  cases computation with
+  | get next₀ =>
+    simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
+    rw [show state.normalize = state.set processId (ownChange id id id process) by
+      rw [normalized]; exact (State.set_self sorted found).symm]
+    refine Config.own_handle_square (computation := next₀ (state.view processId)) (pdict := id) (mailbox := id)
+      reachable lookup rfl found live ownChange_true trivial step' ?_
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ok₁ live₁
+    obtain ⟨record, view, -, -⟩ := later within found₁ live₁ ok₁
+    have tagged := Config.tagged_own_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
+      (transition := Transition.mk (.internal processId) raw.normalize
+        [(processId, ⟨next₀ (raw.normalize.view processId), finish, none⟩)] none false) (by simp [Task.own]) rfl rfl
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none, view] at tagged
+    rw [show raw.normalize.normalize = (raw.normalize.set processId
+        (ownChange id id id (normRecord raw.gone processId process₁))).normalize
+      by rw [show ownChange id id id (normRecord raw.gone processId process₁) =
+          normRecord raw.gone processId process₁ from rfl, State.set_self (Sorted.normalize within.1) record]] at tagged
+    exact ⟨_, tagged⟩
+  | set updated next₀ =>
+    simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
+    have kept : max process.refCounter updated.refCounter = process.refCounter := by
+      simp only [State.store, State.process, State.modify_found found, State.record_set, ↓reduceIte,
+        Option.getD_some, found] at counter
+      exact counter
+    have stored : storeChange updated process = ownChange (fun _ => updated.pdict) id id process := by
+      simp [storeChange, ownChange, kept]
+    rw [show state.store processId updated = state.set processId (storeChange updated process) from
+      State.modify_found found _, stored,
+      State.normalize_set_clean (process' := ownChange (fun _ => updated.pdict) id id process) sorted normalized found
+        live live (cleanOwn _ _)]
+    refine Config.own_handle_square (computation := next₀) (pdict := fun _ => updated.pdict) (mailbox := id)
+      reachable lookup rfl found live ownChange_true trivial step' ?_
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ok₁ live₁
+    obtain ⟨record, -, -, counter₁⟩ := later within found₁ live₁ ok₁
+    have tagged := Config.tagged_own_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
+      (transition := Transition.mk (.internal processId) (raw.normalize.store processId updated)
+        [(processId, ⟨next₀, finish, none⟩)] none false) (by simp [Task.own]) rfl (by
+          simp only [State.store, State.process, State.modify_found record, State.record_set, ↓reduceIte,
+            Option.getD_some, record]
+          rw [normRecord_live live₁, ok₁.2.2, kept])
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
+    rw [show raw.normalize.store processId updated =
+      raw.normalize.set processId (ownChange (fun _ => updated.pdict) id id (normRecord raw.gone processId process₁))
+      by rw [State.store, State.modify_found record]; congr 1; simp [ownChange, normRecord_live live₁, ok₁.2.2, kept]]
+      at tagged
+    exact ⟨_, tagged⟩
+  | receive timeout select next₀ =>
+    have mailbox : (state.process processId).mailbox = process.mailbox := by simp [processOf]
+    cases selected : selectMessage (select (state.view processId)) process.mailbox with
+    | none =>
+      exfalso
+      simp only [Task.own, mailbox, selected] at head
+      repeat' split at head
+      all_goals simp only [List.head?_nil, List.head?_cons, Option.some.injEq, reduceCtorEq] at head
+      all_goals subst head; simp [Event.local] at isLocal
+    | some result =>
+      obtain ⟨message, value, remaining⟩ := result
+      simp only [Task.own, mailbox, selected, List.head?_cons, Option.some.injEq] at head; subst head
+      simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
+      have received : (state.modify processId fun process => { process with mailbox := remaining }) =
+          state.set processId (ownChange id id (selectFrom (select (state.view processId))) process) := by
+        rw [State.modify_found found]; congr 1; simp [ownChange, selectFrom, selected]
+      rw [received, State.normalize_set_clean
+        (process' := ownChange id id (selectFrom (select (state.view processId))) process) sorted normalized found
+        live live (cleanOwn _ _)]
+      refine Config.own_handle_square (computation := next₀ (some value)) (pdict := id) reachable lookup rfl found live
+        (ownChange_select (select (state.view processId)) message value) ⟨_, selected⟩ step' ?_
+      intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ok₁ live₁
+      obtain ⟨record, view, mailbox₁, -⟩ := later within found₁ live₁ ok₁
+      obtain ⟨remaining₁, selected₁⟩ := ok₁.1
+      have tagged := Config.tagged_own_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
+        (transition := Transition.mk (.receive processId message)
+          (raw.normalize.modify processId fun process => { process with mailbox := remaining₁ })
+          [(processId, ⟨next₀ (some value), finish, none⟩)] none false)
+        (by simp [Task.own, view, mailbox₁, selected₁]) rfl (by
+          simp only [State.process, State.modify_found record, State.record_set, ↓reduceIte, Option.getD_some,
+            record])
+      simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
+      rw [show (raw.normalize.modify processId fun process => { process with mailbox := remaining₁ }) =
+          raw.normalize.set processId (ownChange id id (selectFrom (select (state.view processId)))
+            (normRecord raw.gone processId process₁)) by
+        rw [State.modify_found record]; congr 1
+        simp [ownChange, selectFrom, normRecord_live live₁, selected₁]] at tagged
+      exact ⟨_, tagged⟩
+  | ok value =>
+    simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
+    simp [Event.local, Task.ended] at isLocal
+  | error exception =>
+    cases exception <;> simp only [Task.own, List.head?_cons, Option.some.injEq] at head <;> subst head <;>
+      simp [Event.local, Task.ended] at isLocal
+  | schedule options child next₀ =>
+    simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
+    simp [Event.local] at isLocal
+  | send destination message next₀ =>
+    simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
+    simp [Event.local] at isLocal
+  | request query next₀ =>
+    simp only [Task.own] at head
+    split at head <;> simp only [List.head?_cons, Option.some.injEq] at head <;> subst head <;>
+      simp [Event.local] at isLocal
+
 /-- Every other step absorbs a forced step, or commutes with it into a
 configuration where a forced step closes the square. -/
 private theorem Config.forced_square {elapsed : PID → Nat → Nat} {config : Config α} {key key' : Key}
