@@ -3920,14 +3920,14 @@ private theorem inert_congr {gone gone' : PID → Bool} {processId : PID} {proce
 /-- An effect within frames that do not mention a record leaves it as it is. -/
 private theorem Effect.InFrames.untouched {effect : Effect} {frames : List Frame} {state : State} {processId : PID}
     (framed : effect.InFrames frames state)
-    (absent : ∀ bit, readsOf frames processId bit = false ∧ writesOf frames processId bit = false) :
+    (absent : ∀ bit, bit < 17 → readsOf frames processId bit = false ∧ writesOf frames processId bit = false) :
     effect.record processId = id := by
-  rcases framed processId with same | all | ⟨_, _, ⟨bit, _, used⟩, _⟩
+  rcases framed processId with same | all | ⟨_, _, ⟨bit, lower, used⟩, _⟩
   · exact same
-  · have := all 0 (by decide); rw [(absent 0).2] at this; simp at this
+  · have := all 0 (by decide); rw [(absent 0 (by decide)).2] at this; simp at this
   · rcases used with read | written
-    · rw [(absent bit).1] at read; simp at read
-    · rw [(absent bit).2] at written; simp at written
+    · rw [(absent bit lower).1] at read; simp at read
+    · rw [(absent bit lower).2] at written; simp at written
 
 /-- Whether a record refers to a process in what normalizing reads of whether
 it is gone, as `State.leavesOthers` checks. -/
@@ -7057,7 +7057,7 @@ private theorem State.normalize_after {state raw raw' : State} {first second : E
     (sorted : state.Sorted) (framed : first.InFrames frames state)
     (clean : CleanOutside (first.apply state) (WholeOf frames))
     (realizes : Realizes first state raw) (sortedRaw : raw.Sorted)
-    (untouched : ∀ processId, WholeOf frames processId → ∀ bit,
+    (untouched : ∀ processId, WholeOf frames processId → ∀ bit, bit < 17 →
       readsOf frames' processId bit = false ∧ writesOf frames' processId bit = false)
     (framed' : second.InFrames frames' state) (revives : second.NoRevive)
     (realizes' : Realizes second raw.normalize raw') (sortedRaw' : raw'.Sorted) :
@@ -7318,6 +7318,68 @@ private theorem Config.commutes_of_apart {elapsed : PID → Nat → Nat} {state 
   obtain ⟨frames', timers'⟩ := pair'
   simp only [found, found', Bool.and_eq_true, Bool.not_eq_true'] at apart
   obtain ⟨notBoth, apartFrames⟩ := apart
-  sorry
+  have notBoth' : (timers' && timers) = false := by rw [Bool.and_comm]; exact notBoth
+  have owners' : (!(other.owner.isSome && other.owner == key.owner && other.isOwn == key.isOwn)) = true := by
+    rw [Bool.beq_comm (a := other.isOwn)]
+    cases equal : (key.owner == other.owner)
+    · rw [Bool.beq_comm (a := other.owner), equal]; simp
+    · rw [Bool.beq_comm (a := other.owner), equal, ← eq_of_beq equal]
+      rw [equal] at owners; exact owners
+  obtain ⟨raw, tasks₁, finished₁, realizes, rawWithin, rfl⟩ := Config.stepOf_effect within confined step
+  obtain ⟨raw', tasks₂, finished₂, realizes', rawWithin', rfl⟩ := Config.stepOf_effect within confined' step'
+  obtain ⟨event₃, raw₃, tasks₃, finished₃, step₃, realizes₃, within₃, view'⟩ :=
+    Config.step_after within normalized owners fresh confined confined' found found' notBoth apartFrames step
+      realizes rawWithin step'
+  obtain ⟨event₄, raw₄, tasks₄, finished₄, step₄, realizes₄, within₄, view⟩ :=
+    Config.step_after within normalized owners' fresh' confined' confined found' found notBoth'
+      (framesApart_symm apartFrames) step' realizes' rawWithin' step
+  obtain ⟨tasks', finished', state₁, state₂, equal, equal'⟩ :=
+    Config.processes_of_fallback within once owners fresh fresh' distinct step step' step₃ step₄ view view'
+  simp only [Config.running.injEq] at equal equal'
+  obtain ⟨-, rfl, rfl, -⟩ := equal
+  obtain ⟨-, rfl, rfl, -⟩ := equal'
+  refine ⟨event₃, event₄, _, step₃, ?_⟩
+  rw [step₄]
+  -- Both orders reach both effects, normalized.
+  let first := (Config.running state tasks finished false).effectOf key
+  let second := (Config.running state tasks finished false).effectOf other
+  have framed : first.InFrames frames state := Config.inFrames confined found
+  have framed' : second.InFrames frames' state := Config.inFrames confined' found'
+  have untouched : ∀ {frames frames' : List Frame}, framesApart frames frames' = true →
+      ∀ processId, WholeOf frames processId → ∀ bit, bit < 17 →
+        readsOf frames' processId bit = false ∧ writesOf frames' processId bit = false := by
+    intro frames frames' apart processId whole bit lower
+    have conflict := (apart_of_framesApart apart processId).1 bit (whole bit lower)
+    constructor
+    · cases read : readsOf frames' processId bit
+      · rfl
+      · exact (conflict (.inl read)).elim
+    · cases written : writesOf frames' processId bit
+      · rfl
+      · exact (conflict (.inr written)).elim
+  have one : raw₃.normalize = (second.apply (first.apply state)).normalize :=
+    State.normalize_after within.1 framed (Config.clean within.1 normalized confined found) realizes rawWithin.1
+      (untouched apartFrames) framed' (Config.noRevive confined') realizes₃ within₃.1
+  have two : raw₄.normalize = (first.apply (second.apply state)).normalize :=
+    State.normalize_after within.1 framed' (Config.clean within.1 normalized confined' found') realizes'
+      rawWithin'.1 (untouched (framesApart_symm apartFrames)) framed (Config.noRevive confined) realizes₄ within₄.1
+  have records : ∀ processId, (second.apply (first.apply state)).record processId =
+      (first.apply (second.apply state)).record processId := by
+    intro processId
+    simp only [Effect.record_apply]
+    exact (Effect.record_comm framed framed' (fun processId => (apart_of_framesApart apartFrames processId).1)
+      (fun processId => (apart_of_framesApart apartFrames processId).2) processId).symm
+  have states : (second.apply (first.apply state)).normalize = (first.apply (second.apply state)).normalize := by
+    refine State.normalize_absorbs (Effect.apply_sorted _ (Effect.apply_sorted _ within.1))
+      (Effect.apply_sorted _ (Effect.apply_sorted _ within.1)) ?_ ?_ ?_ fun processId => .inl (records processId)
+    · simp only [Effect.apply_timers]
+      cases timed : timers
+      · rw [((Config.timersFramed confined (timed ▸ found)).1 rfl).getD]; rfl
+      · have timed' : timers' = false := by rw [timed] at notBoth; simpa using notBoth
+        rw [((Config.timersFramed confined' (timed' ▸ found')).1 rfl).getD]; rfl
+    · simp only [Effect.apply_elapsed]
+    · funext processId
+      simp only [State.gone, State.alive, records]
+  rw [one, two, states]
 
 end Lynx.Concurrent
