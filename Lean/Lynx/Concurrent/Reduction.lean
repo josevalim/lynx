@@ -52,12 +52,45 @@ step, following every run; keep them in sync. -/
       | successors => successors.findSome? fun (event, next) =>
           (counterexampleFrom accept depth next).map fun (events, failure) => (event :: events, failure)
 
-/-- The first run that following every run rejects, as the events of its
-steps and how it fails. Evaluating it is a fast way to find why a check fails;
-it may need a larger depth than `check`, which explores fewer runs. -/
+/-- The first failure that a visit of the steps not asleep finds, as `explore`
+follows them, with the event of the step that leads to it. -/
+@[expose] def exploreFailure (visit : List Key → Config α → Option (List Event × Failure α))
+    (stays : Key → Config α → Key → Bool) (sleep : List Key) :
+    List Key → List (Key × Event × Config α) → Option (List Event × Failure α)
+  | _, [] => none
+  | done, (key, event, next) :: rest =>
+      if Kernel.contains sleep key then exploreFailure visit stays sleep done rest
+      else match visit (Kernel.filter (stays key next) (Kernel.append sleep done)) next with
+        | some (events, failure) => some (event :: events, failure)
+        | none => exploreFailure visit stays sleep (Kernel.append done [key]) rest
+
+/-- The first run that `checkSleep` rejects. It mirrors `checkSleep` step by
+step; keep them in sync. -/
+@[expose] def counterexampleSleep (accept : Outcome α → Bool) :
+    Nat → List Key → Config α → Option (List Event × Failure α)
+  | 0, _, _ => some ([], .unfinished)
+  | depth + 1, sleep, config =>
+      -- A configuration a run reaches always names each process's steps by one key.
+      if !config.distinctTasks then some ([], .unfinished) else
+      match config.taggedSteps with
+      | [] =>
+          match config.successors with
+          | [] => if accept config.outcome then none else some ([], .rejected config.outcome)
+          | successors => successors.findSome? fun (event, next) =>
+              (counterexampleSleep accept depth [] next).map fun (events, failure) => (event :: events, failure)
+      | tagged =>
+          match Kernel.find? (·.2.2.2) tagged with
+          | some (_, event, next, _) =>
+              (counterexampleSleep accept depth sleep next).map fun (events, failure) => (event :: events, failure)
+          | none =>
+              let steps := Kernel.map (fun (key, event, next, _) => (key, event, next)) tagged
+              exploreFailure (counterexampleSleep accept depth) (config.staysAfter steps) sleep [] steps
+
+/-- The first run that `check` rejects, as the events of its steps and how it
+fails. Evaluating it is a fast way to find why a check fails. -/
 @[expose] def counterexample (accept : Outcome α → Bool) (depth : Nat) (config : Config α) :
     Option (List Event × Failure α) :=
-  counterexampleFrom accept depth config
+  counterexampleSleep accept depth [] config
 
 theorem checkFrom_sound {accept : Outcome α → Bool} {depth : Nat} {config last : Config α}
     {events : List Event} {outcome : Outcome α} (checked : checkFrom accept depth config = true)
