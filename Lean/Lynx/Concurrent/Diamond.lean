@@ -150,7 +150,7 @@ private theorem lookup_insertSorted (processId : PID) (process : ProcessState) :
           · have differ' : (other == key) = false := by simp [equal']
             simp [List.lookup_cons, differ', ih, equal]
 
-private theorem lookup_filter_ne (processId other : PID) (records : List (PID × ProcessState)) :
+private theorem lookup_filter_ne {β : Type} (processId other : PID) (records : List (PID × β)) :
     (records.filter (·.1 != processId)).lookup other =
       if other = processId then none else records.lookup other := by
   induction records with

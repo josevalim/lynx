@@ -5029,6 +5029,41 @@ private theorem State.fireEffect_clean {state : State} (timer : Timer) (sorted :
   exact CleanOutside.enqueue retimed (fun _ _ _ => by simp [inert]) (fun _ kind => by simp at kind) (by simp)
     (fun _ _ equal => by simp at equal)
 
+/-- No other record refers to a process that leaves the others alone. -/
+private theorem State.refers_of_leavesOthers {state : State} {processId other : PID} {process : ProcessState}
+    (leaves : state.leavesOthers processId = true) (differ : other ≠ processId)
+    (found : state.record other = some process) : Refers process processId = false := by
+  have mem : (other, process) ∈ state.processes := mem_of_lookup found
+  simp only [State.leavesOthers, Kernel.all_eq, List.all_eq_true, Bool.or_eq_true, beq_iff_eq] at leaves
+  rcases leaves (other, process) mem with same | kept
+  · exact absurd same differ
+  unfold Refers
+  cases exiting : process.exiting <;> simp only [exiting] at kept ⊢ <;>
+    simp only [Bool.and_eq_true, Bool.not_eq_true', Bool.or_eq_false_iff] at kept <;>
+    simp only [kept, Bool.or_false] <;> exact kept.1
+
+/-- Removing the link to a process that ended keeps a live record clean that does not refer to it. -/
+private theorem Clean.unlinked {gone : PID → Bool} {processId target : PID} {process : ProcessState}
+    (clean : Clean gone target process) (live : process.exiting = none)
+    (refers : Refers process processId = false) : Clean gone target (linkRemoved processId process) := by
+  have noAcks : ∀ entry ∈ process.queue, entry.source = processId →
+      (entry.signal matches .isAlive | .monitor _ | .unlinkAck _) = false := by
+    intro entry mem same
+    simp only [Refers, live, Bool.or_eq_false_iff, Kernel.any_eq, List.any_eq_false] at refers
+    have := refers.1 entry mem
+    simp only [same, beq_self_eq_true, Bool.true_and] at this
+    simpa using this
+  refine clean.preserve live live (fun entry mem => .inl ⟨mem, fun inside => ?_⟩)
+    (fun link mem _ => ⟨by simp [linkRemoved, Kernel.filter_eq] at mem; exact mem.1, id⟩)
+  obtain ⟨source, signal⟩ := entry
+  cases signal with
+  | unlinkAck id =>
+    by_cases same : source = processId
+    · have := noAcks _ mem same; simp at this
+    · simp only [inert, linkRemoved, Kernel.lookup_eq, Kernel.filter_eq] at inside ⊢
+      rwa [lookup_filter_ne, ite_eq_right_iff.mpr (fun h => absurd h same)] at inside
+  | _ => simp only [inert, linkRemoved] at inside ⊢; exact inside
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
