@@ -5591,4 +5591,254 @@ private theorem Config.headSafe {state : State} {tasks : List (PID × Task α)}
     · simp at found
   | link => simp [Config.frames] at found
 
+/-! ### Assembling: no step queues a link -/
+
+/-- Every link signal queued at the second state was queued at the first. -/
+private def NoNewLinks (state state' : State) : Prop :=
+  ∀ processId process', state'.record processId = some process' → ∀ entry ∈ process'.queue, entry.signal = .link →
+    ∃ process, state.record processId = some process ∧ entry ∈ process.queue
+
+private theorem NoNewLinks.refl (state : State) : NoNewLinks state state :=
+  fun _ process found entry mem _ => ⟨process, found, mem⟩
+
+private theorem NoNewLinks.trans {first second third : State} (one : NoNewLinks first second)
+    (two : NoNewLinks second third) : NoNewLinks first third := fun processId process found entry mem link => by
+  obtain ⟨middle, found', mem'⟩ := two processId process found entry mem link
+  exact one processId middle found' entry mem' link
+
+private theorem NoNewLinks.andThen {first second : Effect} {state : State}
+    (one : NoNewLinks state (first.apply state)) (two : NoNewLinks (first.apply state) (second.apply (first.apply state))) :
+    NoNewLinks state ((first.andThen second).apply state) := fun processId process found => by
+  rw [Effect.apply_andThen_record] at found
+  exact (one.trans two) processId process found
+
+private theorem NoNewLinks.empty (state : State) : NoNewLinks state (({} : Effect).apply state) := by
+  rw [Effect.apply_empty]; exact NoNewLinks.refl state
+
+private theorem NoNewLinks.retime (state : State) (change : List Timer → List Timer) :
+    NoNewLinks state ((Effect.retime change).apply state) := fun processId process found => by
+  rw [Effect.record_apply, Effect.record_retime] at found
+  exact NoNewLinks.refl state processId process found
+
+private theorem NoNewLinks.retimeIf (state : State) (condition : Prop) [Decidable condition]
+    (change : List Timer → List Timer) :
+    NoNewLinks state ((if condition then Effect.retime change else {}).apply state) := by
+  split
+  · exact NoNewLinks.retime state change
+  · exact NoNewLinks.empty state
+
+private theorem NoNewLinks.modify (state : State) (processId : PID) {change : ProcessState → ProcessState}
+    (keeps : ∀ process, ∀ entry ∈ (change process).queue, entry.signal = .link → entry ∈ process.queue) :
+    NoNewLinks state ((Effect.modify processId change).apply state) := fun other process found entry mem link => by
+  rw [Effect.record_apply, Effect.record_modify] at found
+  split at found
+  · rename_i same; subst same
+    cases record : state.record other with
+    | none => rw [record] at found; simp at found
+    | some original =>
+      rw [record] at found; simp only [Option.map_some, Option.some.injEq] at found; subst found
+      exact ⟨original, rfl, keeps original entry mem link⟩
+  · exact ⟨process, found, mem⟩
+
+private theorem NoNewLinks.enqueue (state other : State) (source target : PID) (signal : Signal)
+    (notLink : signal ≠ .link) : NoNewLinks state ((other.enqueueEffect source target signal).apply state) := by
+  have queued : ∀ (processId source' : PID) (signal' : Signal), signal' ≠ .link →
+      NoNewLinks state ((Effect.modify processId (queueAt source' signal')).apply state) :=
+    fun processId source' signal' notLink' => NoNewLinks.modify state processId fun process entry mem link => by
+      have mem' : entry ∈ process.queue ∨ entry = { source := source', signal := signal' } := by
+        simpa [queueAt, Kernel.append_eq] using mem
+      rcases mem' with old | rfl
+      · exact old
+      · exact absurd link notLink'
+  unfold State.enqueueEffect State.fallbackEffect
+  repeat' split
+  all_goals first
+    | exact queued _ _ _ notLink
+    | exact queued _ _ _ (by simp)
+    | exact NoNewLinks.empty state
+    | exact absurd rfl notLink
+    | (exact NoNewLinks.modify state _ fun process entry mem _ => mem)
+
+private theorem NoNewLinks.unpark (state other : State) (processId : PID) :
+    NoNewLinks state ((other.unparkEffect processId).apply state) := by
+  unfold State.unparkEffect
+  split
+  · exact NoNewLinks.andThen (NoNewLinks.modify state processId fun _ _ mem _ => mem)
+      (NoNewLinks.enqueue _ _ _ _ _ (by simp))
+  · exact NoNewLinks.empty state
+
+private theorem NoNewLinks.send (state other : State) (source target : PID) (signal : Signal)
+    (notLink : signal ≠ .link) : NoNewLinks state ((other.sendEffect source target signal).apply state) := by
+  unfold State.sendEffect
+  repeat' split
+  all_goals first
+    | exact NoNewLinks.andThen (NoNewLinks.unpark _ _ _) (NoNewLinks.enqueue _ _ _ _ _ notLink)
+    | exact NoNewLinks.enqueue _ _ _ _ _ notLink
+
+/-- Replacing a record by one queuing only links the old one queued queues no new link. -/
+private theorem NoNewLinks.put {state : State} {processId : PID} {process original : ProcessState}
+    (found : state.record processId = some original)
+    (kept : ∀ entry ∈ process.queue, entry.signal = .link → entry ∈ original.queue) :
+    NoNewLinks state ((Effect.put processId process).apply state) := fun other process' found' entry mem link => by
+  rw [Effect.record_apply] at found'
+  by_cases self : other = processId
+  · subst self
+    simp only [Effect.put, Effect.record, changeOf, List.lookup_cons, beq_self_eq_true, Option.some.injEq,
+      ite_true] at found'
+    subst found'
+    exact ⟨original, found, kept entry mem link⟩
+  · have : (Effect.put processId process).record other = id := by
+      simp [Effect.put, Effect.record, changeOf, self, Ne.symm self]
+    rw [this] at found'
+    exact ⟨process', found', mem⟩
+
+/-- The link exits of a process that ended queue no link. -/
+private theorem NoNewLinks.eagerChain (processId : PID) (eager : PID → Bool) :
+    ∀ (targets : List PID) (state : State), NoNewLinks state ((eagerChain processId eager targets).apply state)
+  | [], state => NoNewLinks.empty state
+  | target :: rest, state => by
+    simp only [Lynx.Concurrent.eagerChain]
+    refine NoNewLinks.andThen ?_ (NoNewLinks.eagerChain processId eager rest _)
+    split
+    · exact NoNewLinks.andThen (NoNewLinks.modify state processId fun _ _ mem _ => mem)
+        (NoNewLinks.modify _ target fun _ _ mem _ => mem)
+    · exact NoNewLinks.empty state
+
+/-- An ending queues no link: it keeps the requests of its own queue, and its
+link exits only remove links. -/
+private theorem NoNewLinks.terminate {state : State} {processId : PID} (reason : Term)
+    (alive : state.alive processId = true) :
+    NoNewLinks state ((state.terminateEffect processId reason).apply state) := by
+  obtain ⟨process, found⟩ : ∃ process, state.record processId = some process := by
+    cases record : state.record processId with
+    | none => simp [State.alive, record] at alive
+    | some process => exact ⟨process, rfl⟩
+  have same : state.process processId = process := by simp [State.process, found]
+  unfold State.terminateEffect
+  dsimp only
+  refine NoNewLinks.andThen (NoNewLinks.andThen (NoNewLinks.retimeIf _ _ _) ?_) ?_
+  · refine NoNewLinks.put (original := process) ?_ fun entry mem _ => ?_
+    · split <;> simp only [Effect.record_apply, Effect.record_retime, id, found] <;> rfl
+    · simp only [Kernel.filter_eq, List.mem_filter, same] at mem; exact mem.1
+  · erw [chainEffect_eagerExit processId reason _ _ (by simp [State.alive, State.record_set])]
+    exact NoNewLinks.eagerChain _ _ _ _
+
+private theorem NoNewLinks.ite {state : State} {first second : Effect} (condition : Prop) [Decidable condition]
+    (one : NoNewLinks state (first.apply state)) (two : NoNewLinks state (second.apply state)) :
+    NoNewLinks state ((if condition then first else second).apply state) := by
+  split
+  · exact one
+  · exact two
+
+/-- No confined step queues a link signal. -/
+private theorem Config.noNewLinks {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key}
+    (confined : Config.confined (.running state tasks finished false) key = true) :
+    NoNewLinks state (((Config.running state tasks finished false).effectOf key).apply state) := by
+  cases key with
+  | own processId =>
+    simp only [Config.effectOf]
+    split
+    · rename_i task lookup
+      obtain ⟨computation, finish, wait⟩ := task
+      cases wait with
+      | some => exact NoNewLinks.empty state
+      | none =>
+      simp only [Config.confined, lookup, Bool.and_eq_true] at confined
+      obtain ⟨⟨alive, -⟩, confined⟩ := confined
+      cases computation with
+      | ok => exact NoNewLinks.terminate _ alive
+      | error exception =>
+        cases exception with
+        | exhausted => simp at confined
+        | _ => exact NoNewLinks.terminate _ alive
+      | send => exact NoNewLinks.send _ _ _ _ _ (by simp)
+      | receive =>
+        simp only [Task.ownEffect]
+        split
+        · exact NoNewLinks.modify state _ fun _ _ mem _ => mem
+        · exact NoNewLinks.empty state
+      | request query next =>
+        cases query with
+        | monitor target alias =>
+          simp only [Task.ownEffect, State.requestEffect, State.allocate]
+          refine NoNewLinks.andThen (NoNewLinks.modify state _ fun _ _ mem _ => mem) ?_
+          split
+          · exact NoNewLinks.empty _
+          · exact NoNewLinks.andThen (NoNewLinks.unpark _ _ _) (NoNewLinks.modify _ _ fun _ _ mem _ => mem)
+        | demonitor => exact NoNewLinks.modify state _ fun _ _ mem _ => mem
+        | startTimer =>
+          simp only [Task.ownEffect, State.requestEffect, State.allocate]
+          exact NoNewLinks.andThen (NoNewLinks.modify state _ fun _ _ mem _ => mem) (NoNewLinks.retimeIf _ _ _)
+        | cancelTimer =>
+          simp only [Task.ownEffect, State.requestEffect]
+          split
+          · exact NoNewLinks.andThen (NoNewLinks.retime _ _) (NoNewLinks.modify _ _ fun _ _ mem _ => mem)
+          · exact NoNewLinks.empty state
+        | alive target =>
+          simp only [Task.ownEffect, State.requestEffect]
+          split
+          · exact NoNewLinks.empty state
+          · split
+            · exact NoNewLinks.send _ _ _ _ _ (by simp)
+            · exact NoNewLinks.enqueue _ _ _ _ _ (by simp)
+        | sendAlias => exact NoNewLinks.send _ _ _ _ _ (by simp)
+        | _ => simp at confined
+      | _ => simp at confined
+    · exact NoNewLinks.empty state
+  | handle processId =>
+    simp only [Config.effectOf]
+    split
+    · rename_i task lookup
+      simp only [Config.confined, Bool.and_eq_true] at confined
+      cases queue : (state.process processId).queue with
+      | nil => simp [queue] at confined
+      | cons entry rest =>
+        simp only [queue] at confined
+        have kind : entry.signal.handledConfined = true := by
+          obtain ⟨source, signal⟩ := entry; cases signal <;> simp_all [Signal.handledConfined]
+        rw [Task.handleEffect_of_continues queue (by rw [State.handle_confined _ _ _ _ kind])]
+        refine NoNewLinks.andThen (NoNewLinks.modify state _ fun process entry mem _ =>
+          List.mem_of_mem_drop mem) ?_
+        have keeps : ∀ (state' : State) (processId' : PID) (change : ProcessState → ProcessState),
+            (∀ process, (change process).queue = process.queue) →
+            NoNewLinks state' ((Effect.modify processId' change).apply state') := fun state' processId' change same =>
+          NoNewLinks.modify state' processId' fun process entry mem _ => by rwa [same] at mem
+        obtain ⟨source, signal⟩ := entry
+        cases signal with
+        | message => exact keeps _ _ _ fun _ => rfl
+        | aliasMessage =>
+          simp only [State.handleEffect]
+          split
+          · exact keeps _ _ _ fun _ => rfl
+          · exact NoNewLinks.empty _
+        | monitor => exact keeps _ _ _ fun _ => rfl
+        | down reference reason =>
+          simp only [State.handleEffect]
+          exact NoNewLinks.andThen (NoNewLinks.ite _ (keeps _ _ _ fun _ => rfl) (NoNewLinks.empty _))
+            (NoNewLinks.ite _ (NoNewLinks.andThen (keeps _ _ _ fun _ => rfl) (keeps _ _ _ fun _ => rfl))
+              (NoNewLinks.empty _))
+        | _ => simp [Signal.handledConfined] at kind
+    · exact NoNewLinks.empty state
+  | phase processId =>
+    simp only [Config.effectOf, State.phaseEffect]
+    split
+    · split
+      · exact NoNewLinks.andThen (NoNewLinks.modify state _ fun _ _ mem _ => mem) (NoNewLinks.send _ _ _ _ _ (by simp))
+      · split
+        · rename_i entry rest _
+          refine NoNewLinks.andThen (NoNewLinks.modify state _ fun _ _ mem _ => List.mem_of_mem_drop mem) ?_
+          obtain ⟨source, signal⟩ := entry
+          cases signal <;> simp only [State.answerEffect] <;>
+            first | exact NoNewLinks.send _ _ _ _ _ (by simp) | exact NoNewLinks.empty _
+        · exact NoNewLinks.empty state
+    · exact NoNewLinks.empty state
+  | unpark processId => exact NoNewLinks.unpark state state processId
+  | fire reference =>
+    simp only [Config.effectOf]
+    split
+    · exact NoNewLinks.andThen (NoNewLinks.retime _ _) (NoNewLinks.enqueue _ _ _ _ _ (by simp))
+    · exact NoNewLinks.empty state
+  | link => exact NoNewLinks.empty state
+
 end Lynx.Concurrent
