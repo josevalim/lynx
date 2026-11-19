@@ -3673,6 +3673,138 @@ private theorem Task.handle_agree {state other : State} {tasks : List (PID × Ta
           simp only [State.handleEffect, set, monitoring, eager, normal]
       | _ => simp [Signal.handledConfined] at kind
 
+/-- The next phase of a process that ended is enabled alike and has the same
+effect at a state agreeing on what its frames read. -/
+private theorem State.phase_agree {state other : State} {processId : PID} {frames : List Frame} {timers : Bool}
+    (found : state.phaseFrames processId = some (frames, timers)) (agree : Agree frames state other) :
+    (other.phase processId).isSome = (state.phase processId).isSome ∧
+      other.phaseEffect processId = state.phaseEffect processId := by
+  unfold State.phaseFrames at found
+  cases record : state.record processId with
+  | none => simp [record] at found
+  | some process =>
+    simp only [record] at found
+    cases exits : process.exiting with
+    | none => simp [exits] at found
+    | some exiting =>
+      simp only [exits] at found
+      have same : state.process processId = process := by simp [State.process, record]
+      -- The record exists alike, as every frame of a phase reads some of it.
+      have own : ∀ {entry : Frame} {rest : List Frame}, frames = entry :: rest → entry.1 = processId →
+          entry.2.1.testBit 15 = true →
+          other.record processId = some { other.process processId with } ∧
+            (other.process processId).exiting = some exiting := by
+        intro entry rest equal pid set
+        have inside : entry ∈ frames := by rw [equal]; exact List.mem_cons_self
+        obtain ⟨exists', -⟩ := agree processId ⟨15, by decide, pid ▸ readsOf_of_mem inside set⟩
+        have exiting' := agree.get inside .exiting set
+        rw [pid] at exiting'
+        simp only [ProcessState.get, same, exits] at exiting'
+        refine ⟨?_, exiting'⟩
+        cases found' : other.record processId with
+        | none => rw [found', record] at exists'; simp at exists'
+        | some process' => simp [State.process, found']
+      have recordOf : ∀ (state : State) (process : ProcessState), state.record processId = some process →
+          state.process processId = process := fun state process found => by simp [State.process, found]
+      -- Sending from the process reads its parked monitor signal and whether the target is alive.
+      have sends : ∀ {signal : Signal} {target : PID} (change : ProcessState → ProcessState),
+          (∀ process, (change process).parked = process.parked) →
+          (∀ process, (change process).exiting.isSome = process.exiting.isSome) →
+          (∀ entry ∈ state.sendFrames processId target signal, entry ∈ frames) →
+          (other.modify processId change).sendEffect processId target signal =
+            (state.modify processId change).sendEffect processId target signal := by
+        intro signal target change keepsParked live sub
+        obtain ⟨⟨parkedEntry, parkedMem, parkedSame, parkedRead⟩, ⟨liveEntry, liveMem, liveSame, liveRead⟩⟩ :=
+          sendFrames_reads state processId target signal
+        have parked := agree.get (sub _ parkedMem) .parked parkedRead
+        have alive := agree.alive (sub _ liveMem) liveRead
+        rw [parkedSame] at parked; rw [liveSame] at alive
+        refine State.sendEffect_congr _ ?_ ?_
+        · exact (State.process_modify_keeps (get := (·.parked)) keepsParked).trans
+            (parked.trans (State.process_modify_keeps (get := (·.parked)) keepsParked).symm)
+        · exact (State.alive_modify _ _ _ _ live).trans (alive.trans (State.alive_modify _ _ _ _ live).symm)
+      cases downs : exiting.downs with
+      | cons down rest =>
+        obtain ⟨reference, watcher⟩ := down
+        simp only [downs, Option.some.injEq, Prod.mk.injEq] at found
+        obtain ⟨record', exiting'⟩ := own found.1.symm (by split <;> rfl) (by split <;> (dsimp only; decide))
+        refine ⟨by cases links : exiting.links <;> simp [State.phase, record, record', exits, exiting', links, downs], ?_⟩
+        simp only [State.phaseEffect, same, exits, exiting', downs]
+        rw [sends (setDowns rest) (fun _ => rfl) (fun process => by simp only [setDowns]; cases process.exiting <;> rfl)
+          fun entry mem => found.1 ▸ List.mem_cons_of_mem _ mem]
+      | nil =>
+        cases queue : process.queue with
+        | nil =>
+          simp only [downs, queue, Option.some.injEq, Prod.mk.injEq] at found
+          obtain ⟨record', exiting'⟩ := own found.1.symm (by split <;> rfl) (by split <;> (dsimp only; decide))
+          have inside : (processId, Field.all, Field.all) ∈ frames := by rw [← found.1]; exact List.mem_cons_self
+          have queue' := agree.queue inside (by dsimp only; decide)
+          rw [same, queue] at queue'
+          refine ⟨by cases links : exiting.links <;>
+            simp [State.phase, record, record', exits, exiting', links, downs, queue, queue'], ?_⟩
+          simp only [State.phaseEffect, same, exits, exiting', downs, queue, queue']
+        | cons entry rest =>
+          simp only [downs, queue, Option.some.injEq, Prod.mk.injEq] at found
+          obtain ⟨record', exiting'⟩ := own found.1.symm (by split <;> rfl) (by split <;> (dsimp only; decide))
+          have inside : (if rest.isEmpty then (processId, Field.all, Field.all)
+              else (processId, Field.exiting ||| Field.queueHead, Field.queueHead)) ∈ frames := by
+            rw [← found.1]; exact List.mem_cons_self
+          have head := agree.head inside (by split <;> (dsimp only; decide))
+          rw [show (if rest.isEmpty then (processId, Field.all, Field.all)
+              else (processId, Field.exiting ||| Field.queueHead, Field.queueHead)).1 = processId by split <;> rfl,
+            same, queue] at head
+          obtain ⟨rest', queue'⟩ : ∃ rest', (other.process processId).queue = entry :: rest' := by
+            cases equal' : (other.process processId).queue with
+            | nil => rw [equal'] at head; simp at head
+            | cons first rest' => rw [equal'] at head; simp at head; exact ⟨rest', by rw [head]⟩
+          refine ⟨by cases links : exiting.links <;>
+            simp [State.phase, record, record', exits, exiting', links, downs, queue, queue'], ?_⟩
+          simp only [State.phaseEffect, same, exits, exiting', downs, queue, queue']
+          congr 1
+          obtain ⟨source, signal⟩ := entry
+          have keepsParked : ∀ process : ProcessState, ({ process with queue := process.queue.drop 1 }).parked =
+              process.parked := fun _ => rfl
+          have live : ∀ process : ProcessState, ({ process with queue := process.queue.drop 1 }).exiting.isSome =
+              process.exiting.isSome := fun _ => rfl
+          cases signal <;> simp only [State.answerEffect]
+          all_goals first
+            | rfl
+            | exact sends _ keepsParked live fun entry mem => found.1 ▸ List.mem_cons_of_mem _ mem
+
+/-- Sending a parked monitor signal is enabled alike and has the same effect at
+a state agreeing on what its frames read. -/
+private theorem State.unpark_agree {state other : State} {processId target : PID} {reference : List Nat}
+    (parked : (state.process processId).parked = some (target, reference))
+    (agree : Agree ((processId, Field.parked, Field.parked) ::
+      state.enqueueFrames processId target (.monitor reference)) state other) :
+    (other.process processId).parked = (state.process processId).parked ∧
+      other.unparkEffect processId = state.unparkEffect processId := by
+  have same := agree.get (entry := (processId, Field.parked, Field.parked)) List.mem_cons_self .parked
+    (by dsimp only [Part.bit]; decide)
+  simp only [ProcessState.get] at same
+  refine ⟨same, State.unparkEffect_congr same fun target' reference' found => ?_⟩
+  rw [parked] at found; simp only [Option.some.injEq, Prod.mk.injEq] at found
+  obtain ⟨rfl, rfl⟩ := found
+  obtain ⟨entry, mem, sameTarget, read⟩ := enqueueFrames_live state processId target (.monitor reference)
+  have alive := agree.alive (List.mem_cons_of_mem _ mem) read
+  rw [sameTarget] at alive
+  refine (State.alive_modify _ _ _ _ ?_).trans (alive.trans (State.alive_modify _ _ _ _ ?_).symm) <;>
+    intro process <;> rfl
+
+/-- Firing a timer is enabled alike and has the same effect at a state with the
+same timers agreeing on what its frames read. -/
+private theorem State.fire_agree {state other : State} {timer : Timer}
+    (timers : other.timers = state.timers)
+    (agree : Agree (state.enqueueFrames clock timer.destination (.message timer.message)) state other) :
+    other.firing = state.firing ∧ other.fireEffect timer = state.fireEffect timer := by
+  refine ⟨by simp [State.firing, timers], ?_⟩
+  obtain ⟨entry, mem, same, read⟩ := enqueueFrames_live state clock timer.destination (.message timer.message)
+  have alive := agree.alive mem read
+  rw [same] at alive
+  simp only [State.fireEffect]
+  congr 1
+  exact State.enqueueEffect_congr _ alive
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
