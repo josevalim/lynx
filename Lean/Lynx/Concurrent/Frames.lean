@@ -2,6 +2,7 @@ module
 
 public import Lynx.Concurrent.Diamond
 import all Lynx.Concurrent.Diamond
+import Lynx.Term.Induction
 
 /-! Steps that `Config.apart` lets commute without evaluating them. Each step
 does an effect on the records it changes (`Effect`), a function of their old
@@ -3043,6 +3044,111 @@ private theorem Effect.InFrames.terminateStep (state : State) (processId : PID) 
       · exact (notAll (allOf same.symm)).elim
       · obtain ⟨target, rfl⟩ := mem_eagerFrame mem
         rw [(eagerFrame_bits state processId target).2.1] at set; simp at set
+
+/-! ### Views alike -/
+
+private theorem Term.identicalList_refl : ∀ (terms : List Term), (∀ term ∈ terms, term.identical term = true) →
+    Term.identicalList terms terms = true
+  | [], _ => by simp [Term.identicalList]
+  | term :: rest, same => by
+    simp only [Term.identicalList, Bool.and_eq_true]
+    exact ⟨same term List.mem_cons_self, Term.identicalList_refl rest fun term mem => same term (List.mem_cons_of_mem _ mem)⟩
+
+private theorem Term.identicalEntries_refl : ∀ (entries : List (Term × Term)),
+    (∀ key value, (key, value) ∈ entries → key.identical key = true ∧ value.identical value = true) →
+    Term.identicalEntries entries entries = true
+  | [], _ => by simp [Term.identicalEntries]
+  | (key, value) :: rest, same => by
+    simp only [Term.identicalEntries, Bool.and_eq_true]
+    have := same key value List.mem_cons_self
+    exact ⟨⟨this.1, this.2⟩, Term.identicalEntries_refl rest fun key value mem => same key value (List.mem_cons_of_mem _ mem)⟩
+
+private theorem Term.identical_refl (term : Term) : term.identical term = true := by
+  induction term using Term.induct with
+  | function module name arity captures same =>
+    simp only [Term.identical, beq_self_eq_true, Bool.true_and]
+    exact Term.identicalList_refl _ fun term mem => same term (by simpa using mem)
+  | tuple terms same =>
+    simp only [Term.identical]
+    exact Term.identicalList_refl _ fun term mem => same term (by simpa using mem)
+  | map entries same =>
+    simp only [Term.identical]
+    exact Term.identicalEntries_refl _ same
+  | cons head tail sameHead sameTail => simp [Term.identical, sameHead, sameTail]
+  | _ => simp [Term.identical]
+
+private theorem OwnView.identical_refl (view : OwnView) : view.identical view = true := by
+  cases view with
+  | env env =>
+    simp [OwnView.identical, environmentIdentical, Term.identicalEntries_refl _ fun key value _ =>
+      ⟨Term.identical_refl key, Term.identical_refl value⟩]
+  | receive env message timesOut =>
+    simp only [OwnView.identical, environmentIdentical, beq_self_eq_true, Bool.true_and, Bool.and_true,
+      Term.identicalEntries_refl _ fun key value _ => ⟨Term.identical_refl key, Term.identical_refl value⟩]
+    cases message <;> simp [optionIdentical, Term.identical_refl]
+  | answer shape =>
+    cases shape with
+    | reply value => simp [OwnView.identical, Answer.Shape.identical, Term.identical_refl]
+    | wait waiting => cases waiting <;> simp [OwnView.identical, Answer.Shape.identical, Wait.identical, Term.identical_refl]
+    | «continue» => rfl
+  | _ => simp [OwnView.identical]
+
+private theorem handleViewIdentical_refl (view : Option (Option Term × Option Term)) :
+    handleViewIdentical view view = true := by
+  rcases view with _ | ⟨exits, resumed⟩
+  · rfl
+  · cases exits <;> cases resumed <;> simp [handleViewIdentical, optionIdentical, Term.identical_refl]
+
+/-- Two states agree on what frames read: the records the frames read exist in
+both or neither, and agree on the fields read. -/
+private def Agree (frames : List Frame) (state other : State) : Prop :=
+  ∀ processId, (∃ bit, bit < 17 ∧ readsOf frames processId bit) →
+    (other.record processId).isSome = (state.record processId).isSome ∧
+    RecordSame (readsOf frames processId) (state.record processId) (other.record processId)
+
+private theorem readsOf_of_mem {frames : List Frame} {entry : Frame} (mem : entry ∈ frames) {bit : Nat}
+    (set : entry.2.1.testBit bit = true) : readsOf frames entry.1 bit :=
+  List.any_eq_true.mpr ⟨entry, mem, by simp [set]⟩
+
+private theorem Agree.alive {frames : List Frame} {state other : State} (agree : Agree frames state other)
+    {entry : Frame} (mem : entry ∈ frames) (read : entry.2.1.testBit liveBit = true) :
+    other.alive entry.1 = state.alive entry.1 := by
+  have := (agree entry.1 ⟨liveBit, by decide, readsOf_of_mem mem read⟩).2.1 (readsOf_of_mem mem read)
+  simp only [State.alive]
+  cases found : state.record entry.1 <;> cases found' : other.record entry.1 <;>
+    simp_all [liveOf]
+
+private theorem Agree.get {frames : List Frame} {state other : State} (agree : Agree frames state other)
+    {entry : Frame} (mem : entry ∈ frames) (part : Part) (read : entry.2.1.testBit part.bit = true) :
+    (other.process entry.1).get part = (state.process entry.1).get part := by
+  obtain ⟨exists', same⟩ := agree entry.1 ⟨part.bit, part.bit_lt, readsOf_of_mem mem read⟩
+  simp only [State.process]
+  cases found : state.record entry.1 <;> cases found' : other.record entry.1 <;> simp only [found, found'] at exists' ⊢ <;>
+    first | rfl | (simp at exists'; done) | exact ((same.2 _ _ found found').2.2 part (readsOf_of_mem mem read)).symm
+
+private theorem Agree.head {frames : List Frame} {state other : State} (agree : Agree frames state other)
+    {entry : Frame} (mem : entry ∈ frames) (read : entry.2.1.testBit headBit = true) :
+    (other.process entry.1).queue.head? = (state.process entry.1).queue.head? := by
+  obtain ⟨exists', same⟩ := agree entry.1 ⟨headBit, by decide, readsOf_of_mem mem read⟩
+  simp only [State.process]
+  cases found : state.record entry.1 <;> cases found' : other.record entry.1 <;> simp only [found, found'] at exists' ⊢ <;>
+    first | rfl | (simp at exists'; done) | exact ((same.2 _ _ found found').2.1 (readsOf_of_mem mem read)).symm
+
+private theorem Agree.queue {frames : List Frame} {state other : State} (agree : Agree frames state other)
+    {entry : Frame} (mem : entry ∈ frames) (read : entry.2.1.testBit tailBit = true) :
+    (other.process entry.1).queue = (state.process entry.1).queue := by
+  obtain ⟨exists', same⟩ := agree entry.1 ⟨tailBit, by decide, readsOf_of_mem mem read⟩
+  simp only [State.process]
+  cases found : state.record entry.1 <;> cases found' : other.record entry.1 <;> simp only [found, found'] at exists' ⊢ <;>
+    first | rfl | (simp at exists'; done) | exact ((same.2 _ _ found found').1 (readsOf_of_mem mem read)).symm
+
+private theorem Agree.mono {frames frames' : List Frame} {state other : State} (agree : Agree frames state other)
+    (sub : ∀ entry ∈ frames', entry ∈ frames) : Agree frames' state other := by
+  intro processId used
+  obtain ⟨bit, lower, read⟩ := used
+  obtain ⟨exists', same⟩ := agree processId ⟨bit, lower, readsOf_mono sub _ _ read⟩
+  refine ⟨exists', fun read => same.1 (readsOf_mono sub _ _ read), fun process process' found found' => ?_⟩
+  exact (same.2 process process' found found').mono (readsOf_mono sub processId)
 
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
