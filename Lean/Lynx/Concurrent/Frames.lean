@@ -3465,9 +3465,9 @@ private theorem Task.ownEffect_agree {state other : State} {tasks : List (PID ×
     (lookup : Kernel.lookup processId tasks = some task)
     (found : task.ownFrames state processId = some (frames, timers)) (agree : Agree frames state other)
     (timed : timers = true → other.timers = state.timers)
-    (timedTo : frames = (state.endFrames processId).1 →
+    (timedTo : state.endFrames processId = (frames, timers) →
       Kernel.any other.timers (·.destination == processId) = Kernel.any state.timers (·.destination == processId))
-    (eager : frames = (state.endFrames processId).1 → ∀ target reason,
+    (eager : state.endFrames processId = (frames, timers) → ∀ target reason,
       (target, none) ∈ (state.process processId).links → target ≠ processId →
       other.eagerLink processId target reason = state.eagerLink processId target reason) :
     task.ownEffect other processId = task.ownEffect state processId := by
@@ -3478,23 +3478,23 @@ private theorem Task.ownEffect_agree {state other : State} {tasks : List (PID ×
   simp only [Config.confined, lookup] at confined
   have head : ∀ {reads writes : Nat} {rest : List Frame}, frames = (processId, reads, writes) :: rest →
       (processId, reads, writes) ∈ frames := fun equal => equal ▸ List.mem_cons_self
-  have ending : ∀ reason, frames = (state.endFrames processId).1 →
+  have ending : ∀ reason, state.endFrames processId = (frames, timers) →
       other.terminateEffect processId reason = state.terminateEffect processId reason := by
     intro reason equal
     have inside : (processId, Field.all, Field.all) ∈ frames := by
-      rw [equal, endFrames_eq]; exact List.mem_cons_self
+      rw [show frames = (state.endFrames processId).1 by rw [equal], endFrames_eq]; exact List.mem_cons_self
     exact State.terminateEffect_congr (agree.process inside rfl) (timedTo equal) fun target linked differ =>
       eager equal target reason linked differ
   cases computation with
   | ok =>
     simp only [Task.ownFrames, Option.some.injEq] at found
-    exact ending _ (congrArg Prod.fst found).symm
+    exact ending _ found
   | error exception =>
     cases exception with
     | exhausted => simp at confined
     | _ =>
       simp only [Task.ownFrames, Option.some.injEq] at found
-      exact ending _ (congrArg Prod.fst found).symm
+      exact ending _ found
   | send destination message =>
     simp only [Task.ownFrames, Option.some.injEq, Prod.mk.injEq] at found
     exact State.sendEffect_agree agree fun entry mem => found.1 ▸ mem
@@ -6868,9 +6868,9 @@ private theorem Config.own_after {elapsed : PID → Nat → Nat} {state state' :
     (step : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next))
     (lookup : Kernel.lookup processId tasks = some task) (lookup' : Kernel.lookup processId tasks' = some task)
     (agree : Agree frames state state') (timed : timers = true → state'.timers = state.timers)
-    (timedTo : frames = (state.endFrames processId).1 →
+    (timedTo : state.endFrames processId = (frames, timers) →
       Kernel.any state'.timers (·.destination == processId) = Kernel.any state.timers (·.destination == processId))
-    (eager : frames = (state.endFrames processId).1 → ∀ target reason,
+    (eager : state.endFrames processId = (frames, timers) → ∀ target reason,
       (target, none) ∈ (state.process processId).links → target ≠ processId →
       state'.eagerLink processId target reason = state.eagerLink processId target reason) :
     ∃ event' raw' tasks'' finished'',
@@ -7167,5 +7167,157 @@ private theorem framesApart_symm {frames frames' : List Frame} (apart : framesAp
       simp only [Nat.testBit_and, Nat.testBit_or, Nat.zero_testBit] at one ⊢
       cases a : entry.2.2.testBit bit <;> cases b : entry'.2.1.testBit bit <;> cases c : entry'.2.2.testBit bit <;>
         simp_all
+
+/-! ### Steps apart commute -/
+
+/-- A confined step apart from a first, taken after it, is enabled, has the same
+effect from the state reached, and reads the same view. -/
+private theorem Config.step_after {elapsed : PID → Nat → Nat} {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key other : Key} {event event' : Event} {next' : Config α}
+    {raw : State} {tasks₁ : List (PID × Task α)} {finished₁ : Option (Except Exception α)}
+    {frames frames' : List Frame} {timers timers' : Bool}
+    (within : state.Within elapsed) (normalized : state.normalize = state)
+    (owners : (!(key.owner.isSome && key.owner == other.owner && key.isOwn == other.isOwn)) = true)
+    (fresh : (Config.running state tasks finished false).spawnsFresh key = true)
+    (confined : Config.confined (.running state tasks finished false) key = true)
+    (confined' : Config.confined (.running state tasks finished false) other = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, timers))
+    (found' : (Config.running state tasks finished false).frames other = some (frames', timers'))
+    (notBoth : (timers && timers') = false) (apartFrames : framesApart frames frames' = true)
+    (step : (Config.running state tasks finished false).stepOf key =
+      some (event, .running raw.normalize tasks₁ finished₁ false))
+    (realizes : Realizes ((Config.running state tasks finished false).effectOf key) state raw)
+    (rawWithin : raw.Within elapsed)
+    (step' : (Config.running state tasks finished false).stepOf other = some (event', next')) :
+    ∃ event₃ raw₃ tasks₃ finished₃,
+      (Config.running raw.normalize tasks₁ finished₁ false).stepOf other =
+        some (event₃, .running raw₃.normalize tasks₃ finished₃ false) ∧
+      Realizes ((Config.running state tasks finished false).effectOf other) raw.normalize raw₃ ∧
+      raw₃.Within elapsed ∧
+      (Config.running state tasks finished false).sameView (.running raw.normalize tasks₁ finished₁ false) other = true := by
+  have within₁ : raw.normalize.Within elapsed := rawWithin.normalize
+  have normalized₁ : raw.normalize.normalize = raw.normalize := State.normalize_normalize rawWithin.1
+  have agree := Config.agree_after within.1 normalized confined found confined' found' apartFrames realizes rawWithin.1
+  have timed : timers' = true → raw.normalize.timers = state.timers := fun timed' => by
+    have untimed : timers = false := by cases timers <;> simp_all
+    rw [untimed] at found
+    exact Config.timers_after confined found realizes
+  cases other with
+  | own processId =>
+    obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_own step'
+    have notOwn : key ≠ .own processId := fun same => by subst same; simp [Key.owner, Key.isOwn] at owners
+    obtain ⟨state', tasks', finished', equal, lookup'⟩ := Config.lookup_after confined fresh step lookup notOwn
+    simp only [Config.running.injEq] at equal
+    obtain ⟨rfl, rfl, rfl, -⟩ := equal
+    have timedTo : state.endFrames processId = (frames', timers') →
+        Kernel.any raw.normalize.timers (·.destination == processId) =
+          Kernel.any state.timers (·.destination == processId) := fun ending => by
+      have frames'' : frames' = (state.endFrames processId).1 := by rw [ending]
+      have timers'' : timers' = (state.endFrames processId).2 := by rw [ending]
+      exact Config.timersTo_after confined found (frames'' ▸ apartFrames)
+        (by rw [← timers'', notBoth]; rfl) realizes
+    have eager : state.endFrames processId = (frames', timers') → ∀ target reason,
+        (target, none) ∈ (state.process processId).links → target ≠ processId →
+        raw.normalize.eagerLink processId target reason = state.eagerLink processId target reason := by
+      intro ending target reason linked _
+      have frames'' : frames' = (state.endFrames processId).1 := by rw [ending]
+      subst frames''
+      exact Config.eager_after within.1 normalized confined found confined' found' apartFrames realizes rawWithin.1
+        reason linked
+    exact Config.own_after within normalized within₁ normalized₁ confined' found' step' lookup lookup' agree timed
+      timedTo eager
+  | handle processId =>
+    obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_handle step'
+    -- The process still has a task after the first step.
+    obtain ⟨task', lookup'⟩ : ∃ task', Kernel.lookup processId tasks₁ = some task' := by
+      by_cases same : key = .own processId
+      · subst same
+        obtain ⟨ownTask, transition₀, ownLookup, ownHead, equal⟩ := Config.stepOf_own step
+        rw [ownLookup] at lookup; simp only [Option.some.injEq] at lookup; subst lookup
+        have handleRead : readsOf frames' processId headBit = true := by
+          simp only [Config.frames, ownLookup, Option.bind_some, Task.handleFrames] at found'
+          cases queue : (state.process processId).queue with
+          | nil => simp [Task.handle, queue] at head
+          | cons entry rest =>
+            simp only [queue] at found'
+            simp only [Config.confined, queue, Bool.and_eq_true] at confined'
+            obtain ⟨source, signal⟩ := entry
+            cases signal <;> simp at confined' <;> simp only [Option.some.injEq, Prod.mk.injEq] at found' <;>
+              rw [← found'.1] <;> simp [readsOf] <;> first | decide | exact .inl (by decide)
+        have ownFound : ownTask.ownFrames state processId = some (frames, timers) := by
+          simp only [Config.frames, ownLookup, Option.bind_some] at found; exact found
+        -- An ending writes the whole record, whose head handling reads, so it is not apart.
+        have notEnding : state.endFrames processId ≠ (frames, timers) := fun ending => by
+          have written : writesOf frames processId headBit = true := by
+            rw [show frames = (state.endFrames processId).1 by rw [ending], endFrames_eq]
+            exact List.any_eq_true.mpr ⟨_, List.mem_cons_self, by simp [all_testBit (show headBit < 17 by decide)]⟩
+          exact (apart_of_framesApart apartFrames processId).1 headBit written (.inl handleRead)
+        obtain ⟨computation, finish, wait⟩ := ownTask
+        have waiting : wait = none := Task.own_waiting ownHead
+        subst waiting
+        obtain ⟨single, singleTasks⟩ := Task.own_single (List.mem_of_head? ownHead)
+          (fun value same => by
+            simp only at same
+            simp only [Task.ownFrames, same, Option.some.injEq] at ownFound; exact notEnding ownFound)
+          (fun exception same => by
+            simp only at same
+            cases exception <;> simp only [Task.ownFrames, same, Option.some.injEq] at ownFound <;>
+              first
+                | exact notEnding ownFound
+                | simp only [Config.confined, ownLookup, same, Bool.and_false, Bool.false_eq_true] at confined)
+          (fun options child next same => by
+            simp only at same
+            simp only [Config.confined, ownLookup, same, Bool.and_false, Bool.false_eq_true] at confined)
+        have exhausted : transition₀.exhausted = false := by
+          cases exhausted : transition₀.exhausted
+          · rfl
+          obtain ⟨waits, computes⟩ := Task.own_exhausted (List.mem_of_head? ownHead) exhausted
+          simp only at computes
+          simp only [Config.confined, ownLookup, computes, Bool.and_false, Bool.false_eq_true] at confined
+        rw [exhausted] at equal
+        simp only [Bool.false_eq_true, ↓reduceIte, Config.running.injEq] at equal
+        obtain ⟨-, rfl, -, -⟩ := equal
+        rw [singleTasks]
+        exact ⟨single, lookup_rewriteTask_self ownLookup⟩
+      · obtain ⟨state', tasks', finished', equal, lookup'⟩ := Config.lookup_after confined fresh step lookup same
+        simp only [Config.running.injEq] at equal
+        obtain ⟨rfl, rfl, rfl, -⟩ := equal
+        exact ⟨task, lookup'⟩
+    obtain ⟨event₃, raw₃, tasks₃, finished₃, step₃, realizes₃, within₃, view⟩ :=
+      Config.handle_after within₁ confined' found' step' lookup' agree
+    exact ⟨event₃, raw₃, tasks₃, finished₃, step₃, realizes₃, within₃, view⟩
+  | phase | unpark | fire =>
+    obtain ⟨event₃, raw₃, step₃, realizes₃, within₃, view⟩ :=
+      Config.keeps_after (tasks' := tasks₁) (finished' := finished₁) within₁ rfl confined' found' step' agree timed
+    exact ⟨event₃, raw₃, tasks₁, finished₁, step₃, realizes₃, within₃, view⟩
+  | link => simp [Config.confined] at confined'
+
+/-- Two steps whose frames decide that they commute reach the same
+configuration in either order. -/
+private theorem Config.commutes_of_apart {elapsed : PID → Nat → Nat} {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key other : Key} {event event' : Event} {next next' : Config α}
+    (within : state.Within elapsed) (normalized : state.normalize = state)
+    (once : (Config.running state tasks finished false).FinishesOnce)
+    (owners : (!(key.owner.isSome && key.owner == other.owner && key.isOwn == other.isOwn)) = true)
+    (fresh : (Config.running state tasks finished false).spawnsFresh key = true)
+    (fresh' : (Config.running state tasks finished false).spawnsFresh other = true)
+    (distinct : (Config.running state tasks finished false).distinctTasks = true)
+    (apart : (Config.running state tasks finished false).apart key other = true)
+    (step : (Config.running state tasks finished false).stepOf key = some (event, next))
+    (step' : (Config.running state tasks finished false).stepOf other = some (event', next')) :
+    ∃ event₃ event₄ last, next.stepOf other = some (event₃, last) ∧ next'.stepOf key = some (event₄, last) := by
+  simp only [Config.apart, Bool.and_eq_true] at apart
+  obtain ⟨⟨confined, confined'⟩, apart⟩ := apart
+  cases found : (Config.running state tasks finished false).frames key with
+  | none => simp [found] at apart
+  | some pair =>
+  cases found' : (Config.running state tasks finished false).frames other with
+  | none => simp [found, found'] at apart
+  | some pair' =>
+  obtain ⟨frames, timers⟩ := pair
+  obtain ⟨frames', timers'⟩ := pair'
+  simp only [found, found', Bool.and_eq_true, Bool.not_eq_true'] at apart
+  obtain ⟨notBoth, apartFrames⟩ := apart
+  sorry
 
 end Lynx.Concurrent
