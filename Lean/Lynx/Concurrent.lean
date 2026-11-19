@@ -587,7 +587,9 @@ time elapsed when timers are canceled. -/
     State :=
   { processes := [(env.currentPid, { pdict := env.pdict, refCounter := env.refCounter })], elapsed }
 
-/-- Spawn a child, linking or monitoring it in the same step. -/
+/-- Spawn a child, linking or monitoring it in the same step. The link replaces
+any entry the parent has for the child's PID, which only a program naming that
+PID before it exists can have made. -/
 @[expose] def State.spawnWith (state : State) (processId : PID) (options : SpawnOptions) :
     PID × State :=
   let process := state.process processId

@@ -5042,13 +5042,13 @@ private theorem CleanOutside.eagerExits {processId : PID} {eager : PID → Bool}
           fun outside => absurd rfl outside
         refine CleanOutside.modify (fun _ => rfl) first fun _ process found => ?_
         have record : state.record target = some process := by
-          rw [Effect.record_apply, Effect.record_modify, if_neg differ] at found; exact found
+          rw [Effect.record_apply, Effect.record_modify, ite_eq_right differ] at found; exact found
         have live : process.exiting = none := by simp only [State.alive, record] at alive; simpa using alive
         rw [keepsFirst.gone]
         exact (clean target differ process record).unlinked live (refers target process differ record)
       · intro other process differ' found
         rw [Effect.apply_andThen_record, Effect.record_apply, Effect.record_modify, Effect.record_apply,
-          Effect.record_modify, if_neg differ'] at found
+          Effect.record_modify, ite_eq_right differ'] at found
         by_cases same : other = target
         · subst same
           cases record : state.record other with
@@ -5056,7 +5056,7 @@ private theorem CleanOutside.eagerExits {processId : PID} {eager : PID → Bool}
           | some original =>
             rw [record] at found; simp only [↓reduceIte, id, Option.map_some, Option.some.injEq] at found; subst found
             exact Refers.unlinked (refers other original differ' record)
-        · rw [if_neg same] at found; exact refers other process differ' found
+        · rw [ite_eq_right same] at found; exact refers other process differ' found
     · rw [Effect.apply_empty]
       exact CleanOutside.eagerExits rest state clean refers eagerAlive
 
@@ -5910,7 +5910,7 @@ private theorem Config.timersFramed {state : State} {tasks : List (PID × Task �
       refine ⟨fun none => ?_, fun timers other any => ?_⟩
       · rw [flag] at none
         refine (Effect.Untimed.andThen (Effect.Untimed.andThen ?_ (Effect.Untimed.put _ _)) (eagerChain_untimed _ _ _))
-        rw [if_neg (by rw [none]; exact Bool.false_ne_true)]; exact Effect.Untimed.empty
+        rw [ite_eq_right (by rw [none]; exact Bool.false_ne_true)]; exact Effect.Untimed.empty
       · rw [Effect.timers_andThen, Effect.timers_andThen, (eagerChain_untimed _ _ _).getD,
           (Effect.Untimed.put _ _).getD] at any
         simp only [Function.comp, id] at any

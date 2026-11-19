@@ -20,8 +20,9 @@ attribute [local instance high] Kernel.pidBEq
 /-! ### Changes other processes cannot see
 
 A forced step of a process only changes its own record, in a way the steps of
-other processes neither read nor undo. `State.Changed` relates the states
-before and after such a change, and every step of another process keeps it. -/
+other processes neither read nor undo. `State.Changes` relates the states
+before and after such a change, by a relation between the records, either of
+which may be missing, and every step of another process keeps it. -/
 
 /-- What steps of other processes read of a process's record. -/
 private structure Outside (first second : ProcessState) : Prop where
@@ -209,9 +210,9 @@ private theorem modifyRelated (changed : state.Changes processId related state')
     (keeps : related ((state.record processId).map change) ((state'.record processId).map change)) :
     (state.modify processId change).Changes processId related (state'.modify processId change) := by
   refine ⟨fun third differ' => ?_, ?_, ?_, ?_⟩
-  · rw [State.record_modify, State.record_modify, if_neg differ', if_neg differ']
+  · rw [State.record_modify, State.record_modify, ite_eq_right differ', ite_eq_right differ']
     exact changed.record_other differ'
-  · rw [State.record_modify, State.record_modify, if_pos rfl, if_pos rfl]
+  · rw [State.record_modify, State.record_modify, ite_eq_left rfl, ite_eq_left rfl]
     exact keeps
   · unfold State.modify; split <;> split <;> exact changed.2.2.1
   · unfold State.modify; split <;> split <;> exact changed.2.2.2
@@ -290,7 +291,7 @@ private theorem unpark (changed : state.Changes processId related state') (unsee
       obtain ⟨unparked, pushes⟩ := unseen.unpark changed.2.1 parked
       have modified := changed.modifyRelated unparked
       refine modified.enqueue unseen (fun _ _ signal => by cases signal) fun _ _ entry => ?_
-      rw [State.record_modify, State.record_modify, if_pos rfl, if_pos rfl]
+      rw [State.record_modify, State.record_modify, ite_eq_left rfl, ite_eq_left rfl]
       exact pushes entry
     · exact (changed.modify same _).enqueue unseen (fun equal => absurd equal same) fun equal => absurd equal same
   · exact changed
@@ -1216,10 +1217,10 @@ private theorem State.changed_forced {state : State} {processId : PID} {process 
     · subst same; simp [found, live, live']
     · simp [same]
   refine ⟨fun other differ => ?_, ?_, rfl, rfl⟩
-  · rw [State.record_normalize' sorted', gone, State.record_set, if_neg differ]
+  · rw [State.record_normalize' sorted', gone, State.record_set, ite_eq_right differ]
     conv => rhs; rw [← normalized]
     rw [State.record_normalize' sorted]
-  · rw [State.record_normalize' sorted', gone, State.record_set, if_pos rfl, found]
+  · rw [State.record_normalize' sorted', gone, State.record_set, ite_eq_left rfl, found]
     simp only [Option.map_some, Option.filter, ProcessState.finished_live
       (show (normRecord state.gone processId (change process)).exiting = none by rw [normRecord_live live']; exact live'),
       Bool.not_false, ↓reduceIte]
@@ -1277,14 +1278,14 @@ private theorem State.forced_close {raw raw' : State} {processId : PID} {process
   rw [State.record_normalize' sortedSet, gone, State.record_normalize' sorted', changed.gone unseen]
   by_cases equal : other = processId
   · subst equal
-    rw [State.record_set, if_pos rfl, found'']
+    rw [State.record_set, ite_eq_left rfl, found'']
     simp only [Option.map_some, Option.filter, ProcessState.finished_live (show
       (normRecord raw.gone other (change (normRecord raw.gone other process))).exiting = none by
         rw [normRecord_live live]; exact live),
       ProcessState.finished_live (show (normRecord raw.gone other second).exiting = none by
         rw [normRecord_live live']; exact live'),
       Bool.not_false, ↓reduceIte, same, renormalize]
-  · rw [State.record_set, if_neg equal, changed.record_other equal]
+  · rw [State.record_set, ite_eq_right equal, changed.record_other equal]
     have goneNormal : raw.normalize.gone = raw.gone := funext (State.gone_normalize sorted)
     have again : ((raw.normalize.record other).map (normRecord raw.gone other)).filter (!·.finished) =
         raw.normalize.record other := by
@@ -1310,7 +1311,7 @@ private theorem State.append_set {state : State} {processId : PID} (sorted : sta
     (state.set processId process).append processId message =
       state.set processId { process with mailbox := Kernel.append process.mailbox [message] } := by
   unfold State.append State.modify
-  rw [State.record_set, if_pos rfl]
+  rw [State.record_set, ite_eq_left rfl]
   exact State.set_set sorted _ _
 
 private theorem State.modify_found {state : State} {processId : PID} {process : ProcessState}
@@ -1369,14 +1370,6 @@ private theorem receiveChange_normRecord {gone : PID → Bool} {processId : PID}
       receiveChange remaining (normRecord gone processId process) := by
   rw [normRecord_live (show (receiveChange remaining process).exiting = none from live), normRecord_live live]
   rfl
-
-private theorem hidden_id : Hidden (fun _ => True) id :=
-  ⟨fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ _ _ => .rfl, fun _ _ => ⟨trivial, rfl⟩, fun _ _ => ⟨trivial, rfl⟩,
-    fun _ => ⟨trivial, rfl⟩⟩
-
-private theorem hidden_store (env : Environment) : Hidden (fun _ => True) (storeChange env) :=
-  ⟨fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ _ _ => .rfl, fun _ _ => ⟨trivial, rfl⟩, fun _ _ => ⟨trivial, rfl⟩,
-    fun _ => ⟨trivial, rfl⟩⟩
 
 /-- Records that keep a mailbox, a dictionary and a reference counter. -/
 private def Keeps (process : ProcessState) (other : ProcessState) : Prop :=
@@ -2662,7 +2655,7 @@ private theorem Task.handle_ack {state : State} {processId : PID} {task : Task �
   have modified : ∀ change : ProcessState → ProcessState,
       (state.set processId { process with queue := rest }).modify processId change =
         state.set processId (change { process with queue := rest }) := fun change => by
-    rw [State.modify_found (by rw [State.record_set, if_pos rfl]), State.set_set sorted]
+    rw [State.modify_found (by rw [State.record_set, ite_eq_left rfl]), State.set_set sorted]
   have processSet : (state.set processId { process with queue := rest }).process processId =
       { process with queue := rest } := by simp [State.process, State.record_set]
   by_cases linked : (Kernel.lookup source process.links == some (some id)) = true
@@ -2976,8 +2969,8 @@ private theorem Config.own_handle_square {elapsed : PID → Nat → Nat} {state 
   let task' : Task α := ⟨computation, task.finish, none⟩
   have changed : state.Changed processId (Same (OwnOk ok process.pdict process.refCounter) change)
       (state.set processId (change process)) :=
-    ⟨fun other differ => by rw [State.record_set, if_neg differ],
-      by rw [State.record_set, if_pos rfl, found]; exact .some ⟨⟨ok', rfl, rfl⟩, rfl⟩, rfl, rfl⟩
+    ⟨fun other differ => by rw [State.record_set, ite_eq_right differ],
+      by rw [State.record_set, ite_eq_left rfl, found]; exact .some ⟨⟨ok', rfl, rfl⟩, rfl⟩, rfl, rfl⟩
   obtain ⟨task₀, transition, lookup₀, head, rfl⟩ := Config.stepOf_handle step'
   rw [lookup] at lookup₀; cases lookup₀
   have processOf : state.process processId = process := by simp [State.process, found]
@@ -3514,10 +3507,6 @@ private theorem request (distinct : state.Distinct) (processId : PID) {β : Type
     split
     · exact (distinct.timers _).modify fun _ _ nodup => nodup
     · exact distinct
-
-private theorem filteredLinks (distinct : state.Distinct) {processId : PID} {keep : PID × Option Nat → Bool} :
-    (state.modify processId fun process => { process with links := Kernel.filter keep process.links }).Distinct :=
-  distinct.filtered
 
 private theorem exitSignal (distinct : state.Distinct) (target source : PID) (reason : Term) (linked normalKills : Bool) :
     (state.exitSignal target source reason linked normalKills).1.Distinct := by
@@ -4360,7 +4349,7 @@ private theorem set (covers : state.Covers watcher reference count) {processId :
 private theorem set_other (covers : state.Covers watcher reference count) {processId : PID}
     (differ : processId ≠ watcher) (process : ProcessState) : (state.set processId process).Covers watcher reference count := by
   intro record found live
-  rw [State.record_set, if_neg (Ne.symm differ)] at found
+  rw [State.record_set, ite_eq_right (Ne.symm differ)] at found
   exact covers _ found live
 
 private theorem remove (covers : state.Covers watcher reference count) (processId : PID) :
@@ -4444,39 +4433,11 @@ private theorem allocated (covers : state.Covers watcher reference count) (proce
     (state.allocate processId).2.Covers watcher reference count :=
   covers.modify fun _ live => ⟨live, fun ⟨counted, unmonitored⟩ => ⟨Nat.le_succ_of_le counted, unmonitored⟩⟩
 
-/-- Monitoring the reference a process allocates next. -/
-private theorem monitored (covers : state.Covers watcher reference count) (shape : reference = watcher ++ [count])
-    (processId : PID) (target : PID) (alias : Bool) (parked : Option (PID × List Nat)) :
-    ((state.allocate processId).2.modify processId fun process => { process with
-      monitoring := Kernel.append process.monitoring [((state.allocate processId).1, target)]
-      aliases := if alias then Kernel.append process.aliases [(state.allocate processId).1] else process.aliases
-      parked := parked }).Covers watcher reference count := by
-  intro process found live
-  rw [State.record_modify] at found
-  split at found
-  · rename_i same; subst same
-    cases record : state.record watcher with
-    | none => simp [State.allocate, State.record_modify, record] at found
-    | some process₁ =>
-      have processOf : state.process watcher = process₁ := by simp [State.process, record]
-      simp only [State.allocate, State.record_modify, ↓reduceIte, record, Option.map_some,
-        Option.some.injEq] at found
-      subst found
-      obtain ⟨counted, unmonitored⟩ := covers _ record live
-      refine ⟨Nat.le_succ_of_le counted, ?_⟩
-      simp only [State.allocate, processOf, Kernel.any_eq, Kernel.append_eq, List.any_append, List.any_cons,
-        List.any_nil, Bool.or_false] at unmonitored ⊢
-      rw [unmonitored, Bool.false_or, beq_eq_false_iff_ne, shape]
-      intro equal
-      have := List.append_inj_right' equal rfl
-      simp at this; omega
-  · exact covers.allocated processId _ found live
-
 private theorem modify_other (covers : state.Covers watcher reference count) {processId : PID}
     (differ : processId ≠ watcher) (change : ProcessState → ProcessState) :
     (state.modify processId change).Covers watcher reference count := by
   intro process found live
-  rw [State.record_modify, if_neg (Ne.symm differ)] at found
+  rw [State.record_modify, ite_eq_right (Ne.symm differ)] at found
   exact covers _ found live
 
 private theorem any_filter_false {β : Type} {list : List (List Nat × β)} {reference other : List Nat}
@@ -4884,8 +4845,8 @@ private theorem Config.handle_own_square {elapsed : PID → Nat → Nat} {state 
   have within := reachable.1.1
   let change' := queueChange queue mailbox links
   have changed : state.Changed processId (Same (Queued entry) change') (state.set processId (change' process)) :=
-    ⟨fun other differ => by rw [State.record_set, if_neg differ],
-      by rw [State.record_set, if_pos rfl, found]; exact .some ⟨⟨⟨rest, queued⟩, bound⟩, rfl⟩, rfl, rfl⟩
+    ⟨fun other differ => by rw [State.record_set, ite_eq_right differ],
+      by rw [State.record_set, ite_eq_left rfl, found]; exact .some ⟨⟨⟨rest, queued⟩, bound⟩, rfl⟩, rfl, rfl⟩
   have unseen := change.unseen linking
   have within' : (state.set processId (change' process)).Within elapsed := within.set _ _
   have fresh : Kernel.append processId [process.children + 1] ≠ processId := by
@@ -5075,12 +5036,12 @@ private theorem lookup_unlinking {target : PID} {id : Nat} :
     rw [List.map_cons]
     by_cases equal : peer = target
     · subst equal
-      rw [if_pos (by simp), List.lookup_cons, List.lookup_cons]
+      rw [ite_eq_left (by simp), List.lookup_cons, List.lookup_cons]
       by_cases same : other = peer
       · subst same; simp
       · have differ : (other == peer) = false := by simp [same]
         rw [differ]; simp only [same, ↓reduceIte] at ih ⊢; exact ih
-    · rw [if_neg (by simp [equal]), List.lookup_cons, List.lookup_cons]
+    · rw [ite_eq_right (by simp [equal]), List.lookup_cons, List.lookup_cons]
       by_cases same : other = peer
       · subst same
         have differ : other ≠ target := equal
@@ -5242,11 +5203,11 @@ private theorem Config.forced_handle_own {elapsed : PID → Nat → Nat} {config
       have mapped := lookup_unlinking (target := target) (id := process.unlinks + 1) process.links source
       by_cases same : source = target
       · subst same
-        rw [if_pos rfl, unlinked'] at mapped
+        rw [ite_eq_left rfl, unlinked'] at mapped
         rw [mapped, unlinked']
         have fresh : process.unlinks + 1 ≠ id := by omega
         simp [fresh]
-      · rw [if_neg same] at mapped
+      · rw [ite_eq_right same] at mapped
         rw [mapped]
         split
         · simp only [Kernel.filter_eq, Kernel.map_eq, List.filter_map]
@@ -5431,14 +5392,14 @@ private theorem State.phase_drops {state : State} (sorted : state.Sorted) {proce
   have parked' : ((state.set processId (popDown process)).process processId).parked = none := by
     simp [State.process, State.record_set, popDown, parked]
   have watched : (state.set processId (popDown process)).record watcher = some watcherProcess := by
-    rw [State.record_set, if_neg differ, foundWatcher]
+    rw [State.record_set, ite_eq_right differ, foundWatcher]
   unfold State.send
   rw [parked']
   dsimp only
   unfold State.enqueue
   rw [watched]
   dsimp only
-  rw [if_pos (by simp [live])]
+  rw [ite_eq_left (by simp [live])]
   refine State.normalize_push_inert base watched live ?_
   rw [State.inertEntry_eq] at dropped
   have gone : (state.set processId (popDown process)).gone = state.gone := by
@@ -5615,8 +5576,8 @@ private theorem Config.forced_phase_square {elapsed : PID → Nat → Nat} {conf
     unpark := by rintro _ _ ⟨rfl, rfl⟩ unparked; simp [parked] at unparked }
   have changed : state.Changes processId related (state.set processId (popDown process)).normalize := by
     refine ⟨fun other differ => ?_, ⟨record, ?_⟩, rfl, rfl⟩
-    · rw [records₀, if_neg differ]
-    · rw [records₀, if_pos rfl]
+    · rw [records₀, ite_eq_right differ]
+    · rw [records₀, ite_eq_left rfl]
   have missing : Kernel.lookup processId tasks = none := by
     cases found : Kernel.lookup processId tasks with
     | none => rfl
@@ -5785,26 +5746,26 @@ private theorem forced_first {elapsed : PID → Nat → Nat} {outcome : Outcome 
   intro first last events run
   induction run with
   | refl =>
-    intro key event next reachable forced terminal
-    have step := Config.step_of_stepOf (reachable.1.stepOf forced)
+    intro key event next ready forced terminal
+    have step := Config.step_of_stepOf (ready.1.stepOf forced)
     simp [Step, terminal.successors_eq_nil] at step
   | step step rest ih =>
     rename_i first event' middle events last
-    intro key event next reachable forced terminal
+    intro key event next ready forced terminal
     obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running (elapsed := elapsed) forced
     obtain ⟨key', forced', mem'⟩ := Config.tagged_of_step step
-    have step' := reachable.1.stepOf mem'
+    have step' := ready.1.stepOf mem'
     by_cases same : key' = key
     · subst same
-      rw [reachable.1.stepOf forced] at step'
+      rw [ready.1.stepOf forced] at step'
       simp only [Option.some.injEq, Prod.mk.injEq] at step'
       obtain ⟨-, rfl⟩ := step'
       exact ⟨_, rest⟩
-    · rcases Config.forced_square reachable.1 reachable.2.1 reachable.2.2 forced step' same with ⟨absorbed, after⟩ |
+    · rcases Config.forced_square ready.1 ready.2.1 ready.2.2 forced step' same with ⟨absorbed, after⟩ |
         ⟨key'', event'', last', other, forcedNext, after⟩
       · exact ⟨_, .step (Config.step_of_stepOf after) rest⟩
       · exact Reaches.step (Config.step_of_stepOf after)
-          (ih (reachable.step step) forcedNext terminal)
+          (ih (ready.step step) forcedNext terminal)
 
 /-! ### Soundness -/
 
@@ -5829,10 +5790,10 @@ private theorem checkSleep_reaches {elapsed : PID → Nat → Nat} {accept : Out
   induction depth with
   | zero => intro _ _ _ _ _ _ checked; simp [checkSleep] at checked
   | succ depth ih =>
-    intro sleep first last events outcome reachable checked run terminal awake asleep
+    intro sleep first last events outcome ready checked run terminal awake asleep
     unfold checkSleep at checked
     simp only [Bool.and_eq_true] at checked
-    obtain ⟨distinct, checked⟩ := checked
+    obtain ⟨distinctTasks, checked⟩ := checked
     split at checked
     · -- No tagged steps: follow every step.
       rename_i none
@@ -5844,13 +5805,13 @@ private theorem checkSleep_reaches {elapsed : PID → Nat → Nat} {accept : Out
         split at checked
         · rename_i empty; simp [Step, empty] at step
         · simp only [Kernel.all_eq, List.all_eq_true] at checked
-          exact ih (reachable.step step) (checked _ step) rest terminal (by simp) (by simp)
+          exact ih (ready.step step) (checked _ step) rest terminal (by simp) (by simp)
     · rename_i tagged nonempty
       cases run with
       | refl =>
         exfalso
         obtain ⟨⟨key, event, next, forced⟩, mem⟩ := List.exists_mem_of_ne_nil _ nonempty
-        have := Config.step_of_stepOf (reachable.1.stepOf mem)
+        have := Config.step_of_stepOf (ready.1.stepOf mem)
         simp [Step, terminal.successors_eq_nil] at this
       | step step rest =>
       obtain ⟨state, tasks, finished, rfl⟩ : ∃ state tasks finished, first = .running state tasks finished false := by
@@ -5862,8 +5823,8 @@ private theorem checkSleep_reaches {elapsed : PID → Nat → Nat} {accept : Out
         have mem := List.mem_of_find?_eq_some (by simpa [Kernel.find?_eq] using found)
         have isForced : forced = true := by simpa using List.find?_some (by simpa [Kernel.find?_eq] using found)
         subst isForced
-        have reaches := forced_first (.step step rest) reachable mem terminal
-        have found' := reachable.1.stepOf mem
+        have reaches := forced_first (.step step rest) ready mem terminal
+        have found' := ready.1.stepOf mem
         have notAsleep : key ∉ sleep := fun slept => asleep key slept event next found' reaches
         obtain ⟨events', run'⟩ := reaches
         -- A step asleep before the forced step reaches after it only what it reached before.
@@ -5873,12 +5834,12 @@ private theorem checkSleep_reaches {elapsed : PID → Nat → Nat} {accept : Out
               (Reaches next'' last → Reaches next₀ last) := by
           intro key' slept event₀ next₀ step₀
           have differ : key' ≠ key := fun same => notAsleep (same ▸ slept)
-          rcases Config.forced_square reachable.1 reachable.2.1 reachable.2.2 mem step₀ differ with ⟨absorbed, after⟩ |
+          rcases Config.forced_square ready.1 ready.2.1 ready.2.2 mem step₀ differ with ⟨absorbed, after⟩ |
               ⟨key'', event'', last', other, forced', after⟩
           · exact ⟨_, _, after, id⟩
           · exact ⟨_, _, after, Reaches.step (Config.step_of_stepOf
-              ((reachable.step (Config.step_of_stepOf step₀)).1.stepOf forced'))⟩
-        refine ih (reachable.step (Config.step_of_stepOf found')) checked run' terminal
+              ((ready.step (Config.step_of_stepOf step₀)).1.stepOf forced'))⟩
+        refine ih (ready.step (Config.step_of_stepOf found')) checked run' terminal
           (fun key' slept => ?_) (fun key' slept event'' next'' step'' reaches => ?_)
         · obtain ⟨event₀, next₀, step₀⟩ := awake key' slept
           obtain ⟨event'', next'', step'', -⟩ := after key' slept event₀ next₀ step₀
@@ -5896,7 +5857,7 @@ private theorem checkSleep_reaches {elapsed : PID → Nat → Nat} {accept : Out
             (Config.running state tasks finished false).stepOf key = some (event, next) := by
           intro key event next mem
           obtain ⟨forced, mem⟩ := Config.mem_steps.mp mem
-          exact reachable.1.stepOf mem
+          exact ready.1.stepOf mem
         obtain ⟨key, forced, mem⟩ := Config.tagged_of_step step
         refine explore_sound (goal := accept outcome = true)
           (fun key event next mem sleep' visited stays reaches asleep' => ?_)
@@ -5906,13 +5867,13 @@ private theorem checkSleep_reaches {elapsed : PID → Nat → Nat} {accept : Out
           ⟨key, _, _, Config.mem_steps.mpr ⟨forced, mem⟩, _, rest⟩ checked
         · obtain ⟨events', run'⟩ := reaches
           have step := tagged' _ _ _ mem
-          refine ih (reachable.step (Config.step_of_stepOf step)) visited run' terminal (fun key' slept => ?_) asleep'
+          refine ih (ready.step (Config.step_of_stepOf step)) visited run' terminal (fun key' slept => ?_) asleep'
           obtain ⟨-, -, -, event₃, last', after, -⟩ :=
-            Config.stays reachable.1.1 distinct tagged' step (stays key' slept)
+            Config.stays ready.1.1 distinctTasks tagged' step (stays key' slept)
           exact ⟨event₃, last', after⟩
         · have step := tagged' _ _ _ mem
           obtain ⟨event₀, next₀, step₀, event₃, last', after', back⟩ :=
-            Config.stays reachable.1.1 distinct tagged' step stays
+            Config.stays ready.1.1 distinctTasks tagged' step stays
           rw [after'] at after
           simp only [Option.some.injEq, Prod.mk.injEq] at after
           obtain ⟨-, rfl⟩ := after
