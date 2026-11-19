@@ -1202,6 +1202,19 @@ private theorem State.set_self {state : State} {processId : PID} {process : Proc
     · rename_i same; subst same; exact found.symm
     · rfl) rfl rfl
 
+private theorem State.set_set {state : State} {processId : PID} (sorted : state.Sorted)
+    (first second : ProcessState) : (state.set processId first).set processId second = state.set processId second :=
+  State.ext_records (Sorted.insertRecord sorted _ _) (Sorted.insertRecord (Sorted.insertRecord sorted _ _) _ _)
+    (fun other => by simp only [State.record_set]; split <;> rfl) rfl rfl
+
+private theorem State.append_set {state : State} {processId : PID} (sorted : state.Sorted)
+    (process : ProcessState) (message : Term) :
+    (state.set processId process).append processId message =
+      state.set processId { process with mailbox := Kernel.append process.mailbox [message] } := by
+  unfold State.append State.modify
+  rw [State.record_set, if_pos rfl]
+  exact State.set_set sorted _ _
+
 private theorem State.modify_found {state : State} {processId : PID} {process : ProcessState}
     (found : state.record processId = some process) (change : ProcessState → ProcessState) :
     state.modify processId change = state.set processId (change process) := by
@@ -1346,6 +1359,157 @@ private theorem normRecord_store {gone : PID → Bool} {processId : PID} {proces
     simp [inert', this]
   · simp only [storeChange] at inert'
     simp [inert']
+
+/-! ### Forced changes handling the oldest signal -/
+
+/-- Handling the oldest signal without changing anything else. -/
+private def popChange (process : ProcessState) : ProcessState :=
+  { process with queue := process.queue.tail }
+
+/-- Handling the oldest signal, a message. -/
+private def messageChange (message : Term) (process : ProcessState) : ProcessState :=
+  { process with queue := process.queue.tail, mailbox := Kernel.append process.mailbox [message] }
+
+/-- Handling the oldest signal, an acknowledgement of an unlink. -/
+private def ackChange (source : PID) (id : Nat) (process : ProcessState) : ProcessState :=
+  if Kernel.lookup source process.links == some (some id) then
+    { process with queue := process.queue.tail, links := Kernel.filter (·.1 != source) process.links }
+  else { process with queue := process.queue.tail }
+
+/-- Records whose oldest queued signal is a signal. -/
+private def Heads (entry : Entry) (process : ProcessState) : Prop :=
+  ∃ rest, process.queue = entry :: rest
+
+private theorem Heads.push {entry : Entry} {process : ProcessState} (heads : Heads entry process) (other : Entry) :
+    Heads entry (process.push other) ∧ (process.push other).queue.tail = Kernel.append process.queue.tail [other] := by
+  obtain ⟨rest, queue⟩ := heads
+  simp [Heads, ProcessState.push, queue, Kernel.append_eq]
+
+private theorem Heads.links {entry : Entry} {process : ProcessState} (heads : Heads entry process)
+    (notLink : entry.signal ≠ .link) (other : Entry) (link : other.signal = .link) :
+    other ∈ process.queue.tail ↔ other ∈ process.queue := by
+  obtain ⟨rest, queue⟩ := heads
+  rw [queue]
+  simp only [List.tail_cons, List.mem_cons]
+  constructor
+  · exact .inr
+  · rintro (same | mem)
+    · subst same; exact absurd link notLink
+    · exact mem
+
+private theorem hidden_pop {entry : Entry} (notLink : entry.signal ≠ .link) : Hidden (Heads entry) popChange where
+  exiting _ := rfl
+  trapExit _ := rfl
+  parked _ := rfl
+  links heads other link := heads.links notLink other link
+  push other heads := by
+    obtain ⟨heads', tail⟩ := heads.push other
+    exact ⟨heads', by simp only [popChange, tail]; rfl⟩
+  eagerExit _ heads := ⟨heads, rfl⟩
+  unpark heads := ⟨heads, rfl⟩
+
+private theorem hidden_message {entry : Entry} (notLink : entry.signal ≠ .link) (message : Term) :
+    Hidden (Heads entry) (messageChange message) where
+  exiting _ := rfl
+  trapExit _ := rfl
+  parked _ := rfl
+  links heads other link := heads.links notLink other link
+  push other heads := by
+    obtain ⟨heads', tail⟩ := heads.push other
+    exact ⟨heads', by simp only [messageChange, tail]; rfl⟩
+  eagerExit _ heads := ⟨heads, rfl⟩
+  unpark heads := ⟨heads, rfl⟩
+
+private theorem lookup_filter_self {β : Type} (key : PID) :
+    ∀ entries : List (PID × β), Kernel.lookup key (Kernel.filter (·.1 != key) entries) = none
+  | [] => rfl
+  | (other, value) :: rest => by
+      have ih := lookup_filter_self key rest
+      simp only [Kernel.lookup_eq, Kernel.filter_eq] at ih ⊢
+      by_cases same : other = key
+      · subst same; simpa [List.filter_cons] using ih
+      · have differ : (key == other) = false := by simp [Ne.symm same]
+        simp [List.filter_cons, same, List.lookup_cons, differ, ih]
+
+private theorem hidden_ack {entry : Entry} (notLink : entry.signal ≠ .link) (source : PID) (id : Nat) :
+    Hidden (Heads entry) (ackChange source id) where
+  exiting _ := by unfold ackChange; split <;> rfl
+  trapExit _ := by unfold ackChange; split <;> rfl
+  parked _ := by unfold ackChange; split <;> rfl
+  links heads other link := by unfold ackChange; split <;> exact heads.links notLink other link
+  push := fun {process} other heads => by
+    obtain ⟨heads', tail⟩ := heads.push other
+    refine ⟨heads', ?_⟩
+    unfold ackChange
+    by_cases linked : (Kernel.lookup source process.links == some (some id)) = true <;>
+      simp only [ProcessState.push, linked, ↓reduceIte, Bool.false_eq_true] at tail ⊢ <;> rw [tail]
+  eagerExit := fun {process} exited heads => by
+    refine ⟨heads, ?_⟩
+    unfold ackChange ProcessState.eagerExit
+    by_cases same : exited = source
+    · subst same
+      simp only [lookup_filter_self, reduceCtorEq, beq_iff_eq, ↓reduceIte]
+      split
+      · simp [Kernel.filter_eq, List.filter_filter]
+      · rfl
+    · have kept : Kernel.lookup source (Kernel.filter (·.1 != exited) process.links) =
+          Kernel.lookup source process.links := by
+        simp only [Kernel.lookup_eq, Kernel.filter_eq]
+        exact lookup_filter_of_keep fun entry _ equal => by simp [equal, Ne.symm same]
+      rw [kept]
+      split
+      · simp only [Kernel.filter_eq, List.filter_filter, Bool.and_comm]
+      · rfl
+  unpark heads := by
+    refine ⟨heads, ?_⟩
+    unfold ackChange; split <;> rfl
+
+/-- Handling the oldest signal of a clean record leaves it clean. -/
+private theorem normRecord_popped {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (clean : normRecord gone processId process = process) (live : process.exiting = none)
+    {change : ProcessState → ProcessState} (queue : (change process).queue = process.queue.tail)
+    (same : ∀ entry, inert gone processId (change process) entry = inert gone processId process entry)
+    (links : (change process).links = process.links) (live' : (change process).exiting = none) :
+    normRecord gone processId (change process) = change process := by
+  have cleaned := clean_live clean live
+  rw [normRecord_live live', funext same, queue, links]
+  have keepQueue : Kernel.filter (fun entry => !inert gone processId process entry) process.queue.tail =
+      process.queue.tail := by
+    rw [Kernel.filter_eq]
+    exact List.filter_eq_self.mpr fun entry mem => by
+      simp [cleaned.1 entry (List.mem_of_mem_tail mem)]
+  have keepLinks : Kernel.filter (fun link => !(link.2.isSome && gone link.1)) process.links = process.links := by
+    rw [Kernel.filter_eq]; exact List.filter_eq_self.mpr fun link mem => by simp [cleaned.2 link mem]
+  rw [keepQueue, keepLinks, ← queue, ← links]
+
+/-- Normalizing before handling a kept oldest signal of a message or marker
+reaches what handling it reaches. -/
+private theorem normRecord_message {gone : PID → Bool} {processId : PID} {process : ProcessState} {entry : Entry}
+    (live : process.exiting = none) (heads : Heads entry process) (kept : inert gone processId process entry = false)
+    (message : Term) :
+    normRecord gone processId (messageChange message (normRecord gone processId process)) =
+      normRecord gone processId (messageChange message process) := by
+  obtain ⟨rest, queue⟩ := heads
+  have live₁ : (messageChange message (normRecord gone processId process)).exiting = none := by
+    rw [normRecord_live live]; exact live
+  rw [normRecord_live live₁, normRecord_live (show (messageChange message process).exiting = none from live)]
+  have same : ∀ other : ProcessState, inert gone processId (messageChange message other) = inert gone processId other :=
+    fun _ => rfl
+  rw [same, same, funext (inert_normRecord (gone := gone) (processId := processId) live), normRecord_live live]
+  simp [messageChange, queue, kept, Kernel.filter_eq, List.filter_filter]
+
+private theorem normRecord_pop {gone : PID → Bool} {processId : PID} {process : ProcessState} {entry : Entry}
+    (live : process.exiting = none) (heads : Heads entry process) (kept : inert gone processId process entry = false) :
+    normRecord gone processId (popChange (normRecord gone processId process)) =
+      normRecord gone processId (popChange process) := by
+  obtain ⟨rest, queue⟩ := heads
+  have live₁ : (popChange (normRecord gone processId process)).exiting = none := by
+    rw [normRecord_live live]; exact live
+  rw [normRecord_live live₁, normRecord_live (show (popChange process).exiting = none from live)]
+  have same : ∀ other : ProcessState, inert gone processId (popChange other) = inert gone processId other :=
+    fun _ => rfl
+  rw [same, same, funext (inert_normRecord (gone := gone) (processId := processId) live), normRecord_live live]
+  simp [popChange, queue, kept, Kernel.filter_eq, List.filter_filter]
 
 /-! ### Which tagged steps are forced -/
 
@@ -1642,6 +1806,180 @@ private theorem Config.forced_own_other {elapsed : PID → Nat → Nat} {config 
     simp only [Task.own] at head
     split at head <;> simp only [List.head?_cons, Option.some.injEq] at head <;> subst head <;>
       simp [Event.local] at isLocal
+
+private theorem Config.tagged_handle_forced {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
+    {entry : Entry} {rest : List Entry} (pairwise : tasks.Pairwise fun entry entry' => entry.1 ≠ entry'.1)
+    (lookup : Kernel.lookup processId tasks = some task) (queue : (state.process processId).queue = entry :: rest)
+    (head : (task.handle state processId).head? = some transition) (flag : task.forcedHead state processId entry = true) :
+    (Key.handle processId, transition.event, if transition.exhausted then
+        Config.running { transition.state with processes := [], timers := [] } [] finished true
+      else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
+        (transition.finished.orElse fun _ => finished) false, true) ∈
+      (Config.running state tasks finished false).taggedSteps := by
+  obtain ⟨forced, mem⟩ := Config.tagged_of_stepOf (Config.stepOf_handle_of (finished := finished) lookup head)
+  have flagged := Config.forced_handle pairwise lookup mem
+  rw [queue] at flagged
+  simp only [flag] at flagged
+  rw [flagged] at mem
+  exact mem
+
+/-- The record of a live process after normalizing, which keeps its oldest signal. -/
+private theorem State.normalize_heads {raw : State} {processId : PID} {process : ProcessState} {entry : Entry}
+    (sorted : raw.Sorted) (found : raw.record processId = some process) (live : process.exiting = none)
+    (heads : Heads entry process) (kept : inert raw.gone processId process entry = false) :
+    raw.normalize.record processId = some (normRecord raw.gone processId process) ∧
+      ∃ rest, (normRecord raw.gone processId process).queue = entry :: rest := by
+  refine ⟨State.record_normalize_live sorted found live, ?_⟩
+  obtain ⟨rest, queue⟩ := heads
+  rw [normRecord_live live]
+  exact ⟨List.filter (fun other => !inert raw.gone processId process other) rest,
+    by simp [queue, kept, Kernel.filter_eq]⟩
+
+/-- Handling a message at the head of a live process's queue. -/
+private theorem Task.handle_message {state : State} {processId : PID} {task : Task α} {process : ProcessState}
+    {source : PID} {message : Term} {rest : List Entry} (sorted : state.Sorted)
+    (found : state.record processId = some process)
+    (queue : process.queue = ⟨source, .message message⟩ :: rest) :
+    task.handle state processId = [Transition.mk (.handle processId ⟨source, .message message⟩)
+      (state.set processId (messageChange message process)) [(processId, task)] none false] := by
+  have processOf : state.process processId = process := by simp [State.process, found]
+  simp only [Task.handle, processOf, queue, State.handle, State.append_set sorted]
+  simp [messageChange, queue]
+
+/-- The value a reply or marker resumes a waiting process with. -/
+private def resumedBy (task : Task α) (entry : Entry) : Option Term :=
+  match task.wait, entry.signal with
+  | some (.reply expected, _), .reply value => if expected == entry.source then some value else none
+  | some (.flush value, _), .flush => some value
+  | _, _ => none
+
+/-- A task, resumed with a value if it waits. -/
+private def resumeTask : Option Term → Task α → Task α
+  | some value, ⟨_, finish, some (_, next)⟩ => ⟨next value, finish, none⟩
+  | _, task => task
+
+/-- Handling a reply or marker at the head of a live process's queue. -/
+private theorem Task.handle_quiet {state : State} {processId : PID} {task : Task α} {process : ProcessState}
+    {entry : Entry} {rest : List Entry} (sorted : state.Sorted) (found : state.record processId = some process)
+    (queue : process.queue = entry :: rest) (quiet : (entry.signal matches .reply _ | .flush) = true) :
+    task.handle state processId = [Transition.mk (.handle processId entry) (state.set processId (popChange process))
+      [(processId, resumeTask (resumedBy task entry) task)] none false] := by
+  have processOf : state.process processId = process := by simp [State.process, found]
+  have popped : ({ process with queue := rest } : ProcessState) = popChange process := by simp [popChange, queue]
+  obtain ⟨source, signal⟩ := entry
+  obtain ⟨computation, finish, wait⟩ := task
+  cases signal <;> simp only [reduceCtorEq] at quiet
+  all_goals
+    cases wait with
+    | none => simp [Task.handle, processOf, queue, State.handle, popped, resumedBy, resumeTask]
+    | some waiting =>
+      obtain ⟨wait, next⟩ := waiting
+      cases wait with
+      | reply expected =>
+        by_cases same : expected = source <;>
+          simp [Task.handle, processOf, queue, State.handle, popped, resumedBy, resumeTask, same]
+      | _ => simp [Task.handle, processOf, queue, State.handle, popped, resumedBy, resumeTask]
+
+/-- Whether a signal that does nothing yet is forced does not depend on the state. -/
+private theorem Task.forcedHead_transfer {state state' : State} {processId : PID} {task : Task α} {entry : Entry}
+    (notInert : state.inertEntry processId entry = false) (flagged : task.forcedHead state processId entry = true) :
+    task.forcedHead state' processId entry = true := by
+  obtain ⟨source, signal⟩ := entry
+  cases signal <;> simp_all [Task.forcedHead]
+
+/-- A forced handling of the oldest signal against a step of another key. -/
+private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {config : Config α} {processId : PID}
+    {event event' : Event} {next middle : Config α} {key' : Key} (reachable : config.Reachable elapsed)
+    (forced : (Key.handle processId, event, next, true) ∈ config.taggedSteps)
+    (step' : config.stepOf key' = some (event', middle)) (owner : key'.owner ≠ some processId) :
+    (∃ absorbed, next.stepOf key' = some (absorbed, middle)) ∨
+      ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
+        next.stepOf key' = some (other, last) := by
+  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running (elapsed := elapsed) forced
+  have step := reachable.stepOf forced
+  obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_handle step
+  have flagged := Config.forced_handle reachable.2.1 lookup forced
+  rw [Config.stepOf_handle_of (finished := finished) lookup head] at step
+  simp only [Option.some.injEq, Prod.mk.injEq] at step
+  obtain ⟨rfl, rfl⟩ := step
+  have sorted := reachable.1.1.1
+  have alive := reachable.2.2.1 _ (mem_of_lookup lookup)
+  obtain ⟨process, found, live⟩ := State.alive_iff.mp alive
+  have clean := (Clean.of_normalized sorted reachable.1.2.1 found).1
+  have cleaned := clean_live clean live
+  have processOf : state.process processId = process := by simp [State.process, found]
+  rw [processOf] at flagged
+  cases queue : process.queue with
+  | nil => simp [queue] at flagged
+  | cons entry rest =>
+  simp only [queue] at flagged
+  have notInert : state.inertEntry processId entry = false := by
+    rw [State.inertEntry_eq, processOf]
+    exact cleaned.1 entry (by simp [queue])
+  have heads : Heads entry process := ⟨rest, queue⟩
+  -- A reply or marker only leaves the queue, resuming the process if it waits for it.
+  have quietCase : (entry.signal matches .reply _ | .flush) = true → ((∃ absorbed,
+      (if transition.exhausted then
+          Config.running { transition.state with processes := [], timers := [] } [] finished true
+        else Config.running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
+          (transition.finished.orElse fun _ => finished) false).stepOf key' = some (absorbed, middle)) ∨
+      ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
+        (if transition.exhausted then
+            Config.running { transition.state with processes := [], timers := [] } [] finished true
+          else Config.running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
+            (transition.finished.orElse fun _ => finished) false).stepOf key' = some (other, last)) := by
+    intro quiet
+    have notLink : entry.signal ≠ .link := fun link => by rw [link] at quiet; cases quiet
+    have kept : ∀ gone process', inert gone processId process' entry = false := fun _ _ => by
+      obtain ⟨source, signal⟩ := entry; cases signal <;> simp_all [inert]
+    have handled := Task.handle_quiet (task := task) sorted found queue quiet
+    rw [handled] at head
+    simp only [List.head?_cons, Option.some.injEq] at head
+    subst head
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
+    refine Config.forced_other (key := .handle processId) (task' := resumeTask (resumedBy task entry) task) reachable
+      lookup found live heads (hidden_pop notLink) (renormalize_of_clean (normRecord_popped clean live
+        (by simp [popChange]) (fun _ => rfl) rfl live)) owner step' ?_
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ heads₁ live₁
+    obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ (kept _ _)
+    have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
+      simp [State.process, record]
+    have tagged := Config.tagged_handle_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
+      (by rw [processOf₁, queue₁])
+      (by rw [Task.handle_quiet (Sorted.normalize within.1) record queue₁ quiet]; rfl)
+      (Task.forcedHead_transfer notInert flagged.symm)
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
+    exact .inl ⟨_, tagged, by rw [popChange, normRecord_live live₁]; exact live₁, normRecord_pop live₁ heads₁ (kept _ _)⟩
+  obtain ⟨source, signal⟩ := entry
+  cases signal with
+  | message message =>
+    have fromProcess : (source != clock) = true := by simpa [Task.forcedHead, notInert] using flagged
+    rw [Task.handle_message sorted found queue] at head
+    simp only [List.head?_cons, Option.some.injEq] at head
+    subst head
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
+    refine Config.forced_other (key := .handle processId) (task' := task) reachable lookup found live heads
+      (hidden_message (by simp) message) (renormalize_of_clean (normRecord_popped clean live
+        (by simp [messageChange]) (fun _ => rfl) rfl live)) owner step' ?_
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ heads₁ live₁
+    obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ (by simp [inert])
+    have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
+      simp [State.process, record]
+    have tagged := Config.tagged_handle_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
+      (by rw [processOf₁, queue₁])
+      (transition := Transition.mk (.handle processId ⟨source, .message message⟩)
+        (raw.normalize.set processId (messageChange message (normRecord raw.gone processId process₁)))
+        [(processId, task)] none false)
+      (by rw [Task.handle_message (Sorted.normalize within.1) record queue₁]; rfl)
+      (by simp only [Task.forcedHead, fromProcess, Bool.or_true])
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
+    exact .inl ⟨_, tagged, by rw [messageChange, normRecord_live live₁]; exact live₁,
+      normRecord_message live₁ heads₁ (by simp [inert]) message⟩
+  | reply value => exact quietCase rfl
+  | flush => exact quietCase rfl
+  | unlinkAck id => sorry
+  | _ => simp [Task.forcedHead, notInert] at flagged
 
 /-- Every other step absorbs a forced step, or commutes with it into a
 configuration where a forced step closes the square. -/
