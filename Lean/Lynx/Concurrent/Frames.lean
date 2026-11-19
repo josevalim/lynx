@@ -3590,6 +3590,89 @@ private theorem Task.ownEffect_agree {state other : State} {tasks : List (PID ×
     | _ => simp at confined
   | _ => simp at confined
 
+/-- The kinds of signal whose handling can be confined. -/
+private def Signal.handledConfined : Signal → Bool
+  | .message _ | .aliasMessage .. | .monitor _ | .down .. => true
+  | _ => false
+
+/-- Handling a confined kind of signal neither resumes nor ends the process. -/
+private theorem State.handle_confined (state : State) (processId : PID) (waiting : Option Wait) (entry : Entry)
+    (kind : entry.signal.handledConfined = true) :
+    (state.handle processId waiting entry).2 = (none, none) := by
+  obtain ⟨source, signal⟩ := entry
+  cases signal <;> simp [Signal.handledConfined] at kind <;> simp only [State.handle] <;> (try split) <;> rfl
+
+/-- Handling a confined kind of signal reads the same and has the same effect at
+a state agreeing on what its frames read. -/
+private theorem Task.handle_agree {state other : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {task task' : Task α} {frames : List Frame}
+    {timers : Bool} (confined : Config.confined (.running state tasks finished false) (.handle processId) = true)
+    (found : task.handleFrames state processId = some (frames, timers)) (agree : Agree frames state other) :
+    task'.handleView other processId = task.handleView state processId ∧
+      task'.handleEffect other processId = task.handleEffect state processId := by
+  simp only [Config.confined] at confined
+  simp only [Task.handleFrames] at found
+  cases queue : (state.process processId).queue with
+  | nil => simp [queue] at confined
+  | cons entry rest =>
+    simp only [queue] at confined found
+    have kind : entry.signal.handledConfined = true := by
+      obtain ⟨source, signal⟩ := entry; cases signal <;> simp_all [Signal.handledConfined]
+    -- Every frame of handling reads the head, so the other state handles the same signal.
+    have own : ∃ reads writes, frames = [(processId, Field.queueHead ||| reads, Field.queueHead ||| writes)] := by
+      obtain ⟨source, signal⟩ := entry
+      cases signal <;> simp only [Option.some.injEq, Prod.mk.injEq] at found <;>
+        first | exact ⟨_, _, found.1.symm⟩ | simp [Signal.handledConfined] at kind
+    obtain ⟨reads, writes, equal⟩ := own
+    have inside : (processId, Field.queueHead ||| reads, Field.queueHead ||| writes) ∈ frames := by
+      rw [equal]; exact List.mem_cons_self
+    have head := agree.head inside (by rw [Nat.testBit_or]; exact Bool.or_eq_true_iff.mpr (.inl (by decide)))
+    rw [queue] at head
+    obtain ⟨rest', queue'⟩ : ∃ rest', (other.process processId).queue = entry :: rest' := by
+      cases equal' : (other.process processId).queue with
+      | nil => rw [equal'] at head; simp at head
+      | cons first rest' => rw [equal'] at head; simp at head; exact ⟨rest', by rw [head]⟩
+    have continues : ∀ (state : State) waiting, (state.handle processId waiting entry).2.2 = none := fun state waiting => by
+      rw [State.handle_confined state processId waiting entry kind]
+    refine ⟨?_, ?_⟩
+    · simp only [Task.handleView, queue, queue']
+      have kept := fun (state : State) waiting => State.handle_confined state processId waiting entry kind
+      simp only [kept]
+    · rw [Task.handleEffect_of_continues queue (continues _ _), Task.handleEffect_of_continues queue' (continues _ _)]
+      congr 1
+      have set : ∀ (state : State) (process : ProcessState), (state.set processId process).process processId = process :=
+        fun state process => by simp [State.process, State.record_set]
+      obtain ⟨source, signal⟩ := entry
+      cases signal with
+      | message message => rfl
+      | monitor reference => rfl
+      | aliasMessage alias message =>
+        simp only [Option.some.injEq, Prod.mk.injEq] at found
+        have mem : (processId, Field.queueHead ||| Field.aliases, Field.queueHead ||| Field.mailbox) ∈ frames := by
+          rw [← found.1]; exact List.mem_cons_self
+        have aliases := agree.get mem .aliases (by dsimp only [Part.bit]; decide)
+        simp only [ProcessState.get] at aliases
+        simp only [State.handleEffect, set, aliases]
+      | down reference reason =>
+        simp only [Option.some.injEq, Prod.mk.injEq] at found
+        cases normal : isNormal reason
+        · simp only [normal, Bool.false_eq_true, ↓reduceIte, Nat.or_zero] at found
+          have mem : (processId, Field.queueHead ||| (Field.monitoring ||| Field.aliases),
+              Field.queueHead ||| (Field.monitoring ||| Field.aliases ||| Field.mailbox)) ∈ frames := by
+            rw [← found.1]; exact List.mem_cons_self
+          have monitoring := agree.get mem .monitoring (by dsimp only [Part.bit]; decide)
+          simp only [ProcessState.get] at monitoring
+          simp only [State.handleEffect, set, monitoring, normal, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
+        · simp only [normal, ↓reduceIte] at found
+          have mem : (processId, Field.queueHead ||| (Field.monitoring ||| Field.aliases ||| Field.eagerExits),
+              Field.queueHead ||| (Field.monitoring ||| Field.aliases ||| Field.eagerExits ||| Field.mailbox)) ∈ frames := by
+            rw [← found.1]; exact List.mem_cons_self
+          have monitoring := agree.get mem .monitoring (by dsimp only [Part.bit]; decide)
+          have eager := agree.get mem .eagerExits (by dsimp only [Part.bit]; decide)
+          simp only [ProcessState.get] at monitoring eager
+          simp only [State.handleEffect, set, monitoring, eager, normal]
+      | _ => simp [Signal.handledConfined] at kind
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
