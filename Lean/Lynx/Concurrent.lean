@@ -863,10 +863,11 @@ inductive Config (α : Type) : Type 1 where
       (finished : Option (Except Exception α)) (exhausted : Bool)
 
 /-- The configuration a process step leads to. A process that does not return
-ends the run, which keeps no records or timers, as nothing observes them. -/
+ends the run, which keeps no records, timers or result, as nothing observes
+them. -/
 @[expose] def Transition.apply (transition : Transition α) (before after : List (PID × Task α))
     (finished : Option (Except Exception α)) (exhausted : Bool) : Config α :=
-  if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] finished true
+  if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] none true
   else .running transition.state.normalize (Kernel.append (Kernel.append before transition.tasks) after)
     (transition.finished.orElse fun _ => finished) exhausted
 

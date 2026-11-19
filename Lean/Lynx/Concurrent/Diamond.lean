@@ -1304,7 +1304,7 @@ private theorem Config.stepOf_own {state : State} {tasks : List (PID × Task α)
     (found : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next)) :
     ∃ task transition, Kernel.lookup processId tasks = some task ∧
       (task.own state processId).head? = some transition ∧
-      next = if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] finished true
+      next = if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] none true
         else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
           (transition.finished.orElse fun _ => finished) false := by
   simp only [Config.stepOf, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq] at found
@@ -1318,7 +1318,7 @@ private theorem Config.stepOf_handle {state : State} {tasks : List (PID × Task 
     (found : (Config.running state tasks finished false).stepOf (.handle processId) = some (event, next)) :
     ∃ task transition, Kernel.lookup processId tasks = some task ∧
       (task.handle state processId).head? = some transition ∧
-      next = if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] finished true
+      next = if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] none true
         else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
           (transition.finished.orElse fun _ => finished) false := by
   simp only [Config.stepOf, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq] at found
@@ -1578,7 +1578,7 @@ private theorem Config.changes_own_transfer {state state' : State} {tasks tasks'
       (transition.exhausted = false →
         (Config.running state tasks finished false).Changes (some (transition.change processId)) next ∧
         (Config.running state' tasks' finished' false).Changes (some (transition.change processId)) next') ∧
-      (transition.exhausted = true → next = .running { transition.state with processes := [], timers := [] } [] finished true) := by
+      (transition.exhausted = true → next = .running { transition.state with processes := [], timers := [] } [] none true) := by
   obtain ⟨task₁, transition, lookup₁, head, equal⟩ := Config.stepOf_own found
   rw [lookup] at lookup₁; simp only [Option.some.injEq] at lookup₁; subst lookup₁
   obtain ⟨task₂, transition', lookup₂, head', equal'⟩ := Config.stepOf_own found'

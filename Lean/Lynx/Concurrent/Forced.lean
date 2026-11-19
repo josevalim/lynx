@@ -794,7 +794,7 @@ private theorem Config.stepOf_own_of {state : State} {tasks : List (PID × Task 
     {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
     (lookup : Kernel.lookup processId tasks = some task) (head : (task.own state processId).head? = some transition) :
     (Config.running state tasks finished false).stepOf (.own processId) = some (transition.event,
-      if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] finished true
+      if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] none true
       else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
         (transition.finished.orElse fun _ => finished) false) := by
   obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
@@ -805,7 +805,7 @@ private theorem Config.stepOf_handle_of {state : State} {tasks : List (PID × Ta
     {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
     (lookup : Kernel.lookup processId tasks = some task) (head : (task.handle state processId).head? = some transition) :
     (Config.running state tasks finished false).stepOf (.handle processId) = some (transition.event,
-      if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] finished true
+      if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] none true
       else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
         (transition.finished.orElse fun _ => finished) false) := by
   obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
@@ -835,20 +835,20 @@ private theorem Config.transition_changed {tasks : List (PID × Task α)}
     (head : firsts.head? = some first) (within : first.state.Within elapsed)
     (within' : ∀ second, seconds.head? = some second → second.state.Within elapsed) :
     ∃ second : Transition α, seconds.head? = some second ∧ second.event = first.event ∧
-      ((if second.exhausted then Config.running { second.state with processes := [], timers := [] } [] finished true
+      ((if second.exhausted then Config.running { second.state with processes := [], timers := [] } [] none true
         else .running second.state.normalize
           (rewriteTask other (fun _ => second.tasks) (rewriteTask processId (fun _ => [(processId, task')]) tasks))
           (second.finished.orElse fun _ => finished) false) =
-        (if first.exhausted then Config.running { first.state with processes := [], timers := [] } [] finished true
+        (if first.exhausted then Config.running { first.state with processes := [], timers := [] } [] none true
         else .running first.state.normalize (rewriteTask other (fun _ => first.tasks) tasks)
           (first.finished.orElse fun _ => finished) false) ∨
       ∃ (raw raw' : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α)),
         raw.Changes processId related raw' ∧ raw.Within elapsed ∧ raw'.Within elapsed ∧
         Kernel.lookup processId tasks₁ = Kernel.lookup processId tasks ∧
-        (if first.exhausted then Config.running { first.state with processes := [], timers := [] } [] finished true
+        (if first.exhausted then Config.running { first.state with processes := [], timers := [] } [] none true
           else .running first.state.normalize (rewriteTask other (fun _ => first.tasks) tasks)
             (first.finished.orElse fun _ => finished) false) = .running raw.normalize tasks₁ finished₁ false ∧
-        (if second.exhausted then Config.running { second.state with processes := [], timers := [] } [] finished true
+        (if second.exhausted then Config.running { second.state with processes := [], timers := [] } [] none true
           else .running second.state.normalize
             (rewriteTask other (fun _ => second.tasks) (rewriteTask processId (fun _ => [(processId, task')]) tasks))
             (second.finished.orElse fun _ => finished) false) =
@@ -2426,7 +2426,7 @@ private theorem Config.tagged_own_forced {state : State} {tasks : List (PID × T
     (isLocal : transition.event.local = true)
     (counter : (transition.state.process processId).refCounter = (state.process processId).refCounter) :
     (Key.own processId, transition.event, if transition.exhausted then
-        Config.running { transition.state with processes := [], timers := [] } [] finished true
+        Config.running { transition.state with processes := [], timers := [] } [] none true
       else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
         (transition.finished.orElse fun _ => finished) false, true) ∈
       (Config.running state tasks finished false).taggedSteps := by
@@ -2576,7 +2576,7 @@ private theorem Config.tagged_handle_forced {state : State} {tasks : List (PID �
     (lookup : Kernel.lookup processId tasks = some task) (queue : (state.process processId).queue = entry :: rest)
     (head : (task.handle state processId).head? = some transition) (flag : task.forcedHead state processId entry = true) :
     (Key.handle processId, transition.event, if transition.exhausted then
-        Config.running { transition.state with processes := [], timers := [] } [] finished true
+        Config.running { transition.state with processes := [], timers := [] } [] none true
       else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
         (transition.finished.orElse fun _ => finished) false, true) ∈
       (Config.running state tasks finished false).taggedSteps := by
@@ -2811,12 +2811,12 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
   -- A reply or marker only leaves the queue, resuming the process if it waits for it.
   have quietCase : (entry.signal matches .reply _ | .flush) = true → ((∃ absorbed,
       (if transition.exhausted then
-          Config.running { transition.state with processes := [], timers := [] } [] finished true
+          Config.running { transition.state with processes := [], timers := [] } [] none true
         else Config.running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
           (transition.finished.orElse fun _ => finished) false).stepOf key' = some (absorbed, middle)) ∨
       ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
         (if transition.exhausted then
-            Config.running { transition.state with processes := [], timers := [] } [] finished true
+            Config.running { transition.state with processes := [], timers := [] } [] none true
           else Config.running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
             (transition.finished.orElse fun _ => finished) false).stepOf key' = some (other, last)) := by
     intro quiet
@@ -2993,7 +2993,7 @@ private theorem Config.own_handle_square {elapsed : PID → Nat → Nat} {state 
       some transition' → (Config.running (state.set processId (change process))
         (rewriteTask processId (fun _ => [(processId, task')]) tasks) finished false).stepOf (.handle processId) =
         some (transition'.event, if transition'.exhausted then
-            Config.running { transition'.state with processes := [], timers := [] } [] finished true
+            Config.running { transition'.state with processes := [], timers := [] } [] none true
           else .running transition'.state.normalize
             (rewriteTask processId (fun _ => transition'.tasks) (rewriteTask processId (fun _ => [(processId, task')]) tasks))
             (transition'.finished.orElse fun _ => finished) false) :=
