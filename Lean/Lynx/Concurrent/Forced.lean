@@ -1174,6 +1174,226 @@ private theorem State.forced_close {raw raw' : State} {processId : PID} {process
       rw [← goneNormal, ← State.record_normalize' sortedNormal, State.normalize_normalize sorted]
     rw [again, State.record_normalize' sorted]
 
+/-! ### Records of normalized states -/
+
+private theorem State.set_self {state : State} {processId : PID} {process : ProcessState} (sorted : state.Sorted)
+    (found : state.record processId = some process) : state.set processId process = state :=
+  State.ext_records sorted (Sorted.insertRecord sorted _ _) (fun other => by
+    rw [State.record_set]; split
+    · rename_i same; subst same; exact found.symm
+    · rfl) rfl rfl
+
+private theorem State.modify_found {state : State} {processId : PID} {process : ProcessState}
+    (found : state.record processId = some process) (change : ProcessState → ProcessState) :
+    state.modify processId change = state.set processId (change process) := by
+  unfold State.modify; rw [found]
+
+/-- The record of a live process after normalizing. -/
+private theorem State.record_normalize_live {state : State} {processId : PID} {process : ProcessState}
+    (sorted : state.Sorted) (found : state.record processId = some process) (live : process.exiting = none) :
+    state.normalize.record processId = some (normRecord state.gone processId process) := by
+  rw [State.record_normalize' sorted, found]
+  simp [Option.filter, ProcessState.finished_live (show (normRecord state.gone processId process).exiting = none by
+    rw [normRecord_live live]; exact live)]
+
+/-- What a record of a normalized state keeps: no signal that does nothing, and
+no link being removed from a process that is gone. -/
+private theorem clean_live {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (clean : normRecord gone processId process = process) (live : process.exiting = none) :
+    (∀ entry ∈ process.queue, inert gone processId process entry = false) ∧
+      ∀ link ∈ process.links, (link.2.isSome && gone link.1) = false := by
+  rw [normRecord_live live] at clean
+  have queue := congrArg ProcessState.queue clean
+  have links := congrArg ProcessState.links clean
+  simp only [Kernel.filter_eq, List.filter_eq_self, Bool.not_eq_eq_eq_not, Bool.not_true] at queue links
+  exact ⟨queue, links⟩
+
+/-- A change normalizing leaves as it is when it leaves the record as it is. -/
+private theorem renormalize_of_clean {gone : PID → Bool} {processId : PID} {change : ProcessState → ProcessState}
+    {process : ProcessState} (clean : normRecord gone processId (change process) = change process) (gone' : PID → Bool) :
+    normRecord gone' processId (normRecord gone processId (change process)) = normRecord gone' processId (change process) := by
+  rw [clean]
+
+/-- Whether a signal does nothing after a change of the reference counter alone
+depends on which processes are gone only when it did before. -/
+private theorem inert_any {gone : PID → Bool} {processId : PID} {process process' : ProcessState} {entry : Entry}
+    (links : process'.links = process.links) (clean : inert gone processId process entry = false)
+    (inert' : inert gone processId process' entry = true) (gone' : PID → Bool) :
+    inert gone' processId process' entry = true := by
+  obtain ⟨source, signal⟩ := entry
+  cases signal <;> simp only [inert, links] at clean inert' ⊢ <;> first | exact inert' | simp_all
+
+/-! ### Forced changes of a process's own fields -/
+
+/-- Storing an environment. -/
+private def storeChange (env : Environment) (process : ProcessState) : ProcessState :=
+  { process with pdict := env.pdict, refCounter := max process.refCounter env.refCounter }
+
+/-- Removing the received message. -/
+private def receiveChange (remaining : List Term) (process : ProcessState) : ProcessState :=
+  { process with mailbox := remaining }
+
+private theorem hidden_id : Hidden (fun _ => True) id :=
+  ⟨fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ _ _ => .rfl, fun _ _ => ⟨trivial, rfl⟩, fun _ _ => ⟨trivial, rfl⟩,
+    fun _ => ⟨trivial, rfl⟩⟩
+
+private theorem hidden_store (env : Environment) : Hidden (fun _ => True) (storeChange env) :=
+  ⟨fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ _ _ => .rfl, fun _ _ => ⟨trivial, rfl⟩, fun _ _ => ⟨trivial, rfl⟩,
+    fun _ => ⟨trivial, rfl⟩⟩
+
+/-- Records that keep a mailbox, a dictionary and a reference counter. -/
+private def Keeps (process : ProcessState) (other : ProcessState) : Prop :=
+  other.mailbox = process.mailbox ∧ other.pdict = process.pdict ∧ other.refCounter = process.refCounter
+
+private theorem hidden_receive (process : ProcessState) (remaining : List Term) :
+    Hidden (Keeps process) (receiveChange remaining) :=
+  ⟨fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ _ _ => .rfl, fun _ keeps => ⟨keeps, rfl⟩,
+    fun _ keeps => ⟨keeps, rfl⟩, fun keeps => ⟨keeps, rfl⟩⟩
+
+private theorem hidden_keeps (process : ProcessState) : Hidden (Keeps process) id :=
+  ⟨fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ _ _ => .rfl, fun _ keeps => ⟨keeps, rfl⟩,
+    fun _ keeps => ⟨keeps, rfl⟩, fun keeps => ⟨keeps, rfl⟩⟩
+
+private theorem normRecord_receive {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (live : process.exiting = none) (remaining : List Term) :
+    normRecord gone processId (receiveChange remaining (normRecord gone processId process)) =
+      normRecord gone processId (receiveChange remaining process) := by
+  have live₁ : (receiveChange remaining (normRecord gone processId process)).exiting = none := by
+    rw [normRecord_live live]; exact live
+  rw [normRecord_live live₁, normRecord_live (show (receiveChange remaining process).exiting = none from live)]
+  have same : ∀ other : ProcessState, inert gone processId (receiveChange remaining other) = inert gone processId other :=
+    fun _ => rfl
+  rw [same, same, funext (inert_normRecord (gone := gone) (processId := processId) live), normRecord_live live]
+  simp [receiveChange, Kernel.filter_eq, List.filter_filter]
+
+private theorem normRecord_store {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (live : process.exiting = none) (env : Environment) :
+    normRecord gone processId (storeChange env (normRecord gone processId process)) =
+      normRecord gone processId (storeChange env process) := by
+  have live₁ : (storeChange env (normRecord gone processId process)).exiting = none := by
+    rw [normRecord_live live]; exact live
+  rw [normRecord_live live₁, normRecord_live (show (storeChange env process).exiting = none from live)]
+  -- A larger reference counter only makes more signals inert.
+  have more : ∀ entry, inert gone processId process entry = true →
+      inert gone processId (storeChange env process) entry = true := by
+    intro entry inert'
+    obtain ⟨source, signal⟩ := entry
+    cases signal with
+    | down reference reason =>
+      simp only [inert, storeChange, Bool.and_eq_true] at inert' ⊢
+      obtain ⟨⟨named, counted⟩, unmonitored⟩ := inert'
+      refine ⟨⟨named, ?_⟩, unmonitored⟩
+      generalize reference.getLast? = last at counted ⊢
+      cases last <;> simp at counted ⊢
+      exact ⟨counted.1, decide_eq_true (Nat.le_trans counted.2 (Nat.le_max_left _ _))⟩
+    | aliasMessage alias message =>
+      simp only [inert, storeChange, Bool.and_eq_true] at inert' ⊢
+      obtain ⟨⟨⟨named, counted⟩, unaliased⟩, unmonitored⟩ := inert'
+      refine ⟨⟨⟨named, ?_⟩, unaliased⟩, unmonitored⟩
+      generalize alias.getLast? = last at counted ⊢
+      cases last <;> simp at counted ⊢
+      exact ⟨counted.1, decide_eq_true (Nat.le_trans counted.2 (Nat.le_max_left _ _))⟩
+    | _ => exact inert'
+  have same : inert gone processId (storeChange env (normRecord gone processId process)) =
+      inert gone processId (storeChange env process) := by
+    funext entry
+    apply inert_congr
+    · rw [normRecord_live live]; rfl
+    · rw [normRecord_live live]; rfl
+    · rw [normRecord_live live]; rfl
+    · intro source notGone
+      rw [normRecord_live live]
+      simp only [storeChange, Kernel.lookup_eq, Kernel.filter_eq]
+      exact lookup_filter_of_keep fun entry _ equal => by simp [equal, notGone]
+  rw [same, normRecord_live live]
+  simp only [storeChange, Kernel.filter_eq, List.filter_filter, Bool.and_self]
+  congr 1
+  refine List.filter_congr fun entry _ => ?_
+  cases inert' : inert gone processId (storeChange env process) entry
+  · have := mt (more entry) (by simp [inert'])
+    simp [storeChange] at inert'
+    simp [inert', this]
+  · simp only [storeChange] at inert'
+    simp [inert']
+
+/-! ### Which tagged steps are forced -/
+
+/-- Whether an event is reading or replacing the environment, or receiving. -/
+private def Event.local : Event → Bool
+  | .internal _ | .receive .. => true
+  | _ => false
+
+private theorem Config.forced_own {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {event : Event} {next : Config α} {forced : Bool}
+    (mem : (Key.own processId, event, next, forced) ∈ (Config.running state tasks finished false).taggedSteps) :
+    forced = event.local := by
+  simp only [Config.taggedSteps, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
+    List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.mk.injEq] at mem
+  rcases mem with (((⟨⟨before, ⟨other, task⟩, after⟩, split, own | handle⟩ | ⟨⟨other, _⟩, -, link | phase⟩) |
+    ⟨⟨other, _⟩, -, unpark⟩) | ⟨timer, firing, key, -⟩)
+  · obtain ⟨transition, -, -, rfl, -, rfl⟩ := own
+    cases transition.event <;> rfl
+  · obtain ⟨transition, -, key, -⟩ := handle; cases key
+  · obtain ⟨target, -, found⟩ := link
+    simp only [Option.map_eq_some_iff, Prod.mk.injEq] at found
+    obtain ⟨_, _, key, -⟩ := found; cases key
+  · split at phase
+    · simp only [List.mem_singleton, Prod.mk.injEq] at phase; obtain ⟨key, -⟩ := phase; cases key
+    · simp at phase
+  · simp only [Option.map_eq_some_iff, Prod.mk.injEq] at unpark
+    obtain ⟨_, _, key, -⟩ := unpark; cases key
+  · cases key
+
+private theorem Config.forced_handle {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {event : Event} {next : Config α} {forced : Bool}
+    {task : Task α} (pairwise : tasks.Pairwise fun entry entry' => entry.1 ≠ entry'.1)
+    (lookup : Kernel.lookup processId tasks = some task)
+    (mem : (Key.handle processId, event, next, forced) ∈ (Config.running state tasks finished false).taggedSteps) :
+    forced = match (state.process processId).queue with
+      | entry :: _ => task.forcedHead state processId entry
+      | [] => false := by
+  simp only [Config.taggedSteps, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
+    List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.mk.injEq] at mem
+  rcases mem with (((⟨⟨before, ⟨other, task'⟩, after⟩, split, own | handle⟩ | ⟨⟨other, _⟩, -, link | phase⟩) |
+    ⟨⟨other, _⟩, -, unpark⟩) | ⟨timer, firing, key, -⟩)
+  · obtain ⟨transition, -, key, -⟩ := own; cases key
+  · obtain ⟨transition, -, key, -, -, rfl⟩ := handle
+    cases key
+    have found := lookup_of_splitAt (splitAt_of_mem pairwise split)
+    rw [lookup] at found
+    cases found
+    rfl
+  · obtain ⟨target, -, found⟩ := link
+    simp only [Option.map_eq_some_iff, Prod.mk.injEq] at found
+    obtain ⟨_, _, key, -⟩ := found; cases key
+  · split at phase
+    · simp only [List.mem_singleton, Prod.mk.injEq] at phase; obtain ⟨key, -⟩ := phase; cases key
+    · simp at phase
+  · simp only [Option.map_eq_some_iff, Prod.mk.injEq] at unpark
+    obtain ⟨_, _, key, -⟩ := unpark; cases key
+  · cases key
+
+private theorem Config.forced_phase {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {event : Event} {next : Config α} {forced : Bool}
+    (mem : (Key.phase processId, event, next, forced) ∈ (Config.running state tasks finished false).taggedSteps) :
+    forced = state.dropsDown processId := by
+  simp only [Config.taggedSteps, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
+    List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.mk.injEq] at mem
+  rcases mem with (((⟨⟨before, ⟨other, task'⟩, after⟩, split, own | handle⟩ | ⟨⟨other, _⟩, -, link | phase⟩) |
+    ⟨⟨other, _⟩, -, unpark⟩) | ⟨timer, firing, key, -⟩)
+  · obtain ⟨transition, -, key, -⟩ := own; cases key
+  · obtain ⟨transition, -, key, -⟩ := handle; cases key
+  · obtain ⟨target, -, found⟩ := link
+    simp only [Option.map_eq_some_iff, Prod.mk.injEq] at found
+    obtain ⟨_, _, key, -⟩ := found; cases key
+  · split at phase
+    · simp only [List.mem_singleton, Prod.mk.injEq] at phase
+      obtain ⟨key, -, -, rfl⟩ := phase; cases key; rfl
+    · simp at phase
+  · simp only [Option.map_eq_some_iff, Prod.mk.injEq] at unpark
+    obtain ⟨_, _, key, -⟩ := unpark; cases key
+  · cases key
+
 /-! ### Forced changes against steps of other keys -/
 
 /-- A forced step of a live process, changing only its record and its task,
