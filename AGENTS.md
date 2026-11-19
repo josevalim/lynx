@@ -108,9 +108,9 @@ So a new process BIF, or a change to one, goes through every layer:
    for each OTP behavior, including races where the order of steps changes the
    reply, and update `LynxTest/PublicApi.lean`.
 7. Keep `checkSleep_sound` proven: a change to frames, forced steps or
-   normalization extends the proofs in `Lynx/Concurrent/Frames.lean` and
-   `Lynx/Concurrent/Forced.lean`, and `LynxTest/Concurrent.lean` audits their
-   axioms. Before trusting such a change, also audit it executably: over every
+   normalization extends the proofs in `Lynx/Concurrent/Frames.lean`,
+   `Lynx/Concurrent/Forced.lean` and `Lynx/Concurrent/Confluence.lean`, and
+   `LynxTest/Concurrent.lean` audits their axioms. Before trusting such a change, also audit it executably: over every
    configuration reachable from closed programs that use the BIF, check that
    steps reported as commuting reach the same configuration in either order,
    and that the steps `check` takes alone lose no terminal configuration.

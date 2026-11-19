@@ -332,10 +332,11 @@ defmodule Lynx do
 
     * Programs without races, whose processes only send messages to the
       processes a relation allows, with a single sender for each receiver,
-      receive without timeouts, and make no other requests, are proven by
-      evaluating a single run: `Lynx.Concurrent.RaceFree.of_talks` shows every
-      run ends alike once they run, `Lynx.Concurrent.RaceFree.of_advance`
-      covers the first steps, such as spawning, when each is the only one, and
+      receive without timeouts, and neither spawn, replace their environment,
+      nor make other requests, are proven by evaluating a single run.
+      `Lynx.Concurrent.RaceFree.of_talks` shows every run ends alike from a
+      state without links, monitors or timers, `Lynx.Concurrent.RaceFree.of_advance`
+      covers the steps before it, such as spawning, when each is the only one, and
       `Lynx.concurrent_of_advance` evaluates one run with
       `Lynx.Concurrent.Config.advance`. See `examples/concurrency/server.exs`,
       which does so for any input list.
