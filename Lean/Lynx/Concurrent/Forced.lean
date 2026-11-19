@@ -1513,6 +1513,164 @@ private theorem normRecord_pop {gone : PID → Bool} {processId : PID} {process 
   rw [same, same, funext (inert_normRecord (gone := gone) (processId := processId) live), normRecord_live live]
   simp [popChange, queue, kept, Kernel.filter_eq, List.filter_filter]
 
+/-! ### Forced own steps against handling by the same process -/
+
+/-- A change of a record's dictionary, reference counter and mailbox only. -/
+private def ownChange (pdict : List (Term × Term) → List (Term × Term)) (refCounter : Nat → Nat)
+    (mailbox : List Term → List Term) (process : ProcessState) : ProcessState :=
+  { process with pdict := pdict process.pdict, refCounter := refCounter process.refCounter,
+                 mailbox := mailbox process.mailbox }
+
+/-- Records changed by `change`, where `ok` holds of the original. -/
+private def Same (ok : ProcessState → Prop) (change : ProcessState → ProcessState) (process process' : ProcessState) :
+    Prop :=
+  ok process ∧ process' = change process
+
+/-- A change of a record's own fields, while its mailbox satisfies `ok`, which
+appending a message keeps and which the change commutes with. -/
+private structure OwnChange (ok : List Term → Prop) (mailbox : List Term → List Term) : Prop where
+  append : ∀ {messages} message, ok messages →
+    ok (Kernel.append messages [message]) ∧ mailbox (Kernel.append messages [message]) =
+      Kernel.append (mailbox messages) [message]
+
+private theorem OwnChange.unseen {ok : List Term → Prop} {mailbox : List Term → List Term}
+    {pdict : List (Term × Term) → List (Term × Term)} {refCounter : Nat → Nat} :
+    Unseen (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox)) where
+  outside := by
+    rintro first second ⟨-, rfl⟩
+    exact ⟨rfl, rfl, rfl, fun _ _ => .rfl⟩
+  push := fun _ ⟨ok', same⟩ => by subst same; exact ⟨ok', rfl⟩
+  eagerExit := fun _ ⟨ok', same⟩ => by subst same; exact ⟨ok', rfl⟩
+  unpark := fun ⟨ok', same⟩ => by subst same; exact ⟨ok', rfl⟩
+
+namespace State.Changed
+
+variable {processId : PID} {state state' : State} {ok : List Term → Prop} {mailbox : List Term → List Term}
+  {pdict : List (Term × Term) → List (Term × Term)} {refCounter : Nat → Nat}
+
+/-- The record of the process itself, read through the change. -/
+private theorem process_self
+    (changed : state.Changed processId (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox))
+      state') {β : Type} (get : ProcessState → β) (keeps : ∀ process, get (ownChange pdict refCounter mailbox process) =
+        get process) :
+    get (state'.process processId) = get (state.process processId) ∨
+      (state.record processId = none ∧ state'.record processId = none) := by
+  rcases changed.records with ⟨first, second⟩ | ⟨process, process', first, second, -, rfl⟩
+  · exact .inr ⟨first, second⟩
+  · left; simp [State.process, first, second, keeps]
+
+private theorem modifySelf
+    (changed : state.Changed processId (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox))
+      state') (change : ProcessState → ProcessState)
+    (commutes : ∀ process, ok process.mailbox → ok (change process).mailbox ∧
+      change (ownChange pdict refCounter mailbox process) = ownChange pdict refCounter mailbox (change process)) :
+    (state.modify processId change).Changed processId
+      (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox)) (state'.modify processId change) :=
+  changed.modifyRelated fun ⟨ok', same⟩ => by
+    subst same; exact ⟨(commutes _ ok').1, (commutes _ ok').2⟩
+
+private theorem process_self'
+    (changed : state.Changed processId (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox))
+      state') {β : Type} (get : ProcessState → β) (keeps : ∀ process, get (ownChange pdict refCounter mailbox process) =
+        get process) : get (state'.process processId) = get (state.process processId) := by
+  rcases changed.process_self get keeps with same | ⟨first, second⟩
+  · exact same
+  · simp [State.process, first, second]
+
+private theorem appendSelf
+    (changed : state.Changed processId (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox))
+      state') (own : OwnChange ok mailbox) (message : Term) :
+    (state.append processId message).Changed processId
+      (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox))
+      (state'.append processId message) :=
+  changed.modifySelf _ fun process ok' => ⟨(own.append message ok').1, by
+    simp only [ownChange, (own.append message ok').2]⟩
+
+/-- Handling a signal by the process itself, after a change of its own fields. -/
+private theorem handleSelf
+    (changed : state.Changed processId (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox))
+      state') (own : OwnChange ok mailbox) (waiting : Option Wait) (entry : Entry) :
+    (state'.handle processId waiting entry).2 = (state.handle processId waiting entry).2 ∧
+      (state.handle processId waiting entry).1.Changed processId
+        (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox))
+        (state'.handle processId waiting entry).1 := by
+  have unseen := OwnChange.unseen (ok := ok) (mailbox := mailbox) (pdict := pdict) (refCounter := refCounter)
+  have links := changed.process_self' (·.links) fun _ => rfl
+  have aliases := changed.process_self' (·.aliases) fun _ => rfl
+  have monitoring := changed.process_self' (·.monitoring) fun _ => rfl
+  have eagerExits := changed.process_self' (·.eagerExits) fun _ => rfl
+  have trapExit := changed.process_self' (·.trapExit) fun _ => rfl
+  have either : ∀ {condition : Prop} [Decidable condition] {first first' second second' : State},
+      first.Changed processId (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox)) first' →
+      second.Changed processId (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox)) second' →
+      (if condition then first else second).Changed processId
+        (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox))
+        (if condition then first' else second') :=
+    fun one two => by split; exact one; exact two
+  have modified : ∀ {first first' : State} (change : ProcessState → ProcessState),
+      (∀ process, (change process).mailbox = process.mailbox ∧
+        change (ownChange pdict refCounter mailbox process) = ownChange pdict refCounter mailbox (change process)) →
+      first.Changed processId (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox)) first' →
+      (first.modify processId change).Changed processId
+        (Same (fun process => ok process.mailbox) (ownChange pdict refCounter mailbox)) (first'.modify processId change) :=
+    fun change keeps changed' => changed'.modifySelf change fun process ok' => by
+      rw [(keeps process).1]; exact ⟨ok', (keeps process).2⟩
+  obtain ⟨source, signal⟩ := entry
+  cases signal with
+  | message message => exact ⟨rfl, changed.appendSelf own message⟩
+  | aliasMessage alias message =>
+    simp only [State.handle, aliases]
+    exact ⟨by first | rfl | trivial, either (changed.appendSelf own message) changed⟩
+  | exit reason linked normalKills =>
+    simp only [State.handle, State.exitSignal, links, trapExit]
+    have removed := either (condition := linked = true)
+      (modified (fun process => { process with links := Kernel.filter (·.1 != source) process.links })
+        (fun _ => ⟨rfl, rfl⟩) changed) changed
+    split
+    · exact ⟨rfl, changed⟩
+    split
+    · exact ⟨rfl, removed⟩
+    split
+    · exact ⟨rfl, removed.appendSelf own _⟩
+    split
+    · exact ⟨rfl, removed⟩
+    · exact ⟨rfl, removed⟩
+  | link =>
+    simp only [State.handle, links]
+    exact ⟨by first | rfl | trivial, either changed (modified (fun process =>
+      { process with links := Kernel.append process.links [(source, none)] }) (fun _ => ⟨rfl, rfl⟩) changed)⟩
+  | unlink id =>
+    simp only [State.handle, links]
+    exact ⟨by first | rfl | trivial, (either (modified (fun process =>
+      { process with links := Kernel.filter (·.1 != source) process.links }) (fun _ => ⟨rfl, rfl⟩) changed)
+      changed).send unseen fun _ _ => by simp⟩
+  | unlinkAck id =>
+    simp only [State.handle, links]
+    exact ⟨by first | rfl | trivial, either (modified (fun process =>
+      { process with links := Kernel.filter (·.1 != source) process.links }) (fun _ => ⟨rfl, rfl⟩) changed) changed⟩
+  | monitor reference => exact ⟨rfl, modified (fun process =>
+      { process with monitors := Kernel.append process.monitors [(reference, source)] }) (fun _ => ⟨rfl, rfl⟩) changed⟩
+  | down reference reason =>
+    simp only [State.handle, eagerExits, monitoring]
+    have dropped := either (condition := (isNormal reason && Kernel.contains (state.process processId).eagerExits
+        source) = true)
+      (modified (fun process => { process with eagerExits := Kernel.filter (· != source) process.eagerExits })
+        (fun _ => ⟨rfl, rfl⟩) changed) changed
+    split
+    · exact ⟨rfl, (modified (fun process => { process with
+        monitoring := Kernel.filter (·.1 != reference) process.monitoring
+        aliases := Kernel.erase process.aliases reference }) (fun _ => ⟨rfl, rfl⟩) dropped).appendSelf own _⟩
+    · exact ⟨rfl, dropped⟩
+  | isAlive => exact ⟨rfl, changed.send unseen fun _ _ => by simp⟩
+  | reply value =>
+    simp only [State.handle]
+    split <;> exact ⟨rfl, changed⟩
+  | flush =>
+    simp only [State.handle]
+    split <;> exact ⟨rfl, changed⟩
+
+end State.Changed
+
 /-! ### Which tagged steps are forced -/
 
 /-- Whether an event is reading or replacing the environment, or receiving. -/
