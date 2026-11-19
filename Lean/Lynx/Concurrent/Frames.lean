@@ -4196,6 +4196,58 @@ private theorem CleanOutside.enqueue {state : State} {except : PID → Prop} {so
       exact viaFallback (by
         simp only [State.alive, found]; cases equal : process.exiting <;> simp_all)
 
+/-- `State.inertEntry` is `inert` with the process's own record. -/
+private theorem State.inertEntry_eq (state : State) (processId : PID) (entry : Entry) :
+    state.inertEntry processId entry = inert state.gone processId (state.process processId) entry := by
+  obtain ⟨source, signal⟩ := entry
+  cases signal <;> rfl
+
+/-- Sending a parked monitor signal keeps a state clean, from a live process
+that still monitors it. -/
+private theorem CleanOutside.unpark {state : State} {except : PID → Prop} {processId : PID}
+    (clean : CleanOutside state except) (outside : ¬ except processId) (alive : state.alive processId = true)
+    (monitored : state.parkedMonitored processId = true) :
+    CleanOutside ((state.unparkEffect processId).apply state) except := by
+  have found : ∃ process, state.record processId = some process ∧ process.exiting = none := by
+    simp only [State.alive] at alive
+    cases record : state.record processId with
+    | none => rw [record] at alive; simp at alive
+    | some process => rw [record] at alive; exact ⟨process, rfl, by simpa using alive⟩
+  obtain ⟨process, record, live⟩ := found
+  have same : state.process processId = process := by simp [State.process, record]
+  unfold State.unparkEffect
+  cases parked : (state.process processId).parked with
+  | none => simpa [Effect.apply_empty] using clean
+  | some found' =>
+    obtain ⟨target, reference⟩ := found'
+    simp only
+    let unparked := fun process : ProcessState => { process with parked := none }
+    have cleaned := CleanOutside.modify (change := unparked) (fun _ => rfl) clean fun _ process' found' =>
+      (clean processId outside process' found').preserve (by rw [record] at found'; cases found'; exact live)
+        (by rw [record] at found'; cases found'; exact live) (fun entry mem => .inl ⟨mem, fun inside => by
+          rw [inert_congr rfl rfl rfl rfl rfl] at inside; exact inside⟩) (fun link mem _ => ⟨mem, id⟩)
+    refine CleanOutside.andThen ?_
+    have recordOf : ((Effect.modify processId unparked).apply state).record processId = some (unparked process) := by
+      rw [Effect.record_apply, Effect.record_modify, record]; simp
+    have goneOf := (Effect.KeepsAlive.modify (change := unparked) (processId := processId) fun _ => rfl).gone state
+    have aliveOf : ∀ pid, ((Effect.modify processId unparked).apply state).alive pid = state.alive pid := fun pid => by
+      have := congrFun goneOf pid; simpa [State.gone] using this
+    rw [State.enqueueEffect_congr (state := (Effect.modify processId unparked).apply state) _
+      (by rw [aliveOf]; exact State.alive_modify _ _ _ _ fun _ => rfl)]
+    refine CleanOutside.enqueue cleaned (fun process' _ _ => ?_) (fun _ _ => ⟨outside, fun process' found' => ?_⟩)
+      (fun id => by simp) (fun _ reference' equal process' found' => ?_)
+    · simp [inert, State.gone, aliveOf, alive]
+    · rw [recordOf] at found'; cases found'; exact live
+    · simp only [Signal.monitor.injEq] at equal; subst equal
+      rw [recordOf] at found'; cases found'
+      have parked' : process.parked = some (target, reference) := same ▸ parked
+      simp only [State.parkedMonitored, same, parked', Kernel.any_eq, List.any_eq_true, beq_iff_eq] at monitored
+      obtain ⟨⟨reference', watched⟩, mem, equal'⟩ := monitored
+      simp only at equal'; subst equal'
+      simp only [inert, queueAt, unparked, Kernel.any_eq, Bool.and_eq_false_iff, Bool.not_eq_false',
+        List.any_eq_true, beq_iff_eq]
+      exact .inr ⟨_, mem, rfl⟩
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
