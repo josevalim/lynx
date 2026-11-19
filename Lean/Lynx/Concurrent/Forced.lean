@@ -3739,6 +3739,111 @@ private theorem Config.handle_own_square {elapsed : PID → Nat → Nat} {state 
       sortedEnded'.1]
   · exact absurd exhausted' exhausted
 
+private theorem messageChange_queue (message : Term) :
+    QueueChange List.tail (fun messages => Kernel.append messages [message]) id where
+  push := fun {entries} other nonempty => by
+    cases entries with
+    | nil => exact absurd rfl nonempty
+    | cons head rest => simp [Kernel.append_eq]
+  filtered _ _ := rfl
+  relink _ _ := rfl
+  select := by
+    intro β select messages remaining selected value found
+    exact selectMessage_append found
+
+/-- A forced handling of the oldest signal against the process's own step. -/
+private theorem Config.forced_handle_own {elapsed : PID → Nat → Nat} {config : Config α} {processId : PID}
+    {event event' : Event} {next middle : Config α} (reachable : config.Reachable elapsed) (distinct : config.Distinct)
+    (forced : (Key.handle processId, event, next, true) ∈ config.taggedSteps)
+    (step' : config.stepOf (.own processId) = some (event', middle)) :
+    (∃ absorbed, next.stepOf (.own processId) = some (absorbed, middle)) ∨
+      ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
+        next.stepOf (.own processId) = some (other, last) := by
+  obtain ⟨state, tasks, finished, rfl⟩ := Config.Reachable.running (elapsed := elapsed) forced
+  have step := reachable.stepOf forced
+  obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_handle step
+  have flagged := Config.forced_handle reachable.2.1 lookup forced
+  rw [Config.stepOf_handle_of (finished := finished) lookup head] at step
+  simp only [Option.some.injEq, Prod.mk.injEq] at step
+  obtain ⟨rfl, rfl⟩ := step
+  have sorted := reachable.1.1.1
+  have normalized := reachable.1.2.1
+  have alive := reachable.2.2.1 _ (mem_of_lookup lookup)
+  obtain ⟨process, found, live⟩ := State.alive_iff.mp alive
+  have clean := (Clean.of_normalized sorted normalized found).1
+  have cleaned := clean_live clean live
+  have processOf : state.process processId = process := by simp [State.process, found]
+  rw [processOf] at flagged
+  cases queue : process.queue with
+  | nil => simp [queue] at flagged
+  | cons entry rest =>
+  simp only [queue] at flagged
+  have notInert : state.inertEntry processId entry = false := by
+    rw [State.inertEntry_eq, processOf]
+    exact cleaned.1 entry (by simp [queue])
+  -- A process waiting for a reply or marker takes no own step.
+  have running : task.wait = none := by
+    obtain ⟨task₀, own, lookup₀, head₀, -⟩ := Config.stepOf_own step'
+    rw [lookup] at lookup₀; cases lookup₀
+    obtain ⟨computation, finish, wait⟩ := task
+    cases wait with
+    | none => rfl
+    | some => simp [Task.own] at head₀
+  obtain ⟨source, signal⟩ := entry
+  cases signal with
+  | message message =>
+    have fromProcess : (source != clock) = true := by simpa [Task.forcedHead, notInert] using flagged
+    have notClock : source ≠ clock := by simpa using fromProcess
+    rw [Task.handle_message sorted found queue] at head
+    simp only [List.head?_cons, Option.some.injEq] at head
+    subst head
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
+    have changed : messageChange message process =
+        queueChange List.tail (fun messages => Kernel.append messages [message]) id process := rfl
+    rw [rewriteTask_same lookup, State.normalize_set_clean (process' := messageChange message process) sorted
+      normalized found live live (normRecord_popped clean live (by simp [messageChange]) (fun _ => rfl) rfl live),
+      changed]
+    refine Config.handle_own_square reachable lookup found live queue (messageChange_queue message) ?_ ?_
+      (fun _ => rfl) (fun _ _ _ => rfl) (fun _ => rfl) ?_ ?_ step' ?_
+    · intro rest' other link
+      simp only [List.tail_cons, List.mem_cons]
+      constructor
+      · exact .inr
+      · rintro (same | inside)
+        · subst same; cases link
+        · exact inside
+    · intro rest' keep requests'
+      simp only [List.tail_cons, Kernel.filter_eq, List.filter_cons]
+      cases kept : keep ⟨source, .message message⟩
+      · rfl
+      · simpa using requests' _ kept
+    · intro _
+      simp only [Kernel.any_eq, List.any_eq_true]
+      exact ⟨⟨source, .message message⟩, by simp [queue], by simp [State.awaitedEntry, notInert, notClock]⟩
+    · intro _ _ _ quiet
+      simp only [Kernel.any_eq, List.any_eq_false] at quiet
+      exact absurd (quiet ⟨source, .message message⟩ (by simp [queue]))
+        (by simp [State.awaitedEntry, notInert, notClock])
+    · intro raw tasks₁ finished₁ process₁ within reachable₁ ⟨task₁, lookup₁⟩ found₁ heads₁ live₁
+      obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ (by simp [inert])
+      have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
+        simp [State.process, record]
+      have tagged := Config.tagged_handle_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1
+        lookup₁ (by rw [processOf₁, queue₁])
+        (transition := Transition.mk (.handle processId ⟨source, .message message⟩)
+          (raw.normalize.set processId (messageChange message (normRecord raw.gone processId process₁)))
+          [(processId, task₁)] none false)
+        (by rw [Task.handle_message (Sorted.normalize within.1) record queue₁]; rfl)
+        (by simp only [Task.forcedHead, fromProcess, Bool.or_true])
+      simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none, rewriteTask_same lookup₁] at tagged
+      exact ⟨_, tagged, normRecord_message live₁ heads₁ (by simp [inert]) message⟩
+  | unlinkAck id => sorry
+  | reply value =>
+    simp [Task.forcedHead, notInert, running] at flagged
+  | flush =>
+    simp [Task.forcedHead, notInert, running] at flagged
+  | _ => simp [Task.forcedHead, notInert] at flagged
+
 /-- What every configuration a run reaches satisfies, with links with distinct processes. -/
 private def Config.Ready (elapsed : PID → Nat → Nat) (config : Config α) : Prop :=
   config.Reachable elapsed ∧ config.Distinct
