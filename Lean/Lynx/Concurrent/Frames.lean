@@ -6558,4 +6558,186 @@ private theorem State.normalize_absorbs {state other : State} (sorted : state.So
   simp only [State.mk.injEq] at processes ⊢
   exact ⟨processes, timers, elapsed⟩
 
+/-! ### Assembling: effects keep records sorted, and revive no process -/
+
+private theorem Effect.apply_sorted (effect : Effect) {state : State} (sorted : state.Sorted) :
+    (effect.apply state).Sorted := by
+  unfold Effect.apply
+  have step : ∀ (pids : List PID) (start : State), start.Sorted → (pids.foldl (fun changed processId =>
+      changed.put processId (effect.record processId (state.record processId))) start).Sorted := by
+    intro pids
+    induction pids with
+    | nil => intro _ sorted; exact sorted
+    | cons head rest ih =>
+      intro start sorted
+      rw [List.foldl_cons]
+      apply ih
+      cases effect.record head (state.record head) with
+      | none =>
+        show Lynx.Concurrent.Sorted (Kernel.filter _ start.processes)
+        rw [Kernel.filter_eq]; exact Lynx.Concurrent.Sorted.filter sorted _
+      | some process => exact Lynx.Concurrent.Sorted.insertRecord sorted head process
+  exact step _ _ sorted
+
+/-- An effect that makes no gone process live again. -/
+private def Effect.NoRevive (effect : Effect) : Prop :=
+  ∀ processId record, liveOf (effect.record processId record) = true → liveOf record = true
+
+private theorem Effect.KeepsAlive.noRevive {effect : Effect} (keeps : effect.KeepsAlive) : effect.NoRevive :=
+  fun processId record live => by rw [← keeps processId record]; exact live
+
+private theorem Effect.NoRevive.andThen {first second : Effect} (one : first.NoRevive) (two : second.NoRevive) :
+    (first.andThen second).NoRevive := fun processId record live => by
+  rw [Effect.record_andThen] at live
+  exact one processId record (two processId _ live)
+
+private theorem Effect.NoRevive.gone {effect : Effect} (revives : effect.NoRevive) (state : State) (processId : PID)
+    (gone : state.gone processId = true) : (effect.apply state).gone processId = true := by
+  simp only [State.gone, State.alive, Effect.record_apply] at gone ⊢
+  cases live : liveOf (effect.record processId (state.record processId))
+  · simp only [liveOf] at live
+    cases found : effect.record processId (state.record processId) <;> simp_all
+  · have := revives processId (state.record processId) live
+    simp only [liveOf] at this
+    cases found : state.record processId <;> simp_all
+
+private theorem Effect.KeepsAlive.ite {first second : Effect} (condition : Prop) [Decidable condition]
+    (one : first.KeepsAlive) (two : second.KeepsAlive) : (if condition then first else second).KeepsAlive := by
+  split
+  · exact one
+  · exact two
+
+private theorem eagerChain_keepsAlive (processId : PID) (eager : PID → Bool) :
+    ∀ targets, (eagerChain processId eager targets).KeepsAlive
+  | [] => Effect.KeepsAlive.empty
+  | _ :: rest => by
+    simp only [Lynx.Concurrent.eagerChain]
+    refine (Effect.KeepsAlive.ite _ ((Effect.KeepsAlive.modify ?_).andThen (Effect.KeepsAlive.modify ?_))
+      Effect.KeepsAlive.empty).andThen (eagerChain_keepsAlive processId eager rest)
+    · intro process; simp only [exitingWithout]; cases process.exiting <;> rfl
+    · intro process; rfl
+
+/-- An ending revives no process: it ends its own, and its link exits keep the others. -/
+private theorem State.terminateEffect_noRevive (state : State) (processId : PID) (reason : Term) :
+    (state.terminateEffect processId reason).NoRevive := by
+  unfold State.terminateEffect
+  dsimp only
+  erw [chainEffect_eagerExit processId reason _ _ (by simp [State.alive, State.record_set])]
+  refine (Effect.NoRevive.andThen (Effect.NoRevive.andThen ?_ ?_) (eagerChain_keepsAlive _ _ _).noRevive)
+  · exact (Effect.KeepsAlive.ite _ (Effect.KeepsAlive.retime _) Effect.KeepsAlive.empty).noRevive
+  · intro other record live
+    by_cases same : other = processId
+    · subst same; simp [Effect.put, Effect.record, changeOf, liveOf] at live
+    · have : ∀ process : ProcessState, (Effect.put processId process).record other = id := fun _ => by
+        simp [Effect.put, Effect.record, changeOf, same, Ne.symm same]
+      rw [this] at live; exact live
+
+/-- A record change keeping whether the process ended keeps every process alive or gone. -/
+local syntax "keeps_alive" : tactic
+macro_rules
+  | `(tactic| keeps_alive) => `(tactic|
+      (refine Effect.KeepsAlive.modify ?_; intro process; first | rfl | (cases process.exiting <;> rfl)))
+
+/-- No confined step makes a gone process live again. -/
+private theorem Config.noRevive {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key}
+    (confined : Config.confined (.running state tasks finished false) key = true) :
+    ((Config.running state tasks finished false).effectOf key).NoRevive := by
+  cases key with
+  | own processId =>
+    simp only [Config.effectOf]
+    split
+    · rename_i task lookup
+      obtain ⟨computation, finish, wait⟩ := task
+      cases wait with
+      | some => exact Effect.KeepsAlive.empty.noRevive
+      | none =>
+      simp only [Config.confined, lookup, Bool.and_eq_true] at confined
+      cases computation with
+      | ok => exact State.terminateEffect_noRevive _ _ _
+      | error exception =>
+        cases exception with
+        | exhausted => simp at confined
+        | _ => exact State.terminateEffect_noRevive _ _ _
+      | send => exact (State.sendEffect_keepsAlive _ _ _ _).noRevive
+      | receive =>
+        simp only [Task.ownEffect]
+        split
+        · exact Effect.KeepsAlive.noRevive (by keeps_alive)
+        · exact Effect.KeepsAlive.empty.noRevive
+      | request query next =>
+        refine Effect.KeepsAlive.noRevive ?_
+        cases query with
+        | monitor target alias =>
+          simp only [Task.ownEffect, State.requestEffect, State.allocate]
+          exact Effect.KeepsAlive.andThen (by keeps_alive) (Effect.KeepsAlive.ite _ Effect.KeepsAlive.empty
+            ((State.unparkEffect_keepsAlive _ _).andThen (by keeps_alive)))
+        | demonitor => keeps_alive
+        | startTimer =>
+          simp only [Task.ownEffect, State.requestEffect, State.allocate]
+          exact Effect.KeepsAlive.andThen (by keeps_alive)
+            (Effect.KeepsAlive.ite _ (Effect.KeepsAlive.retime _) Effect.KeepsAlive.empty)
+        | cancelTimer =>
+          simp only [Task.ownEffect, State.requestEffect]
+          split
+          · exact (Effect.KeepsAlive.retime _).andThen (by keeps_alive)
+          · exact Effect.KeepsAlive.empty
+        | alive target =>
+          simp only [Task.ownEffect, State.requestEffect]
+          exact Effect.KeepsAlive.ite _ Effect.KeepsAlive.empty (Effect.KeepsAlive.ite _
+            (State.sendEffect_keepsAlive _ _ _ _) (State.enqueueEffect_keepsAlive _ _ _ _))
+        | sendAlias => exact State.sendEffect_keepsAlive _ _ _ _
+        | _ => simp at confined
+      | _ => simp at confined
+    · exact Effect.KeepsAlive.empty.noRevive
+  | handle processId =>
+    refine Effect.KeepsAlive.noRevive ?_
+    simp only [Config.effectOf]
+    split
+    · simp only [Config.confined, Bool.and_eq_true] at confined
+      cases queue : (state.process processId).queue with
+      | nil => simp [queue] at confined
+      | cons entry rest =>
+        simp only [queue] at confined
+        have kind : entry.signal.handledConfined = true := by
+          obtain ⟨source, signal⟩ := entry; cases signal <;> simp_all [Signal.handledConfined]
+        rw [Task.handleEffect_of_continues queue (by rw [State.handle_confined _ _ _ _ kind])]
+        refine Effect.KeepsAlive.andThen (by keeps_alive) ?_
+        obtain ⟨source, signal⟩ := entry
+        cases signal with
+        | message => keeps_alive
+        | aliasMessage =>
+          simp only [State.handleEffect]
+          exact Effect.KeepsAlive.ite _ (by keeps_alive) Effect.KeepsAlive.empty
+        | monitor => keeps_alive
+        | down =>
+          simp only [State.handleEffect]
+          exact (Effect.KeepsAlive.ite _ (by keeps_alive) Effect.KeepsAlive.empty).andThen
+            (Effect.KeepsAlive.ite _ (Effect.KeepsAlive.andThen (by keeps_alive) (by keeps_alive))
+              Effect.KeepsAlive.empty)
+        | _ => simp [Signal.handledConfined] at kind
+    · exact Effect.KeepsAlive.empty
+  | phase processId =>
+    refine Effect.KeepsAlive.noRevive ?_
+    simp only [Config.effectOf, State.phaseEffect]
+    split
+    · split
+      · exact (Effect.KeepsAlive.modify fun process => by simp only [setDowns]; cases process.exiting <;> rfl).andThen
+          (State.sendEffect_keepsAlive _ _ _ _)
+      · split
+        · rename_i entry rest _
+          refine Effect.KeepsAlive.andThen (by keeps_alive) ?_
+          obtain ⟨source, signal⟩ := entry
+          cases signal <;> simp only [State.answerEffect] <;>
+            first | exact State.sendEffect_keepsAlive _ _ _ _ | exact Effect.KeepsAlive.empty
+        · exact Effect.KeepsAlive.empty
+    · exact Effect.KeepsAlive.empty
+  | unpark processId => exact (State.unparkEffect_keepsAlive _ _).noRevive
+  | fire reference =>
+    simp only [Config.effectOf]
+    split
+    · exact ((Effect.KeepsAlive.retime _).andThen (State.enqueueEffect_keepsAlive _ _ _ _)).noRevive
+    · exact Effect.KeepsAlive.empty.noRevive
+  | link => exact Effect.KeepsAlive.empty.noRevive
+
 end Lynx.Concurrent
