@@ -873,10 +873,13 @@ private theorem Config.transition_changed {tasks : List (PID × Task α)}
 the step cannot see and of its task: the same step, then the change. -/
 private theorem Config.step_changed {state state' : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {processId : PID} {related : Option ProcessState → Option ProcessState → Prop}
-    {task task' : Task α} {key : Key} {event : Event} {next : Config α}
+    {task' : Task α} {key : Key} {event : Event} {next : Config α}
     {elapsed : PID → Nat → Nat} (within : state.Within elapsed) (within' : state'.Within elapsed)
-    (changed : state.Changes processId related state') (unseen : Unnoticed related) (fresh : TasksFresh state tasks)
-    (lookup : Kernel.lookup processId tasks = some task) (owner : key.owner ≠ some processId)
+    (changed : state.Changes processId related state') (unseen : Unnoticed related)
+    (spawns : ∀ {other : PID} {other' : Task α}, Kernel.lookup other tasks = some other' → other ≠ processId →
+      Kernel.append other [(state.process other).children + 1] ≠ processId)
+    (quiet : ∀ {target : PID}, key = .phase processId ∨ key = .link processId target → False)
+    (owner : key.owner ≠ some processId)
     (step : (Config.running state tasks finished false).stepOf key = some (event, next)) :
     ∃ next', (Config.running state' (rewriteTask processId (fun _ => [(processId, task')]) tasks) finished false).stepOf
         key = some (event, next') ∧
@@ -885,9 +888,6 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
         Kernel.lookup processId tasks₁ = Kernel.lookup processId tasks ∧
         next = .running raw.normalize tasks₁ finished₁ false ∧
         next' = .running raw'.normalize (rewriteTask processId (fun _ => [(processId, task')]) tasks₁) finished₁ false) := by
-  have alive : state.alive processId = true := fresh.2.1 _ (mem_of_lookup lookup)
-  have exiting : ∀ {process : ProcessState}, state.record processId = some process → process.exiting = none :=
-    fun found => by simpa [State.alive, found] using alive
   have tasks' : ∀ {other : PID}, other ≠ processId → ∀ {other' : Task α}, Kernel.lookup other tasks = some other' →
       Kernel.lookup other (rewriteTask processId (fun _ => [(processId, task')]) tasks) = some other' := by
     intro other differ other' found
@@ -924,8 +924,8 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
       (fun entry inside => by
         rcases Task.own_pids (List.mem_of_head? head) entry inside with same | child
         · rw [same]; exact differ
-        · rw [child]; exact fresh.child found lookup)
-      (changed.own unseen differ other' (fresh.child found lookup)) head
+        · rw [child]; exact spawns found differ)
+      (changed.own unseen differ other' (spawns found differ)) head
       (within.own (List.mem_of_head? head)) (fun _ head' => within'.own (List.mem_of_head? head'))
     rw [← event']
     exact ⟨_, Config.stepOf_own_of (tasks' differ found) head', result⟩
@@ -943,26 +943,12 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
     exact ⟨_, Config.stepOf_handle_of (tasks' differ found) head', result⟩
   | phase other =>
     by_cases same : other = processId
-    · subst same
-      simp only [Config.stepOf, State.phase, Option.map_eq_some_iff] at step
-      obtain ⟨_, found, -⟩ := step
-      split at found
-      · rename_i process record
-        rw [exiting record] at found
-        simp at found
-      · simp at found
+    · subst same; exact (quiet (target := other) (.inl rfl)).elim
     · exact kept (changed.phase unseen same) (fun _ found => within.phase found)
         (fun _ found => within'.phase found) step
   | link other target =>
     by_cases same : other = processId
-    · subst same
-      simp only [Config.stepOf, State.linkPhase, Option.map_eq_some_iff] at step
-      obtain ⟨_, found, -⟩ := step
-      split at found
-      · rename_i process record
-        rw [exiting record] at found
-        simp at found
-      · simp at found
+    · subst same; exact (quiet (.inr rfl)).elim
     · exact kept (changed.linkPhase unseen same target) (fun _ found => within.linkPhase found)
         (fun _ found => within'.linkPhase found) step
   | unpark other =>
@@ -2419,7 +2405,10 @@ private theorem Config.forced_other {elapsed : PID → Nat → Nat} {state : Sta
   have changed := State.changed_forced within.1 normalized found live ok' hidden renormalize
   have within' : ((state.set processId (change process)).normalize).Within elapsed := (within.set _ _).normalize
   obtain ⟨next', stepped, same | ⟨raw, raw', tasks₁, finished₁, changedRaw, withinRaw, withinRaw', lookupAfter,
-      rfl, rfl⟩⟩ := Config.step_changed (task' := task') within within' changed hidden.unseen.opt fresh lookup owner step'
+      rfl, rfl⟩⟩ := Config.step_changed (task' := task') within within' changed hidden.unseen.opt
+      (fun found differ => fresh.child found lookup) (fun {target} same => by
+        rcases same with rfl | rfl <;>
+          simp [Config.stepOf, State.phase, State.linkPhase, found, live] at step') owner step'
   · subst same
     exact .inl ⟨event', stepped⟩
   · have reachableMiddle := reachable₀.step (Config.step_of_stepOf step')
@@ -5347,6 +5336,118 @@ private theorem Config.forced_keys {config : Config α} {key : Key} {event : Eve
   · simp only [Option.map_eq_some_iff, Prod.mk.injEq] at unpark
     obtain ⟨_, _, -, -, -, flag⟩ := unpark; cases flag
   · cases flag
+
+/-! ### Forced phases against steps of other keys
+
+A process that ended sends a `DOWN` its watcher drops, then normalization drops
+it, so the phase only removes the `DOWN` from the record, or the record once
+nothing is left. Other steps neither read nor change that record. -/
+
+/-- A record that ended, after it sent its next `DOWN`. -/
+private def popDown (process : ProcessState) : ProcessState :=
+  { process with exiting := process.exiting.map fun exiting => { exiting with downs := exiting.downs.tail } }
+
+private theorem normRecord_popDown_kept {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    {exiting : Exiting} {down : List Nat × PID} {rest : List (List Nat × PID)}
+    (ended : process.exiting = some exiting) (downs : exiting.downs = down :: rest) (kept : gone down.2 = false) :
+    normRecord gone processId (popDown process) = popDown (normRecord gone processId process) := by
+  obtain ⟨reason, links, downs'⟩ := exiting
+  simp only at downs; subst downs
+  simp [normRecord, popDown, ended, Kernel.filter_eq, List.filter_cons, kept]
+
+private theorem normRecord_popDown_gone {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    {exiting : Exiting} {down : List Nat × PID} {rest : List (List Nat × PID)}
+    (ended : process.exiting = some exiting) (downs : exiting.downs = down :: rest) (dropped : gone down.2 = true) :
+    normRecord gone processId (popDown process) = normRecord gone processId process := by
+  obtain ⟨reason, links, downs'⟩ := exiting
+  simp only at downs; subst downs
+  simp [normRecord, popDown, ended, Kernel.filter_eq, List.filter_cons, dropped]
+
+/-- What a clean record of a process that ended holds besides its queue, children and exiting. -/
+private theorem Clean.ended {gone : PID → Bool} {processId : PID} {process : ProcessState} {exiting : Exiting}
+    (clean : Clean gone processId process) (ended : process.exiting = some exiting) :
+    process.trapExit = false ∧ process.parked = none ∧
+      Kernel.filter (fun down => !gone down.2) exiting.downs = exiting.downs := by
+  have equal := clean.1
+  unfold normRecord at equal
+  rw [ended] at equal
+  refine ⟨?_, ?_, ?_⟩
+  · have := congrArg ProcessState.trapExit equal; simp at this; first | exact this | exact this.symm
+  · have := congrArg ProcessState.parked equal; simp at this; first | exact this | exact this.symm
+  · have := congrArg ProcessState.exiting equal
+    rw [ended] at this
+    simp only [Option.some.injEq] at this
+    exact congrArg Exiting.downs this
+
+/-- Queuing a signal a live process drops is undone by normalizing. -/
+private theorem State.normalize_push_inert {state : State} (sorted : state.Sorted) {processId : PID}
+    {process : ProcessState} (found : state.record processId = some process) (live : process.exiting = none)
+    {entry : Entry} (dropped : inert state.gone processId process entry = true) :
+    (state.set processId { process with queue := Kernel.append process.queue [entry] }).normalize = state.normalize := by
+  have gone : (state.set processId { process with queue := Kernel.append process.queue [entry] }).gone = state.gone := by
+    funext other
+    by_cases same : other = processId
+    · subst same; simp [State.gone, State.alive, State.record_set, found, live]
+    · simp [State.gone, State.alive, State.record_set, same]
+  have sorted' : (state.set processId { process with queue := Kernel.append process.queue [entry] }).Sorted :=
+    Lynx.Concurrent.Sorted.insertRecord sorted processId _
+  refine State.ext_records (Sorted.normalize sorted) (Sorted.normalize sorted') (fun other => ?_) rfl rfl
+  rw [State.record_normalize' sorted', State.record_normalize' sorted, gone, State.record_set]
+  split
+  · rename_i same; subst same
+    rw [found]
+    simp only [Option.map_some]
+    have live' : ({ process with queue := Kernel.append process.queue [entry] } : ProcessState).exiting = none := live
+    rw [normRecord_live live, normRecord_live live']
+    have same : inert state.gone other { process with queue := Kernel.append process.queue [entry] } =
+        inert state.gone other process := funext fun _ => rfl
+    rw [same]
+    simp [Kernel.filter_eq, Kernel.append_eq, List.filter_append, dropped]
+  · rfl
+
+/-- The phase sending a `DOWN` its live watcher drops, normalized, only removes it from the record. -/
+private theorem State.phase_drops {state : State} (sorted : state.Sorted) {processId watcher : PID}
+    {process watcherProcess : ProcessState} {exiting : Exiting} {reference : List Nat}
+    {rest : List (List Nat × PID)} {next : State}
+    (found : state.record processId = some process) (ended : process.exiting = some exiting)
+    (links : exiting.links = []) (downs : exiting.downs = (reference, watcher) :: rest)
+    (parked : process.parked = none)
+    (foundWatcher : state.record watcher = some watcherProcess) (live : watcherProcess.exiting = none)
+    (dropped : state.inertEntry watcher { source := processId, signal := .down reference exiting.reason } = true)
+    (phase : state.phase processId = some next) :
+    next.normalize = (state.set processId (popDown process)).normalize := by
+  have differ : watcher ≠ processId := fun same => by
+    subst same; rw [found] at foundWatcher; cases foundWatcher; rw [ended] at live; cases live
+  simp only [State.phase, found, ended, links, downs, Option.some.injEq] at phase
+  subst phase
+  have popped : { process with exiting := some { reason := exiting.reason, links := [], downs := rest } } =
+      popDown process := by
+    obtain ⟨reason, links', downs'⟩ := exiting
+    simp only at links downs; subst links downs
+    simp [popDown, ended]
+  rw [popped]
+  have base : (state.set processId (popDown process)).Sorted :=
+    Lynx.Concurrent.Sorted.insertRecord sorted processId (popDown process)
+  have parked' : ((state.set processId (popDown process)).process processId).parked = none := by
+    simp [State.process, State.record_set, popDown, parked]
+  have watched : (state.set processId (popDown process)).record watcher = some watcherProcess := by
+    rw [State.record_set, if_neg differ, foundWatcher]
+  unfold State.send
+  rw [parked']
+  dsimp only
+  unfold State.enqueue
+  rw [watched]
+  dsimp only
+  rw [if_pos (by simp [live])]
+  refine State.normalize_push_inert base watched live ?_
+  rw [State.inertEntry_eq] at dropped
+  have gone : (state.set processId (popDown process)).gone = state.gone := by
+    funext other
+    by_cases same : other = processId
+    · subst same; simp [State.gone, State.alive, State.record_set, found, popDown, ended]
+    · simp [State.gone, State.alive, State.record_set, same]
+  have processOf : state.process watcher = watcherProcess := by simp [State.process, foundWatcher]
+  rw [gone]; rw [processOf] at dropped; exact dropped
 
 /-- A forced phase, a `DOWN` its watcher drops, against any other step. -/
 private theorem Config.forced_phase_square {elapsed : PID → Nat → Nat} {config : Config α} {processId : PID}
