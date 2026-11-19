@@ -4792,6 +4792,220 @@ private theorem Task.handleEffect_clean {state : State} {tasks : List (PID × Ta
       · rw [Effect.apply_empty]; exact clean'
     | _ => simp [Signal.handledConfined] at kind
 
+/-- The signals a process that ended still answers. -/
+private def Signal.request : Signal → Bool
+  | .link | .monitor _ | .isAlive => true
+  | _ => false
+
+/-- What normalizing keeps of a record that ended. -/
+private def endedShape (process : ProcessState) : ProcessState :=
+  { queue := process.queue, refCounter := process.refCounter, children := process.children, exiting := process.exiting }
+
+/-- What a clean record that ended satisfies: only requests from processes not
+gone queued, links and watchers not gone, and every other field empty. -/
+private theorem Clean.exiting_facts {gone : PID → Bool} {processId : PID} {process : ProcessState} {exiting : Exiting}
+    (clean : Clean gone processId process) (ended : process.exiting = some exiting) :
+    process = endedShape process ∧
+    (∀ entry ∈ process.queue, entry.signal.request = true ∧ gone entry.source = false) ∧
+    (∀ target ∈ exiting.links, gone target = false) ∧ (∀ down ∈ exiting.downs, gone down.2 = false) := by
+  have equal := clean.1
+  unfold normRecord at equal
+  rw [ended] at equal
+  simp only [Kernel.filter_eq] at equal
+  have queue := congrArg ProcessState.queue equal
+  have exiting' := congrArg ProcessState.exiting equal
+  simp only [ended, Option.some.injEq] at queue exiting'
+  have links := congrArg Exiting.links exiting'
+  have downs := congrArg Exiting.downs exiting'
+  simp only at links downs
+  refine ⟨?_, fun entry mem => ?_, fun target mem => ?_, fun down mem => ?_⟩
+  · rw [← equal]; simp [endedShape, ended]
+  · have := List.filter_eq_self.mp queue entry mem
+    obtain ⟨source, signal⟩ := entry
+    cases signal <;> simp_all [Signal.request]
+  · have := List.filter_eq_self.mp links target mem; simpa using this
+  · have := List.filter_eq_self.mp downs down mem; simpa using this
+
+/-- A record that ended with every field but its queue, references, children
+and exiting empty, holding only what normalizing keeps, is clean while something is left. -/
+private theorem Clean.exiting {gone : PID → Bool} {processId : PID} {process : ProcessState} {exiting : Exiting}
+    (ended : process.exiting = some exiting)
+    (shape : process = endedShape process)
+    (queue : ∀ entry ∈ process.queue, entry.signal.request = true ∧ gone entry.source = false)
+    (links : ∀ target ∈ exiting.links, gone target = false) (downs : ∀ down ∈ exiting.downs, gone down.2 = false)
+    (left : process.finished = false) : Clean gone processId process := by
+  refine ⟨?_, left⟩
+  unfold normRecord
+  rw [ended]
+  simp only [Kernel.filter_eq]
+  rw [List.filter_eq_self.mpr fun entry mem => by
+      have := queue entry mem; obtain ⟨source, signal⟩ := entry
+      cases signal <;> simp only [Signal.request] at this <;> simp [this.2] <;> simp at this,
+    List.filter_eq_self.mpr fun target mem => by simp [links target mem],
+    List.filter_eq_self.mpr fun down mem => by simp [downs down mem]]
+  conv => rhs; rw [shape]
+  simp [endedShape, ended]
+
+/-- Sending from a process with no parked monitor signal only queues the signal. -/
+private theorem State.sendEffect_unparked {state : State} {source target : PID} {signal : Signal}
+    (unparked : (state.process source).parked = none) :
+    state.sendEffect source target signal = state.enqueueEffect source target signal := by
+  simp [State.sendEffect, unparked]
+
+/-- A record that ended, changed by keeping what normalizing keeps, stays clean while something is left. -/
+private theorem Clean.ended {gone : PID → Bool} {processId : PID} {process process' : ProcessState}
+    {exiting exiting' : Exiting} (clean : Clean gone processId process) (ended : process.exiting = some exiting)
+    (ended' : process'.exiting = some exiting') (shape : process' = endedShape process')
+    (queue : ∀ entry ∈ process'.queue, entry ∈ process.queue)
+    (links : ∀ target ∈ exiting'.links, target ∈ exiting.links)
+    (downs : ∀ down ∈ exiting'.downs, down ∈ exiting.downs) (left : process'.finished = false) :
+    Clean gone processId process' := by
+  obtain ⟨-, queueFacts, linkFacts, downFacts⟩ := clean.exiting_facts ended
+  exact Clean.exiting ended' shape (fun entry mem => queueFacts entry (queue entry mem))
+    (fun target mem => linkFacts target (links target mem)) (fun down mem => downFacts down (downs down mem)) left
+
+/-- Whether the next phase of a process that ended leaves nothing, as `State.phaseFrames` reads it. -/
+private def State.lastPhase (state : State) (processId : PID) : Prop :=
+  match (state.process processId).exiting with
+  | some exiting => match exiting.downs, (state.process processId).queue with
+    | _ :: rest, queue => rest = [] ∧ queue = []
+    | [], _ :: rest => rest = []
+    | [], [] => True
+  | none => True
+
+/-- Normalizing after a confined phase changes no record but the process's own
+when it leaves nothing. -/
+private theorem State.phaseEffect_clean {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID}
+    (sorted : state.Sorted) (normalized : state.normalize = state)
+    (confined : Config.confined (.running state tasks finished false) (.phase processId) = true) :
+    CleanOutside ((state.phaseEffect processId).apply state) (fun other => other = processId ∧ state.lastPhase processId) := by
+  have clean : CleanOutside state (fun other => other = processId ∧ state.lastPhase processId) :=
+    fun _ _ _ found => Clean.of_normalized sorted normalized found
+  simp only [Config.confined, Bool.and_eq_true, Option.isNone_iff_eq_none] at confined
+  obtain ⟨unparked, confined⟩ := confined
+  cases exits : (state.process processId).exiting with
+  | none => simp [exits] at confined
+  | some exiting =>
+    obtain ⟨process, found⟩ : ∃ process, state.record processId = some process := by
+      cases record : state.record processId with
+      | none => simp [State.process, record] at exits
+      | some process => exact ⟨process, rfl⟩
+    have same : state.process processId = process := by simp [State.process, found]
+    rw [same] at exits unparked
+    have cleanOwn := Clean.of_normalized sorted normalized found
+    obtain ⟨shape, -, -, -⟩ := cleanOwn.exiting_facts exits
+    simp only [same, exits] at confined
+    simp only [State.phaseEffect, same, exits]
+    -- Queueing what the phase sends, at a state changing only its own record.
+    have sends : ∀ (change : ProcessState → ProcessState) (target : PID) (signal : Signal),
+        (∀ process, (change process).exiting.isSome = process.exiting.isSome) →
+        (∀ process, (change process).parked = process.parked) →
+        (∀ process', state.record target = some process' → process'.exiting = none →
+          inert state.gone target (queueAt processId signal process') { source := processId, signal } = false) →
+        (∀ id, signal ≠ .unlink id) → (∀ reference, signal ≠ .monitor reference) →
+        signal ≠ .link → signal ≠ .isAlive →
+        (¬ state.lastPhase processId → Clean state.gone processId (change process)) →
+        CleanOutside (((Effect.modify processId change).andThen
+          ((state.modify processId change).sendEffect processId target signal)).apply state)
+          (fun other => other = processId ∧ state.lastPhase processId) := by
+      intro change target signal keeps keepsParked fresh notUnlink notMonitor notLink notAlive here
+      refine CleanOutside.andThen ?_
+      have records := Effect.apply_modify_record state processId (change := change)
+      have goneOf := (Effect.KeepsAlive.modify (processId := processId) keeps).gone state
+      have changed := CleanOutside.modify keeps clean fun outside process' found' => by
+        rw [found] at found'; cases found'
+        exact here fun last => outside ⟨rfl, last⟩
+      rw [State.sendEffect_unparked (by
+          rw [State.process_modify_keeps (get := (·.parked)) keepsParked, same]; exact unparked),
+        State.enqueueEffect_congr (state := (Effect.modify processId change).apply state) _
+          (by simp only [State.alive, records])]
+      refine CleanOutside.enqueue changed (fun process' found' live' => ?_) (fun _ kind => ?_) notUnlink
+        (fun _ reference equal => absurd equal (notMonitor reference))
+      · rw [goneOf]
+        by_cases self : target = processId
+        · subst self
+          rw [records] at found'
+          unfold State.modify at found'; rw [found] at found'
+          simp only [State.record_set, ↓reduceIte, Option.some.injEq] at found'
+          have := keeps process; rw [found', live', exits] at this; simp at this
+        · have : ((Effect.modify processId change).apply state).record target = state.record target := by
+            rw [Effect.record_apply, Effect.record_modify]; simp [self]
+          rw [this] at found'
+          exact fresh process' found' live'
+      · cases signal <;> simp at kind <;> first
+          | exact absurd rfl (notMonitor _) | exact absurd rfl (notUnlink _) | exact absurd rfl notLink
+          | exact absurd rfl notAlive
+    -- A signal the phase sends that is not inert at the target in this state.
+    have freshOf : ∀ (target : PID) (signal : Signal),
+        state.inertEntry target { source := processId, signal } = false →
+        ∀ process', state.record target = some process' → process'.exiting = none →
+          inert state.gone target (queueAt processId signal process') { source := processId, signal } = false := by
+      intro target signal notInert process' found' _
+      rw [State.inertEntry_eq] at notInert
+      have : state.process target = process' := by simp [State.process, found']
+      rw [this] at notInert
+      rwa [inert_congr (process' := queueAt _ _ process') (process := process') rfl rfl rfl rfl rfl]
+    obtain ⟨reason, links, downs⟩ := exiting
+    cases downs with
+    | cons down rest =>
+      obtain ⟨reference, watcher⟩ := down
+      cases links with
+      | cons => simp at confined
+      | nil =>
+        simp only [Bool.not_eq_true', Bool.not_eq_eq_eq_not, Bool.not_true] at confined
+        refine sends (setDowns rest) watcher (.down reference reason)
+          (fun process => by simp only [setDowns]; cases process.exiting <;> rfl) (fun _ => rfl)
+          (freshOf watcher _ confined) (by simp) (by simp) (by simp) (by simp) fun notLast => ?_
+        refine Clean.ended cleanOwn exits (exiting' := { reason, links := [], downs := rest })
+          (by simp [setDowns, exits]) ?_ (fun _ mem => mem) (fun _ mem => mem)
+          (fun _ mem => List.mem_cons_of_mem _ mem) ?_
+        · rw [shape]; simp [setDowns, endedShape, exits]
+        · simp only [State.lastPhase, same, exits] at notLast
+          cases rest with
+          | nil =>
+            have : process.queue ≠ [] := fun empty => notLast ⟨rfl, empty⟩
+            cases queue : process.queue with
+            | nil => exact absurd queue this
+            | cons => simp [ProcessState.finished, setDowns, exits, queue]
+          | cons => simp [ProcessState.finished, setDowns, exits]
+    | nil =>
+      cases links with
+      | cons => simp at confined
+      | nil =>
+        cases queue : process.queue with
+        | nil => simp only [queue]; rw [Effect.apply_empty]; exact clean
+        | cons entry rest =>
+          simp only [queue] at confined ⊢
+          let pop := fun process : ProcessState => { process with queue := process.queue.drop 1 }
+          have here : ¬ state.lastPhase processId → Clean state.gone processId (pop process) := fun notLast => by
+            simp only [State.lastPhase, same, exits, queue] at notLast
+            refine Clean.ended cleanOwn exits (exiting' := { reason, links := [], downs := [] })
+              (by simp [pop, exits]) ?_ (fun _ mem => List.mem_of_mem_drop mem) (fun _ mem => mem) (fun _ mem => mem) ?_
+            · rw [shape]; simp [pop, endedShape, exits]
+            · cases rest with
+              | nil => exact absurd rfl notLast
+              | cons => simp [ProcessState.finished, pop, exits, queue]
+          obtain ⟨source, signal⟩ := entry
+          cases signal with
+          | link =>
+            exact sends pop source _ (fun _ => rfl) (fun _ => rfl) (fun _ _ _ => by simp [inert])
+              (by simp) (by simp) (by simp) (by simp) here
+          | isAlive =>
+            exact sends pop source _ (fun _ => rfl) (fun _ => rfl) (fun _ _ _ => by simp [inert])
+              (by simp) (by simp) (by simp) (by simp) here
+          | monitor reference =>
+            simp only [Bool.not_eq_eq_eq_not, Bool.not_true] at confined
+            exact sends pop source _ (fun _ => rfl) (fun _ => rfl) (freshOf source _ confined)
+              (by simp) (by simp) (by simp) (by simp) here
+          | _ =>
+            simp only [State.answerEffect]
+            refine CleanOutside.andThen ?_
+            rw [Effect.apply_empty]
+            exact CleanOutside.modify (fun _ => rfl) clean fun outside process' found' => by
+              rw [found] at found'; cases found'
+              exact here fun last => outside ⟨rfl, last⟩
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
