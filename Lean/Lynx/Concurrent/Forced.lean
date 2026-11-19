@@ -1976,6 +1976,72 @@ private theorem spawnSelf
   · exact linked
   · exact started
 
+/-- The process ends, after handling its oldest signal changed its queue,
+mailbox and links in a way ending forgets. -/
+private theorem terminateQueue
+    (changed : state.Changed processId (Same Queued (queueChange queue mailbox links)) state')
+    (change : QueueChange queue mailbox links)
+    (requests : ∀ (entries : List Entry) (keep : Entry → Bool), entries ≠ [] →
+      (∀ entry, keep entry = true → (entry.signal matches .link | .monitor _ | .isAlive) = true) →
+      Kernel.filter keep (queue entries) = Kernel.filter keep entries)
+    (exitLinks : ∀ entries : List (PID × Option Nat),
+      Kernel.foldl (fun links (peer, unlinking) => if unlinking.isNone then insertPid peer links else links) []
+        (links entries) =
+      Kernel.foldl (fun links (peer, unlinking) => if unlinking.isNone then insertPid peer links else links) [] entries)
+    (reason : Term) (before : state.Sorted) (before' : state'.Sorted)
+    (sorted : (state.terminate processId reason).Sorted) (sorted' : (state'.terminate processId reason).Sorted) :
+    (state'.terminate processId reason).normalize = (state.terminate processId reason).normalize := by
+  let ended := Same (fun process : ProcessState => process.exiting.isSome = true) (queueChange id id links)
+  have unseen : Unseen ended :=
+    ⟨by rintro first second ⟨-, rfl⟩; exact ⟨rfl, rfl, rfl, fun _ _ => .rfl⟩,
+      fun _ ⟨ok', same⟩ => by subst same; exact ⟨ok', rfl⟩,
+      fun _ ⟨ok', same⟩ => by
+        subst same; exact ⟨ok', by simp only [queueChange, ProcessState.eagerExit, change.filtered]⟩,
+      fun ⟨ok', same⟩ => by subst same; exact ⟨ok', rfl⟩⟩
+  rcases changed.records with ⟨missing, missing'⟩ | ⟨process, second, found, found'', queued, rfl⟩
+  · have same : state' = state := State.ext_records before before' (fun other => by
+      by_cases equal : other = processId
+      · subst equal; rw [missing, missing']
+      · exact changed.record_other equal) changed.2.2.1 changed.2.2.2
+    rw [same]
+  have processOf : state.process processId = process := by simp [State.process, found]
+  have processOf' : state'.process processId = queueChange queue mailbox links process := by
+    simp [State.process, found'']
+  have endedChanged : (state.terminate processId reason).Changed processId ended
+      (state'.terminate processId reason) := by
+    unfold State.terminate
+    simp only [processOf, processOf', changed.2.2.1, queueChange, exitLinks]
+    rw [requests _ _ queued fun entry kept => by
+      obtain ⟨_, signal⟩ := entry; cases signal <;> simp_all]
+    refine State.Changed.foldl (fun target changed' => ?_) _ ⟨fun other differ => ?_, ?_, rfl, changed.2.2.2⟩
+    · rw [changed'.eagerLink unseen]
+      split
+      · refine (changed'.modifyRelated fun {first second} related => ?_).linkExit unseen _ _ _
+        obtain ⟨ok', same⟩ := related
+        subst same
+        refine ⟨?_, rfl⟩
+        cases exiting : first.exiting <;> simp_all
+      · exact changed'
+    · simp only [State.record_set, differ, ↓reduceIte]
+      exact changed.record_other differ
+    · simp only [State.record_set, ↓reduceIte]
+      exact .some ⟨rfl, rfl⟩
+  have goneSame := endedChanged.gone unseen
+  refine State.ext_records (Sorted.normalize sorted) (Sorted.normalize sorted') (fun other => ?_)
+    endedChanged.2.2.1 endedChanged.2.2.2
+  rw [State.record_normalize' sorted', State.record_normalize' sorted, goneSame]
+  by_cases equal : other = processId
+  · subst equal
+    rcases endedChanged.records with ⟨none₁, none₂⟩ | ⟨record, record', found₁, found₂, exiting, rfl⟩
+    · rw [none₁, none₂]
+    · rw [found₁, found₂]
+      obtain ⟨reason', exiting'⟩ := Option.isSome_iff_exists.mp exiting
+      simp only [Option.map_some]
+      unfold normRecord
+      simp only [queueChange, exiting']
+      rfl
+  · rw [endedChanged.record_other equal]
+
 end State.Changed
 
 /-! ### Which tagged steps are forced -/
