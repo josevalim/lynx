@@ -596,7 +596,8 @@ time elapsed when timers are canceled. -/
   let state := (state.set processId { process with children := process.children + 1 }).set child {}
   let state := if options.link then
       (state.modify processId fun process =>
-        { process with links := Kernel.append process.links [(child, none)] }).modify child fun other =>
+        { process with links := Kernel.append (Kernel.filter (·.1 != child) process.links) [(child, none)] }).modify
+          child fun other =>
           { other with links := [(processId, none)] }
     else state
   let state := if options.monitor then

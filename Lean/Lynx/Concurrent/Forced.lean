@@ -328,7 +328,7 @@ private theorem spawnWith (changed : state.Changed processId related state') {ot
     fresh {}
   let child := Kernel.append other [(state.process other).children + 1]
   have linked := (started.modify differ fun process =>
-      { process with links := Kernel.append process.links [(child, none)] }).modify fresh
+      { process with links := Kernel.append (Kernel.filter (·.1 != child) process.links) [(child, none)] }).modify fresh
     fun child => { child with links := [(other, none)] }
   by_cases monitor : options.monitor <;> by_cases link : options.link <;>
     simp only [monitor, link, ↓reduceIte, Bool.false_eq_true, State.allocate]

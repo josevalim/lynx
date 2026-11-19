@@ -908,12 +908,12 @@ private def State.spawnEffect (state : State) (processId : PID) (options : Spawn
   let started := (state.set processId { process with children := process.children + 1 }).set child {}
   let linked := if options.link then
       (started.modify processId fun process =>
-        { process with links := Kernel.append process.links [(child, none)] }).modify child fun other =>
+        { process with links := Kernel.append (Kernel.filter (·.1 != child) process.links) [(child, none)] }).modify child fun other =>
           { other with links := [(processId, none)] }
     else started
   let linkedEffect : Effect := if options.link then
       (Effect.modify processId fun process =>
-        { process with links := Kernel.append process.links [(child, none)] }).andThen
+        { process with links := Kernel.append (Kernel.filter (·.1 != child) process.links) [(child, none)] }).andThen
         (Effect.modify child fun other => { other with links := [(processId, none)] })
     else {}
   let monitoredEffect : Effect := if options.monitor then
