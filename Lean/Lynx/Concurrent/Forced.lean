@@ -3111,6 +3111,263 @@ private theorem Config.forced_own_handle {elapsed : PID → Nat → Nat} {config
     split at head <;> simp only [List.head?_cons, Option.some.injEq] at head <;> subst head <;>
       simp [Event.local] at isLocal
 
+/-! ### Links with distinct processes
+
+A record never holds two links with the same process: linking removes any
+link with the process first, and handling a link adds one only when there is
+none. -/
+
+/-- Every record holds at most one link with each process. -/
+private def State.Distinct (state : State) : Prop :=
+  ∀ processId process, state.record processId = some process → (process.links.map (·.1)).Nodup
+
+namespace State.Distinct
+
+variable {state : State}
+
+private theorem set (distinct : state.Distinct) {processId : PID} {process : ProcessState}
+    (nodup : (process.links.map (·.1)).Nodup) : (state.set processId process).Distinct := by
+  intro other process' found
+  rw [State.record_set] at found
+  split at found
+  · cases found; exact nodup
+  · exact distinct _ _ found
+
+private theorem remove (distinct : state.Distinct) (processId : PID) : (state.remove processId).Distinct := by
+  intro other process' found
+  rw [State.record_remove] at found
+  split at found
+  · cases found
+  · exact distinct _ _ found
+
+private theorem modify (distinct : state.Distinct) {processId : PID} {change : ProcessState → ProcessState}
+    (keeps : ∀ process, state.record processId = some process → (process.links.map (·.1)).Nodup →
+      ((change process).links.map (·.1)).Nodup) : (state.modify processId change).Distinct := by
+  unfold State.modify
+  split
+  · rename_i process found
+    exact distinct.set (keeps _ found (distinct _ _ found))
+  · exact distinct
+
+private theorem timers (distinct : state.Distinct) (timers : List Timer) : ({ state with timers }).Distinct :=
+  distinct
+
+private theorem same (distinct : state.Distinct) {processId : PID} {change : ProcessState → ProcessState}
+    (links : ∀ process, (change process).links = process.links) : (state.modify processId change).Distinct :=
+  distinct.modify fun process _ nodup => by rw [links]; exact nodup
+
+private theorem filtered (distinct : state.Distinct) {processId : PID} {keep : PID × Option Nat → Bool}
+    : (state.modify processId fun process => { process with links := Kernel.filter keep process.links }).Distinct :=
+  distinct.modify fun process _ nodup => by
+    simp only [Kernel.filter_eq]
+    exact (List.filter_sublist.map _).nodup nodup
+
+private theorem relinked (distinct : state.Distinct) {processId target : PID} :
+    (state.modify processId fun process =>
+      { process with links := Kernel.append (Kernel.filter (·.1 != target) process.links) [(target, none)] }).Distinct :=
+  distinct.modify fun process _ nodup => by
+    simp only [Kernel.append_eq, Kernel.filter_eq, List.map_append, List.map_cons, List.map_nil]
+    refine List.nodup_append.mpr ⟨(List.filter_sublist.map _).nodup nodup, by simp, ?_⟩
+    intro peer mem other mem'
+    simp only [List.mem_singleton] at mem'
+    subst mem'
+    simp only [List.mem_map, List.mem_filter, bne_iff_ne, ne_eq] at mem
+    obtain ⟨link, ⟨-, differ⟩, rfl⟩ := mem
+    exact differ
+
+private theorem fallback (distinct : state.Distinct) (source target : PID) (signal : Signal) :
+    (state.fallback source target signal).Distinct := by
+  cases signal <;> simp only [State.fallback] <;> first | exact distinct | exact distinct.same fun _ => rfl |
+    exact distinct.filtered
+
+private theorem enqueue (distinct : state.Distinct) (source target : PID) (signal : Signal) :
+    (state.enqueue source target signal).Distinct := by
+  unfold State.enqueue
+  split
+  · rename_i process found
+    split
+    · refine distinct.set ?_; exact distinct (process := process) _ found
+    · exact distinct.fallback _ _ _
+  · exact distinct.fallback _ _ _
+
+private theorem unpark (distinct : state.Distinct) (processId : PID) : (state.unpark processId).Distinct := by
+  unfold State.unpark
+  split
+  · refine (distinct.same ?_).enqueue _ _ _; intro; rfl
+  · exact distinct
+
+private theorem send (distinct : state.Distinct) (source target : PID) (signal : Signal) :
+    (state.send source target signal).Distinct := by
+  unfold State.send
+  refine State.Distinct.enqueue ?_ _ _ _
+  split
+  · split
+    · exact distinct.unpark _
+    · exact distinct
+  · exact distinct
+
+private theorem linkExit (distinct : state.Distinct) (processId target : PID) (reason : Term) :
+    (state.linkExit processId target reason).Distinct := by
+  unfold State.linkExit
+  split
+  · exact distinct.modify fun process _ nodup => by
+      simp only [Kernel.filter_eq]
+      exact (List.filter_sublist.map _).nodup nodup
+  · exact distinct.send _ _ _
+
+private theorem foldl {γ : Type} {step : State → γ → State}
+    (keeps : ∀ {state : State} item, state.Distinct → (step state item).Distinct) :
+    ∀ (items : List γ) {state : State}, state.Distinct → (Kernel.foldl step state items).Distinct
+  | [], _, distinct => distinct
+  | item :: rest, _, distinct => by
+      have := foldl keeps rest (keeps item distinct)
+      simpa only [Kernel.foldl_eq, List.foldl_cons] using this
+
+private theorem terminate (distinct : state.Distinct) (processId : PID) (reason : Term) :
+    (state.terminate processId reason).Distinct := by
+  unfold State.terminate
+  refine State.Distinct.foldl (fun target distinct' => ?_) _ ?_
+  · split
+    · refine (distinct'.same ?_).linkExit _ _ _; intro; rfl
+    · exact distinct'
+  · refine (distinct.timers _).set ?_
+    cases found : state.record processId with
+    | none => simp [State.process, found]
+    | some process => simpa [State.process, found] using distinct _ _ found
+
+private theorem answer (distinct : state.Distinct) (processId : PID) (entry : Entry) :
+    (state.answer processId entry).Distinct := by
+  unfold State.answer
+  split <;> first | exact distinct | exact distinct.send _ _ _
+
+end State.Distinct
+
+private theorem State.Distinct.allocated {state : State} (distinct : state.Distinct) (processId : PID) :
+    (state.allocate processId).2.Distinct :=
+  State.Distinct.modify (change := fun process => { process with refCounter := process.refCounter + 1 }) distinct
+    fun _ _ nodup => nodup
+
+private theorem nodup_relink (links : List (PID × Option Nat)) (target : PID) (value : Option Nat)
+    (nodup : (links.map (·.1)).Nodup) :
+    ((Kernel.append (Kernel.filter (·.1 != target) links) [(target, value)]).map (·.1)).Nodup := by
+  simp only [Kernel.append_eq, Kernel.filter_eq, List.map_append, List.map_cons, List.map_nil]
+  rw [List.nodup_append]
+  refine ⟨(List.filter_sublist.map _).nodup nodup, List.nodup_cons.mpr ⟨by simp, .nil⟩, ?_⟩
+  intro peer mem other mem'
+  simp only [List.mem_singleton] at mem'
+  subst mem'
+  simp only [List.mem_map, List.mem_filter, bne_iff_ne, ne_eq] at mem
+  obtain ⟨link, ⟨-, differ⟩, rfl⟩ := mem
+  exact differ
+
+/-- Links a change keeps: the same, fewer, or another with a process after removing any. -/
+local syntax "distinct_links" : tactic
+macro_rules
+  | `(tactic| distinct_links) => `(tactic| first
+      | (intro _ _ nodup; exact nodup)
+      | (intro _ _ nodup; simp only [Kernel.filter_eq]; exact (List.filter_sublist.map _).nodup nodup)
+      | (intro _ _ nodup; exact nodup_relink _ _ _ nodup)
+      | (intro _ _ _; simp))
+
+/-- Steps keep links with distinct processes. -/
+local syntax "distinct" : tactic
+macro_rules
+  | `(tactic| distinct) => `(tactic|
+      (repeat' first
+        | refine State.Distinct.modify ?_ (by distinct_links)
+        | refine State.Distinct.enqueue ?_ _ _ _
+        | refine State.Distinct.send ?_ _ _ _
+        | refine State.Distinct.unpark ?_ _
+        | refine State.Distinct.linkExit ?_ _ _ _
+        | refine State.Distinct.terminate ?_ _ _
+        | refine State.Distinct.answer ?_ _ _
+        | refine State.Distinct.remove ?_ _
+        | refine State.Distinct.timers ?_ _
+        | refine State.Distinct.allocated ?_ _))
+
+namespace State.Distinct
+
+variable {state : State}
+
+private theorem spawnWith (distinct : state.Distinct) (processId : PID) (options : SpawnOptions) :
+    (state.spawnWith processId options).2.Distinct := by
+  have parent : ((state.process processId).links.map (·.1)).Nodup := by
+    cases found : state.record processId with
+    | none => simp [State.process, found]
+    | some process => simpa [State.process, found] using distinct _ _ found
+  unfold State.spawnWith
+  dsimp only
+  by_cases monitor : options.monitor <;> by_cases link : options.link <;>
+    simp only [monitor, link, ↓reduceIte, Bool.false_eq_true, State.allocate]
+  all_goals
+    repeat' first
+      | refine State.Distinct.modify ?_ (by distinct_links)
+      | refine State.Distinct.set ?_ ?_
+  all_goals first | exact distinct | exact parent | simp
+
+private theorem request (distinct : state.Distinct) (processId : PID) {β : Type} (next : Term → Result β)
+    (query : Request) : (state.request processId next query).state.Distinct := by
+  have allocated := distinct.allocated processId
+  cases query with
+  | monitor target alias =>
+    simp only [State.request]
+    generalize state.allocate processId = pair at allocated ⊢
+    obtain ⟨reference, after⟩ := pair
+    dsimp only at allocated ⊢
+    split
+    · exact allocated
+    · exact (allocated.unpark _).modify fun _ _ nodup => nodup
+  | demonitor reference flush =>
+    simp only [State.request]
+    split <;> exact distinct.modify fun _ _ nodup => nodup
+  | link target =>
+    simp only [State.request]
+    repeat' split
+    all_goals first
+      | exact distinct
+      | exact (distinct.modify fun _ _ nodup => nodup_relink _ _ _ nodup).send _ _ _
+  | unlink target =>
+    simp only [State.request]
+    repeat' split
+    all_goals first
+      | exact distinct
+      | refine (distinct.modify fun _ _ nodup => ?_).send _ _ _
+        have keys : ∀ (links : List (PID × Option Nat)) (id : Nat), (Kernel.map (fun link =>
+            if link.1 == target then (link.1, some id) else link) links).map (·.1) = links.map (·.1) := by
+          intro links id
+          simp only [Kernel.map_eq, List.map_map]
+          congr 1; funext link; simp only [Function.comp]; split <;> rfl
+        rw [keys]; exact nodup
+  | exit target reason quirk =>
+    simp only [State.request]
+    repeat' split
+    all_goals exact distinct.send _ _ _
+  | trapExit enabled =>
+    simp only [State.request]
+    split
+    · exact distinct
+    · exact distinct.modify fun _ _ nodup => nodup
+  | alive target =>
+    simp only [State.request]
+    repeat' split
+    all_goals first | exact distinct | exact distinct.send _ _ _ | exact distinct.enqueue _ _ _
+  | sendAlias alias message => exact distinct.send _ _ _
+  | startTimer destination message duration =>
+    simp only [State.request]
+    generalize state.allocate processId = pair at allocated ⊢
+    obtain ⟨reference, after⟩ := pair
+    dsimp only at allocated ⊢
+    split
+    · exact allocated.timers _
+    · exact allocated
+  | cancelTimer reference =>
+    simp only [State.request]
+    split
+    · exact (distinct.timers _).modify fun _ _ nodup => nodup
+    · exact distinct
+
+end State.Distinct
+
 /-- Every other step absorbs a forced step, or commutes with it into a
 configuration where a forced step closes the square. -/
 private theorem Config.forced_square {elapsed : PID → Nat → Nat} {config : Config α} {key key' : Key}
