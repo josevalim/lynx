@@ -2734,9 +2734,122 @@ private theorem normRecord_ack_kept {gone : PID → Bool} {processId source : PI
   rw [normRecord_live live]
   split <;> split <;> rfl
 
+/-- Handling the oldest signal, a message to an alias: delivered while the alias is active. -/
+private def aliasChange (alias : List Nat) (message : Term) (process : ProcessState) : ProcessState :=
+  if Kernel.contains process.aliases alias then messageChange message process else popChange process
+
+private theorem Task.handle_alias {state : State} {processId : PID} {task : Task α} {process : ProcessState}
+    {source : PID} {alias : List Nat} {message : Term} {rest : List Entry} (sorted : state.Sorted)
+    (found : state.record processId = some process)
+    (queue : process.queue = ⟨source, .aliasMessage alias message⟩ :: rest) :
+    task.handle state processId = [Transition.mk (.handle processId ⟨source, .aliasMessage alias message⟩)
+      (state.set processId (aliasChange alias message process)) [(processId, task)] none false] := by
+  have processOf : state.process processId = process := by simp [State.process, found]
+  simp only [Task.handle, processOf, queue, State.handle]
+  simp only [State.process, State.record_set, ↓reduceIte, Option.getD_some, aliasChange]
+  split
+  · simp only [State.append_set sorted]
+    simp [messageChange, queue]
+  · simp [popChange, queue]
+
+private theorem normRecord_alias {gone : PID → Bool} {processId : PID} {process : ProcessState} {entry : Entry}
+    (live : process.exiting = none) (heads : Heads entry process) (kept : inert gone processId process entry = false)
+    (alias : List Nat) (message : Term) :
+    normRecord gone processId (aliasChange alias message (normRecord gone processId process)) =
+      normRecord gone processId (aliasChange alias message process) := by
+  have aliases : (normRecord gone processId process).aliases = process.aliases := by rw [normRecord_live live]
+  unfold aliasChange
+  rw [aliases]
+  split
+  · exact normRecord_message live heads kept message
+  · exact normRecord_pop live heads kept
+
+private theorem hidden_alias {entry : Entry} (notLink : entry.signal ≠ .link) (alias : List Nat) (message : Term) :
+    Hidden (Heads entry) (aliasChange alias message) where
+  exiting _ := by unfold aliasChange; split <;> rfl
+  trapExit _ := by unfold aliasChange; split <;> rfl
+  parked _ := by unfold aliasChange; split <;> rfl
+  links heads other link := by
+    unfold aliasChange; split
+    · exact (hidden_message notLink message).links heads other link
+    · exact (hidden_pop notLink).links heads other link
+  push {process} other heads := by
+    obtain ⟨heads', pushed⟩ := (hidden_message notLink message).push other heads
+    obtain ⟨-, popped⟩ := (hidden_pop notLink).push other heads
+    refine ⟨heads', ?_⟩
+    have same : (process.push other).aliases = process.aliases := rfl
+    unfold aliasChange
+    rw [same]
+    split
+    · exact pushed
+    · exact popped
+  eagerExit {process} source heads := by
+    have same : (process.eagerExit source).aliases = process.aliases := rfl
+    refine ⟨heads, ?_⟩
+    unfold aliasChange
+    rw [same]
+    split <;> rfl
+  unpark {process} heads := by
+    have same : ({ process with parked := none } : ProcessState).aliases = process.aliases := rfl
+    refine ⟨heads, ?_⟩
+    unfold aliasChange
+    rw [same]
+    split <;> rfl
+
+/-- Records whose process sees the same environment and mailbox as `base`, and
+holds the same monitors and aliases. -/
+private def Viewed (base process : ProcessState) : Prop :=
+  process.mailbox = base.mailbox ∧ process.pdict = base.pdict ∧ process.refCounter = base.refCounter ∧
+    process.monitoring = base.monitoring ∧ process.aliases = base.aliases
+
+/-- What other processes change in a record keeps what its process sees. -/
+private theorem Hidden.viewed {ok : ProcessState → Prop} {change : ProcessState → ProcessState}
+    (hidden : Hidden ok change) (base : ProcessState) :
+    Hidden (fun process => ok process ∧ Viewed base process) change where
+  exiting ok' := hidden.exiting ok'.1
+  trapExit ok' := hidden.trapExit ok'.1
+  parked ok' := hidden.parked ok'.1
+  links ok' := hidden.links ok'.1
+  push entry ok' := by
+    obtain ⟨ok'', pushed⟩ := hidden.push entry ok'.1
+    exact ⟨⟨ok'', ok'.2⟩, pushed⟩
+  eagerExit source ok' := by
+    obtain ⟨ok'', exited⟩ := hidden.eagerExit source ok'.1
+    exact ⟨⟨ok'', ok'.2⟩, exited⟩
+  unpark ok' := by
+    obtain ⟨ok'', unparked⟩ := hidden.unpark ok'.1
+    exact ⟨⟨ok'', ok'.2⟩, unparked⟩
+
+/-- A live record keeps what its process sees through normalizing. -/
+private theorem Viewed.normRecord {gone : PID → Bool} {processId : PID} {base process : ProcessState}
+    (viewed : Viewed base process) (live : process.exiting = none) :
+    Viewed base (normRecord gone processId process) := by
+  rw [normRecord_live live]; exact viewed
+
+/-- Whether a process is blocked depends only on what it sees. -/
+private theorem Task.blocked_of_viewed {state state' : State} {processId : PID} {task : Task α}
+    {process process' : ProcessState} (found : state.process processId = process)
+    (found' : state'.process processId = process') (viewed : Viewed process process') :
+    task.blocked state' processId = task.blocked state processId := by
+  obtain ⟨mailbox, pdict, refCounter, -, -⟩ := viewed
+  simp only [Task.blocked, State.view, found, found', mailbox, pdict, refCounter]
+
+/-- A blocked process takes no step of its own. -/
+private theorem Task.own_of_blocked {state : State} {processId : PID} {task : Task α}
+    (blocked : task.blocked state processId = true) : task.own state processId = [] := by
+  rcases task with ⟨computation, finish, _ | wait⟩
+  · cases computation with
+    | receive timeout select next =>
+      cases timeout <;> simp only [Task.blocked, Option.isSome_none, Bool.false_or, Option.isNone_iff_eq_none,
+        reduceCtorEq] at blocked
+      simp [Task.own, blocked]
+    | _ => simp [Task.blocked] at blocked
+  · rfl
+
 /-- Whether a signal other than an acknowledgement that does nothing yet is forced does not
 depend on the state. -/
 private theorem Task.forcedHead_transfer {state state' : State} {processId : PID} {task : Task α} {entry : Entry}
+    (blocked : task.blocked state' processId = task.blocked state processId)
     (notAck : ∀ id, entry.signal ≠ .unlinkAck id)
     (notInert : state.inertEntry processId entry = false) (flagged : task.forcedHead state processId entry = true) :
     task.forcedHead state' processId entry = true := by
@@ -2810,43 +2923,82 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
     subst head
     simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
     refine Config.forced_other (key := .handle processId) (task' := resumeTask (resumedBy task entry) task) reachable
-      lookup found live heads (hidden_pop notLink) (renormalize_of_clean (normRecord_popped clean live
-        (by simp [popChange]) (fun _ => rfl) rfl live)) owner step' ?_
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ heads₁ live₁
+      lookup found live ⟨heads, rfl, rfl, rfl, rfl, rfl⟩ ((hidden_pop notLink).viewed process)
+      (renormalize_of_clean (normRecord_popped clean live (by simp [popChange]) (fun _ => rfl) rfl live)) owner step' ?_
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁
     obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ (kept _ _)
     have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
       simp [State.process, record]
     have tagged := Config.tagged_handle_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
       (by rw [processOf₁, queue₁])
       (by rw [Task.handle_quiet record queue₁ quiet]; rfl)
-      (Task.forcedHead_transfer (fun _ ack => by rw [ack] at quiet; cases quiet) notInert flagged.symm)
+      (Task.forcedHead_transfer (Task.blocked_of_viewed processOf processOf₁ (viewed₁.normRecord live₁))
+        (fun _ ack => by rw [ack] at quiet; cases quiet) notInert flagged.symm)
     simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
     exact .inl ⟨_, tagged, by rw [popChange, normRecord_live live₁]; exact live₁, normRecord_pop live₁ heads₁ (kept _ _)⟩
   obtain ⟨source, signal⟩ := entry
   cases signal with
   | message message =>
-    have fromProcess : (source != clock) = true := by simpa [Task.forcedHead, notInert] using flagged
+    have fromProcess : (source != clock || task.blocked state processId) = true := by
+      simpa [Task.forcedHead, notInert] using flagged
     rw [Task.handle_message sorted found queue] at head
     simp only [List.head?_cons, Option.some.injEq] at head
     subst head
     simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
-    refine Config.forced_other (key := .handle processId) (task' := task) reachable lookup found live heads
-      (hidden_message (by simp) message) (renormalize_of_clean (normRecord_popped clean live
-        (by simp [messageChange]) (fun _ => rfl) rfl live)) owner step' ?_
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ heads₁ live₁
+    refine Config.forced_other (key := .handle processId) (task' := task) reachable lookup found live
+      ⟨heads, rfl, rfl, rfl, rfl, rfl⟩ ((hidden_message (by simp) message).viewed process)
+      (renormalize_of_clean (normRecord_popped clean live (by simp [messageChange]) (fun _ => rfl) rfl live))
+      owner step' ?_
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁
     obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ (by simp [inert])
     have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
       simp [State.process, record]
+    have blocked := Task.blocked_of_viewed (task := task) processOf processOf₁ (viewed₁.normRecord live₁)
     have tagged := Config.tagged_handle_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
       (by rw [processOf₁, queue₁])
       (transition := Transition.mk (.handle processId ⟨source, .message message⟩)
         (raw.normalize.set processId (messageChange message (normRecord raw.gone processId process₁)))
         [(processId, task)] none false)
       (by rw [Task.handle_message (Sorted.normalize within.1) record queue₁]; rfl)
-      (by simp only [Task.forcedHead, fromProcess, Bool.or_true])
+      (by simp only [Task.forcedHead, blocked, fromProcess, Bool.or_true])
     simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
     exact .inl ⟨_, tagged, by rw [messageChange, normRecord_live live₁]; exact live₁,
       normRecord_message live₁ heads₁ (by simp [inert]) message⟩
+  | aliasMessage alias message =>
+    have blockedNow : task.blocked state processId = true := by
+      simpa [Task.forcedHead, notInert] using flagged
+    have notInert' : inert state.gone processId process ⟨source, .aliasMessage alias message⟩ = false := by
+      rw [State.inertEntry_eq, processOf] at notInert; exact notInert
+    rw [Task.handle_alias sorted found queue] at head
+    simp only [List.head?_cons, Option.some.injEq] at head
+    subst head
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
+    have liveChange : ∀ other : ProcessState, other.exiting = none → (aliasChange alias message other).exiting = none :=
+      fun _ live' => by unfold aliasChange; split <;> exact live'
+    refine Config.forced_other (key := .handle processId) (task' := task) reachable lookup found live
+      ⟨heads, rfl, rfl, rfl, rfl, rfl⟩ ((hidden_alias (by simp) alias message).viewed process)
+      (renormalize_of_clean (normRecord_popped clean live (by unfold aliasChange; split <;> rfl)
+        (fun _ => by unfold aliasChange; split <;> rfl) (by unfold aliasChange; split <;> rfl)
+        (liveChange _ live))) owner step' ?_
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁
+    have kept : inert raw.gone processId process₁ ⟨source, .aliasMessage alias message⟩ = false := by
+      obtain ⟨-, -, refCounter, monitoring, aliases⟩ := viewed₁
+      rw [inert_congr refCounter monitoring aliases]
+      simpa [inert] using notInert'
+    obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ kept
+    have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
+      simp [State.process, record]
+    have blocked := Task.blocked_of_viewed (task := task) processOf processOf₁ (viewed₁.normRecord live₁)
+    have tagged := Config.tagged_handle_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
+      (by rw [processOf₁, queue₁])
+      (transition := Transition.mk (.handle processId ⟨source, .aliasMessage alias message⟩)
+        (raw.normalize.set processId (aliasChange alias message (normRecord raw.gone processId process₁)))
+        [(processId, task)] none false)
+      (by rw [Task.handle_alias (Sorted.normalize within.1) record queue₁]; rfl)
+      (by simp only [Task.forcedHead, blocked, blockedNow, Bool.or_true])
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
+    exact .inl ⟨_, tagged, liveChange _ (by rw [normRecord_live live₁]; exact live₁),
+      normRecord_alias live₁ heads₁ kept alias message⟩
   | reply value => exact quietCase rfl
   | flush => exact quietCase rfl
   | unlinkAck id =>
@@ -5091,10 +5243,16 @@ private theorem Config.forced_handle_own {elapsed : PID → Nat → Nat} {config
     cases wait with
     | none => rfl
     | some => simp [Task.own] at head₀
+  have notBlocked : task.blocked state processId = false := by
+    obtain ⟨task₀, own, lookup₀, head₀, -⟩ := Config.stepOf_own step'
+    rw [lookup] at lookup₀; cases lookup₀
+    cases blocked : task.blocked state processId
+    · rfl
+    · simp [Task.own_of_blocked blocked] at head₀
   obtain ⟨source, signal⟩ := entry
   cases signal with
   | message message =>
-    have fromProcess : (source != clock) = true := by simpa [Task.forcedHead, notInert] using flagged
+    have fromProcess : (source != clock) = true := by simpa [Task.forcedHead, notInert, notBlocked] using flagged
     have notClock : source ≠ clock := by simpa using fromProcess
     rw [Task.handle_message sorted found queue] at head
     simp only [List.head?_cons, Option.some.injEq] at head
@@ -5137,7 +5295,7 @@ private theorem Config.forced_handle_own {elapsed : PID → Nat → Nat} {config
           (raw.normalize.set processId (messageChange message (normRecord raw.gone processId process₁)))
           [(processId, task₁)] none false)
         (by rw [Task.handle_message (Sorted.normalize within.1) record queue₁]; rfl)
-        (by simp only [Task.forcedHead, fromProcess, Bool.or_true])
+        (by simp only [Task.forcedHead, fromProcess, Bool.true_or, Bool.or_true])
       simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none, rewriteTask_same lookup₁] at tagged
       exact ⟨_, tagged, normRecord_message live₁ heads₁.1 (by simp [inert]) message⟩
   | unlinkAck id =>
@@ -5241,7 +5399,7 @@ private theorem Config.forced_handle_own {elapsed : PID → Nat → Nat} {config
     simp [Task.forcedHead, notInert, running] at flagged
   | flush =>
     simp [Task.forcedHead, notInert, running] at flagged
-  | _ => simp [Task.forcedHead, notInert] at flagged
+  | _ => simp [Task.forcedHead, notInert, notBlocked] at flagged
 
 /-- Only own steps, handling and phases are forced. -/
 private theorem Config.forced_keys {config : Config α} {key : Key} {event : Event} {next : Config α}

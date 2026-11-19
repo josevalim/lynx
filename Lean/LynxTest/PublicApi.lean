@@ -568,6 +568,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.State.weight",
   "Lynx.Concurrent.Step",
   "Lynx.Concurrent.Task",
+  "Lynx.Concurrent.Task.blocked",
   "Lynx.Concurrent.Task.child",
   "Lynx.Concurrent.Task.computation",
   "Lynx.Concurrent.Task.ended",

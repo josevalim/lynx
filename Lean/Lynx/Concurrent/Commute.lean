@@ -122,16 +122,26 @@ instance : DecidableEq Key := fun first second => decidable_of_iff (first == sec
 
 /-! ### Steps by key -/
 
+/-- Whether a process takes no step of its own before it handles a signal: it
+waits for a reply, or receives without a timeout and nothing it handled matches. -/
+@[expose] def Task.blocked (state : State) (processId : PID) (task : Task α) : Bool :=
+  task.wait.isSome || match task.computation with
+    | .receive .infinity select _ =>
+        (selectMessage (select (state.view processId)) (state.process processId).mailbox).isNone
+    | _ => false
+
 /-- Whether handling the oldest queued signal commutes with every other step,
 now and after any of them: a signal that does nothing, a message from a
 process, which the process's own steps cannot race with as a receive only
 times out with nothing left to handle, a reply or marker resuming a process
-that waits, or an acknowledgement of an unlink the process started. Other
-signals race with what the process may do before handling them, such as timing
-out before a timer's message, removing a monitor, trapping exits, or ending. -/
+that waits, or an acknowledgement of an unlink the process started. A timer's
+message, or a message to an alias, is taken alone when the process is blocked.
+Other signals race with what the process may do before handling them, such as
+timing out before a timer's message, removing a monitor, trapping exits, or ending. -/
 @[expose] def Task.forcedHead (state : State) (processId : PID) (task : Task α) (entry : Entry) : Bool :=
   state.inertEntry processId entry || match entry.signal with
-    | .message _ => entry.source != clock
+    | .message _ => entry.source != clock || task.blocked state processId
+    | .aliasMessage .. => task.blocked state processId
     | .unlinkAck id => decide (id ≤ (state.process processId).unlinks)
     | .reply _ | .flush => task.wait.isSome
     | _ => false
