@@ -20,6 +20,8 @@ namespace Lynx.Concurrent
 
 open Lynx
 
+attribute [local instance high] Kernel.pidBEq
+
 /-! ### Configurations without races -/
 
 /-- Two configurations meet again, each after at most one step. -/
@@ -382,6 +384,94 @@ private theorem Config.Talking.step {talk : PID → PID → Prop} (single : Sing
         simp [State.phases, State.exitLinks, State.process, State.phase, record, live] at phase
     · simp [quiet.process processId] at unparked
     · simp [State.firing, quiet.1, firstOfEach] at firing
+
+private theorem distinctTasks_of_pairwise {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {exhausted : Bool}
+    (pairwise : tasks.Pairwise fun entry entry' => entry.1 ≠ entry'.1) :
+    (Config.running state tasks finished exhausted).distinctTasks = true := by
+  simp only [Config.distinctTasks, Kernel.all_eq, List.all_eq_true, Kernel.any_eq, Bool.not_eq_eq_eq_not,
+    Bool.not_true, List.any_eq_false, beq_iff_eq, Prod.forall]
+  intro before processId task after mem other task' inside same
+  rw [eq_of_mem_splits mem, List.pairwise_append] at pairwise
+  exact pairwise.2.2 _ inside _ List.mem_cons_self same
+
+/-- A computation whose own step is not forced among those of talking processes. -/
+private def _root_.Lynx.Result.Unforced : Result β → Prop
+  | .send .. | .ok _ | .error _ => True
+  | _ => False
+
+/-- A step of talking processes that is not forced is a process's own step
+that sends, returns or raises. -/
+private theorem Config.unforced {talk : PID → PID → Prop} {elapsed : PID → Nat → Nat} {state : State}
+    {tasks : List (PID × Task α)} {finished : Option (Except Exception α)} {key : Key} {event : Event}
+    {next : Config α} (reachable : (Config.running state tasks finished false).Reachable elapsed)
+    (talking : (Config.running state tasks finished false).Talking talk)
+    (mem : (key, event, next, false) ∈ (Config.running state tasks finished false).taggedSteps) :
+    ∃ processId task, key = .own processId ∧ Kernel.lookup processId tasks = some task ∧ task.wait = none ∧
+      task.computation.Unforced := by
+  obtain ⟨quiet, talks⟩ := talking
+  have step := reachable.stepOf mem
+  have pairwise := reachable.2.1
+  cases key with
+  | own processId =>
+    obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_own step
+    have flag := Config.forced_own pairwise lookup head mem
+    obtain ⟨waits, talksTask⟩ := talks _ (mem_of_lookup lookup)
+    refine ⟨processId, task, rfl, lookup, waits, ?_⟩
+    obtain ⟨computation, finish, wait⟩ := task
+    simp only at waits talksTask ⊢
+    subst waits
+    cases talksTask with
+    | ok | error | send => trivial
+    | get =>
+      simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
+      simp [Event.local] at flag
+    | receive =>
+      simp only [Task.own] at head
+      split at head
+      · simp only [List.head?_cons, Option.some.injEq] at head; subst head
+        have kept : ∀ remaining : List Term, ((state.modify processId fun process =>
+            { process with mailbox := remaining }).process processId).refCounter =
+            (state.process processId).refCounter := by
+          intro remaining
+          unfold State.modify
+          split
+          · rename_i process found
+            simp only [State.process, State.record_set, ↓reduceIte, found, Option.getD_some]
+          · rfl
+        simp [Event.local, kept] at flag
+      · simp at head
+  | handle processId =>
+    obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_handle step
+    have flag := Config.forced_handle pairwise lookup mem
+    simp only [Task.handle] at head
+    split at head
+    · simp at head
+    · rename_i entry rest queue
+      rw [queue] at flag
+      cases found : state.record processId with
+      | none => simp [State.process, found] at queue
+      | some process =>
+        have processOf : state.process processId = process := by simp [State.process, found]
+        rw [processOf] at queue
+        obtain ⟨⟨message, signal⟩, notClock⟩ := (quiet.2 _ _ found).2.2.2.2.2.2 entry (by rw [queue]; simp)
+        simp [Task.forcedHead, signal, notClock] at flag
+  | phase processId =>
+    simp only [Config.stepOf, Option.map_eq_some_iff] at step
+    obtain ⟨_, phase, -⟩ := step
+    cases record : state.record processId with
+    | none => simp [State.phase, record] at phase
+    | some process => simp [State.phase, record, (quiet.2 _ _ record).1] at phase
+  | link processId target =>
+    simp only [Config.stepOf, Option.map_eq_some_iff] at step
+    obtain ⟨_, phase, -⟩ := step
+    cases record : state.record processId with
+    | none => simp [State.linkPhase, record] at phase
+    | some process => simp [State.linkPhase, record, (quiet.2 _ _ record).1] at phase
+  | unpark processId =>
+    simp [Config.stepOf, quiet.process processId] at step
+  | fire reference =>
+    simp [Config.stepOf, State.firing, quiet.1, firstOfEach, Kernel.find?_eq] at step
 
 /-! ### Evaluating one run
 
