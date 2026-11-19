@@ -4248,6 +4248,105 @@ private theorem CleanOutside.unpark {state : State} {except : PID → Prop} {pro
         List.any_eq_true, beq_iff_eq]
       exact .inr ⟨_, mem, rfl⟩
 
+private theorem State.alive_eq_of_gone {state other : State} (gone : state.gone = other.gone) (processId : PID) :
+    state.alive processId = other.alive processId := by
+  have := congrFun gone processId
+  simp only [State.gone] at this
+  cases equal : state.alive processId <;> cases equal' : other.alive processId <;> simp_all
+
+/-- An effect that changes none of what inertness reads of any record, nor whether it ended. -/
+private def Effect.KeepsInert (effect : Effect) : Prop :=
+  ∀ processId record process', effect.record processId record = some process' → ∃ process, record = some process ∧
+    process'.refCounter = process.refCounter ∧ process'.monitoring = process.monitoring ∧
+    process'.aliases = process.aliases ∧ process'.links = process.links ∧ process.exiting = process'.exiting
+
+private theorem Effect.KeepsInert.empty : ({} : Effect).KeepsInert := fun _ record process' found =>
+  ⟨process', found, rfl, rfl, rfl, rfl, rfl⟩
+
+private theorem Effect.KeepsInert.modify {processId : PID} {change : ProcessState → ProcessState}
+    (keeps : ∀ process, (change process).refCounter = process.refCounter ∧
+      (change process).monitoring = process.monitoring ∧ (change process).aliases = process.aliases ∧
+      (change process).links = process.links ∧ process.exiting = (change process).exiting) :
+    (Effect.modify processId change).KeepsInert := fun other record process' found => by
+  rw [Effect.record_modify] at found
+  split at found
+  · cases record with
+    | none => simp at found
+    | some process =>
+      simp only [Option.map_some, Option.some.injEq] at found; subst found
+      exact ⟨process, rfl, keeps process⟩
+  · exact ⟨process', found, rfl, rfl, rfl, rfl, rfl⟩
+
+private theorem Effect.KeepsInert.andThen {first second : Effect} (one : first.KeepsInert) (two : second.KeepsInert) :
+    (first.andThen second).KeepsInert := fun processId record process'' found => by
+  rw [Effect.record_andThen] at found
+  obtain ⟨process', middle, a, b, c, d, e⟩ := two processId _ process'' found
+  obtain ⟨process, start, a', b', c', d', e'⟩ := one processId record process' middle
+  exact ⟨process, start, a.trans a', b.trans b', c.trans c', d.trans d', e'.trans e⟩
+
+private theorem State.enqueueEffect_keepsInert (state : State) (source target : PID) (signal : Signal)
+    (notUnlink : ∀ id, signal ≠ .unlink id) : (state.enqueueEffect source target signal).KeepsInert := by
+  unfold State.enqueueEffect State.fallbackEffect
+  repeat' split
+  all_goals first
+    | exact Effect.KeepsInert.empty
+    | exact absurd rfl (notUnlink _)
+    | (refine Effect.KeepsInert.modify ?_; intro process; exact ⟨rfl, rfl, rfl, rfl, rfl⟩)
+
+private theorem State.unparkEffect_keepsInert (state : State) (processId : PID) :
+    (state.unparkEffect processId).KeepsInert := by
+  unfold State.unparkEffect
+  split
+  · refine (Effect.KeepsInert.modify ?_).andThen (State.enqueueEffect_keepsInert _ _ _ _ fun _ => by simp)
+    intro process; exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+  · exact Effect.KeepsInert.empty
+
+/-- Sending a signal from a live process that still monitors its parked monitor
+signal keeps a state clean, when the signal is not inert at a live target, and
+is not a link removal or a monitor signal, which only unparking sends. -/
+private theorem CleanOutside.send {state : State} {except : PID → Prop} {source target : PID} {signal : Signal}
+    (clean : CleanOutside state except) (outside : ¬ except source) (alive : state.alive source = true)
+    (monitored : state.parkedMonitored source = true)
+    (fresh : ∀ process, state.record target = some process → process.exiting = none →
+      inert state.gone target (queueAt source signal process) { source, signal } = false)
+    (notUnlink : ∀ id, signal ≠ .unlink id) (notMonitor : ∀ reference, signal ≠ .monitor reference) :
+    CleanOutside ((state.sendEffect source target signal).apply state) except := by
+  have live : ∀ (state' : State), state'.alive source = true → ∀ process, state'.record source = some process →
+      process.exiting = none := fun state' alive' process found => by
+    simp only [State.alive, found] at alive'; simpa using alive'
+  -- Queueing the signal at a state reached from this one by changes that keep
+  -- every process alive or gone and the fields inertness reads.
+  have queue : ∀ (state' : State), CleanOutside state' except → state'.gone = state.gone →
+      (∀ process', state'.record target = some process' → ∃ process, state.record target = some process ∧
+        process'.refCounter = process.refCounter ∧ process'.monitoring = process.monitoring ∧
+        process'.aliases = process.aliases ∧ process'.links = process.links ∧ process.exiting = process'.exiting) →
+      CleanOutside ((state'.enqueueEffect source target signal).apply state') except := by
+    intro state' clean' gone' fields
+    refine CleanOutside.enqueue clean' (fun process' found' exiting' => ?_) (fun _ kind => ⟨outside, ?_⟩) notUnlink
+      (fun _ reference equal => absurd equal (notMonitor reference))
+    · obtain ⟨process, found, refCounter, monitoring, aliases, links, exiting⟩ := fields process' found'
+      rw [gone', inert_congr (process' := queueAt source signal process') (process := queueAt source signal process)
+        rfl refCounter monitoring aliases links]
+      exact fresh process found (exiting.trans exiting')
+    · have aliveOf : state'.alive source = true := by
+        have := congrFun gone' source; simp only [State.gone] at this
+        cases equal : state'.alive source <;> simp_all
+      exact live state' aliveOf
+  unfold State.sendEffect
+  split
+  · rename_i parkedTarget reference parked
+    split
+    · refine CleanOutside.andThen ?_
+      have goneOf := (State.unparkEffect_keepsAlive state source).gone state
+      have unparked := CleanOutside.unpark clean outside alive monitored
+      rw [State.enqueueEffect_congr (state := (state.unparkEffect source).apply state) _
+        (by rw [State.alive_unpark, State.alive_eq_of_gone goneOf])]
+      exact queue _ unparked goneOf fun process' found' => by
+        rw [Effect.record_apply] at found'
+        exact State.unparkEffect_keepsInert state source target _ process' found'
+    · exact queue state clean rfl fun process found => ⟨process, found, rfl, rfl, rfl, rfl, rfl⟩
+  · exact queue state clean rfl fun process found => ⟨process, found, rfl, rfl, rfl, rfl, rfl⟩
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
