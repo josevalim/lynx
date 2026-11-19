@@ -1932,6 +1932,50 @@ private theorem requestSelf
     · exact ⟨by rw [changed.2.2.2], (changed.timers _).queue_modify _ (fun _ => rfl) (fun _ _ => rfl)⟩
     · exact ⟨rfl, changed⟩
 
+/-- A process spawns a child, after handling its oldest signal changed its queue, mailbox and links. -/
+private theorem spawnSelf
+    (changed : state.Changed processId (Same Queued (queueChange queue mailbox links)) state')
+    (change : QueueChange queue mailbox links) {process : ProcessState}
+    (found : state.record processId = some process) (options : SpawnOptions)
+    (fresh : Kernel.append processId [process.children + 1] ≠ processId) :
+    (state'.spawnWith processId options).1 = (state.spawnWith processId options).1 ∧
+      (state.spawnWith processId options).2.Changed processId (Same Queued (queueChange queue mailbox links))
+        (state'.spawnWith processId options).2 := by
+  rcases changed.records with ⟨missing, -⟩ | ⟨first, second, found', found'', queued, rfl⟩
+  · rw [found] at missing; cases missing
+  rw [found] at found'; cases found'
+  have processOf : state.process processId = process := by simp [State.process, found]
+  have processOf' : state'.process processId = queueChange queue mailbox links process := by
+    simp [State.process, found'']
+  refine ⟨by simp only [State.spawnWith, processOf, processOf']; rfl, ?_⟩
+  unfold State.spawnWith
+  dsimp only
+  rw [processOf, processOf']
+  have started := (changed.setRelated (process := { process with children := process.children + 1 })
+    (process' := { queueChange queue mailbox links process with
+      children := (queueChange queue mailbox links process).children + 1 }) ⟨queued, rfl⟩).set fresh {}
+  let child := Kernel.append processId [process.children + 1]
+  have linked := (started.queue_modify (fun process =>
+      { process with links := Kernel.append (Kernel.filter (·.1 != child) process.links) [(child, none)] })
+      (fun _ => rfl) (fun _ _ => by simp only [queueChange, change.relink])).modify fresh
+    fun child => { child with links := [(processId, none)] }
+  have counter : ∀ {first second : State}, first.Changed processId (Same Queued (queueChange queue mailbox links))
+      second → (second.process processId).refCounter = (first.process processId).refCounter :=
+    fun {first second} changed' => by
+      rcases changed'.records with ⟨one, two⟩ | ⟨a, b, one, two, -, rfl⟩
+      · simp [State.process, one, two]
+      · simp [State.process, one, two, queueChange]
+  by_cases monitor : options.monitor <;> by_cases link : options.link <;>
+    simp only [monitor, link, ↓reduceIte, Bool.false_eq_true, State.allocate]
+  · simp only [State.process, State.record_modify, State.record_set, ↓reduceIte, Ne.symm fresh, Option.map_some,
+      Option.getD_some, queueChange]
+    refine ((linked.queue_modify _ ?_ ?_).queue_modify _ ?_ ?_).modify fresh _ <;> intros <;> rfl
+  · simp only [State.process, State.record_modify, State.record_set, ↓reduceIte, Ne.symm fresh, Option.map_some,
+      Option.getD_some, queueChange]
+    refine ((started.queue_modify _ ?_ ?_).queue_modify _ ?_ ?_).modify fresh _ <;> intros <;> rfl
+  · exact linked
+  · exact started
+
 end State.Changed
 
 /-! ### Which tagged steps are forced -/
