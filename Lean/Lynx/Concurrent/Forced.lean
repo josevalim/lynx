@@ -837,6 +837,220 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
       obtain ⟨rfl, rfl⟩ := step
       exact ⟨_, ⟨rfl, rfl⟩, .inr ⟨_, _, _, _, changed.fire unseen clockless timer', rfl, rfl⟩⟩
 
+/-! ### Normalizing a live record again -/
+
+private theorem normRecord_live {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (live : process.exiting = none) :
+    normRecord gone processId process = { process with
+      queue := Kernel.filter (fun entry => !inert gone processId process entry) process.queue
+      links := Kernel.filter (fun link => !(link.2.isSome && gone link.1)) process.links } := by
+  unfold normRecord; rw [live]
+
+private theorem lookup_filter_congr {β : Type} {key : PID} {keep keep' : PID × β → Bool} :
+    ∀ (entries : List (PID × β)), (∀ entry ∈ entries, entry.1 = key → keep entry = keep' entry) →
+      (entries.filter keep).lookup key = (entries.filter keep').lookup key
+  | [], _ => rfl
+  | (other, value) :: rest, same => by
+      have ih := lookup_filter_congr rest fun entry mem => same entry (List.mem_cons_of_mem _ mem)
+      by_cases equal : other = key
+      · subst equal
+        have keeps := same (other, value) List.mem_cons_self rfl
+        cases first : keep (other, value) <;> rw [first] at keeps <;>
+          simp [List.filter_cons, first, ← keeps, ih]
+      · have differ : (key == other) = false := by simp [Ne.symm equal]
+        cases first : keep (other, value) <;> cases second : keep' (other, value) <;>
+          simp [List.filter_cons, first, second, List.lookup_cons, differ, ih]
+
+private theorem lookup_filter_of_keep {β : Type} {key : PID} {keep : PID × β → Bool} :
+    ∀ {entries : List (PID × β)}, (∀ entry ∈ entries, entry.1 = key → keep entry = true) →
+      (entries.filter keep).lookup key = entries.lookup key
+  | [], _ => rfl
+  | (other, value) :: rest, kept => by
+      have ih := lookup_filter_of_keep (keep := keep) fun entry mem => kept entry (List.mem_cons_of_mem _ mem)
+      by_cases same : other = key
+      · subst same
+        simp [List.filter_cons, kept (other, value) List.mem_cons_self rfl]
+      · have differ : (key == other) = false := by simp [Ne.symm same]
+        by_cases keeps : keep (other, value) = true
+        · simp [List.filter_cons, keeps, List.lookup_cons, differ, ih]
+        · simp [List.filter_cons, keeps, List.lookup_cons, differ, ih]
+
+/-- Whether a queued signal does nothing depends on the record only through
+fields normalizing keeps, and on links only of processes not gone. -/
+private theorem inert_congr {gone : PID → Bool} {processId : PID} {process process' : ProcessState}
+    (refCounter : process'.refCounter = process.refCounter) (monitoring : process'.monitoring = process.monitoring)
+    (aliases : process'.aliases = process.aliases)
+    (links : ∀ source, gone source = false → Kernel.lookup source process'.links = Kernel.lookup source process.links)
+    (entry : Entry) : inert gone processId process' entry = inert gone processId process entry := by
+  obtain ⟨source, signal⟩ := entry
+  cases signal <;> simp only [inert, refCounter, monitoring, aliases]
+  rename_i id
+  cases gone' : gone source
+  · rw [links source gone']
+  · simp
+
+private theorem inert_normRecord {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (live : process.exiting = none) (entry : Entry) :
+    inert gone processId (normRecord gone processId process) entry = inert gone processId process entry := by
+  rw [normRecord_live live]
+  apply inert_congr
+  · rfl
+  · rfl
+  · rfl
+  · intro source notGone
+    simp only [Kernel.lookup_eq, Kernel.filter_eq]
+    exact lookup_filter_of_keep fun entry _ same => by simp [same, notGone]
+
+private theorem normRecord_normRecord {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (live : process.exiting = none) :
+    normRecord gone processId (normRecord gone processId process) = normRecord gone processId process := by
+  have live' : (normRecord gone processId process).exiting = none := by rw [normRecord_live live]; exact live
+  conv => lhs; rw [normRecord_live live']
+  have inertSame := funext (inert_normRecord (gone := gone) (processId := processId) live)
+  simp only [inertSame]
+  rw [normRecord_live live]
+  simp [Kernel.filter_eq, List.filter_filter]
+
+private theorem normRecord_push {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (live : process.exiting = none) (entry : Entry) :
+    normRecord gone processId ((normRecord gone processId process).push entry) =
+      normRecord gone processId (process.push entry) := by
+  have live₁ : ((normRecord gone processId process).push entry).exiting = none := by
+    rw [normRecord_live live]; exact live
+  rw [normRecord_live live₁, normRecord_live (show (process.push entry).exiting = none from live)]
+  have inertPushed : ∀ other : ProcessState, inert gone processId (other.push entry) = inert gone processId other :=
+    fun _ => rfl
+  rw [inertPushed, inertPushed, funext (inert_normRecord (gone := gone) (processId := processId) live),
+    normRecord_live live]
+  simp [ProcessState.push, Kernel.filter_eq, Kernel.append_eq, List.filter_append, List.filter_filter]
+
+private theorem normRecord_eagerExit {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (live : process.exiting = none) (source : PID) :
+    normRecord gone processId ((normRecord gone processId process).eagerExit source) =
+      normRecord gone processId (process.eagerExit source) := by
+  have live₁ : ((normRecord gone processId process).eagerExit source).exiting = none := by
+    rw [normRecord_live live]; exact live
+  rw [normRecord_live live₁, normRecord_live (show (process.eagerExit source).exiting = none from live)]
+  -- Removing a link only makes more signals inert.
+  have more : ∀ entry, inert gone processId process entry = true →
+      inert gone processId (process.eagerExit source) entry = true := by
+    intro entry inert'
+    obtain ⟨from', signal⟩ := entry
+    cases signal <;> simp only [inert, ProcessState.eagerExit] at inert' ⊢ <;> try exact inert'
+    rename_i id
+    simp only [Bool.or_eq_true, bne_iff_ne, ne_eq, Kernel.lookup_eq, Kernel.filter_eq] at inert' ⊢
+    rcases inert' with gone' | missing
+    · exact .inl gone'
+    · right
+      by_cases same : from' = source
+      · subst same
+        rw [show List.lookup from' (process.links.filter (·.1 != from')) = none from by
+          induction process.links with
+          | nil => rfl
+          | cons head rest ih =>
+            obtain ⟨key, value⟩ := head
+            by_cases equal : key = from'
+            · subst equal; simpa [List.filter_cons] using ih
+            · have differ : (from' == key) = false := by simp [Ne.symm equal]
+              simp [equal, List.lookup_cons, differ, ih]]
+        simp
+      · rw [lookup_filter_of_keep fun entry _ equal => by simp [equal, same]]
+        exact missing
+  have same : inert gone processId ((normRecord gone processId process).eagerExit source) =
+      inert gone processId (process.eagerExit source) := by
+    funext entry
+    refine inert_congr (process := process.eagerExit source)
+      (process' := (normRecord gone processId process).eagerExit source) ?_ ?_ ?_ ?_ entry
+    · rw [normRecord_live live]; rfl
+    · rw [normRecord_live live]; rfl
+    · rw [normRecord_live live]; rfl
+    · intro from' notGone
+      rw [normRecord_live live]
+      simp only [ProcessState.eagerExit, Kernel.lookup_eq, Kernel.filter_eq, List.filter_filter]
+      exact lookup_filter_congr _ fun entry _ equal => by simp [equal, notGone]
+  rw [same]
+  rw [normRecord_live live]
+  simp only [ProcessState.eagerExit, Kernel.filter_eq, List.filter_filter]
+  congr 1
+  · refine List.filter_congr fun entry _ => ?_
+    cases inert' : inert gone processId (process.eagerExit source) entry
+    · have := mt (more entry) (by simp [inert'])
+      simp [ProcessState.eagerExit, this]
+    · simp only [ProcessState.eagerExit, Kernel.filter_eq] at inert'
+      simp [inert']
+  · refine List.filter_congr fun entry _ => ?_
+    cases gone entry.fst <;> cases entry.snd.isSome <;> simp
+
+private theorem normRecord_unpark {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (live : process.exiting = none) :
+    normRecord gone processId { normRecord gone processId process with parked := none } =
+      normRecord gone processId { process with parked := none } := by
+  have live₁ : ({ normRecord gone processId process with parked := none } : ProcessState).exiting = none := by
+    rw [normRecord_live live]; exact live
+  rw [normRecord_live live₁, normRecord_live (show ({ process with parked := none } : ProcessState).exiting = none
+    from live)]
+  have unparked : ∀ other : ProcessState, inert gone processId { other with parked := none } = inert gone processId other :=
+    fun _ => rfl
+  rw [unparked, unparked, funext (inert_normRecord (gone := gone) (processId := processId) live), normRecord_live live]
+  simp [Kernel.filter_eq, List.filter_filter]
+
+/-- A change of a live record that steps of other processes neither read nor
+undo, while `ok` holds of the record, which their changes keep. -/
+private structure Hidden (ok : ProcessState → Prop) (change : ProcessState → ProcessState) : Prop where
+  exiting : ∀ {process}, ok process → (change process).exiting = process.exiting
+  trapExit : ∀ {process}, ok process → (change process).trapExit = process.trapExit
+  parked : ∀ {process}, ok process → (change process).parked = process.parked
+  links : ∀ {process}, ok process → ∀ entry : Entry, entry.signal = .link →
+    (entry ∈ (change process).queue ↔ entry ∈ process.queue)
+  push : ∀ {process} entry, ok process → ok (process.push entry) ∧ change (process.push entry) = (change process).push entry
+  eagerExit : ∀ {process} source, ok process →
+    ok (process.eagerExit source) ∧ change (process.eagerExit source) = (change process).eagerExit source
+  unpark : ∀ {process}, ok process → ok { process with parked := none } ∧
+    change { process with parked := none } = { change process with parked := none }
+
+/-- A live record after a change, up to what normalizing drops. -/
+private def Forced (processId : PID) (ok : ProcessState → Prop) (change : ProcessState → ProcessState)
+    (process process' : ProcessState) : Prop :=
+  ok process ∧ process.exiting = none ∧ process'.exiting = none ∧
+    ∀ gone, normRecord gone processId process' = normRecord gone processId (change process)
+
+private theorem mem_normRecord_link {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (live : process.exiting = none) {entry : Entry} (link : entry.signal = .link) :
+    entry ∈ (normRecord gone processId process).queue ↔ entry ∈ process.queue := by
+  rw [normRecord_live live]
+  obtain ⟨source, signal⟩ := entry
+  simp only at link; subst link
+  simp [Kernel.filter_eq, inert]
+
+private theorem Hidden.unseen {processId : PID} {ok : ProcessState → Prop} {change : ProcessState → ProcessState}
+    (hidden : Hidden ok change) : Unseen (Forced processId ok change) where
+  outside := by
+    intro first second ⟨ok', live, live', same⟩
+    have live'' : (change first).exiting = none := (hidden.exiting ok').trans live
+    have field : ∀ {β : Type} (get : ProcessState → β), (∀ process : ProcessState, process.exiting = none →
+        get (normRecord (fun _ => false) processId process) = get process) → get second = get (change first) :=
+      fun get keeps => by rw [← keeps _ live', same, keeps _ live'']
+    refine ⟨by rw [live, live'], ?_, ?_, fun entry link => ?_⟩
+    · rw [field (·.trapExit) fun _ live => by rw [normRecord_live live], hidden.trapExit ok']
+    · rw [field (·.parked) fun _ live => by rw [normRecord_live live], hidden.parked ok']
+    · rw [← mem_normRecord_link (gone := fun _ => false) (processId := processId) live' link, same,
+        mem_normRecord_link live'' link, hidden.links ok' entry link]
+  push := by
+    intro first second entry ⟨ok', live, live', same⟩
+    obtain ⟨ok'', pushed⟩ := hidden.push entry ok'
+    refine ⟨ok'', live, live', fun gone => ?_⟩
+    rw [← normRecord_push live', same gone, normRecord_push ((hidden.exiting ok').trans live), pushed]
+  eagerExit := by
+    intro first second source ⟨ok', live, live', same⟩
+    obtain ⟨ok'', exited⟩ := hidden.eagerExit source ok'
+    refine ⟨ok'', live, live', fun gone => ?_⟩
+    rw [← normRecord_eagerExit live', same gone, normRecord_eagerExit ((hidden.exiting ok').trans live), exited]
+  unpark := by
+    intro first second ⟨ok', live, live', same⟩
+    obtain ⟨ok'', unparked⟩ := hidden.unpark ok'
+    refine ⟨ok'', live, live', fun gone => ?_⟩
+    rw [← normRecord_unpark live', same gone, normRecord_unpark ((hidden.exiting ok').trans live), unparked]
+
 /-- Every other step absorbs a forced step, or commutes with it into a
 configuration where a forced step closes the square. -/
 private theorem Config.forced_square {elapsed : PID → Nat → Nat} {config : Config α} {key key' : Key}
