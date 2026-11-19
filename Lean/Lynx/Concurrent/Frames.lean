@@ -6311,4 +6311,75 @@ private theorem Config.agree_after {state : State} {tasks : List (PID × Task α
   · exact absurd all notWhole
   · rw [equal]; cases state.record processId <;> rfl
 
+/-! ### Assembling: what transfer assumes, after the other step -/
+
+/-- No signal queued at a live process of a normalized state is inert. -/
+private theorem State.inertEntry_of_normalized {state : State} (sorted : state.Sorted)
+    (normalized : state.normalize = state) {processId : PID} {process : ProcessState}
+    (found : state.record processId = some process) (live : process.exiting = none) {entry : Entry}
+    (mem : entry ∈ process.queue) : state.inertEntry processId entry = false := by
+  rw [State.inertEntry_eq, show state.process processId = process by simp [State.process, found]]
+  exact ((Clean.of_normalized sorted normalized found).live_facts live).1 entry mem
+
+/-- A step apart from one using the timers, normalized after, leaves them as they were. -/
+private theorem Config.timers_after {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key} {frames : List Frame} {raw : State}
+    (confined : Config.confined (.running state tasks finished false) key = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, false))
+    (realizes : Realizes ((Config.running state tasks finished false).effectOf key) state raw) :
+    raw.normalize.timers = state.timers := by
+  have untimed := (Config.timersFramed confined found).1 rfl
+  show raw.timers = state.timers
+  rw [realizes.2.1, untimed.getD]; rfl
+
+/-- Whether a timer is to a process ending, after a step apart from its end,
+is as it was. -/
+private theorem Config.timersTo_after {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key} {frames : List Frame} {timers : Bool} {raw : State}
+    {processId : PID}
+    (confined : Config.confined (.running state tasks finished false) key = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, timers))
+    (apart : framesApart frames (state.endFrames processId).1 = true)
+    (notBoth : !(timers && (state.endFrames processId).2) = true)
+    (realizes : Realizes ((Config.running state tasks finished false).effectOf key) state raw) :
+    Kernel.any raw.normalize.timers (·.destination == processId) =
+      Kernel.any state.timers (·.destination == processId) := by
+  show Kernel.any raw.timers _ = _
+  rw [realizes.2.1]
+  have framed := Config.timersFramed confined found
+  cases timed : timers
+  · rw [(framed.1 timed).getD]; rfl
+  · have none : Kernel.any state.timers (·.destination == processId) = false := by
+      simpa [timed, State.endFrames] using notBoth
+    rw [none]
+    cases after : Kernel.any ((((Config.running state tasks finished false).effectOf key).timers.getD id)
+        state.timers) (·.destination == processId)
+    · rfl
+    · rcases framed.2 state.timers processId after with before | ⟨entry, mem, same, read⟩
+      · rw [none] at before; simp at before
+      · exfalso
+        have whole : (processId, Field.all, Field.all) ∈ (state.endFrames processId).1 := by
+          rw [endFrames_eq]; exact List.mem_cons_self
+        have := (apart_of_framesApart apart processId).2 liveBit
+          (List.any_eq_true.mpr ⟨_, whole, by simp [all_testBit (show liveBit < 17 by decide)]⟩)
+          (List.any_eq_true.mpr ⟨entry, mem, by simp [same, read]⟩)
+        exact this
+
+/-- No signal queued at a live process of a normalized state is inert, so
+whether a receive can time out reads only where the signals come from. -/
+private theorem State.awaited_of_normalized {state : State} (sorted : state.Sorted)
+    (normalized : state.normalize = state) {processId : PID} (alive : state.alive processId = true) :
+    Kernel.any (state.process processId).queue (state.awaitedEntry processId) =
+      Kernel.any (state.process processId).queue (fun entry => entry.source != clock) := by
+  obtain ⟨process, found, live⟩ : ∃ process, state.record processId = some process ∧ process.exiting = none := by
+    cases record : state.record processId with
+    | none => simp [State.alive, record] at alive
+    | some process => exact ⟨process, rfl, by simpa [State.alive, record] using alive⟩
+  have same : state.process processId = process := by simp [State.process, found]
+  rw [same]
+  simp only [Kernel.any_eq]
+  rw [Bool.eq_iff_iff, List.any_eq_true, List.any_eq_true]
+  constructor <;> rintro ⟨entry, mem, holds⟩ <;> refine ⟨entry, mem, ?_⟩ <;>
+    simpa [State.awaitedEntry, State.inertEntry_of_normalized sorted normalized found live mem] using holds
+
 end Lynx.Concurrent
