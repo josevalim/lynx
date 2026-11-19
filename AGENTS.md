@@ -58,10 +58,14 @@ Processes are modeled by the labelled transition system in `Lynx/Concurrent.lean
 (`Config`, `Step`, `State.request`), and concurrent laws are proven by evaluating
 `Lynx.Concurrent.check` (`Lynx/Concurrent/Reduction.lean`). Exploring with sleep
 sets and forced steps (`checkSleep`, `Lynx/Concurrent/Commute.lean`) rests on
-frames and forced steps. Parity with OTP's behaviour is fundamental: every run OTP
-can take must be a run of the model, and every reply one OTP can give. Precision
-may be traded for proof performance, never parity. So a new process BIF, or a
-change to one, goes through every layer:
+frames and forced steps, and `checkSleep_sound` (`Lynx/Concurrent/Forced.lean`)
+proves it covers every run: steps apart by their frames commute
+(`Config.commutes_of_apart`), and every other step commutes with or absorbs a
+forced step (`Config.forced_square`). Programs without races are proven from one
+run (`Lynx/Concurrent/Confluence.lean`). Parity with OTP's behaviour is
+fundamental: every run OTP can take must be a run of the model, and every reply
+one OTP can give. Precision may be traded for proof performance, never parity.
+So a new process BIF, or a change to one, goes through every layer:
 
 1. Model OTP from its source (`../otp`), not its documentation, including the
    corner cases (dead targets, self-targets, exit signals racing the request,
@@ -103,12 +107,15 @@ change to one, goes through every layer:
 6. Test it in `LynxTest/Modules/Signals.lean` with kernel-checked closed programs
    for each OTP behavior, including races where the order of steps changes the
    reply, and update `LynxTest/PublicApi.lean`.
-7. Before trusting a change to frames or to how `check` explores, audit it
-   executably: over every configuration reachable from closed programs that use
-   the BIF, check that steps reported as commuting reach the same configuration
-   in either order, and that the steps `check` takes alone lose no terminal
-   configuration. Audits only cover the races the programs exercise, so write
-   programs for each race (for example, a timer whose destination dies).
+7. Keep `checkSleep_sound` proven: a change to frames, forced steps or
+   normalization extends the proofs in `Lynx/Concurrent/Frames.lean` and
+   `Lynx/Concurrent/Forced.lean`, and `LynxTest/Concurrent.lean` audits their
+   axioms. Before trusting such a change, also audit it executably: over every
+   configuration reachable from closed programs that use the BIF, check that
+   steps reported as commuting reach the same configuration in either order,
+   and that the steps `check` takes alone lose no terminal configuration.
+   Audits only cover the races the programs exercise, so write programs for
+   each race (for example, a timer whose destination dies).
 8. Measure the concurrent examples (`examples/concurrency`, `examples/elixir/task.exs`):
    explored configurations and kernel time, before and after.
 
