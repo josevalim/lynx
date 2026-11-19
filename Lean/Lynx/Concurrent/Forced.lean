@@ -3689,7 +3689,7 @@ yet, so a process never spawns a child over an existing record. -/
 /-- No record extends a live record's PID with an index not spawned yet. -/
 private def State.Unborn (state : State) : Prop :=
   ∀ parent process, state.record parent = some process → process.exiting = none →
-    ∀ other, (state.record other).isSome → ∀ index, process.children < index → ¬Kernel.append parent [index] <+: other
+    ∀ other, (state.record other).isSome → ∀ index, process.children < index → ¬parent ++ [index] <+: other
 
 namespace State.Unborn
 
@@ -3816,6 +3816,131 @@ private theorem allocated (unborn : state.Unborn) (processId : PID) : (state.all
   State.Unborn.same (change := fun process => { process with refCounter := process.refCounter + 1 }) unborn
     (fun _ => rfl) (fun _ => rfl)
 
+private theorem prefix_extend {first second : PID} {index index' : Nat}
+    (extends' : first ++ [index] <+: second ++ [index']) : first ++ [index] <+: second ∨ (first = second ∧ index = index') := by
+  by_cases shorter : (first ++ [index]).length ≤ second.length
+  · exact .inl (List.prefix_of_prefix_length_le extends' (List.prefix_append _ _) shorter)
+  · have same : (first ++ [index]).length = (second ++ [index']).length := by
+      have := extends'.length_le; simp at shorter this ⊢; omega
+    have equal := List.append_inj (extends'.eq_of_length same) (by simpa using same)
+    exact .inr ⟨equal.1, by simpa using equal.2⟩
+
+/-- Spawning a child of a live process, whose index it has not used. -/
+private theorem spawned (unborn : state.Unborn) {processId : PID} {process : ProcessState}
+    (found : state.record processId = some process) (live : process.exiting = none) :
+    ((state.set processId { process with children := process.children + 1 }).set
+      (processId ++ [process.children + 1]) {}).Unborn := by
+  have childFresh : ∀ other, (state.record other).isSome → ¬processId ++ [process.children + 1] <+: other :=
+    fun other present => unborn _ _ found live other present _ (Nat.lt_succ_self _)
+  intro parent record found' live' other present index more
+  simp only [State.record_set] at found' present
+  have present' : other = processId ++ [process.children + 1] ∨ other = processId ∨ (state.record other).isSome := by
+    split at present
+    · exact .inl (by assumption)
+    · split at present
+      · exact .inr (.inl (by assumption))
+      · exact .inr (.inr present)
+  split at found'
+  · -- The child spawns nothing yet.
+    rename_i isChild; subst isChild
+    intro extends'
+    have extends'' : processId ++ [process.children + 1] <+: other := (List.prefix_append _ _).trans extends'
+    rcases present' with rfl | rfl | present'
+    · have := extends'.length_le; simp at this <;> omega
+    · have := extends''.length_le; simp at this <;> omega
+    · exact childFresh other present' extends''
+  · split at found'
+    · rename_i notChild isParent; subst isParent
+      simp only [Option.some.injEq] at found'; subst found'
+      intro extends'
+      rcases present' with rfl | rfl | present'
+      · rcases prefix_extend extends' with shorter | ⟨-, rfl⟩
+        · have := shorter.length_le; simp at this <;> omega
+        · simp at more
+      · have := extends'.length_le; simp at this <;> omega
+      · exact unborn _ _ found live other present' index (Nat.lt_of_succ_lt more) extends'
+    · rename_i notChild notParent
+      intro extends'
+      rcases present' with rfl | rfl | present'
+      · rcases prefix_extend extends' with shorter | ⟨same, -⟩
+        · exact unborn _ _ found' live' processId (by simp [found]) index more shorter
+        · exact notParent same
+      · exact unborn _ _ found' live' _ (by simp [found]) index more extends'
+      · exact unborn _ _ found' live' other present' index more extends'
+
+private theorem spawnWith (unborn : state.Unborn) {processId : PID} {process : ProcessState}
+    (found : state.record processId = some process) (live : process.exiting = none) (options : SpawnOptions) :
+    (state.spawnWith processId options).2.Unborn := by
+  have processOf : state.process processId = process := by simp [State.process, found]
+  have started := unborn.spawned found live
+  unfold State.spawnWith
+  dsimp only
+  rw [processOf, Kernel.append_eq]
+  by_cases monitor : options.monitor <;> by_cases link : options.link <;>
+    simp only [monitor, link, ↓reduceIte, Bool.false_eq_true, State.allocate]
+  all_goals
+    repeat' refine State.Unborn.modify ?_ fun _ => ⟨rfl, id⟩
+  all_goals exact started
+
+private theorem request (unborn : state.Unborn) (processId : PID) {β : Type} (next : Term → Result β)
+    (query : Request) : (state.request processId next query).state.Unborn := by
+  have allocated := unborn.allocated processId
+  have keep : ∀ {state : State} {processId : PID} {change : ProcessState → ProcessState}, state.Unborn →
+      (∀ process, (change process).children = process.children ∧ (change process).exiting = process.exiting) →
+      (state.modify processId change).Unborn :=
+    fun unborn keeps => unborn.modify fun process => ⟨(keeps process).1, fun live => (keeps process).2 ▸ live⟩
+  cases query with
+  | monitor target alias =>
+    simp only [State.request]
+    generalize state.allocate processId = pair at allocated ⊢
+    obtain ⟨reference, after⟩ := pair
+    dsimp only at allocated ⊢
+    split
+    · exact allocated
+    · exact keep (allocated.unpark _) fun _ => ⟨rfl, rfl⟩
+  | demonitor reference flush =>
+    simp only [State.request]
+    split <;> exact keep unborn fun _ => ⟨rfl, rfl⟩
+  | link target =>
+    simp only [State.request]
+    repeat' split
+    all_goals first
+      | exact unborn
+      | (refine State.Unborn.send ?_ _ _ _; exact keep unborn fun _ => ⟨rfl, rfl⟩)
+  | unlink target =>
+    simp only [State.request]
+    repeat' split
+    all_goals first
+      | exact unborn
+      | (refine State.Unborn.send ?_ _ _ _; exact keep unborn fun _ => ⟨rfl, rfl⟩)
+  | exit target reason quirk =>
+    simp only [State.request]
+    repeat' split
+    all_goals exact unborn.send _ _ _
+  | trapExit enabled =>
+    simp only [State.request]
+    split
+    · exact unborn
+    · exact keep unborn fun _ => ⟨rfl, rfl⟩
+  | alive target =>
+    simp only [State.request]
+    repeat' split
+    all_goals first | exact unborn | exact unborn.send _ _ _ | exact unborn.enqueue _ _ _
+  | sendAlias alias message => exact unborn.send _ _ _
+  | startTimer destination message duration =>
+    simp only [State.request]
+    generalize state.allocate processId = pair at allocated ⊢
+    obtain ⟨reference, after⟩ := pair
+    dsimp only at allocated ⊢
+    split
+    · exact allocated.timers _
+    · exact allocated
+  | cancelTimer reference =>
+    simp only [State.request]
+    split
+    · exact keep (unborn.timers _) fun _ => ⟨rfl, rfl⟩
+    · exact unborn
+
 end State.Unborn
 
 /-- A configuration whose records hold links with distinct processes. -/
@@ -3880,6 +4005,308 @@ private theorem Config.Distinct.step {elapsed : PID → Nat → Nat} {config nex
     · simp only [Prod.mk.injEq] at fired
       obtain ⟨-, rfl⟩ := fired
       exact (distinct.fire _).normalize (within.fire _).1
+
+namespace State.Unborn
+
+variable {state : State}
+
+private theorem keep (unborn : state.Unborn) {processId : PID} {change : ProcessState → ProcessState}
+    (keeps : ∀ process, (change process).children = process.children ∧ (change process).exiting = process.exiting) :
+    (state.modify processId change).Unborn :=
+  unborn.modify fun process => ⟨(keeps process).1, fun live => (keeps process).2 ▸ live⟩
+
+private theorem exitSignal (unborn : state.Unborn) (target source : PID) (reason : Term) (linked normalKills : Bool) :
+    (state.exitSignal target source reason linked normalKills).1.Unborn := by
+  unfold State.exitSignal State.append
+  dsimp only
+  repeat' split
+  all_goals (repeat' refine State.Unborn.keep ?_ fun _ => ⟨rfl, rfl⟩)
+  all_goals exact unborn
+
+private theorem handle (unborn : state.Unborn) (processId : PID) (waiting : Option Wait) (entry : Entry) :
+    (state.handle processId waiting entry).1.Unborn := by
+  obtain ⟨source, signal⟩ := entry
+  cases signal with
+  | message message => exact unborn.keep fun _ => ⟨rfl, rfl⟩
+  | aliasMessage alias message =>
+    simp only [State.handle]; split
+    · exact unborn.keep fun _ => ⟨rfl, rfl⟩
+    · exact unborn
+  | exit reason linked normalKills => exact unborn.exitSignal _ _ _ _ _
+  | link =>
+    simp only [State.handle]; split
+    · exact unborn
+    · exact unborn.keep fun _ => ⟨rfl, rfl⟩
+  | unlink id =>
+    simp only [State.handle]
+    split
+    · refine State.Unborn.send ?_ _ _ _; exact unborn.keep fun _ => ⟨rfl, rfl⟩
+    · exact unborn.send _ _ _
+  | unlinkAck id =>
+    simp only [State.handle]; split
+    · exact unborn.keep fun _ => ⟨rfl, rfl⟩
+    · exact unborn
+  | monitor reference => exact unborn.keep fun _ => ⟨rfl, rfl⟩
+  | down reference reason =>
+    simp only [State.handle]
+    repeat' split
+    all_goals (repeat' refine State.Unborn.keep ?_ fun _ => ⟨rfl, rfl⟩)
+    all_goals exact unborn
+  | isAlive => exact unborn.send _ _ _
+  | reply value => simp only [State.handle]; split <;> exact unborn
+  | flush => simp only [State.handle]; split <;> exact unborn
+
+private theorem linkPhase (unborn : state.Unborn) {processId target : PID} {next : State}
+    (phase : state.linkPhase processId target = some next) : next.Unborn := by
+  unfold State.linkPhase at phase
+  repeat' split at phase
+  all_goals simp only [Option.some.injEq, reduceCtorEq] at phase
+  subst phase
+  rename_i process found _ _ _ _
+  refine State.Unborn.linkExit ?_ _ _ _
+  exact unborn.set found rfl fun live => by simp_all
+
+private theorem phase (unborn : state.Unborn) {processId : PID} {next : State}
+    (phase : state.phase processId = some next) : next.Unborn := by
+  unfold State.phase at phase
+  repeat' split at phase
+  all_goals simp only [Option.some.injEq, reduceCtorEq] at phase
+  all_goals subst phase
+  · refine State.Unborn.send ?_ _ _ _
+    exact unborn.set (by assumption) (by rfl) fun live => by simp_all
+  · refine State.Unborn.answer ?_ _ _
+    exact unborn.set (by assumption) (by rfl) fun live => by simp_all
+
+private theorem fire (unborn : state.Unborn) (timer : Timer) : (state.fire timer).Unborn :=
+  (unborn.timers _).enqueue _ _ _
+
+private theorem normalize (unborn : state.Unborn) (sorted : state.Sorted) : state.normalize.Unborn := by
+  intro parent process found live other present index more
+  rw [State.record_normalize' sorted] at found present
+  cases record : state.record parent with
+  | none => simp [record] at found
+  | some original =>
+    simp only [record, Option.map_some, Option.filter] at found
+    split at found
+    · cases found
+      have keeps : (normRecord state.gone parent original).children = original.children ∧
+          ((normRecord state.gone parent original).exiting = none → original.exiting = none) := by
+        unfold normRecord
+        split
+        · exact ⟨rfl, fun live => by simp at live⟩
+        · exact ⟨rfl, fun _ => by assumption⟩
+      refine unborn _ _ record (keeps.2 live) other ?_ index (keeps.1 ▸ more)
+      cases record' : state.record other with
+      | none => simp [record'] at present
+      | some _ => rfl
+    · cases found
+
+end State.Unborn
+
+/-! Steps of a process other than ending it keep its record. -/
+
+private def State.Present (processId : PID) (state : State) : Prop := (state.record processId).isSome
+
+namespace State.Present
+
+variable {processId : PID} {state : State}
+
+private theorem modify (present : state.Present processId) (other : PID) (change : ProcessState → ProcessState) :
+    (state.modify other change).Present processId := by
+  unfold State.Present at *
+  rw [State.record_modify]; split
+  · rename_i same; subst same; simpa using present
+  · exact present
+
+private theorem set (present : state.Present processId) (other : PID) (process : ProcessState) :
+    (state.set other process).Present processId := by
+  unfold State.Present at *
+  rw [State.record_set]; split
+  · rfl
+  · exact present
+
+private theorem fallback (present : state.Present processId) (source target : PID) (signal : Signal) :
+    (state.fallback source target signal).Present processId := by
+  cases signal <;> simp only [State.fallback] <;> first | exact present | exact present.modify _ _
+
+private theorem enqueue (present : state.Present processId) (source target : PID) (signal : Signal) :
+    (state.enqueue source target signal).Present processId := by
+  unfold State.enqueue
+  split
+  · split
+    · exact present.set _ _
+    · exact present.fallback _ _ _
+  · exact present.fallback _ _ _
+
+private theorem send (present : state.Present processId) (source target : PID) (signal : Signal) :
+    (state.send source target signal).Present processId := by
+  unfold State.send State.unpark
+  refine State.Present.enqueue ?_ _ _ _
+  repeat' split
+  all_goals first | exact present | exact (present.modify _ _).enqueue _ _ _
+
+private theorem exitSignal (present : state.Present processId) (target source : PID) (reason : Term)
+    (linked normalKills : Bool) : (state.exitSignal target source reason linked normalKills).1.Present processId := by
+  unfold State.exitSignal
+  dsimp only
+  repeat' split
+  all_goals first
+    | exact present
+    | exact present.modify _ _
+    | exact (present.modify _ _).modify _ _
+
+private theorem handle (present : state.Present processId) (other : PID) (waiting : Option Wait) (entry : Entry) :
+    (state.handle other waiting entry).1.Present processId := by
+  obtain ⟨source, signal⟩ := entry
+  cases signal with
+  | exit reason linked normalKills => exact present.exitSignal _ _ _ _ _
+  | _ =>
+    simp only [State.handle]
+    repeat' split
+    all_goals first
+      | exact present
+      | exact present.modify _ _
+      | exact present.send _ _ _
+      | exact (present.modify _ _).send _ _ _
+      | exact (present.modify _ _).modify _ _
+      | exact ((present.modify _ _).modify _ _).modify _ _
+
+end State.Present
+
+private theorem Task.own_unborn {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (unborn : state.Unborn) (alive : state.alive processId = true) (mem : transition ∈ task.own state processId) :
+    transition.state.Unborn := by
+  obtain ⟨process, found, live⟩ := State.alive_iff.mp alive
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp [Task.own] at mem
+  | none =>
+  cases computation with
+  | ok value =>
+    simp only [Task.own, List.mem_singleton] at mem; subst mem; exact unborn.terminate found _
+  | error exception =>
+    cases exception <;> simp only [Task.own, List.mem_singleton] at mem <;> subst mem <;>
+      first | exact unborn.terminate found _ | exact unborn.remove _
+  | get next => simp only [Task.own, List.mem_singleton] at mem; subst mem; exact unborn
+  | set updated next =>
+    simp only [Task.own, List.mem_singleton] at mem; subst mem; exact unborn.keep fun _ => ⟨rfl, rfl⟩
+  | schedule options child next =>
+    simp only [Task.own, List.mem_singleton] at mem; subst mem; exact unborn.spawnWith found live _
+  | send destination message next =>
+    simp only [Task.own, List.mem_singleton] at mem; subst mem; exact unborn.send _ _ _
+  | receive timeout select next =>
+    simp only [Task.own] at mem
+    repeat' split at mem
+    all_goals simp only [List.mem_singleton, List.not_mem_nil] at mem
+    all_goals subst mem
+    · exact unborn.keep fun _ => ⟨rfl, rfl⟩
+    all_goals exact unborn
+  | request query next =>
+    have requested := unborn.request processId next query
+    simp only [Task.own] at mem
+    split at mem <;> rename_i answer <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+      simp only [answer, Answer.state] at requested <;> exact requested
+
+private theorem Task.handle_unborn {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (unborn : state.Unborn) (mem : transition ∈ task.handle state processId) : transition.state.Unborn := by
+  simp only [Task.handle] at mem
+  split at mem
+  · simp at mem
+  · rename_i entry rest queue
+    cases found : state.record processId with
+    | none => simp [State.process, found] at queue
+    | some process =>
+    have processOf : state.process processId = process := by simp [State.process, found]
+    have set : (state.set processId { state.process processId with queue := rest }).Unborn := by
+      rw [processOf]; exact unborn.set found rfl id
+    have found' : (state.set processId { state.process processId with queue := rest }).record processId =
+        some { state.process processId with queue := rest } := by simp [State.record_set]
+    have handled := set.handle processId (task.wait.map (·.1)) entry
+    have recorded := State.Present.handle (state := state.set processId { state.process processId with queue := rest })
+      (processId := processId) (by simp [State.Present, found']) processId (task.wait.map (·.1)) entry
+    revert mem handled recorded
+    generalize (state.set processId { state.process processId with queue := rest }).handle processId
+      (task.wait.map (·.1)) entry = triple
+    obtain ⟨handled, resumed, exits⟩ := triple
+    intro mem unborn' recorded
+    dsimp only at mem unborn' recorded
+    split at mem
+    · simp only [List.mem_singleton] at mem; subst mem
+      obtain ⟨record, recorded⟩ := Option.isSome_iff_exists.mp recorded
+      exact unborn'.terminate recorded _
+    · split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> exact unborn'
+
+/-- A configuration whose live processes have spawned no record yet. -/
+private def Config.Unborn : Config α → Prop
+  | .start .. => True
+  | .running state .. => state.Unborn
+
+private theorem Config.Unborn.step {elapsed : PID → Nat → Nat} {config next : Config α} {event : Event}
+    (reachable : config.Reachable elapsed) (unborn : config.Unborn) (step : Step config event next) : next.Unborn := by
+  cases config with
+  | start env computation elapsed' =>
+    simp only [Step, Config.successors] at step
+    split at step
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · split at step
+      · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step
+        intro parent process found live other present index more extends'
+        have only : ∀ pid, ((State.initial env elapsed').record pid).isSome = true → pid = env.currentPid := by
+          intro pid present
+          simp only [State.initial, State.record, Kernel.lookup_eq, List.lookup_cons, List.lookup_nil] at present
+          split at present
+          · rename_i same; simpa using same
+          · simp at present
+        have one := only parent (by simp [found])
+        have two := only other present
+        subst one; subst two
+        have := extends'.length_le; simp at this <;> omega
+      · simp at step
+  | running state tasks finished exhausted =>
+    have within : state.Within elapsed := reachable.1.1
+    have unborn : state.Unborn := unborn
+    cases exhausted
+    case true => simp [Step, Config.successors] at step
+    simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
+      List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists] at step
+    rcases step with ((⟨before, processId, task, after, split, transition, possible, same⟩ |
+      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩
+    · simp only [Prod.mk.injEq] at same
+      obtain ⟨-, rfl⟩ := same
+      have alive : state.alive processId = true :=
+        reachable.2.2.1 (processId, task) (by rw [eq_of_mem_splits split]; simp)
+      simp only [Task.transitions, Kernel.append_eq, List.mem_append] at possible
+      have kept : transition.state.Unborn ∧ transition.state.Within elapsed := by
+        rcases possible with possible | possible
+        · exact ⟨Task.own_unborn unborn alive possible, within.own possible⟩
+        · exact ⟨Task.handle_unborn unborn possible, within.handleStep possible⟩
+      unfold Transition.apply
+      split
+      · intro parent process found
+        simp [State.record, Kernel.lookup_eq] at found
+      · exact kept.1.normalize kept.2.1
+    · obtain ⟨next', phase, same⟩ := phased
+      simp only [Prod.mk.injEq] at same
+      obtain ⟨-, rfl⟩ := same
+      simp only [State.phases, Kernel.append_eq, Kernel.filterMap_eq, List.mem_append, List.mem_filterMap] at phase
+      show next'.normalize.Unborn
+      rcases phase with ⟨target, -, linked⟩ | phase
+      · exact (unborn.linkPhase linked).normalize (within.linkPhase linked).1
+      · split at phase
+        · rename_i next'' found
+          simp only [List.mem_singleton] at phase; subst phase
+          exact (unborn.phase found).normalize (within.phase found).1
+        · simp at phase
+    · cases parked : (state.process processId).parked with
+      | none => simp [parked] at unparked
+      | some _ =>
+        simp only [parked, Option.map_some, Option.some.injEq, Prod.mk.injEq] at unparked
+        obtain ⟨-, rfl⟩ := unparked
+        exact (unborn.unpark _).normalize (within.unpark _).1
+    · simp only [Prod.mk.injEq] at fired
+      obtain ⟨-, rfl⟩ := fired
+      exact (unborn.fire _).normalize (within.fire _).1
 
 private theorem QueueChange.hidden {queue : List Entry → List Entry} {mailbox : List Term → List Term}
     {links : List (PID × Option Nat) → List (PID × Option Nat)} {entry : Entry} (change : QueueChange queue mailbox links)
@@ -4428,7 +4855,7 @@ private theorem Config.forced_keys {config : Config α} {key : Key} {event : Eve
 /-- A forced phase, a `DOWN` its watcher drops, against any other step. -/
 private theorem Config.forced_phase_square {elapsed : PID → Nat → Nat} {config : Config α} {processId : PID}
     {key' : Key} {event event' : Event} {next middle : Config α} (reachable : config.Reachable elapsed)
-    (forced : (Key.phase processId, event, next, true) ∈ config.taggedSteps)
+    (unborn : config.Unborn) (forced : (Key.phase processId, event, next, true) ∈ config.taggedSteps)
     (step' : config.stepOf key' = some (event', middle)) (differ : key' ≠ .phase processId) :
     (∃ absorbed, next.stepOf key' = some (absorbed, middle)) ∨
       ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
@@ -4439,7 +4866,7 @@ private theorem Config.forced_phase_square {elapsed : PID → Nat → Nat} {conf
 configuration where a forced step closes the square. -/
 private theorem Config.forced_square {elapsed : PID → Nat → Nat} {config : Config α} {key key' : Key}
     {event event' : Event} {next middle : Config α} (reachable : config.Reachable elapsed) (distinct : config.Distinct)
-    (forced : (key, event, next, true) ∈ config.taggedSteps)
+    (unborn : config.Unborn) (forced : (key, event, next, true) ∈ config.taggedSteps)
     (step' : config.stepOf key' = some (event', middle)) (differ : key' ≠ key) :
     (∃ absorbed, next.stepOf key' = some (absorbed, middle)) ∨
       ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
@@ -4457,15 +4884,16 @@ private theorem Config.forced_square {elapsed : PID → Nat → Nat} {config : C
       cases key' <;> simp only [Key.owner, Option.some.injEq, reduceCtorEq] at owner <;> subst owner
       · exact owning rfl
       · exact differ rfl
-  · exact Config.forced_phase_square reachable forced step' differ
+  · exact Config.forced_phase_square reachable unborn forced step' differ
 
-/-- What every configuration a run reaches satisfies, with links with distinct processes. -/
+/-- What every configuration a run reaches satisfies, with links with distinct
+processes and children not spawned yet without records. -/
 private def Config.Ready (elapsed : PID → Nat → Nat) (config : Config α) : Prop :=
-  config.Reachable elapsed ∧ config.Distinct
+  config.Reachable elapsed ∧ config.Distinct ∧ config.Unborn
 
 private theorem Config.Ready.step {elapsed : PID → Nat → Nat} {config next : Config α} {event : Event}
     (ready : config.Ready elapsed) (step : Step config event next) : next.Ready elapsed :=
-  ⟨ready.1.step step, Config.Distinct.step ready.1.1.1 ready.2 step⟩
+  ⟨ready.1.step step, Config.Distinct.step ready.1.1.1 ready.2.1 step, Config.Unborn.step ready.1 ready.2.2 step⟩
 
 /-- Every run reaching a terminal configuration can take a forced step first. -/
 private theorem forced_first {elapsed : PID → Nat → Nat} {outcome : Outcome α} :
@@ -4490,7 +4918,7 @@ private theorem forced_first {elapsed : PID → Nat → Nat} {outcome : Outcome 
       simp only [Option.some.injEq, Prod.mk.injEq] at step'
       obtain ⟨-, rfl⟩ := step'
       exact ⟨_, rest⟩
-    · rcases Config.forced_square reachable.1 reachable.2 forced step' same with ⟨absorbed, after⟩ |
+    · rcases Config.forced_square reachable.1 reachable.2.1 reachable.2.2 forced step' same with ⟨absorbed, after⟩ |
         ⟨key'', event'', last', other, forcedNext, after⟩
       · exact ⟨_, .step (Config.step_of_stepOf after) rest⟩
       · exact Reaches.step (Config.step_of_stepOf after)
@@ -4563,7 +4991,7 @@ private theorem checkSleep_reaches {elapsed : PID → Nat → Nat} {accept : Out
               (Reaches next'' last → Reaches next₀ last) := by
           intro key' slept event₀ next₀ step₀
           have differ : key' ≠ key := fun same => notAsleep (same ▸ slept)
-          rcases Config.forced_square reachable.1 reachable.2 mem step₀ differ with ⟨absorbed, after⟩ |
+          rcases Config.forced_square reachable.1 reachable.2.1 reachable.2.2 mem step₀ differ with ⟨absorbed, after⟩ |
               ⟨key'', event'', last', other, forced', after⟩
           · exact ⟨_, _, after, id⟩
           · exact ⟨_, _, after, Reaches.step (Config.step_of_stepOf
@@ -4623,6 +5051,6 @@ theorem checkSleep_sound {accept : Outcome α → Bool} {depth : Nat} {env : Env
     (run : Run (.start env computation elapsed) events last) (terminal : Terminal last outcome) :
     accept outcome = true :=
   checkSleep_reaches (elapsed := elapsed) (first := .start env computation elapsed)
-    ⟨⟨⟨rfl, trivial, trivial⟩, trivial⟩, trivial⟩ checked run terminal (by simp) (by simp)
+    ⟨⟨⟨rfl, trivial, trivial⟩, trivial⟩, trivial, trivial⟩ checked run terminal (by simp) (by simp)
 
 end Lynx.Concurrent
