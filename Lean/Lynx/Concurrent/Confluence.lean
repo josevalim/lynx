@@ -473,6 +473,101 @@ private theorem Config.unforced {talk : PID → PID → Prop} {elapsed : PID →
   | fire reference =>
     simp [Config.stepOf, State.firing, quiet.1, firstOfEach, Kernel.find?_eq] at step
 
+/-! ### Steps of talking processes that are not forced -/
+
+/-- What a send reads and writes in a quiet state: the sender's parked monitor
+signal, and the receiver's liveness and, while it lives, its queue's tail. -/
+private theorem State.Quiet.sendFrames {state : State} (quiet : state.Quiet) (source target : PID) (message : Term) :
+    state.sendFrames source target (.message message) =
+      [(source, Field.parked, 0), (target, Field.live, if state.alive target then Field.queueTail else 0)] := by
+  simp only [State.sendFrames, quiet.process source, State.enqueueFrames, State.appendFrames]
+  split <;> simp_all
+
+/-- What a quiet process ending reads and writes: only its record. -/
+private theorem State.Quiet.endFrames {state : State} (quiet : state.Quiet) (processId : PID) :
+    state.endFrames processId = ([(processId, Field.all, Field.all)], false) := by
+  have links : (state.process processId).links = [] := by
+    cases found : state.record processId with
+    | none => simp [State.process, found]
+    | some process => simpa [State.process, found] using (quiet.2 _ _ found).2.1
+  simp [State.endFrames, links, quiet.1, Kernel.filterMap_eq, Kernel.any_eq]
+
+/-- No process of a quiet state holds anything about another that normalizing
+drops once it is gone. -/
+private theorem State.Quiet.leavesOthers {state : State} (sorted : state.Sorted) (quiet : state.Quiet)
+    (processId : PID) : state.leavesOthers processId = true := by
+  simp only [State.leavesOthers, Kernel.all_eq, List.all_eq_true, Prod.forall]
+  intro other process mem
+  have found : state.record other = some process := by
+    simpa [State.record, Kernel.lookup_eq] using Sorted.lookup_of_mem sorted mem
+  obtain ⟨live, links, -, -, -, -, queue⟩ := quiet.2 _ _ found
+  simp only [live, links, Kernel.any_eq, List.any_nil, Bool.not_false, Bool.and_true, Bool.or_eq_true,
+    beq_iff_eq, Bool.not_eq_true', List.any_eq_false]
+  refine .inr fun entry mem' => ?_
+  obtain ⟨⟨message, signal⟩, -⟩ := queue entry mem'
+  simp [signal]
+
+/-- The frames of a send are apart from frames that write neither the sender's
+parked monitor signal nor the receiver's liveness, and that touch nothing of
+the receiver the send writes. -/
+private theorem framesApart_send {sender receiver : PID} {write : Nat} {frames : List Frame}
+    (apart : ∀ entry ∈ frames, (entry.1 ≠ sender ∨ entry.2.2 &&& Field.parked = 0) ∧
+      (entry.1 ≠ receiver ∨ entry.2.2 &&& Field.live = 0 ∧ write &&& (entry.2.1 ||| entry.2.2) = 0)) :
+    framesApart [(sender, Field.parked, 0), (receiver, Field.live, write)] frames = true := by
+  simp only [framesApart, Kernel.all_eq, List.all_eq_true, List.mem_cons, List.mem_nil_iff, or_false,
+    Bool.or_eq_true, bne_iff_ne, ne_eq, Bool.and_eq_true, beq_iff_eq, forall_eq_or_imp, forall_eq, Prod.forall]
+  refine ⟨fun processId reads writes mem => ?_, fun processId reads writes mem => ?_⟩
+  · rcases (apart _ mem).1 with differ | unwritten
+    · exact .inl (Ne.symm differ)
+    · exact .inr ⟨by simp, unwritten⟩
+  · rcases (apart _ mem).2 with differ | ⟨unlive, untouched⟩
+    · exact .inl (Ne.symm differ)
+    · exact .inr ⟨untouched, unlive⟩
+
+section
+variable {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
+
+/-- A quiet process's send is confined, within the frames of a send. -/
+private theorem Config.sends_confined (quiet : state.Quiet) {processId target : PID} {message : Term} {β : Type}
+    {next : Result β} {finish : Except Exception β → Option (Except Exception α)}
+    (alive : state.alive processId = true)
+    (lookup : Kernel.lookup processId tasks = some ⟨.send target message next, finish, none⟩) :
+    (Config.running state tasks finished false).confined (.own processId) = true ∧
+      (Config.running state tasks finished false).frames (.own processId) =
+        some ([(processId, Field.parked, 0),
+          (target, Field.live, if state.alive target then Field.queueTail else 0)], false) := by
+  simp only [Config.confined, Config.frames, lookup]
+  simp [alive, State.parkedMonitored, quiet.process, Task.ownFrames, quiet.sendFrames]
+
+/-- A quiet process ending is confined, within the frames of its own record. -/
+private theorem Config.ends_confined (sorted : state.Sorted) (quiet : state.Quiet) {processId : PID} {β : Type}
+    {computation : Result β} {finish : Except Exception β → Option (Except Exception α)}
+    (alive : state.alive processId = true)
+    (lookup : Kernel.lookup processId tasks = some ⟨computation, finish, none⟩)
+    (ends : (∃ value, computation = .ok value) ∨ ∃ exception, computation = .error exception ∧ exception ≠ .exhausted) :
+    (Config.running state tasks finished false).confined (.own processId) = true ∧
+      (Config.running state tasks finished false).frames (.own processId) =
+        some ([(processId, Field.all, Field.all)], false) := by
+  rcases ends with ⟨value, rfl⟩ | ⟨exception, rfl, notExhausted⟩
+  · simp only [Config.confined, Config.frames, lookup]
+    simp [alive, State.parkedMonitored, quiet.process, Task.ownFrames, quiet.endFrames, quiet.leavesOthers sorted]
+  · cases exception
+    case exhausted => exact absurd rfl notExhausted
+    all_goals
+      simp only [Config.confined, Config.frames, lookup]
+      simp [alive, State.parkedMonitored, quiet.process, Task.ownFrames, quiet.endFrames, quiet.leavesOthers sorted]
+
+private theorem Config.apart_of_frames {key other : Key} {frames frames' : List Frame}
+    (confined : (Config.running state tasks finished false).confined key = true)
+    (confined' : (Config.running state tasks finished false).confined other = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, false))
+    (found' : (Config.running state tasks finished false).frames other = some (frames', false))
+    (apart : framesApart frames frames' = true) :
+    (Config.running state tasks finished false).apart key other = true := by
+  simp [Config.apart, confined, confined', found, found', apart]
+
+end
+
 /-! ### Evaluating one run
 
 `Config.advance` repeatedly takes the first step of a configuration. Its runs
