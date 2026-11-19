@@ -6848,4 +6848,77 @@ private theorem Config.lookup_after {state : State} {tasks : List (PID × Task �
     exact ⟨state', tasks, finished, rfl, lookup⟩
   | link => simp [Config.confined] at confined
 
+/-- An entry of frames reading a bit of a record. -/
+private theorem readsOf_entry {frames : List Frame} {processId : PID} {bit : Nat}
+    (read : readsOf frames processId bit = true) :
+    ∃ entry ∈ frames, entry.1 = processId ∧ entry.2.1.testBit bit = true := by
+  simp only [readsOf, List.any_eq_true, Bool.and_eq_true, beq_iff_eq] at read
+  obtain ⟨entry, mem, same, set⟩ := read
+  exact ⟨entry, mem, same, set⟩
+
+/-- A confined own step taken at a state agreeing with the original on what its
+frames read is enabled, has the same effect, and reads the same view. -/
+private theorem Config.own_after {elapsed : PID → Nat → Nat} {state state' : State}
+    {tasks tasks' : List (PID × Task α)} {finished finished' : Option (Except Exception α)} {processId : PID}
+    {frames : List Frame} {timers : Bool} {event : Event} {next : Config α} {task : Task α}
+    (within : state.Within elapsed) (normalized : state.normalize = state)
+    (within' : state'.Within elapsed) (normalized' : state'.normalize = state')
+    (confined : Config.confined (.running state tasks finished false) (.own processId) = true)
+    (found : (Config.running state tasks finished false).frames (.own processId) = some (frames, timers))
+    (step : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next))
+    (lookup : Kernel.lookup processId tasks = some task) (lookup' : Kernel.lookup processId tasks' = some task)
+    (agree : Agree frames state state') (timed : timers = true → state'.timers = state.timers)
+    (timedTo : frames = (state.endFrames processId).1 →
+      Kernel.any state'.timers (·.destination == processId) = Kernel.any state.timers (·.destination == processId))
+    (eager : frames = (state.endFrames processId).1 → ∀ target reason,
+      (target, none) ∈ (state.process processId).links → target ≠ processId →
+      state'.eagerLink processId target reason = state.eagerLink processId target reason) :
+    ∃ event' raw' tasks'' finished'',
+      (Config.running state' tasks' finished' false).stepOf (.own processId) =
+        some (event', .running raw'.normalize tasks'' finished'' false) ∧
+      Realizes ((Config.running state tasks finished false).effectOf (.own processId)) state' raw' ∧
+      raw'.Within elapsed ∧
+      (Config.running state tasks finished false).sameView (.running state' tasks' finished' false) (.own processId) = true := by
+  have found' : task.ownFrames state processId = some (frames, timers) := by
+    simp only [Config.frames, lookup, Option.bind_some] at found; exact found
+  obtain ⟨task₁, transition, lookup₁, head, -⟩ := Config.stepOf_own step
+  rw [lookup] at lookup₁; simp only [Option.some.injEq] at lookup₁; subst lookup₁
+  have view : task.ownView state' processId = task.ownView state processId :=
+    Task.ownView_agree confined lookup found' agree timed fun tail live => by
+      obtain ⟨entry, mem, same, set⟩ := readsOf_entry tail
+      obtain ⟨entry', mem', same', set'⟩ := readsOf_entry live
+      have queue := agree.queue mem set
+      have alive' := agree.alive mem' set'
+      rw [same] at queue; rw [same'] at alive'
+      have alive : state.alive processId = true := by
+        simp only [Config.confined, lookup, Bool.and_eq_true] at confined
+        obtain ⟨computation, finish, wait⟩ := task
+        cases wait <;> simp_all
+      rw [State.awaited_of_normalized within'.1 normalized' (alive'.trans alive),
+        State.awaited_of_normalized within.1 normalized alive, queue]
+  have identical : (task.ownView state processId).identical (task.ownView state' processId) = true := by
+    rw [view]; exact OwnView.identical_refl _
+  obtain ⟨transition', head', shape⟩ :=
+    (Task.own_shape identical (within.2.trans within'.2.symm)).head head
+  have exhausted : transition'.exhausted = false := by
+    rw [← shape.2.2]
+    cases exhausted : transition.exhausted
+    · rfl
+    obtain ⟨computation, finish, wait⟩ := task
+    obtain ⟨waits, computes⟩ := Task.own_exhausted (List.mem_of_head? head) exhausted
+    simp only at waits computes
+    subst waits computes
+    simp only [Config.confined] at confined; rw [lookup] at confined; simp at confined
+  obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup'
+  have effect : task.ownEffect state' processId = task.ownEffect state processId :=
+    Task.ownEffect_agree confined lookup found' agree timed timedTo eager
+  refine ⟨transition'.event, transition'.state, Kernel.append (Kernel.append before transition'.tasks) after,
+    transition'.finished.orElse fun _ => finished', ?_, ?_, within'.own (List.mem_of_head? head'), ?_⟩
+  · simp [Config.stepOf, split, head', Transition.apply, exhausted]
+  · simp only [Config.effectOf, lookup]
+    rw [← effect]
+    exact Realizes.own (List.mem_of_head? head')
+  · simp only [Config.sameView, lookup, lookup']
+    rw [view]; exact OwnView.identical_refl _
+
 end Lynx.Concurrent
