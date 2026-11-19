@@ -187,7 +187,9 @@ private theorem timers (changed : state.Changed processId related state') (timer
 
 /-- A signal falls back without changing the process, or only queues at it. -/
 private theorem fallback (changed : state.Changed processId related state') (unseen : Unseen related)
-    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal ≠ .unlink id) :
+    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal = .unlink id → ∀ {first second}, related first second →
+      related { first with links := Kernel.filter (·.1 != target) first.links }
+        { second with links := Kernel.filter (·.1 != target) second.links }) :
     (state.fallback source target signal).Changed processId related (state'.fallback source target signal) := by
   by_cases same : source = processId
   · subst same
@@ -195,11 +197,13 @@ private theorem fallback (changed : state.Changed processId related state') (uns
     all_goals first
       | exact changed
       | exact changed.modifyRelated (fun related => unseen.push _ related)
-      | exact absurd rfl (allowed rfl _)
+      | exact changed.modifyRelated (allowed rfl _ rfl)
   · cases signal <;> simp only [State.fallback] <;> first | exact changed | exact changed.modify same _
 
 private theorem enqueue (changed : state.Changed processId related state') (unseen : Unseen related)
-    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal ≠ .unlink id) :
+    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal = .unlink id → ∀ {first second}, related first second →
+      related { first with links := Kernel.filter (·.1 != target) first.links }
+        { second with links := Kernel.filter (·.1 != target) second.links }) :
     (state.enqueue source target signal).Changed processId related (state'.enqueue source target signal) := by
   unfold State.enqueue
   by_cases same : target = processId
@@ -240,7 +244,9 @@ private theorem unpark (changed : state.Changed processId related state') (unsee
   · exact changed
 
 private theorem send (changed : state.Changed processId related state') (unseen : Unseen related)
-    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal ≠ .unlink id) :
+    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal = .unlink id → ∀ {first second}, related first second →
+      related { first with links := Kernel.filter (·.1 != target) first.links }
+        { second with links := Kernel.filter (·.1 != target) second.links }) :
     (state.send source target signal).Changed processId related (state'.send source target signal) := by
   unfold State.send
   rw [changed.parked unseen]
@@ -1759,6 +1765,172 @@ private theorem terminateSelf
       unfold normRecord
       simp only [ownChange, exiting']
   · rw [endedChanged.record_other equal]
+
+end State.Changed
+
+/-! ### Forced handling against the process's own step -/
+
+/-- A change of a record's queue, mailbox and links only. -/
+private def queueChange (queue : List Entry → List Entry) (mailbox : List Term → List Term)
+    (links : List (PID × Option Nat) → List (PID × Option Nat)) (process : ProcessState) : ProcessState :=
+  { process with queue := queue process.queue, mailbox := mailbox process.mailbox, links := links process.links }
+
+/-- Records with a signal queued. -/
+private def Queued (process : ProcessState) : Prop := process.queue ≠ []
+
+/-- How handling the oldest signal changes the queue, mailbox and links, in a
+way that a process's own steps commute with. -/
+private structure QueueChange (queue : List Entry → List Entry) (mailbox : List Term → List Term)
+    (links : List (PID × Option Nat) → List (PID × Option Nat)) : Prop where
+  push : ∀ {entries} entry, entries ≠ [] → queue (Kernel.append entries [entry]) = Kernel.append (queue entries) [entry]
+  lookupNone : ∀ (target : PID) (entries : List (PID × Option Nat)),
+    (Kernel.lookup target (links entries) == some none) = (Kernel.lookup target entries == some none)
+  filtered : ∀ (target : PID) (entries : List (PID × Option Nat)),
+    links (Kernel.filter (·.1 != target) entries) = Kernel.filter (·.1 != target) (links entries)
+  relink : ∀ (target : PID) (entries : List (PID × Option Nat)),
+    links (Kernel.append (Kernel.filter (·.1 != target) entries) [(target, none)]) =
+      Kernel.append (Kernel.filter (·.1 != target) (links entries)) [(target, none)]
+  select : ∀ {β : Type} (select : Term → Option β) {messages remaining : List Term} {message : Term} {value : β},
+    selectMessage select messages = some (message, value, remaining) →
+      selectMessage select (mailbox messages) = some (message, value, mailbox remaining)
+
+private theorem QueueChange.unseen {queue : List Entry → List Entry} {mailbox : List Term → List Term}
+    {links : List (PID × Option Nat) → List (PID × Option Nat)} (change : QueueChange queue mailbox links)
+    (linking : ∀ (entries : List Entry) entry, entries ≠ [] → entry.signal = .link →
+      (entry ∈ queue entries ↔ entry ∈ entries)) :
+    Unseen (Same Queued (queueChange queue mailbox links)) where
+  outside := by
+    rintro first second ⟨queued, rfl⟩
+    exact ⟨rfl, rfl, rfl, fun entry link => linking _ entry queued link⟩
+  push := fun entry ⟨queued, same⟩ => by
+    subst same
+    refine ⟨by simp [Queued, ProcessState.push, Kernel.append_eq], ?_⟩
+    simp only [queueChange, ProcessState.push, change.push entry queued]
+  eagerExit := fun source ⟨queued, same⟩ => by
+    subst same
+    exact ⟨queued, by simp only [queueChange, ProcessState.eagerExit, change.filtered]⟩
+  unpark := fun ⟨queued, same⟩ => by subst same; exact ⟨queued, rfl⟩
+
+namespace State.Changed
+
+variable {processId : PID} {state state' : State} {queue : List Entry → List Entry} {mailbox : List Term → List Term}
+  {links : List (PID × Option Nat) → List (PID × Option Nat)}
+
+private theorem queue_modify
+    (changed : state.Changed processId (Same Queued (queueChange queue mailbox links)) state')
+    (change : ProcessState → ProcessState) (queued : ∀ process, (change process).queue = process.queue)
+    (commutes : ∀ process, Queued process →
+      change (queueChange queue mailbox links process) = queueChange queue mailbox links (change process)) :
+    (state.modify processId change).Changed processId (Same Queued (queueChange queue mailbox links))
+      (state'.modify processId change) :=
+  changed.modifyRelated fun ⟨ok', same⟩ => by
+    subst same
+    exact ⟨by simp only [Queued, queued]; exact ok', commutes _ ok'⟩
+
+/-- A process's request, after handling its oldest signal changed its queue, mailbox and links. -/
+private theorem requestSelf
+    (changed : state.Changed processId (Same Queued (queueChange queue mailbox links)) state')
+    (unseen : Unseen (Same Queued (queueChange queue mailbox links))) (change : QueueChange queue mailbox links)
+    {process : ProcessState} (found : state.record processId = some process)
+    (unlinked : ∀ (target : PID) (id : Nat), Kernel.lookup target process.links = some none →
+      links (Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) process.links) =
+        Kernel.map (fun link => if link.1 == target then (link.1, some id) else link) (links process.links))
+    {β : Type} (next : Term → Result β) (query : Request) :
+    Answer.Changed processId (Same Queued (queueChange queue mailbox links)) (state.request processId next query)
+      (state'.request processId next query) := by
+  rcases changed.records with ⟨missing, -⟩ | ⟨first, second, found', found'', queued, rfl⟩
+  · rw [found] at missing; cases missing
+  rw [found] at found'; cases found'
+  have processOf : state.process processId = process := by simp [State.process, found]
+  have processOf' : state'.process processId = queueChange queue mailbox links process := by
+    simp [State.process, found'']
+  have allocated : (state'.allocate processId).1 = (state.allocate processId).1 ∧
+      (state.allocate processId).2.Changed processId (Same Queued (queueChange queue mailbox links))
+        (state'.allocate processId).2 := by
+    refine ⟨by simp only [State.allocate, processOf, processOf']; rfl, ?_⟩
+    exact changed.queue_modify _ (fun _ => rfl) (fun _ _ => rfl)
+  cases query with
+  | monitor target alias =>
+    simp only [State.request]
+    obtain ⟨same, allocated⟩ := allocated
+    rw [same]
+    split
+    · exact ⟨rfl, allocated⟩
+    · exact ⟨rfl, (allocated.unpark unseen processId).queue_modify _ (fun _ => rfl) (fun _ _ => rfl)⟩
+  | demonitor reference flush =>
+    simp only [State.request, processOf, processOf', queueChange]
+    split <;> exact ⟨rfl, changed.queue_modify _ (fun _ => rfl) (fun _ _ => rfl)⟩
+  | link target =>
+    simp only [State.request, processOf, processOf', changed.alive unseen, queueChange]
+    by_cases self : target = processId
+    · simp only [self, ↓reduceIte]; exact ⟨rfl, changed⟩
+    simp only [self, ↓reduceIte]
+    by_cases eager : Kernel.contains process.eagerExits target = true
+    · simp only [eager, ↓reduceIte]; exact ⟨rfl, changed⟩
+    simp only [eager, ↓reduceIte, Bool.false_eq_true]
+    by_cases gone : (!state.alive target && !process.trapExit) = true
+    · simp only [gone, ↓reduceIte]; exact ⟨rfl, changed⟩
+    simp only [gone, ↓reduceIte, Bool.false_eq_true]
+    have relinked := changed.queue_modify (fun process => { process with
+        links := Kernel.append (Kernel.filter (·.1 != target) process.links) [(target, none)] }) (fun _ => rfl)
+      fun _ _ => by simp only [queueChange, change.relink]
+    have lookups := change.lookupNone target process.links
+    generalize Kernel.lookup target process.links = found₁ at lookups ⊢
+    generalize Kernel.lookup target (links process.links) = found₂ at lookups ⊢
+    rcases found₁ with _ | _ | id <;> rcases found₂ with _ | _ | id' <;> simp at lookups <;>
+      first
+        | exact ⟨rfl, changed⟩
+        | exact ⟨rfl, relinked.send unseen fun _ _ => by simp⟩
+  | unlink target =>
+    simp only [State.request, processOf, processOf', queueChange]
+    by_cases self : target = processId
+    · simp only [self, ↓reduceIte]; exact ⟨rfl, changed⟩
+    simp only [self, ↓reduceIte]
+    have lookups := change.lookupNone target process.links
+    have unlinking := unlinked target (process.unlinks + 1)
+    generalize Kernel.lookup target process.links = found₁ at lookups unlinking ⊢
+    generalize Kernel.lookup target (links process.links) = found₂ at lookups ⊢
+    rcases found₁ with _ | _ | id <;> rcases found₂ with _ | _ | id' <;> simp at lookups <;>
+      first
+        | exact ⟨rfl, changed⟩
+        | (rw [State.modify_found found, State.modify_found found'']
+           refine ⟨rfl, State.Changed.send ?_ unseen fun _ _ _ _ _ ⟨queued', same⟩ => ?_⟩
+           · exact changed.setRelated ⟨queued, by simp only [queueChange, unlinking rfl]⟩
+           · subst same; exact ⟨queued', by simp only [queueChange, change.filtered]⟩)
+  | exit target reason quirk =>
+    simp only [State.request, processOf, processOf', queueChange]
+    split
+    · exact ⟨rfl, changed.send unseen fun _ _ => by simp⟩
+    split
+    · exact ⟨rfl, changed.send unseen fun _ _ => by simp⟩
+    · exact ⟨rfl, changed.send unseen fun _ _ => by simp⟩
+  | trapExit enabled =>
+    simp only [State.request, processOf, processOf', queueChange]
+    split
+    · exact ⟨rfl, changed⟩
+    · exact ⟨rfl, changed.queue_modify _ (fun _ => rfl) (fun _ _ => rfl)⟩
+  | alive target =>
+    simp only [State.request, changed.alive unseen]
+    split
+    · exact ⟨rfl, changed⟩
+    split
+    · exact ⟨rfl, changed.send unseen fun _ _ => by simp⟩
+    · exact ⟨rfl, changed.enqueue unseen fun _ _ => by simp⟩
+  | sendAlias alias message =>
+    exact ⟨rfl, changed.send unseen fun _ _ => by simp⟩
+  | startTimer destination message duration =>
+    simp only [State.request]
+    obtain ⟨same, allocated⟩ := allocated
+    rw [same, allocated.alive unseen]
+    refine ⟨rfl, ?_⟩
+    split
+    · rw [allocated.2.2.1]; exact allocated.timers _
+    · exact allocated
+  | cancelTimer reference =>
+    simp only [State.request, changed.2.2.1, processOf, processOf', queueChange]
+    split
+    · exact ⟨by rw [changed.2.2.2], (changed.timers _).queue_modify _ (fun _ => rfl) (fun _ _ => rfl)⟩
+    · exact ⟨rfl, changed⟩
 
 end State.Changed
 
