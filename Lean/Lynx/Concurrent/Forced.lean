@@ -4308,6 +4308,502 @@ private theorem Config.Unborn.step {elapsed : PID → Nat → Nat} {config next 
       obtain ⟨-, rfl⟩ := fired
       exact (unborn.fire _).normalize (within.fire _).1
 
+/-! ### Dropped `DOWN`s stay dropped
+
+A watcher drops a `DOWN` of a reference it allocated and no longer monitors.
+Its reference counter only grows, and it only monitors references it allocates
+next, so it keeps dropping it. -/
+
+/-- A record has allocated the reference with the count, which it does not monitor. -/
+private def Unmonitored (reference : List Nat) (count : Nat) (process : ProcessState) : Prop :=
+  count ≤ process.refCounter ∧ Kernel.any process.monitoring (·.1 == reference) = false
+
+/-- The live record of the watcher, if any, has allocated the reference and does not monitor it. -/
+private def State.Covers (watcher : PID) (reference : List Nat) (count : Nat) (state : State) : Prop :=
+  ∀ process, state.record watcher = some process → process.exiting = none → Unmonitored reference count process
+
+namespace State.Covers
+
+variable {watcher : PID} {reference : List Nat} {count : Nat} {state : State}
+
+/-- A change that revives no process and keeps it from monitoring the reference. -/
+private def Keeps (reference : List Nat) (count : Nat) (change : ProcessState → ProcessState) : Prop :=
+  ∀ process, (change process).exiting = none → process.exiting = none ∧
+    (Unmonitored reference count process → Unmonitored reference count (change process))
+
+private theorem modify (covers : state.Covers watcher reference count) {processId : PID}
+    {change : ProcessState → ProcessState} (keeps : Keeps reference count change) :
+    (state.modify processId change).Covers watcher reference count := by
+  intro process found live
+  rw [State.record_modify] at found
+  split at found
+  · rename_i same; subst same
+    cases original : state.record watcher with
+    | none => simp [original] at found
+    | some process₀ =>
+      simp only [original, Option.map_some, Option.some.injEq] at found
+      subst found
+      have kept := keeps process₀ live
+      exact kept.2 (covers _ original kept.1)
+  · exact covers _ found live
+
+private theorem same (covers : state.Covers watcher reference count) {processId : PID}
+    {change : ProcessState → ProcessState} (refCounter : ∀ process, (change process).refCounter = process.refCounter)
+    (monitoring : ∀ process, (change process).monitoring = process.monitoring)
+    (exiting : ∀ process, (change process).exiting = process.exiting) :
+    (state.modify processId change).Covers watcher reference count :=
+  covers.modify fun process live => ⟨exiting process ▸ live, fun ⟨counted, unmonitored⟩ =>
+    ⟨(refCounter process).symm ▸ counted, (monitoring process).symm ▸ unmonitored⟩⟩
+
+private theorem set (covers : state.Covers watcher reference count) {processId : PID} {process process' : ProcessState}
+    (found : state.record processId = some process) (keeps : process'.exiting = none → process.exiting = none ∧
+      (Unmonitored reference count process → Unmonitored reference count process')) :
+    (state.set processId process').Covers watcher reference count := by
+  intro record found' live
+  rw [State.record_set] at found'
+  split at found'
+  · rename_i same; subst same
+    simp only [Option.some.injEq] at found'; subst found'
+    have kept := keeps live
+    exact kept.2 (covers _ found kept.1)
+  · exact covers _ found' live
+
+private theorem set_other (covers : state.Covers watcher reference count) {processId : PID}
+    (differ : processId ≠ watcher) (process : ProcessState) : (state.set processId process).Covers watcher reference count := by
+  intro record found live
+  rw [State.record_set, if_neg (Ne.symm differ)] at found
+  exact covers _ found live
+
+private theorem remove (covers : state.Covers watcher reference count) (processId : PID) :
+    (state.remove processId).Covers watcher reference count := by
+  intro record found live
+  rw [State.record_remove] at found
+  split at found
+  · cases found
+  · exact covers _ found live
+
+private theorem timers (covers : state.Covers watcher reference count) (timers : List Timer) :
+    ({ state with timers }).Covers watcher reference count := covers
+
+private theorem fallback (covers : state.Covers watcher reference count) (source target : PID) (signal : Signal) :
+    (state.fallback source target signal).Covers watcher reference count := by
+  cases signal <;> simp only [State.fallback] <;>
+    first | exact covers | exact covers.same (fun _ => rfl) (fun _ => rfl) (fun _ => rfl)
+
+private theorem enqueue (covers : state.Covers watcher reference count) (source target : PID) (signal : Signal) :
+    (state.enqueue source target signal).Covers watcher reference count := by
+  unfold State.enqueue
+  split
+  · rename_i process found
+    split
+    · exact covers.set found fun live => ⟨live, id⟩
+    · exact covers.fallback _ _ _
+  · exact covers.fallback _ _ _
+
+private theorem unpark (covers : state.Covers watcher reference count) (processId : PID) :
+    (state.unpark processId).Covers watcher reference count := by
+  unfold State.unpark
+  split
+  · refine (covers.same ?_ ?_ ?_).enqueue _ _ _ <;> intro <;> rfl
+  · exact covers
+
+private theorem send (covers : state.Covers watcher reference count) (source target : PID) (signal : Signal) :
+    (state.send source target signal).Covers watcher reference count := by
+  unfold State.send
+  refine State.Covers.enqueue ?_ _ _ _
+  split
+  · split
+    · exact covers.unpark _
+    · exact covers
+  · exact covers
+
+private theorem linkExit (covers : state.Covers watcher reference count) (processId target : PID) (reason : Term) :
+    (state.linkExit processId target reason).Covers watcher reference count := by
+  unfold State.linkExit
+  split
+  · exact covers.same (fun _ => rfl) (fun _ => rfl) (fun _ => rfl)
+  · exact covers.send _ _ _
+
+private theorem foldl {γ : Type} {step : State → γ → State}
+    (keeps : ∀ {state : State} item, state.Covers watcher reference count → (step state item).Covers watcher reference count) :
+    ∀ (items : List γ) {state : State}, state.Covers watcher reference count →
+      (Kernel.foldl step state items).Covers watcher reference count
+  | [], _, covers => covers
+  | item :: rest, _, covers => by
+      have := foldl keeps rest (keeps item covers)
+      simpa only [Kernel.foldl_eq, List.foldl_cons] using this
+
+private theorem terminate (covers : state.Covers watcher reference count) {processId : PID} {process : ProcessState}
+    (found : state.record processId = some process) (reason : Term) :
+    (state.terminate processId reason).Covers watcher reference count := by
+  have processOf : state.process processId = process := by simp [State.process, found]
+  unfold State.terminate
+  refine State.Covers.foldl (fun target covers' => ?_) _ ?_
+  · split
+    · refine State.Covers.linkExit ?_ _ _ _
+      exact covers'.modify fun process live => ⟨by simpa using live, id⟩
+    · exact covers'
+  · rw [processOf]
+    exact (covers.timers _).set (process := process) found fun live => by simp at live
+
+private theorem answer (covers : state.Covers watcher reference count) (processId : PID) (entry : Entry) :
+    (state.answer processId entry).Covers watcher reference count := by
+  unfold State.answer
+  split <;> first | exact covers | exact covers.send _ _ _
+
+private theorem allocated (covers : state.Covers watcher reference count) (processId : PID) :
+    (state.allocate processId).2.Covers watcher reference count :=
+  covers.modify fun _ live => ⟨live, fun ⟨counted, unmonitored⟩ => ⟨Nat.le_succ_of_le counted, unmonitored⟩⟩
+
+/-- Monitoring the reference a process allocates next. -/
+private theorem monitored (covers : state.Covers watcher reference count) (shape : reference = watcher ++ [count])
+    (processId : PID) (target : PID) (alias : Bool) (parked : Option (PID × List Nat)) :
+    ((state.allocate processId).2.modify processId fun process => { process with
+      monitoring := Kernel.append process.monitoring [((state.allocate processId).1, target)]
+      aliases := if alias then Kernel.append process.aliases [(state.allocate processId).1] else process.aliases
+      parked := parked }).Covers watcher reference count := by
+  intro process found live
+  rw [State.record_modify] at found
+  split at found
+  · rename_i same; subst same
+    cases record : state.record watcher with
+    | none => simp [State.allocate, State.record_modify, record] at found
+    | some process₁ =>
+      have processOf : state.process watcher = process₁ := by simp [State.process, record]
+      simp only [State.allocate, State.record_modify, ↓reduceIte, record, Option.map_some,
+        Option.some.injEq] at found
+      subst found
+      obtain ⟨counted, unmonitored⟩ := covers _ record live
+      refine ⟨Nat.le_succ_of_le counted, ?_⟩
+      simp only [State.allocate, processOf, Kernel.any_eq, Kernel.append_eq, List.any_append, List.any_cons,
+        List.any_nil, Bool.or_false] at unmonitored ⊢
+      rw [unmonitored, Bool.false_or, beq_eq_false_iff_ne, shape]
+      intro equal
+      have := List.append_inj_right' equal rfl
+      simp at this; omega
+  · exact covers.allocated processId _ found live
+
+private theorem modify_other (covers : state.Covers watcher reference count) {processId : PID}
+    (differ : processId ≠ watcher) (change : ProcessState → ProcessState) :
+    (state.modify processId change).Covers watcher reference count := by
+  intro process found live
+  rw [State.record_modify, if_neg (Ne.symm differ)] at found
+  exact covers _ found live
+
+private theorem any_filter_false {β : Type} {list : List (List Nat × β)} {reference other : List Nat}
+    (unmonitored : Kernel.any list (·.1 == reference) = false) :
+    Kernel.any (Kernel.filter (·.1 != other) list) (·.1 == reference) = false := by
+  simp only [Kernel.any_eq, Kernel.filter_eq, List.any_eq_false, List.mem_filter] at unmonitored ⊢
+  exact fun entry inside => unmonitored entry inside.1
+
+/-- Monitoring a reference other than the one dropped. -/
+private theorem monitor (covers : state.Covers watcher reference count) {processId : PID} {fresh : List Nat}
+    {target : PID} {change : ProcessState → ProcessState} (differ : processId = watcher → fresh ≠ reference)
+    (refCounter : ∀ process, (change process).refCounter = process.refCounter)
+    (exiting : ∀ process, (change process).exiting = process.exiting)
+    (monitoring : ∀ process, (change process).monitoring = Kernel.append process.monitoring [(fresh, target)]) :
+    (state.modify processId change).Covers watcher reference count := by
+  by_cases same : processId = watcher
+  · refine covers.modify fun process live => ⟨exiting process ▸ live, fun ⟨counted, unmonitored⟩ =>
+      ⟨(refCounter process).symm ▸ counted, ?_⟩⟩
+    rw [monitoring]
+    simp only [Kernel.any_eq, Kernel.append_eq, List.any_append, List.any_cons, List.any_nil, Bool.or_false]
+      at unmonitored ⊢
+    rw [unmonitored, Bool.false_or, beq_eq_false_iff_ne]
+    exact differ same
+  · exact covers.modify_other same _
+
+/-- A reference a live process allocates next is not one its record allocated already. -/
+private theorem allocated_fresh (covers : state.Covers watcher reference count) (shape : reference = watcher ++ [count])
+    {processId : PID} {process : ProcessState} (found : state.record processId = some process)
+    (live : process.exiting = none) : processId = watcher → (state.allocate processId).1 ≠ reference := by
+  intro same; subst same
+  have counted := (covers _ found live).1
+  simp only [State.allocate, State.process, found, Option.getD_some, Kernel.append_eq, shape]
+  intro equal
+  have := List.append_inj_right' equal rfl
+  simp at this; omega
+
+private theorem request (covers : state.Covers watcher reference count) (shape : reference = watcher ++ [count])
+    {processId : PID} {process : ProcessState} (found : state.record processId = some process)
+    (live : process.exiting = none) {β : Type} (next : Term → Result β) (query : Request) :
+    (state.request processId next query).state.Covers watcher reference count := by
+  have allocated := covers.allocated processId
+  have fresh := covers.allocated_fresh shape found live
+  cases query with
+  | monitor target alias =>
+    simp only [State.request]
+    split
+    · exact allocated
+    · exact State.Covers.monitor (allocated.unpark _) fresh (fun _ => rfl) (fun _ => rfl) (fun _ => rfl)
+  | demonitor reference' flush =>
+    simp only [State.request]
+    split <;> exact covers.modify fun _ live => ⟨live, fun ⟨counted, unmonitored⟩ =>
+      ⟨counted, any_filter_false unmonitored⟩⟩
+  | link target =>
+    simp only [State.request]
+    repeat' split
+    all_goals first
+      | exact covers
+      | (refine State.Covers.send ?_ _ _ _; exact covers.same (fun _ => rfl) (fun _ => rfl) (fun _ => rfl))
+  | unlink target =>
+    simp only [State.request]
+    repeat' split
+    all_goals first
+      | exact covers
+      | (refine State.Covers.send ?_ _ _ _; exact covers.same (fun _ => rfl) (fun _ => rfl) (fun _ => rfl))
+  | exit target reason quirk =>
+    simp only [State.request]
+    repeat' split
+    all_goals exact covers.send _ _ _
+  | trapExit enabled =>
+    simp only [State.request]
+    split
+    · exact covers
+    · exact covers.same (fun _ => rfl) (fun _ => rfl) (fun _ => rfl)
+  | alive target =>
+    simp only [State.request]
+    repeat' split
+    all_goals first | exact covers | exact covers.send _ _ _ | exact covers.enqueue _ _ _
+  | sendAlias alias message => exact covers.send _ _ _
+  | startTimer destination message duration =>
+    simp only [State.request]
+    split
+    · exact allocated.timers _
+    · exact allocated
+  | cancelTimer reference' =>
+    simp only [State.request]
+    split
+    · exact (covers.timers _).same (fun _ => rfl) (fun _ => rfl) (fun _ => rfl)
+    · exact covers
+
+private theorem exitSignal (covers : state.Covers watcher reference count) (target source : PID) (reason : Term)
+    (linked normalKills : Bool) : (state.exitSignal target source reason linked normalKills).1.Covers watcher reference count := by
+  unfold State.exitSignal State.append
+  dsimp only
+  repeat' split
+  all_goals (repeat' refine State.Covers.same ?_ (fun _ => rfl) (fun _ => rfl) (fun _ => rfl))
+  all_goals exact covers
+
+private theorem handle (covers : state.Covers watcher reference count) (processId : PID) (waiting : Option Wait)
+    (entry : Entry) : (state.handle processId waiting entry).1.Covers watcher reference count := by
+  obtain ⟨source, signal⟩ := entry
+  cases signal with
+  | exit reason linked normalKills => exact covers.exitSignal _ _ _ _ _
+  | down reference' reason =>
+    simp only [State.handle]
+    repeat' split
+    all_goals (repeat' first
+      | refine State.Covers.same ?_ (fun _ => rfl) (fun _ => rfl) (fun _ => rfl)
+      | refine State.Covers.modify ?_ fun _ live => ⟨live, fun ⟨counted, unmonitored⟩ =>
+          ⟨counted, any_filter_false unmonitored⟩⟩)
+    all_goals exact covers
+  | _ =>
+    simp only [State.handle]
+    repeat' split
+    all_goals first
+      | exact covers
+      | exact covers.same (fun _ => rfl) (fun _ => rfl) (fun _ => rfl)
+      | exact covers.send _ _ _
+      | (refine State.Covers.send ?_ _ _ _; exact covers.same (fun _ => rfl) (fun _ => rfl) (fun _ => rfl))
+
+private theorem spawnWith (covers : state.Covers watcher reference count) (shape : reference = watcher ++ [count])
+    {processId : PID} {process : ProcessState} (found : state.record processId = some process)
+    (live : process.exiting = none) (child : Kernel.append processId [process.children + 1] ≠ watcher)
+    (options : SpawnOptions) : (state.spawnWith processId options).2.Covers watcher reference count := by
+  have processOf : state.process processId = process := by simp [State.process, found]
+  have counted : processId = watcher → count ≤ process.refCounter := fun same => by
+    subst same; exact (covers _ found live).1
+  unfold State.spawnWith
+  dsimp only
+  rw [processOf]
+  by_cases monitor : options.monitor <;> by_cases link : options.link <;>
+    simp only [monitor, link, ↓reduceIte, Bool.false_eq_true, State.allocate]
+  all_goals (repeat' first
+    | refine State.Covers.same ?_ (fun _ => rfl) (fun _ => rfl) (fun _ => rfl)
+    | refine State.Covers.monitor ?_ ?_ (fun _ => rfl) (fun _ => rfl) (fun _ => rfl)
+    | refine State.Covers.modify ?_ fun _ live => ⟨live, fun ⟨counted, unmonitored⟩ =>
+        ⟨Nat.le_succ_of_le counted, unmonitored⟩⟩
+    | refine State.Covers.set_other ?_ child _
+    | refine State.Covers.set ?_ found fun live => ⟨live, id⟩)
+  all_goals first
+    | exact covers
+    | (intro same; subst same
+       have counted := counted rfl
+       rw [shape, Kernel.append_eq]
+       intro equal
+       have := List.append_inj_right' equal rfl
+       simp [State.process, State.record_modify, State.record_set, Ne.symm child] at this
+       omega)
+
+end State.Covers
+
+namespace State.Covers
+
+variable {watcher : PID} {reference : List Nat} {count : Nat} {state : State}
+
+private theorem linkPhase (covers : state.Covers watcher reference count) {processId target : PID} {next : State}
+    (phase : state.linkPhase processId target = some next) : next.Covers watcher reference count := by
+  unfold State.linkPhase at phase
+  repeat' split at phase
+  all_goals simp only [Option.some.injEq, reduceCtorEq] at phase
+  subst phase
+  rename_i process found _ _ _ _
+  refine State.Covers.linkExit ?_ _ _ _
+  exact covers.set found fun live => by simp_all
+
+private theorem phase (covers : state.Covers watcher reference count) {processId : PID} {next : State}
+    (phase : state.phase processId = some next) : next.Covers watcher reference count := by
+  unfold State.phase at phase
+  repeat' split at phase
+  all_goals simp only [Option.some.injEq, reduceCtorEq] at phase
+  all_goals subst phase
+  · refine State.Covers.send ?_ _ _ _
+    exact covers.set (by assumption) fun live => by simp_all
+  · refine State.Covers.answer ?_ _ _
+    exact covers.set (by assumption) fun live => by simp_all
+
+private theorem fire (covers : state.Covers watcher reference count) (timer : Timer) :
+    (state.fire timer).Covers watcher reference count :=
+  (covers.timers _).enqueue _ _ _
+
+private theorem normalize (covers : state.Covers watcher reference count) (sorted : state.Sorted) :
+    state.normalize.Covers watcher reference count := by
+  intro process found live
+  rw [State.record_normalize' sorted] at found
+  cases record : state.record watcher with
+  | none => simp [record] at found
+  | some original =>
+    simp only [record, Option.map_some, Option.filter] at found
+    split at found
+    · cases found
+      unfold normRecord at live ⊢
+      split
+      · rename_i exiting; rw [exiting] at live; simp at live
+      · rename_i exiting; exact covers original record exiting
+    · cases found
+
+end State.Covers
+
+private theorem Task.own_covers {state : State} {processId watcher : PID} {reference : List Nat} {count : Nat}
+    {task : Task α} {transition : Transition α} (covers : state.Covers watcher reference count)
+    (shape : reference = watcher ++ [count]) (unborn : state.Unborn) (present : (state.record watcher).isSome)
+    (alive : state.alive processId = true) (mem : transition ∈ task.own state processId) :
+    transition.state.Covers watcher reference count := by
+  obtain ⟨process, found, live⟩ := State.alive_iff.mp alive
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp [Task.own] at mem
+  | none =>
+  cases computation with
+  | ok value =>
+    simp only [Task.own, List.mem_singleton] at mem; subst mem; exact covers.terminate found _
+  | error exception =>
+    cases exception <;> simp only [Task.own, List.mem_singleton] at mem <;> subst mem <;>
+      first | exact covers.terminate found _ | exact covers.remove _
+  | get next => simp only [Task.own, List.mem_singleton] at mem; subst mem; exact covers
+  | set updated next =>
+    simp only [Task.own, List.mem_singleton] at mem; subst mem
+    exact covers.modify fun _ live => ⟨live, fun ⟨counted, unmonitored⟩ =>
+      ⟨Nat.le_trans counted (Nat.le_max_left _ _), unmonitored⟩⟩
+  | schedule options child next =>
+    simp only [Task.own, List.mem_singleton] at mem; subst mem
+    refine covers.spawnWith shape found live (fun same => ?_) _
+    obtain ⟨_, record⟩ := Option.isSome_iff_exists.mp present
+    exact unborn _ _ found live watcher present _ (Nat.lt_succ_self _)
+      (by rw [← same, Kernel.append_eq]; exact List.prefix_refl _)
+  | send destination message next =>
+    simp only [Task.own, List.mem_singleton] at mem; subst mem; exact covers.send _ _ _
+  | receive timeout select next =>
+    simp only [Task.own] at mem
+    repeat' split at mem
+    all_goals simp only [List.mem_singleton, List.not_mem_nil] at mem
+    all_goals subst mem
+    · exact covers.same (fun _ => rfl) (fun _ => rfl) (fun _ => rfl)
+    all_goals exact covers
+  | request query next =>
+    have requested := covers.request shape found live next query
+    simp only [Task.own] at mem
+    split at mem <;> rename_i answer <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+      simp only [answer, Answer.state] at requested <;> exact requested
+
+private theorem Task.handle_covers {state : State} {processId watcher : PID} {reference : List Nat} {count : Nat}
+    {task : Task α} {transition : Transition α} (covers : state.Covers watcher reference count)
+    (mem : transition ∈ task.handle state processId) : transition.state.Covers watcher reference count := by
+  simp only [Task.handle] at mem
+  split at mem
+  · simp at mem
+  · rename_i entry rest queue
+    cases found : state.record processId with
+    | none => simp [State.process, found] at queue
+    | some process =>
+    have processOf : state.process processId = process := by simp [State.process, found]
+    have set : (state.set processId { state.process processId with queue := rest }).Covers watcher reference count := by
+      rw [processOf]; exact covers.set found fun live => ⟨live, id⟩
+    have found' : (state.set processId { state.process processId with queue := rest }).record processId =
+        some { state.process processId with queue := rest } := by simp [State.record_set]
+    have handled := set.handle processId (task.wait.map (·.1)) entry
+    have recorded := State.Present.handle (state := state.set processId { state.process processId with queue := rest })
+      (processId := processId) (by simp [State.Present, found']) processId (task.wait.map (·.1)) entry
+    revert mem handled recorded
+    generalize (state.set processId { state.process processId with queue := rest }).handle processId
+      (task.wait.map (·.1)) entry = triple
+    obtain ⟨handled, resumed, exits⟩ := triple
+    intro mem covers' recorded
+    dsimp only at mem covers' recorded
+    split at mem
+    · simp only [List.mem_singleton] at mem; subst mem
+      obtain ⟨record, recorded⟩ := Option.isSome_iff_exists.mp recorded
+      exact covers'.terminate recorded _
+    · split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> exact covers'
+
+/-- A step from a configuration a run reaches keeps a watcher dropping a `DOWN`. -/
+private theorem Config.covers_step {elapsed : PID → Nat → Nat} {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key} {event : Event} {middle : State}
+    {tasks' : List (PID × Task α)} {finished' : Option (Except Exception α)} {watcher : PID}
+    {reference : List Nat} {count : Nat}
+    (reachable : (Config.running state tasks finished false).Reachable elapsed) (unborn : state.Unborn)
+    (covers : state.Covers watcher reference count) (shape : reference = watcher ++ [count])
+    (present : (state.record watcher).isSome)
+    (step : (Config.running state tasks finished false).stepOf key = some (event, .running middle tasks' finished' false)) :
+    middle.Covers watcher reference count := by
+  have within : state.Within elapsed := reachable.1.1
+  have tasked : ∀ {processId : PID} {task : Task α}, Kernel.lookup processId tasks = some task →
+      state.alive processId = true := fun lookup => reachable.2.2.1 _ (mem_of_lookup lookup)
+  cases key with
+  | own processId =>
+    obtain ⟨task, transition, lookup, head, next⟩ := Config.stepOf_own step
+    split at next
+    · cases next
+    · simp only [Config.running.injEq] at next
+      rw [next.1]
+      exact (Task.own_covers covers shape unborn present (tasked lookup) (List.mem_of_head? head)).normalize
+        (within.own (List.mem_of_head? head)).1
+  | handle processId =>
+    obtain ⟨task, transition, lookup, head, next⟩ := Config.stepOf_handle step
+    split at next
+    · cases next
+    · simp only [Config.running.injEq] at next
+      rw [next.1]
+      exact (Task.handle_covers covers (List.mem_of_head? head)).normalize
+        (within.handleStep (List.mem_of_head? head)).1
+  | phase processId =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq, Config.running.injEq] at step
+    obtain ⟨next, phase, -, rfl, -⟩ := step
+    exact (covers.phase phase).normalize (within.phase phase).1
+  | link processId target =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq, Config.running.injEq] at step
+    obtain ⟨next, phase, -, rfl, -⟩ := step
+    exact (covers.linkPhase phase).normalize (within.linkPhase phase).1
+  | unpark processId =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq, Config.running.injEq] at step
+    obtain ⟨-, -, -, rfl, -⟩ := step
+    exact (covers.unpark _).normalize (within.unpark _).1
+  | fire reference' =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq, Config.running.injEq] at step
+    obtain ⟨timer, -, -, rfl, -⟩ := step
+    exact (covers.fire _).normalize (within.fire _).1
+
 private theorem QueueChange.hidden {queue : List Entry → List Entry} {mailbox : List Term → List Term}
     {links : List (PID × Option Nat) → List (PID × Option Nat)} {entry : Entry} (change : QueueChange queue mailbox links)
     (linking : ∀ (rest : List Entry) (other : Entry), other.signal = .link →
