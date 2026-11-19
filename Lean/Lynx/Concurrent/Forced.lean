@@ -520,10 +520,10 @@ private theorem phase (changed : state.Changed processId related state') (unseen
   · exact .none
 
 private theorem fire (changed : state.Changed processId related state') (unseen : Unseen related)
-    (clockless : clock ≠ processId) (timer : Timer) :
+    (timer : Timer) :
     (state.fire timer).Changed processId related (state'.fire timer) := by
   simp only [State.fire, changed.2.2.1]
-  exact (changed.timers _).enqueue unseen fun same => absurd same clockless
+  exact (changed.timers _).enqueue unseen fun _ _ => by simp
 
 end State.Changed
 
@@ -694,9 +694,10 @@ private theorem Config.transition_changed {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {processId other : PID}
     {related : ProcessState → ProcessState → Prop} {task' : Task α} {first : Transition α}
     {firsts seconds : List (Transition α)} (differ : other ≠ processId)
-    (pids : ∀ entry ∈ first.tasks, entry.1 ≠ processId)
+    {elapsed : PID → Nat → Nat} (pids : ∀ entry ∈ first.tasks, entry.1 ≠ processId)
     (related' : Option.Rel (Transition.Changed processId related) firsts.head? seconds.head?)
-    (head : firsts.head? = some first) :
+    (head : firsts.head? = some first) (within : first.state.Within elapsed)
+    (within' : ∀ second, seconds.head? = some second → second.state.Within elapsed) :
     ∃ second : Transition α, seconds.head? = some second ∧ second.event = first.event ∧
       ((if second.exhausted then Config.running { second.state with processes := [], timers := [] } [] finished true
         else .running second.state.normalize
@@ -706,7 +707,8 @@ private theorem Config.transition_changed {tasks : List (PID × Task α)}
         else .running first.state.normalize (rewriteTask other (fun _ => first.tasks) tasks)
           (first.finished.orElse fun _ => finished) false) ∨
       ∃ (raw raw' : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α)),
-        raw.Changed processId related raw' ∧
+        raw.Changed processId related raw' ∧ raw.Within elapsed ∧ raw'.Within elapsed ∧
+        Kernel.lookup processId tasks₁ = Kernel.lookup processId tasks ∧
         (if first.exhausted then Config.running { first.state with processes := [], timers := [] } [] finished true
           else .running first.state.normalize (rewriteTask other (fun _ => first.tasks) tasks)
             (first.finished.orElse fun _ => finished) false) = .running raw.normalize tasks₁ finished₁ false ∧
@@ -727,7 +729,8 @@ private theorem Config.transition_changed {tasks : List (PID × Task α)}
     simp only at elapsed
     rw [elapsed]
   · right
-    refine ⟨first.state, second.state, _, _, changed', rfl, ?_⟩
+    refine ⟨first.state, second.state, _, _, changed', within, within' _ head',
+      lookup_rewriteTask (Ne.symm differ) (fun _ => pids) tasks, rfl, ?_⟩
     rw [rewriteTask_comm (Ne.symm differ) (fun _ entry mem => by
         simp only [List.mem_singleton] at mem; subst mem; exact Ne.symm differ) (fun _ => pids)]
 
@@ -736,14 +739,15 @@ the step cannot see and of its task: the same step, then the change. -/
 private theorem Config.step_changed {state state' : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {processId : PID} {related : ProcessState → ProcessState → Prop}
     {task task' : Task α} {key : Key} {event : Event} {next : Config α}
+    {elapsed : PID → Nat → Nat} (within : state.Within elapsed) (within' : state'.Within elapsed)
     (changed : state.Changed processId related state') (unseen : Unseen related) (fresh : TasksFresh state tasks)
-    (lookup : Kernel.lookup processId tasks = some task) (clockless : clock ≠ processId)
-    (owner : key.owner ≠ some processId)
+    (lookup : Kernel.lookup processId tasks = some task) (owner : key.owner ≠ some processId)
     (step : (Config.running state tasks finished false).stepOf key = some (event, next)) :
     ∃ next', (Config.running state' (rewriteTask processId (fun _ => [(processId, task')]) tasks) finished false).stepOf
         key = some (event, next') ∧
       (next' = next ∨ ∃ (raw raw' : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α)),
-        raw.Changed processId related raw' ∧
+        raw.Changed processId related raw' ∧ raw.Within elapsed ∧ raw'.Within elapsed ∧
+        Kernel.lookup processId tasks₁ = Kernel.lookup processId tasks ∧
         next = .running raw.normalize tasks₁ finished₁ false ∧
         next' = .running raw'.normalize (rewriteTask processId (fun _ => [(processId, task')]) tasks₁) finished₁ false) := by
   have alive : state.alive processId = true := fresh.2.1 _ (mem_of_lookup lookup)
@@ -758,19 +762,22 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
   -- Steps that keep the tasks.
   have kept : ∀ {first second : Option State} {event' : Event},
       Option.Rel (State.Changed processId related) first second →
+      (∀ raw, first = some raw → raw.Within elapsed) → (∀ raw', second = some raw' → raw'.Within elapsed) →
       first.map (fun raw => (event', Config.running raw.normalize tasks finished false)) = some (event, next) →
       ∃ next', second.map (fun raw => (event', Config.running raw.normalize
           (rewriteTask processId (fun _ => [(processId, task')]) tasks) finished false)) = some (event, next') ∧
         (next' = next ∨ ∃ (raw raw' : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α)),
-          raw.Changed processId related raw' ∧ next = .running raw.normalize tasks₁ finished₁ false ∧
+          raw.Changed processId related raw' ∧ raw.Within elapsed ∧ raw'.Within elapsed ∧
+          Kernel.lookup processId tasks₁ = Kernel.lookup processId tasks ∧
+          next = .running raw.normalize tasks₁ finished₁ false ∧
           next' = .running raw'.normalize (rewriteTask processId (fun _ => [(processId, task')]) tasks₁) finished₁ false) := by
-    intro first second event' rel found
+    intro first second event' rel sorted sorted' found
     cases rel with
     | none => simp at found
     | some changed' =>
       simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at found
       obtain ⟨rfl, rfl⟩ := found
-      exact ⟨_, rfl, .inr ⟨_, _, _, _, changed', rfl, rfl⟩⟩
+      exact ⟨_, rfl, .inr ⟨_, _, _, _, changed', sorted _ rfl, sorted' _ rfl, rfl, rfl, rfl⟩⟩
   cases key with
   | own other =>
     have differ : other ≠ processId := fun same => owner (by simp [Key.owner, same])
@@ -784,6 +791,7 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
         · rw [same]; exact differ
         · rw [child]; exact fresh.child found lookup)
       (changed.own unseen differ other' (fresh.child found lookup)) head
+      (within.own (List.mem_of_head? head)) (fun _ head' => within'.own (List.mem_of_head? head'))
     rw [← event']
     exact ⟨_, Config.stepOf_own_of (tasks' differ found) head', result⟩
   | handle other =>
@@ -795,6 +803,7 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
     obtain ⟨second, head', event', result⟩ := Config.transition_changed (finished := finished) (task' := task') differ
       (fun entry inside => by rw [(Task.handle_pids (List.mem_of_head? head)).1 entry inside]; exact differ)
       (changed.handleTask unseen differ other') head
+      (within.handleStep (List.mem_of_head? head)) (fun _ head' => within'.handleStep (List.mem_of_head? head'))
     rw [← event']
     exact ⟨_, Config.stepOf_handle_of (tasks' differ found) head', result⟩
   | phase other =>
@@ -807,7 +816,8 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
         rw [exiting record] at found
         simp at found
       · simp at found
-    · exact kept (changed.phase unseen same) step
+    · exact kept (changed.phase unseen same) (fun _ found => within.phase found)
+        (fun _ found => within'.phase found) step
   | link other target =>
     by_cases same : other = processId
     · subst same
@@ -818,7 +828,8 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
         rw [exiting record] at found
         simp at found
       · simp at found
-    · exact kept (changed.linkPhase unseen same target) step
+    · exact kept (changed.linkPhase unseen same target) (fun _ found => within.linkPhase found)
+        (fun _ found => within'.linkPhase found) step
   | unpark other =>
     simp only [Config.stepOf, changed.parked unseen] at step ⊢
     cases parked : (state.process other).parked with
@@ -826,7 +837,8 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
     | some pair =>
       simp only [parked, Option.map_some, Option.some.injEq, Prod.mk.injEq] at step ⊢
       obtain ⟨rfl, rfl⟩ := step
-      exact ⟨_, ⟨rfl, rfl⟩, .inr ⟨_, _, _, _, changed.unpark unseen other, rfl, rfl⟩⟩
+      exact ⟨_, ⟨rfl, rfl⟩, .inr ⟨_, _, _, _, changed.unpark unseen other, within.unpark other,
+        within'.unpark other, rfl, rfl, rfl⟩⟩
   | fire reference =>
     have firing : state'.firing = state.firing := by simp only [State.firing, changed.2.2.1]
     simp only [Config.stepOf, firing, Kernel.find?_eq] at step ⊢
@@ -835,7 +847,8 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
     | some timer' =>
       simp only [timer, Option.map_some, Option.some.injEq, Prod.mk.injEq] at step ⊢
       obtain ⟨rfl, rfl⟩ := step
-      exact ⟨_, ⟨rfl, rfl⟩, .inr ⟨_, _, _, _, changed.fire unseen clockless timer', rfl, rfl⟩⟩
+      exact ⟨_, ⟨rfl, rfl⟩, .inr ⟨_, _, _, _, changed.fire unseen timer', within.fire timer',
+        within'.fire timer', rfl, rfl, rfl⟩⟩
 
 /-! ### Normalizing a live record again -/
 
@@ -1160,6 +1173,59 @@ private theorem State.forced_close {raw raw' : State} {processId : PID} {process
         raw.normalize.record other := by
       rw [← goneNormal, ← State.record_normalize' sortedNormal, State.normalize_normalize sorted]
     rw [again, State.record_normalize' sorted]
+
+/-! ### Forced changes against steps of other keys -/
+
+/-- A forced step of a live process, changing only its record and its task,
+against a step of another key: the other step absorbs it, or the forced step
+taken after the other step closes the square, as `atMiddle` shows it stays
+forced, with the same change. -/
+private theorem Config.forced_other {elapsed : PID → Nat → Nat} {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {process : ProcessState}
+    {ok : ProcessState → Prop} {change : ProcessState → ProcessState} {task task' : Task α} {key key' : Key}
+    {event' : Event} {middle : Config α}
+    (reachable : (Config.running state tasks finished false).Reachable elapsed)
+    (lookup : Kernel.lookup processId tasks = some task) (found : state.record processId = some process)
+    (live : process.exiting = none) (ok' : ok process) (hidden : Hidden ok change)
+    (renormalize : ∀ gone, normRecord gone processId (normRecord state.gone processId (change process)) =
+      normRecord gone processId (change process))
+    (owner : key'.owner ≠ some processId)
+    (step' : (Config.running state tasks finished false).stepOf key' = some (event', middle))
+    (atMiddle : ∀ (raw : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α))
+      (process₁ : ProcessState), raw.Within elapsed →
+      (Config.running raw.normalize tasks₁ finished₁ false).Reachable elapsed →
+      Kernel.lookup processId tasks₁ = some task → raw.record processId = some process₁ → ok process₁ →
+      process₁.exiting = none →
+      ∃ event'', (key, event'', .running (raw.normalize.set processId (change (normRecord raw.gone processId process₁))).normalize
+          (rewriteTask processId (fun _ => [(processId, task')]) tasks₁) finished₁ false, true) ∈
+          (Config.running raw.normalize tasks₁ finished₁ false).taggedSteps ∧
+        (change (normRecord raw.gone processId process₁)).exiting = none ∧
+        normRecord raw.gone processId (change (normRecord raw.gone processId process₁)) =
+          normRecord raw.gone processId (change process₁)) :
+    (∃ absorbed, (Config.running (state.set processId (change process)).normalize
+        (rewriteTask processId (fun _ => [(processId, task')]) tasks) finished false).stepOf key' = some (absorbed, middle)) ∨
+      ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
+        (Config.running (state.set processId (change process)).normalize
+          (rewriteTask processId (fun _ => [(processId, task')]) tasks) finished false).stepOf key' = some (other, last) := by
+  have reachable₀ := reachable
+  obtain ⟨⟨within, normalized, -⟩, fresh⟩ := reachable
+  have changed := State.changed_forced within.1 normalized found live ok' hidden renormalize
+  have within' : ((state.set processId (change process)).normalize).Within elapsed := (within.set _ _).normalize
+  obtain ⟨next', stepped, same | ⟨raw, raw', tasks₁, finished₁, changedRaw, withinRaw, withinRaw', lookupAfter,
+      rfl, rfl⟩⟩ := Config.step_changed (task' := task') within within' changed hidden.unseen fresh lookup owner step'
+  · subst same
+    exact .inl ⟨event', stepped⟩
+  · right
+    have reachableMiddle := reachable₀.step (Config.step_of_stepOf step')
+    rcases changedRaw.records with ⟨missing, -⟩ | ⟨process₁, process₂, found₁, -, ok₁, live₁, -, -⟩
+    · exfalso
+      have alive := reachableMiddle.2.2.1 _ (mem_of_lookup (lookupAfter ▸ lookup))
+      rw [State.alive_normalize withinRaw.1] at alive
+      simp [State.alive, missing] at alive
+    obtain ⟨event'', mem, liveChanged, renormalized⟩ := atMiddle raw tasks₁ finished₁ process₁ withinRaw
+      reachableMiddle (lookupAfter ▸ lookup) found₁ ok₁ live₁
+    rw [State.forced_close withinRaw.1 withinRaw'.1 changedRaw hidden.unseen found₁ liveChanged renormalized] at mem
+    exact ⟨key, event'', _, event', mem, stepped⟩
 
 /-- Every other step absorbs a forced step, or commutes with it into a
 configuration where a forced step closes the square. -/
