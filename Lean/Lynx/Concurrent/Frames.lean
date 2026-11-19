@@ -1931,6 +1931,41 @@ private theorem enqueueFrames_quiet {state : State} {source target : PID} {signa
     · rfl
     · have := writes _ set; simp [headBit] at this
 
+/-- Sending a parked monitor signal is within its frames. -/
+private theorem Effect.InFrames.unpark (state : State) (source target : PID) (reference : List Nat)
+    (parked : (state.process source).parked = some (target, reference)) :
+    (state.unparkEffect source).InFrames
+      ([(source, Field.parked, Field.parked)] ++ state.enqueueFrames source target (.monitor reference)) state := by
+  let unparked := state.modify source fun process => { process with parked := none }
+  have first := Effect.InFrames.unparked state source
+  have second : (unparked.enqueueEffect source target (.monitor reference)).InFrames
+      (state.enqueueFrames source target (.monitor reference))
+      ((Effect.modify source fun process => { process with parked := none }).apply state) := by
+    have equal : unparked.enqueueFrames source target (.monitor reference) =
+        state.enqueueFrames source target (.monitor reference) :=
+      State.enqueueFrames_congr _ (State.alive_modify _ _ _ _ fun _ => rfl)
+    rw [← equal]
+    exact (Effect.InFrames.enqueue unparked _ _ _).congr fun other =>
+      ((Realizes.modify state source _).records other).symm
+  have parkedBits : ∀ {other bit}, writesOf [(source, Field.parked, Field.parked)] other bit → bit = 13 := by
+    intro other bit written
+    obtain ⟨entry, mem, set⟩ := writesOf_bits written
+    simp only [List.mem_singleton] at mem; subst mem; dsimp only at set; mask_bits
+  have unparkFramed := first.andThen second
+    (WellFramed.quiet fun entry mem => by
+      simp only [List.mem_append, List.mem_singleton] at mem
+      rcases mem with rfl | mem
+      · dsimp only; decide
+      · exact enqueueFrames_quiet mem)
+    (fun other _ written => by have := parkedBits written; simp [headBit] at this)
+    (fun other written _ => by have := parkedBits written; simp [headBit] at this)
+    (fun other written _ => by have := parkedBits written; simp [tailBit] at this)
+  have unparkEq : state.unparkEffect source = (Effect.modify source fun process => { process with parked := none }).andThen
+      (unparked.enqueueEffect source target (.monitor reference)) := by
+    simp only [State.unparkEffect, parked]; rfl
+  rw [← unparkEq] at unparkFramed
+  exact unparkFramed
+
 /-- Sending a signal is within its frames. -/
 private theorem Effect.InFrames.send (state : State) (source target : PID) (signal : Signal) :
     (state.sendEffect source target signal).InFrames (state.sendFrames source target signal) state := by
@@ -1982,39 +2017,7 @@ private theorem Effect.InFrames.send (state : State) (source target : PID) (sign
     · rename_i same
       have same : other = target := eq_of_beq same
       subst same
-      let unparked := state.modify source fun process => { process with parked := none }
-      have first := Effect.InFrames.unparked state source
-      have second : (unparked.enqueueEffect source other (.monitor reference)).InFrames
-          (state.enqueueFrames source other (.monitor reference))
-          ((Effect.modify source fun process => { process with parked := none }).apply state) := by
-        have equal : unparked.enqueueFrames source other (.monitor reference) =
-            state.enqueueFrames source other (.monitor reference) :=
-          State.enqueueFrames_congr _ (State.alive_modify _ _ _ _ fun _ => rfl)
-        rw [← equal]
-        exact (Effect.InFrames.enqueue unparked _ _ _).congr fun processId =>
-          ((Realizes.modify state source _).records processId).symm
-      have parkedBits : ∀ {processId bit}, writesOf [(source, Field.parked, Field.parked)] processId bit → bit = 13 := by
-        intro processId bit written
-        obtain ⟨entry, mem, set⟩ := writesOf_bits written
-        simp only [List.mem_singleton] at mem; subst mem; dsimp only at set; mask_bits
-      have readBits : ∀ {signal : Signal} {processId bit}, readsOf (state.enqueueFrames source other signal) processId bit →
-          bit = 16 ∨ bit = 6 ∨ bit = 12 := by
-        intro signal processId bit read
-        obtain ⟨entry, mem, set⟩ := readsOf_bits read
-        exact (enqueueFrames_bits mem).1 _ set
-      have unparkFramed := first.andThen second
-        (WellFramed.quiet fun entry mem => by
-          simp only [List.mem_append, List.mem_singleton] at mem
-          rcases mem with rfl | mem
-          · dsimp only; decide
-          · exact enqueueFrames_quiet mem)
-        (fun processId _ written => by have := parkedBits written; simp [headBit] at this)
-        (fun processId written _ => by have := parkedBits written; simp [headBit] at this)
-        (fun processId written _ => by have := parkedBits written; simp [tailBit] at this)
-      have unparkEq : state.unparkEffect source = (Effect.modify source fun process => { process with parked := none }).andThen
-          (unparked.enqueueEffect source other (.monitor reference)) := by
-        simp only [State.unparkEffect, parked]; rfl
-      rw [← unparkEq] at unparkFramed
+      have unparkFramed := Effect.InFrames.unpark state source other reference parked
       have third : ((state.unpark source).enqueueEffect source other signal).InFrames
           (state.enqueueFrames source other signal) ((state.unparkEffect source).apply state) := by
         have equal : (state.unpark source).enqueueFrames source other signal = state.enqueueFrames source other signal :=
@@ -2048,5 +2051,96 @@ private theorem Effect.InFrames.send (state : State) (source target : PID) (sign
          · exact inside entry mem (.inr ⟨other, reference, parked, rfl, rfl⟩)
          · exact inside entry mem (.inl rfl))
     · exact direct
+
+/-- Firing a timer is within its frames. -/
+private theorem Effect.InFrames.fire (state : State) (timer : Timer) :
+    (state.fireEffect timer).InFrames (state.enqueueFrames clock timer.destination (.message timer.message)) state := by
+  let retimed : State := { state with timers := Kernel.filter (·.reference != timer.reference) state.timers }
+  have second : (retimed.enqueueEffect clock timer.destination (.message timer.message)).InFrames
+      (state.enqueueFrames clock timer.destination (.message timer.message))
+      ((Effect.retime (Kernel.filter (·.reference != timer.reference))).apply state) :=
+    (Effect.InFrames.enqueue retimed _ _ _).congr fun processId =>
+      ((Realizes.retime state _).records processId).symm
+  have total := (Effect.InFrames.empty [] state).andThen (effect := Effect.retime _) second
+    (WellFramed.quiet fun _ mem => enqueueFrames_quiet (List.nil_append _ ▸ mem))
+    (fun _ _ written => by simp [writesOf] at written)
+    (fun _ written => by simp [writesOf] at written)
+    (fun _ written => by simp [writesOf] at written)
+  exact total
+
+/-! ### Frames of own steps -/
+
+/-- Changing one record within the one frame of its process, reading no queue. -/
+private theorem Effect.InFrames.single {processId : PID} {reads writes : Nat} {change : ProcessState → ProcessState}
+    {state : State} (framed : ∀ base, Framed (bitsOf reads) (bitsOf writes) base change)
+    (used : ∃ bit, bit < 17 ∧ (reads.testBit bit ∨ writes.testBit bit))
+    (quiet : reads.testBit headBit = false ∧ reads.testBit tailBit = false ∧ writes.testBit headBit = false) :
+    (Effect.modify processId change).InFrames [(processId, reads, writes)] state :=
+  Effect.InFrames.modify (List.mem_singleton.mpr rfl) used fun process _ =>
+    (framed process).widen (fun _ read => read) (fun _ written => written) (List.mem_singleton.mpr rfl)
+      fun entry mem _ => by simp only [List.mem_singleton] at mem; subst mem; exact quiet
+
+/-- An effect within frames is within frames with more entries that read no queue. -/
+private theorem Effect.InFrames.more {effect : Effect} {frames more : List Frame} {state : State}
+    (framed : effect.InFrames frames state)
+    (quiet : ∀ entry ∈ frames ++ more, entry.2.1.testBit headBit = false ∧ entry.2.1.testBit tailBit = false ∧
+      entry.2.2.testBit headBit = false) : effect.InFrames (frames ++ more) state :=
+  framed.mono (readsOf_mono fun _ mem => List.mem_append_left _ mem)
+    (writesOf_mono fun _ mem => List.mem_append_left _ mem) (WellFramed.quiet quiet)
+
+private theorem Effect.InFrames.setStep (state : State) (processId : PID) (updated : Environment) :
+    (Effect.modify processId fun process =>
+      { process with pdict := updated.pdict, refCounter := max process.refCounter updated.refCounter }).InFrames
+      [(processId, Field.refCounter, Field.pdict ||| Field.refCounter)] state :=
+  Effect.InFrames.single (fun _ => by framed_update) ⟨4, by decide, .inl (by decide)⟩ (by decide)
+
+private theorem Effect.InFrames.receiveStep (state : State) (processId : PID) (reads : Nat) (remaining : List Term)
+    (quiet : reads.testBit headBit = false ∧ reads.testBit tailBit = false)
+    (mailbox : reads.testBit 2 = true) :
+    (Effect.modify processId fun process => { process with mailbox := remaining }).InFrames
+      [(processId, reads, Field.mailbox)] state := by
+  refine Effect.InFrames.single (fun base => ?_) ⟨2, by decide, .inr (by decide)⟩ ⟨quiet.1, quiet.2, by decide⟩
+  have widen : ∀ bit, (Field.mailbox).testBit bit → reads.testBit bit := fun bit set => by
+    have : bit = 2 := by mask_bits
+    subst this; exact mailbox
+  exact (show Framed (bitsOf Field.mailbox) (bitsOf Field.mailbox) base
+      (fun process => { process with mailbox := remaining }) by framed_update).mono
+    (fun bit read => widen bit read) (fun _ written => written)
+    (fun read => by simp [bitsOf, quiet.2] at read) (fun read => by simp [bitsOf, quiet.1] at read)
+    (fun written => by simp [bitsOf] at written; contradiction)
+
+private theorem Effect.InFrames.demonitorStep (state : State) (processId : PID) (reference : List Nat) :
+    (Effect.modify processId fun process =>
+      { process with
+        monitoring := Kernel.filter (·.1 != reference) process.monitoring
+        aliases := Kernel.erase process.aliases reference }).InFrames
+      [(processId, Field.monitoring ||| Field.aliases, Field.monitoring ||| Field.aliases)] state :=
+  Effect.InFrames.single (fun _ => by framed_update) ⟨8, by decide, .inl (by decide)⟩ (by decide)
+
+/-- Effects changing records alike are within the same frames. -/
+private theorem Effect.InFrames.of_record {effect effect' : Effect} {frames : List Frame} {state : State}
+    (framed : effect.InFrames frames state) (same : ∀ processId, effect'.record processId = effect.record processId) :
+    effect'.InFrames frames state := fun processId => by rw [same]; exact framed processId
+
+private theorem Effect.record_retime (change : List Timer → List Timer) (processId : PID) :
+    (Effect.retime change).record processId = id := rfl
+
+private theorem Effect.InFrames.cancelTimerStep (state : State) (processId : PID) (change : List Timer → List Timer) :
+    ((Effect.retime change).andThen (.modify processId fun process => { process with cancels := process.cancels + 1 })).InFrames
+      [(processId, Field.cancels, Field.cancels)] state :=
+  (Effect.InFrames.single (state := state) (change := fun process => { process with cancels := process.cancels + 1 })
+    (fun _ => by framed_update) ⟨11, by decide, .inl (by decide)⟩ (by decide)).of_record
+    fun processId => by rw [Effect.record_andThen, Effect.record_retime]; rfl
+
+private theorem Effect.InFrames.startTimerStep (state : State) (processId destination : PID) (retime : Effect)
+    (untimed : ∀ processId, retime.record processId = id) :
+    ((allocateEffect processId).andThen retime).InFrames
+      [(processId, Field.refCounter, Field.refCounter), (destination, Field.live, 0)] state := by
+  have first : (allocateEffect processId).InFrames [(processId, Field.refCounter, Field.refCounter)] state :=
+    Effect.InFrames.single (fun _ => by framed_update) ⟨4, by decide, .inl (by decide)⟩ (by decide)
+  refine (first.more (more := [(destination, Field.live, 0)]) fun entry mem => ?_).of_record fun other => ?_
+  · simp only [List.cons_append, List.nil_append, List.mem_cons, List.not_mem_nil, or_false] at mem
+    rcases mem with rfl | rfl <;> (dsimp only; decide)
+  · rw [Effect.record_andThen, untimed]; rfl
 
 end Lynx.Concurrent
