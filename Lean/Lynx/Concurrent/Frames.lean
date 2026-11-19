@@ -6966,4 +6966,59 @@ private theorem Config.handle_after {elapsed : PID → Nat → Nat} {state state
   · simp only [Config.sameView, lookup, lookup']
     rw [view]; exact handleViewIdentical_refl _
 
+/-- A confined phase, unparking or timer firing, at a state agreeing with the
+original on what its frames read, is enabled and has the same effect. -/
+private theorem Config.keeps_after {elapsed : PID → Nat → Nat} {state state' : State}
+    {tasks tasks' : List (PID × Task α)} {finished finished' : Option (Except Exception α)} {key : Key}
+    {frames : List Frame} {timers : Bool} {event : Event} {next : Config α}
+    (within' : state'.Within elapsed) (owner : key.owner = none)
+    (confined : Config.confined (.running state tasks finished false) key = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, timers))
+    (step : (Config.running state tasks finished false).stepOf key = some (event, next))
+    (agree : Agree frames state state') (timed : timers = true → state'.timers = state.timers) :
+    ∃ event' raw',
+      (Config.running state' tasks' finished' false).stepOf key =
+        some (event', .running raw'.normalize tasks' finished' false) ∧
+      Realizes ((Config.running state tasks finished false).effectOf key) state' raw' ∧
+      raw'.Within elapsed ∧
+      (Config.running state tasks finished false).sameView (.running state' tasks' finished' false) key = true := by
+  cases key with
+  | own | handle => simp [Key.owner] at owner
+  | link => simp [Config.confined] at confined
+  | phase processId =>
+    simp only [Config.frames] at found
+    obtain ⟨enabled, effect⟩ := State.phase_agree found agree
+    simp only [Config.stepOf, Option.map_eq_some_iff] at step
+    obtain ⟨raw, phase, -⟩ := step
+    obtain ⟨raw', phase'⟩ : ∃ raw', state'.phase processId = some raw' := by
+      cases found' : state'.phase processId with
+      | none => rw [found', phase] at enabled; simp at enabled
+      | some raw' => exact ⟨raw', rfl⟩
+    refine ⟨Event.phase processId, raw', by simp [Config.stepOf, phase'], ?_, within'.phase phase', rfl⟩
+    simp only [Config.effectOf]; rw [← effect]; exact Realizes.phase phase'
+  | unpark processId =>
+    simp only [Config.frames] at found
+    split at found
+    · rename_i target reference parked
+      simp only [Option.some.injEq, Prod.mk.injEq] at found
+      rw [← found.1] at agree
+      obtain ⟨parked', effect⟩ := State.unpark_agree parked agree
+      refine ⟨Event.unpark processId, state'.unpark processId, by simp [Config.stepOf, parked', parked], ?_,
+        within'.unpark processId, rfl⟩
+      simp only [Config.effectOf]; rw [← effect]; exact Realizes.unpark state' processId
+    · simp at found
+  | fire reference =>
+    simp only [Config.frames] at found
+    split at found
+    · rename_i timer timerFound
+      simp only [Option.some.injEq, Prod.mk.injEq] at found
+      rw [← found.1] at agree
+      obtain ⟨firing, effect⟩ := State.fire_agree (timed found.2.symm) agree
+      have timerFound' : Kernel.find? (·.reference == reference) state'.firing = some timer := by
+        rw [firing]; exact timerFound
+      refine ⟨Event.fire reference, state'.fire timer, by simp only [Config.stepOf, timerFound']; rfl, ?_,
+        within'.fire timer, rfl⟩
+      simp only [Config.effectOf, timerFound]; rw [← effect]; exact Realizes.fire state' timer
+    · simp at found
+
 end Lynx.Concurrent
