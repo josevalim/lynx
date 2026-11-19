@@ -107,10 +107,9 @@ private theorem find?_firstOfEach :
 step with its key. -/
 private theorem Config.stepOf_of_tagged {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {key : Key} {event : Event} {next : Config α} {forced : Bool}
-    (distinct : (Config.running state tasks finished false).distinctTasks = true)
+    (pairwise : tasks.Pairwise fun entry entry' => entry.1 ≠ entry'.1)
     (mem : (key, event, next, forced) ∈ (Config.running state tasks finished false).taggedSteps) :
     (Config.running state tasks finished false).stepOf key = some (event, next) := by
-  have pairwise := distinct_of_distinctTasks distinct
   simp only [Config.taggedSteps, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
     List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.mk.injEq] at mem
   rcases mem with (((⟨⟨before, ⟨processId, task⟩, after⟩, split, own | handle⟩ | ⟨⟨processId, _⟩, -, link | phase⟩) |
@@ -677,33 +676,45 @@ private theorem State.fireEffect_steady (state : State) (timer : Timer) {actor :
     (state.fireEffect timer).Steady actor :=
   (Effect.Steady.retime _).andThen (State.enqueueEffect_steady _ _ _ _)
 
-/-- A process's own step that leaves it its task keeps every live record but
-its own and a child's it spawns, and its own too unless it spawns. -/
+/-- A process's own step keeps every live record but its own and a child's it
+spawns, and its own too when it continues without spawning. -/
 private theorem Task.ownEffect_steady {state : State} {processId : PID} {task : Task α}
-    {transition : Transition α} (mem : transition ∈ task.own state processId)
-    (continues : ∃ task', (processId, task') ∈ transition.tasks) :
+    {transition : Transition α} (mem : transition ∈ task.own state processId) :
     (task.ownEffect state processId).Steady
         (fun other => other = processId ∨ other = Kernel.append processId [(state.process processId).children + 1]) ∧
-      ((∀ options child next, task.computation ≠ .schedule options child next) →
+      ((∃ task', (processId, task') ∈ transition.tasks) →
+        (∀ options child next, task.computation ≠ .schedule options child next) →
         (task.ownEffect state processId).Steady fun _ => False) := by
   obtain ⟨computation, finish, wait⟩ := task
-  obtain ⟨task', inside⟩ := continues
   cases wait with
   | some => simp [Task.own] at mem
   | none =>
     have all : (Task.ownEffect state processId ⟨computation, finish, none⟩).Steady (fun _ => False) →
         (Task.ownEffect state processId ⟨computation, finish, none⟩).Steady
           (fun other => other = processId ∨ other = Kernel.append processId [(state.process processId).children + 1]) ∧
-        ((∀ options child next, computation ≠ .schedule options child next) →
+        ((∃ task', (processId, task') ∈ transition.tasks) →
+          (∀ options child next, computation ≠ .schedule options child next) →
           (Task.ownEffect state processId ⟨computation, finish, none⟩).Steady fun _ => False) :=
-      fun steady => ⟨steady.mono fun _ => False.elim, fun _ => steady⟩
+      fun steady => ⟨steady.mono fun _ => False.elim, fun _ _ => steady⟩
+    have ends : ∀ reason, transition.tasks = [] → (state.terminateEffect processId reason).Steady
+        (fun other => other = processId ∨ other = Kernel.append processId [(state.process processId).children + 1]) ∧
+        ((∃ task', (processId, task') ∈ transition.tasks) →
+          (∀ options child next, computation ≠ .schedule options child next) →
+          (state.terminateEffect processId reason).Steady fun _ => False) :=
+      fun reason none => ⟨State.terminateEffect_steady _ _ _ (.inl rfl), fun ⟨_, inside⟩ => by simp [none] at inside⟩
     cases computation with
-    | ok => simp [Task.own, Task.ended] at mem; subst mem; simp at inside
+    | ok => simp [Task.own, Task.ended] at mem; subst mem; exact ends _ rfl
     | error exception =>
-      cases exception <;> simp [Task.own, Task.ended] at mem <;> subst mem <;> simp at inside
+      cases exception
+      case exhausted =>
+        simp [Task.own] at mem; subst mem
+        refine ⟨fun other outside process live => ?_, fun ⟨_, inside⟩ => by simp at inside⟩
+        have differ : other ≠ processId := fun same => outside (.inl same)
+        exact ⟨process, by simp [Task.ownEffect, Effect.record, changeOf, Ne.symm differ], live, rfl⟩
+      all_goals (simp [Task.own, Task.ended] at mem; subst mem; exact ends _ rfl)
     | schedule options child next =>
       exact ⟨State.spawnEffect_steady _ _ _ (.inl rfl) (.inr rfl),
-        fun spawns => absurd rfl (spawns options child next)⟩
+        fun _ spawns => absurd rfl (spawns options child next)⟩
     | get => exact all Effect.Steady.empty
     | set => exact all (by simp only [Task.ownEffect]; steady_modify)
     | send => exact all (State.sendEffect_steady _ _ _ _)
@@ -806,29 +817,30 @@ private theorem State.keepsLive_normalize {state : State} (sorted : state.Sorted
   refine ⟨normRecord state.gone processId process, ?_, by simp [normRecord, live], by simp [normRecord, live]⟩
   simp [Option.filter, finished]
 
-/-- Handling a signal that leaves the process its task keeps every live record. -/
+/-- Handling a signal keeps every live record but the process's, and its own
+too when it continues. -/
 private theorem Task.handleEffect_steady {state : State} {processId : PID} {task : Task α}
-    {transition : Transition α} (mem : transition ∈ task.handle state processId)
-    (continues : ∃ task', (processId, task') ∈ transition.tasks) :
-    (task.handleEffect state processId).Steady fun _ => False := by
-  obtain ⟨task', inside⟩ := continues
+    {transition : Transition α} (mem : transition ∈ task.handle state processId) :
+    (task.handleEffect state processId).Steady (· = processId) ∧
+      ((∃ task', (processId, task') ∈ transition.tasks) → (task.handleEffect state processId).Steady fun _ => False) := by
   simp only [Task.handle] at mem
   simp only [Task.handleEffect]
   cases queue : (state.process processId).queue with
   | nil => simp [queue] at mem
   | cons entry rest =>
     simp only [queue] at mem ⊢
-    have handled : ((Effect.modify processId fun process => { process with queue := process.queue.drop 1 }).andThen
+    have handled : ∀ actor : PID → Prop, ((Effect.modify processId fun process =>
+        { process with queue := process.queue.drop 1 }).andThen
         ((state.set processId { state.process processId with queue := rest }).handleEffect processId entry)).Steady
-        fun _ => False :=
-      (by steady_modify : Effect.Steady _ _).andThen (State.handleEffect_steady _ _ _)
+        actor := fun _ => (by steady_modify : Effect.Steady _ _).andThen (State.handleEffect_steady _ _ _)
     generalize (State.set _ _ _).handle _ _ _ = result at mem ⊢
     obtain ⟨handledState, resumed, exits⟩ := result
     cases exits with
     | some reason =>
       simp only [List.mem_singleton] at mem; subst mem
-      simp [Task.ended] at inside
-    | none => exact handled
+      exact ⟨(handled _).andThen (State.terminateEffect_steady _ _ _ rfl),
+        fun ⟨_, inside⟩ => by simp [Task.ended] at inside⟩
+    | none => exact ⟨handled _, fun _ => handled _⟩
 
 /-- A link phase keeps every live record but the ended process's. -/
 private theorem State.linkPhase_keepsLive {state next : State} {processId target : PID}
@@ -845,7 +857,8 @@ private theorem State.linkPhase_keepsLive {state next : State} {processId target
         refine (set.andThen (Realizes.linkExit _ _ _ _)).keepsLive ?_
         refine Effect.Steady.andThen ?_ (State.linkExitEffect_steady _ _ _ _)
         intro other outside process' live
-        rw [Effect.record_modify, if_neg outside]
+        rw [Effect.record_modify]
+        simp only [outside, ↓reduceIte]
         exact ⟨process', rfl, live, rfl⟩
       · simp at phase
     · simp at phase
@@ -990,5 +1003,248 @@ private theorem TasksFresh.replace {state state' : State} {before after replacem
           exact unspawned old' inside ((List.prefix_append child [index]).trans extended)
         · rw [same']
           exact not_append_prefix child index
+
+/-- A step that keeps the tasks keeps them fresh, when it keeps every live
+record of a process with a task. -/
+private theorem TasksFresh.keep {state state' : State} {tasks : List (PID × Task α)} {actor : PID → Prop}
+    (fresh : TasksFresh state tasks) (keeps : state.KeepsLive state' actor)
+    (holders : ∀ entry ∈ tasks, ¬actor entry.1) : TasksFresh state' tasks := by
+  obtain ⟨pairwise, alive, extends'⟩ := fresh
+  have kept : ∀ entry ∈ tasks, ∃ process process', state.record entry.1 = some process ∧
+      state'.record entry.1 = some process' ∧ process'.exiting = none ∧ process'.children = process.children := by
+    intro entry mem
+    obtain ⟨process, found, live⟩ := State.alive_iff.mp (alive entry mem)
+    obtain ⟨process', found', live', children⟩ := keeps entry.1 (holders entry mem) process found live
+    exact ⟨process, process', found, found', live', children⟩
+  refine ⟨pairwise, fun entry mem => ?_, fun entry mem entry' mem' index above => ?_⟩
+  · obtain ⟨-, process', -, found', live', -⟩ := kept entry mem
+    exact State.alive_iff.mpr ⟨process', found', live'⟩
+  · obtain ⟨process, process', found, found', -, children⟩ := kept entry mem
+    rw [State.process_of_record found', children] at above
+    exact extends' entry mem entry' mem' index (by rw [State.process_of_record found]; exact above)
+
+/-- A process with a task is not one that ended. -/
+private theorem TasksFresh.not_exiting {state : State} {tasks : List (PID × Task α)} (fresh : TasksFresh state tasks)
+    {processId : PID} {exiting : Exiting} {process : ProcessState} (found : state.record processId = some process)
+    (exits : process.exiting = some exiting) : ∀ entry ∈ tasks, ¬entry.1 = processId := by
+  intro entry mem same
+  obtain ⟨process', found', live⟩ := State.alive_iff.mp (fresh.2.1 entry mem)
+  rw [same, found] at found'
+  simp only [Option.some.injEq] at found'
+  subst found'
+  rw [exits] at live
+  simp at live
+
+private theorem Task.own_pairwise {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.own state processId) :
+    transition.tasks.Pairwise fun entry entry' => entry.1 ≠ entry'.1 := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp [Task.own] at mem
+  | none =>
+    cases computation with
+    | schedule options child next =>
+      simp only [Task.own, List.mem_singleton] at mem; subst mem
+      simp [Ne.symm (append_ne_self _ _), State.spawnWith]
+    | receive =>
+      simp only [Task.own] at mem
+      repeat' split at mem
+      all_goals (simp only [List.mem_singleton, List.not_mem_nil] at mem; try (subst mem; simp))
+    | request =>
+      simp only [Task.own] at mem
+      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> simp
+    | error exception =>
+      cases exception <;> simp only [Task.own, List.mem_singleton] at mem <;> subst mem <;> simp [Task.ended]
+    | _ => simp only [Task.own, List.mem_singleton] at mem; subst mem; simp [Task.ended]
+
+private theorem Task.handle_pids {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.handle state processId) :
+    (∀ entry ∈ transition.tasks, entry.1 = processId) ∧
+      transition.tasks.Pairwise fun entry entry' => entry.1 ≠ entry'.1 := by
+  obtain ⟨view, -, changed, -⟩ := Task.handle_change mem
+  rw [changed]
+  unfold handleChange
+  split
+  · simp
+  · split <;> simp
+
+private theorem entry_of_pid {processId : PID} {entry : PID × Task α} {tasks : List (PID × Task α)}
+    (inside : entry ∈ tasks) (same : entry.1 = processId) : ∃ task, (processId, task) ∈ tasks := by
+  obtain ⟨_, task⟩ := entry
+  simp only at same; subst same
+  exact ⟨task, inside⟩
+
+/-- A process's own step keeps the tasks fresh. -/
+private theorem TasksFresh.own {elapsed : PID → Nat → Nat} {state : State} {tasks : List (PID × Task α)}
+    {processId : PID} {task : Task α} {transition : Transition α} (within : state.Within elapsed)
+    (fresh : TasksFresh state tasks) (lookup : Kernel.lookup processId tasks = some task)
+    (head : (task.own state processId).head? = some transition) :
+    TasksFresh transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks) := by
+  have mem := List.mem_of_head? head
+  obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
+  rw [rewriteTask_of_splitAt split]
+  rw [splitAt_eq split] at fresh
+  have realizes := Realizes.own mem
+  obtain ⟨steady, steadyKept⟩ := Task.ownEffect_steady mem
+  have normal := State.keepsLive_normalize (within.own mem).1
+  have mine : (processId, task) ∈ before ++ (processId, task) :: after := by simp
+  obtain ⟨process, found, live⟩ := State.alive_iff.mp (fresh.2.1 _ mine)
+  have spawnedLive : ∀ options child next, task.computation = .schedule options child next →
+      (∃ parent, transition.state.normalize.record processId = some parent ∧ parent.exiting = none ∧
+        parent.children = process.children + 1) ∧
+      ∃ started, transition.state.normalize.record
+        (Kernel.append processId [(state.process processId).children + 1]) = some started ∧
+        started.exiting = none := by
+    intro options child next computes
+    have effect : task.ownEffect state processId = state.spawnEffect processId options := by
+      have waiting := Task.own_waiting head
+      obtain ⟨computation, finish, wait⟩ := task
+      simp only at computes waiting
+      subst waiting
+      simp only [Task.ownEffect, computes]
+    rw [effect] at realizes
+    obtain ⟨⟨parent, atParent, liveParent, childrenParent⟩, started, atChild, liveChild⟩ :=
+      State.spawnEffect_records state processId options found live
+        (state.record (Kernel.append processId [(state.process processId).children + 1]))
+    have rawParent : transition.state.record processId = some parent := by
+      rw [realizes.1, found]; exact atParent
+    have rawChild : transition.state.record (Kernel.append processId [(state.process processId).children + 1]) =
+        some started := by
+      rw [realizes.1]; exact atChild
+    obtain ⟨parent', atParent', liveParent', childrenParent'⟩ := normal processId id parent rawParent liveParent
+    obtain ⟨started', atChild', liveChild', -⟩ := normal _ id started rawChild liveChild
+    exact ⟨⟨parent', atParent', liveParent', childrenParent'.trans childrenParent⟩, started', atChild', liveChild'⟩
+  refine TasksFresh.replace fresh (fun entry inside => ?_) (Task.own_pairwise mem)
+    (((realizes.keepsLive steady).trans normal).mono fun _ inside => inside.elim id False.elim)
+    (fun entry inside same => ?_) (fun entry inside same => ?_)
+  · rcases Task.own_pids mem entry inside with same | ⟨same, -⟩
+    · exact .inl same
+    · exact .inr same
+  · by_cases spawns : ∃ options child next, task.computation = .schedule options child next
+    · obtain ⟨options, child, next, computes⟩ := spawns
+      obtain ⟨⟨parent, atParent, liveParent, childrenParent⟩, -⟩ := spawnedLive options child next computes
+      rw [State.process_of_record atParent, childrenParent, State.process_of_record found]
+      exact ⟨State.alive_iff.mpr ⟨parent, atParent, liveParent⟩, by omega, fun _ _ _ => by omega⟩
+    · have notSpawn : ∀ options child next, task.computation ≠ .schedule options child next :=
+        fun options child next computes => spawns ⟨options, child, next, computes⟩
+      obtain ⟨process', found', live', children⟩ :=
+        ((realizes.keepsLive (steadyKept (entry_of_pid inside same) notSpawn)).trans normal) processId
+          (fun inside => inside.elim id id) process found live
+      rw [State.process_of_record found', children, State.process_of_record found]
+      refine ⟨State.alive_iff.mpr ⟨process', found', live'⟩, Nat.le_refl _, fun entry' inside' same' => ?_⟩
+      exfalso
+      rcases Task.own_pids mem entry' inside' with same'' | ⟨-, options, child, next, computes⟩
+      · rw [same''] at same'; exact append_ne_self _ _ same'.symm
+      · exact notSpawn options child next computes
+  · rcases Task.own_pids mem entry inside with same' | ⟨-, options, child, next, computes⟩
+    · exfalso; rw [same'] at same; exact append_ne_self _ _ same.symm
+    · obtain ⟨-, started, atChild, liveChild⟩ := spawnedLive options child next computes
+      rw [same]
+      exact State.alive_iff.mpr ⟨started, atChild, liveChild⟩
+
+/-- Handling a signal keeps the tasks fresh. -/
+private theorem TasksFresh.handle {elapsed : PID → Nat → Nat} {state : State} {tasks : List (PID × Task α)}
+    {processId : PID} {task : Task α} {transition : Transition α} (within : state.Within elapsed)
+    (fresh : TasksFresh state tasks) (lookup : Kernel.lookup processId tasks = some task)
+    (head : (task.handle state processId).head? = some transition) :
+    TasksFresh transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks) := by
+  have mem := List.mem_of_head? head
+  obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
+  rw [rewriteTask_of_splitAt split]
+  rw [splitAt_eq split] at fresh
+  have realizes := Realizes.handleStep mem
+  obtain ⟨steady, steadyKept⟩ := Task.handleEffect_steady mem
+  obtain ⟨pids, distinct⟩ := Task.handle_pids mem
+  have normal := State.keepsLive_normalize (within.handleStep mem).1
+  have mine : (processId, task) ∈ before ++ (processId, task) :: after := by simp
+  obtain ⟨process, found, live⟩ := State.alive_iff.mp (fresh.2.1 _ mine)
+  refine TasksFresh.replace fresh (fun entry inside => .inl (pids entry inside)) distinct
+    (((realizes.keepsLive steady).trans normal).mono fun _ inside => inside.elim .inl False.elim)
+    (fun entry inside same => ?_) (fun entry inside same => ?_)
+  · obtain ⟨process', found', live', children⟩ :=
+      ((realizes.keepsLive (steadyKept (entry_of_pid inside same))).trans normal) processId
+        (fun inside => inside.elim id id) process found live
+    rw [State.process_of_record found', children, State.process_of_record found]
+    refine ⟨State.alive_iff.mpr ⟨process', found', live'⟩, Nat.le_refl _, fun entry' inside' same' => ?_⟩
+    exfalso
+    rw [pids entry' inside'] at same'
+    exact append_ne_self _ _ same'.symm
+  · exfalso
+    rw [pids entry inside] at same
+    exact append_ne_self _ _ same.symm
+
+/-- Each process has one task, along every run. -/
+private def Config.Fresh : Config α → Prop
+  | .start .. => True
+  | .running state tasks _ _ => TasksFresh state tasks
+
+private theorem TasksFresh.nil (state : State) : TasksFresh state ([] : List (PID × Task α)) :=
+  ⟨.nil, by simp, by simp⟩
+
+/-- Every step keeps each process with one task. -/
+private theorem Config.Fresh.step {elapsed : PID → Nat → Nat} {config next : Config α} {event : Event}
+    (within : config.Within elapsed) (fresh : config.Fresh) (step : Step config event next) : next.Fresh := by
+  match config with
+  | .start env computation elapsed' =>
+    simp only [Step, Config.successors] at step
+    split at step
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · split at step
+      · simp only [List.mem_singleton, Prod.mk.injEq] at step
+        obtain ⟨-, rfl⟩ := step
+        refine ⟨List.pairwise_singleton _ _, fun entry mem => ?_, fun entry mem entry' mem' index _ => ?_⟩
+        · simp only [List.mem_singleton] at mem; subst mem
+          simp [State.alive, State.initial, State.record, Kernel.lookup_eq]
+        · simp only [List.mem_singleton] at mem mem'; subst mem mem'
+          exact not_append_prefix _ _ ∘ (by simpa using ·)
+      · simp at step
+  | .running _ _ _ true => simp [Step, Config.successors] at step
+  | .running state tasks finished false =>
+    have within : state.Within elapsed := within
+    have fresh : TasksFresh state tasks := fresh
+    obtain ⟨key, forced, mem⟩ := Config.tagged_of_step step
+    have found := Config.stepOf_of_tagged fresh.1 mem
+    cases key with
+    | own processId =>
+      obtain ⟨task, transition, lookup, head, rfl⟩ := Config.stepOf_own found
+      split
+      · exact TasksFresh.nil _
+      · exact TasksFresh.own within fresh lookup head
+    | handle processId =>
+      obtain ⟨task, transition, lookup, head, rfl⟩ := Config.stepOf_handle found
+      split
+      · exact TasksFresh.nil _
+      · exact TasksFresh.handle within fresh lookup head
+    | link processId target =>
+      simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
+      obtain ⟨phased, phase, -, rfl⟩ := found
+      obtain ⟨process, record, linked⟩ := State.record_of_linkPhase phase
+      have exits : ∃ exiting, process.exiting = some exiting := by
+        simp only [State.exitLinks, State.process_of_record record] at linked
+        split at linked
+        · rename_i exiting found'; exact ⟨exiting, found'⟩
+        · simp at linked
+      obtain ⟨exiting, exits⟩ := exits
+      exact fresh.keep ((State.linkPhase_keepsLive phase).trans
+        (State.keepsLive_normalize (within.linkPhase phase).1)) fun entry mem inside =>
+          inside.elim (fresh.not_exiting record exits entry mem) id
+    | phase processId =>
+      simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
+      obtain ⟨phased, phase, -, rfl⟩ := found
+      exact fresh.keep (((Realizes.phase phase).keepsLive (State.phaseEffect_steady _ _ (actor := fun _ => False))).trans
+        (State.keepsLive_normalize (within.phase phase).1)) fun _ _ inside => inside.elim id id
+    | unpark processId =>
+      simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
+      obtain ⟨-, -, -, rfl⟩ := found
+      exact fresh.keep (((Realizes.unpark state processId).keepsLive
+        (State.unparkEffect_steady _ _ (actor := fun _ => False))).trans
+        (State.keepsLive_normalize (within.unpark processId).1)) fun _ _ inside => inside.elim id id
+    | fire reference =>
+      simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
+      obtain ⟨timer, -, -, rfl⟩ := found
+      exact fresh.keep (((Realizes.fire state timer).keepsLive
+        (State.fireEffect_steady _ _ (actor := fun _ => False))).trans
+        (State.keepsLive_normalize (within.fire timer).1)) fun _ _ inside => inside.elim id id
 
 end Lynx.Concurrent
