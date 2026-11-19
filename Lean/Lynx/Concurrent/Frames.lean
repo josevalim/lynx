@@ -4676,6 +4676,122 @@ private theorem Task.ownEffect_clean {state : State} {tasks : List (PID × Task 
       exact CleanOutside.retimeIf _ _ allocated
     | _ => simp at confined
 
+/-- A change neutral to inertness applied to a live process keeps a state clean. -/
+private theorem CleanOutside.neutral {state : State} {except : PID → Prop} {processId : PID}
+    {change : ProcessState → ProcessState} (clean : CleanOutside state except) (alive : state.alive processId = true)
+    (keeps : ∀ process, (change process).queue = process.queue ∧ (change process).refCounter = process.refCounter ∧
+      (change process).monitoring = process.monitoring ∧ (change process).aliases = process.aliases ∧
+      (change process).links = process.links ∧ (change process).exiting = process.exiting) :
+    CleanOutside ((Effect.modify processId change).apply state) except := by
+  refine CleanOutside.modify (fun process => by rw [(keeps process).2.2.2.2.2]) clean fun outside process found => ?_
+  have live : process.exiting = none := by simp only [State.alive, found] at alive; simpa using alive
+  obtain ⟨queue, refCounter, monitoring, aliases, links, exiting⟩ := keeps process
+  exact (clean _ outside process found).neutral live (exiting.trans live) queue refCounter monitoring aliases links
+
+/-- Removing a monitor and alias of a live process keeps a state clean when no
+queued signal carries its reference. -/
+private theorem CleanOutside.demonitor {state : State} {except : PID → Prop} {processId : PID}
+    {reference : List Nat} (clean : CleanOutside state except) (alive : state.alive processId = true)
+    (fresh : ∀ entry ∈ (state.process processId).queue, entry.carries reference = false) :
+    CleanOutside ((Effect.modify processId fun process =>
+      { process with monitoring := Kernel.filter (·.1 != reference) process.monitoring
+                     aliases := Kernel.erase process.aliases reference }).apply state) except := by
+  refine CleanOutside.modify (fun _ => rfl) clean fun outside process found => ?_
+  have live : process.exiting = none := by simp only [State.alive, found] at alive; simpa using alive
+  have same : state.process processId = process := by simp [State.process, found]
+  exact (clean _ outside process found).demonitor (reference := reference) live live rfl rfl rfl rfl rfl
+    fun entry mem => fresh entry (same ▸ mem)
+
+/-- Normalizing after handling a confined kind of signal changes no record. -/
+private theorem Task.handleEffect_clean {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {task : Task α}
+    (sorted : state.Sorted) (normalized : state.normalize = state)
+    (confined : Config.confined (.running state tasks finished false) (.handle processId) = true) :
+    CleanOutside ((task.handleEffect state processId).apply state) (fun _ => False) := by
+  have clean : CleanOutside state (fun _ => False) := fun _ _ _ found => Clean.of_normalized sorted normalized found
+  simp only [Config.confined, Bool.and_eq_true] at confined
+  obtain ⟨alive, confined⟩ := confined
+  obtain ⟨process, found, live⟩ : ∃ process, state.record processId = some process ∧ process.exiting = none := by
+    simp only [State.alive] at alive
+    cases record : state.record processId with
+    | none => rw [record] at alive; simp at alive
+    | some process => rw [record] at alive; exact ⟨process, rfl, by simpa using alive⟩
+  have same : state.process processId = process := by simp [State.process, found]
+  cases queue : (state.process processId).queue with
+  | nil => simp [queue] at confined
+  | cons entry rest =>
+    simp only [queue] at confined
+    have kind : entry.signal.handledConfined = true := by
+      obtain ⟨source, signal⟩ := entry; cases signal <;> simp_all [Signal.handledConfined]
+    rw [Task.handleEffect_of_continues queue (by rw [State.handle_confined _ _ _ _ kind])]
+    refine CleanOutside.andThen ?_
+    -- Removing the oldest signal.
+    let pop := fun process : ProcessState => { process with queue := process.queue.drop 1 }
+    have popped : CleanOutside ((Effect.modify processId pop).apply state) (fun _ => False) :=
+      CleanOutside.modify (fun _ => rfl) clean fun _ process' found' => by
+        rw [found] at found'; cases found'
+        exact (clean processId (by simp) process found).pop live
+    have alivePopped : ((Effect.modify processId pop).apply state).alive processId = true := by
+      rw [Effect.apply_modify_alive]; exact (State.alive_modify state processId processId pop fun _ => rfl).trans alive
+    have recordPopped : ((Effect.modify processId pop).apply state).record processId = some (pop process) := by
+      rw [Effect.record_apply, Effect.record_modify, found]; simp
+    have neutralAppend : ∀ (message : Term) (state' : State), CleanOutside state' (fun _ => False) →
+        state'.alive processId = true → CleanOutside ((appendEffect processId message).apply state') (fun _ => False) :=
+      fun message state' clean' alive' => CleanOutside.neutral clean' alive' fun _ => ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
+    obtain ⟨source, signal⟩ := entry
+    cases signal with
+    | message message => exact neutralAppend message _ popped alivePopped
+    | aliasMessage alias message =>
+      simp only [State.handleEffect]
+      split
+      · exact neutralAppend message _ popped alivePopped
+      · rw [Effect.apply_empty]; exact popped
+    | monitor reference =>
+      simp only [State.handleEffect]
+      refine CleanOutside.modify (fun _ => rfl) popped fun _ process' found' => ?_
+      rw [recordPopped] at found'; cases found'
+      exact (popped processId (by simp) _ recordPopped).grow live live rfl rfl (fun _ mem => mem) (fun _ mem => mem) rfl
+    | down reference reason =>
+      simp only [Kernel.any_eq, Bool.not_eq_true', List.any_eq_false, Bool.not_eq_true] at confined
+      simp only [State.handleEffect]
+      refine CleanOutside.andThen ?_
+      -- Clearing an eager exit keeps the queue, the record live, and the state clean.
+      have cleared : ∀ (condition : Prop) [Decidable condition],
+          CleanOutside ((if condition then Effect.modify processId fun process =>
+            { process with eagerExits := Kernel.filter (· != source) process.eagerExits } else {}).apply
+              ((Effect.modify processId pop).apply state)) (fun _ => False) ∧
+          ((if condition then Effect.modify processId fun process =>
+            { process with eagerExits := Kernel.filter (· != source) process.eagerExits } else {}).apply
+              ((Effect.modify processId pop).apply state)).alive processId = true ∧
+          (((if condition then Effect.modify processId fun process =>
+            { process with eagerExits := Kernel.filter (· != source) process.eagerExits } else {}).apply
+              ((Effect.modify processId pop).apply state)).process processId).queue = rest := by
+        intro condition _
+        have queuePopped : (((Effect.modify processId pop).apply state).process processId).queue = rest := by
+          rw [State.process, recordPopped]
+          show (process.queue.drop 1) = rest
+          rw [← same, queue]; rfl
+        split
+        · refine ⟨CleanOutside.neutral popped alivePopped fun _ => ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩, ?_, ?_⟩
+          · rw [Effect.apply_modify_alive]
+            refine (State.alive_modify _ processId processId _ ?_).trans alivePopped
+            intro process; rfl
+          · rw [Effect.apply_modify_process]
+            refine (State.process_modify_keeps (get := (·.queue)) ?_).trans queuePopped
+            intro process; rfl
+        · rw [Effect.apply_empty]; exact ⟨popped, alivePopped, queuePopped⟩
+      obtain ⟨clean', alive', queue'⟩ := cleared ((isNormal reason && Kernel.contains
+        ((state.set processId { state.process processId with queue := rest }).process processId).eagerExits source) = true)
+      split
+      · refine CleanOutside.andThen ?_
+        refine neutralAppend _ _ (CleanOutside.demonitor clean' alive' fun entry mem => ?_) ?_
+        · rw [queue'] at mem; simpa using confined entry mem
+        · rw [Effect.apply_modify_alive]
+          refine (State.alive_modify _ processId processId _ ?_).trans alive'
+          intro process; rfl
+      · rw [Effect.apply_empty]; exact clean'
+    | _ => simp [Signal.handledConfined] at kind
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
