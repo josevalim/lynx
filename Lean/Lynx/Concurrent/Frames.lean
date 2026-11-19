@@ -6740,4 +6740,38 @@ private theorem Config.noRevive {state : State} {tasks : List (PID × Task α)}
     · exact Effect.KeepsAlive.empty.noRevive
   | link => exact Effect.KeepsAlive.empty.noRevive
 
+/-! ### Assembling: the other step, after one apart -/
+
+private theorem splitAt_of_lookup {processId : PID} : ∀ {tasks : List (PID × Task α)} {task : Task α},
+    Kernel.lookup processId tasks = some task → ∃ before after, splitAt processId tasks = some (before, task, after)
+  | [], _, found => by simp [Kernel.lookup_eq] at found
+  | (other, task') :: rest, task, found => by
+    simp only [Kernel.lookup_eq, List.lookup_cons] at found
+    simp only [splitAt]
+    by_cases same : other = processId
+    · subst same
+      simp only [beq_self_eq_true, ↓reduceIte, Option.some.injEq] at found ⊢
+      exact ⟨[], rest, by rw [found]⟩
+    · have differ : (other == processId) = false := by simp [same]
+      have differ' : (processId == other) = false := by simp [Ne.symm same]
+      simp only [differ', Bool.false_eq_true, ↓reduceIte] at found
+      obtain ⟨before, after, split⟩ := splitAt_of_lookup (by simpa [Kernel.lookup_eq] using found)
+      exact ⟨(other, task') :: before, after, by simp [differ, split]⟩
+
+/-- A process's own step at a configuration, given its task and its first transition. -/
+private theorem Config.stepOf_own_of {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
+    (lookup : Kernel.lookup processId tasks = some task) (head : (task.own state processId).head? = some transition) :
+    ∃ event next, (Config.running state tasks finished false).stepOf (.own processId) = some (event, next) := by
+  obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
+  exact ⟨transition.event, transition.apply before after finished false, by simp [Config.stepOf, split, head]⟩
+
+/-- Handling a signal at a configuration, given the task and the first transition. -/
+private theorem Config.stepOf_handle_of {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
+    (lookup : Kernel.lookup processId tasks = some task) (head : (task.handle state processId).head? = some transition) :
+    ∃ event next, (Config.running state tasks finished false).stepOf (.handle processId) = some (event, next) := by
+  obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
+  exact ⟨transition.event, transition.apply before after finished false, by simp [Config.stepOf, split, head]⟩
+
 end Lynx.Concurrent
