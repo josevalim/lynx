@@ -236,7 +236,7 @@ private def Framed (reads writes : Mask) (base : ProcessState) (change : Process
     process.get part = process'.get part → (change process).get part = (change process').get part) ∧
   QueueChange (writes headBit) (writes tailBit) reads base change ∧
   (reads tailBit → reads headBit) ∧
-  (reads headBit → base.queue ≠ []) ∧
+  (reads headBit → reads tailBit ∨ base.queue ≠ []) ∧
   (writes headBit → base.queue ≠ []) ∧
   (writes liveBit = false → ∀ process, process.Same reads base →
     (change process).exiting.isSome = process.exiting.isSome)
@@ -244,7 +244,7 @@ private def Framed (reads writes : Mask) (base : ProcessState) (change : Process
 /-- A change within its frame keeps what a frame it writes nothing of reads. -/
 private theorem Framed.keeps {reads writes reads' : Mask} {base : ProcessState} {change : ProcessState → ProcessState}
     (framed : Framed reads writes base change) (apart : ∀ bit, writes bit → reads' bit → False)
-    (nonempty : reads' headBit → base.queue ≠ []) (tail : reads' tailBit → reads' headBit) :
+    (nonempty : reads' headBit → reads' tailBit ∨ base.queue ≠ []) (tail : reads' tailBit → reads' headBit) :
     (change base).Same reads' base := by
   obtain ⟨keeps, -, ⟨dropped, added, -, noHead, noTail, queue⟩, -, -, -, -⟩ := framed
   have self := ProcessState.Same.refl reads base
@@ -257,9 +257,11 @@ private theorem Framed.keeps {reads writes reads' : Mask} {base : ProcessState} 
     · exact (apart _ written head).elim
   · cases written : writes headBit
     · rw [queue base self, noHead written]
-      cases equal : base.queue with
-      | nil => exact absurd equal (nonempty inside)
-      | cons _ _ => rfl
+      cases written' : writes tailBit
+      · rw [noTail written']; simp
+      · cases equal : base.queue with
+        | nil => exact absurd equal ((nonempty inside).resolve_left fun read => apart _ written' read)
+        | cons _ _ => rfl
     · exact (apart _ written inside).elim
   · cases written : writes part.bit
     · exact keeps base self part written
@@ -370,10 +372,15 @@ private theorem apart_of_framesApart {frames frames' : List Frame} (apart : fram
 
 /-! ### Effects within frames -/
 
+/-- Whether a record, or its absence, is of a live process, as `State.alive` reads it. -/
+private def liveOf : Option ProcessState → Bool
+  | some process => process.exiting.isNone
+  | none => false
+
 /-- Two records, or their absence, agree on a mask: alike live, when it reads
 liveness, and agreeing on its fields when both exist. -/
 private def RecordSame (mask : Mask) (record record' : Option ProcessState) : Prop :=
-  (mask liveBit → record.map (·.exiting.isSome) = record'.map (·.exiting.isSome)) ∧
+  (mask liveBit → liveOf record = liveOf record') ∧
   ∀ process process', record = some process → record' = some process' → process.Same mask process'
 
 private theorem RecordSame.refl (mask : Mask) (record : Option ProcessState) : RecordSame mask record record :=
@@ -399,7 +406,7 @@ private theorem Effect.InFrames.keeps {effect : Effect} {frames frames' : List F
     (framed : effect.InFrames frames state)
     (apart : ∀ processId bit, writesOf frames processId bit → readsOf frames' processId bit → False)
     (nonempty : ∀ processId process, state.record processId = some process →
-      readsOf frames' processId headBit → process.queue ≠ [])
+      readsOf frames' processId headBit → readsOf frames' processId tailBit ∨ process.queue ≠ [])
     (tail : ∀ processId, readsOf frames' processId tailBit → readsOf frames' processId headBit)
     (processId : PID) :
     RecordSame (readsOf frames' processId) (state.record processId) ((effect.apply state).record processId) := by
@@ -418,9 +425,10 @@ private theorem Effect.InFrames.keeps {effect : Effect} {frames frames' : List F
       have keeps := (framed process found).keeps (apart processId)
         (fun read => nonempty processId process found read) (tail processId)
       refine ⟨fun read => ?_, fun process₁ process₂ found₁ found₂ => ?_⟩
-      · simp only [Option.map_some, Option.some.injEq]
+      · simp only [Option.map_some, liveOf]
         cases written : writesOf frames processId liveBit
-        · exact ((framed process found).2.2.2.2.2.2 written process (ProcessState.Same.refl _ _)).symm
+        · have := (framed process found).2.2.2.2.2.2 written process (ProcessState.Same.refl _ _)
+          cases equal : process.exiting <;> cases equal' : (change process).exiting <;> simp_all
         · exact (apart processId liveBit written read).elim
       · simp only [Option.some.injEq, Option.map_some] at found₁ found₂; subst found₁; subst found₂
         exact keeps.symm
@@ -786,7 +794,10 @@ private def State.terminateEffect (state : State) (processId : PID) (reason : Te
         ((state.modify processId fun process => { process with exiting := process.exiting.map fun exiting =>
           { exiting with links := Kernel.filter (· != target) exiting.links } }).linkExitEffect processId target reason)
     else {}
-  ((Effect.retime (Kernel.filter (·.destination != processId))).andThen (Effect.put processId { process with
+  -- It changes the timers only when one is to the process, as its frames say.
+  let retime := if Kernel.any state.timers (·.destination == processId) then
+      Effect.retime (Kernel.filter (·.destination != processId)) else {}
+  (retime.andThen (Effect.put processId { process with
     mailbox := [], queue, exiting := some { reason, links, downs := process.monitors } })).andThen
     (chainEffect exit exitEffect ended links)
 
@@ -794,7 +805,17 @@ private theorem Realizes.terminate (state : State) (processId : PID) (reason : T
     Realizes (state.terminateEffect processId reason) state (state.terminate processId reason) := by
   unfold State.terminateEffect State.terminate
   simp only [Kernel.foldl_eq]
-  refine ((Realizes.retime _ _).andThen (Realizes.put _ _ _)).andThen (Realizes.foldl (fun state target => ?_) _ _)
+  have retimed : Realizes (if Kernel.any state.timers (·.destination == processId) then
+      Effect.retime (Kernel.filter (·.destination != processId)) else {}) state
+      { state with timers := Kernel.filter (·.destination != processId) state.timers } := by
+    split
+    · exact Realizes.retime _ _
+    · rename_i none
+      have kept : Kernel.filter (·.destination != processId) state.timers = state.timers := by
+        simp only [Kernel.filter_eq, Kernel.any_eq, Bool.not_eq_true, List.any_eq_false] at none ⊢
+        exact List.filter_eq_self.mpr fun timer mem => by simpa using none timer mem
+      rw [kept]; exact Realizes.refl _
+  refine (retimed.andThen (Realizes.put _ _ _)).andThen (Realizes.foldl (fun state target => ?_) _ _)
   split
   · exact (Realizes.modify _ _ _).andThen (Realizes.linkExit _ _ _ _)
   · exact Realizes.refl _
@@ -1335,7 +1356,6 @@ reads, when the other's reads of its writes are read by it too. -/
 private theorem Framed.same {reads writes reads' : Mask} {base process : ProcessState}
     {change : ProcessState → ProcessState} (framed : Framed reads writes base change)
     (same : process.Same (reads.union reads') base)
-    (covered : ∀ bit, reads' bit → writes bit → reads bit)
     (popped : reads' headBit → writes headBit → reads tailBit) :
     (change process).Same reads' (change base) := by
   obtain ⟨keeps, depends, ⟨dropped, added, -, noHead, -, queue⟩, -, -, -, -⟩ := framed
@@ -1352,7 +1372,7 @@ private theorem Framed.same {reads writes reads' : Mask} {base process : Process
   · cases written : writes part.bit
     · rw [keeps _ mine part written, keeps _ self part written]
       exact same.right.2.2 part read
-    · exact depends _ _ mine self part written (same.2.2 part (by simp [Mask.union, covered _ read written]))
+    · exact depends _ _ mine self part written (same.2.2 part (by simp [Mask.union, read]))
 
 /-- Two changes within frames, one after the other, are within the union of
 their frames, when the second reads of what the first writes only what the
@@ -1361,14 +1381,23 @@ reads of a queue is there before the first. -/
 private theorem Framed.comp {reads writes reads' writes' : Mask} {base : ProcessState}
     {change change' : ProcessState → ProcessState}
     (framed : Framed reads writes base change) (framed' : Framed reads' writes' (change base) change')
-    (covered : ∀ bit, reads' bit → writes bit → reads bit)
     (popped : reads' headBit → writes headBit → reads tailBit)
     (once : writes headBit → writes' headBit → False)
     (appended : writes tailBit → writes' headBit → False)
-    (nonempty : reads' headBit ∨ writes' headBit → base.queue ≠ []) :
+    (nonempty : reads' headBit → (reads.union reads') tailBit ∨ base.queue ≠ []) :
     Framed (reads.union reads') (writes.union writes') base (change' ∘ change) := by
+  -- The second removes a head only from a queue the first appended nothing to.
+  have pops'' : writes' headBit → base.queue ≠ [] := fun popping empty => by
+    obtain ⟨-, -, ⟨dropped, added, -, -, noTail, queue⟩, -⟩ := framed
+    have none : added = [] := by
+      cases tail : writes tailBit
+      · exact noTail tail
+      · exact (appended tail popping).elim
+    have := framed'.2.2.2.2.2.1 popping
+    rw [queue base (ProcessState.Same.refl _ _), empty, none] at this
+    simp at this
   have through : ∀ process, process.Same (reads.union reads') base →
-      (change process).Same reads' (change base) := fun process same => framed.same same covered popped
+      (change process).Same reads' (change base) := fun process same => framed.same same popped
   obtain ⟨keeps, depends, queue, tail, head, pops, live⟩ := framed
   obtain ⟨keeps', depends', queue', tail', head', pops', live'⟩ := framed'
   have self := ProcessState.Same.refl reads base
@@ -1412,14 +1441,15 @@ private theorem Framed.comp {reads writes reads' writes' : Mask} {base : Process
     rcases read with read | read
     · exact .inl (tail read)
     · exact .inr (tail' read)
-  · simp only [Mask.union, Bool.or_eq_true] at read
-    rcases read with read | read
-    · exact head read
-    · exact nonempty (.inl read)
+  · rcases (by simpa [Mask.union] using read : reads headBit ∨ reads' headBit) with read | read
+    · rcases head read with tail | nonempty
+      · exact .inl (by simp [Mask.union, tail])
+      · exact .inr nonempty
+    · exact nonempty read
   · simp only [Mask.union, Bool.or_eq_true] at written
     rcases written with written | written
     · exact pops written
-    · exact nonempty (.inr written)
+    · exact pops'' written
   · simp only [Mask.union, Bool.or_eq_false_iff] at written
     simp only [Function.comp]
     rw [live' written.2 _ (through _ same), live written.1 _ same.left]
@@ -1433,7 +1463,7 @@ private theorem ProcessState.Same.mono {mask mask' : Mask} {process base : Proce
 private theorem Framed.mono {reads writes reads' writes' : Mask} {base : ProcessState}
     {change : ProcessState → ProcessState} (framed : Framed reads writes base change)
     (moreReads : ∀ bit, reads bit → reads' bit) (moreWrites : ∀ bit, writes bit → writes' bit)
-    (tail : reads' tailBit → reads' headBit) (nonempty : reads' headBit → base.queue ≠ [])
+    (tail : reads' tailBit → reads' headBit) (nonempty : reads' headBit → reads' tailBit ∨ base.queue ≠ [])
     (pops : writes' headBit → base.queue ≠ []) :
     Framed reads' writes' base change := by
   obtain ⟨keeps, depends, ⟨dropped, added, one, noHead, noTail, queue⟩, -, -, -, live⟩ := framed
@@ -1522,12 +1552,13 @@ private theorem writesOf_append (frames frames' : List Frame) (processId : PID) 
     writesOf (frames ++ frames') processId = (writesOf frames processId).union (writesOf frames' processId) := by
   funext bit; simp [writesOf, Mask.union, List.any_append]
 
-/-- Frames that read a queue's tail only with its head, and its head, or write
-it, only where there is one. -/
+/-- Frames that read a queue's tail only with its head, and, unless they write
+the whole record, read its head without its tail, or remove it, only where
+there is one. -/
 private def WellFramed (frames : List Frame) (state : State) : Prop :=
   ∀ processId, (readsOf frames processId tailBit → readsOf frames processId headBit) ∧
-    ∀ process, state.record processId = some process →
-      (readsOf frames processId headBit → process.queue ≠ []) ∧
+    ∀ process, state.record processId = some process → ¬ (∀ bit, bit < 17 → writesOf frames processId bit) →
+      (readsOf frames processId headBit → readsOf frames processId tailBit ∨ process.queue ≠ []) ∧
       (writesOf frames processId headBit → process.queue ≠ [])
 
 /-- Two effects within frames, one after the other, are within both frames,
@@ -1536,8 +1567,6 @@ they neither both remove a queue's head nor remove it after appending to it. -/
 private theorem Effect.InFrames.andThen {effect effect' : Effect} {frames frames' : List Frame} {state : State}
     (framed : effect.InFrames frames state) (framed' : effect'.InFrames frames' (effect.apply state))
     (wellFramed : WellFramed (frames ++ frames') state)
-    (covered : ∀ processId bit, readsOf frames' processId bit → writesOf frames processId bit →
-      readsOf frames processId bit)
     (popped : ∀ processId, readsOf frames' processId headBit → writesOf frames processId headBit →
       readsOf frames processId tailBit)
     (once : ∀ processId, writesOf frames processId headBit → writesOf frames' processId headBit → False)
@@ -1547,6 +1576,8 @@ private theorem Effect.InFrames.andThen {effect effect' : Effect} {frames frames
   rw [Effect.record_andThen, readsOf_append, writesOf_append]
   have bits := wellFramed processId
   rw [readsOf_append, writesOf_append] at bits
+  by_cases all : ∀ bit, bit < 17 → (writesOf frames processId).union (writesOf frames' processId) bit
+  · exact .inr (.inl all)
   have widen : ∀ {reads writes : Mask} {process : ProcessState} {change : ProcessState → ProcessState},
       state.record processId = some process → Framed reads writes process change →
       (∀ bit, reads bit → (readsOf frames processId).union (readsOf frames' processId) bit) →
@@ -1554,7 +1585,7 @@ private theorem Effect.InFrames.andThen {effect effect' : Effect} {frames frames
       Framed ((readsOf frames processId).union (readsOf frames' processId))
         ((writesOf frames processId).union (writesOf frames' processId)) process change :=
     fun found framed moreReads moreWrites => framed.mono moreReads moreWrites bits.1
-      (fun read => ((bits.2 _ found).1 read)) (fun written => ((bits.2 _ found).2 written))
+      (fun read => ((bits.2 _ found all).1 read)) (fun written => ((bits.2 _ found all).2 written))
   have left : ∀ bit, readsOf frames processId bit → (readsOf frames processId).union (readsOf frames' processId) bit :=
     fun bit read => by simp [Mask.union, read]
   have right : ∀ bit, readsOf frames' processId bit → (readsOf frames processId).union (readsOf frames' processId) bit :=
@@ -1592,11 +1623,8 @@ private theorem Effect.InFrames.andThen {effect effect' : Effect} {frames frames
         · exact ⟨bit, lower, .inr (left' bit written)⟩
       · have after : (effect.apply state).record processId = some (change process) := by
           rw [Effect.record_apply, equal, found]; rfl
-        exact (inside process found).comp (inside' _ after) (covered processId) (popped processId)
-          (once processId) (appended processId) (fun read => by
-            rcases read with read | written
-            · exact (bits.2 _ found).1 (by simp [Mask.union, read])
-            · exact (bits.2 _ found).2 (by simp [Mask.union, written]))
+        exact (inside process found).comp (inside' _ after) (popped processId)
+          (once processId) (appended processId) (fun read => (bits.2 _ found all).1 (by simp [Mask.union, read]))
 
 /-! ### Frames of steps -/
 
@@ -1822,6 +1850,8 @@ private theorem Effect.InFrames.mono {effect : Effect} {frames frames' : List Fr
     (moreWrites : ∀ processId bit, writesOf frames processId bit → writesOf frames' processId bit)
     (wellFramed : WellFramed frames' state) : effect.InFrames frames' state := by
   intro processId
+  by_cases all' : ∀ bit, bit < 17 → writesOf frames' processId bit
+  · exact .inr (.inl all')
   rcases framed processId with same | all | ⟨change, equal, used, inside⟩
   · exact .inl same
   · exact .inr (.inl fun bit lower => moreWrites _ _ (all bit lower))
@@ -1830,14 +1860,14 @@ private theorem Effect.InFrames.mono {effect : Effect} {frames frames' : List Fr
       · exact ⟨bit, lower, .inl (moreReads _ _ read)⟩
       · exact ⟨bit, lower, .inr (moreWrites _ _ written)⟩
     · exact (inside process found).mono (moreReads _) (moreWrites _) (wellFramed processId).1
-        ((wellFramed processId).2 _ found).1 ((wellFramed processId).2 _ found).2
+        ((wellFramed processId).2 _ found all').1 ((wellFramed processId).2 _ found all').2
 
 /-- Frames that read no queue's head or tail and remove no head are well formed. -/
 private theorem WellFramed.quiet {frames : List Frame} {state : State}
     (quiet : ∀ entry ∈ frames, entry.2.1.testBit headBit = false ∧ entry.2.1.testBit tailBit = false ∧
       entry.2.2.testBit headBit = false) : WellFramed frames state :=
   fun processId => ⟨fun read => by rw [readsOf_false fun entry mem => (quiet entry mem).2.1] at read; simp at read,
-    fun _ _ => ⟨fun read => by rw [readsOf_false fun entry mem => (quiet entry mem).1] at read; simp at read,
+    fun _ _ _ => ⟨fun read => by rw [readsOf_false fun entry mem => (quiet entry mem).1] at read; simp at read,
       fun written => by rw [writesOf_false fun entry mem => (quiet entry mem).2.2] at written; simp at written⟩⟩
 
 private theorem readsOf_mono {frames frames' : List Frame} (sub : ∀ entry ∈ frames, entry ∈ frames')
@@ -1978,7 +2008,6 @@ private theorem Effect.InFrames.send (state : State) (source target : PID) (sign
           rcases mem with rfl | mem
           · dsimp only; decide
           · exact enqueueFrames_quiet mem)
-        (fun processId bit read written => by have := parkedBits written; have := readBits read; omega)
         (fun processId _ written => by have := parkedBits written; simp [headBit] at this)
         (fun processId written _ => by have := parkedBits written; simp [headBit] at this)
         (fun processId written _ => by have := parkedBits written; simp [tailBit] at this)
@@ -2007,7 +2036,6 @@ private theorem Effect.InFrames.send (state : State) (source target : PID) (sign
           · dsimp only; decide
           · exact enqueueFrames_quiet mem
           · exact enqueueFrames_quiet mem)
-        (fun processId bit read written => by have := writeBits written; have := readBits read; omega)
         (fun processId _ written => by have := writeBits written; simp [headBit] at this)
         (fun processId written _ => by have := writeBits written; simp [headBit] at this)
         (fun processId _ written => by
