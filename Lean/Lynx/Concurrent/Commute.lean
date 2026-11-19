@@ -145,7 +145,8 @@ message, removing a monitor, trapping exits, or ending. -/
 
 /-- The steps of a running configuration, each with its key and whether every
 run can take it first, the forced steps: a process reading or replacing its
-environment or receiving a message already handled, handling a signal that
+environment without allocating references, which could make a queued signal
+inert, or receiving a message already handled, handling a signal that
 `Task.forcedHead` accepts, or sending a `DOWN` its watcher drops. -/
 @[expose] def Config.taggedSteps : Config α → List (Key × Event × Config α × Bool)
   | .start .. => []
@@ -156,7 +157,9 @@ environment or receiving a message already handled, handling a signal that
           Kernel.append
             (Kernel.map (fun transition => (Key.own processId, transition.event,
               transition.apply before after finished false,
-              transition.event matches .internal _ | .receive ..)) (task.own state processId))
+              (transition.event matches .internal _ | .receive ..) &&
+                (transition.state.process processId).refCounter == (state.process processId).refCounter))
+              (task.own state processId))
             (Kernel.map (fun transition => (Key.handle processId, transition.event,
               transition.apply before after finished false,
               match (state.process processId).queue with
