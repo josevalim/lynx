@@ -49,12 +49,71 @@ private structure Unseen (related : ProcessState → ProcessState → Prop) : Pr
   unpark : ∀ {first second}, related first second →
     related { first with parked := none } { second with parked := none }
 
-/-- Two states that differ only in the record of a process, related by `related`. -/
-private def State.Changed (processId : PID) (related : ProcessState → ProcessState → Prop)
+/-- Whether a record is of a live process. -/
+private def liveRecord (record : Option ProcessState) : Bool := (record.map (·.exiting.isNone)).getD false
+
+/-- Whether a signal to a process that is gone is answered to its sender. -/
+private def Signal.fallsBack : Signal → Bool
+  | .link | .monitor _ | .isAlive => true
+  | _ => false
+
+/-- A relation between the records of a process, either of which may be
+missing, that steps of other processes cannot tell apart, and that what they
+change in the record keeps. -/
+private structure Unnoticed (related : Option ProcessState → Option ProcessState → Prop) : Prop where
+  live : ∀ {first second}, related first second → liveRecord second = liveRecord first
+  trapExit : ∀ {first second}, related first second → (second.getD {}).trapExit = (first.getD {}).trapExit
+  parked : ∀ {first second}, related first second → (second.getD {}).parked = (first.getD {}).parked
+  links : ∀ {first second}, related first second → ∀ entry : Entry, entry.signal = .link →
+    (entry ∈ (second.getD {}).queue ↔ entry ∈ (first.getD {}).queue)
+  push : ∀ {first second} entry, related first second → liveRecord first = true →
+    related (first.map (·.push entry)) (second.map (·.push entry))
+  eagerExit : ∀ {first second} source, related first second → liveRecord first = true →
+    related (first.map (·.eagerExit source)) (second.map (·.eagerExit source))
+  unpark : ∀ {first second}, related first second → (first.getD {}).parked.isSome = true →
+    related (first.map ({ · with parked := none })) (second.map ({ · with parked := none })) ∧
+      ∀ entry, related ((first.map ({ · with parked := none })).map (·.push entry))
+        ((second.map ({ · with parked := none })).map (·.push entry))
+
+private theorem Unseen.opt {related : ProcessState → ProcessState → Prop} (unseen : Unseen related) :
+    Unnoticed (Option.Rel related) where
+  live rel := by cases rel with
+    | none => rfl
+    | some related => simp [liveRecord, (unseen.outside related).exiting]
+  trapExit rel := by cases rel with
+    | none => rfl
+    | some related => exact (unseen.outside related).trapExit
+  parked rel := by cases rel with
+    | none => rfl
+    | some related => exact (unseen.outside related).parked
+  links rel := by cases rel with
+    | none => exact fun _ _ => Iff.rfl
+    | some related => exact (unseen.outside related).links
+  push entry rel _ := by cases rel with
+    | none => exact .none
+    | some related => exact .some (unseen.push entry related)
+  eagerExit source rel _ := by cases rel with
+    | none => exact .none
+    | some related => exact .some (unseen.eagerExit source related)
+  unpark rel _ := by cases rel with
+    | none => exact ⟨.none, fun _ => .none⟩
+    | some related => exact ⟨.some (unseen.unpark related), fun entry => .some (unseen.push entry (unseen.unpark related))⟩
+
+private instance {related : ProcessState → ProcessState → Prop} : Coe (Unseen related) (Unnoticed (Option.Rel related)) :=
+  ⟨Unseen.opt⟩
+
+/-- Two states that differ only in the record of a process, related by `related`,
+either of which may be missing. -/
+private def State.Changes (processId : PID) (related : Option ProcessState → Option ProcessState → Prop)
     (state state' : State) : Prop :=
   (∀ other, other ≠ processId → state'.record other = state.record other) ∧
-  Option.Rel related (state.record processId) (state'.record processId) ∧
+  related (state.record processId) (state'.record processId) ∧
   state'.timers = state.timers ∧ state'.elapsed = state.elapsed
+
+/-- Two states that differ only in the record of a process, related by `related`. -/
+private abbrev State.Changed (processId : PID) (related : ProcessState → ProcessState → Prop)
+    (state state' : State) : Prop :=
+  State.Changes processId (Option.Rel related) state state'
 
 private theorem State.record_modify (state : State) (processId other : PID) (change : ProcessState → ProcessState) :
     (state.modify processId change).record other =
@@ -71,71 +130,44 @@ private theorem State.record_modify (state : State) (processId other : PID) (cha
     · subst same; simp [missing]
     · simp [same]
 
-namespace State.Changed
+private theorem State.alive_eq (state : State) (processId : PID) :
+    state.alive processId = liveRecord (state.record processId) := by
+  unfold State.alive liveRecord
+  cases state.record processId <;> rfl
 
-variable {processId : PID} {related : ProcessState → ProcessState → Prop} {state state' : State}
+namespace State.Changes
 
-private theorem record_other (changed : state.Changed processId related state') {other : PID} (differ : other ≠ processId) :
+variable {processId : PID} {related : Option ProcessState → Option ProcessState → Prop} {state state' : State}
+
+private theorem record_other (changed : state.Changes processId related state') {other : PID} (differ : other ≠ processId) :
     state'.record other = state.record other := changed.1 other differ
 
-private theorem process_other (changed : state.Changed processId related state') {other : PID} (differ : other ≠ processId) :
+private theorem process_other (changed : state.Changes processId related state') {other : PID} (differ : other ≠ processId) :
     state'.process other = state.process other := by
   simp only [State.process, changed.record_other differ]
 
-/-- The two records of the process. -/
-private theorem records (changed : state.Changed processId related state') :
-    (state.record processId = none ∧ state'.record processId = none) ∨
-      ∃ process process', state.record processId = some process ∧ state'.record processId = some process' ∧
-        related process process' := by
-  have rel := changed.2.1
-  generalize state.record processId = first at rel
-  generalize state'.record processId = second at rel
-  cases rel with
-  | none => exact .inl ⟨rfl, rfl⟩
-  | some related => exact .inr ⟨_, _, rfl, rfl, related⟩
-
-private theorem outside (changed : state.Changed processId related state') (unseen : Unseen related) :
-    Option.Rel Outside (state.record processId) (state'.record processId) := by
-  rcases changed.records with ⟨first, second⟩ | ⟨process, process', first, second, related⟩
-  · rw [first, second]; exact .none
-  · rw [first, second]; exact .some (unseen.outside related)
-
-/-- What another process reads of a record is the same in both. -/
-private theorem get (changed : state.Changed processId related state') (unseen : Unseen related) {β : Type}
-    {get : ProcessState → β} (same : ∀ first second, Outside first second → get second = get first)
-    (missing : β) (other : PID) :
-    ((state'.record other).map get).getD missing = ((state.record other).map get).getD missing := by
+private theorem alive (changed : state.Changes processId related state') (unseen : Unnoticed related) (other : PID) :
+    state'.alive other = state.alive other := by
+  rw [State.alive_eq, State.alive_eq]
   by_cases differ : other = processId
-  · subst differ
-    rcases changed.records with ⟨first, second⟩ | ⟨process, process', first, second, related⟩
-    · rw [first, second]
-    · simp [first, second, same _ _ (unseen.outside related)]
+  · subst differ; exact unseen.live changed.2.1
   · rw [changed.record_other differ]
 
-private theorem alive (changed : state.Changed processId related state') (unseen : Unseen related) (other : PID) :
-    state'.alive other = state.alive other := by
-  have := changed.get unseen (get := fun process => process.exiting.isNone)
-    (fun _ _ outside => by rw [outside.exiting]) false other
-  simp only [State.alive]
-  cases first : state.record other <;> cases second : state'.record other <;> simp_all
-
-private theorem gone (changed : state.Changed processId related state') (unseen : Unseen related) :
+private theorem gone (changed : state.Changes processId related state') (unseen : Unnoticed related) :
     state'.gone = state.gone := by
   funext other; simp only [State.gone, changed.alive unseen]
 
-private theorem process_get (changed : state.Changed processId related state') (unseen : Unseen related) {β : Type}
-    {get : ProcessState → β} (same : ∀ first second, Outside first second → get second = get first)
-    (empty : get {} = get {}) (other : PID) : get (state'.process other) = get (state.process other) := by
+/-- What another process reads of a record is the same in both. -/
+private theorem process_get (changed : state.Changes processId related state') {β : Type}
+    {get : ProcessState → β} (same : ∀ {first second}, related first second → get (second.getD {}) = get (first.getD {}))
+    (other : PID) : get (state'.process other) = get (state.process other) := by
   by_cases differ : other = processId
   · subst differ
-    simp only [State.process]
-    rcases changed.records with ⟨first, second⟩ | ⟨process, process', first, second, related⟩
-    · rw [first, second]
-    · simp [first, second, same _ _ (unseen.outside related)]
+    exact same changed.2.1
   · rw [changed.process_other differ]
 
-private theorem set (changed : state.Changed processId related state') {other : PID} (differ : other ≠ processId)
-    (process : ProcessState) : (state.set other process).Changed processId related (state'.set other process) := by
+private theorem set (changed : state.Changes processId related state') {other : PID} (differ : other ≠ processId)
+    (process : ProcessState) : (state.set other process).Changes processId related (state'.set other process) := by
   refine ⟨fun third differ' => ?_, ?_, changed.2.2.1, changed.2.2.2⟩
   · simp only [State.record_set]
     split
@@ -144,17 +176,17 @@ private theorem set (changed : state.Changed processId related state') {other : 
   · simp only [State.record_set, Ne.symm differ, ↓reduceIte]
     exact changed.2.1
 
-private theorem setRelated (changed : state.Changed processId related state') {process process' : ProcessState}
-    (related' : related process process') :
-    (state.set processId process).Changed processId related (state'.set processId process') := by
+private theorem setRelated (changed : state.Changes processId related state') {process process' : ProcessState}
+    (related' : related (some process) (some process')) :
+    (state.set processId process).Changes processId related (state'.set processId process') := by
   refine ⟨fun third differ' => ?_, ?_, changed.2.2.1, changed.2.2.2⟩
   · simp only [State.record_set, differ', ↓reduceIte]
     exact changed.record_other differ'
   · simp only [State.record_set, ↓reduceIte]
-    exact .some related'
+    exact related'
 
-private theorem remove (changed : state.Changed processId related state') {other : PID} (differ : other ≠ processId) :
-    (state.remove other).Changed processId related (state'.remove other) := by
+private theorem remove (changed : state.Changes processId related state') {other : PID} (differ : other ≠ processId) :
+    (state.remove other).Changes processId related (state'.remove other) := by
   refine ⟨fun third differ' => ?_, ?_, changed.2.2.1, changed.2.2.2⟩
   · simp only [State.record_remove]
     split
@@ -163,9 +195,9 @@ private theorem remove (changed : state.Changed processId related state') {other
   · simp only [State.record_remove, Ne.symm differ, ↓reduceIte]
     exact changed.2.1
 
-private theorem modify (changed : state.Changed processId related state') {other : PID} (differ : other ≠ processId)
+private theorem modify (changed : state.Changes processId related state') {other : PID} (differ : other ≠ processId)
     (change : ProcessState → ProcessState) :
-    (state.modify other change).Changed processId related (state'.modify other change) := by
+    (state.modify other change).Changes processId related (state'.modify other change) := by
   unfold State.modify
   rw [changed.record_other differ]
   split
@@ -173,159 +205,189 @@ private theorem modify (changed : state.Changed processId related state') {other
   · exact changed
 
 /-- Changing the record of the process in a way the relation keeps. -/
-private theorem modifyRelated (changed : state.Changed processId related state') {change : ProcessState → ProcessState}
-    (keeps : ∀ {first second}, related first second → related (change first) (change second)) :
-    (state.modify processId change).Changed processId related (state'.modify processId change) := by
-  unfold State.modify
-  rcases changed.records with ⟨first, second⟩ | ⟨process, process', first, second, related'⟩
-  · rw [first, second]; exact changed
-  · rw [first, second]; exact changed.setRelated (keeps related')
+private theorem modifyRelated (changed : state.Changes processId related state') {change : ProcessState → ProcessState}
+    (keeps : related ((state.record processId).map change) ((state'.record processId).map change)) :
+    (state.modify processId change).Changes processId related (state'.modify processId change) := by
+  refine ⟨fun third differ' => ?_, ?_, ?_, ?_⟩
+  · rw [State.record_modify, State.record_modify, if_neg differ', if_neg differ']
+    exact changed.record_other differ'
+  · rw [State.record_modify, State.record_modify, if_pos rfl, if_pos rfl]
+    exact keeps
+  · unfold State.modify; split <;> split <;> exact changed.2.2.1
+  · unfold State.modify; split <;> split <;> exact changed.2.2.2
 
-private theorem timers (changed : state.Changed processId related state') (timers : List Timer) :
-    { state with timers }.Changed processId related { state' with timers } :=
+private theorem timers (changed : state.Changes processId related state') (timers : List Timer) :
+    { state with timers }.Changes processId related { state' with timers } :=
   ⟨changed.1, changed.2.1, rfl, changed.2.2.2⟩
 
 /-- A signal falls back without changing the process, or only queues at it. -/
-private theorem fallback (changed : state.Changed processId related state') (unseen : Unseen related)
-    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal = .unlink id → ∀ {first second}, related first second →
-      related { first with links := Kernel.filter (·.1 != target) first.links }
-        { second with links := Kernel.filter (·.1 != target) second.links }) :
-    (state.fallback source target signal).Changed processId related (state'.fallback source target signal) := by
+private theorem fallback (changed : state.Changes processId related state')
+    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal = .unlink id → ∀ {first second},
+      related first second →
+      related (first.map fun first => { first with links := Kernel.filter (·.1 != target) first.links })
+        (second.map fun second => { second with links := Kernel.filter (·.1 != target) second.links }))
+    (pushes : source = processId → signal.fallsBack = true → ∀ entry,
+      related ((state.record processId).map (·.push entry)) ((state'.record processId).map (·.push entry))) :
+    (state.fallback source target signal).Changes processId related (state'.fallback source target signal) := by
   by_cases same : source = processId
   · subst same
     cases signal <;> simp only [State.fallback]
     all_goals first
       | exact changed
-      | exact changed.modifyRelated (fun related => unseen.push _ related)
-      | exact changed.modifyRelated (allowed rfl _ rfl)
+      | exact changed.modifyRelated (pushes rfl rfl _)
+      | exact changed.modifyRelated (allowed rfl _ rfl changed.2.1)
   · cases signal <;> simp only [State.fallback] <;> first | exact changed | exact changed.modify same _
 
-private theorem enqueue (changed : state.Changed processId related state') (unseen : Unseen related)
-    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal = .unlink id → ∀ {first second}, related first second →
-      related { first with links := Kernel.filter (·.1 != target) first.links }
-        { second with links := Kernel.filter (·.1 != target) second.links }) :
-    (state.enqueue source target signal).Changed processId related (state'.enqueue source target signal) := by
+private theorem enqueue (changed : state.Changes processId related state') (unseen : Unnoticed related)
+    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal = .unlink id → ∀ {first second},
+      related first second →
+      related (first.map fun first => { first with links := Kernel.filter (·.1 != target) first.links })
+        (second.map fun second => { second with links := Kernel.filter (·.1 != target) second.links }))
+    (pushes : source = processId → signal.fallsBack = true → ∀ entry,
+      related ((state.record processId).map (·.push entry)) ((state'.record processId).map (·.push entry))) :
+    (state.enqueue source target signal).Changes processId related (state'.enqueue source target signal) := by
   unfold State.enqueue
   by_cases same : target = processId
   · subst same
-    rcases changed.records with ⟨first, second⟩ | ⟨process, process', first, second, related'⟩
-    · rw [first, second]; exact changed.fallback unseen allowed
-    · rw [first, second]
-      dsimp only
-      have exiting : process'.exiting.isNone = process.exiting.isNone := by rw [(unseen.outside related').exiting]
-      rw [exiting]
+    have live := unseen.live changed.2.1
+    have pushed := unseen.push { source, signal } changed.2.1
+    revert live pushed
+    cases first : state.record target <;> cases second : state'.record target <;>
+      intro live pushed <;> simp only [liveRecord, Option.map_some, Option.map_none, Option.getD_some,
+        Option.getD_none] at live pushed ⊢
+    · exact changed.fallback allowed pushes
+    · rw [live]; exact changed.fallback allowed pushes
+    · rw [← live]; exact changed.fallback allowed pushes
+    · rename_i process process'
+      rw [live]
       split
-      · have pushed := unseen.push { source, signal } related'
+      · rename_i isLive
+        have pushed := pushed isLive
         unfold ProcessState.push at pushed
         exact changed.setRelated pushed
-      · exact changed.fallback unseen allowed
+      · exact changed.fallback allowed pushes
   · rw [changed.record_other same]
     split
     · split
       · exact changed.set same _
-      · exact changed.fallback unseen allowed
-    · exact changed.fallback unseen allowed
+      · exact changed.fallback allowed pushes
+    · exact changed.fallback allowed pushes
 
-private theorem parked (changed : state.Changed processId related state') (unseen : Unseen related) (other : PID) :
+private theorem parked (changed : state.Changes processId related state') (unseen : Unnoticed related) (other : PID) :
     (state'.process other).parked = (state.process other).parked :=
-  changed.process_get unseen (fun _ _ outside => outside.parked) rfl other
+  changed.process_get (get := (·.parked)) unseen.parked other
 
-private theorem unpark (changed : state.Changed processId related state') (unseen : Unseen related) (other : PID) :
-    (state.unpark other).Changed processId related (state'.unpark other) := by
+private theorem unpark (changed : state.Changes processId related state') (unseen : Unnoticed related) (other : PID) :
+    (state.unpark other).Changes processId related (state'.unpark other) := by
   unfold State.unpark
   rw [changed.parked unseen]
   split
-  · have modified : (state.modify other fun process => { process with parked := none }).Changed processId related
-        (state'.modify other fun process => { process with parked := none }) := by
-      by_cases same : other = processId
-      · subst same; exact changed.modifyRelated unseen.unpark
-      · exact changed.modify same _
-    exact modified.enqueue unseen fun _ _ => by simp
+  · rename_i target reference parkedAt
+    by_cases same : other = processId
+    · subst same
+      have parked : ((state.record other).getD {}).parked.isSome = true := by
+        simp only [State.process] at parkedAt; simp [parkedAt]
+      obtain ⟨unparked, pushes⟩ := unseen.unpark changed.2.1 parked
+      have modified := changed.modifyRelated unparked
+      refine modified.enqueue unseen (fun _ _ signal => by cases signal) fun _ _ entry => ?_
+      rw [State.record_modify, State.record_modify, if_pos rfl, if_pos rfl]
+      exact pushes entry
+    · exact (changed.modify same _).enqueue unseen (fun equal => absurd equal same) fun equal => absurd equal same
   · exact changed
 
-private theorem send (changed : state.Changed processId related state') (unseen : Unseen related)
-    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal = .unlink id → ∀ {first second}, related first second →
-      related { first with links := Kernel.filter (·.1 != target) first.links }
-        { second with links := Kernel.filter (·.1 != target) second.links }) :
-    (state.send source target signal).Changed processId related (state'.send source target signal) := by
+private theorem send (changed : state.Changes processId related state') (unseen : Unnoticed related)
+    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal = .unlink id → ∀ {first second},
+      related first second →
+      related (first.map fun first => { first with links := Kernel.filter (·.1 != target) first.links })
+        (second.map fun second => { second with links := Kernel.filter (·.1 != target) second.links }))
+    (pushes : source = processId → signal.fallsBack = true → ∀ entry, ∀ {first second}, related first second →
+      related (first.map (·.push entry)) (second.map (·.push entry))) :
+    (state.send source target signal).Changes processId related (state'.send source target signal) := by
   unfold State.send
   rw [changed.parked unseen]
-  refine State.Changed.enqueue ?_ unseen allowed
+  have keeps : ∀ {first second : State}, first.Changes processId related second →
+      (first.enqueue source target signal).Changes processId related (second.enqueue source target signal) :=
+    fun changed' => changed'.enqueue unseen allowed fun same falls entry => pushes same falls entry changed'.2.1
   split
   · split
-    · exact changed.unpark unseen source
-    · exact changed
-  · exact changed
+    · exact keeps (changed.unpark unseen source)
+    · exact keeps changed
+  · exact keeps changed
 
 /-- Whether a link is queued at a process is the same in both. -/
-private theorem any_queue (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem any_queue (changed : state.Changes processId related state') (unseen : Unnoticed related)
     (target : PID) (find : Entry → Bool) (only : ∀ entry, find entry = true → entry.signal = .link) :
     Kernel.any (state'.process target).queue find = Kernel.any (state.process target).queue find := by
-  refine changed.process_get unseen (get := fun process => Kernel.any process.queue find) (fun first second outside => ?_)
-    rfl target
+  refine changed.process_get (get := fun process => Kernel.any process.queue find) (fun rel => ?_) target
   simp only [Kernel.any_eq]
   rw [Bool.eq_iff_iff]
   simp only [List.any_eq_true]
   constructor <;> rintro ⟨entry, mem, found⟩ <;> refine ⟨entry, ?_, found⟩
-  · exact (outside.links _ (only _ found)).mp mem
-  · exact (outside.links _ (only _ found)).mpr mem
+  · exact (unseen.links rel _ (only _ found)).mp mem
+  · exact (unseen.links rel _ (only _ found)).mpr mem
 
-private theorem eagerLink (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem eagerLink (changed : state.Changes processId related state') (unseen : Unnoticed related)
     (source target : PID) (reason : Term) : state'.eagerLink source target reason = state.eagerLink source target reason := by
   unfold State.eagerLink
-  rw [changed.alive unseen, changed.process_get unseen (fun _ _ outside => outside.trapExit) rfl target,
+  rw [changed.alive unseen, changed.process_get (get := (·.trapExit)) unseen.trapExit target,
     changed.any_queue unseen target _ fun entry found => by
       obtain ⟨_, signal⟩ := entry; cases signal <;> simp_all]
 
-private theorem linkExit (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem linkExit (changed : state.Changes processId related state') (unseen : Unnoticed related)
     (source target : PID) (reason : Term) :
-    (state.linkExit source target reason).Changed processId related (state'.linkExit source target reason) := by
+    (state.linkExit source target reason).Changes processId related (state'.linkExit source target reason) := by
   unfold State.linkExit
   rw [changed.eagerLink unseen]
   split
-  · by_cases same : target = processId
-    · subst same; exact changed.modifyRelated (unseen.eagerExit source)
+  · rename_i eager
+    by_cases same : target = processId
+    · subst same
+      have alive : state.alive target = true := by
+        simp only [State.eagerLink, Bool.and_eq_true] at eager; exact eager.1.1.2
+      rw [State.alive_eq] at alive
+      exact changed.modifyRelated (unseen.eagerExit source changed.2.1 alive)
     · exact changed.modify same _
-  · exact changed.send unseen fun _ _ => by simp
+  · exact changed.send unseen (fun _ _ signal => by cases signal) fun _ falls => by simp [Signal.fallsBack] at falls
 
-private theorem answer (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem answer (changed : state.Changes processId related state') (unseen : Unnoticed related)
     (other : PID) (entry : Entry) :
-    (state.answer other entry).Changed processId related (state'.answer other entry) := by
+    (state.answer other entry).Changes processId related (state'.answer other entry) := by
   unfold State.answer
-  split <;> first | exact changed | exact changed.send unseen fun _ _ => by simp
+  split <;> first | exact changed |
+    exact changed.send unseen (fun _ _ signal => by cases signal) fun _ falls => by simp [Signal.fallsBack] at falls
 
-private theorem allocate (changed : state.Changed processId related state') {other : PID}
+private theorem allocate (changed : state.Changes processId related state') {other : PID}
     (differ : other ≠ processId) :
     (state'.allocate other).1 = (state.allocate other).1 ∧
-      (state.allocate other).2.Changed processId related (state'.allocate other).2 :=
+      (state.allocate other).2.Changes processId related (state'.allocate other).2 :=
   ⟨by simp only [State.allocate, changed.process_other differ], changed.modify differ _⟩
 
 private theorem foldl {γ : Type} {step : State → γ → State}
-    (keeps : ∀ {state state'} item, state.Changed processId related state' →
-      (step state item).Changed processId related (step state' item)) :
-    ∀ (items : List γ) {state state'}, state.Changed processId related state' →
-      (Kernel.foldl step state items).Changed processId related (Kernel.foldl step state' items)
+    (keeps : ∀ {state state'} item, state.Changes processId related state' →
+      (step state item).Changes processId related (step state' item)) :
+    ∀ (items : List γ) {state state'}, state.Changes processId related state' →
+      (Kernel.foldl step state items).Changes processId related (Kernel.foldl step state' items)
   | [], _, _, changed => changed
   | item :: rest, _, _, changed => by
       have := foldl keeps rest (keeps item changed)
       simpa only [Kernel.foldl_eq, List.foldl_cons] using this
 
-private theorem terminate (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem terminate (changed : state.Changes processId related state') (unseen : Unnoticed related)
     {other : PID} (differ : other ≠ processId) (reason : Term) :
-    (state.terminate other reason).Changed processId related (state'.terminate other reason) := by
+    (state.terminate other reason).Changes processId related (state'.terminate other reason) := by
   unfold State.terminate
   simp only [changed.process_other differ, changed.2.2.1]
-  refine State.Changed.foldl (fun target changed' => ?_) _ ((changed.timers _).set differ _)
+  refine State.Changes.foldl (fun target changed' => ?_) _ ((changed.timers _).set differ _)
   rw [changed'.eagerLink unseen]
   split
   · exact (changed'.modify differ _).linkExit unseen _ _ _
   · exact changed'
 
-private theorem spawnWith (changed : state.Changed processId related state') {other : PID}
+private theorem spawnWith (changed : state.Changes processId related state') {other : PID}
     (differ : other ≠ processId) (options : SpawnOptions)
     (fresh : Kernel.append other [(state.process other).children + 1] ≠ processId) :
     (state'.spawnWith other options).1 = (state.spawnWith other options).1 ∧
-      (state.spawnWith other options).2.Changed processId related (state'.spawnWith other options).2 := by
+      (state.spawnWith other options).2.Changes processId related (state'.spawnWith other options).2 := by
   refine ⟨by simp only [State.spawnWith, changed.process_other differ], ?_⟩
   unfold State.spawnWith
   dsimp only
@@ -345,24 +407,90 @@ private theorem spawnWith (changed : state.Changed processId related state') {ot
   · exact linked
   · exact started
 
-end State.Changed
+end State.Changes
 
-/-- Two answers to a request that agree but for a process's record. -/
-private def Answer.Changed {β : Type} (processId : PID) (related : ProcessState → ProcessState → Prop) :
-    Answer β → Answer β → Prop
-  | .reply value state, .reply value' state' => value' = value ∧ state.Changed processId related state'
-  | .wait waiting state, .wait waiting' state' => waiting' = waiting ∧ state.Changed processId related state'
-  | .continue computation state, .continue computation' state' =>
-      computation' = computation ∧ state.Changed processId related state'
-  | _, _ => False
+namespace State.Changes
+
+variable {processId : PID} {related : ProcessState → ProcessState → Prop} {state state' : State}
+
+/-- The two records of the process. -/
+private theorem records (changed : state.Changes processId (Option.Rel related) state') :
+    (state.record processId = none ∧ state'.record processId = none) ∨
+      ∃ process process', state.record processId = some process ∧ state'.record processId = some process' ∧
+        related process process' := by
+  have rel := changed.2.1
+  generalize state.record processId = first at rel
+  generalize state'.record processId = second at rel
+  cases rel with
+  | none => exact .inl ⟨rfl, rfl⟩
+  | some related => exact .inr ⟨_, _, rfl, rfl, related⟩
+
+end State.Changes
+
+private theorem rel_map {β : Type} {related : β → β → Prop} {change : β → β}
+    (keeps : ∀ {first second}, related first second → related (change first) (change second)) :
+    ∀ {first second : Option β}, Option.Rel related first second → Option.Rel related (first.map change) (second.map change)
+  | _, _, .none => .none
+  | _, _, .some related' => .some (keeps related')
 
 namespace State.Changed
 
 variable {processId : PID} {related : ProcessState → ProcessState → Prop} {state state' : State}
 
-private theorem request (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem setRelated (changed : state.Changed processId related state') {process process' : ProcessState}
+    (related' : related process process') :
+    (state.set processId process).Changed processId related (state'.set processId process') :=
+  State.Changes.setRelated changed (.some related')
+
+private theorem modifyRelated (changed : state.Changed processId related state') {change : ProcessState → ProcessState}
+    (keeps : ∀ {first second}, related first second → related (change first) (change second)) :
+    (state.modify processId change).Changed processId related (state'.modify processId change) := by
+  refine State.Changes.modifyRelated changed ?_
+  have rel := changed.2.1
+  revert rel
+  generalize state.record processId = first
+  generalize state'.record processId = second
+  intro rel
+  exact rel_map keeps rel
+
+private theorem send (changed : state.Changed processId related state') (unseen : Unseen related)
+    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal = .unlink id → ∀ {first second},
+      related first second →
+      related { first with links := Kernel.filter (·.1 != target) first.links }
+        { second with links := Kernel.filter (·.1 != target) second.links }) :
+    (state.send source target signal).Changed processId related (state'.send source target signal) :=
+  State.Changes.send changed unseen (@fun same id signal _ _ rel => rel_map (allowed same id signal) rel)
+    fun _ _ entry _ _ rel => rel_map (unseen.push entry) rel
+
+private theorem enqueue (changed : state.Changed processId related state') (unseen : Unseen related)
+    {source target : PID} {signal : Signal} (allowed : source = processId → ∀ id, signal = .unlink id → ∀ {first second},
+      related first second →
+      related { first with links := Kernel.filter (·.1 != target) first.links }
+        { second with links := Kernel.filter (·.1 != target) second.links }) :
+    (state.enqueue source target signal).Changed processId related (state'.enqueue source target signal) :=
+  State.Changes.enqueue changed unseen (@fun same id signal _ _ rel => rel_map (allowed same id signal) rel)
+    fun _ _ entry => rel_map (unseen.push entry) changed.2.1
+
+end State.Changed
+
+
+
+/-- Two answers to a request that agree but for a process's record. -/
+private def Answer.Changes {β : Type} (processId : PID) (related : Option ProcessState → Option ProcessState → Prop) :
+    Answer β → Answer β → Prop
+  | .reply value state, .reply value' state' => value' = value ∧ state.Changes processId related state'
+  | .wait waiting state, .wait waiting' state' => waiting' = waiting ∧ state.Changes processId related state'
+  | .continue computation state, .continue computation' state' =>
+      computation' = computation ∧ state.Changes processId related state'
+  | _, _ => False
+
+namespace State.Changes
+
+variable {processId : PID} {related : Option ProcessState → Option ProcessState → Prop} {state state' : State}
+
+private theorem request (changed : state.Changes processId related state') (unseen : Unnoticed related)
     {other : PID} (differ : other ≠ processId) {β : Type} (next : Term → Result β) (query : Request) :
-    Answer.Changed processId related (state.request other next query) (state'.request other next query) := by
+    Answer.Changes processId related (state.request other next query) (state'.request other next query) := by
   cases query with
   | monitor target alias =>
     simp only [State.request]
@@ -384,21 +512,21 @@ private theorem request (changed : state.Changed processId related state') (unse
     · exact ⟨rfl, changed⟩
     split
     · exact ⟨rfl, changed⟩
-    · exact ⟨rfl, (changed.modify differ _).send unseen fun same => absurd same differ⟩
+    · exact ⟨rfl, (changed.modify differ _).send unseen (fun same => absurd same differ) fun same => absurd same differ⟩
   | unlink target =>
     simp only [State.request, changed.process_other differ]
     split
     · exact ⟨rfl, changed⟩
     split
-    · exact ⟨rfl, (changed.modify differ _).send unseen fun same => absurd same differ⟩
+    · exact ⟨rfl, (changed.modify differ _).send unseen (fun same => absurd same differ) fun same => absurd same differ⟩
     · exact ⟨rfl, changed⟩
   | exit target reason quirk =>
     simp only [State.request, changed.process_other differ]
     split
-    · exact ⟨rfl, changed.send unseen fun same => absurd same differ⟩
+    · exact ⟨rfl, changed.send unseen (fun same => absurd same differ) fun same => absurd same differ⟩
     split
-    · exact ⟨rfl, changed.send unseen fun same => absurd same differ⟩
-    · exact ⟨rfl, changed.send unseen fun same => absurd same differ⟩
+    · exact ⟨rfl, changed.send unseen (fun same => absurd same differ) fun same => absurd same differ⟩
+    · exact ⟨rfl, changed.send unseen (fun same => absurd same differ) fun same => absurd same differ⟩
   | trapExit enabled =>
     simp only [State.request, changed.process_other differ]
     split
@@ -409,10 +537,10 @@ private theorem request (changed : state.Changed processId related state') (unse
     split
     · exact ⟨rfl, changed⟩
     split
-    · exact ⟨rfl, changed.send unseen fun same => absurd same differ⟩
-    · exact ⟨rfl, changed.enqueue unseen fun same => absurd same differ⟩
+    · exact ⟨rfl, changed.send unseen (fun same => absurd same differ) fun same => absurd same differ⟩
+    · exact ⟨rfl, changed.enqueue unseen (fun same => absurd same differ) fun same => absurd same differ⟩
   | sendAlias alias message =>
-    exact ⟨rfl, changed.send unseen fun same => absurd same differ⟩
+    exact ⟨rfl, changed.send unseen (fun same => absurd same differ) fun same => absurd same differ⟩
   | startTimer destination message duration =>
     simp only [State.request]
     obtain ⟨same, allocated⟩ := changed.allocate differ
@@ -428,16 +556,16 @@ private theorem request (changed : state.Changed processId related state') (unse
     · exact ⟨rfl, changed⟩
 
 
-private theorem exitSignal (changed : state.Changed processId related state') {target : PID}
+private theorem exitSignal (changed : state.Changes processId related state') {target : PID}
     (differ : target ≠ processId) (source : PID) (reason : Term) (linked normalKills : Bool) :
     (state'.exitSignal target source reason linked normalKills).2 = (state.exitSignal target source reason linked normalKills).2 ∧
-      (state.exitSignal target source reason linked normalKills).1.Changed processId related
+      (state.exitSignal target source reason linked normalKills).1.Changes processId related
         (state'.exitSignal target source reason linked normalKills).1 := by
   simp only [State.exitSignal, changed.process_other differ]
   split
   · exact ⟨rfl, changed⟩
   have removed : (if linked then state.modify target fun process =>
-        { process with links := Kernel.filter (·.1 != source) process.links } else state).Changed processId related
+        { process with links := Kernel.filter (·.1 != source) process.links } else state).Changes processId related
       (if linked then state'.modify target fun process =>
         { process with links := Kernel.filter (·.1 != source) process.links } else state') := by
     split
@@ -451,16 +579,16 @@ private theorem exitSignal (changed : state.Changed processId related state') {t
   · exact ⟨rfl, removed⟩
   · exact ⟨rfl, removed⟩
 
-private theorem handle (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem handle (changed : state.Changes processId related state') (unseen : Unnoticed related)
     {other : PID} (differ : other ≠ processId) (waiting : Option Wait) (entry : Entry) :
     (state'.handle other waiting entry).2 = (state.handle other waiting entry).2 ∧
-      (state.handle other waiting entry).1.Changed processId related (state'.handle other waiting entry).1 := by
-  have sends : ∀ {first second : State} (signal : Signal), first.Changed processId related second →
-      (first.send other entry.source signal).Changed processId related (second.send other entry.source signal) :=
-    fun _ changed' => changed'.send unseen fun same => absurd same differ
+      (state.handle other waiting entry).1.Changes processId related (state'.handle other waiting entry).1 := by
+  have sends : ∀ {first second : State} (signal : Signal), first.Changes processId related second →
+      (first.send other entry.source signal).Changes processId related (second.send other entry.source signal) :=
+    fun _ changed' => changed'.send unseen (fun same => absurd same differ) fun same => absurd same differ
   have either : ∀ {condition : Prop} [Decidable condition] {first first' second second' : State},
-      first.Changed processId related first' → second.Changed processId related second' →
-      (if condition then first else second).Changed processId related (if condition then first' else second') :=
+      first.Changes processId related first' → second.Changes processId related second' →
+      (if condition then first else second).Changes processId related (if condition then first' else second') :=
     fun one two => by split; exact one; exact two
   obtain ⟨source, signal⟩ := entry
   cases signal with
@@ -498,9 +626,9 @@ private theorem handle (changed : state.Changed processId related state') (unsee
     simp only [State.handle]
     split <;> exact ⟨rfl, changed⟩
 
-private theorem linkPhase (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem linkPhase (changed : state.Changes processId related state') (unseen : Unnoticed related)
     {other : PID} (differ : other ≠ processId) (target : PID) :
-    Option.Rel (State.Changed processId related) (state.linkPhase other target) (state'.linkPhase other target) := by
+    Option.Rel (State.Changes processId related) (state.linkPhase other target) (state'.linkPhase other target) := by
   simp only [State.linkPhase, changed.record_other differ]
   split
   · split
@@ -510,57 +638,58 @@ private theorem linkPhase (changed : state.Changed processId related state') (un
     · exact .none
   · exact .none
 
-private theorem phase (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem phase (changed : state.Changes processId related state') (unseen : Unnoticed related)
     {other : PID} (differ : other ≠ processId) :
-    Option.Rel (State.Changed processId related) (state.phase other) (state'.phase other) := by
+    Option.Rel (State.Changes processId related) (state.phase other) (state'.phase other) := by
   simp only [State.phase, changed.record_other differ]
   split
   · split
     · split
       · exact .none
-      · exact .some ((changed.set differ _).send unseen fun same => absurd same differ)
+      · exact .some ((changed.set differ _).send unseen (fun same => absurd same differ) fun same => absurd same differ)
       · split
         · exact .some ((changed.set differ _).answer unseen _ _)
         · exact .none
     · exact .none
   · exact .none
 
-private theorem fire (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem fire (changed : state.Changes processId related state') (unseen : Unnoticed related)
     (timer : Timer) :
-    (state.fire timer).Changed processId related (state'.fire timer) := by
+    (state.fire timer).Changes processId related (state'.fire timer) := by
   simp only [State.fire, changed.2.2.1]
-  exact (changed.timers _).enqueue unseen fun _ _ => by simp
+  exact (changed.timers _).enqueue unseen (fun _ _ signal => by cases signal)
+    fun _ falls => by simp [Signal.fallsBack] at falls
 
-end State.Changed
+end State.Changes
 
 /-- Two transitions that agree but for a process's record. -/
-private def Transition.Changed (processId : PID) (related : ProcessState → ProcessState → Prop)
+private def Transition.Changes (processId : PID) (related : Option ProcessState → Option ProcessState → Prop)
     (transition transition' : Transition α) : Prop :=
   transition'.event = transition.event ∧ transition'.tasks = transition.tasks ∧
     transition'.finished = transition.finished ∧ transition'.exhausted = transition.exhausted ∧
-    transition.state.Changed processId related transition'.state
+    transition.state.Changes processId related transition'.state
 
-namespace State.Changed
+namespace State.Changes
 
-variable {processId : PID} {related : ProcessState → ProcessState → Prop} {state state' : State}
+variable {processId : PID} {related : Option ProcessState → Option ProcessState → Prop} {state state' : State}
 
-private theorem inertEntry (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem inertEntry (changed : state.Changes processId related state') (unseen : Unnoticed related)
     {other : PID} (differ : other ≠ processId) (entry : Entry) :
     state'.inertEntry other entry = state.inertEntry other entry := by
   simp only [State.inertEntry, State.allocated, changed.process_other differ, changed.gone unseen]
 
-private theorem ended (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem ended (changed : state.Changes processId related state') (unseen : Unnoticed related)
     {other : PID} (differ : other ≠ processId) {γ : Type}
     (finish : Except Exception γ → Option (Except Exception α)) (event : Event) (reason : Term)
     (result : Except Exception γ) :
-    Transition.Changed processId related (Task.ended finish event state other reason result)
+    Transition.Changes processId related (Task.ended finish event state other reason result)
       (Task.ended finish event state' other reason result) :=
   ⟨rfl, rfl, rfl, rfl, changed.terminate unseen differ reason⟩
 
-private theorem own (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem own (changed : state.Changes processId related state') (unseen : Unnoticed related)
     {other : PID} (differ : other ≠ processId) (task : Task α)
     (fresh : Kernel.append other [(state.process other).children + 1] ≠ processId) :
-    Option.Rel (Transition.Changed processId related) (task.own state other).head? (task.own state' other).head? := by
+    Option.Rel (Transition.Changes processId related) (task.own state other).head? (task.own state' other).head? := by
   obtain ⟨computation, finish, wait⟩ := task
   cases wait with
   | some => exact .none
@@ -584,7 +713,7 @@ private theorem own (changed : state.Changed processId related state') (unseen :
     exact .some ⟨rfl, rfl, rfl, rfl, spawned⟩
   | send destination message next =>
     simp only [Task.own, List.head?_cons]
-    exact .some ⟨rfl, rfl, rfl, rfl, changed.send unseen fun same => absurd same differ⟩
+    exact .some ⟨rfl, rfl, rfl, rfl, changed.send unseen (fun same => absurd same differ) fun same => absurd same differ⟩
   | receive timeout select next =>
     simp only [Task.own, view, changed.process_other differ]
     split
@@ -604,13 +733,13 @@ private theorem own (changed : state.Changed processId related state') (unseen :
     generalize state.request other next query = answer
     generalize state'.request other next query = answer'
     intro answered
-    cases answer <;> cases answer' <;> simp only [Answer.Changed] at answered
+    cases answer <;> cases answer' <;> simp only [Answer.Changes] at answered
     all_goals obtain ⟨rfl, answered⟩ := answered
     all_goals exact .some ⟨rfl, rfl, rfl, rfl, answered⟩
 
-private theorem handleTask (changed : state.Changed processId related state') (unseen : Unseen related)
+private theorem handleTask (changed : state.Changes processId related state') (unseen : Unnoticed related)
     {other : PID} (differ : other ≠ processId) (task : Task α) :
-    Option.Rel (Transition.Changed processId related) (task.handle state other).head?
+    Option.Rel (Transition.Changes processId related) (task.handle state other).head?
       (task.handle state' other).head? := by
   simp only [Task.handle, changed.process_other differ]
   split
@@ -633,7 +762,7 @@ private theorem handleTask (changed : state.Changed processId related state') (u
       · exact .some ⟨rfl, rfl, rfl, rfl, changed'⟩
       · exact .some ⟨rfl, rfl, rfl, rfl, changed'⟩
 
-end State.Changed
+end State.Changes
 
 /-- A process's own step leaves tasks of itself and of the child it spawns. -/
 private theorem Task.own_pids {state : State} {processId : PID} {task : Task α} {transition : Transition α}
@@ -698,10 +827,10 @@ private theorem TasksFresh.child {state : State} {tasks : List (PID × Task α)}
 and task: the same transition, then the change. -/
 private theorem Config.transition_changed {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {processId other : PID}
-    {related : ProcessState → ProcessState → Prop} {task' : Task α} {first : Transition α}
+    {related : Option ProcessState → Option ProcessState → Prop} {task' : Task α} {first : Transition α}
     {firsts seconds : List (Transition α)} (differ : other ≠ processId)
     {elapsed : PID → Nat → Nat} (pids : ∀ entry ∈ first.tasks, entry.1 ≠ processId)
-    (related' : Option.Rel (Transition.Changed processId related) firsts.head? seconds.head?)
+    (related' : Option.Rel (Transition.Changes processId related) firsts.head? seconds.head?)
     (head : firsts.head? = some first) (within : first.state.Within elapsed)
     (within' : ∀ second, seconds.head? = some second → second.state.Within elapsed) :
     ∃ second : Transition α, seconds.head? = some second ∧ second.event = first.event ∧
@@ -713,7 +842,7 @@ private theorem Config.transition_changed {tasks : List (PID × Task α)}
         else .running first.state.normalize (rewriteTask other (fun _ => first.tasks) tasks)
           (first.finished.orElse fun _ => finished) false) ∨
       ∃ (raw raw' : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α)),
-        raw.Changed processId related raw' ∧ raw.Within elapsed ∧ raw'.Within elapsed ∧
+        raw.Changes processId related raw' ∧ raw.Within elapsed ∧ raw'.Within elapsed ∧
         Kernel.lookup processId tasks₁ = Kernel.lookup processId tasks ∧
         (if first.exhausted then Config.running { first.state with processes := [], timers := [] } [] finished true
           else .running first.state.normalize (rewriteTask other (fun _ => first.tasks) tasks)
@@ -743,16 +872,16 @@ private theorem Config.transition_changed {tasks : List (PID × Task α)}
 /-- The step of another key, after a change of a live process's record that
 the step cannot see and of its task: the same step, then the change. -/
 private theorem Config.step_changed {state state' : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α)} {processId : PID} {related : ProcessState → ProcessState → Prop}
+    {finished : Option (Except Exception α)} {processId : PID} {related : Option ProcessState → Option ProcessState → Prop}
     {task task' : Task α} {key : Key} {event : Event} {next : Config α}
     {elapsed : PID → Nat → Nat} (within : state.Within elapsed) (within' : state'.Within elapsed)
-    (changed : state.Changed processId related state') (unseen : Unseen related) (fresh : TasksFresh state tasks)
+    (changed : state.Changes processId related state') (unseen : Unnoticed related) (fresh : TasksFresh state tasks)
     (lookup : Kernel.lookup processId tasks = some task) (owner : key.owner ≠ some processId)
     (step : (Config.running state tasks finished false).stepOf key = some (event, next)) :
     ∃ next', (Config.running state' (rewriteTask processId (fun _ => [(processId, task')]) tasks) finished false).stepOf
         key = some (event, next') ∧
       (next' = next ∨ ∃ (raw raw' : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α)),
-        raw.Changed processId related raw' ∧ raw.Within elapsed ∧ raw'.Within elapsed ∧
+        raw.Changes processId related raw' ∧ raw.Within elapsed ∧ raw'.Within elapsed ∧
         Kernel.lookup processId tasks₁ = Kernel.lookup processId tasks ∧
         next = .running raw.normalize tasks₁ finished₁ false ∧
         next' = .running raw'.normalize (rewriteTask processId (fun _ => [(processId, task')]) tasks₁) finished₁ false) := by
@@ -767,13 +896,13 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
     exact found
   -- Steps that keep the tasks.
   have kept : ∀ {first second : Option State} {event' : Event},
-      Option.Rel (State.Changed processId related) first second →
+      Option.Rel (State.Changes processId related) first second →
       (∀ raw, first = some raw → raw.Within elapsed) → (∀ raw', second = some raw' → raw'.Within elapsed) →
       first.map (fun raw => (event', Config.running raw.normalize tasks finished false)) = some (event, next) →
       ∃ next', second.map (fun raw => (event', Config.running raw.normalize
           (rewriteTask processId (fun _ => [(processId, task')]) tasks) finished false)) = some (event, next') ∧
         (next' = next ∨ ∃ (raw raw' : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α)),
-          raw.Changed processId related raw' ∧ raw.Within elapsed ∧ raw'.Within elapsed ∧
+          raw.Changes processId related raw' ∧ raw.Within elapsed ∧ raw'.Within elapsed ∧
           Kernel.lookup processId tasks₁ = Kernel.lookup processId tasks ∧
           next = .running raw.normalize tasks₁ finished₁ false ∧
           next' = .running raw'.normalize (rewriteTask processId (fun _ => [(processId, task')]) tasks₁) finished₁ false) := by
@@ -1112,7 +1241,7 @@ private theorem State.changed_forced {state : State} {processId : PID} {process 
     rw [normRecord_live live']; exact live'
 
 /-- A change normalizing undoes leaves the normalized state as it is. -/
-private theorem State.Changed.normalize_same {raw raw' : State} {processId : PID} {process : ProcessState}
+private theorem State.Changes.normalize_same {raw raw' : State} {processId : PID} {process : ProcessState}
     {ok : ProcessState → Prop} {change : ProcessState → ProcessState} (sorted : raw.Sorted) (sorted' : raw'.Sorted)
     (changed : raw.Changed processId (Forced processId ok change) raw') (unseen : Unseen (Forced processId ok change))
     (found : raw.record processId = some process)
@@ -1563,7 +1692,7 @@ private theorem OwnChange.unseen {ok : List Term → Prop} {mailbox : List Term 
   eagerExit := fun _ ⟨ok', same⟩ => by subst same; exact ⟨ok', rfl⟩
   unpark := fun ⟨ok', same⟩ => by subst same; exact ⟨ok', rfl⟩
 
-namespace State.Changed
+namespace State.Changes
 
 variable {processId : PID} {state state' : State} {ok : List Term → Prop} {mailbox : List Term → List Term}
   {pdict : List (Term × Term) → List (Term × Term)} {refCounter : Nat → Nat} {dict : List (Term × Term)}
@@ -1723,10 +1852,10 @@ private theorem terminateSelf
       (state'.terminate processId reason) := by
     unfold State.terminate
     simp only [processOf, processOf', changed.2.2.1]
-    refine State.Changed.foldl (fun target changed' => ?_) _ ⟨fun other differ => ?_, ?_, rfl, changed.2.2.2⟩
+    refine State.Changes.foldl (fun target changed' => ?_) _ ⟨fun other differ => ?_, ?_, rfl, changed.2.2.2⟩
     · rw [changed'.eagerLink unseen]
       split
-      · refine (changed'.modifyRelated fun {first second} related => ?_).linkExit unseen _ _ _
+      · refine (State.Changed.modifyRelated changed' fun {first second} related => ?_).linkExit unseen _ _ _
         obtain ⟨ok', same⟩ := related
         subst same
         refine ⟨?_, rfl⟩
@@ -1751,7 +1880,7 @@ private theorem terminateSelf
       simp only [ownChange, exiting']
   · rw [endedChanged.record_other equal]
 
-end State.Changed
+end State.Changes
 
 /-! ### Forced handling against the process's own step -/
 
@@ -1800,7 +1929,7 @@ private theorem QueueChange.unseen {queue : List Entry → List Entry} {mailbox 
     exact ⟨queued, by simp only [queueChange, ProcessState.eagerExit, change.filtered]⟩
   unpark := fun ⟨queued, same⟩ => by subst same; exact ⟨queued, rfl⟩
 
-namespace State.Changed
+namespace State.Changes
 
 variable {processId : PID} {state state' : State} {queue : List Entry → List Entry} {mailbox : List Term → List Term}
   {links : List (PID × Option Nat) → List (PID × Option Nat)} {entry : Entry}
@@ -1831,7 +1960,8 @@ private theorem requestSelf
     (lookups : ∀ target : PID,
       (Kernel.lookup target (links process.links) == some none) = (Kernel.lookup target process.links == some none))
     {β : Type} (next : Term → Result β) (query : Request) :
-    Answer.Changed processId (Same (Queued entry) (queueChange queue mailbox links)) (state.request processId next query)
+    Answer.Changes processId (Option.Rel (Same (Queued entry) (queueChange queue mailbox links)))
+      (state.request processId next query)
       (state'.request processId next query) := by
   rcases changed.records with ⟨missing, -⟩ | ⟨first, second, found', found'', queued, rfl⟩
   · rw [found] at missing; cases missing
@@ -2010,10 +2140,10 @@ private theorem terminateQueue
     obtain ⟨⟨rest, queued⟩, -⟩ := queued
     rw [queued, requests _ _ fun entry kept => by
       obtain ⟨_, signal⟩ := entry; cases signal <;> simp_all]
-    refine State.Changed.foldl (fun target changed' => ?_) _ ⟨fun other differ => ?_, ?_, rfl, changed.2.2.2⟩
+    refine State.Changes.foldl (fun target changed' => ?_) _ ⟨fun other differ => ?_, ?_, rfl, changed.2.2.2⟩
     · rw [changed'.eagerLink unseen]
       split
-      · refine (changed'.modifyRelated fun {first second} related => ?_).linkExit unseen _ _ _
+      · refine (State.Changed.modifyRelated changed' fun {first second} related => ?_).linkExit unseen _ _ _
         obtain ⟨ok', same⟩ := related
         subst same
         refine ⟨?_, rfl⟩
@@ -2152,7 +2282,7 @@ private theorem ownSelf
     generalize state.request processId next query = answer
     generalize state'.request processId next query = answer'
     intro head answered
-    cases answer <;> cases answer' <;> unfold Answer.Changed at answered
+    cases answer <;> cases answer' <;> unfold Answer.Changes at answered
     all_goals first
       | exact answered.elim
       | (obtain ⟨rfl, answered⟩ := answered
@@ -2160,7 +2290,7 @@ private theorem ownSelf
          subst head
          exact ⟨_, rfl, rfl, rfl, rfl, rfl, .inl ⟨answered, _, _, rfl⟩⟩)
 
-end State.Changed
+end State.Changes
 
 /-! ### Which tagged steps are forced -/
 
@@ -2289,7 +2419,7 @@ private theorem Config.forced_other {elapsed : PID → Nat → Nat} {state : Sta
   have changed := State.changed_forced within.1 normalized found live ok' hidden renormalize
   have within' : ((state.set processId (change process)).normalize).Within elapsed := (within.set _ _).normalize
   obtain ⟨next', stepped, same | ⟨raw, raw', tasks₁, finished₁, changedRaw, withinRaw, withinRaw', lookupAfter,
-      rfl, rfl⟩⟩ := Config.step_changed (task' := task') within within' changed hidden.unseen fresh lookup owner step'
+      rfl, rfl⟩⟩ := Config.step_changed (task' := task') within within' changed hidden.unseen.opt fresh lookup owner step'
   · subst same
     exact .inl ⟨event', stepped⟩
   · have reachableMiddle := reachable₀.step (Config.step_of_stepOf step')
@@ -2304,7 +2434,7 @@ private theorem Config.forced_other {elapsed : PID → Nat → Nat} {state : Sta
       exact .inr ⟨key, event'', _, event', mem, stepped⟩
     · left
       refine ⟨event', ?_⟩
-      rw [stepped, rewriteTask_same (lookupAfter ▸ lookup), State.Changed.normalize_same withinRaw.1 withinRaw'.1 changedRaw
+      rw [stepped, rewriteTask_same (lookupAfter ▸ lookup), State.Changes.normalize_same withinRaw.1 withinRaw'.1 changedRaw
         hidden.unseen found₁ nothing]
 
 private theorem Config.tagged_own_forced {state : State} {tasks : List (PID × Task α)}
@@ -2793,7 +2923,7 @@ private theorem hidden_own (ok : List Term → Prop) (dict : List (Term × Term)
     fun _ ok' => ⟨ok', rfl⟩, fun ok' => ⟨ok', rfl⟩⟩
 
 /-- Records changed exactly are changed up to normalization, while live. -/
-private theorem State.Changed.forced_of_same {state state' : State} {processId : PID} {ok : ProcessState → Prop}
+private theorem State.Changes.forced_of_same {state state' : State} {processId : PID} {ok : ProcessState → Prop}
     {change : ProcessState → ProcessState} (changed : state.Changed processId (Same ok change) state')
     (live : ∀ process, state.record processId = some process → process.exiting = none)
     (exiting : ∀ process, (change process).exiting = process.exiting) :
@@ -2918,7 +3048,7 @@ private theorem Config.own_handle_square {elapsed : PID → Nat → Nat} {state 
     refine ⟨Event.handle processId entry, ?_⟩
     rw [handleN _ headN]
     simp only [Task.ended, Bool.false_eq_true, ↓reduceIte, rewriteTask_ended]
-    rw [State.Changed.terminateSelf changedHandled reason sortedHandled.1 sortedHandled'.1
+    rw [State.Changes.terminateSelf changedHandled reason sortedHandled.1 sortedHandled'.1
       (sortedHandled.terminate processId reason).1 (sortedHandled'.terminate processId reason).1]
   | none =>
     simp only [List.head?_cons, Option.some.injEq] at head
@@ -3551,6 +3681,143 @@ private theorem Task.handle_distinct {state : State} {processId : PID} {task : T
     · simp only [List.mem_singleton] at mem; subst mem; exact distinct'.terminate _ _
     · split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> exact distinct'
 
+/-! ### Unborn children
+
+No record's PID extends a live process's PID with an index it has not spawned
+yet, so a process never spawns a child over an existing record. -/
+
+/-- No record extends a live record's PID with an index not spawned yet. -/
+private def State.Unborn (state : State) : Prop :=
+  ∀ parent process, state.record parent = some process → process.exiting = none →
+    ∀ other, (state.record other).isSome → ∀ index, process.children < index → ¬Kernel.append parent [index] <+: other
+
+namespace State.Unborn
+
+variable {state : State}
+
+/-- Changing a record that keeps its children and revives no process. -/
+private theorem modify (unborn : state.Unborn) {processId : PID} {change : ProcessState → ProcessState}
+    (keeps : ∀ process, (change process).children = process.children ∧
+      ((change process).exiting = none → process.exiting = none)) :
+    (state.modify processId change).Unborn := by
+  intro parent process found live other present index more
+  rw [State.record_modify] at found present
+  have present' : (state.record other).isSome := by
+    split at present
+    · rename_i same; subst same; simpa using present
+    · exact present
+  split at found
+  · rename_i same; subst same
+    cases original : state.record parent with
+    | none => simp [original] at found
+    | some process₀ =>
+      simp only [original, Option.map_some, Option.some.injEq] at found
+      subst found
+      exact unborn _ _ original ((keeps _).2 live) _ present' _ (by rw [← (keeps _).1]; exact more)
+  · exact unborn _ _ found live _ present' _ more
+
+private theorem timers (unborn : state.Unborn) (timers : List Timer) : ({ state with timers }).Unborn := unborn
+
+private theorem remove (unborn : state.Unborn) (processId : PID) : (state.remove processId).Unborn := by
+  intro parent process found live other present index more
+  rw [State.record_remove] at found present
+  split at found
+  · cases found
+  · split at present
+    · cases present
+    · exact unborn _ _ found live _ present _ more
+
+/-- Replacing an existing record by one that keeps its children and revives no process. -/
+private theorem set (unborn : state.Unborn) {processId : PID} {process' : ProcessState} {process : ProcessState}
+    (found : state.record processId = some process) (children : process'.children = process.children)
+    (revives : process'.exiting = none → process.exiting = none) : (state.set processId process').Unborn := by
+  intro parent record found' live other present index more
+  rw [State.record_set] at found' present
+  have present' : (state.record other).isSome := by
+    split at present
+    · rename_i same; subst same; simp [found]
+    · exact present
+  split at found'
+  · rename_i same; subst same
+    simp only [Option.some.injEq] at found'
+    subst found'
+    exact unborn _ _ found (revives live) _ present' _ (by rw [← children]; exact more)
+  · exact unborn _ _ found' live _ present' _ more
+
+private theorem same (unborn : state.Unborn) {processId : PID} {change : ProcessState → ProcessState}
+    (children : ∀ process, (change process).children = process.children)
+    (exiting : ∀ process, (change process).exiting = process.exiting) : (state.modify processId change).Unborn :=
+  unborn.modify fun process => ⟨children process, fun live => by rw [← exiting]; exact live⟩
+
+private theorem fallback (unborn : state.Unborn) (source target : PID) (signal : Signal) :
+    (state.fallback source target signal).Unborn := by
+  cases signal <;> simp only [State.fallback] <;> first | exact unborn | exact unborn.same (fun _ => rfl) (fun _ => rfl)
+
+private theorem enqueue (unborn : state.Unborn) (source target : PID) (signal : Signal) :
+    (state.enqueue source target signal).Unborn := by
+  unfold State.enqueue
+  split
+  · rename_i process found
+    split
+    · exact unborn.set found rfl id
+    · exact unborn.fallback _ _ _
+  · exact unborn.fallback _ _ _
+
+private theorem unpark (unborn : state.Unborn) (processId : PID) : (state.unpark processId).Unborn := by
+  unfold State.unpark
+  split
+  · refine (unborn.same ?_ ?_).enqueue _ _ _ <;> intro <;> rfl
+  · exact unborn
+
+private theorem send (unborn : state.Unborn) (source target : PID) (signal : Signal) :
+    (state.send source target signal).Unborn := by
+  unfold State.send
+  refine State.Unborn.enqueue ?_ _ _ _
+  split
+  · split
+    · exact unborn.unpark _
+    · exact unborn
+  · exact unborn
+
+private theorem linkExit (unborn : state.Unborn) (processId target : PID) (reason : Term) :
+    (state.linkExit processId target reason).Unborn := by
+  unfold State.linkExit
+  split
+  · exact unborn.same (fun _ => rfl) (fun _ => rfl)
+  · exact unborn.send _ _ _
+
+private theorem foldl {γ : Type} {step : State → γ → State}
+    (keeps : ∀ {state : State} item, state.Unborn → (step state item).Unborn) :
+    ∀ (items : List γ) {state : State}, state.Unborn → (Kernel.foldl step state items).Unborn
+  | [], _, unborn => unborn
+  | item :: rest, _, unborn => by
+      have := foldl keeps rest (keeps item unborn)
+      simpa only [Kernel.foldl_eq, List.foldl_cons] using this
+
+private theorem terminate (unborn : state.Unborn) {processId : PID} {process : ProcessState}
+    (found : state.record processId = some process) (reason : Term) :
+    (state.terminate processId reason).Unborn := by
+  have processOf : state.process processId = process := by simp [State.process, found]
+  unfold State.terminate
+  refine State.Unborn.foldl (fun target unborn' => ?_) _ ?_
+  · split
+    · refine State.Unborn.linkExit ?_ _ _ _
+      exact unborn'.modify fun process => ⟨rfl, fun live => by simpa using live⟩
+    · exact unborn'
+  · rw [processOf]
+    exact (unborn.timers _).set (process := process) found rfl (by simp)
+
+private theorem answer (unborn : state.Unborn) (processId : PID) (entry : Entry) :
+    (state.answer processId entry).Unborn := by
+  unfold State.answer
+  split <;> first | exact unborn | exact unborn.send _ _ _
+
+private theorem allocated (unborn : state.Unborn) (processId : PID) : (state.allocate processId).2.Unborn :=
+  State.Unborn.same (change := fun process => { process with refCounter := process.refCounter + 1 }) unborn
+    (fun _ => rfl) (fun _ => rfl)
+
+end State.Unborn
+
 /-- A configuration whose records hold links with distinct processes. -/
 private def Config.Distinct : Config α → Prop
   | .start .. => True
@@ -3754,7 +4021,7 @@ private theorem Config.handle_own_square {elapsed : PID → Nat → Nat} {state 
     rw [stepped, ended, ended']
     have sortedEnded := ended ▸ sortedOwn
     have sortedEnded' := ended' ▸ sortedOwn'
-    rw [State.Changed.terminateQueue changed change requests exitLinks reason within.1 within'.1 sortedEnded.1
+    rw [State.Changes.terminateQueue changed change requests exitLinks reason within.1 within'.1 sortedEnded.1
       sortedEnded'.1]
   · exact absurd exhausted' exhausted
 
