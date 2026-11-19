@@ -143,6 +143,42 @@ whose queue holds messages from processes. -/
 @[expose] public def State.Quiet (state : State) : Prop :=
   state.timers = [] ∧ ∀ processId process, state.record processId = some process → process.Quiet
 
+/-- Normalizing keeps a quiet record. -/
+public theorem ProcessState.Quiet.normalizeRecord {process : ProcessState} (quiet : process.Quiet) (state : State)
+    (processId : PID) : state.normalizeRecord processId process = process := by
+  obtain ⟨live, links, -, -, -, -, queue⟩ := quiet
+  unfold State.normalizeRecord
+  rw [live]
+  dsimp only
+  have kept : Kernel.filter (state.keepEntry processId process) process.queue = process.queue := by
+    rw [Kernel.filter_eq]
+    refine List.filter_eq_self.mpr fun entry mem => ?_
+    obtain ⟨⟨message, signal⟩, -⟩ := queue entry mem
+    obtain ⟨source, signal'⟩ := entry
+    simp only at signal; subst signal
+    simp [State.keepEntry, State.inertEntry, live]
+  rw [kept, links]
+  simp only [Kernel.filter_eq, List.filter_nil]
+  cases process
+  simp only at links live ⊢
+  subst links live
+  rfl
+
+/-- Normalizing keeps a state whose records are quiet. -/
+public theorem State.normalize_of_quiet {state : State} (quiet : ∀ entry ∈ state.processes, entry.2.Quiet) :
+    state.normalize = state := by
+  obtain ⟨processes, timers, elapsed⟩ := state
+  simp only [State.normalize, Kernel.map_eq, Kernel.filter_eq, State.mk.injEq, and_true]
+  have mapped : processes.map (fun record => (record.1,
+      ({ processes, timers, elapsed } : State).normalizeRecord record.1 record.2)) = processes := by
+    conv => rhs; rw [← List.map_id processes]
+    refine List.map_congr_left fun record mem => ?_
+    rw [(quiet record mem).normalizeRecord]
+    rfl
+  rw [mapped]
+  refine List.filter_eq_self.mpr fun record mem => ?_
+  simp [ProcessState.finished, (quiet record mem).1]
+
 /-- Every process only messages others as `talk` allows, in a quiet state. -/
 private def Config.Talking (talk : PID → PID → Prop) : Config α → Prop
   | .start .. => False
@@ -979,5 +1015,40 @@ public theorem Config.run_advance (steps : Nat) (config : Config α) :
     · rename_i event next rest found
       obtain ⟨events, run⟩ := ih next
       exact ⟨event :: events, .step (by simp [Step, found]) run⟩
+
+/-- A configuration whose first steps are each the only one available has no
+races when the configuration after them has none. -/
+public theorem RaceFree.of_advance (steps : Nat) {config : Config α}
+    (unique : ∀ step < steps, ((config.advance step).successors).length ≤ 1)
+    (raceFree : RaceFree (config.advance steps)) : RaceFree config := by
+  induction steps generalizing config with
+  | zero => exact raceFree
+  | succ steps ih =>
+    have first := unique 0 (Nat.succ_pos _)
+    simp only [Config.advance_zero] at first
+    cases found : config.successors with
+    | nil =>
+      have stuck : ∀ steps, config.advance steps = config := by
+        intro steps
+        cases steps with
+        | zero => rfl
+        | succ steps =>
+          clear ih unique raceFree first
+          induction steps with
+          | zero => simp [Config.advance, found]
+          | succ steps ih => simp [Config.advance, found]
+      rw [stuck] at raceFree
+      exact raceFree
+    | cons head rest =>
+      obtain ⟨event, next⟩ := head
+      rw [found] at first
+      have empty : rest = [] := List.eq_nil_of_length_eq_zero (by simpa using first)
+      subst empty
+      refine RaceFree.of_unique (next := next) (fun event' next' step => ?_) (ih (fun step below => ?_) ?_)
+      · simp only [Step, found, List.mem_singleton, Prod.mk.injEq] at step
+        exact step.2
+      · have := unique (step + 1) (by omega)
+        rwa [Config.advance_succ step found] at this
+      · rwa [Config.advance_succ steps found] at raceFree
 
 end Lynx.Concurrent
