@@ -7102,4 +7102,70 @@ private theorem State.normalize_after {state raw raw' : State} {first second : E
     cases found : raw'.record processId <;> cases found' : (second.apply (first.apply state)).record processId <;>
       simp_all [liveOf]
 
+/-- A process's own step that neither ends it nor spawns leaves it one task. -/
+private theorem Task.own_single {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.own state processId) (continues : ∀ value, task.computation ≠ .ok value)
+    (raises : ∀ exception, task.computation ≠ .error exception)
+    (spawns : ∀ options child next, task.computation ≠ .schedule options child next) :
+    ∃ task', transition.tasks = [(processId, task')] := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp [Task.own] at mem
+  | none =>
+    simp only at continues raises spawns
+    cases computation with
+    | ok value => exact absurd rfl (continues value)
+    | error exception => exact absurd rfl (raises exception)
+    | schedule options child next => exact absurd rfl (spawns options child next)
+    | receive =>
+      simp only [Task.own] at mem
+      split at mem
+      · simp only [List.mem_singleton] at mem; subst mem; exact ⟨_, rfl⟩
+      · split at mem
+        · simp at mem
+        · split at mem
+          · simp at mem
+          · simp only [List.mem_singleton] at mem; subst mem; exact ⟨_, rfl⟩
+    | request =>
+      simp only [Task.own] at mem
+      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> exact ⟨_, rfl⟩
+    | _ => simp only [Task.own, List.mem_singleton] at mem; subst mem; exact ⟨_, rfl⟩
+
+private theorem lookup_rewriteTask_self {processId : PID} {task : Task α} :
+    ∀ {tasks : List (PID × Task α)} {original : Task α}, Kernel.lookup processId tasks = some original →
+      Kernel.lookup processId (rewriteTask processId (fun _ => [(processId, task)]) tasks) = some task
+  | [], _, found => by simp [Kernel.lookup_eq] at found
+  | (key, task') :: rest, original, found => by
+    simp only [Kernel.lookup_eq, List.lookup_cons] at found
+    by_cases same : key = processId
+    · subst same; simp [rewriteTask, Kernel.lookup_eq]
+    · have differ : (processId == key) = false := by simp [Ne.symm same]
+      simp only [differ, Bool.false_eq_true, ↓reduceIte] at found
+      have := lookup_rewriteTask_self (task := task) (by simpa [Kernel.lookup_eq] using found)
+      simp only [Kernel.lookup_eq] at this
+      simp [rewriteTask, same, Kernel.lookup_eq, List.lookup_cons, differ, this]
+
+private theorem framesApart_symm {frames frames' : List Frame} (apart : framesApart frames frames' = true) :
+    framesApart frames' frames = true := by
+  simp only [framesApart, Kernel.all_eq, List.all_eq_true, Bool.or_eq_true, bne_iff_ne, ne_eq, Bool.and_eq_true,
+    beq_iff_eq] at apart ⊢
+  intro entry mem entry' mem'
+  rcases apart entry' mem' entry mem with differ | ⟨zero, zero'⟩
+  · exact .inl (Ne.symm differ)
+  · right
+    refine ⟨?_, ?_⟩
+    · rw [Nat.and_comm] at zero' ⊢
+      apply Nat.eq_of_testBit_eq; intro bit
+      have one := congrArg (Nat.testBit · bit) zero
+      have two := congrArg (Nat.testBit · bit) zero'
+      simp only [Nat.testBit_and, Nat.testBit_or, Nat.zero_testBit] at one two ⊢
+      cases a : entry.2.2.testBit bit <;> cases b : entry'.2.1.testBit bit <;> cases c : entry'.2.2.testBit bit <;>
+        cases d : entry.2.1.testBit bit <;> simp_all
+    · rw [Nat.and_comm]
+      apply Nat.eq_of_testBit_eq; intro bit
+      have one := congrArg (Nat.testBit · bit) zero
+      simp only [Nat.testBit_and, Nat.testBit_or, Nat.zero_testBit] at one ⊢
+      cases a : entry.2.2.testBit bit <;> cases b : entry'.2.1.testBit bit <;> cases c : entry'.2.2.testBit bit <;>
+        simp_all
+
 end Lynx.Concurrent
