@@ -3366,7 +3366,223 @@ private theorem request (distinct : state.Distinct) (processId : PID) {β : Type
     · exact (distinct.timers _).modify fun _ _ nodup => nodup
     · exact distinct
 
+private theorem filteredLinks (distinct : state.Distinct) {processId : PID} {keep : PID × Option Nat → Bool} :
+    (state.modify processId fun process => { process with links := Kernel.filter keep process.links }).Distinct :=
+  distinct.filtered
+
+private theorem exitSignal (distinct : state.Distinct) (target source : PID) (reason : Term) (linked normalKills : Bool) :
+    (state.exitSignal target source reason linked normalKills).1.Distinct := by
+  unfold State.exitSignal
+  dsimp only
+  repeat' split
+  all_goals first
+    | exact distinct
+    | exact distinct.filtered
+    | (refine State.Distinct.modify ?_ fun _ _ nodup => nodup
+       first | exact distinct | exact distinct.filtered)
+
+private theorem handle (distinct : state.Distinct) (processId : PID) (waiting : Option Wait) (entry : Entry) :
+    (state.handle processId waiting entry).1.Distinct := by
+  obtain ⟨source, signal⟩ := entry
+  cases signal with
+  | message message => exact distinct.modify fun _ _ nodup => nodup
+  | aliasMessage alias message =>
+    simp only [State.handle]; split
+    · exact distinct.modify fun _ _ nodup => nodup
+    · exact distinct
+  | exit reason linked normalKills => exact distinct.exitSignal _ _ _ _ _
+  | link =>
+    simp only [State.handle]; split
+    · exact distinct
+    · rename_i missing
+      refine distinct.modify fun process found nodup => ?_
+      have absent : ∀ value, (source, value) ∉ process.links := by
+        simpa [State.process, found, Kernel.lookup_eq] using missing
+      simp only [Kernel.append_eq, List.map_append, List.map_cons, List.map_nil]
+      rw [List.nodup_append]
+      refine ⟨nodup, List.nodup_cons.mpr ⟨by simp, .nil⟩, fun peer mem other mem' => ?_⟩
+      simp only [List.mem_singleton] at mem'
+      subst mem'
+      intro same; subst same
+      simp only [List.mem_map] at mem
+      obtain ⟨⟨key, value⟩, inside, rfl⟩ := mem
+      exact absent value inside
+  | unlink id =>
+    simp only [State.handle]
+    split
+    · exact distinct.filtered.send _ _ _
+    · exact distinct.send _ _ _
+  | unlinkAck id =>
+    simp only [State.handle]; split
+    · exact distinct.filtered
+    · exact distinct
+  | monitor reference => exact distinct.modify fun _ _ nodup => nodup
+  | down reference reason =>
+    simp only [State.handle]
+    repeat' split
+    all_goals (repeat' refine State.Distinct.modify ?_ fun _ _ nodup => nodup)
+    all_goals exact distinct
+  | isAlive => exact distinct.send _ _ _
+  | reply value => simp only [State.handle]; split <;> exact distinct
+  | flush => simp only [State.handle]; split <;> exact distinct
+
+private theorem linkPhase (distinct : state.Distinct) {processId target : PID} {next : State}
+    (phase : state.linkPhase processId target = some next) : next.Distinct := by
+  unfold State.linkPhase at phase
+  repeat' split at phase
+  all_goals simp only [Option.some.injEq, reduceCtorEq] at phase
+  subst phase
+  rename_i process found _ _ _ _
+  exact (distinct.set (by simpa using distinct _ _ found)).linkExit _ _ _
+
+private theorem phase (distinct : state.Distinct) {processId : PID} {next : State}
+    (phase : state.phase processId = some next) : next.Distinct := by
+  unfold State.phase at phase
+  repeat' split at phase
+  all_goals simp only [Option.some.injEq, reduceCtorEq] at phase
+  all_goals subst phase
+  · refine (distinct.set ?_).send _ _ _
+    simpa using distinct _ _ (by assumption)
+  · refine (distinct.set ?_).answer _ _
+    simpa using distinct _ _ (by assumption)
+
+private theorem fire (distinct : state.Distinct) (timer : Timer) : (state.fire timer).Distinct :=
+  (distinct.timers _).enqueue _ _ _
+
+private theorem normalize (distinct : state.Distinct) (sorted : state.Sorted) : state.normalize.Distinct := by
+  intro processId process found
+  rw [State.record_normalize' sorted] at found
+  cases record : state.record processId with
+  | none => simp [record] at found
+  | some original =>
+    simp only [record, Option.map_some, Option.filter] at found
+    split at found
+    · cases found
+      unfold normRecord
+      split
+      · simp
+      · simp only [Kernel.filter_eq]
+        exact (List.filter_sublist.map _).nodup (distinct _ _ record)
+    · cases found
+
 end State.Distinct
+
+private theorem Task.own_distinct {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (distinct : state.Distinct) (mem : transition ∈ task.own state processId) : transition.state.Distinct := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp [Task.own] at mem
+  | none =>
+  cases computation with
+  | ok value =>
+    simp only [Task.own, List.mem_singleton] at mem; subst mem; exact distinct.terminate _ _
+  | error exception =>
+    cases exception <;> simp only [Task.own, List.mem_singleton] at mem <;> subst mem <;>
+      first | exact distinct.terminate _ _ | exact distinct.remove _
+  | get next => simp only [Task.own, List.mem_singleton] at mem; subst mem; exact distinct
+  | set updated next =>
+    simp only [Task.own, List.mem_singleton] at mem; subst mem; exact distinct.modify fun _ _ nodup => nodup
+  | schedule options child next =>
+    simp only [Task.own, List.mem_singleton] at mem; subst mem; exact distinct.spawnWith _ _
+  | send destination message next =>
+    simp only [Task.own, List.mem_singleton] at mem; subst mem; exact distinct.send _ _ _
+  | receive timeout select next =>
+    simp only [Task.own] at mem
+    repeat' split at mem
+    all_goals simp only [List.mem_singleton, List.not_mem_nil] at mem
+    all_goals subst mem
+    · exact distinct.modify fun _ _ nodup => nodup
+    all_goals exact distinct
+  | request query next =>
+    have requested := distinct.request processId next query
+    simp only [Task.own] at mem
+    split at mem <;> rename_i answer <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+      simp only [answer, Answer.state] at requested <;> exact requested
+
+private theorem Task.handle_distinct {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (distinct : state.Distinct) (mem : transition ∈ task.handle state processId) : transition.state.Distinct := by
+  simp only [Task.handle] at mem
+  split at mem
+  · simp at mem
+  · rename_i entry rest queue
+    have set : (state.set processId { state.process processId with queue := rest }).Distinct := by
+      refine distinct.set ?_
+      cases found : state.record processId with
+      | none => simp [State.process, found]
+      | some process => simpa [State.process, found] using distinct _ _ found
+    have handled := set.handle processId (task.wait.map (·.1)) entry
+    revert mem handled
+    generalize (state.set processId { state.process processId with queue := rest }).handle processId
+      (task.wait.map (·.1)) entry = triple
+    obtain ⟨handled, resumed, exits⟩ := triple
+    intro mem distinct'
+    dsimp only at mem distinct'
+    split at mem
+    · simp only [List.mem_singleton] at mem; subst mem; exact distinct'.terminate _ _
+    · split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> exact distinct'
+
+/-- A configuration whose records hold links with distinct processes. -/
+private def Config.Distinct : Config α → Prop
+  | .start .. => True
+  | .running state .. => state.Distinct
+
+private theorem Config.Distinct.step {elapsed : PID → Nat → Nat} {config next : Config α} {event : Event}
+    (within : config.Within elapsed) (distinct : config.Distinct) (step : Step config event next) : next.Distinct := by
+  cases config with
+  | start env computation elapsed' =>
+    simp only [Step, Config.successors] at step
+    split at step
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial
+    · split at step
+      · simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step
+        intro processId process found
+        simp only [State.initial, State.record, Kernel.lookup_eq, List.lookup_cons, List.lookup_nil] at found
+        split at found <;> simp only [Option.some.injEq, reduceCtorEq] at found
+        subst found; simp
+      · simp at step
+  | running state tasks finished exhausted =>
+    have within : state.Within elapsed := within
+    have distinct : state.Distinct := distinct
+    cases exhausted
+    case true => simp [Step, Config.successors] at step
+    simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
+      List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists] at step
+    rcases step with ((⟨before, processId, task, after, -, transition, possible, same⟩ |
+      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩
+    · simp only [Prod.mk.injEq] at same
+      obtain ⟨-, rfl⟩ := same
+      simp only [Task.transitions, Kernel.append_eq, List.mem_append] at possible
+      have kept : transition.state.Distinct ∧ transition.state.Within elapsed := by
+        rcases possible with possible | possible
+        · exact ⟨Task.own_distinct distinct possible, within.own possible⟩
+        · exact ⟨Task.handle_distinct distinct possible, within.handleStep possible⟩
+      unfold Transition.apply
+      split
+      · intro processId process found
+        simp [State.record, Kernel.lookup_eq] at found
+      · exact kept.1.normalize kept.2.1
+    · obtain ⟨next', phase, same⟩ := phased
+      simp only [Prod.mk.injEq] at same
+      obtain ⟨-, rfl⟩ := same
+      simp only [State.phases, Kernel.append_eq, Kernel.filterMap_eq, List.mem_append, List.mem_filterMap] at phase
+      show next'.normalize.Distinct
+      rcases phase with ⟨target, -, linked⟩ | phase
+      · exact (distinct.linkPhase linked).normalize (within.linkPhase linked).1
+      · split at phase
+        · rename_i next'' found
+          simp only [List.mem_singleton] at phase; subst phase
+          exact (distinct.phase found).normalize (within.phase found).1
+        · simp at phase
+    · cases parked : (state.process processId).parked with
+      | none => simp [parked] at unparked
+      | some _ =>
+        simp only [parked, Option.map_some, Option.some.injEq, Prod.mk.injEq] at unparked
+        obtain ⟨-, rfl⟩ := unparked
+        exact (distinct.unpark _).normalize (within.unpark _).1
+    · simp only [Prod.mk.injEq] at fired
+      obtain ⟨-, rfl⟩ := fired
+      exact (distinct.fire _).normalize (within.fire _).1
 
 /-- Every other step absorbs a forced step, or commutes with it into a
 configuration where a forced step closes the square. -/
