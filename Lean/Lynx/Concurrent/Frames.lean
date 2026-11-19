@@ -5064,6 +5064,71 @@ private theorem Clean.unlinked {gone : PID → Bool} {processId target : PID} {p
       rwa [lookup_filter_ne, ite_eq_right_iff.mpr (fun h => absurd h same)] at inside
   | _ => simp only [inert, linkRemoved] at inside ⊢; exact inside
 
+private theorem Refers.unlinked {process : ProcessState} {processId : PID} (refers : Refers process processId = false) :
+    Refers (linkRemoved processId process) processId = false := by
+  unfold Refers at refers ⊢
+  simp only [linkRemoved]
+  cases exiting : process.exiting <;> simp only [exiting] at refers ⊢
+  · simp only [Bool.or_eq_false_iff] at refers ⊢
+    refine ⟨refers.1, ?_⟩
+    simp only [Kernel.any_eq, Kernel.filter_eq, List.any_filter] at refers ⊢
+    simp [List.any_eq_false]
+    intros; simp_all
+  · exact refers
+
+/-- The link exits of a process that ended, applied as they are sent, keep a
+state clean but for its own record, while no other record refers to it and
+the exits go to live processes. -/
+private theorem CleanOutside.eagerExits {processId : PID} {eager : PID → Bool} :
+    ∀ (targets : List PID) (state : State), CleanOutside state (· = processId) →
+      (∀ other process, other ≠ processId → state.record other = some process → Refers process processId = false) →
+      (∀ target, eager target = true → target ≠ processId ∧ state.alive target = true) →
+      CleanOutside ((eagerChain processId eager targets).apply state) (· = processId)
+  | [], state, clean, _, _ => by simpa [eagerChain, Effect.apply_empty] using clean
+  | target :: rest, state, clean, refers, eagerAlive => by
+    simp only [eagerChain]
+    refine CleanOutside.andThen ?_
+    -- The first exit, then the rest from the state it leads to.
+    have step : ∀ (effect : Effect), effect.KeepsAlive →
+        CleanOutside (effect.apply state) (· = processId) →
+        (∀ other process, other ≠ processId → (effect.apply state).record other = some process →
+          Refers process processId = false) →
+        CleanOutside ((eagerChain processId eager rest).apply (effect.apply state)) (· = processId) :=
+      fun effect keeps clean' refers' => CleanOutside.eagerExits rest _ clean' refers' fun target' eager' => by
+        obtain ⟨differ, alive⟩ := eagerAlive target' eager'
+        exact ⟨differ, (State.alive_eq_of_gone (keeps.gone state) target').trans alive⟩
+    split
+    · rename_i taken
+      obtain ⟨differ, alive⟩ := eagerAlive target taken
+      have keepsFirst : (Effect.modify processId (exitingWithout target)).KeepsAlive :=
+        Effect.KeepsAlive.modify fun process => by simp only [exitingWithout]; cases process.exiting <;> rfl
+      have keeps := keepsFirst.andThen (Effect.KeepsAlive.modify (processId := target)
+        (change := linkRemoved processId) fun _ => rfl)
+      refine step _ keeps ?_ ?_
+      · refine CleanOutside.andThen ?_
+        have first := CleanOutside.modify (processId := processId) (change := exitingWithout target)
+          (fun process => by simp only [exitingWithout]; cases process.exiting <;> rfl) clean
+          fun outside => absurd rfl outside
+        refine CleanOutside.modify (fun _ => rfl) first fun _ process found => ?_
+        have record : state.record target = some process := by
+          rw [Effect.record_apply, Effect.record_modify, if_neg differ] at found; exact found
+        have live : process.exiting = none := by simp only [State.alive, record] at alive; simpa using alive
+        rw [keepsFirst.gone]
+        exact (clean target differ process record).unlinked live (refers target process differ record)
+      · intro other process differ' found
+        rw [Effect.apply_andThen_record, Effect.record_apply, Effect.record_modify, Effect.record_apply,
+          Effect.record_modify, if_neg differ'] at found
+        by_cases same : other = target
+        · subst same
+          cases record : state.record other with
+          | none => rw [record] at found; simp at found
+          | some original =>
+            rw [record] at found; simp only [↓reduceIte, id, Option.map_some, Option.some.injEq] at found; subst found
+            exact Refers.unlinked (refers other original differ' record)
+        · rw [if_neg same] at found; exact refers other process differ' found
+    · rw [Effect.apply_empty]
+      exact CleanOutside.eagerExits rest state clean refers eagerAlive
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
