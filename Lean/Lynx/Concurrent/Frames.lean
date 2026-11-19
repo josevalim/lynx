@@ -6774,4 +6774,75 @@ private theorem Config.stepOf_handle_of {state : State} {tasks : List (PID × Ta
   obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
   exact ⟨transition.event, transition.apply before after finished false, by simp [Config.stepOf, split, head]⟩
 
+private theorem rewriteTask_same {processId : PID} {task : Task α} :
+    ∀ {tasks : List (PID × Task α)}, Kernel.lookup processId tasks = some task →
+      rewriteTask processId (fun _ => [(processId, task)]) tasks = tasks
+  | [], found => by simp [Kernel.lookup_eq] at found
+  | (key, task') :: rest, found => by
+    simp only [Kernel.lookup_eq, List.lookup_cons] at found
+    by_cases same : key = processId
+    · subst same
+      simp only [beq_self_eq_true, ↓reduceIte, Option.some.injEq] at found
+      subst found; simp [rewriteTask]
+    · have differ : (processId == key) = false := by simp [Ne.symm same]
+      simp only [differ, Bool.false_eq_true, ↓reduceIte] at found
+      simp [rewriteTask, same, rewriteTask_same (by simpa [Kernel.lookup_eq] using found)]
+
+private theorem Task.own_waiting {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (head : (task.own state processId).head? = some transition) : task.wait = none := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | none => rfl
+  | some => simp [Task.own] at head
+
+/-- A confined step keeps the task of every other process, and of its own when it handles a signal. -/
+private theorem Config.lookup_after {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key} {event : Event} {next : Config α} {processId : PID}
+    {task : Task α} (confined : Config.confined (.running state tasks finished false) key = true)
+    (fresh : (Config.running state tasks finished false).spawnsFresh key = true)
+    (step : (Config.running state tasks finished false).stepOf key = some (event, next))
+    (lookup : Kernel.lookup processId tasks = some task) (notOwn : key ≠ .own processId) :
+    ∃ state' tasks' finished', next = .running state' tasks' finished' false ∧
+      Kernel.lookup processId tasks' = some task := by
+  cases key with
+  | own other =>
+    have differ : other ≠ processId := fun same => notOwn (by rw [same])
+    obtain ⟨task', transition, lookup', head, rfl⟩ := Config.stepOf_own step
+    have exhausted : transition.exhausted = false := by
+      cases exhausted : transition.exhausted
+      · rfl
+      obtain ⟨computation, finish, wait⟩ := task'
+      obtain ⟨waits, computes⟩ := Task.own_exhausted (List.mem_of_head? head) exhausted
+      simp only at waits computes
+      subst waits computes
+      simp only [Config.confined] at confined; rw [lookup'] at confined; simp at confined
+    have waiting : task'.wait = none := Task.own_waiting head
+    refine ⟨transition.state.normalize, rewriteTask other (fun _ => transition.tasks) tasks,
+      transition.finished.orElse fun _ => finished, by simp [exhausted], ?_⟩
+    rw [lookup_rewriteTask (Ne.symm differ) (fun _ => Config.own_missing fresh lookup' waiting head differ lookup)]
+    exact lookup
+  | handle other =>
+    obtain ⟨task', transition, lookup', head, rfl⟩ := Config.stepOf_handle step
+    obtain ⟨view, viewed, changed, -, exhausted⟩ := Task.handle_change (List.mem_of_head? head)
+    have kept : transition.tasks = [(other, task')] := by
+      simp only [Config.confined, Bool.and_eq_true] at confined
+      cases queue : (state.process other).queue with
+      | nil => simp [queue] at confined
+      | cons entry rest =>
+        simp only [queue] at confined
+        have kind : entry.signal.handledConfined = true := by
+          obtain ⟨source, signal⟩ := entry; cases signal <;> simp_all [Signal.handledConfined]
+        have : view = (none, none) := by
+          simp only [Task.handleView, queue, State.handle_confined _ _ _ _ kind, Option.some.injEq] at viewed
+          exact viewed.symm
+        rw [changed, this, handleChange_keep rfl]
+    refine ⟨transition.state.normalize, rewriteTask other (fun _ => transition.tasks) tasks,
+      transition.finished.orElse fun _ => finished, by simp [exhausted], ?_⟩
+    rw [kept, rewriteTask_same lookup']
+    exact lookup
+  | phase | unpark | fire =>
+    obtain ⟨state', rfl⟩ := Config.stepOf_keeps rfl step
+    exact ⟨state', tasks, finished, rfl, lookup⟩
+  | link => simp [Config.confined] at confined
+
 end Lynx.Concurrent
