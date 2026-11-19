@@ -428,7 +428,14 @@ no unlink waits for, which reads its links. -/
       else if state.alive target then some (state.sendFrames processId target .isAlive, false)
       else some ([(target, Field.live, 0), (processId, 0, Field.queueTail)], false)
   | .sendAlias alias message =>
-      some (state.sendFrames processId alias.dropLast (.aliasMessage alias message), false)
+      -- A message to an alias its receiver no longer holds does nothing, once
+      -- normalized: the step reads only what makes it so.
+      let target := alias.dropLast
+      if (state.process processId).parked.isNone &&
+          state.inertEntry target { source := processId, signal := .aliasMessage alias message } then
+        some ([(processId, Field.parked, 0),
+          (target, Field.live ||| Field.aliases ||| Field.monitoring ||| Field.refCounter, 0)], false)
+      else some (state.sendFrames processId target (.aliasMessage alias message), false)
   | .startTimer destination _ _ =>
       some ([(processId, Field.refCounter, Field.refCounter), (destination, Field.live, 0)], true)
   | .cancelTimer _ => some ([(processId, Field.cancels, Field.cancels)], true)
@@ -436,25 +443,11 @@ no unlink waits for, which reads its links. -/
 /-- Every field. -/
 @[expose] def Field.all : Nat := 131071
 
-/-- The frames of a process ending: its own record, and the records of others
-that normalization changes once it is gone, and whether it cancels timers. A
-live process drops the requests the process queued, which only it can queue,
-and the links it was removing; a process that ended drops everything the
-process queued and its signals to it. -/
+/-- The frames of a process ending: its own record, the link exits that only
+remove a link, and a parked monitor signal, and whether it cancels timers.
+What normalization drops from other records once it is gone is not among them:
+such a step is not confined (`Config.confined`). -/
 @[expose] def State.endFrames (state : State) (processId : PID) : List Frame × Bool :=
-  let others := Kernel.filterMap (fun (other, process) =>
-    if other == processId then none else
-    let fields := match process.exiting with
-      | some exiting =>
-          (if Kernel.any process.queue (·.source == processId) then Field.queueHead ||| Field.queueTail else 0) |||
-          (if Kernel.contains exiting.links processId || Kernel.any exiting.downs (·.2 == processId)
-            then Field.exiting ||| Field.live else 0)
-      | none =>
-          (if Kernel.any process.queue (fun entry => entry.source == processId && match entry.signal with
-              | .isAlive | .monitor _ | .unlinkAck _ => true
-              | _ => false) then Field.queueHead ||| Field.queueTail else 0) |||
-          (if Kernel.any process.links (fun link => link.1 == processId && link.2.isSome) then Field.links else 0)
-    if fields == 0 then none else some (other, fields, fields)) state.processes
   -- It applies the link exits that only remove a link, after a parked monitor
   -- signal to the same target.
   let process := state.process processId
@@ -467,7 +460,7 @@ process queued and its signals to it. -/
   let unpark := match process.parked with
     | some (target, _) => [(target, Field.live, Field.queueTail)]
     | none => []
-  ((processId, Field.all, Field.all) :: Kernel.append others (Kernel.append eager unpark),
+  ((processId, Field.all, Field.all) :: Kernel.append eager unpark,
     Kernel.any state.timers (·.destination == processId))
 
 /-- The frames of a process's own step, `none` when it does not return. -/
@@ -595,8 +588,75 @@ as for a process that does not return. -/
     processId != processId' ||
       writes &&& (reads' ||| writes') == 0 && writes' &&& reads == 0
 
-/-- Whether two steps touch records apart and do not both use the timers. -/
+/-- Whether a queued signal is a `DOWN` or a message to an alias with the reference. -/
+@[expose] def Entry.carries (entry : Entry) (reference : List Nat) : Bool :=
+  match entry.signal with
+  | .down reference' _ | .aliasMessage reference' _ => reference' == reference
+  | _ => false
+
+/-- Whether no other record holds what normalization drops once a process is
+gone: a live process drops the requests the process queued, which only it can
+queue, and the links it was removing; a process that ended drops everything
+the process queued and its signals to it. -/
+@[expose] def State.leavesOthers (state : State) (processId : PID) : Bool :=
+  Kernel.all state.processes fun (other, process) =>
+    other == processId || match process.exiting with
+      | some exiting =>
+          !Kernel.any process.queue (·.source == processId) &&
+          !(Kernel.contains exiting.links processId || Kernel.any exiting.downs (·.2 == processId))
+      | none =>
+          !Kernel.any process.queue (fun entry => entry.source == processId && match entry.signal with
+              | .isAlive | .monitor _ | .unlinkAck _ => true
+              | _ => false) &&
+          !Kernel.any process.links (fun link => link.1 == processId && link.2.isSome)
+
+/-- Whether the frames of a step decide that it commutes: normalizing after it
+changes no record but its own when it ends, as no signal it makes inert is
+queued, and it is a step the laws need to commute without evaluating them.
+Other steps are compared by evaluating them. -/
+@[expose] def Config.confined : Config α → Key → Bool
+  | .running state tasks _ false, .own processId =>
+      match Kernel.lookup processId tasks with
+      | some ⟨computation, _, none⟩ =>
+          let process := state.process processId
+          match computation with
+          | .error .exhausted => false
+          | .ok _ | .error _ => state.leavesOthers processId
+          | .get _ | .set .. | .send .. | .receive .. => true
+          | .request query _ => match query with
+            | .demonitor reference _ => !Kernel.any process.queue (·.carries reference)
+            | .monitor .. | .startTimer .. =>
+                !Kernel.any process.queue (·.carries (Kernel.append processId [process.refCounter + 1]))
+            | .sendAlias alias message => process.parked.isNone ||
+                !state.inertEntry alias.dropLast { source := processId, signal := .aliasMessage alias message }
+            | .cancelTimer _ | .alive _ => true
+            | _ => false
+          | Result.schedule .. => false
+      | _ => false
+  | .running state _ _ false, .handle processId =>
+      match (state.process processId).queue with
+      | entry :: rest => match entry.signal with
+        | .message _ | .monitor _ => true
+        | .down reference _ | .aliasMessage reference _ => !Kernel.any rest (·.carries reference)
+        | _ => false
+      | [] => false
+  | .running state _ _ false, .phase processId =>
+      let process := state.process processId
+      match process.exiting with
+      | some { reason, links := [], downs := (reference, watcher) :: _, .. } =>
+          !state.inertEntry watcher { source := processId, signal := .down reference reason }
+      | some { links := [], downs := [], .. } => match process.queue with
+        | { source, signal := .monitor reference } :: _ =>
+            !state.inertEntry source { source := processId, signal := .down reference (.atom "noproc") }
+        | _ => true
+      | _ => false
+  | .running state _ _ false, .unpark processId => state.alive processId
+  | .running _ _ _ false, .fire _ => true
+  | _, _ => false
+
+/-- Whether two confined steps touch records apart and do not both use the timers. -/
 @[expose] def Config.apart (config : Config α) (key other : Key) : Bool :=
+  config.confined key && config.confined other &&
   match config.frames key, config.frames other with
   | some (frames, timers), some (frames', timers') => !(timers && timers') && framesApart frames frames'
   | _, _ => false
