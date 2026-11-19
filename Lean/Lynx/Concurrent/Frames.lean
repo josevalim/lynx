@@ -402,19 +402,6 @@ private theorem Effect.InFrames.keeps {effect : Effect} {frames frames' : List F
       · simp only [Option.some.injEq, Option.map_some] at found₁ found₂; subst found₁; subst found₂
         exact keeps.symm
 
-/-- A change within a frame that reads and writes nothing of a record leaves it as it is. -/
-private theorem Framed.id {reads writes : Mask} {base : ProcessState} {change : ProcessState → ProcessState}
-    (framed : Framed reads writes base change) (unused : ∀ bit, bit < 17 → reads bit = false ∧ writes bit = false)
-    (process : ProcessState) : change process = process := by
-  obtain ⟨keeps, -, ⟨dropped, added, -, noHead, noTail, queue⟩, -⟩ := framed
-  have same : process.Same reads base :=
-    ⟨fun read => by simp [(unused tailBit (by decide)).1] at read,
-      fun read => by simp [(unused headBit (by decide)).1] at read,
-      fun part read => by simp [(unused part.bit part.bit_lt).1] at read⟩
-  have queueSame : (change process).queue = process.queue := by
-    rw [queue process same, noHead (unused headBit (by decide)).2, noTail (unused tailBit (by decide)).2]; simp
-  exact ProcessState.ext_get queueSame fun part => keeps process same part (unused _ part.bit_lt).2
-
 /-- Two effects within frames apart change every record alike in either order. -/
 private theorem Effect.record_comm {effect effect' : Effect} {frames frames' : List Frame} {state : State}
     (framed : effect.InFrames frames state) (framed' : effect'.InFrames frames' state)
@@ -4051,45 +4038,6 @@ private theorem State.sendEffect_keepsAlive (state : State) (source target : PID
     | exact (State.unparkEffect_keepsAlive _ _).andThen (State.enqueueEffect_keepsAlive _ _ _ _)
     | exact State.enqueueEffect_keepsAlive _ _ _ _
 
-/-- A record an effect leaves as it is stays clean, when the effect leaves every
-process alive or gone as it was. -/
-private theorem Clean.unchanged {state : State} (sorted : state.Sorted) (normalized : state.normalize = state)
-    {effect : Effect} (keeps : effect.KeepsAlive) {processId : PID}
-    (same : effect.record processId (state.record processId) = state.record processId) :
-    ∀ process, (effect.apply state).record processId = some process →
-      Clean (effect.apply state).gone processId process := by
-  intro process found
-  rw [Effect.record_apply, same] at found
-  rw [keeps.gone]
-  exact Clean.of_normalized sorted normalized found
-
-/-- A record an effect appends a signal to that is not inert stays clean, when
-the effect leaves every process alive or gone as it was. -/
-private theorem Clean.appended {state : State} (sorted : state.Sorted) (normalized : state.normalize = state)
-    {effect : Effect} (keeps : effect.KeepsAlive) {processId source : PID} {signal : Signal}
-    (appended : effect.record processId (state.record processId) =
-      (state.record processId).map (queueAt source signal))
-    (live : ∀ process, state.record processId = some process → process.exiting = none)
-    (fresh : ∀ process, state.record processId = some process →
-      inert state.gone processId (queueAt source signal process) { source, signal } = false) :
-    ∀ process, (effect.apply state).record processId = some process →
-      Clean (effect.apply state).gone processId process := by
-  intro process found
-  rw [Effect.record_apply, appended] at found
-  rw [keeps.gone]
-  cases record : state.record processId with
-  | none => rw [record] at found; simp at found
-  | some original =>
-    rw [record] at found; simp only [Option.map_some, Option.some.injEq] at found; subst found
-    have clean := Clean.of_normalized sorted normalized record
-    have exiting := live original record
-    refine clean.preserve exiting exiting (fun entry mem => ?_) (fun link mem _ => ⟨mem, id⟩)
-    simp only [queueAt, Kernel.append_eq, List.mem_append, List.mem_singleton] at mem
-    rcases mem with old | rfl
-    · exact .inl ⟨old, fun inside => by
-        rw [inert_congr rfl rfl rfl rfl rfl] at inside; exact inside⟩
-    · exact .inr (fresh original record)
-
 private theorem Effect.apply_empty (state : State) : ({} : Effect).apply state = state := by
   cases state; rfl
 
@@ -5334,7 +5282,21 @@ private theorem Task.handle_not_exhausted {state : State} {processId : PID} {tas
     · simp only [List.mem_singleton] at mem; subst mem; rfl
     · split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> rfl
 
-/-- A confined step leads to its effect's state, normalized. -/
+/-- A confined own step is not one the process did not return from. -/
+private theorem Config.own_not_exhausted {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
+    (confined : Config.confined (.running state tasks finished false) (.own processId) = true)
+    (lookup : Kernel.lookup processId tasks = some task) (head : (task.own state processId).head? = some transition) :
+    transition.exhausted = false := by
+  cases exhausted : transition.exhausted
+  · rfl
+  obtain ⟨computation, finish, wait⟩ := task
+  obtain ⟨waits, computes⟩ := Task.own_exhausted (List.mem_of_head? head) exhausted
+  simp only at waits computes
+  simp only [Config.confined, lookup, waits, computes, Bool.and_false, Bool.false_eq_true] at confined
+
+/-- A confined step leads to its effect's state, normalized, which keeps the
+records sorted and the elapsed oracle. -/
 private theorem Config.stepOf_effect {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {key : Key} {event : Event} {next : Config α}
     {elapsed : PID → Nat → Nat} (within : state.Within elapsed)
@@ -5345,16 +5307,7 @@ private theorem Config.stepOf_effect {state : State} {tasks : List (PID × Task 
   cases key with
   | own processId =>
     obtain ⟨task, transition, lookup, head, rfl⟩ := Config.stepOf_own step
-    have exhausted : transition.exhausted = false := by
-      cases exhausted : transition.exhausted
-      · rfl
-      obtain ⟨computation, finish, wait⟩ := task
-      obtain ⟨waits, computes⟩ := Task.own_exhausted (List.mem_of_head? head) exhausted
-      simp only at waits computes
-      subst waits computes
-      simp only [Config.confined] at confined
-      rw [lookup] at confined
-      simp at confined
+    have exhausted := Config.own_not_exhausted confined lookup head
     refine ⟨transition.state, rewriteTask processId (fun _ => transition.tasks) tasks,
       transition.finished.orElse fun _ => finished, ?_, within.own (List.mem_of_head? head), by simp [exhausted]⟩
     simp only [Config.effectOf, lookup]
@@ -6757,25 +6710,9 @@ private theorem splitAt_of_lookup {processId : PID} : ∀ {tasks : List (PID × 
       exact ⟨[], rest, by rw [found]⟩
     · have differ : (other == processId) = false := by simp [same]
       have differ' : (processId == other) = false := by simp [Ne.symm same]
-      simp only [differ', Bool.false_eq_true, ↓reduceIte] at found
+      simp only [differ'] at found
       obtain ⟨before, after, split⟩ := splitAt_of_lookup (by simpa [Kernel.lookup_eq] using found)
       exact ⟨(other, task') :: before, after, by simp [differ, split]⟩
-
-/-- A process's own step at a configuration, given its task and its first transition. -/
-private theorem Config.stepOf_own_of {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
-    (lookup : Kernel.lookup processId tasks = some task) (head : (task.own state processId).head? = some transition) :
-    ∃ event next, (Config.running state tasks finished false).stepOf (.own processId) = some (event, next) := by
-  obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
-  exact ⟨transition.event, transition.apply before after finished false, by simp [Config.stepOf, split, head]⟩
-
-/-- Handling a signal at a configuration, given the task and the first transition. -/
-private theorem Config.stepOf_handle_of {state : State} {tasks : List (PID × Task α)}
-    {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
-    (lookup : Kernel.lookup processId tasks = some task) (head : (task.handle state processId).head? = some transition) :
-    ∃ event next, (Config.running state tasks finished false).stepOf (.handle processId) = some (event, next) := by
-  obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
-  exact ⟨transition.event, transition.apply before after finished false, by simp [Config.stepOf, split, head]⟩
 
 private theorem rewriteTask_same {processId : PID} {task : Task α} :
     ∀ {tasks : List (PID × Task α)}, Kernel.lookup processId tasks = some task →
@@ -6785,10 +6722,10 @@ private theorem rewriteTask_same {processId : PID} {task : Task α} :
     simp only [Kernel.lookup_eq, List.lookup_cons] at found
     by_cases same : key = processId
     · subst same
-      simp only [beq_self_eq_true, ↓reduceIte, Option.some.injEq] at found
+      simp only [beq_self_eq_true, Option.some.injEq] at found
       subst found; simp [rewriteTask]
     · have differ : (processId == key) = false := by simp [Ne.symm same]
-      simp only [differ, Bool.false_eq_true, ↓reduceIte] at found
+      simp only [differ] at found
       simp [rewriteTask, same, rewriteTask_same (by simpa [Kernel.lookup_eq] using found)]
 
 private theorem Task.own_waiting {state : State} {processId : PID} {task : Task α} {transition : Transition α}
@@ -6811,14 +6748,7 @@ private theorem Config.lookup_after {state : State} {tasks : List (PID × Task �
   | own other =>
     have differ : other ≠ processId := fun same => notOwn (by rw [same])
     obtain ⟨task', transition, lookup', head, rfl⟩ := Config.stepOf_own step
-    have exhausted : transition.exhausted = false := by
-      cases exhausted : transition.exhausted
-      · rfl
-      obtain ⟨computation, finish, wait⟩ := task'
-      obtain ⟨waits, computes⟩ := Task.own_exhausted (List.mem_of_head? head) exhausted
-      simp only at waits computes
-      subst waits computes
-      simp only [Config.confined] at confined; rw [lookup'] at confined; simp at confined
+    have exhausted := Config.own_not_exhausted confined lookup' head
     have waiting : task'.wait = none := Task.own_waiting head
     refine ⟨transition.state.normalize, rewriteTask other (fun _ => transition.tasks) tasks,
       transition.finished.orElse fun _ => finished, by simp [exhausted], ?_⟩
@@ -6891,7 +6821,7 @@ private theorem Config.own_after {elapsed : PID → Nat → Nat} {state state' :
       have alive' := agree.alive mem' set'
       rw [same] at queue; rw [same'] at alive'
       have alive : state.alive processId = true := by
-        simp only [Config.confined, lookup, Bool.and_eq_true] at confined
+        simp only [Config.confined, lookup] at confined
         obtain ⟨computation, finish, wait⟩ := task
         cases wait <;> simp_all
       rw [State.awaited_of_normalized within'.1 normalized' (alive'.trans alive),
@@ -6901,14 +6831,7 @@ private theorem Config.own_after {elapsed : PID → Nat → Nat} {state state' :
   obtain ⟨transition', head', shape⟩ :=
     (Task.own_shape identical (within.2.trans within'.2.symm)).head head
   have exhausted : transition'.exhausted = false := by
-    rw [← shape.2.2]
-    cases exhausted : transition.exhausted
-    · rfl
-    obtain ⟨computation, finish, wait⟩ := task
-    obtain ⟨waits, computes⟩ := Task.own_exhausted (List.mem_of_head? head) exhausted
-    simp only at waits computes
-    subst waits computes
-    simp only [Config.confined] at confined; rw [lookup] at confined; simp at confined
+    rw [← shape.2.2]; exact Config.own_not_exhausted confined lookup head
   obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup'
   have effect : task.ownEffect state' processId = task.ownEffect state processId :=
     Task.ownEffect_agree confined lookup found' agree timed timedTo eager
@@ -7054,8 +6977,7 @@ private theorem Effect.apply_elapsed (effect : Effect) (state : State) :
 /-- A step apart from a first one, taken after it, normalized, reaches both
 effects applied in order, normalized. -/
 private theorem State.normalize_after {state raw raw' : State} {first second : Effect} {frames frames' : List Frame}
-    (sorted : state.Sorted) (framed : first.InFrames frames state)
-    (clean : CleanOutside (first.apply state) (WholeOf frames))
+    (sorted : state.Sorted) (clean : CleanOutside (first.apply state) (WholeOf frames))
     (realizes : Realizes first state raw) (sortedRaw : raw.Sorted)
     (untouched : ∀ processId, WholeOf frames processId → ∀ bit, bit < 17 →
       readsOf frames' processId bit = false ∧ writesOf frames' processId bit = false)
@@ -7140,11 +7062,12 @@ private theorem lookup_rewriteTask_self {processId : PID} {task : Task α} :
     by_cases same : key = processId
     · subst same; simp [rewriteTask, Kernel.lookup_eq]
     · have differ : (processId == key) = false := by simp [Ne.symm same]
-      simp only [differ, Bool.false_eq_true, ↓reduceIte] at found
+      simp only [differ] at found
       have := lookup_rewriteTask_self (task := task) (by simpa [Kernel.lookup_eq] using found)
       simp only [Kernel.lookup_eq] at this
       simp [rewriteTask, same, Kernel.lookup_eq, List.lookup_cons, differ, this]
 
+/-- Frames apart are apart in either order. -/
 private theorem framesApart_symm {frames frames' : List Frame} (apart : framesApart frames frames' = true) :
     framesApart frames' frames = true := by
   simp only [framesApart, Kernel.all_eq, List.all_eq_true, Bool.or_eq_true, bne_iff_ne, ne_eq, Bool.and_eq_true,
@@ -7153,20 +7076,9 @@ private theorem framesApart_symm {frames frames' : List Frame} (apart : framesAp
   rcases apart entry' mem' entry mem with differ | ⟨zero, zero'⟩
   · exact .inl (Ne.symm differ)
   · right
-    refine ⟨?_, ?_⟩
-    · rw [Nat.and_comm] at zero' ⊢
-      apply Nat.eq_of_testBit_eq; intro bit
-      have one := congrArg (Nat.testBit · bit) zero
-      have two := congrArg (Nat.testBit · bit) zero'
-      simp only [Nat.testBit_and, Nat.testBit_or, Nat.zero_testBit] at one two ⊢
-      cases a : entry.2.2.testBit bit <;> cases b : entry'.2.1.testBit bit <;> cases c : entry'.2.2.testBit bit <;>
-        cases d : entry.2.1.testBit bit <;> simp_all
-    · rw [Nat.and_comm]
-      apply Nat.eq_of_testBit_eq; intro bit
-      have one := congrArg (Nat.testBit · bit) zero
-      simp only [Nat.testBit_and, Nat.testBit_or, Nat.zero_testBit] at one ⊢
-      cases a : entry.2.2.testBit bit <;> cases b : entry'.2.1.testBit bit <;> cases c : entry'.2.2.testBit bit <;>
-        simp_all
+    rw [Nat.and_or_distrib_left, Nat.or_eq_zero_iff] at zero ⊢
+    obtain ⟨one, two⟩ := zero
+    exact ⟨⟨zero', Nat.and_comm _ _ ▸ two⟩, Nat.and_comm _ _ ▸ one⟩
 
 /-! ### Steps apart commute -/
 
@@ -7199,7 +7111,7 @@ private theorem Config.step_after {elapsed : PID → Nat → Nat} {state : State
   have normalized₁ : raw.normalize.normalize = raw.normalize := State.normalize_normalize rawWithin.1
   have agree := Config.agree_after within.1 normalized confined found confined' found' apartFrames realizes rawWithin.1
   have timed : timers' = true → raw.normalize.timers = state.timers := fun timed' => by
-    have untimed : timers = false := by cases timers <;> simp_all
+    have untimed : timers = false := by simpa [timed'] using notBoth
     rw [untimed] at found
     exact Config.timers_after confined found realizes
   cases other with
@@ -7268,12 +7180,7 @@ private theorem Config.step_after {elapsed : PID → Nat → Nat} {state : State
           (fun options child next same => by
             simp only at same
             simp only [Config.confined, ownLookup, same, Bool.and_false, Bool.false_eq_true] at confined)
-        have exhausted : transition₀.exhausted = false := by
-          cases exhausted : transition₀.exhausted
-          · rfl
-          obtain ⟨waits, computes⟩ := Task.own_exhausted (List.mem_of_head? ownHead) exhausted
-          simp only at computes
-          simp only [Config.confined, ownLookup, computes, Bool.and_false, Bool.false_eq_true] at confined
+        have exhausted := Config.own_not_exhausted confined ownLookup ownHead
         rw [exhausted] at equal
         simp only [Bool.false_eq_true, ↓reduceIte, Config.running.injEq] at equal
         obtain ⟨-, rfl, -, -⟩ := equal
@@ -7292,8 +7199,8 @@ private theorem Config.step_after {elapsed : PID → Nat → Nat} {state : State
     exact ⟨event₃, raw₃, tasks₁, finished₁, step₃, realizes₃, within₃, view⟩
   | link => simp [Config.confined] at confined'
 
-/-- Two steps whose frames decide that they commute reach the same
-configuration in either order. -/
+/-- Two steps whose frames decide that they commute, at a reachable
+configuration, reach the same configuration in either order. -/
 private theorem Config.commutes_of_apart {elapsed : PID → Nat → Nat} {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {key other : Key} {event event' : Event} {next next' : Config α}
     (within : state.Within elapsed) (normalized : state.normalize = state)
@@ -7358,10 +7265,10 @@ private theorem Config.commutes_of_apart {elapsed : PID → Nat → Nat} {state 
       · rfl
       · exact (conflict (.inr written)).elim
   have one : raw₃.normalize = (second.apply (first.apply state)).normalize :=
-    State.normalize_after within.1 framed (Config.clean within.1 normalized confined found) realizes rawWithin.1
+    State.normalize_after within.1 (Config.clean within.1 normalized confined found) realizes rawWithin.1
       (untouched apartFrames) framed' (Config.noRevive confined') realizes₃ within₃.1
   have two : raw₄.normalize = (first.apply (second.apply state)).normalize :=
-    State.normalize_after within.1 framed' (Config.clean within.1 normalized confined' found') realizes'
+    State.normalize_after within.1 (Config.clean within.1 normalized confined' found') realizes'
       rawWithin'.1 (untouched (framesApart_symm apartFrames)) framed (Config.noRevive confined) realizes₄ within₄.1
   have records : ∀ processId, (second.apply (first.apply state)).record processId =
       (first.apply (second.apply state)).record processId := by
