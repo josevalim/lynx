@@ -568,6 +568,14 @@ the process queued and its signals to it. -/
               | _ => false) &&
           !Kernel.any process.links (fun link => link.1 == processId && link.2.isSome)
 
+/-- Whether a parked monitor signal is of a monitor the process holds, so that
+the `DOWN` a dead target answers it with is not dropped. -/
+@[expose] def State.parkedMonitored (state : State) (processId : PID) : Bool :=
+  let process := state.process processId
+  match process.parked with
+  | some (_, reference) => Kernel.any process.monitoring (·.1 == reference)
+  | none => true
+
 /-- Whether the frames of a step decide that it commutes: normalizing after it
 changes no record but its own when it ends, as no signal it makes inert is
 queued, and it is a step the laws need to commute without evaluating them.
@@ -577,9 +585,9 @@ Other steps are compared by evaluating them. -/
       match Kernel.lookup processId tasks with
       | some ⟨computation, _, none⟩ =>
           let process := state.process processId
-          match computation with
+          state.alive processId && state.parkedMonitored processId && match computation with
           | .error .exhausted => false
-          | .ok _ | .error _ => state.alive processId && state.leavesOthers processId
+          | .ok _ | .error _ => state.leavesOthers processId
           | .send .. => true
           -- A matching receive is forced, as reading or replacing the environment are.
           | .get _ | .set .. => false
@@ -592,7 +600,7 @@ Other steps are compared by evaluating them. -/
             | .sendAlias alias message => !(state.alive alias.dropLast &&
                 state.inertEntry alias.dropLast { source := processId, signal := .aliasMessage alias message })
             | .cancelTimer _ => true
-            | .alive _ => state.alive processId
+            | .alive _ => true
             | _ => false
           | Result.schedule .. => false
       | _ => false
@@ -613,7 +621,7 @@ Other steps are compared by evaluating them. -/
             !state.inertEntry source { source := processId, signal := .down reference (.atom "noproc") }
         | _ => true
       | _ => false
-  | .running state _ _ false, .unpark processId => state.alive processId
+  | .running state _ _ false, .unpark processId => state.alive processId && state.parkedMonitored processId
   | .running _ _ _ false, .fire _ => true
   | _, _ => false
 

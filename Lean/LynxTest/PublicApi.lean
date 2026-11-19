@@ -539,6 +539,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.State.modify",
   "Lynx.Concurrent.State.normalize",
   "Lynx.Concurrent.State.normalizeRecord",
+  "Lynx.Concurrent.State.parkedMonitored",
   "Lynx.Concurrent.State.phase",
   "Lynx.Concurrent.State.phaseFrames",
   "Lynx.Concurrent.State.phases",
