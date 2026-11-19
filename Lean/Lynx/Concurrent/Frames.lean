@@ -3989,6 +3989,105 @@ private theorem Clean.gone {gone gone' : PID → Bool} {processId : PID} {proces
         List.filter_congr (l := exiting'.downs) fun down mem => by rw [downs down mem]]
     rw [congruent, same]
 
+/-- An effect that leaves every process alive or gone as it was. -/
+private def Effect.KeepsAlive (effect : Effect) : Prop :=
+  ∀ processId record, liveOf (effect.record processId record) = liveOf record
+
+private theorem Effect.KeepsAlive.empty : ({} : Effect).KeepsAlive := fun _ _ => rfl
+
+private theorem Effect.KeepsAlive.andThen {first second : Effect} (one : first.KeepsAlive) (two : second.KeepsAlive) :
+    (first.andThen second).KeepsAlive := fun processId record => by
+  rw [Effect.record_andThen]; exact (two _ _).trans (one _ _)
+
+private theorem Effect.KeepsAlive.modify {processId : PID} {change : ProcessState → ProcessState}
+    (live : ∀ process, (change process).exiting.isSome = process.exiting.isSome) :
+    (Effect.modify processId change).KeepsAlive := fun other record => by
+  rw [Effect.record_modify]
+  split
+  · cases record with
+    | none => rfl
+    | some process =>
+      simp only [Option.map_some, liveOf]
+      have := live process
+      cases equal : process.exiting <;> cases equal' : (change process).exiting <;> simp_all
+  · rfl
+
+private theorem Effect.KeepsAlive.retime (change : List Timer → List Timer) : (Effect.retime change).KeepsAlive :=
+  fun _ _ => rfl
+
+private theorem Effect.KeepsAlive.gone {effect : Effect} (keeps : effect.KeepsAlive) (state : State) :
+    (effect.apply state).gone = state.gone := by
+  funext processId
+  simp only [State.gone, State.alive, Effect.record_apply]
+  have := keeps processId (state.record processId)
+  cases found : state.record processId <;> cases found' : effect.record processId (state.record processId) <;>
+    simp_all [liveOf]
+  rename_i process process'
+  cases equal : process.exiting <;> cases equal' : process'.exiting <;> simp_all
+
+private theorem State.enqueueEffect_keepsAlive (state : State) (source target : PID) (signal : Signal) :
+    (state.enqueueEffect source target signal).KeepsAlive := by
+  unfold State.enqueueEffect State.fallbackEffect
+  repeat' split
+  all_goals first
+    | exact Effect.KeepsAlive.empty
+    | (refine Effect.KeepsAlive.modify ?_; intro process; rfl)
+
+private theorem State.unparkEffect_keepsAlive (state : State) (processId : PID) :
+    (state.unparkEffect processId).KeepsAlive := by
+  unfold State.unparkEffect
+  split
+  · refine (Effect.KeepsAlive.modify ?_).andThen (State.enqueueEffect_keepsAlive _ _ _ _)
+    intro process; rfl
+  · exact Effect.KeepsAlive.empty
+
+private theorem State.sendEffect_keepsAlive (state : State) (source target : PID) (signal : Signal) :
+    (state.sendEffect source target signal).KeepsAlive := by
+  unfold State.sendEffect
+  repeat' split
+  all_goals first
+    | exact (State.unparkEffect_keepsAlive _ _).andThen (State.enqueueEffect_keepsAlive _ _ _ _)
+    | exact State.enqueueEffect_keepsAlive _ _ _ _
+
+/-- A record an effect leaves as it is stays clean, when the effect leaves every
+process alive or gone as it was. -/
+private theorem Clean.unchanged {state : State} (sorted : state.Sorted) (normalized : state.normalize = state)
+    {effect : Effect} (keeps : effect.KeepsAlive) {processId : PID}
+    (same : effect.record processId (state.record processId) = state.record processId) :
+    ∀ process, (effect.apply state).record processId = some process →
+      Clean (effect.apply state).gone processId process := by
+  intro process found
+  rw [Effect.record_apply, same] at found
+  rw [keeps.gone]
+  exact Clean.of_normalized sorted normalized found
+
+/-- A record an effect appends a signal to that is not inert stays clean, when
+the effect leaves every process alive or gone as it was. -/
+private theorem Clean.appended {state : State} (sorted : state.Sorted) (normalized : state.normalize = state)
+    {effect : Effect} (keeps : effect.KeepsAlive) {processId source : PID} {signal : Signal}
+    (appended : effect.record processId (state.record processId) =
+      (state.record processId).map (queueAt source signal))
+    (live : ∀ process, state.record processId = some process → process.exiting = none)
+    (fresh : ∀ process, state.record processId = some process →
+      inert state.gone processId (queueAt source signal process) { source, signal } = false) :
+    ∀ process, (effect.apply state).record processId = some process →
+      Clean (effect.apply state).gone processId process := by
+  intro process found
+  rw [Effect.record_apply, appended] at found
+  rw [keeps.gone]
+  cases record : state.record processId with
+  | none => rw [record] at found; simp at found
+  | some original =>
+    rw [record] at found; simp only [Option.map_some, Option.some.injEq] at found; subst found
+    have clean := Clean.of_normalized sorted normalized record
+    have exiting := live original record
+    refine clean.preserve exiting exiting (fun entry mem => ?_) (fun link mem _ => ⟨mem, id⟩)
+    simp only [queueAt, Kernel.append_eq, List.mem_append, List.mem_singleton] at mem
+    rcases mem with old | rfl
+    · exact .inl ⟨old, fun inside => by
+        rw [inert_congr rfl rfl rfl rfl rfl] at inside; exact inside⟩
+    · exact .inr (fresh original record)
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
