@@ -2487,6 +2487,179 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
     · exact .inr ⟨rfl, normRecord_ack_inert live₁ heads₁ kept single₁⟩
   | _ => simp [Task.forcedHead, notInert] at flagged
 
+private theorem normRecord_ownChange {gone : PID → Bool} {processId : PID} {process : ProcessState}
+    (live : process.exiting = none) (pdict : List (Term × Term) → List (Term × Term)) (mailbox : List Term → List Term) :
+    normRecord gone processId (ownChange pdict id mailbox process) =
+      ownChange pdict id mailbox (normRecord gone processId process) := by
+  rw [normRecord_live (show (ownChange pdict id mailbox process).exiting = none from live), normRecord_live live]
+  rfl
+
+private theorem hidden_own (ok : List Term → Prop) (dict : List (Term × Term)) (counter : Nat)
+    (pdict : List (Term × Term) → List (Term × Term)) (mailbox : List Term → List Term) :
+    Hidden (OwnOk ok dict counter) (ownChange pdict id mailbox) :=
+  ⟨fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ _ _ => .rfl, fun _ ok' => ⟨ok', rfl⟩,
+    fun _ ok' => ⟨ok', rfl⟩, fun ok' => ⟨ok', rfl⟩⟩
+
+/-- Records changed exactly are changed up to normalization, while live. -/
+private theorem State.Changed.forced_of_same {state state' : State} {processId : PID} {ok : ProcessState → Prop}
+    {change : ProcessState → ProcessState} (changed : state.Changed processId (Same ok change) state')
+    (live : ∀ process, state.record processId = some process → process.exiting = none)
+    (exiting : ∀ process, (change process).exiting = process.exiting) :
+    state.Changed processId (Forced processId ok change) state' := by
+  refine ⟨changed.1, ?_, changed.2.2⟩
+  rcases changed.records with ⟨first, second⟩ | ⟨process, process', first, second, ok', rfl⟩
+  · rw [first, second]; exact .none
+  · rw [first, second]
+    exact .some ⟨ok', live _ first, by rw [exiting]; exact live _ first, fun _ => rfl⟩
+
+private theorem rewriteTask_twice {processId : PID} (first second : Task α) :
+    ∀ tasks : List (PID × Task α), rewriteTask processId (fun _ => [(processId, second)])
+      (rewriteTask processId (fun _ => [(processId, first)]) tasks) =
+        rewriteTask processId (fun _ => [(processId, second)]) tasks
+  | [] => rfl
+  | (other, task) :: rest => by
+      by_cases same : other = processId
+      · subst same; simp [rewriteTask]
+      · simp [rewriteTask, same, rewriteTask_twice first second rest]
+
+private theorem rewriteTask_ended {processId : PID} (first : Task α) :
+    ∀ tasks : List (PID × Task α), rewriteTask processId (fun _ => [])
+      (rewriteTask processId (fun _ => [(processId, first)]) tasks) = rewriteTask processId (fun _ => []) tasks
+  | [] => rfl
+  | (other, task) :: rest => by
+      by_cases same : other = processId
+      · subst same; simp [rewriteTask]
+      · simp [rewriteTask, same, rewriteTask_ended first rest]
+
+/-- A process's forced own step, a change of its own fields, against handling
+its oldest signal: handling absorbs it when it ends the process, and the forced
+step closes the square otherwise. -/
+private theorem Config.own_handle_square {elapsed : PID → Nat → Nat} {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {process : ProcessState} {task : Task α}
+    {computation : Result task.β} {pdict : List (Term × Term) → List (Term × Term)} {mailbox : List Term → List Term}
+    {ok : List Term → Prop} {event' : Event} {middle : Config α}
+    (reachable : (Config.running state tasks finished false).Reachable elapsed)
+    (lookup : Kernel.lookup processId tasks = some task) (waiting : task.wait = none)
+    (found : state.record processId = some process) (live : process.exiting = none)
+    (own : OwnChange ok mailbox) (ok' : ok process.mailbox)
+    (step' : (Config.running state tasks finished false).stepOf (.handle processId) = some (event', middle))
+    (atMiddle : ∀ (raw : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α))
+      (process₁ : ProcessState), raw.Within elapsed →
+      (Config.running raw.normalize tasks₁ finished₁ false).Reachable elapsed →
+      Kernel.lookup processId tasks₁ = some task → raw.record processId = some process₁ →
+      OwnOk ok process.pdict process.refCounter process₁ → process₁.exiting = none →
+      ∃ event'', (Key.own processId, event'', .running (raw.normalize.set processId
+          (ownChange pdict id mailbox (normRecord raw.gone processId process₁))).normalize
+          (rewriteTask processId (fun _ => [(processId, ⟨computation, task.finish, none⟩)]) tasks₁) finished₁ false, true) ∈
+          (Config.running raw.normalize tasks₁ finished₁ false).taggedSteps) :
+    (∃ absorbed, (Config.running (state.set processId (ownChange pdict id mailbox process))
+        (rewriteTask processId (fun _ => [(processId, ⟨computation, task.finish, none⟩)]) tasks) finished false).stepOf
+        (.handle processId) = some (absorbed, middle)) ∨
+      ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
+        (Config.running (state.set processId (ownChange pdict id mailbox process))
+          (rewriteTask processId (fun _ => [(processId, ⟨computation, task.finish, none⟩)]) tasks) finished false).stepOf
+          (.handle processId) = some (other, last) := by
+  have sorted := reachable.1.1.1
+  have within := reachable.1.1
+  let change := ownChange pdict id mailbox
+  let task' : Task α := ⟨computation, task.finish, none⟩
+  have changed : state.Changed processId (Same (OwnOk ok process.pdict process.refCounter) change)
+      (state.set processId (change process)) :=
+    ⟨fun other differ => by rw [State.record_set, if_neg differ],
+      by rw [State.record_set, if_pos rfl, found]; exact .some ⟨⟨ok', rfl, rfl⟩, rfl⟩, rfl, rfl⟩
+  obtain ⟨task₀, transition, lookup₀, head, rfl⟩ := Config.stepOf_handle step'
+  rw [lookup] at lookup₀; cases lookup₀
+  have processOf : state.process processId = process := by simp [State.process, found]
+  have processOf' : (state.set processId (change process)).process processId = change process := by
+    simp [State.process, State.record_set]
+  have lookup' : Kernel.lookup processId (rewriteTask processId (fun _ => [(processId, task')]) tasks) = some task' :=
+    lookup_rewriteTask_self lookup
+  cases queue : process.queue with
+  | nil => simp [Task.handle, processOf, queue] at head
+  | cons entry rest =>
+  have queue' : (change process).queue = entry :: rest := queue
+  have changedSet := changed.setRelated (process := { process with queue := rest })
+    (process' := { change process with queue := rest }) ⟨⟨ok', rfl, rfl⟩, rfl⟩
+  obtain ⟨same, changedHandled⟩ := changedSet.handleSelf own (task.wait.map (·.1)) entry
+  have resumedNone := State.handle_not_waiting (state.set processId { process with queue := rest }) processId entry
+  rw [waiting] at same changedHandled
+  simp only [Option.map_none] at same changedHandled
+  -- The handling step after the forced step.
+  have handleN : ∀ transition', (task'.handle (state.set processId (change process)) processId).head? =
+      some transition' → (Config.running (state.set processId (change process))
+        (rewriteTask processId (fun _ => [(processId, task')]) tasks) finished false).stepOf (.handle processId) =
+        some (transition'.event, if transition'.exhausted then
+            Config.running { transition'.state with processes := [], timers := [] } [] finished true
+          else .running transition'.state.normalize
+            (rewriteTask processId (fun _ => transition'.tasks) (rewriteTask processId (fun _ => [(processId, task')]) tasks))
+            (transition'.finished.orElse fun _ => finished) false) :=
+    fun transition' head' => Config.stepOf_handle_of lookup' head'
+  revert head
+  simp only [Task.handle, processOf, queue, waiting, Option.map_none]
+  generalize hT : (state.set processId { process with queue := rest }).handle processId none entry = triple
+  generalize hT' : ((state.set processId (change process)).set processId { change process with queue := rest }).handle
+    processId none entry = triple'
+  rw [hT] at same changedHandled resumedNone
+  rw [hT'] at same changedHandled
+  obtain ⟨handled, resumed, exits⟩ := triple
+  obtain ⟨handled', resumed', exits'⟩ := triple'
+  intro head
+  simp only [Prod.mk.injEq] at same resumedNone
+  obtain ⟨resumedSame, exitsSame⟩ := same
+  subst resumedSame exitsSame
+  subst resumedNone
+  have sortedHandled : handled.Within elapsed := by
+    have := (within.set processId { process with queue := rest }).handle processId none entry
+    rw [hT] at this; exact this
+  have sortedHandled' : handled'.Within elapsed := by
+    have := ((within.set processId (change process)).set processId { change process with queue := rest }).handle
+      processId none entry
+    rw [hT'] at this; exact this
+  cases exits' with
+  | some reason =>
+    simp only [List.head?_cons, Option.some.injEq] at head
+    subst head
+    have headN : (task'.handle (state.set processId (change process)) processId).head? =
+        some (Task.ended task'.finish (.handle processId entry) handled' processId reason (.error (.exit reason))) := by
+      simp [Task.handle, processOf', queue', hT', task']
+    left
+    refine ⟨Event.handle processId entry, ?_⟩
+    rw [handleN _ headN]
+    simp only [Task.ended, Bool.false_eq_true, ↓reduceIte, rewriteTask_ended]
+    rw [State.Changed.terminateSelf changedHandled reason sortedHandled.1 sortedHandled'.1
+      (sortedHandled.terminate processId reason).1 (sortedHandled'.terminate processId reason).1]
+  | none =>
+    simp only [List.head?_cons, Option.some.injEq] at head
+    subst head
+    have headN : (task'.handle (state.set processId (change process)) processId).head? =
+        some { event := .handle processId entry, state := handled', tasks := [(processId, task')] } := by
+      simp [Task.handle, processOf', queue', hT', task']
+    right
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none, rewriteTask_same lookup] at step' ⊢
+    have reachableMiddle := reachable.step (Config.step_of_stepOf step')
+    have alive := reachableMiddle.2.2.1 _ (mem_of_lookup lookup)
+    rw [State.alive_normalize sortedHandled.1] at alive
+    obtain ⟨process₁, found₁, live₁⟩ := State.alive_iff.mp alive
+    have related₁ : OwnOk ok process.pdict process.refCounter process₁ := by
+      rcases changedHandled.records with ⟨missing, -⟩ | ⟨first, second, found₂, -, ok₁, -⟩
+      · rw [found₁] at missing; cases missing
+      · rw [found₁] at found₂; cases found₂; exact ok₁
+    obtain ⟨event'', mem⟩ := atMiddle handled tasks finished process₁ sortedHandled reachableMiddle lookup found₁
+      related₁ live₁
+    have forcedChanged := changedHandled.forced_of_same (fun _ found₂ => by
+      rw [found₁] at found₂; cases found₂; exact live₁) (fun _ => rfl)
+    have liveNormal : (normRecord handled.gone processId process₁).exiting = none := by
+      rw [normRecord_live live₁]; exact live₁
+    rw [State.forced_close sortedHandled.1 sortedHandled'.1 forcedChanged
+      (hidden_own ok process.pdict process.refCounter pdict mailbox).unseen found₁
+      liveNormal
+      (by rw [normRecord_ownChange liveNormal, normRecord_ownChange live₁,
+        normRecord_normRecord (fun _ gone => gone)])] at mem
+    refine ⟨.own processId, event'', _, Event.handle processId entry, mem, ?_⟩
+    rw [handleN _ headN]
+    simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none, rewriteTask_twice]
+    rfl
+
 /-- Every other step absorbs a forced step, or commutes with it into a
 configuration where a forced step closes the square. -/
 private theorem Config.forced_square {elapsed : PID → Nat → Nat} {config : Config α} {key key' : Key}
