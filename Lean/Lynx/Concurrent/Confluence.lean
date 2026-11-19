@@ -240,23 +240,30 @@ private theorem State.Quiet.send {state : State} (quiet : state.Quiet) {source t
   · exact quiet
 
 /-- A quiet process ends with nothing left to signal or answer. -/
-private theorem State.Quiet.terminate {state : State} (quiet : state.Quiet) {processId : PID}
+private theorem State.Quiet.terminate_eq {state : State} (quiet : state.Quiet) {processId : PID}
     {process : ProcessState} (found : state.record processId = some process) (reason : Term) :
-    (state.terminate processId reason).Calm := by
+    ∃ ended : ProcessState, ended.Ended ∧
+      state.terminate processId reason = ({ state with timers := [] } : State).set processId ended := by
   obtain ⟨live, links, monitors, monitoring, parked, eager, queue⟩ := quiet.2 _ _ found
   have processOf : state.process processId = process := by simp [State.process, found]
   unfold State.terminate
   simp only [processOf, links, monitors, Kernel.foldl_eq, List.foldl_nil, quiet.1]
   simp only [Kernel.filter_eq, List.filter_nil]
+  refine ⟨_, ⟨reason, rfl, ?_⟩, rfl⟩
+  simp only [List.filter_eq_nil_iff]
+  intro entry mem
+  obtain ⟨⟨message, signal⟩, -⟩ := queue entry mem
+  simp [signal]
+
+private theorem State.Quiet.terminate {state : State} (quiet : state.Quiet) {processId : PID}
+    {process : ProcessState} (found : state.record processId = some process) (reason : Term) :
+    (state.terminate processId reason).Calm := by
+  obtain ⟨ended, isEnded, equal⟩ := quiet.terminate_eq found reason
+  rw [equal]
   refine ⟨rfl, fun other record found' => ?_⟩
   rw [State.record_set] at found'
   split at found'
-  · cases found'
-    refine .inr ⟨reason, rfl, ?_⟩
-    simp only [Kernel.filter_eq, List.filter_eq_nil_iff]
-    intro entry mem
-    obtain ⟨⟨message, signal⟩, -⟩ := queue entry mem
-    simp [signal]
+  · cases found'; exact .inr isEnded
   · exact .inl (quiet.2 other record found')
 
 /-- A talking process's own step leaves a calm state, unless it does not
@@ -523,6 +530,38 @@ private theorem framesApart_send {sender receiver : PID} {write : Nat} {frames :
   · rcases (apart _ mem).2 with differ | ⟨unlive, untouched⟩
     · exact .inl (Ne.symm differ)
     · exact .inr ⟨untouched, unlive⟩
+
+/-- Normalizing leaves a quiet state as it is. -/
+private theorem State.Quiet.normalize_eq {state : State} (sorted : state.Sorted) (quiet : state.Quiet) :
+    state.normalize = state := by
+  refine State.ext_records sorted (Sorted.normalize sorted) (fun processId => ?_) rfl rfl
+  rw [State.record_normalize' sorted]
+  cases found : state.record processId with
+  | none => rfl
+  | some process =>
+    have quiet' := quiet.2 _ _ found
+    simp [quiet'.normRecord, Option.filter, ProcessState.finished, quiet'.1]
+
+/-- A quiet process ending, normalized, only removes its record. -/
+private theorem State.Quiet.terminate_normalize {state : State} (sorted : state.Sorted) (quiet : state.Quiet)
+    {processId : PID} {process : ProcessState} (found : state.record processId = some process) (reason : Term) :
+    (state.terminate processId reason).normalize = state.remove processId := by
+  obtain ⟨ended, ⟨reason', exiting, empty⟩, equal⟩ := quiet.terminate_eq found reason
+  have sorted' : (state.terminate processId reason).Sorted := (State.Within.terminate ⟨sorted, rfl⟩ _ _).1
+  have removedSorted : (state.remove processId).Sorted := (State.Within.remove ⟨sorted, rfl⟩ _).1
+  refine State.ext_records removedSorted (Sorted.normalize sorted') (fun other => ?_) ?_ ?_
+  · rw [State.record_normalize' sorted', equal, State.record_set, State.record_remove]
+    split
+    · simp [normRecord, exiting, empty, Option.filter, ProcessState.finished, Kernel.filter_eq]
+    · rename_i differ
+      rw [show ({ state with timers := [] } : State).record other = state.record other from rfl]
+      cases record : state.record other with
+      | none => rfl
+      | some process' =>
+        have quiet' := quiet.2 _ _ record
+        simp [quiet'.normRecord, Option.filter, ProcessState.finished, quiet'.1]
+  · simp [State.normalize, equal, State.set, State.remove, quiet.1]
+  · simp [State.normalize, equal, State.set, State.remove]
 
 section
 variable {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
