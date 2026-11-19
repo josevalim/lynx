@@ -368,7 +368,7 @@ private theorem Task.handle_talks {state : State} {processId : PID} {task : Task
     have set : (state.set processId { process with queue := rest }).Quiet := quiet.set
       ⟨live, links, monitors, monitoring, parked, eager, fun entry mem =>
         queued entry (by rw [queue]; exact List.mem_cons_of_mem _ mem)⟩
-    simp only [State.handle, waits] at mem
+    simp only [State.handle] at mem
     obtain ⟨computation, finish, wait⟩ := task
     simp only at waits; subst waits
     simp only [List.mem_singleton] at mem; subst mem
