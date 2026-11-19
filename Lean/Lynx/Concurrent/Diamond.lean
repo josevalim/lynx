@@ -175,7 +175,7 @@ private theorem lookup_filter_ne {β : Type} (processId other : PID) (records : 
 private theorem State.record_set (state : State) (processId other : PID) (process : ProcessState) :
     (state.set processId process).record other =
       if other = processId then some process else state.record other := by
-  simp only [State.set, State.record, insertRecord, Kernel.lookup_eq, Kernel.filter_eq]
+  simp only [State.set, State.record, insertRecord, Kernel.insertSorted_eq, Kernel.lookup_eq, Kernel.filter_eq]
   rw [lookup_insertSorted _ _ _ _ (by rw [lookup_filter_ne]; simp), lookup_filter_ne]
   by_cases equal : other = processId <;> simp [equal]
 
@@ -233,7 +233,7 @@ private theorem Sorted.insertSorted {records : List (PID × ProcessState)} (sort
 
 private theorem Sorted.insertRecord {records : List (PID × ProcessState)} (sorted : Sorted records)
     (processId : PID) (process : ProcessState) : Sorted (insertRecord processId process records) := by
-  simp only [Lynx.Concurrent.insertRecord, Kernel.filter_eq]
+  simp only [Lynx.Concurrent.insertRecord, Kernel.insertSorted_eq, Kernel.filter_eq]
   exact (sorted.filter _).insertSorted _ _ fun record mem => by
     have := (List.mem_filter.mp mem).2
     simpa using this

@@ -78,7 +78,7 @@ theorem State.weight_set (state : State) (processId : PID) (process : ProcessSta
     (state.set processId process).weight + (state.process processId).weight ≤
       state.weight + process.weight := by
   have filtered := recordsWeight_filter processId state.processes
-  simp only [State.weight, State.set, insertRecord, recordsWeight_insertSorted, Kernel.filter_eq]
+  simp only [State.weight, State.set, insertRecord, Kernel.insertSorted_eq, recordsWeight_insertSorted, Kernel.filter_eq]
   simp only [State.process, State.record, Kernel.lookup_eq]
   cases found : state.processes.lookup processId with
   | none => simp only [found, Option.map_none, Option.getD_none] at filtered; simp [ProcessState.weight]; omega

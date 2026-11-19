@@ -170,11 +170,42 @@ structure State where
       if pidBefore processId other then (processId, process) :: (other, record) :: rest
       else (other, record) :: insertSorted processId process rest
 
+/-- `pidBefore`, by `List.rec` for the kernel. -/
+@[expose] noncomputable def Kernel.pidBefore (first : PID) : PID → Bool :=
+  @List.rec Nat (fun _ => PID → Bool)
+    (fun second => @List.casesOn Nat (fun _ => Bool) second false fun _ _ => true)
+    (fun head _ rest second => @List.casesOn Nat (fun _ => Bool) second false
+      fun head' rest' => decide (head < head') || (head == head' && rest rest')) first
+
+@[csimp] theorem Kernel.pidBefore_eq : @Kernel.pidBefore = @Lynx.Concurrent.pidBefore := by
+  funext first second
+  induction first generalizing second with
+  | nil => cases second <;> rfl
+  | cons head rest ih => cases second <;> simp [Kernel.pidBefore, Lynx.Concurrent.pidBefore, ← ih]
+
+/-- `insertSorted`, by `List.rec` for the kernel. -/
+@[expose] noncomputable def Kernel.insertSorted (processId : PID) (process : ProcessState)
+    (records : List (PID × ProcessState)) : List (PID × ProcessState) :=
+  @List.rec (PID × ProcessState) (fun _ => List (PID × ProcessState)) [(processId, process)]
+    (fun record rest inserted =>
+      cond (Kernel.pidBefore processId record.1) ((processId, process) :: record :: rest) (record :: inserted))
+    records
+
+@[csimp] theorem Kernel.insertSorted_eq : @Kernel.insertSorted = @Lynx.Concurrent.insertSorted := by
+  funext processId process records
+  induction records with
+  | nil => rfl
+  | cons record rest ih =>
+    obtain ⟨other, value⟩ := record
+    show cond (Kernel.pidBefore processId other) _ (_ :: Kernel.insertSorted processId process rest) = _
+    rw [ih, Kernel.pidBefore_eq]
+    cases before : Lynx.Concurrent.pidBefore processId other <;> simp [Lynx.Concurrent.insertSorted, before]
+
 /-- Replace the record of a process, keeping the records in PID order, so the
 state does not depend on the order in which processes were created. -/
 @[expose] def insertRecord (processId : PID) (process : ProcessState)
     (records : List (PID × ProcessState)) : List (PID × ProcessState) :=
-  insertSorted processId process (Kernel.filter (·.1 != processId) records)
+  Kernel.insertSorted processId process (Kernel.filter (·.1 != processId) records)
 
 /-- The record of a process, if it is alive or still ending. -/
 @[expose] def State.record (state : State) (processId : PID) : Option ProcessState :=

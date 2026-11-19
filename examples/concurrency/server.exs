@@ -219,9 +219,9 @@ defmodule ServerProofsTest do
             State.initial, State.process, Task.root, Transition.apply, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq,
             Kernel.filterMap_eq, State.record, Kernel.lookup_eq,
             Erlang.program.«Elixir.ServerProofsTest:-double_all/1-fun-0-/0».call, «-double_all/1-fun-0-/2»]
-          rw [State.normalize_of_quiet (by simp [State.set, insertRecord, insertSorted, Kernel.filter_eq, pidBefore,
+          rw [State.normalize_of_quiet (by simp [State.set, insertRecord, Kernel.insertSorted_eq, insertSorted, Kernel.filter_eq, pidBefore,
             ProcessState.Quiet])]
-          simp [State.set, insertRecord, insertSorted, Kernel.filter_eq, pidBefore]
+          simp [State.set, insertRecord, Kernel.insertSorted_eq, insertSorted, Kernel.filter_eq, pidBefore]
         have raceFree : ∀ elapsed, RaceFree (Config.start {} (Lynx.apply «double_all_doubles:ensures/1»
             Erlang.program.fun_table (depth + len xs + 1) xs) elapsed) := by
           intro elapsed
@@ -274,7 +274,7 @@ defmodule ServerProofsTest do
               rw [«request/2»]
               simp [root_server, Config.advance, Config.successors, splits, Task.transitions, Task.own,
                 Erlang.erlang.«send/2», Transition.apply, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, State.send,
-                State.enqueue, State.process, State.record, Kernel.lookup_eq, State.set, insertRecord, insertSorted,
+                State.enqueue, State.process, State.record, Kernel.lookup_eq, State.set, insertRecord, Kernel.insertSorted_eq, insertSorted,
                 Kernel.filter_eq, pidBefore, List.lookup, normalize_two, quiet_record, messages_nil,
                 messages_append _ messages]
             rw [step, ih validRest _ (messages_append _ messages)]
@@ -302,7 +302,7 @@ defmodule ServerProofsTest do
           simp (maxDischargeDepth := 4) [Config.advance, Config.successors, splits, Task.transitions, Task.own, Task.handle, Task.child,
             Result.receiveWith, ReceiveTimeout.ofTerm, State.view, State.process, State.record, Kernel.lookup_eq,
             List.lookup, root_server, requests, selectMessage,
-            Erlang.erlang.«send/2», Transition.apply, State.handle, State.append, State.modify, State.set, insertRecord,
+            Erlang.erlang.«send/2», Transition.apply, State.handle, State.append, State.modify, State.set, insertRecord, Kernel.insertSorted_eq,
             insertSorted, Kernel.filter_eq, pidBefore, State.send, State.enqueue, len, Dispatcher.ofTable,
             Dispatcher.step, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq, State.phases,
             State.exitLinks, State.phase, State.firing, firstOfEach, State.awaitedEntry, normalize_two, quiet_record,
@@ -358,7 +358,7 @@ defmodule ServerProofsTest do
         simp [double_ok xs valid, Erlang.erlang.«==/2», Config.advance, Config.successors, splits,
           Task.transitions, Task.own, Task.ended, Task.handle, Task.child, «serve/2», Transition.apply, State.terminate,
           State.process, State.record, Kernel.lookup_eq, List.lookup, root_server,
-          State.set, insertRecord, insertSorted, Kernel.filter_eq, pidBefore, Kernel.append_eq, Kernel.flatMap_eq,
+          State.set, insertRecord, Kernel.insertSorted_eq, insertSorted, Kernel.filter_eq, pidBefore, Kernel.append_eq, Kernel.flatMap_eq,
           Kernel.map_eq, Kernel.filterMap_eq, Kernel.foldl_eq, State.normalize_eq, State.normalizeRecord, State.phases,
           State.exitLinks, State.phase, State.firing, firstOfEach, Config.outcome, Lynx.Term.true, ProcessState.finished]
       """
