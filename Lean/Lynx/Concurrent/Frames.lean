@@ -3286,6 +3286,310 @@ private theorem Task.ownView_agree {state other : State} {tasks : List (PID × T
     | _ => simp at confined
   | _ => first | rfl | simp at confined
 
+/-! ### Termination decided by what its frames read -/
+
+/-- Removing a target from the links a process that ended has left to signal. -/
+private def exitingWithout (target : PID) (process : ProcessState) : ProcessState :=
+  { process with exiting := process.exiting.map fun (exiting : Exiting) =>
+    { exiting with links := Kernel.filter (· != target) exiting.links } }
+
+/-- Removing the link to a process that ended, applying its exit as it is sent. -/
+private def linkRemoved (processId : PID) (process : ProcessState) : ProcessState :=
+  { process with
+    links := Kernel.filter (·.1 != processId) process.links
+    eagerExits := insertPid processId process.eagerExits }
+
+/-- A link exit of a process that ended, decided by whether it is applied as it is sent. -/
+private theorem State.eagerExitEffect_eq (state : State) (processId target : PID) (reason : Term)
+    (ended : state.alive processId = false) :
+    State.eagerExitEffect processId reason state target =
+      if state.eagerLink processId target reason then
+        (Effect.modify processId (exitingWithout target)).andThen (.modify target (linkRemoved processId))
+      else {} := by
+  unfold State.eagerExitEffect
+  split
+  · rename_i eager
+    have differ : target ≠ processId := fun same => by
+      subst same; simp [State.eagerLink, ended] at eager
+    have still : (state.modify processId (exitingWithout target)).eagerLink processId target reason = true := by
+      have alive : (state.modify processId (exitingWithout target)).alive target = state.alive target :=
+        State.alive_modify _ _ _ _ fun process => by simp only [exitingWithout]; cases process.exiting <;> rfl
+      simp only [State.eagerLink, alive, State.process_modify_other _ _ differ] at eager ⊢
+      exact eager
+    have link : (state.modify processId (exitingWithout target)).linkExitEffect processId target reason =
+        .modify target (linkRemoved processId) := by
+      unfold State.linkExitEffect; rw [still]; rfl
+    exact congrArg _ link
+  · rfl
+
+/-- Whether a link exit is applied as it is sent reads only liveness, trapping and queues. -/
+private theorem State.eagerLink_modify (state : State) (changed processId target : PID) (reason : Term)
+    (change : ProcessState → ProcessState)
+    (live : ∀ process, (change process).exiting.isSome = process.exiting.isSome)
+    (trap : ∀ process, (change process).trapExit = process.trapExit)
+    (queue : ∀ process, (change process).queue = process.queue) :
+    (state.modify changed change).eagerLink processId target reason = state.eagerLink processId target reason := by
+  have trap' := State.process_modify_keeps (state := state) (processId := changed) (other := target)
+    (get := (·.trapExit)) trap
+  have queue' := State.process_modify_keeps (state := state) (processId := changed) (other := target)
+    (get := (·.queue)) queue
+  simp only [State.eagerLink, State.alive_modify _ _ _ _ live]
+  try simp only at trap' queue'
+  rw [trap', queue']
+
+/-- Whether a link exit is applied as it is sent, which other link exits of
+the same process that ended do not change. -/
+private theorem State.eagerLink_exit (state : State) (processId target other : PID) (reason : Term)
+    (ended : state.alive processId = false) :
+    (if state.eagerLink processId target reason then
+        (state.modify processId (exitingWithout target)).linkExit processId target reason
+      else state).eagerLink processId other reason = state.eagerLink processId other reason := by
+  split
+  · rename_i eager
+    have differ : target ≠ processId := fun same => by
+      subst same; simp [State.eagerLink, ended] at eager
+    unfold State.linkExit
+    have still : (state.modify processId (exitingWithout target)).eagerLink processId target reason = true := by
+      have alive : (state.modify processId (exitingWithout target)).alive target = state.alive target :=
+        State.alive_modify _ _ _ _ fun process => by simp only [exitingWithout]; cases process.exiting <;> rfl
+      simp only [State.eagerLink, alive, State.process_modify_other _ _ differ] at eager ⊢
+      exact eager
+    rw [still]
+    simp only [↓reduceIte]
+    refine (State.eagerLink_modify _ _ _ _ _ _ ?_ ?_ ?_).trans (State.eagerLink_modify _ _ _ _ _ _ ?_ ?_ ?_) <;>
+      intro process <;> first | rfl | (simp only [exitingWithout]; cases process.exiting <;> rfl)
+  · rfl
+
+/-- A link exit of a process that ended, applied as it is sent, as `State.terminate` folds them. -/
+private def State.eagerExit (processId : PID) (reason : Term) (state : State) (target : PID) : State :=
+  if state.eagerLink processId target reason then
+    (state.modify processId (exitingWithout target)).linkExit processId target reason
+  else state
+
+private theorem State.alive_eagerExit (state : State) (processId target other : PID) (reason : Term) :
+    (State.eagerExit processId reason state target).alive other = state.alive other := by
+  unfold State.eagerExit
+  split
+  · unfold State.linkExit
+    split
+    · refine (State.alive_modify _ _ _ _ ?_).trans (State.alive_modify _ _ _ _ ?_) <;> intro process
+      · rfl
+      · simp only [exitingWithout]; cases process.exiting <;> rfl
+    · refine (State.alive_send _ _ _ _ _).trans (State.alive_modify _ _ _ _ ?_)
+      intro process; simp only [exitingWithout]; cases process.exiting <;> rfl
+  · rfl
+
+/-- The link exits of a process that ended, each decided as at the start. -/
+private def eagerChain (processId : PID) (eager : PID → Bool) : List PID → Effect
+  | [] => {}
+  | target :: rest =>
+      (if eager target then
+        (Effect.modify processId (exitingWithout target)).andThen (.modify target (linkRemoved processId))
+      else {}).andThen (eagerChain processId eager rest)
+
+private theorem chainEffect_eagerExit (processId : PID) (reason : Term) :
+    ∀ (targets : List PID) (state : State), state.alive processId = false →
+      chainEffect (State.eagerExit processId reason) (State.eagerExitEffect processId reason) state targets =
+        eagerChain processId (fun target => state.eagerLink processId target reason) targets
+  | [], _, _ => rfl
+  | target :: rest, state, ended => by
+    simp only [chainEffect, eagerChain]
+    rw [State.eagerExitEffect_eq state processId target reason ended,
+      chainEffect_eagerExit processId reason rest _ ((State.alive_eagerExit _ _ _ _ _).trans ended)]
+    congr 2
+    funext other
+    exact State.eagerLink_exit state processId target other reason ended
+
+/-- A process ending decides the same at a state where its record, whether a
+timer is to it, and whether each link exit is applied as it is sent are the same. -/
+private theorem State.terminateEffect_congr {state other : State} {processId : PID} {reason : Term}
+    (process : other.process processId = state.process processId)
+    (timed : Kernel.any other.timers (·.destination == processId) = Kernel.any state.timers (·.destination == processId))
+    (eager : ∀ target, target ≠ processId →
+      other.eagerLink processId target reason = state.eagerLink processId target reason) :
+    other.terminateEffect processId reason = state.terminateEffect processId reason := by
+  -- The link exits are decided once the process ended, which changes only its own record.
+  have ended : ∀ (state : State) (timers : List Timer) (record : ProcessState), record.exiting.isSome →
+      ∀ target, ({ state with timers }.set processId record).eagerLink processId target reason =
+        if target = processId then false else state.eagerLink processId target reason := by
+    intro state timers record exiting target
+    split
+    · rename_i same; subst same
+      simp only [State.eagerLink, State.alive, State.record_set, ↓reduceIte]
+      cases equal : record.exiting <;> simp_all
+    · rename_i differ
+      simp only [State.eagerLink, State.alive, State.process, State.record_set, differ, ↓reduceIte]
+      rfl
+  unfold State.terminateEffect
+  dsimp only
+  rw [process, timed]
+  erw [chainEffect_eagerExit processId reason _ _ (by simp [State.alive, State.record_set]),
+    chainEffect_eagerExit processId reason _ _ (by simp [State.alive, State.record_set])]
+  congr 2
+  funext target
+  rw [ended _ _ _ rfl, ended _ _ _ rfl]
+  split
+  · rfl
+  · rename_i differ; exact eager target differ
+
+/-- A record agreeing on every field, its queue included, is the same record. -/
+private theorem Agree.process {frames : List Frame} {state other : State} (agree : Agree frames state other)
+    {entry : Frame} (mem : entry ∈ frames) (all : entry.2.1 = Field.all) :
+    other.process entry.1 = state.process entry.1 := by
+  refine ProcessState.ext_get (agree.queue mem (by rw [all]; decide)) fun part => agree.get mem part ?_
+  rw [all]; exact all_testBit part.bit_lt
+
+/-- A confined own step has the same effect at a state agreeing on what its
+frames read, with the same timers when it uses them, where the process is
+alike alive, and where, when it ends, a timer is to it and each of its link
+exits is applied as it is sent alike. -/
+private theorem Task.ownEffect_agree {state other : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {frames : List Frame}
+    {timers : Bool} (confined : Config.confined (.running state tasks finished false) (.own processId) = true)
+    (lookup : Kernel.lookup processId tasks = some task)
+    (found : task.ownFrames state processId = some (frames, timers)) (agree : Agree frames state other)
+    (timed : timers = true → other.timers = state.timers)
+    (self : other.alive processId = state.alive processId)
+    (timedTo : Kernel.any other.timers (·.destination == processId) =
+      Kernel.any state.timers (·.destination == processId))
+    (eager : ∀ target reason, target ≠ processId →
+      other.eagerLink processId target reason = state.eagerLink processId target reason) :
+    task.ownEffect other processId = task.ownEffect state processId := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => rfl
+  | none =>
+  simp only [Config.confined, lookup] at confined
+  have head : ∀ {reads writes : Nat} {rest : List Frame}, frames = (processId, reads, writes) :: rest →
+      (processId, reads, writes) ∈ frames := fun equal => equal ▸ List.mem_cons_self
+  have ending : ∀ reason, frames = (state.endFrames processId).1 →
+      other.terminateEffect processId reason = state.terminateEffect processId reason := by
+    intro reason equal
+    have inside : (processId, Field.all, Field.all) ∈ frames := by
+      rw [equal, endFrames_eq]; exact List.mem_cons_self
+    exact State.terminateEffect_congr (agree.process inside rfl) timedTo fun target differ =>
+      eager target reason differ
+  cases computation with
+  | ok =>
+    simp only [Task.ownFrames, Option.some.injEq] at found
+    exact ending _ (congrArg Prod.fst found).symm
+  | error exception =>
+    cases exception with
+    | exhausted => simp at confined
+    | _ =>
+      simp only [Task.ownFrames, Option.some.injEq] at found
+      exact ending _ (congrArg Prod.fst found).symm
+  | send destination message =>
+    simp only [Task.ownFrames, Option.some.injEq, Prod.mk.injEq] at found
+    exact State.sendEffect_agree agree fun entry mem => found.1 ▸ mem
+  | receive timeout select next =>
+    simp only [Task.ownFrames] at found
+    dsimp only at confined
+    cases selected : selectMessage (select (state.view processId)) (state.process processId).mailbox with
+    | some => simp [selected] at confined
+    | none =>
+      simp only [selected] at found
+      have facts : ∀ {reads : Nat}, frames = [(processId, reads, 0)] → reads.testBit 3 = true →
+          reads.testBit 4 = true → reads.testBit 2 = true →
+          other.view processId = state.view processId ∧
+            (other.process processId).mailbox = (state.process processId).mailbox := by
+        intro reads equal pdict refCounter mailbox
+        have inside : (processId, reads, 0) ∈ frames := by rw [equal]; exact List.mem_cons_self
+        have samePdict := agree.get inside .pdict pdict
+        have sameCounter := agree.get inside .refCounter refCounter
+        have sameMailbox := agree.get inside .mailbox mailbox
+        simp only [ProcessState.get] at samePdict sameCounter sameMailbox
+        exact ⟨by simp [State.view, samePdict, sameCounter], sameMailbox⟩
+      have same : other.view processId = state.view processId ∧
+          (other.process processId).mailbox = (state.process processId).mailbox := by
+        cases timeout <;> simp only [Option.some.injEq, Prod.mk.injEq] at found <;>
+          exact facts found.1.symm (by decide) (by decide) (by decide)
+      simp only [Task.ownEffect, same.1, same.2, selected]
+  | request query next =>
+    have counter : ∀ {reads writes : Nat} {rest : List Frame}, frames = (processId, reads, writes) :: rest →
+        reads.testBit 4 = true → (other.process processId).refCounter = (state.process processId).refCounter :=
+      fun equal set => agree.get (head equal) .refCounter set
+    cases query with
+    | monitor target alias =>
+      simp only [Task.ownFrames, State.requestFrames] at found
+      simp only [Task.ownEffect, State.requestEffect, State.allocate]
+      by_cases self : target = processId
+      · subst self
+        simp only [beq_self_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found
+        have same := counter found.1.symm (by decide)
+        simp only [same, ↓reduceIte]
+      · have differ : (target == processId) = false := by simpa using self
+        simp only [differ, Bool.false_eq_true, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at found
+        have same := counter found.1.symm (by decide)
+        have parked := agree.get (head found.1.symm) .parked (by dsimp only [Part.bit]; decide)
+        simp only [ProcessState.get] at parked
+        simp only [self, ↓reduceIte, same]
+        -- Allocating keeps the parked monitor signal, and whether its target is alive.
+        let allocate := fun process : ProcessState => { process with refCounter := process.refCounter + 1 }
+        have unparked : (other.modify processId allocate).unparkEffect processId =
+            (state.modify processId allocate).unparkEffect processId := by
+          refine State.unparkEffect_congr ?_ fun parkedTarget reference found' => ?_
+          · exact (State.process_modify_keeps (change := allocate) (get := (·.parked)) fun _ => rfl).trans
+              (parked.trans (State.process_modify_keeps (change := allocate) (get := (·.parked)) fun _ => rfl).symm)
+          · rw [State.process_modify_keeps (state := state) (change := allocate) (get := (·.parked))
+              (fun _ => rfl)] at found'
+            have inside : ∃ entry ∈ frames, entry.1 = parkedTarget ∧ entry.2.1.testBit liveBit = true := by
+              obtain ⟨entry, mem, same, read⟩ := enqueueFrames_live state processId parkedTarget (.monitor reference)
+              refine ⟨entry, ?_, same, read⟩
+              rw [← found.1]; simp only [found']; exact List.mem_cons_of_mem _ mem
+            obtain ⟨entry, mem, sameTarget, read⟩ := inside
+            have alive := agree.alive mem read
+            rw [sameTarget] at alive
+            refine (State.alive_modify _ _ _ _ ?_).trans ((State.alive_modify _ _ _ _ ?_).trans
+              (alive.trans ((State.alive_modify _ _ _ _ ?_).trans (State.alive_modify _ _ _ _ ?_)).symm)) <;>
+              intro process <;> rfl
+        rw [unparked]
+    | demonitor reference flush => rfl
+    | startTimer destination message duration =>
+      simp only [Task.ownFrames, State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found
+      have same := counter found.1.symm (by decide)
+      have alive : other.alive destination = state.alive destination :=
+        agree.alive (entry := (destination, Field.live, 0)) (by rw [← found.1]; simp) (by dsimp only; decide)
+      have alive' : (other.modify processId fun process => { process with refCounter := process.refCounter + 1 }).alive
+          destination = (state.modify processId fun process =>
+            { process with refCounter := process.refCounter + 1 }).alive destination := by
+        refine (State.alive_modify _ _ _ _ ?_).trans (alive.trans (State.alive_modify _ _ _ _ ?_).symm) <;>
+          intro process <;> rfl
+      try simp only [ProcessState.get] at same
+      simp only [Task.ownEffect, State.requestEffect, State.allocate, same, alive']
+      rfl
+    | cancelTimer reference =>
+      simp only [Task.ownFrames, State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found
+      simp only [Task.ownEffect, State.requestEffect, timed found.2.symm]
+    | alive target =>
+      simp only [Task.ownFrames, State.requestFrames] at found
+      simp only [Task.ownEffect, State.requestEffect]
+      by_cases same : target = processId
+      · simp [same]
+      · have differ : (target == processId) = false := by simpa using same
+        simp only [differ, same, Bool.false_eq_true, ↓reduceIte] at found ⊢
+        split at found
+        · rename_i targetAlive
+          simp only [Option.some.injEq, Prod.mk.injEq] at found
+          have alive : other.alive target = state.alive target := by
+            obtain ⟨-, ⟨entry, mem, same, read⟩⟩ := sendFrames_reads state processId target .isAlive
+            rw [← same]; exact agree.alive (found.1 ▸ mem) read
+          rw [alive, targetAlive]
+          exact State.sendEffect_agree agree fun entry mem => found.1 ▸ mem
+        · rename_i targetDead
+          simp only [Option.some.injEq, Prod.mk.injEq] at found
+          have alive : other.alive target = state.alive target :=
+            agree.alive (entry := (target, Field.live, 0)) (by rw [← found.1]; exact List.mem_cons_self)
+              (by dsimp only; decide)
+          simp only [Bool.not_eq_true] at targetDead
+          rw [alive, targetDead]
+          exact State.enqueueEffect_congr _ self
+    | sendAlias alias message =>
+      simp only [Task.ownFrames, State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found
+      exact State.sendEffect_agree agree fun entry mem => found.1 ▸ mem
+    | _ => simp at confined
+  | _ => simp at confined
+
 /-- A confined own step of a live process is within its frames. -/
 private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
     {processId : PID} {task : Task α} {frames : List Frame} {timers : Bool}
