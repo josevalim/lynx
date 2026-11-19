@@ -507,19 +507,21 @@ theorem trap_exit_after_seeing_link_gone_is_exhausted :
       | some (_, .rejected (.error .exhausted)) => true
       | _ => false) = true := by decide +kernel
 
+/-- Whether a monitored child was alive, and its `DOWN` then found it gone. -/
+private def aliveThenNoproc : Result := do
+  let child ← «spawn/1» dispatcher returns
+  let _ ← «monitor/2» dispatcher (.atom "process") child
+  let alive ← «is_process_alive/1» dispatcher child
+  let down ← receiveMatch isDown
+  pure (match alive, down with
+    | .atom "true", .tuple ⟨[_, _, _, _, .atom "noproc"]⟩ => Term.true
+    | _, _ => Term.false)
+
 /-- `is_process_alive/1` may reply `true` without signaling its target, leaving
 a monitor parked for it, which then finds the target gone. -/
-theorem alive_may_leave_monitor_parked :
-    (match Concurrent.counterexample (fun (outcome : Outcome Term) => match outcome with
-        | .ok (.tuple ⟨[.atom "true", .tuple ⟨[_, _, _, _, .atom "noproc"]⟩]⟩) => false
-        | _ => true) 64 (.start {} (do
-      let child ← «spawn/1» dispatcher returns
-      let _ ← «monitor/2» dispatcher (.atom "process") child
-      let alive ← «is_process_alive/1» dispatcher child
-      let down ← receiveMatch isDown
-      pure (Term.tuple #[alive, down]))) with
-      | some (_, .rejected _) => true
-      | _ => false) = true := by decide +kernel
+theorem alive_may_leave_monitor_parked : Lynx.reachable aliveThenNoproc (.ok Term.true) :=
+  Lynx.reachable_of_witness aliveThenNoproc Lynx.Outcome.isTrue 64 (fun _ _ => 0) (by decide +kernel)
+    fun _ => Lynx.Outcome.eq_of_isTrue
 
 /-- A child that sends the root `kill`. -/
 private def killsRoot : Dispatcher := Dispatcher.ofTable [

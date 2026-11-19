@@ -91,6 +91,38 @@ public theorem concurrent_of_check (computation : Result α) (accept : Outcome �
   fun elapsed _ _ result run final =>
     accepted result (Concurrent.check_sound (checked elapsed) run final)
 
+/-- Some run of a computation from a fresh runtime ends with the outcome, for
+some time elapsed before timers are canceled. Laws with `reaches:` are stated
+this way, so that a law can show an outcome is possible, such as each branch of
+a race. -/
+public def reachable (computation : Result α) (outcome : Outcome α) : Prop :=
+  ∃ elapsed events last, Concurrent.Run (.start {} computation elapsed) events last ∧
+    Concurrent.Terminal last outcome
+
+/-- A run that `Concurrent.witness` finds, which `Concurrent.Config.follow`
+checks, reaches its outcome. Evaluate the check with `lynx_kernel`. -/
+public theorem reachable_of_witness (computation : Result α) (accept : Outcome α → Bool) (depth : Nat)
+    (elapsed : PID → Nat → Nat)
+    (found : (match Concurrent.witness accept depth (.start {} computation elapsed) with
+      | some schedule =>
+          match (Concurrent.Config.start {} computation elapsed).follow schedule with
+          | some last => last.successors.isEmpty && accept last.outcome
+          | none => false
+      | none => false) = true)
+    {outcome : Outcome α} (accepted : ∀ result, accept result = true → result = outcome) :
+    reachable computation outcome := by
+  split at found
+  · rename_i schedule _
+    split at found
+    · rename_i last followed
+      obtain ⟨events, run⟩ := Concurrent.Config.run_of_follow followed
+      simp only [Bool.and_eq_true, List.isEmpty_iff] at found
+      refine ⟨elapsed, events, last, run, ?_⟩
+      rw [← accepted _ found.2]
+      exact .stuck found.1
+    · cases found
+  · cases found
+
 /-- Without races, one run to a terminal configuration determines the outcome of
 every run: different steps meet again, so all runs end alike. -/
 public theorem concurrent_of_raceFree (computation : Result α) {outcome : Outcome α}

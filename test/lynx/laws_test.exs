@@ -92,11 +92,13 @@ defmodule Lynx.LawsTest do
         law checked(x), requires: x, expects: true
         law expected(x), expects: x
         law pair(a, b), requires: a, expects: b
+        law reached(x), reaches: x
       end
 
       assert Callable.checked(true)
       assert Callable.expected(true)
       assert Callable.pair(true, true)
+      assert Callable.reached(true)
 
       for {function, args, exception, message} <- [
             {:pair, [false, true], ArgumentError, "law pair/2 requires returned false"},
@@ -104,7 +106,8 @@ defmodule Lynx.LawsTest do
             {:checked, [false], ArgumentError, "law checked/1 requires returned false"},
             {:checked, [:invalid], ArgumentError, "law checked/1 requires returned :invalid"},
             {:expected, [false], RuntimeError, "law expected/1 expects returned false"},
-            {:expected, [42], RuntimeError, "law expected/1 expects returned 42"}
+            {:expected, [42], RuntimeError, "law expected/1 expects returned 42"},
+            {:reached, [false], RuntimeError, "law reached/1 reaches returned false"}
           ] do
         assert_raise exception, message, fn -> apply(Callable, function, args) end
       end
@@ -212,7 +215,8 @@ defmodule Lynx.LawsTest do
     test "requires an expectation and a Lean proof value" do
       for {options, reason} <- [
             {:invalid, "law options must be a keyword list"},
-            {[requires: true], "law requires the :expects option to be given"},
+            {[requires: true], "law requires the :expects or :reaches option to be given"},
+            {[expects: true, reaches: true], "law accepts only one of :expects and :reaches"},
             {quote(do: [expects: true, proof: ~LEAN"rfl"x]),
              "~LEAN requires a literal string without modifiers"}
           ] do
@@ -305,6 +309,20 @@ defmodule Lynx.LawsTest do
                  ]
                }
              ] = translate(module, beam)
+    end
+
+    test "rejects reaches over code that is not concurrent" do
+      {:module, module, beam, _} =
+        defmodule PureReaches do
+          @compile :debug_info
+          use Lynx.Laws
+          law two, reaches: 1 + 1 == 2
+        end
+
+      assert %CompileError{description: description} =
+               assert_raise(CompileError, fn -> translate(module, beam) end)
+
+      assert description =~ "uses :reaches, which requires concurrent code"
     end
 
     test "translates every law and omits unused default preconditions" do

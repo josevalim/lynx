@@ -763,6 +763,15 @@ defmodule Lynx.Translation do
             if helper.dispatches, do: Map.put(law, key <> "_dispatches", true), else: law
         end
 
+      # Some run reaching an outcome only differs from every run reaching it
+      # for concurrent code.
+      if law["reaches"] == true and law["ensures_purity"] != "concurrent" do
+        raise CompileError,
+          description:
+            "law #{law["name"]} uses :reaches, which requires concurrent code, " <>
+              "but its expectation is #{law["ensures_purity"]}; use :expects instead"
+      end
+
       if table?, do: Map.put(law, "table", "Erlang.program.fun_table"), else: law
     end)
   end

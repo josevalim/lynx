@@ -4,7 +4,7 @@
 # that it survived. With :erlang.exit/2, the child ends before the call
 # returns, so the parent always gets its exit reason. With
 # :erlang.exit_signal/2, the child acts on its own signal later, so either
-# message may arrive first.
+# message may arrive first, and each does in some run.
 ExUnit.start()
 
 defmodule SelfKillProofsTest do
@@ -38,8 +38,8 @@ defmodule SelfKillProofsTest do
       end)
 
     receive do
-      :survived -> :ok
-      {:EXIT, ^child, :alma} -> :ok
+      :survived -> :survived
+      {:EXIT, ^child, :alma} -> :exited
     end
   end
 
@@ -59,15 +59,40 @@ defmodule SelfKillProofsTest do
         fun _ => Lynx.Outcome.eq_of_isTrue
       """
 
-    law self_signal_is_ok,
-      expects: self_signal() == :ok,
+    law self_signal_is_either,
+      expects: self_signal() in [:survived, :exited],
       proof: ~LEAN"""
       refine ⟨2, fun depth deep => ?_⟩
       obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
       exact Lynx.concurrent_of_check
-        (Lynx.apply «self_signal_is_ok:ensures/0» Erlang.program.fun_table (depth + 2))
+        (Lynx.apply «self_signal_is_either:ensures/0» Erlang.program.fun_table (depth + 2))
         Lynx.Outcome.isTrue 64
         (fun _ => by lynx_kernel)
+        fun _ => Lynx.Outcome.eq_of_isTrue
+      """
+
+    law self_signal_may_survive,
+      reaches: self_signal() == :survived,
+      proof: ~LEAN"""
+      refine ⟨2, fun depth deep => ?_⟩
+      obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
+      -- Find a run, and check it in the kernel.
+      exact Lynx.reachable_of_witness
+        (Lynx.apply «self_signal_may_survive:ensures/0» Erlang.program.fun_table (depth + 2))
+        Lynx.Outcome.isTrue 64 (fun _ _ => 0)
+        (by lynx_kernel)
+        fun _ => Lynx.Outcome.eq_of_isTrue
+      """
+
+    law self_signal_may_exit,
+      reaches: self_signal() == :exited,
+      proof: ~LEAN"""
+      refine ⟨2, fun depth deep => ?_⟩
+      obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
+      exact Lynx.reachable_of_witness
+        (Lynx.apply «self_signal_may_exit:ensures/0» Erlang.program.fun_table (depth + 2))
+        Lynx.Outcome.isTrue 64 (fun _ _ => 0)
+        (by lynx_kernel)
         fun _ => Lynx.Outcome.eq_of_isTrue
       """
   end

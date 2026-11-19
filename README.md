@@ -58,7 +58,9 @@ started or ask your coding agent to run `mix help Lynx`.
     exit signals, and timers are modeled after OTP. Concurrent laws hold for every
     interleaving of processes and every point at which timers fire, and steps
     that commute are explored only once. `lynx_counterexample` prints a failing
-    run of a concurrent program, one step per line
+    run of a concurrent program, one step per line. It is also possible to validate
+    a given outcome in a concurrent program is possible within one of its executions
+    (instead of all of its executions) by using `reaches:` instead of `expects:`
 
   * **Profiling** - `LYNX_DEBUG=lean` reports the time each module and law takes
     to verify, and translated sources can be profiled with Lean's built-in profiler

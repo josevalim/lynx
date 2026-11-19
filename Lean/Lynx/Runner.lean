@@ -53,7 +53,9 @@ and a proof object. Helpers are ordinary translated computations called with the
 parameters. Each helper carries its level, which selects how it is stated to return true.
 Helpers returning `Except` are stated directly as `= .ok true`. Other helpers are stated
 through `Lynx.sequential`, except concurrent ones, which are stated through
-`Lynx.concurrent`: every run of the helper ends with `ok true`. An absent requires helper
+`Lynx.concurrent`: every run of the helper ends with `ok true`. A theorem with
+`reaches: true` states instead that some run of its concurrent ensures helper
+ends with `ok true` (`Lynx.reachable`). An absent requires helper
 means no assumption. Helpers that are not pure
 are called through `Lynx.apply helper table depth`, which passes them the dispatcher of the
 program's function table up to a call depth; an optional table names it, and it defaults
@@ -1532,7 +1534,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
   | "theorem" => do
     fields j ["kind", "name", "params", "requires", "ensures", "proof", "span",
       "table", "requires_purity", "requires_dispatches", "ensures_purity",
-      "ensures_dispatches"]
+      "ensures_dispatches", "reaches"]
     let params ← (← arr j "params").mapM fun p => do
       pure (mkIdent (Name.mkSimple (← p.getStr?)))
     let arity := params.size
@@ -1562,6 +1564,13 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
         pure (some (helper (functionName (← value.getStr?) arity) level, level))
     let ensuresPurity ← level j "ensures_purity" "ensures_dispatches"
     let ensures := helper (functionName (← str j "ensures") arity) ensuresPurity
+    let reaches ← match field j "reaches" with
+      | .error _ => pure false
+      | .ok value => do
+        unless (← value.getBool?) do throw "reaches must be true when present"
+        pure true
+    if reaches && ensuresPurity != "concurrent" then
+      throw "reaches requires a concurrent expectation"
     let (proof, proofInfo) ← leanProof map info name.getId (← field j "proof")
     let source ← str (← field j "proof") "source"
     modify fun s => { s with
@@ -1570,6 +1579,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
     let ok := mkIdent ``Lynx.Outcome.ok
     let run := mkIdent ``Lynx.sequential
     let everyRun := mkIdent ``Lynx.concurrent
+    let someRun := mkIdent ``Lynx.reachable
     let trueTerm := mkIdent ``Lynx.Term.true
     let hypothesis := mkIdent `requires
     -- Each helper is stated as strongly as its purity allows: directly when it
@@ -1599,10 +1609,13 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
           | "sequential" => eventually level (runs requires)
           | _ => eventually level (direct requires)
         binders.push (Unhygienic.run `(bracketedBinder| ($hypothesis : $statement)))
-    -- A direct expectation implies it holds when run, in every run.
+    -- A direct expectation implies it holds when run, in every run. An
+    -- expectation that some run reaches is stated through `Lynx.reachable`.
     let goal := match ensuresPurity with
       | "pure" | "apply" => eventually ensuresPurity (direct ensures)
-      | "concurrent" => eventually ensuresPurity (everyRunEnds ensures)
+      | "concurrent" =>
+        if reaches then eventually ensuresPurity (Unhygienic.run `($someRun $ensures ($ok $trueTerm)))
+        else eventually ensuresPurity (everyRunEnds ensures)
       | _ => eventually ensuresPurity (runs ensures)
     pure (Unhygienic.run `(theorem $name $binders:bracketedBinder* : $goal := $proof))
   | "def" => do

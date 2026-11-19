@@ -322,9 +322,9 @@ defmodule Lynx do
   a process that ended, sends a parked monitor signal, or fires a timer, and a
   `Lynx.Concurrent.Run` records consecutive steps. As in OTP, a signal joins its
   receiver's queue when it is sent, and the receiver handles its queue in order,
-  against its state at that time. This assumes on-heap message queues: with
-  `message_queue_data` set to `off_heap`, OTP may reorder signals from different
-  senders. A law is proven in one of three ways:
+  against its state at that time.
+
+  A law is proven in one of three ways:
 
     * Programs whose processes take the same steps for every input are proven
       by evaluating every run, as described below. See
@@ -369,21 +369,8 @@ defmodule Lynx do
         fun _ => Lynx.Outcome.eq_of_isTrue
 
   The kernel cannot decide what depends on an unknown value, so when the
-  processes compare a symbolic input, evaluate with `cbv`. It stops at
-  comparisons it cannot decide, such as `n * 2 == n * 2` for a symbolic `n`,
-  unless a `@[cbv_eval]` lemma decides them. Lemmas for numbers compared with
-  themselves can go in the laws group's `Lynx.Case.prelude/1`, inside a
-  `public section` of a module that publicly imports `Lynx`:
-
-      @[cbv_eval] theorem compare_int_self (a : Int) : compareOfLessAndEq a a = .eq := by
-        simp [compareOfLessAndEq]
-
-      @[cbv_eval] theorem compare_rat_self (a : Rat) : compareOfLessAndEq a a = .eq := by
-        simp [compareOfLessAndEq]
-
-  (`===` and `in` compare integers exactly, as `Int`, and `==` compares numbers
-  as rationals.) For example, for a law over an integer `x` that is only
-  carried by messages and arithmetic:
+  processes compare a symbolic input, evaluate with `cbv`. For example,
+  for a law over an integer `x` that is only carried by messages and arithmetic:
 
       obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
         cases x <;> simp [«law:requires/1», Erlang.erlang.«is_integer/1»] at requires ⊢
@@ -397,10 +384,7 @@ defmodule Lynx do
   `Lynx.Outcome.isTrue` accepts the outcome the law expects, and `cbv`
   evaluates the check for an unknown time elapsed before timers are canceled.
   Programs that only compare the time left `:erlang.cancel_timer/1` reports
-  with `false` evaluate without knowing it. Writing the depth as `depth + 1` lets evaluation take the level the
-  spawned function consumes, and the level the receive of its reply consumes,
-  whatever the remaining depth. Evaluation takes longer as the bound grows,
-  so choose the smallest bound that covers the program.
+  with `false` evaluate without knowing it.
 
   A few things to keep in mind:
 
@@ -408,9 +392,11 @@ defmodule Lynx do
       so evaluation can select the program's branches. Evaluation covers every
       `n` at once only when no branch the processes take depends on its value.
 
-    * A depth that is too small makes the check `false` rather than failing
-      the evaluation, so the proof does not close. Increase it until every run
-      ends within it.
+    * Writing the depth as `depth + 1` lets evaluation take the level the spawned
+      function consumes, and the level the receive of its reply consumes, whatever
+      the remaining depth. A minimum is required for proofs. Evaluation takes
+      longer as the bound grows, so choose the smallest bound that covers the
+      program.
 
     * Evaluation stops at comparisons it cannot decide and does not explore
       the runs after them, so the proof does not close. Give `cbv` a lemma
@@ -423,16 +409,31 @@ defmodule Lynx do
 
   When a check of a closed program fails, such as a law without parameters,
   `lynx_counterexample` explains why. Run it before evaluating the check, as in
-  `(by lynx_counterexample; cbv)`: it runs the program in Lean's interpreter,
-  which is much faster than the kernel, and fails with a run the check
-  rejects, one step per line, or with one that takes more steps than the depth.
-  Otherwise it leaves the goal for `lynx_kernel` or `cbv`. It proves nothing itself.
-  Traces show the first process as `<0>` and its first child as `<0.1>`, and
-  references as their allocating process followed by a count, as in `#Ref<0.1>`.
+  `(by lynx_counterexample; cbv)`: it runs the program in Lean's interpreter
+  and fails with a run the check rejects, one step per line, or with one that
+  takes more steps than the depth. Otherwise it leaves the goal for `lynx_kernel`
+  or `cbv`. It proves nothing itself. Traces show the first process as `<0>` and
+  its first child as `<0.1>`, and references as their allocating process followed
+  by a count, as in `#Ref<0.1>`.
 
   See `examples/elixir/task.exs` for laws about `Task.async/1`,
   `Task.await/2`, and `Task.ignore/1`, which link and monitor, so they are
   proven this way.
+
+  ### Existential quantification of concurrent programs
+
+  Sometimes you want to validate a given outcome in a concurrent program is
+  possible within one of its executions. To do so, one may write a law with
+  `reaches:` instead of `expects:`. In such cases, `Lynx.reachable` is used
+  instead of `Lynx.concurrent`:
+
+      ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
+        Lynx.reachable (Lynx.apply «law:ensures/1» table depth x) (.ok Lynx.Term.true)
+
+  `Lynx.reachable_of_witness` proves it from a schedule that `Lynx.Concurrent.witness`
+  finds and `Lynx.Concurrent.Config.follow` checks. Generally speaking, prefer
+  `expects:` unless you want to specifically validate a particular outcome.
+  See `examples/concurrency/self_kill.exs`.
 
   ## Taking it to the next level
 

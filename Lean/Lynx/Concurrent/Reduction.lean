@@ -112,6 +112,47 @@ theorem checkFrom_sound {accept : Outcome α → Bool} {depth : Nat} {config las
       · simp only [Kernel.all_eq, List.all_eq_true] at checked
         exact ih (checked _ step) terminal
 
+/-- The configuration a schedule reaches, taking for each index the successor
+at that position. -/
+@[expose] def Config.follow : List Nat → Config α → Option (Config α)
+  | [], config => some config
+  | index :: rest, config =>
+      match config.successors[index]? with
+      | some (_, next) => next.follow rest
+      | none => none
+
+/-- A schedule of a run that ends in an accepted outcome, searching every run
+up to a depth. `Config.follow` checks what it finds (`reachable_of_witness`). -/
+@[expose] def witness (accept : Outcome α → Bool) : Nat → Config α → Option (List Nat)
+  | 0, _ => none
+  | depth + 1, config =>
+      match config.successors with
+      | [] => if accept config.outcome then some [] else none
+      | successors => witnessFrom (witness accept depth) 0 successors
+where
+  /-- The first successor, by position, from which `search` finds a schedule. -/
+  witnessFrom (search : Config α → Option (List Nat)) :
+      Nat → List (Event × Config α) → Option (List Nat)
+    | _, [] => none
+    | index, (_, next) :: rest =>
+        match search next with
+        | some schedule => some (index :: schedule)
+        | none => witnessFrom search (index + 1) rest
+
+/-- Following a schedule is a run. -/
+theorem Config.run_of_follow {config last : Config α} :
+    ∀ {schedule : List Nat}, config.follow schedule = some last → ∃ events, Run config events last
+  | [], followed => by
+    simp only [Config.follow, Option.some.injEq] at followed
+    subst followed; exact ⟨[], .refl⟩
+  | index :: rest, followed => by
+    simp only [Config.follow] at followed
+    split at followed
+    · rename_i event next found
+      obtain ⟨events, run⟩ := Config.run_of_follow followed
+      exact ⟨event :: events, .step (List.mem_of_getElem? found) run⟩
+    · cases followed
+
 /-- Every run of a program that `check` accepts ends in an accepted outcome. -/
 theorem check_sound {accept : Outcome α → Bool} {depth : Nat} {env : Environment} {computation : Result α}
     {elapsed : PID → Nat → Nat} {last : Config α} {events : List Event} {outcome : Outcome α}

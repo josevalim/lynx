@@ -429,7 +429,11 @@ translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensure
                          translate_def({Helper, Arity}, State0)}
     end,
     State2 = translate_def({Ensures, Arity}, State1),
-    Theorem = node(~"theorem", Anno, Requirement#{
+    Fields = case maps:find(reaches, Law) of
+        {ok, true} -> Requirement#{~"reaches" => true};
+        error -> Requirement
+    end,
+    Theorem = node(~"theorem", Anno, Fields#{
         ~"name" => function_name(Name), ~"params" => [atom_to_binary(Param, utf8) || Param <- Params],
         ~"ensures" => atom_to_binary(Ensures, utf8), ~"proof" => Proof
     }),

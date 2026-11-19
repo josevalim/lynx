@@ -194,8 +194,14 @@ defmodule Lynx.Laws do
       It must evaluate to exactly `true` for the expected expression to be
       evaluated. Defaults to `true`.
 
-    * `:expects` (required) — the Elixir expression to prove. It must evaluate to
+    * `:expects` — the Elixir expression to prove. It must evaluate to
       exactly `true` whenever the precondition holds.
+
+    * `:reaches` — instead of `:expects`, an Elixir expression over concurrent
+      code that evaluates to exactly `true` in some run, whenever the
+      precondition holds in every run. It shows an outcome is possible, such as
+      each branch of a race, and is stated through `Lynx.reachable`. Each law
+      has one; use one law per outcome.
 
     * `:proof` (optional) — a `Lynx.Lean` value containing the Lean tactic proof,
       usually built with `~LEAN`. Both inline and heredoc sigils are accepted.
@@ -212,8 +218,9 @@ defmodule Lynx.Laws do
 
   Besides defining a law, this macro also defines a public function that you can
   invoke passing Elixir values. Elixir will then validate said values against the
-  given `:requires`, the given `:expects`, and return true when both predicates
-  succeed, otherwise it will raise. This is useful to provide counter examples.
+  given `:requires`, the given `:expects` or `:reaches`, and return true when
+  both predicates succeed, otherwise it will raise. This is useful to provide
+  counter examples.
   """
   defmacro law(call, opts) do
     {_name, definition} = __law__(__CALLER__, call, opts)
@@ -242,14 +249,16 @@ defmodule Lynx.Laws do
       compile_error!(env, "law options must be a keyword list")
     end
 
-    for key <- Keyword.keys(opts), key not in [:requires, :expects, :proof] do
+    for key <- Keyword.keys(opts), key not in [:requires, :expects, :reaches, :proof] do
       compile_error!(env, "unknown law option #{inspect(key)}")
     end
 
-    expects =
-      case Keyword.fetch(opts, :expects) do
-        {:ok, expression} -> expression
-        :error -> compile_error!(env, "law requires the :expects option to be given")
+    {expects, reaches?} =
+      case {Keyword.fetch(opts, :expects), Keyword.fetch(opts, :reaches)} do
+        {{:ok, expression}, :error} -> {expression, false}
+        {:error, {:ok, expression}} -> {expression, true}
+        {{:ok, _}, {:ok, _}} -> compile_error!(env, "law accepts only one of :expects and :reaches")
+        {:error, :error} -> compile_error!(env, "law requires the :expects or :reaches option to be given")
       end
 
     proof =
@@ -272,6 +281,8 @@ defmodule Lynx.Laws do
         do: Map.put(attribute, :requires, requires_name),
         else: attribute
 
+    attribute = if reaches?, do: Map.put(attribute, :reaches, true), else: attribute
+
     attributes = Macro.escape(Map.to_list(attribute))
     attributes = [proof: quote(do: Lynx.Laws.__proof__(unquote(proof)))] ++ attributes
 
@@ -279,7 +290,8 @@ defmodule Lynx.Laws do
       Enum.map(args, &Macro.update_meta(&1, fn meta -> Keyword.put(meta, :generated, true) end))
 
     requires_message = "law #{name}/#{length(args)} requires returned "
-    expects_message = "law #{name}/#{length(args)} expects returned "
+    expects_key = if reaches?, do: "reaches", else: "expects"
+    expects_message = "law #{name}/#{length(args)} #{expects_key} returned "
 
     definition =
       quote generated: true do

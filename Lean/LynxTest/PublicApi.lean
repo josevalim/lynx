@@ -381,6 +381,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Config.commutesAfter",
   "Lynx.Concurrent.Config.confined",
   "Lynx.Concurrent.Config.distinctTasks",
+  "Lynx.Concurrent.Config.follow",
   "Lynx.Concurrent.Config.frames",
   "Lynx.Concurrent.Config.keepsTasks",
   "Lynx.Concurrent.Config.outcome",
@@ -649,6 +650,8 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.selectMessage",
   "Lynx.Concurrent.splitAt",
   "Lynx.Concurrent.splits",
+  "Lynx.Concurrent.witness",
+  "Lynx.Concurrent.witness.witnessFrom",
   "Lynx.Dispatch",
   "Lynx.Dispatch.dispatch",
   "Lynx.Dispatch.mk",
@@ -880,6 +883,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.instReprScheduleChoice",
   "Lynx.instReprSpawnOptions",
   "Lynx.instReprTerm",
+  "Lynx.reachable",
   "Lynx.sequential",
   "main"
 ]
