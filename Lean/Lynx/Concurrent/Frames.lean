@@ -5277,4 +5277,106 @@ private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task �
         exact Effect.InFrames.send state processId _ _
       | _ => simp at confined
 
+/-! ### Assembling: steps by their effects -/
+
+/-- The effect of a step at a running configuration. -/
+private def Config.effectOf : Config α → Key → Effect
+  | .running state tasks _ false, .own processId =>
+      match Kernel.lookup processId tasks with
+      | some task => task.ownEffect state processId
+      | none => {}
+  | .running state tasks _ false, .handle processId =>
+      match Kernel.lookup processId tasks with
+      | some task => task.handleEffect state processId
+      | none => {}
+  | .running state _ _ false, .phase processId => state.phaseEffect processId
+  | .running state _ _ false, .unpark processId => state.unparkEffect processId
+  | .running state _ _ false, .fire reference =>
+      match Kernel.find? (·.reference == reference) state.firing with
+      | some timer => state.fireEffect timer
+      | none => {}
+  | _, _ => {}
+
+/-- Only a process that does not return steps to exhaustion. -/
+private theorem Task.own_exhausted {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.own state processId) (exhausted : transition.exhausted = true) :
+    task.wait = none ∧ task.computation = .error .exhausted := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => simp [Task.own] at mem
+  | none =>
+    cases computation with
+    | error exception =>
+      cases exception <;> simp only [Task.own, List.mem_singleton] at mem <;> subst mem <;>
+        simp [Task.ended] at exhausted
+      exact ⟨rfl, rfl⟩
+    | receive timeout select next =>
+      simp only [Task.own] at mem
+      split at mem
+      · simp only [List.mem_singleton] at mem; subst mem; simp at exhausted
+      · split at mem
+        · simp at mem
+        · split at mem <;> simp_all
+    | request query next =>
+      simp only [Task.own] at mem
+      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> simp at exhausted
+    | _ => simp only [Task.own, List.mem_singleton, Task.ended] at mem <;> subst mem <;> simp at exhausted
+
+/-- Handling a signal never steps to exhaustion. -/
+private theorem Task.handle_not_exhausted {state : State} {processId : PID} {task : Task α} {transition : Transition α}
+    (mem : transition ∈ task.handle state processId) : transition.exhausted = false := by
+  simp only [Task.handle] at mem
+  split at mem
+  · simp at mem
+  · split at mem
+    · simp only [List.mem_singleton] at mem; subst mem; rfl
+    · split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> rfl
+
+/-- A confined step leads to its effect's state, normalized. -/
+private theorem Config.stepOf_effect {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key} {event : Event} {next : Config α}
+    (confined : Config.confined (.running state tasks finished false) key = true)
+    (step : (Config.running state tasks finished false).stepOf key = some (event, next)) :
+    ∃ raw tasks' finished', Realizes ((Config.running state tasks finished false).effectOf key) state raw ∧
+      next = .running raw.normalize tasks' finished' false := by
+  cases key with
+  | own processId =>
+    obtain ⟨task, transition, lookup, head, rfl⟩ := Config.stepOf_own step
+    have exhausted : transition.exhausted = false := by
+      cases exhausted : transition.exhausted
+      · rfl
+      obtain ⟨computation, finish, wait⟩ := task
+      obtain ⟨waits, computes⟩ := Task.own_exhausted (List.mem_of_head? head) exhausted
+      simp only at waits computes
+      subst waits computes
+      simp only [Config.confined] at confined
+      rw [lookup] at confined
+      simp at confined
+    refine ⟨transition.state, rewriteTask processId (fun _ => transition.tasks) tasks,
+      transition.finished.orElse fun _ => finished, ?_, by simp [exhausted]⟩
+    simp only [Config.effectOf, lookup]
+    exact Realizes.own (List.mem_of_head? head)
+  | handle processId =>
+    obtain ⟨task, transition, lookup, head, rfl⟩ := Config.stepOf_handle step
+    have exhausted : transition.exhausted = false := Task.handle_not_exhausted (List.mem_of_head? head)
+    refine ⟨transition.state, rewriteTask processId (fun _ => transition.tasks) tasks,
+      transition.finished.orElse fun _ => finished, ?_, by simp [exhausted]⟩
+    simp only [Config.effectOf, lookup]
+    exact Realizes.handleStep (List.mem_of_head? head)
+  | phase processId =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at step
+    obtain ⟨raw, phase, -, rfl⟩ := step
+    exact ⟨raw, _, _, Realizes.phase phase, rfl⟩
+  | unpark processId =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at step
+    obtain ⟨-, -, -, rfl⟩ := step
+    exact ⟨_, _, _, Realizes.unpark state processId, rfl⟩
+  | fire reference =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at step
+    obtain ⟨timer, found, -, rfl⟩ := step
+    refine ⟨_, _, _, ?_, rfl⟩
+    simp only [Config.effectOf, found]
+    exact Realizes.fire state timer
+  | link => simp [Config.confined] at confined
+
 end Lynx.Concurrent
