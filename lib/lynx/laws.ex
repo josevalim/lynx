@@ -255,10 +255,17 @@ defmodule Lynx.Laws do
 
     {expects, reaches?} =
       case {Keyword.fetch(opts, :expects), Keyword.fetch(opts, :reaches)} do
-        {{:ok, expression}, :error} -> {expression, false}
-        {:error, {:ok, expression}} -> {expression, true}
-        {{:ok, _}, {:ok, _}} -> compile_error!(env, "law accepts only one of :expects and :reaches")
-        {:error, :error} -> compile_error!(env, "law requires the :expects or :reaches option to be given")
+        {{:ok, expression}, :error} ->
+          {expression, false}
+
+        {:error, {:ok, expression}} ->
+          {expression, true}
+
+        {{:ok, _}, {:ok, _}} ->
+          compile_error!(env, "law accepts only one of :expects and :reaches")
+
+        {:error, :error} ->
+          compile_error!(env, "law requires the :expects or :reaches option to be given")
       end
 
     proof =
