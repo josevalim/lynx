@@ -38,6 +38,12 @@ private instance (cmp : β → β → Ordering) (f : α → β) [Std.TransCmp cm
 
 @[expose] def ratCompare (a b : Rat) : Ordering := compareOfLessAndEq a b
 
+/-- Float numeric comparison reduces to a comparison of scaled integers. -/
+theorem ratCompare_finiteFloat (a b : FiniteFloat) :
+    ratCompare a.toRat b.toRat = compareOfLessAndEq a.signedScaled b.signedScaled := by
+  simp [ratCompare, compareOfLessAndEq, FiniteFloat.toRat_lt_iff_signedScaled,
+    FiniteFloat.toRat_eq_iff_signedScaled]
+
 private theorem rat_lt_trans {a b c : Rat} (hab : a < b) (hbc : b < c) : a < c := by
   rw [Rat.lt_iff_le_and_not_ge]
   refine ⟨Rat.le_trans (Rat.le_of_lt hab) (Rat.le_of_lt hbc), ?_⟩
