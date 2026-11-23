@@ -3568,7 +3568,7 @@ defmodule JsonProofsTest do
         -- The map generator yields each binding as a tuple with the rest of the iterator.
         have fields_loop : ∀ (fs : List (Key × Json)) (es : List (Term × Term)) (k : Nat),
             RepresentsFields es fs → (∀ f ∈ fs, Encodes f.2) → (∀ f ∈ fs, f.2.depth < k) →
-            ∃ io text, («lynx_local_10/2» (Dispatcher.ofTable Erlang.program.fun_table (k + 1))
+            ∃ io text, («-do_encode_map/2-lc$^0/1-/2» (Dispatcher.ofTable Erlang.program.fun_table (k + 1))
                 (es.foldr (fun e rest => .tuple #[e.1, e.2, rest]) (.atom "none"))
                   (.function "json" "do_encode" 2 #[])) = .ok io ∧
               Erlang.erlang.«iolist_to_binary/1» io = .ok (bin text) ∧
@@ -3578,7 +3578,7 @@ defmodule JsonProofsTest do
           | nil =>
             intro es k represents _ _
             cases represents
-            exact ⟨.nil, [], by simp [«lynx_local_10/2»], Erlang.erlang.iolist_to_binary_nil,
+            exact ⟨.nil, [], by simp [«-do_encode_map/2-lc$^0/1-/2»], Erlang.erlang.iolist_to_binary_nil,
               by simp [Json.fieldsText]⟩
           | cons f fs ih =>
             intro es k represents encodes bound
@@ -3592,7 +3592,7 @@ defmodule JsonProofsTest do
                 (fun g mem => encodes g (by simp [mem])) (fun g mem => bound g (by simp [mem]))
               refine ⟨.cons (.cons (.integer 44) (.cons kio (.cons (.integer 58) vio))) lio,
                 44 :: ((34 :: (escapeText key.1 ++ [34])) ++ 58 :: v.text) ++ text, ?_, ?_, ?_⟩
-              · simp only [List.foldr_cons, «lynx_local_10/2», «key/2»]
+              · simp only [List.foldr_cons, «-do_encode_map/2-lc$^0/1-/2», «key/2»]
                 simp [kres, vres, lres]
               · exact flat_join _ _ _ _ (flat_byte 44 _ _ (flat_join _ _ _ _ kflat
                   (flat_byte 58 _ _ vflat))) lflat |>.trans (by simp)
@@ -3677,7 +3677,7 @@ defmodule JsonProofsTest do
             cases fields with
             | nil =>
               cases bindings
-              exact ⟨bin [123, 125], by simp [«lynx_local_10/2»], flat_bin _⟩
+              exact ⟨bin [123, 125], by simp [«-do_encode_map/2-lc$^0/1-/2»], flat_bin _⟩
             | cons f fs =>
               obtain ⟨key, v⟩ := f
               cases bindings with
@@ -3688,7 +3688,7 @@ defmodule JsonProofsTest do
                 (fun g mem => ih g (by simp [mem])) (fun g mem => below g (by simp [mem]))
               refine ⟨Term.list [.integer 123, .cons kio (.cons (.integer 58) vio), lio, .integer 125],
                 ?_, ?_⟩
-              · simp only [List.foldr_cons, Lynx.Except.ok_bind, «lynx_local_10/2», «key/2»]
+              · simp only [List.foldr_cons, Lynx.Except.ok_bind, «-do_encode_map/2-lc$^0/1-/2», «key/2»]
                 simp [kres, vres, lres]
               · have joined := flat_byte 123 _ _ (flat_join _ _ _ _ (flat_join _ _ _ _ kflat
                   (flat_byte 58 _ _ vflat)) (flat_join _ _ _ _ lflat (flat_byte 125 _ _

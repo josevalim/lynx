@@ -23,7 +23,7 @@
 %% local_dispatch/3.
 -record(state, {module, name, defs, translated, laws = #{}, funs = #{}, dispatch = none,
                 local_calls = #{}, purity = pure, dispatches = false, remote, next_var = 0,
-                anonymous = 0,
+                anonymous = 0, local_roots = #{},
                 labels = #{},
                 local_funs = #{}, size_facts = #{}, size_calls = [], suffixed = [],
                 dynamic = [], literals = #{}, binds = [], pattern = false}).
@@ -1034,15 +1034,16 @@ segment_pattern(Pattern, _) ->
 computation_local_function(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
              #c_fun{vars = Vars} = Fun}], body = Body}, State0) ->
     Captures = local_captures(Fun, State0, [Loop]),
-    Name = local_function_name(map_size(State0#state.translated),
-                              length(Captures) + length(Vars), State0#state.defs),
+    Name = local_function_name(Loop, length(Captures) + length(Vars), State0),
+    Root = maps:get(State0#state.name, State0#state.local_roots, State0#state.name),
     %% A named fun and its self-references share one name.
     {Compiled, State0a} = compiled_name(Fun, State0),
     %% Keep recursive arguments first for structural purity proofs.
     LiftedFun = generator_widths(Anno, Fun#c_fun{vars = Vars ++ Captures}),
     State1 = State0a#state{
         local_funs = (State0a#state.local_funs)#{Loop => {Name, Compiled, Captures}},
-        defs = (State0a#state.defs)#{Name => {function, LiftedFun}}},
+        defs = (State0a#state.defs)#{Name => {function, LiftedFun}},
+        local_roots = (State0a#state.local_roots)#{Name => Root}},
     {TranslatedBody, State2} = expression(Body, State1),
     {TranslatedBody, State2#state{local_funs = State0#state.local_funs}}.
 
@@ -1091,10 +1092,32 @@ consumes_bits(#c_bitstr{size = #c_literal{val = Size}}) ->
 consumes_bits(#c_bitstr{}) ->
     false.
 
-local_function_name(Index, Arity, Definitions) ->
-    Name = {list_to_atom("lynx_local_" ++ integer_to_list(Index)), Arity},
+%% Local functions are named after the function that defines them and the name
+%% the compiler gives them, such as '-filter/2-lc$^0/1-' for the comprehension of
+%% lists:filter/2, so their names do not depend on what else is translated.
+%% Nested local functions are named after the outermost function, as the compiler
+%% names them uniquely within it. Other local functions are numbered.
+local_function_name({Loop, LoopArity}, Arity, #state{name = Name, local_roots = Roots, defs = Definitions} = State)
+        when is_atom(Loop) ->
+    case maps:get(Name, Roots, Name) of
+        {Function, FunctionArity} when is_atom(Function) ->
+            Base = lists:flatten(io_lib:format("-~ts/~b-~ts/~b-", [Function, FunctionArity, Loop, LoopArity])),
+            unique_function_name(Base, 0, Arity, Definitions);
+        _ ->
+            local_function_name(none, Arity, State)
+    end;
+local_function_name(_Loop, Arity, #state{translated = Translated, defs = Definitions}) ->
+    unique_function_name("lynx_local_", map_size(Translated), Arity, Definitions).
+
+unique_function_name(Base, Index, Arity, Definitions) ->
+    Suffix = case Base of
+        "lynx_local_" -> integer_to_list(Index);
+        _ when Index =:= 0 -> "";
+        _ -> integer_to_list(Index) ++ "-"
+    end,
+    Name = {list_to_atom(Base ++ Suffix), Arity},
     case maps:is_key(Name, Definitions) of
-        true -> local_function_name(Index + 1, Arity, Definitions);
+        true -> unique_function_name(Base, Index + 1, Arity, Definitions);
         false -> Name
     end.
 

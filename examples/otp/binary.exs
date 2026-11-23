@@ -183,10 +183,10 @@ defmodule BinaryProofsTest do
                   (by simp only [List.length_append, integerBits_length]; omega)]
                 simp only [wireCons, List.append_assoc]
           have decBlockStep (lower : Bool) (a b c d e f g h : Fin 16) (rest : List (Fin 16)) (acc : List Bool) :
-              Erlang.binary.«lynx_local_6/2» (ofBits (wire lower (a::b::c::d::e::f::g::h::rest))) (ofBits acc) =
-              Erlang.binary.«lynx_local_6/2» (ofBits (wire lower rest)) (ofBits (acc++source (a::b::c::d::e::f::g::h::[]))) := by
+              Erlang.binary.«-decode_hex1/1-lbc$^0/2-/2» (ofBits (wire lower (a::b::c::d::e::f::g::h::rest))) (ofBits acc) =
+              Erlang.binary.«-decode_hex1/1-lbc$^0/2-/2» (ofBits (wire lower rest)) (ofBits (acc++source (a::b::c::d::e::f::g::h::[]))) := by
             simp only [wireCons]
-            conv => lhs; unfold Erlang.binary.«lynx_local_6/2»
+            conv => lhs; unfold Erlang.binary.«-decode_hex1/1-lbc$^0/2-/2»
             lynx_fold_table decodeTable
             have ha := a.isLt
             have hb := b.isLt
@@ -207,11 +207,11 @@ defmodule BinaryProofsTest do
             simp (disch := (try simp only [sourceLength, wireLength]); omega) only
               [field8, extract_some, tailMatch, decodeLookup, okBind, construct4, binarySegment_bits, Except.bind, append_bits, sourceCons, sourceNil, List.append_nil]
           have decBlockEmpty (lower : Bool) (acc : List Bool) :
-              Erlang.binary.«lynx_local_6/2» (ofBits []) (ofBits acc) = .ok (ofBits acc) := by
-            conv => lhs; unfold Erlang.binary.«lynx_local_6/2»
+              Erlang.binary.«-decode_hex1/1-lbc$^0/2-/2» (ofBits []) (ofBits acc) = .ok (ofBits acc) := by
+            conv => lhs; unfold Erlang.binary.«-decode_hex1/1-lbc$^0/2-/2»
             rfl
           have decBlock (lower : Bool) (ns : List (Fin 16)) (blocks : ns.length%8=0) : ∀ acc : List Bool,
-              Erlang.binary.«lynx_local_6/2» (ofBits (wire lower ns)) (ofBits acc) =
+              Erlang.binary.«-decode_hex1/1-lbc$^0/2-/2» (ofBits (wire lower ns)) (ofBits acc) =
                 .ok (ofBits (acc++source ns)) := by
             induction length : ns.length using Nat.strongRecOn generalizing ns with
             | ind size ih =>
@@ -225,10 +225,10 @@ defmodule BinaryProofsTest do
                   (by simp only [List.length_cons] at blocks; omega) rfl]
                 simp only [sourceCons, sourceNil, List.append_nil, List.append_assoc]
           have encBlockStep (lower : Bool) (a b c d e f g h i j k l m n o p : Fin 16) (rest : List (Fin 16)) (acc : List Bool) :
-              Erlang.binary.«lynx_local_2/3» (ofBits (source (a::b::c::d::e::f::g::h::i::j::k::l::m::n::o::p::rest))) (ofBits acc) (.integer (offset lower)) =
-              Erlang.binary.«lynx_local_2/3» (ofBits (source rest)) (ofBits (acc++wire lower (a::b::c::d::e::f::g::h::i::j::k::l::m::n::o::p::[]))) (.integer (offset lower)) := by
+              Erlang.binary.«-encode_hex1/2-lbc$^0/2-/3» (ofBits (source (a::b::c::d::e::f::g::h::i::j::k::l::m::n::o::p::rest))) (ofBits acc) (.integer (offset lower)) =
+              Erlang.binary.«-encode_hex1/2-lbc$^0/2-/3» (ofBits (source rest)) (ofBits (acc++wire lower (a::b::c::d::e::f::g::h::i::j::k::l::m::n::o::p::[]))) (.integer (offset lower)) := by
             simp only [sourcePair]
-            conv => lhs; unfold Erlang.binary.«lynx_local_2/3»
+            conv => lhs; unfold Erlang.binary.«-encode_hex1/2-lbc$^0/2-/3»
             lynx_fold_table encodeTable
             have ha := a.isLt
             have hb := b.isLt
@@ -249,11 +249,11 @@ defmodule BinaryProofsTest do
             simp (disch := (try simp only [sourceLength, wireLength]); omega) only
               [field8, extract_some, tailMatch, Erlang.erlang.«+/2_integers», encodePair, okBind, codePair, binarySegment_bits, Except.bind, append_bits, wireCons, wireNil, List.append_nil, List.append_assoc]
           have encBlockEmpty (lower : Bool) (acc : List Bool) :
-              Erlang.binary.«lynx_local_2/3» (ofBits []) (ofBits acc) (.integer (offset lower)) = .ok (ofBits acc) := by
-            conv => lhs; unfold Erlang.binary.«lynx_local_2/3»
+              Erlang.binary.«-encode_hex1/2-lbc$^0/2-/3» (ofBits []) (ofBits acc) (.integer (offset lower)) = .ok (ofBits acc) := by
+            conv => lhs; unfold Erlang.binary.«-encode_hex1/2-lbc$^0/2-/3»
             rfl
           have encBlock (lower : Bool) (ns : List (Fin 16)) (blocks : ns.length%16=0) : ∀ acc : List Bool,
-              Erlang.binary.«lynx_local_2/3» (ofBits (source ns)) (ofBits acc) (.integer (offset lower)) =
+              Erlang.binary.«-encode_hex1/2-lbc$^0/2-/3» (ofBits (source ns)) (ofBits acc) (.integer (offset lower)) =
                 .ok (ofBits (acc++wire lower ns)) := by
             induction length : ns.length using Nat.strongRecOn generalizing ns with
             | ind size ih =>
@@ -308,7 +308,7 @@ defmodule BinaryProofsTest do
             rw [represented]
             rw [matchPrefix _ _ count prefixSize]
             simp only [extract_some, tailMatch _ 8 (by decide) (by decide) restAligned]
-            change (Erlang.binary.«lynx_local_2/3» (ofBits (source first)) (ofBits []) (.integer (offset lower)) >>=
+            change (Erlang.binary.«-encode_hex1/2-lbc$^0/2-/3» (ofBits (source first)) (ofBits []) (.integer (offset lower)) >>=
               fun value => Erlang.binary.«encode_hex2/3» (ofBits (source rest)) (.integer (offset lower)) value) = _
             rw [encBlock lower first (by omega) []]
             simp only [okBind, List.nil_append]
@@ -330,7 +330,7 @@ defmodule BinaryProofsTest do
             rw [represented]
             rw [matchPrefix _ _ count prefixSize]
             simp only [extract_some, tailMatch _ 8 (by decide) (by decide) restAligned]
-            change (Erlang.binary.«lynx_local_6/2» (ofBits (wire lower first)) (ofBits []) >>=
+            change (Erlang.binary.«-decode_hex1/1-lbc$^0/2-/2» (ofBits (wire lower first)) (ofBits []) >>=
               fun value => Erlang.binary.«decode_hex2/2» (ofBits (wire lower rest)) value) = _
             rw [decBlock lower first (by omega) []]
             simp only [okBind, List.nil_append]

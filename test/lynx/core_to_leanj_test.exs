@@ -250,16 +250,16 @@ defmodule Lynx.CoreToLeanjTest do
             %{
               {:entry, 1} => %{
                 purity: :pure,
-                local_calls: [{:lynx_local_1, 2}],
+                local_calls: [{:"-entry/1-loop/1-", 2}],
                 translation: %{
                   "body" => %{
                     "kind" => "local_call",
-                    "name" => "lynx_local_1",
+                    "name" => "-entry/1-loop/1-",
                     "args" => [%{"kind" => "nil"}, %{"name" => 0}]
                   }
                 }
               },
-              {:lynx_local_1, 2} => %{
+              {:"-entry/1-loop/1-", 2} => %{
                 purity: :pure,
                 local_calls: [],
                 translation: %{
@@ -270,7 +270,7 @@ defmodule Lynx.CoreToLeanjTest do
                       %{
                         "body" => %{
                           "kind" => "local_call",
-                          "name" => "lynx_local_1",
+                          "name" => "-entry/1-loop/1-",
                           "args" => [%{"name" => "tail"}, %{"name" => 0}]
                         }
                       }
@@ -325,7 +325,7 @@ defmodule Lynx.CoreToLeanjTest do
                   }
                 }
               },
-              {:lynx_local_1, 2} => %{
+              {:"-entry/1-loop/1-", 2} => %{
                 translation: %{
                   "body" => %{
                     "values" => [
@@ -350,7 +350,7 @@ defmodule Lynx.CoreToLeanjTest do
                   "params" => [%{"name" => 0}, %{"name" => %{"generated" => 1}}],
                   "body" => %{
                     "kind" => "local_call",
-                    "name" => "lynx_local_1",
+                    "name" => "-entry/1-loop/1-",
                     "args" => [%{"name" => %{"generated" => 1}}, %{"name" => 0}]
                   }
                 }
