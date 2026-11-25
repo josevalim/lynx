@@ -180,6 +180,12 @@ defmodule Lynx do
       its duration less an unknown elapsed time, and laws cover every elapsed
       time.
 
+    * A process that starts trapping exits after a linked process exited with
+      reason `normal`, while it was not trapping exits, ends with
+      `Lynx.Exception.exhausted`, unless it has since received the `DOWN`
+      message of a monitor on that process. Laws about it fail to verify, so
+      nothing invalid is proven.
+
     * Exception stack traces are not recorded and are represented by `[]`.
 
     * Map iteration order is unspecified, as in Erlang, and opaque.
