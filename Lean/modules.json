@@ -9,6 +9,12 @@
   "intersection/2": {"pure": true},
   "from_list/2": {"pure": true},
   "from_list/1": {"pure": true}},
+ "persistent_term":
+ {"put_new/2": {"pure": false},
+  "put/2": {"pure": false},
+  "get/2": {"pure": false},
+  "get/1": {"pure": false},
+  "erase/1": {"pure": false}},
  "math": {"floor/1": {"pure": true}, "ceil/1": {"pure": true}},
  "maps":
  {"values/1": {"pure": true},

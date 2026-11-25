@@ -113,8 +113,8 @@ private theorem Config.stepOf_of_tagged {state : State} {tasks : List (PID × Ta
     (Config.running state tasks finished false).stepOf key = some (event, next) := by
   simp only [Config.taggedSteps, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
     List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.mk.injEq] at mem
-  rcases mem with (((⟨⟨before, ⟨processId, task⟩, after⟩, split, own | handle⟩ | ⟨⟨processId, _⟩, -, link | phase⟩) |
-    ⟨⟨processId, _⟩, -, unpark⟩) | ⟨timer, firing, rfl, rfl, rfl, -⟩)
+  rcases mem with ((((⟨⟨before, ⟨processId, task⟩, after⟩, split, own | handle⟩ | ⟨⟨processId, _⟩, -, link | phase⟩) |
+    ⟨⟨processId, _⟩, -, unpark⟩) | ⟨timer, firing, rfl, rfl, rfl, -⟩) | ⟨update, staged, rfl, rfl, rfl, -⟩)
   · obtain ⟨transition, mem, rfl, rfl, rfl, -⟩ := own
     simp [Config.stepOf, splitAt_of_mem pairwise split, head?_of_length mem (Task.own_length ..)]
   · obtain ⟨transition, mem, rfl, rfl, rfl, -⟩ := handle
@@ -134,6 +134,8 @@ private theorem Config.stepOf_of_tagged {state : State} {tasks : List (PID × Ta
     simp [Config.stepOf, parked]
   · have found := find?_firstOfEach (seen := []) (timers := state.timers) firing
     simp only [Config.stepOf, State.firing, found, Option.map_some]
+  · simp only [Option.mem_toList] at staged
+    simp [Config.stepOf, staged]
 
 /-- Every step of a running configuration is tagged with a key. -/
 private theorem Config.tagged_of_step {state : State} {tasks : List (PID × Task α)}
@@ -144,25 +146,26 @@ private theorem Config.tagged_of_step {state : State} {tasks : List (PID × Task
     List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.mk.injEq] at step
   simp only [Config.taggedSteps, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
     List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.mk.injEq]
-  rcases step with (((⟨⟨before, ⟨processId, task⟩, after⟩, split, transition, mem, rfl, rfl⟩ |
+  rcases step with ((((⟨⟨before, ⟨processId, task⟩, after⟩, split, transition, mem, rfl, rfl⟩ |
     ⟨⟨processId, record⟩, mem, phased, phases, rfl, rfl⟩) | ⟨⟨processId, record⟩, mem, unpark⟩) |
-    ⟨timer, firing, rfl, rfl⟩)
+    ⟨timer, firing, rfl, rfl⟩) | ⟨update, staged, rfl, rfl⟩)
   · simp only [Task.transitions, Kernel.append_eq, List.mem_append] at mem
     rcases mem with own | handle
-    · exact ⟨_, _, .inl (.inl (.inl ⟨_, split, .inl ⟨transition, own, rfl, rfl, rfl, rfl⟩⟩))⟩
-    · exact ⟨_, _, .inl (.inl (.inl ⟨_, split, .inr ⟨transition, handle, rfl, rfl, rfl, rfl⟩⟩))⟩
+    · exact ⟨_, _, .inl (.inl (.inl (.inl ⟨_, split, .inl ⟨transition, own, rfl, rfl, rfl, rfl⟩⟩)))⟩
+    · exact ⟨_, _, .inl (.inl (.inl (.inl ⟨_, split, .inr ⟨transition, handle, rfl, rfl, rfl, rfl⟩⟩)))⟩
   · simp only [State.phases, Kernel.append_eq, Kernel.filterMap_eq, List.mem_append, List.mem_filterMap] at phases
     rcases phases with ⟨target, linked, found⟩ | found
-    · exact ⟨.link processId target, false, .inl (.inl (.inr ⟨_, mem, .inl ⟨target, linked, by simp [found]⟩⟩))⟩
+    · exact ⟨.link processId target, false, .inl (.inl (.inl (.inr ⟨_, mem, .inl ⟨target, linked, by simp [found]⟩⟩)))⟩
     · split at found
       · rename_i phased' found'
         simp only [List.mem_singleton] at found; subst found
-        exact ⟨.phase processId, state.dropsDown processId, .inl (.inl (.inr ⟨_, mem, .inr (by simp [found'])⟩))⟩
+        exact ⟨.phase processId, state.dropsDown processId, .inl (.inl (.inl (.inr ⟨_, mem, .inr (by simp [found'])⟩)))⟩
       · simp at found
   · simp only [Option.map_eq_some_iff, Prod.mk.injEq] at unpark
     obtain ⟨parked, found, rfl, rfl⟩ := unpark
-    exact ⟨.unpark processId, false, .inl (.inr ⟨_, mem, by simp [found]⟩)⟩
-  · exact ⟨_, _, .inr ⟨timer, firing, rfl, rfl, rfl, rfl⟩⟩
+    exact ⟨.unpark processId, false, .inl (.inl (.inr ⟨_, mem, by simp [found]⟩))⟩
+  · exact ⟨_, _, .inl (.inr ⟨timer, firing, rfl, rfl, rfl, rfl⟩)⟩
+  · exact ⟨_, _, .inr ⟨update, staged, rfl, rfl, rfl, rfl⟩⟩
 
 /-- The step with a key is tagged with it. -/
 private theorem Config.tagged_of_stepOf {state : State} {tasks : List (PID × Task α)}
@@ -176,24 +179,24 @@ private theorem Config.tagged_of_stepOf {state : State} {tasks : List (PID × Ta
     simp only [Config.stepOf, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq] at found
     obtain ⟨⟨before, task, after⟩, split, transition, head, rfl, rfl⟩ := found
     have split' : (before, (processId, task), after) ∈ splits tasks := by rw [splitAt_eq split]; exact mem_splits
-    exact ⟨_, .inl (.inl (.inl ⟨_, split', .inl ⟨transition, List.mem_of_head? head, rfl, rfl, rfl, rfl⟩⟩))⟩
+    exact ⟨_, .inl (.inl (.inl (.inl ⟨_, split', .inl ⟨transition, List.mem_of_head? head, rfl, rfl, rfl, rfl⟩⟩)))⟩
   | handle processId =>
     simp only [Config.stepOf, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq] at found
     obtain ⟨⟨before, task, after⟩, split, transition, head, rfl, rfl⟩ := found
     have split' : (before, (processId, task), after) ∈ splits tasks := by rw [splitAt_eq split]; exact mem_splits
-    exact ⟨_, .inl (.inl (.inl ⟨_, split', .inr ⟨transition, List.mem_of_head? head, rfl, rfl, rfl, rfl⟩⟩))⟩
+    exact ⟨_, .inl (.inl (.inl (.inl ⟨_, split', .inr ⟨transition, List.mem_of_head? head, rfl, rfl, rfl, rfl⟩⟩)))⟩
   | link processId target =>
     simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
     obtain ⟨next', phase, rfl, rfl⟩ := found
     obtain ⟨process, record, linked⟩ := State.record_of_linkPhase phase
     obtain ⟨record', mem⟩ := State.mem_processes_of_record record
-    exact ⟨false, .inl (.inl (.inr ⟨(processId, record'), mem, .inl ⟨target, linked, by simp [phase]⟩⟩))⟩
+    exact ⟨false, .inl (.inl (.inl (.inr ⟨(processId, record'), mem, .inl ⟨target, linked, by simp [phase]⟩⟩)))⟩
   | phase processId =>
     simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
     obtain ⟨next', phase, rfl, rfl⟩ := found
     obtain ⟨process, record⟩ := State.record_of_phase phase
     obtain ⟨record', mem⟩ := State.mem_processes_of_record record
-    exact ⟨state.dropsDown processId, .inl (.inl (.inr ⟨(processId, record'), mem, .inr (by simp [phase])⟩))⟩
+    exact ⟨state.dropsDown processId, .inl (.inl (.inl (.inr ⟨(processId, record'), mem, .inr (by simp [phase])⟩)))⟩
   | unpark processId =>
     simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
     obtain ⟨parked, found, rfl, rfl⟩ := found
@@ -203,7 +206,7 @@ private theorem Config.tagged_of_stepOf {state : State} {tasks : List (PID × Ta
       | some process => exact ⟨process, rfl⟩
     obtain ⟨process, record⟩ := record
     obtain ⟨record', mem⟩ := State.mem_processes_of_record record
-    exact ⟨false, .inl (.inr ⟨(processId, record'), mem, by simp [found]⟩)⟩
+    exact ⟨false, .inl (.inl (.inr ⟨(processId, record'), mem, by simp [found]⟩))⟩
   | fire reference =>
     simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
     obtain ⟨timer, found, rfl, rfl⟩ := found
@@ -211,7 +214,11 @@ private theorem Config.tagged_of_stepOf {state : State} {tasks : List (PID × Ta
     have mem := List.mem_of_find?_eq_some (by simpa [Kernel.find?_eq] using found)
     simp only [beq_iff_eq] at equal
     subst equal
-    exact ⟨false, .inr ⟨timer, mem, rfl, rfl, rfl, rfl⟩⟩
+    exact ⟨false, .inl (.inr ⟨timer, mem, rfl, rfl, rfl, rfl⟩)⟩
+  | commit =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
+    obtain ⟨update, staged, rfl, rfl⟩ := found
+    exact ⟨false, .inr ⟨update, by simp [staged], rfl, rfl, rfl, rfl⟩⟩
 
 /-! ### Absorbing a step -/
 
@@ -246,7 +253,7 @@ private theorem Config.next_of_keepsTasks {state : State} {tasks : List (PID × 
       simp only [handleTaskChange, handleFinished, Option.orElse_none]
       rw [rewriteTask_of_lookup lookup, same, ← rewriteTask_of_lookup (change := fun task => [(processId, task)])
         lookup, rewriteTask_keep]
-  | link | phase | unpark | fire =>
+  | link | phase | unpark | fire | commit =>
     obtain ⟨state', rfl⟩ := Config.changes_keeps rfl step
     exact ⟨state', rfl⟩
 
@@ -303,7 +310,7 @@ private theorem Config.absorbs {elapsed : PID → Nat → Nat} {state : State} {
     simp only [Option.some.injEq] at lookup₂ lookup₃
     subst lookup₂ lookup₃
     exact finish rfl rfl
-  | link | phase | unpark | fire =>
+  | link | phase | unpark | fire | commit =>
     obtain ⟨state₂, rfl⟩ := Config.changes_keeps rfl step'
     obtain ⟨state₃, rfl⟩ := Config.changes_keeps rfl after
     exact finish rfl rfl
@@ -448,6 +455,10 @@ private def Effect.Steady (effect : Effect) (actor : PID → Prop) : Prop :=
       process'.children = process.children
 
 private theorem Effect.Steady.empty {actor : PID → Prop} : ({} : Effect).Steady actor :=
+  fun _ _ process none => ⟨process, rfl, none, rfl⟩
+
+private theorem Effect.Steady.reshare {actor : PID → Prop} {change : Shared → Shared} :
+    (Effect.reshare change).Steady actor :=
   fun _ _ process none => ⟨process, rfl, none, rfl⟩
 
 private theorem Effect.Steady.andThen {first second : Effect} {actor : PID → Prop}
@@ -596,6 +607,9 @@ private theorem State.requestEffect_steady (state : State) (processId : PID) (qu
   · split
     · exact (Effect.Steady.retime _).andThen (by steady_modify)
     · exact Effect.Steady.empty
+  all_goals
+    repeat' split
+    all_goals first | exact Effect.Steady.empty | exact Effect.Steady.reshare
 
 /-- Spawning keeps every live record but the parent's and the child's. -/
 private theorem State.spawnEffect_steady (state : State) (processId : PID) (options : SpawnOptions)
@@ -1034,7 +1048,7 @@ private theorem Task.own_pairwise {state : State} {processId : PID} {task : Task
       all_goals (simp only [List.mem_singleton, List.not_mem_nil] at mem; try (subst mem; simp))
     | request =>
       simp only [Task.own] at mem
-      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> simp
+      split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;> simp
     | error exception =>
       cases exception <;> simp only [Task.own, List.mem_singleton] at mem <;> subst mem <;> simp [Task.ended]
     | _ => simp only [Task.own, List.mem_singleton] at mem; subst mem; simp [Task.ended]
@@ -1228,6 +1242,11 @@ private theorem Config.Fresh.step {elapsed : PID → Nat → Nat} {config next :
       exact fresh.keep (((Realizes.fire state timer).keepsLive
         (State.fireEffect_steady _ _ (actor := fun _ => False))).trans
         (State.keepsLive_normalize (within.fire timer).1)) fun _ _ inside => inside.elim id id
+    | commit =>
+      simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
+      obtain ⟨update, -, -, rfl⟩ := found
+      exact fresh.keep (((Realizes.commit state).keepsLive (Effect.Steady.reshare (actor := fun _ => False))).trans
+        (State.keepsLive_normalize within.commit.1)) fun _ _ inside => inside.elim id id
 
 /-! ### Steps every run can take first -/
 

@@ -1,6 +1,7 @@
 module
 
 public import Lynx.Term.DataTypes
+public import Lynx.Term.Compare
 public import Lynx.Concurrent.Kernel
 
 /-! Interleaving semantics of local processes, as a labelled transition system.
@@ -38,6 +39,12 @@ signal. A
 parked monitor signal of a process that ends, or of a monitor it removes, is
 dropped: its target would only remove the monitor again, and a `DOWN` it
 answers with only reaches a process that drops it.
+
+Persistent terms are shared by every process (`State.table`). Lookups read
+them at once. Updates take turns, as OTP's update permission does: a process
+whose update changes the table stages it (`State.staged`) and is suspended
+until a step of its own makes it visible (`State.commit`), even if the process
+exits first, as OTP still makes it visible after thread progress.
 
 The scheduler owns the `State` of every process. A running process only
 observes and replaces its own `Environment`: its identity, its process
@@ -145,12 +152,25 @@ structure Timer where
   duration : Nat
 deriving Repr
 
+/-- A persistent term update waiting to become visible: the key, and the value
+stored or `none` when erased. OTP makes it visible after thread progress,
+while the process that started it is suspended. -/
+structure Update where
+  owner : PID
+  key : Term
+  value : Option Term
+deriving Repr
+
 /-- The runtime shared by all processes of a run. -/
 structure State where
   /-- The records of processes that are alive or still ending, in the order of their PIDs. -/
   processes : List (PID × ProcessState) := []
   /-- Timers yet to fire, in the order of their references. -/
   timers : List Timer := []
+  /-- The persistent terms visible to every process, each key once. -/
+  table : List (Term × Term) := []
+  /-- The persistent term update in progress, which holds OTP's update permission. -/
+  staged : Option Update := none
   /-- The milliseconds elapsed when a process cancels a timer, by how many
   timers it canceled before. Elapsed time is not modeled: a run starts with any
   of these, and nothing changes them. -/
@@ -559,11 +579,38 @@ inductive Wait where
   | exit
 deriving Repr
 
-/-- How a request is answered: at once, by waiting, or by continuing with a computation. -/
+/-- How a request is answered: at once, by waiting, or by continuing with a
+computation, or not yet, as the requester is suspended until another step. -/
 inductive Answer (β : Type) : Type 1 where
   | reply (value : Term) (state : State)
   | wait (wait : Wait) (state : State)
   | continue (computation : Result β) (state : State)
+  | suspended
+
+/-- The persistent term stored under a key, compared exactly as OTP does. -/
+@[expose] def State.persistent (state : State) (key : Term) : Option Term :=
+  (Kernel.find? (fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq))
+    state.table).map (·.2)
+
+/-- Stage a persistent term update, which holds the update permission until
+it is visible, and continue once it is. -/
+@[expose] def State.stage (state : State) (processId : PID) (key : Term) (value : Option Term)
+    (next : Term → Result β) (reply : Term) : Answer β :=
+  .continue (.request .persistentAwait fun _ => next reply)
+    { state with staged := some { owner := processId, key, value } }
+
+/-- Make the staged persistent term update visible, releasing the update permission. -/
+@[expose] def State.commit (state : State) : State :=
+  match state.staged with
+  | some update =>
+      let rest := Kernel.filter (fun entry =>
+        !decide (Term.compareExact (Term.fuel update.key entry.1) update.key entry.1 = .eq)) state.table
+      { state with
+        table := match update.value with
+          | some value => (update.key, value) :: rest
+          | none => rest
+        staged := none }
+  | none => state
 
 /-- Answer a request from a process. -/
 @[expose] def State.request (state : State) (processId : PID) (next : Term → Result β) :
@@ -664,6 +711,30 @@ inductive Answer (β : Type) : Type 1 where
             ({ state with timers := Kernel.filter (·.reference != reference) state.timers }.modify
               processId fun process => { process with cancels := process.cancels + 1 })
       | none => .reply (.atom "false") state
+  | .persistentGet key =>
+      .reply (match state.persistent key with
+        | some value => .cons value .nil
+        | none => .nil) state
+  | .persistentPut key value new =>
+      -- OTP's updates take turns (try_seize_update_permission in
+      -- erl_bif_persistent.c). Storing the same value, or failing `put_new`,
+      -- returns without staging.
+      if state.staged.isSome then .suspended else
+      match state.persistent key with
+      | some stored =>
+          if Term.compareExact (Term.fuel value stored) value stored = .eq then .reply (.atom "ok") state
+          else if new then .reply (.atom "badarg") state
+          else state.stage processId key (some value) next (.atom "ok")
+      | none => state.stage processId key (some value) next (.atom "ok")
+  | .persistentErase key =>
+      if state.staged.isSome then .suspended else
+      match state.persistent key with
+      | some _ => state.stage processId key none next (.atom "true")
+      | none => .reply (.atom "false") state
+  | .persistentAwait =>
+      match state.staged with
+      | some update => if update.owner == processId then .suspended else .reply (.atom "ok") state
+      | none => .reply (.atom "ok") state
 
 /-- The runtime of a single process continuing from its environment, with the
 time elapsed when timers are canceled. -/
@@ -763,6 +834,8 @@ inductive Event where
   | unpark : PID → Event
   /-- A timer fires, so its message is queued. -/
   | fire (reference : List Nat) : Event
+  /-- The persistent term update a process staged becomes visible. -/
+  | commit (owner : PID) : Event
 deriving Repr
 
 /-- One possible step of one process, and the processes that replace it. -/
@@ -784,7 +857,7 @@ the root. -/
     Transition α :=
   { event, state := state.terminate processId reason, tasks := [], finished := finish result }
 
-/-- The steps of a process itself: none while blocked or waiting, one
+/-- The steps of a process itself: none while blocked, waiting or suspended, one
 otherwise. A receive without a match and with a timeout steps by timing out,
 only with nothing left to handle (`State.awaitedEntry`), which it handles
 first. A positive timeout starts once the process waits after handling its
@@ -832,6 +905,7 @@ expires, as sending to a process does not observe whether its timer expired. -/
         | .wait wait state =>
             [{ event := .request processId query none, state
                tasks := [(processId, ⟨computation, finish, some (wait, next)⟩)] }]
+        | .suspended => []
 
 /-- How a process acts on an exit signal: the state, and the reason it exits
 with, if any. A link exit signal only acts while the link exists and is not
@@ -947,11 +1021,11 @@ inductive Config (α : Type) : Type 1 where
       (finished : Option (Except Exception α)) (exhausted : Bool)
 
 /-- The configuration a process step leads to. A process that does not return
-ends the run, which keeps no records, timers or result, as nothing observes
-them. -/
+ends the run, which keeps no records, timers, persistent terms or result, as
+nothing observes them. -/
 @[expose] def Transition.apply (transition : Transition α) (before after : List (PID × Task α))
     (finished : Option (Except Exception α)) (exhausted : Bool) : Config α :=
-  if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] none true
+  if transition.exhausted then .running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true
   else .running transition.state.normalize (Kernel.append (Kernel.append before transition.tasks) after)
     (transition.finished.orElse fun _ => finished) exhausted
 
@@ -981,8 +1055,10 @@ theorem eq_of_mem_splits {tasks before after : List γ} {item : γ}
     · simp [ih mem]
 
 /-- Every step of a configuration, with its event: a step of a process, a
-phase of a process that ended, a parked monitor signal sent, or a timer firing.
-A run that a process did not return from has none. -/
+phase of a process that ended, a parked monitor signal sent, a timer firing,
+or a staged persistent term update becoming visible, whether or not the
+process that staged it is still alive. A run that a process did not return
+from has none. -/
 @[expose] def Config.successors : Config α → List (Event × Config α)
   | .start env computation elapsed =>
       match computation with
@@ -995,7 +1071,7 @@ A run that a process did not return from has none. -/
           else []
   | .running _ _ _ true => []
   | .running state tasks finished false =>
-      Kernel.append (Kernel.append (Kernel.append
+      Kernel.append (Kernel.append (Kernel.append (Kernel.append
         (Kernel.flatMap (fun (before, (processId, task), after) =>
           Kernel.map (fun transition => (transition.event, transition.apply before after finished false))
             (task.transitions state processId)) (splits tasks))
@@ -1008,7 +1084,9 @@ A run that a process did not return from has none. -/
             (.unpark processId, .running (state.unpark processId).normalize tasks finished false))
           state.processes))
         (Kernel.map (fun timer =>
-          (.fire timer.reference, .running (state.fire timer).normalize tasks finished false)) state.firing)
+          (.fire timer.reference, .running (state.fire timer).normalize tasks finished false)) state.firing))
+        (Kernel.map (fun update => (.commit update.owner, .running state.commit.normalize tasks finished false))
+          state.staged.toList)
 
 /-- A step of a configuration. -/
 @[expose] def Step (first : Config α) (event : Event) (next : Config α) : Prop :=

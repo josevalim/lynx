@@ -109,7 +109,7 @@ private def State.Changes (processId : PID) (related : Option ProcessState → O
     (state state' : State) : Prop :=
   (∀ other, other ≠ processId → state'.record other = state.record other) ∧
   related (state.record processId) (state'.record processId) ∧
-  state'.timers = state.timers ∧ state'.elapsed = state.elapsed
+  state'.timers = state.timers ∧ state'.elapsed = state.elapsed ∧ state'.shared = state.shared
 
 /-- Two states that differ only in the record of a process, related by `related`. -/
 private abbrev State.Changed (processId : PID) (related : ProcessState → ProcessState → Prop)
@@ -209,17 +209,40 @@ private theorem modify (changed : state.Changes processId related state') {other
 private theorem modifyRelated (changed : state.Changes processId related state') {change : ProcessState → ProcessState}
     (keeps : related ((state.record processId).map change) ((state'.record processId).map change)) :
     (state.modify processId change).Changes processId related (state'.modify processId change) := by
-  refine ⟨fun third differ' => ?_, ?_, ?_, ?_⟩
+  refine ⟨fun third differ' => ?_, ?_, ?_, ?_, ?_⟩
   · rw [State.record_modify, State.record_modify, ite_eq_right differ', ite_eq_right differ']
     exact changed.record_other differ'
   · rw [State.record_modify, State.record_modify, ite_eq_left rfl, ite_eq_left rfl]
     exact keeps
   · unfold State.modify; split <;> split <;> exact changed.2.2.1
-  · unfold State.modify; split <;> split <;> exact changed.2.2.2
+  · unfold State.modify; split <;> split <;> exact changed.2.2.2.1
+  · unfold State.modify; split <;> split <;> exact changed.2.2.2.2
 
 private theorem timers (changed : state.Changes processId related state') (timers : List Timer) :
     { state with timers }.Changes processId related { state' with timers } :=
   ⟨changed.1, changed.2.1, rfl, changed.2.2.2⟩
+
+private theorem table_eq (changed : state.Changes processId related state') : state'.table = state.table :=
+  congrArg Prod.fst changed.2.2.2.2
+
+private theorem staged_eq (changed : state.Changes processId related state') : state'.staged = state.staged :=
+  congrArg Prod.snd changed.2.2.2.2
+
+private theorem persistent (changed : state.Changes processId related state') (key : Term) :
+    state'.persistent key = state.persistent key := by
+  simp only [State.persistent, changed.table_eq]
+
+private theorem stage (changed : state.Changes processId related state') (staged : Option Update) :
+    { state with staged }.Changes processId related { state' with staged } :=
+  ⟨changed.1, changed.2.1, changed.2.2.1, changed.2.2.2.1, by simp only [State.shared, changed.table_eq]⟩
+
+private theorem commit (changed : state.Changes processId related state') :
+    state.commit.Changes processId related state'.commit := by
+  unfold State.commit
+  rw [changed.staged_eq]
+  split
+  · exact ⟨changed.1, changed.2.1, changed.2.2.1, changed.2.2.2.1, by simp only [State.shared, changed.table_eq]⟩
+  · exact changed
 
 /-- A signal falls back without changing the process, or only queues at it. -/
 private theorem fallback (changed : state.Changes processId related state')
@@ -483,6 +506,7 @@ private def Answer.Changes {β : Type} (processId : PID) (related : Option Proce
   | .wait waiting state, .wait waiting' state' => waiting' = waiting ∧ state.Changes processId related state'
   | .continue computation state, .continue computation' state' =>
       computation' = computation ∧ state.Changes processId related state'
+  | .suspended, .suspended => True
   | _, _ => False
 
 namespace State.Changes
@@ -558,8 +582,15 @@ private theorem request (changed : state.Changes processId related state') (unse
   | cancelTimer reference =>
     simp only [State.request, changed.2.2.1, changed.process_other differ]
     split
-    · exact ⟨by rw [changed.2.2.2], (changed.timers _).modify differ _⟩
+    · exact ⟨by rw [changed.2.2.2.1], (changed.timers _).modify differ _⟩
     · exact ⟨rfl, changed⟩
+  | persistentGet key =>
+    simp only [State.request, changed.persistent]
+    exact ⟨rfl, changed⟩
+  | persistentPut | persistentErase | persistentAwait =>
+    simp only [State.request, State.stage, changed.persistent, changed.staged_eq]
+    repeat' split
+    all_goals first | trivial | exact ⟨rfl, changed⟩ | exact ⟨rfl, changed.stage _⟩
 
 
 private theorem exitSignal (changed : state.Changes processId related state') {target : PID}
@@ -740,6 +771,7 @@ private theorem own (changed : state.Changes processId related state') (unseen :
     generalize state'.request other next query = answer'
     intro answered
     cases answer <;> cases answer' <;> simp only [Answer.Changes] at answered
+    case suspended.suspended => exact .none
     all_goals obtain ⟨rfl, answered⟩ := answered
     all_goals exact .some ⟨rfl, rfl, rfl, rfl, answered⟩
 
@@ -789,7 +821,7 @@ private theorem Task.own_pids {state : State} {processId : PID} {task : Task α}
       all_goals (simp only [List.mem_singleton, List.not_mem_nil] at mem; try (subst mem; simp))
     | request =>
       simp only [Task.own] at mem
-      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> simp
+      split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;> simp
     | error exception =>
       cases exception <;> simp only [Task.own, List.mem_singleton] at mem <;> subst mem <;> simp [Task.ended]
     | _ => simp only [Task.own, List.mem_singleton] at mem; subst mem; simp [Task.ended]
@@ -799,7 +831,7 @@ private theorem Config.stepOf_own_of {state : State} {tasks : List (PID × Task 
     {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
     (lookup : Kernel.lookup processId tasks = some task) (head : (task.own state processId).head? = some transition) :
     (Config.running state tasks finished false).stepOf (.own processId) = some (transition.event,
-      if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] none true
+      if transition.exhausted then .running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true
       else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
         (transition.finished.orElse fun _ => finished) false) := by
   obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
@@ -810,7 +842,7 @@ private theorem Config.stepOf_handle_of {state : State} {tasks : List (PID × Ta
     {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
     (lookup : Kernel.lookup processId tasks = some task) (head : (task.handle state processId).head? = some transition) :
     (Config.running state tasks finished false).stepOf (.handle processId) = some (transition.event,
-      if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] none true
+      if transition.exhausted then .running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true
       else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
         (transition.finished.orElse fun _ => finished) false) := by
   obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup
@@ -840,20 +872,20 @@ private theorem Config.transition_changed {tasks : List (PID × Task α)}
     (head : firsts.head? = some first) (within : first.state.Within elapsed)
     (within' : ∀ second, seconds.head? = some second → second.state.Within elapsed) :
     ∃ second : Transition α, seconds.head? = some second ∧ second.event = first.event ∧
-      ((if second.exhausted then Config.running { second.state with processes := [], timers := [] } [] none true
+      ((if second.exhausted then Config.running { second.state with processes := [], timers := [], table := [], staged := none } [] none true
         else .running second.state.normalize
           (rewriteTask other (fun _ => second.tasks) (rewriteTask processId (fun _ => [(processId, task')]) tasks))
           (second.finished.orElse fun _ => finished) false) =
-        (if first.exhausted then Config.running { first.state with processes := [], timers := [] } [] none true
+        (if first.exhausted then Config.running { first.state with processes := [], timers := [], table := [], staged := none } [] none true
         else .running first.state.normalize (rewriteTask other (fun _ => first.tasks) tasks)
           (first.finished.orElse fun _ => finished) false) ∨
       ∃ (raw raw' : State) (tasks₁ : List (PID × Task α)) (finished₁ : Option (Except Exception α)),
         raw.Changes processId related raw' ∧ raw.Within elapsed ∧ raw'.Within elapsed ∧
         Kernel.lookup processId tasks₁ = Kernel.lookup processId tasks ∧
-        (if first.exhausted then Config.running { first.state with processes := [], timers := [] } [] none true
+        (if first.exhausted then Config.running { first.state with processes := [], timers := [], table := [], staged := none } [] none true
           else .running first.state.normalize (rewriteTask other (fun _ => first.tasks) tasks)
             (first.finished.orElse fun _ => finished) false) = .running raw.normalize tasks₁ finished₁ false ∧
-        (if second.exhausted then Config.running { second.state with processes := [], timers := [] } [] none true
+        (if second.exhausted then Config.running { second.state with processes := [], timers := [], table := [], staged := none } [] none true
           else .running second.state.normalize
             (rewriteTask other (fun _ => second.tasks) (rewriteTask processId (fun _ => [(processId, task')]) tasks))
             (second.finished.orElse fun _ => finished) false) =
@@ -863,12 +895,13 @@ private theorem Config.transition_changed {tasks : List (PID × Task α)}
   rw [exhausted', tasks', finished']
   split
   · left
-    have elapsed := changed'.2.2.2
-    revert elapsed
+    have elapsed := changed'.2.2.2.1
+    have shared := changed'.2.2.2.2
+    revert elapsed shared
     cases first.state; cases second.state
-    intro elapsed
-    simp only at elapsed
-    rw [elapsed]
+    intro elapsed shared
+    simp only [State.shared, Prod.mk.injEq] at elapsed shared
+    rw [elapsed, shared.1, shared.2]
   · right
     refine ⟨first.state, second.state, _, _, changed', within, within' _ head',
       lookup_rewriteTask (Ne.symm differ) (fun _ => pids) tasks, rfl, ?_⟩
@@ -976,6 +1009,14 @@ private theorem Config.step_changed {state state' : State} {tasks : List (PID ×
       obtain ⟨rfl, rfl⟩ := step
       exact ⟨_, ⟨rfl, rfl⟩, .inr ⟨_, _, _, _, changed.fire unseen timer', within.fire timer',
         within'.fire timer', rfl, rfl, rfl⟩⟩
+  | commit =>
+    simp only [Config.stepOf, changed.staged_eq] at step ⊢
+    cases staged : state.staged with
+    | none => simp [staged] at step
+    | some update =>
+      simp only [staged, Option.map_some, Option.some.injEq, Prod.mk.injEq] at step ⊢
+      obtain ⟨rfl, rfl⟩ := step
+      exact ⟨_, ⟨rfl, rfl⟩, .inr ⟨_, _, _, _, changed.commit, within.commit, within'.commit, rfl, rfl, rfl⟩⟩
 
 /-! ### Normalizing a live record again -/
 
@@ -1157,14 +1198,15 @@ private theorem Hidden.unseen {processId : PID} {ok : ProcessState → Prop} {ch
 /-- Sorted states with the same records, timers and elapsed times are equal. -/
 private theorem State.ext_records {state state' : State} (sorted : state.Sorted) (sorted' : state'.Sorted)
     (records : ∀ processId, state'.record processId = state.record processId)
-    (timers : state'.timers = state.timers) (elapsed : state'.elapsed = state.elapsed) : state' = state := by
+    (timers : state'.timers = state.timers) (elapsed : state'.elapsed = state.elapsed)
+    (shared : state'.shared = state.shared) : state' = state := by
   have processes : state'.processes = state.processes :=
     Sorted.ext sorted' sorted fun processId => by
       have := records processId; simpa [State.record, Kernel.lookup_eq] using this
   cases state; cases state'
-  simp only at processes timers elapsed
+  simp only [State.shared, Prod.mk.injEq] at processes timers elapsed shared
   simp only [State.mk.injEq]
-  exact ⟨processes, timers, elapsed⟩
+  exact ⟨processes, timers, shared.1, shared.2, elapsed⟩
 
 private theorem ProcessState.finished_live {process : ProcessState} (live : process.exiting = none) :
     process.finished = false := by
@@ -1218,7 +1260,7 @@ private theorem State.changed_forced {state : State} {processId : PID} {process 
     by_cases same : other = processId
     · subst same; simp [found, live, live']
     · simp [same]
-  refine ⟨fun other differ => ?_, ?_, rfl, rfl⟩
+  refine ⟨fun other differ => ?_, ?_, rfl, rfl, rfl⟩
   · rw [State.record_normalize' sorted', gone, State.record_set, ite_eq_right differ]
     conv => rhs; rw [← normalized]
     rw [State.record_normalize' sorted]
@@ -1240,7 +1282,7 @@ private theorem State.Changes.normalize_same {raw raw' : State} {processId : PID
   · rw [found] at missing; cases missing
   rw [found] at found'; cases found'
   refine State.ext_records (Sorted.normalize sorted) (Sorted.normalize sorted') (fun other => ?_)
-    changed.2.2.1 changed.2.2.2
+    changed.2.2.1 changed.2.2.2.1 changed.2.2.2.2
   rw [State.record_normalize' sorted', State.record_normalize' sorted, changed.gone unseen]
   by_cases equal : other = processId
   · subst equal
@@ -1276,7 +1318,7 @@ private theorem State.forced_close {raw raw' : State} {processId : PID} {process
       simp only [State.gone, State.alive] at this
       exact this
   refine (State.ext_records (Sorted.normalize sorted') (Sorted.normalize sortedSet) (fun other => ?_)
-    changed.2.2.1.symm changed.2.2.2.symm)
+    changed.2.2.1.symm changed.2.2.2.1.symm changed.2.2.2.2.symm)
   rw [State.record_normalize' sortedSet, gone, State.record_normalize' sorted', changed.gone unseen]
   by_cases equal : other = processId
   · subst equal
@@ -1296,12 +1338,12 @@ private theorem State.set_self {state : State} {processId : PID} {process : Proc
   State.ext_records sorted (Sorted.insertRecord sorted _ _) (fun other => by
     rw [State.record_set]; split
     · rename_i same; subst same; exact found.symm
-    · rfl) rfl rfl
+    · rfl) rfl rfl rfl
 
 private theorem State.set_set {state : State} {processId : PID} (sorted : state.Sorted)
     (first second : ProcessState) : (state.set processId first).set processId second = state.set processId second :=
   State.ext_records (Sorted.insertRecord sorted _ _) (Sorted.insertRecord (Sorted.insertRecord sorted _ _) _ _)
-    (fun other => by simp only [State.record_set]; split <;> rfl) rfl rfl
+    (fun other => by simp only [State.record_set]; split <;> rfl) rfl rfl rfl
 
 private theorem State.append_set {state : State} {processId : PID} (sorted : state.Sorted)
     (process : ProcessState) (message : Term) :
@@ -1809,7 +1851,7 @@ private theorem normalize_ended {change : ProcessState → ProcessState}
       normRecord gone processId (change process) = normRecord gone processId process)
     (sorted : state.Sorted) (sorted' : state'.Sorted) : state'.normalize = state.normalize := by
   refine State.ext_records (Sorted.normalize sorted) (Sorted.normalize sorted') (fun other => ?_)
-    changed.2.2.1 changed.2.2.2
+    changed.2.2.1 changed.2.2.2.1 changed.2.2.2.2
   rw [State.record_normalize' sorted', State.record_normalize' sorted, changed.gone unseen]
   by_cases equal : other = processId
   · subst equal
@@ -1837,7 +1879,7 @@ private theorem terminateSelf
     have same : state' = state := State.ext_records before before' (fun other => by
       by_cases equal : other = processId
       · subst equal; rw [missing, missing']
-      · exact changed.record_other equal) changed.2.2.1 changed.2.2.2
+      · exact changed.record_other equal) changed.2.2.1 changed.2.2.2.1 changed.2.2.2.2
     rw [same]
   have processOf : state.process processId = process := by simp [State.process, found]
   have processOf' : state'.process processId = ownChange pdict refCounter mailbox process := by
@@ -1847,7 +1889,7 @@ private theorem terminateSelf
       (state'.terminate processId reason) := by
     unfold State.terminate
     simp only [processOf, processOf', changed.2.2.1]
-    refine State.Changes.foldl (fun target changed' => ?_) _ ⟨fun other differ => ?_, ?_, rfl, changed.2.2.2⟩
+    refine State.Changes.foldl (fun target changed' => ?_) _ ⟨fun other differ => ?_, ?_, rfl, changed.2.2.2.1, changed.2.2.2.2⟩
     · rw [changed'.eagerLink unseen]
       split
       · refine (State.Changed.modifyRelated changed' fun {first second} related => ?_).linkExit unseen _ _ _
@@ -2044,8 +2086,15 @@ private theorem requestSelf
   | cancelTimer reference =>
     simp only [State.request, changed.2.2.1, processOf, processOf', queueChange]
     split
-    · exact ⟨by rw [changed.2.2.2], (changed.timers _).queue_modify _ (fun _ => ⟨rfl, rfl⟩) (fun _ _ => rfl)⟩
+    · exact ⟨by rw [changed.2.2.2.1], (changed.timers _).queue_modify _ (fun _ => ⟨rfl, rfl⟩) (fun _ _ => rfl)⟩
     · exact ⟨rfl, changed⟩
+  | persistentGet key =>
+    simp only [State.request, changed.persistent]
+    exact ⟨rfl, changed⟩
+  | persistentPut | persistentErase | persistentAwait =>
+    simp only [State.request, State.stage, changed.persistent, changed.staged_eq]
+    repeat' split
+    all_goals first | trivial | exact ⟨rfl, changed⟩ | exact ⟨rfl, changed.stage _⟩
 
 /-- A process spawns a child, after handling its oldest signal changed its queue, mailbox and links. -/
 private theorem spawnSelf
@@ -2117,7 +2166,7 @@ private theorem terminateQueue
   · have same : state' = state := State.ext_records before before' (fun other => by
       by_cases equal : other = processId
       · subst equal; rw [missing, missing']
-      · exact changed.record_other equal) changed.2.2.1 changed.2.2.2
+      · exact changed.record_other equal) changed.2.2.1 changed.2.2.2.1 changed.2.2.2.2
     rw [same]
   have processOf : state.process processId = process := by simp [State.process, found]
   have processOf' : state'.process processId = queueChange queue mailbox links process := by
@@ -2129,7 +2178,7 @@ private theorem terminateQueue
     obtain ⟨⟨rest, queued⟩, -⟩ := queued
     rw [queued, requests _ _ fun entry kept => by
       obtain ⟨_, signal⟩ := entry; cases signal <;> simp_all]
-    refine State.Changes.foldl (fun target changed' => ?_) _ ⟨fun other differ => ?_, ?_, rfl, changed.2.2.2⟩
+    refine State.Changes.foldl (fun target changed' => ?_) _ ⟨fun other differ => ?_, ?_, rfl, changed.2.2.2.1, changed.2.2.2.2⟩
     · rw [changed'.eagerLink unseen]
       split
       · refine (State.Changed.modifyRelated changed' fun {first second} related => ?_).linkExit unseen _ _ _
@@ -2268,6 +2317,7 @@ private theorem ownSelf
          simp only [List.head?_cons, Option.some.injEq] at head
          subst head
          exact ⟨_, rfl, rfl, rfl, rfl, rfl, .inl ⟨answered, _, _, rfl⟩⟩)
+      | simp at head
 
 end State.Changes
 
@@ -2287,8 +2337,8 @@ private theorem Config.forced_own {state : State} {tasks : List (PID × Task α)
       (transition.state.process processId).refCounter == (state.process processId).refCounter) := by
   simp only [Config.taggedSteps, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
     List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.mk.injEq] at mem
-  rcases mem with (((⟨⟨before, ⟨other, task'⟩, after⟩, split, own | handle⟩ | ⟨⟨other, _⟩, -, link | phase⟩) |
-    ⟨⟨other, _⟩, -, unpark⟩) | ⟨timer, firing, key, -⟩)
+  rcases mem with ((((⟨⟨before, ⟨other, task'⟩, after⟩, split, own | handle⟩ | ⟨⟨other, _⟩, -, link | phase⟩) |
+    ⟨⟨other, _⟩, -, unpark⟩) | ⟨timer, firing, key, -⟩) | ⟨update, -, key, -⟩)
   · obtain ⟨transition', mem, key, -, -, rfl⟩ := own
     cases key
     have found := lookup_of_splitAt (splitAt_of_mem pairwise split)
@@ -2307,6 +2357,7 @@ private theorem Config.forced_own {state : State} {tasks : List (PID × Task α)
   · simp only [Option.map_eq_some_iff, Prod.mk.injEq] at unpark
     obtain ⟨_, _, key, -⟩ := unpark; cases key
   · cases key
+  · cases key
 
 private theorem Config.forced_handle {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {processId : PID} {event : Event} {next : Config α} {forced : Bool}
@@ -2318,8 +2369,8 @@ private theorem Config.forced_handle {state : State} {tasks : List (PID × Task 
       | [] => false := by
   simp only [Config.taggedSteps, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
     List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.mk.injEq] at mem
-  rcases mem with (((⟨⟨before, ⟨other, task'⟩, after⟩, split, own | handle⟩ | ⟨⟨other, _⟩, -, link | phase⟩) |
-    ⟨⟨other, _⟩, -, unpark⟩) | ⟨timer, firing, key, -⟩)
+  rcases mem with ((((⟨⟨before, ⟨other, task'⟩, after⟩, split, own | handle⟩ | ⟨⟨other, _⟩, -, link | phase⟩) |
+    ⟨⟨other, _⟩, -, unpark⟩) | ⟨timer, firing, key, -⟩) | ⟨update, -, key, -⟩)
   · obtain ⟨transition, -, key, -⟩ := own; cases key
   · obtain ⟨transition, -, key, -, -, rfl⟩ := handle
     cases key
@@ -2336,6 +2387,7 @@ private theorem Config.forced_handle {state : State} {tasks : List (PID × Task 
   · simp only [Option.map_eq_some_iff, Prod.mk.injEq] at unpark
     obtain ⟨_, _, key, -⟩ := unpark; cases key
   · cases key
+  · cases key
 
 private theorem Config.forced_phase {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {processId : PID} {event : Event} {next : Config α} {forced : Bool}
@@ -2343,8 +2395,8 @@ private theorem Config.forced_phase {state : State} {tasks : List (PID × Task �
     forced = state.dropsDown processId := by
   simp only [Config.taggedSteps, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
     List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.mk.injEq] at mem
-  rcases mem with (((⟨⟨before, ⟨other, task'⟩, after⟩, split, own | handle⟩ | ⟨⟨other, _⟩, -, link | phase⟩) |
-    ⟨⟨other, _⟩, -, unpark⟩) | ⟨timer, firing, key, -⟩)
+  rcases mem with ((((⟨⟨before, ⟨other, task'⟩, after⟩, split, own | handle⟩ | ⟨⟨other, _⟩, -, link | phase⟩) |
+    ⟨⟨other, _⟩, -, unpark⟩) | ⟨timer, firing, key, -⟩) | ⟨update, -, key, -⟩)
   · obtain ⟨transition, -, key, -⟩ := own; cases key
   · obtain ⟨transition, -, key, -⟩ := handle; cases key
   · obtain ⟨target, -, found⟩ := link
@@ -2356,6 +2408,7 @@ private theorem Config.forced_phase {state : State} {tasks : List (PID × Task �
     · simp at phase
   · simp only [Option.map_eq_some_iff, Prod.mk.injEq] at unpark
     obtain ⟨_, _, key, -⟩ := unpark; cases key
+  · cases key
   · cases key
 
 /-! ### Forced changes against steps of other keys -/
@@ -2426,7 +2479,7 @@ private theorem Config.tagged_own_forced {state : State} {tasks : List (PID × T
     (isLocal : transition.event.local = true)
     (counter : (transition.state.process processId).refCounter = (state.process processId).refCounter) :
     (Key.own processId, transition.event, if transition.exhausted then
-        Config.running { transition.state with processes := [], timers := [] } [] none true
+        Config.running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true
       else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
         (transition.finished.orElse fun _ => finished) false, true) ∈
       (Config.running state tasks finished false).taggedSteps := by
@@ -2567,8 +2620,8 @@ private theorem Config.forced_own_other {elapsed : PID → Nat → Nat} {config 
     simp [Event.local] at isLocal
   | request query next₀ =>
     simp only [Task.own] at head
-    split at head <;> simp only [List.head?_cons, Option.some.injEq] at head <;> subst head <;>
-      simp [Event.local] at isLocal
+    split at head <;> simp only [List.head?_cons, List.head?_nil, Option.some.injEq, reduceCtorEq] at head <;>
+      subst head <;> simp [Event.local] at isLocal
 
 private theorem Config.tagged_handle_forced {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
@@ -2576,7 +2629,7 @@ private theorem Config.tagged_handle_forced {state : State} {tasks : List (PID �
     (lookup : Kernel.lookup processId tasks = some task) (queue : (state.process processId).queue = entry :: rest)
     (head : (task.handle state processId).head? = some transition) (flag : task.forcedHead state processId entry = true) :
     (Key.handle processId, transition.event, if transition.exhausted then
-        Config.running { transition.state with processes := [], timers := [] } [] none true
+        Config.running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true
       else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
         (transition.finished.orElse fun _ => finished) false, true) ∈
       (Config.running state tasks finished false).taggedSteps := by
@@ -2985,12 +3038,12 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
   -- A reply or marker only leaves the queue, resuming the process if it waits for it.
   have quietCase : (entry.signal matches .reply _ | .flush) = true → ((∃ absorbed,
       (if transition.exhausted then
-          Config.running { transition.state with processes := [], timers := [] } [] none true
+          Config.running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true
         else Config.running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
           (transition.finished.orElse fun _ => finished) false).stepOf key' = some (absorbed, middle)) ∨
       ∃ key'' event'' last other, (key'', event'', last, true) ∈ middle.taggedSteps ∧
         (if transition.exhausted then
-            Config.running { transition.state with processes := [], timers := [] } [] none true
+            Config.running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true
           else Config.running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
             (transition.finished.orElse fun _ => finished) false).stepOf key' = some (other, last)) := by
     intro quiet
@@ -3211,7 +3264,7 @@ private theorem Config.own_handle_square {elapsed : PID → Nat → Nat} {state 
   have changed : state.Changed processId (Same (OwnOk ok process.pdict process.refCounter) change)
       (state.set processId (change process)) :=
     ⟨fun other differ => by rw [State.record_set, ite_eq_right differ],
-      by rw [State.record_set, ite_eq_left rfl, found]; exact .some ⟨⟨ok', rfl, rfl⟩, rfl⟩, rfl, rfl⟩
+      by rw [State.record_set, ite_eq_left rfl, found]; exact .some ⟨⟨ok', rfl, rfl⟩, rfl⟩, rfl, rfl, rfl⟩
   obtain ⟨task₀, transition, lookup₀, head, rfl⟩ := Config.stepOf_handle step'
   rw [lookup] at lookup₀; cases lookup₀
   have processOf : state.process processId = process := by simp [State.process, found]
@@ -3234,7 +3287,7 @@ private theorem Config.own_handle_square {elapsed : PID → Nat → Nat} {state 
       some transition' → (Config.running (state.set processId (change process))
         (rewriteTask processId (fun _ => [(processId, task')]) tasks) finished false).stepOf (.handle processId) =
         some (transition'.event, if transition'.exhausted then
-            Config.running { transition'.state with processes := [], timers := [] } [] none true
+            Config.running { transition'.state with processes := [], timers := [], table := [], staged := none } [] none true
           else .running transition'.state.normalize
             (rewriteTask processId (fun _ => transition'.tasks) (rewriteTask processId (fun _ => [(processId, task')]) tasks))
             (transition'.finished.orElse fun _ => finished) false) :=
@@ -3319,7 +3372,7 @@ private theorem State.normalize_set_clean {state : State} {processId : PID} {pro
     by_cases same : other = processId
     · subst same; simp [found, live, live']
     · simp [same]
-  refine State.ext_records sorted' (Sorted.normalize sorted') (fun other => ?_) rfl rfl
+  refine State.ext_records sorted' (Sorted.normalize sorted') (fun other => ?_) rfl rfl rfl
   rw [State.record_normalize' sorted', gone, State.record_set]
   by_cases same : other = processId
   · subst same
@@ -3491,8 +3544,8 @@ private theorem Config.forced_own_handle {elapsed : PID → Nat → Nat} {config
     simp [Event.local] at isLocal
   | request query next₀ =>
     simp only [Task.own] at head
-    split at head <;> simp only [List.head?_cons, Option.some.injEq] at head <;> subst head <;>
-      simp [Event.local] at isLocal
+    split at head <;> simp only [List.head?_cons, List.head?_nil, Option.some.injEq, reduceCtorEq] at head <;>
+      subst head <;> simp [Event.local] at isLocal
 
 /-! ### Links with distinct processes
 
@@ -3689,9 +3742,11 @@ private theorem spawnWith (distinct : state.Distinct) (processId : PID) (options
   all_goals first | exact distinct | exact parent | simp
 
 private theorem request (distinct : state.Distinct) (processId : PID) {β : Type} (next : Term → Result β)
-    (query : Request) : (state.request processId next query).state.Distinct := by
+    (query : Request) : ((state.request processId next query).state state).Distinct := by
   have allocated := distinct.allocated processId
   cases query with
+  | persistentGet _ | persistentPut _ _ _ | persistentErase _ | persistentAwait =>
+    exact State.request_persistent_of (fun _ => distinct) (by rfl)
   | monitor target alias =>
     simp only [State.request]
     generalize state.allocate processId = pair at allocated ⊢
@@ -3825,6 +3880,9 @@ private theorem phase (distinct : state.Distinct) {processId : PID} {next : Stat
   · refine (distinct.set ?_).answer _ _
     simpa using distinct _ _ (by assumption)
 
+private theorem commit (distinct : state.Distinct) : state.commit.Distinct := by
+  unfold State.commit; split <;> exact distinct
+
 private theorem fire (distinct : state.Distinct) (timer : Timer) : (state.fire timer).Distinct :=
   (distinct.timers _).enqueue _ _ _
 
@@ -3875,7 +3933,7 @@ private theorem Task.own_distinct {state : State} {processId : PID} {task : Task
   | request query next =>
     have requested := distinct.request processId next query
     simp only [Task.own] at mem
-    split at mem <;> rename_i answer <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+    split at mem <;> rename_i answer <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;>
       simp only [answer, Answer.state] at requested <;> exact requested
 
 private theorem Task.handle_distinct {state : State} {processId : PID} {task : Task α} {transition : Transition α}
@@ -4102,13 +4160,15 @@ private theorem spawnWith (unborn : state.Unborn) {processId : PID} {process : P
   all_goals exact started
 
 private theorem request (unborn : state.Unborn) (processId : PID) {β : Type} (next : Term → Result β)
-    (query : Request) : (state.request processId next query).state.Unborn := by
+    (query : Request) : ((state.request processId next query).state state).Unborn := by
   have allocated := unborn.allocated processId
   have keep : ∀ {state : State} {processId : PID} {change : ProcessState → ProcessState}, state.Unborn →
       (∀ process, (change process).children = process.children ∧ (change process).exiting = process.exiting) →
       (state.modify processId change).Unborn :=
     fun unborn keeps => unborn.modify fun process => ⟨(keeps process).1, fun live => (keeps process).2 ▸ live⟩
   cases query with
+  | persistentGet _ | persistentPut _ _ _ | persistentErase _ | persistentAwait =>
+    exact State.request_persistent_of (fun _ => unborn) (by rfl)
   | monitor target alias =>
     simp only [State.request]
     generalize state.allocate processId = pair at allocated ⊢
@@ -4189,8 +4249,9 @@ private theorem Config.Distinct.step {elapsed : PID → Nat → Nat} {config nex
     case true => simp [Step, Config.successors] at step
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
       List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists] at step
-    rcases step with ((⟨before, processId, task, after, -, transition, possible, same⟩ |
-      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩
+    rcases step with (((⟨before, processId, task, after, -, transition, possible, same⟩ |
+      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩) |
+      ⟨update, -, committed⟩
     · simp only [Prod.mk.injEq] at same
       obtain ⟨-, rfl⟩ := same
       simp only [Task.transitions, Kernel.append_eq, List.mem_append] at possible
@@ -4224,6 +4285,9 @@ private theorem Config.Distinct.step {elapsed : PID → Nat → Nat} {config nex
     · simp only [Prod.mk.injEq] at fired
       obtain ⟨-, rfl⟩ := fired
       exact (distinct.fire _).normalize (within.fire _).1
+    · simp only [Prod.mk.injEq] at committed
+      obtain ⟨-, rfl⟩ := committed
+      exact distinct.commit.normalize within.commit.1
 
 namespace State.Unborn
 
@@ -4295,6 +4359,9 @@ private theorem phase (unborn : state.Unborn) {processId : PID} {next : State}
     exact unborn.set (by assumption) (by rfl) fun live => by simp_all
   · refine State.Unborn.answer ?_ _ _
     exact unborn.set (by assumption) (by rfl) fun live => by simp_all
+
+private theorem commit (unborn : state.Unborn) : state.commit.Unborn := by
+  unfold State.commit; split <;> exact unborn
 
 private theorem fire (unborn : state.Unborn) (timer : Timer) : (state.fire timer).Unborn :=
   (unborn.timers _).enqueue _ _ _
@@ -4423,7 +4490,7 @@ private theorem Task.own_unborn {state : State} {processId : PID} {task : Task �
   | request query next =>
     have requested := unborn.request processId next query
     simp only [Task.own] at mem
-    split at mem <;> rename_i answer <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+    split at mem <;> rename_i answer <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;>
       simp only [answer, Answer.state] at requested <;> exact requested
 
 private theorem Task.handle_unborn {state : State} {processId : PID} {task : Task α} {transition : Transition α}
@@ -4489,8 +4556,9 @@ private theorem Config.Unborn.step {elapsed : PID → Nat → Nat} {config next 
     case true => simp [Step, Config.successors] at step
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
       List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists] at step
-    rcases step with ((⟨before, processId, task, after, split, transition, possible, same⟩ |
-      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩
+    rcases step with (((⟨before, processId, task, after, split, transition, possible, same⟩ |
+      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩) |
+      ⟨update, -, committed⟩
     · simp only [Prod.mk.injEq] at same
       obtain ⟨-, rfl⟩ := same
       have alive : state.alive processId = true :=
@@ -4526,6 +4594,9 @@ private theorem Config.Unborn.step {elapsed : PID → Nat → Nat} {config next 
     · simp only [Prod.mk.injEq] at fired
       obtain ⟨-, rfl⟩ := fired
       exact (unborn.fire _).normalize (within.fire _).1
+    · simp only [Prod.mk.injEq] at committed
+      obtain ⟨-, rfl⟩ := committed
+      exact unborn.commit.normalize within.commit.1
 
 /-! ### Dropped `DOWN`s stay dropped
 
@@ -4718,10 +4789,12 @@ private theorem allocated_fresh (covers : state.Covers watcher reference count) 
 private theorem request (covers : state.Covers watcher reference count) (shape : reference = watcher ++ [count])
     {processId : PID} {process : ProcessState} (found : state.record processId = some process)
     (live : process.exiting = none) {β : Type} (next : Term → Result β) (query : Request) :
-    (state.request processId next query).state.Covers watcher reference count := by
+    ((state.request processId next query).state state).Covers watcher reference count := by
   have allocated := covers.allocated processId
   have fresh := covers.allocated_fresh shape found live
   cases query with
+  | persistentGet _ | persistentPut _ _ _ | persistentErase _ | persistentAwait =>
+    exact State.request_persistent_of (fun _ => covers) (by rfl)
   | monitor target alias =>
     simp only [State.request]
     split
@@ -4854,6 +4927,9 @@ private theorem phase (covers : state.Covers watcher reference count) {processId
   · refine State.Covers.answer ?_ _ _
     exact covers.set (by assumption) fun live => by simp_all
 
+private theorem commit (covers : state.Covers watcher reference count) : state.commit.Covers watcher reference count := by
+  unfold State.commit; split <;> exact covers
+
 private theorem fire (covers : state.Covers watcher reference count) (timer : Timer) :
     (state.fire timer).Covers watcher reference count :=
   (covers.timers _).enqueue _ _ _
@@ -4915,7 +4991,7 @@ private theorem Task.own_covers {state : State} {processId watcher : PID} {refer
   | request query next =>
     have requested := covers.request shape found live next query
     simp only [Task.own] at mem
-    split at mem <;> rename_i answer <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+    split at mem <;> rename_i answer <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;>
       simp only [answer, Answer.state] at requested <;> exact requested
 
 private theorem Task.handle_covers {state : State} {processId watcher : PID} {reference : List Nat} {count : Nat}
@@ -4994,6 +5070,10 @@ private theorem Config.covers_step {elapsed : PID → Nat → Nat} {state : Stat
     simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq, Config.running.injEq] at step
     obtain ⟨timer, -, -, rfl, -⟩ := step
     exact (covers.fire _).normalize (within.fire _).1
+  | commit =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq, Config.running.injEq] at step
+    obtain ⟨update, -, -, rfl, -⟩ := step
+    exact covers.commit.normalize within.commit.1
 
 private theorem QueueChange.hidden {queue : List Entry → List Entry} {mailbox : List Term → List Term}
     {links : List (PID × Option Nat) → List (PID × Option Nat)} {entry : Entry} (change : QueueChange queue mailbox links)
@@ -5030,7 +5110,7 @@ private theorem lookup_rewriteTask_head {processId : PID} {task : Task α} {more
 
 /-- Clearing the records and timers of states with the same elapsed times. -/
 private theorem State.cleared {state state' : State} (elapsed : state'.elapsed = state.elapsed) :
-    ({ state' with processes := [], timers := [] } : State) = { state with processes := [], timers := [] } := by
+    ({ state' with processes := [], timers := [], table := [], staged := none } : State) = { state with processes := [], timers := [], table := [], staged := none } := by
   cases state; cases state'; simp_all
 
 /-- A forced handling of the oldest signal, a change of the queue, mailbox and
@@ -5087,7 +5167,7 @@ private theorem Config.handle_own_square {elapsed : PID → Nat → Nat} {state 
   let change' := queueChange queue mailbox links
   have changed : state.Changed processId (Same (Queued entry) change') (state.set processId (change' process)) :=
     ⟨fun other differ => by rw [State.record_set, ite_eq_right differ],
-      by rw [State.record_set, ite_eq_left rfl, found]; exact .some ⟨⟨⟨rest, queued⟩, bound⟩, rfl⟩, rfl, rfl⟩
+      by rw [State.record_set, ite_eq_left rfl, found]; exact .some ⟨⟨⟨rest, queued⟩, bound⟩, rfl⟩, rfl, rfl, rfl⟩
   have unseen := change.unseen linking
   have within' : (state.set processId (change' process)).Within elapsed := within.set _ _
   have fresh : Kernel.append processId [process.children + 1] ≠ processId := by
@@ -5532,8 +5612,8 @@ private theorem Config.forced_keys {config : Config α} {key : Key} {event : Eve
   | .running state tasks finished false =>
   simp only [Config.taggedSteps, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
     List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.mk.injEq] at forced
-  rcases forced with (((⟨⟨before, ⟨other, task⟩, after⟩, split, own | handle⟩ | ⟨⟨other, _⟩, -, link | phase⟩) |
-    ⟨⟨other, _⟩, -, unpark⟩) | ⟨timer, firing, key, -, -, flag⟩)
+  rcases forced with ((((⟨⟨before, ⟨other, task⟩, after⟩, split, own | handle⟩ | ⟨⟨other, _⟩, -, link | phase⟩) |
+    ⟨⟨other, _⟩, -, unpark⟩) | ⟨timer, firing, key, -, -, flag⟩) | ⟨update, -, key, -, -, flag⟩)
   · obtain ⟨transition, -, rfl, -⟩ := own; exact .inl ⟨_, rfl⟩
   · obtain ⟨transition, -, rfl, -⟩ := handle; exact .inr (.inl ⟨_, rfl⟩)
   · obtain ⟨target, -, found⟩ := link
@@ -5545,6 +5625,7 @@ private theorem Config.forced_keys {config : Config α} {key : Key} {event : Eve
     · simp at phase
   · simp only [Option.map_eq_some_iff, Prod.mk.injEq] at unpark
     obtain ⟨_, _, -, -, -, flag⟩ := unpark; cases flag
+  · cases flag
   · cases flag
 
 /-! ### Forced phases against steps of other keys
@@ -5601,7 +5682,7 @@ private theorem State.normalize_push_inert {state : State} (sorted : state.Sorte
     · simp [State.gone, State.alive, State.record_set, same]
   have sorted' : (state.set processId { process with queue := Kernel.append process.queue [entry] }).Sorted :=
     Lynx.Concurrent.Sorted.insertRecord sorted processId _
-  refine State.ext_records (Sorted.normalize sorted) (Sorted.normalize sorted') (fun other => ?_) rfl rfl
+  refine State.ext_records (Sorted.normalize sorted) (Sorted.normalize sorted') (fun other => ?_) rfl rfl rfl
   rw [State.record_normalize' sorted', State.record_normalize' sorted, gone, State.record_set]
   split
   · rename_i same; subst same
@@ -5687,7 +5768,7 @@ private theorem Config.tagged_phase {state : State} {tasks : List (PID × Task �
     (Key.phase processId, Event.phase processId, Config.running next.normalize tasks finished false,
       state.dropsDown processId) ∈ (Config.running state tasks finished false).taggedSteps := by
   simp only [Config.taggedSteps, Kernel.append_eq, Kernel.flatMap_eq, List.mem_append, List.mem_flatMap]
-  refine .inl (.inl (.inr ⟨(processId, process), ?_, ?_⟩))
+  refine .inl (.inl (.inl (.inr ⟨(processId, process), ?_, ?_⟩)))
   · exact mem_of_lookup found
   · simp [phase]
 
@@ -5824,7 +5905,7 @@ private theorem Config.forced_phase_square {elapsed : PID → Nat → Nat} {conf
     eagerExit := by rintro _ _ source ⟨rfl, rfl⟩ live; simp [liveRecord, ended] at live
     unpark := by rintro _ _ ⟨rfl, rfl⟩ unparked; simp [parked] at unparked }
   have changed : state.Changes processId related (state.set processId (popDown process)).normalize := by
-    refine ⟨fun other differ => ?_, ⟨record, ?_⟩, rfl, rfl⟩
+    refine ⟨fun other differ => ?_, ⟨record, ?_⟩, rfl, rfl, rfl⟩
     · rw [records₀, ite_eq_right differ]
     · rw [records₀, ite_eq_left rfl]
   have missing : Kernel.lookup processId tasks = none := by
@@ -5859,7 +5940,7 @@ private theorem Config.forced_phase_square {elapsed : PID → Nat → Nat} {conf
     exact .inl ⟨event', by rw [← popped] at stepped; exact stepped⟩
   rw [rewriteTask_missing missing, rewriteTask_missing (lookup₁.trans missing), ← popped] at stepped
   have goneRaw : raw'.gone = raw.gone := changedRaw.gone unseen
-  obtain ⟨othersRaw, ⟨foundRaw, foundRaw'⟩, timersRaw, elapsedRaw⟩ := changedRaw
+  obtain ⟨othersRaw, ⟨foundRaw, foundRaw'⟩, timersRaw, elapsedRaw, sharedRaw⟩ := changedRaw
   have normalizedRecords : ∀ other, other ≠ processId → raw'.normalize.record other = raw.normalize.record other := by
     intro other differ'
     rw [State.record_normalize' withinRaw'.1, State.record_normalize' withinRaw.1, goneRaw, othersRaw other differ']
@@ -5885,7 +5966,7 @@ private theorem Config.forced_phase_square {elapsed : PID → Nat → Nat} {conf
     rw [stepped]
     congr 3
     refine State.ext_records (Sorted.normalize withinRaw.1) (Sorted.normalize withinRaw'.1) (fun other => ?_)
-      timersRaw elapsedRaw
+      timersRaw elapsedRaw sharedRaw
     by_cases same : other = processId
     · subst same
       rw [afterRaw, State.record_normalize' withinRaw.1, foundRaw, Option.map_some,
@@ -5946,6 +6027,7 @@ private theorem Config.forced_phase_square {elapsed : PID → Nat → Nat} {conf
       (normRecord_popDown_kept ended rfl watcherGone).symm
     refine State.ext_records (Sorted.normalize sortedPopped) (Sorted.normalize withinRaw'.1) (fun other => ?_)
       (by simp [State.normalize_eq, State.set, timersRaw]) (by simp [State.normalize_eq, State.set, elapsedRaw])
+      (by simpa [State.normalize_eq, State.set, State.shared] using sharedRaw)
     rw [State.record_normalize' sortedPopped, gonePopped, State.record_set]
     split
     · rename_i same; subst same

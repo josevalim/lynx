@@ -71,17 +71,25 @@ attribute [local instance high] Kernel.pidBEq
   first.reference == second.reference && first.destination == second.destination &&
     first.message.identical second.message && first.duration == second.duration
 
+/-- Whether two persistent term updates are the same. -/
+@[expose] def Update.identical (first second : Update) : Bool :=
+  first.owner == second.owner && first.key.identical second.key &&
+    optionIdentical Term.identical first.value second.value
+
 /-- Whether two states are the same, except for the time elapsed, which no step changes. -/
 @[expose] def State.identical (first second : State) : Bool :=
   identicalLists (fun record record' => record.1 == record'.1 && record.2.identical record'.2)
     first.processes second.processes &&
-  identicalLists Timer.identical first.timers second.timers
+  identicalLists Timer.identical first.timers second.timers &&
+  Term.identicalEntries first.table second.table &&
+  optionIdentical Update.identical first.staged second.staged
 
 /-! ### Keys -/
 
 /-- Which step of a configuration: a process's own step, its handling of the
 oldest signal it queued, a phase of a process that ended signaling one of its
-links or else its next phase, a parked monitor signal sent, or a timer firing. -/
+links or else its next phase, a parked monitor signal sent, a timer firing, or
+the staged persistent term update becoming visible. -/
 inductive Key where
   | own (processId : PID)
   | handle (processId : PID)
@@ -89,6 +97,7 @@ inductive Key where
   | phase (processId : PID)
   | unpark (processId : PID)
   | fire (reference : List Nat)
+  | commit
 
 /-- Compare keys in evaluation. -/
 @[expose] def Key.beq : Key → Key → Bool
@@ -96,6 +105,7 @@ inductive Key where
   | .phase processId, .phase processId' | .unpark processId, .unpark processId' => processId == processId'
   | .link processId target, .link processId' target' => processId == processId' && target == target'
   | .fire reference, .fire reference' => reference == reference'
+  | .commit, .commit => true
   | _, _ => false
 
 instance : BEq Key := ⟨Key.beq⟩
@@ -162,7 +172,7 @@ inert, or receiving a message already handled, handling a signal that
   | .start .. => []
   | .running _ _ _ true => []
   | .running state tasks finished false =>
-      Kernel.append (Kernel.append (Kernel.append
+      Kernel.append (Kernel.append (Kernel.append (Kernel.append
         (Kernel.flatMap (fun (before, (processId, task), after) =>
           Kernel.append
             (Kernel.map (fun transition => (Key.own processId, transition.event,
@@ -193,7 +203,9 @@ inert, or receiving a message already handled, handling a signal that
           state.processes))
         (Kernel.map (fun timer =>
           (Key.fire timer.reference, Event.fire timer.reference,
-            .running (state.fire timer).normalize tasks finished false, false)) state.firing)
+            .running (state.fire timer).normalize tasks finished false, false)) state.firing))
+        (Kernel.map (fun update => (Key.commit, Event.commit update.owner,
+          .running state.commit.normalize tasks finished false, false)) state.staged.toList)
 
 /-- Where a process is in a list of tasks: the tasks before it, its own, and those after. -/
 @[expose] def splitAt (processId : PID) : List (PID × Task α) →
@@ -226,6 +238,8 @@ inert, or receiving a message already handled, handling a signal that
   | .running state tasks finished false, .fire reference =>
       (Kernel.find? (·.reference == reference) state.firing).map fun timer =>
         (Event.fire reference, .running (state.fire timer).normalize tasks finished false)
+  | .running state tasks finished false, .commit =>
+      state.staged.map fun update => (Event.commit update.owner, .running state.commit.normalize tasks finished false)
 
 /-! ### What a process continues with -/
 
@@ -234,11 +248,13 @@ inductive Answer.Shape where
   | reply (value : Term)
   | wait (wait : Wait)
   | continue
+  | suspended
 
 @[expose] def Answer.shape : Answer β → Answer.Shape
   | .reply value _ => .reply value
   | .wait waiting _ => .wait waiting
   | .continue .. => .continue
+  | .suspended => .suspended
 
 /-- Whether two waits are the same. -/
 @[expose] def Wait.identical : Wait → Wait → Bool
@@ -250,7 +266,7 @@ inductive Answer.Shape where
 @[expose] def Answer.Shape.identical : Answer.Shape → Answer.Shape → Bool
   | .reply value, .reply value' => value.identical value'
   | .wait waiting, .wait waiting' => waiting.identical waiting'
-  | .continue, .continue => true
+  | .continue, .continue | .suspended, .suspended => true
   | _, _ => false
 
 /-- What a process's own step reads from the state to continue. -/
@@ -367,6 +383,10 @@ namespace Field
 @[expose] def exiting : Nat := 32768
 /-- Whether the process is alive or has a record. -/
 @[expose] def live : Nat := 65536
+/-- The persistent terms, a field of `clock`, which has no record. -/
+@[expose] def table : Nat := 131072
+/-- The staged persistent term update, a field of `clock`. -/
+@[expose] def staged : Nat := 262144
 end Field
 
 /-- A process, and the fields of its record a step reads and writes. -/
@@ -443,8 +463,13 @@ receiver is live, as a live receiver keeps every signal. -/
   | .startTimer destination _ _ =>
       some ([(processId, Field.refCounter, Field.refCounter), (destination, Field.live, 0)], true)
   | .cancelTimer _ => some ([(processId, Field.cancels, Field.cancels)], true)
+  -- Persistent terms are fields of `clock`: lookups read the table, updates
+  -- read it and stage, and waiting reads what is staged.
+  | .persistentGet _ => some ([(clock, Field.table, 0)], false)
+  | .persistentPut .. | .persistentErase _ => some ([(clock, Field.table ||| Field.staged, Field.staged)], false)
+  | .persistentAwait => some ([(clock, Field.staged, 0)], false)
 
-/-- Every field. -/
+/-- Every field of a record. -/
 @[expose] def Field.all : Nat := 131071
 
 /-- The frames of a process ending: its own record, the link exits that only
@@ -552,6 +577,8 @@ as for a process that does not return. -/
       match Kernel.find? (·.reference == reference) state.firing with
       | some timer => some (state.enqueueFrames clock timer.destination (.message timer.message), true)
       | none => none
+  | .running _ _ _ false, .commit =>
+      some ([(clock, Field.table ||| Field.staged, Field.table ||| Field.staged)], false)
   | _, _ => none
 
 /-- Whether no frame of one step writes what a frame of the other reads or writes. -/
@@ -616,6 +643,7 @@ Other steps are compared by evaluating them. -/
                 state.inertEntry alias.dropLast { source := processId, signal := .aliasMessage alias message })
             | .cancelTimer _ => true
             | .alive _ | .processInfo _ => true
+            | .persistentGet _ | .persistentPut .. | .persistentErase _ | .persistentAwait => true
             | _ => false
           | Result.schedule .. => false
       | _ => false
@@ -638,6 +666,7 @@ Other steps are compared by evaluating them. -/
       | _ => false
   | .running state _ _ false, .unpark processId => state.alive processId && state.parkedMonitored processId
   | .running _ _ _ false, .fire _ => true
+  | .running _ _ _ false, .commit => true
   | _, _ => false
 
 /-- Whether two confined steps touch records apart and do not both use the timers. -/

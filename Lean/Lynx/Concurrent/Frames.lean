@@ -19,11 +19,19 @@ attribute [local instance high] Kernel.pidBEq
 
 /-! ### Effects -/
 
-/-- What a step does to records and timers: the change of each record it
-touches (the first entry of a process counts), and the timers, if it changes them. -/
+/-- The persistent terms and their staged update, which processes share. -/
+private abbrev Shared := List (Term × Term) × Option Update
+
+/-- The part of a state that processes share through persistent terms. -/
+private def State.shared (state : State) : Shared := (state.table, state.staged)
+
+/-- What a step does to records, timers and persistent terms: the change of
+each record it touches (the first entry of a process counts), and the timers
+and persistent terms, if it changes them. -/
 private structure Effect where
   records : List (PID × (Option ProcessState → Option ProcessState)) := []
   timers : Option (List Timer → List Timer) := none
+  shared : Option (Shared → Shared) := none
 
 /-- The first change of a process in a list of changes. -/
 private def changeOf : List (PID × (Option ProcessState → Option ProcessState)) → PID →
@@ -57,7 +65,10 @@ private theorem State.record_put (state : State) (processId other : PID) (record
 private def Effect.apply (effect : Effect) (state : State) : State :=
   (effect.records.map (·.1)).foldl (fun changed processId =>
       changed.put processId (effect.record processId (state.record processId)))
-    { state with timers := (effect.timers.getD id) state.timers }
+    { state with
+      timers := (effect.timers.getD id) state.timers
+      table := ((effect.shared.getD id) state.shared).1
+      staged := ((effect.shared.getD id) state.shared).2 }
 
 private theorem foldl_put_record (change : PID → Option ProcessState) (processId : PID) :
     ∀ (processes : List PID) (start : State),
@@ -91,6 +102,10 @@ private def Effect.andThen (first second : Effect) : Effect where
     | some change, some change' => some (change' ∘ change)
     | some change, none => some change
     | none, change' => change'
+  shared := match first.shared, second.shared with
+    | some change, some change' => some (change' ∘ change)
+    | some change, none => some change
+    | none, change' => change'
 
 private theorem changeOf_append (first second : List (PID × (Option ProcessState → Option ProcessState)))
     (outer : PID → Option ProcessState → Option ProcessState) (processId : PID)
@@ -114,6 +129,11 @@ private theorem Effect.timers_andThen (first second : Effect) :
     ((first.andThen second).timers.getD id) = (second.timers.getD id) ∘ (first.timers.getD id) := by
   simp only [Effect.andThen]
   cases first.timers <;> cases second.timers <;> rfl
+
+private theorem Effect.shared_andThen (first second : Effect) :
+    ((first.andThen second).shared.getD id) = (second.shared.getD id) ∘ (first.shared.getD id) := by
+  simp only [Effect.andThen]
+  cases first.shared <;> cases second.shared <;> rfl
 
 /-- Change the record of a process that has one. -/
 private def Effect.modify (processId : PID) (change : ProcessState → ProcessState) : Effect :=
@@ -433,23 +453,26 @@ private theorem Effect.record_comm {effect effect' : Effect} {frames frames' : L
 
 /-! ### Operations as effects -/
 
-/-- A state is an effect applied to another: the same records by PID and timers. -/
+/-- A state is an effect applied to another: the same records by PID, timers
+and persistent terms. -/
 private def Realizes (effect : Effect) (before after : State) : Prop :=
   (∀ processId, after.record processId = effect.record processId (before.record processId)) ∧
-    after.timers = (effect.timers.getD id) before.timers ∧ after.elapsed = before.elapsed
+    after.timers = (effect.timers.getD id) before.timers ∧ after.elapsed = before.elapsed ∧
+    after.shared = (effect.shared.getD id) before.shared
 
 private theorem Realizes.refl (state : State) : Realizes {} state state :=
-  ⟨fun _ => rfl, rfl, rfl⟩
+  ⟨fun _ => rfl, rfl, rfl, rfl⟩
 
 private theorem Realizes.andThen {first second : Effect} {before middle after : State}
     (one : Realizes first before middle) (two : Realizes second middle after) :
     Realizes (first.andThen second) before after :=
   ⟨fun processId => by rw [two.1, one.1, Effect.record_andThen]; rfl,
-    by rw [two.2.1, one.2.1, Effect.timers_andThen]; rfl, two.2.2.trans one.2.2⟩
+    by rw [two.2.1, one.2.1, Effect.timers_andThen]; rfl, two.2.2.1.trans one.2.2.1,
+    by rw [two.2.2.2, one.2.2.2, Effect.shared_andThen]; rfl⟩
 
 private theorem Realizes.modify (state : State) (processId : PID) (change : ProcessState → ProcessState) :
     Realizes (Effect.modify processId change) state (state.modify processId change) := by
-  refine ⟨fun other => ?_, ?_, ?_⟩
+  refine ⟨fun other => ?_, ?_, ?_, ?_⟩
   · rw [Effect.record_modify]
     unfold State.modify
     split
@@ -462,6 +485,7 @@ private theorem Realizes.modify (state : State) (processId : PID) (change : Proc
       by_cases same : other = processId
       · subst same; simp [missing]
       · simp [same]
+  · unfold State.modify; split <;> rfl
   · unfold State.modify; split <;> rfl
   · unfold State.modify; split <;> rfl
 
@@ -479,7 +503,14 @@ private def Effect.retime (change : List Timer → List Timer) : Effect := { tim
 
 private theorem Realizes.retime (state : State) (change : List Timer → List Timer) :
     Realizes (Effect.retime change) state { state with timers := change state.timers } :=
-  ⟨fun _ => rfl, rfl, rfl⟩
+  ⟨fun _ => rfl, rfl, rfl, rfl⟩
+
+/-- Changing only the persistent terms. -/
+private def Effect.reshare (change : Shared → Shared) : Effect := { shared := some change }
+
+private theorem Realizes.reshare (state : State) (change : Shared → Shared) :
+    Realizes (Effect.reshare change) state { state with table := (change state.shared).1, staged := (change state.shared).2 } :=
+  ⟨fun _ => rfl, rfl, rfl, rfl⟩
 
 /-- Queue a signal at a record. -/
 private def queueAt (source : PID) (signal : Signal) (process : ProcessState) : ProcessState :=
@@ -654,7 +685,7 @@ private def Effect.put (processId : PID) (process : ProcessState) : Effect :=
 
 private theorem Realizes.put (state : State) (processId : PID) (process : ProcessState) :
     Realizes (Effect.put processId process) state (state.set processId process) := by
-  refine ⟨fun other => ?_, rfl, rfl⟩
+  refine ⟨fun other => ?_, rfl, rfl, rfl⟩
   rw [State.record_set]
   by_cases same : other = processId
   · subst same; simp [Effect.put, Effect.record, changeOf]
@@ -759,6 +790,14 @@ private theorem Realizes.allocate (state : State) (processId : PID) :
     Realizes (allocateEffect processId) state (state.allocate processId).2 :=
   Realizes.modify _ _ _
 
+/-- Stage a persistent term update. -/
+private def stageEffect (processId : PID) (key : Term) (value : Option Term) : Effect :=
+  .reshare fun shared => (shared.1, some { owner := processId, key, value })
+
+private theorem Realizes.stage (state : State) (processId : PID) (key : Term) (value : Option Term) :
+    Realizes (stageEffect processId key value) state { state with staged := some { owner := processId, key, value } } :=
+  Realizes.reshare state _
+
 /-- The effect of `State.request`. -/
 private def State.requestEffect (state : State) (processId : PID) : Request → Effect
   | .monitor target alias =>
@@ -827,9 +866,22 @@ private def State.requestEffect (state : State) (processId : PID) : Request → 
           (Effect.retime (Kernel.filter (·.reference != reference))).andThen
             (.modify processId fun process => { process with cancels := process.cancels + 1 })
       | none => {}
+  | .persistentGet _ | .persistentAwait => {}
+  | .persistentPut key value new =>
+      if state.staged.isSome then {} else
+      match state.persistent key with
+      | some stored =>
+          if Term.compareExact (Term.fuel value stored) value stored = .eq then {}
+          else if new then {} else stageEffect processId key (some value)
+      | none => stageEffect processId key (some value)
+  | .persistentErase key =>
+      if state.staged.isSome then {} else
+      match state.persistent key with
+      | some _ => stageEffect processId key none
+      | none => {}
 
 private theorem Realizes.request (state : State) (processId : PID) (next : Term → Result β) (query : Request) :
-    Realizes (state.requestEffect processId query) state (state.request processId next query).state := by
+    Realizes (state.requestEffect processId query) state ((state.request processId next query).state state) := by
   cases query with
   | monitor target alias =>
     simp only [State.requestEffect, State.request]
@@ -888,6 +940,39 @@ private theorem Realizes.request (state : State) (processId : PID) (next : Term 
     cases found : Kernel.find? (·.reference == reference) state.timers with
     | none => exact Realizes.refl _
     | some timer => exact (Realizes.retime _ _).andThen (Realizes.modify _ _ _)
+  | persistentGet _ | persistentAwait =>
+    simp only [State.requestEffect, State.request]
+    repeat' split
+    all_goals exact Realizes.refl _
+  | persistentPut key value new =>
+    simp only [State.requestEffect, State.request, State.stage]
+    cases staged : state.staged.isSome
+    · simp only [Bool.false_eq_true, ↓reduceIte]
+      cases found : state.persistent key with
+      | none => exact Realizes.stage _ _ _ _
+      | some stored =>
+        simp only
+        by_cases same : Term.compareExact (Term.fuel value stored) value stored = .eq
+        · simp only [same, ↓reduceIte]; exact Realizes.refl _
+        · cases new
+          · simp only [same, Bool.false_eq_true, ↓reduceIte]; exact Realizes.stage _ _ _ _
+          · simp only [same, ↓reduceIte]; exact Realizes.refl _
+    · simp only [↓reduceIte, Answer.state]; exact Realizes.refl _
+  | persistentErase key =>
+    simp only [State.requestEffect, State.request, State.stage]
+    cases staged : state.staged.isSome
+    · simp only [Bool.false_eq_true, ↓reduceIte]
+      cases found : state.persistent key with
+      | none => exact Realizes.refl _
+      | some stored => exact Realizes.stage _ _ _ _
+    · simp only [↓reduceIte, Answer.state]; exact Realizes.refl _
+
+/-- A persistent term request changes neither records nor timers. -/
+private theorem State.requestEffect_recordless (state : State) (processId : PID) {query : Request}
+    (persistent : (query matches .persistentGet _ | .persistentPut .. | .persistentErase _ | .persistentAwait) = true) :
+    (state.requestEffect processId query).records = [] ∧ (state.requestEffect processId query).timers = none := by
+  cases query <;> simp at persistent <;> refine ⟨?_, ?_⟩ <;> simp only [State.requestEffect] <;>
+    (repeat' split) <;> rfl
 
 /-- The effect of `State.spawnWith`: the parent's record changes and the child's starts. -/
 private def State.spawnEffect (state : State) (processId : PID) (options : SpawnOptions) : Effect :=
@@ -1117,6 +1202,21 @@ private theorem Realizes.fire (state : State) (timer : Timer) :
     Realizes (state.fireEffect timer) state (state.fire timer) :=
   (Realizes.retime _ _).andThen (Realizes.enqueue _ _ _ _)
 
+/-- The effect of `State.commit`. -/
+private def State.commitEffect (state : State) : Effect := .reshare fun _ => state.commit.shared
+
+private theorem Realizes.commit (state : State) : Realizes state.commitEffect state state.commit := by
+  refine ⟨fun _ => ?_, ?_, ?_, rfl⟩ <;> unfold State.commit <;> split <;> rfl
+
+/-- Committing reads only the persistent terms. -/
+private theorem State.commitEffect_congr {state other : State} (table : other.table = state.table)
+    (staged : other.staged = state.staged) : other.commitEffect = state.commitEffect := by
+  have shared : other.commit.shared = state.commit.shared := by
+    unfold State.commit
+    rw [staged]
+    split <;> simp only [State.shared, table, staged]
+  simp only [State.commitEffect, shared]
+
 /-- The effect of a process's own step, given its computation. -/
 private def Task.ownEffect (state : State) (processId : PID) : Task α → Effect
   | ⟨_, _, some _⟩ => {}
@@ -1138,7 +1238,7 @@ private def Task.ownEffect (state : State) (processId : PID) : Task α → Effec
 
 private theorem Realizes.remove (state : State) (processId : PID) :
     Realizes { records := [(processId, fun _ => none)] } state (state.remove processId) := by
-  refine ⟨fun other => ?_, rfl, rfl⟩
+  refine ⟨fun other => ?_, rfl, rfl, rfl⟩
   rw [State.record_remove]
   by_cases same : other = processId
   · subst same; simp [Effect.record, changeOf]
@@ -1189,7 +1289,7 @@ private theorem Realizes.own {state : State} {processId : PID} {task : Task α} 
     | request query next =>
       have := Realizes.request state processId next query
       simp only [Task.own] at mem
-      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> rename_i found <;>
+      split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;> rename_i found <;>
         simpa [Task.ownEffect, found, Answer.state] using this
 
 /-- The effect of handling the oldest queued signal. -/
@@ -1553,6 +1653,14 @@ private theorem Effect.InFrames.modify {processId : PID} {change : ProcessState 
 /-- The empty effect is within any frames. -/
 private theorem Effect.InFrames.empty (frames : List Frame) (state : State) : ({} : Effect).InFrames frames state :=
   fun _ => .inl rfl
+
+private theorem Effect.record_recordless {effect : Effect} (records : effect.records = []) (processId : PID) :
+    effect.record processId = id := by
+  simp only [Effect.record, records, changeOf]
+
+private theorem Effect.InFrames.recordless {effect : Effect} (records : effect.records = []) {frames : List Frame}
+    {state : State} : effect.InFrames frames state :=
+  fun processId => .inl (Effect.record_recordless records processId)
 
 /-- A change within the frame of one entry is within all the frames of its
 process, when none of them reads or removes the queue's head. -/
@@ -3064,7 +3172,7 @@ private theorem OwnView.identical_refl (view : OwnView) : view.identical view = 
     cases shape with
     | reply value => simp [OwnView.identical, Answer.Shape.identical, Term.identical_refl]
     | wait waiting => cases waiting <;> simp [OwnView.identical, Answer.Shape.identical, Wait.identical, Term.identical_refl]
-    | «continue» => rfl
+    | «continue» | suspended => rfl
   | _ => simp [OwnView.identical]
 
 private theorem handleViewIdentical_refl (view : Option (Option Term × Option Term)) :
@@ -3073,8 +3181,18 @@ private theorem handleViewIdentical_refl (view : Option (Option Term × Option T
   · rfl
   · cases exits <;> cases resumed <;> simp [handleViewIdentical, optionIdentical, Term.identical_refl]
 
+/-- The bits of `clock`'s frames for the persistent terms and their staged update. -/
+private def tableBit : Nat := 17
+private def stagedBit : Nat := 18
+
+/-- Two states agreeing on the persistent terms that frames read. -/
+private def SharedAgree (frames : List Frame) (state other : State) : Prop :=
+  (readsOf frames clock tableBit = true → other.table = state.table) ∧
+  (readsOf frames clock stagedBit = true → other.staged = state.staged)
+
 /-- Two states agree on what frames read: the records the frames read exist in
 both or neither, and agree on the fields read. -/
+
 private def Agree (frames : List Frame) (state other : State) : Prop :=
   ∀ processId, (∃ bit, bit < 17 ∧ readsOf frames processId bit) →
     (other.record processId).isSome = (state.record processId).isSome ∧
@@ -3162,7 +3280,7 @@ private theorem Task.ownView_agree {state other : State} {tasks : List (PID × T
     {timers : Bool} (confined : Config.confined (.running state tasks finished false) (.own processId) = true)
     (lookup : Kernel.lookup processId tasks = some task)
     (found : task.ownFrames state processId = some (frames, timers)) (agree : Agree frames state other)
-    (timed : timers = true → other.timers = state.timers)
+    (shared : SharedAgree frames state other) (timed : timers = true → other.timers = state.timers)
     (awaited : readsOf frames processId tailBit → readsOf frames processId liveBit →
       Kernel.any (other.process processId).queue (other.awaitedEntry processId) =
         Kernel.any (state.process processId).queue (state.awaitedEntry processId)) :
@@ -3212,6 +3330,23 @@ private theorem Task.ownView_agree {state other : State} {tasks : List (PID × T
         reads.testBit 4 = true → (other.process processId).refCounter = (state.process processId).refCounter :=
       fun equal set => agree.get (head equal) .refCounter set
     cases query with
+    | persistentGet key =>
+      simp only [Task.ownFrames, State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found
+      have table := shared.1 (by rw [← found.1]; decide)
+      simp only [Task.ownView, State.request, State.persistent, table, Answer.shape]
+    | persistentPut | persistentErase =>
+      simp only [Task.ownFrames, State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found
+      have table := shared.1 (by rw [← found.1]; decide)
+      have staged := shared.2 (by rw [← found.1]; decide)
+      simp only [Task.ownView, State.request, State.persistent, State.stage, table, staged]
+      repeat' split
+      all_goals rfl
+    | persistentAwait =>
+      simp only [Task.ownFrames, State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found
+      have staged := shared.2 (by rw [← found.1]; decide)
+      simp only [Task.ownView, State.request, staged]
+      repeat' split
+      all_goals rfl
     | monitor target alias =>
       simp only [Task.ownFrames, State.requestFrames] at found
       have same : (other.process processId).refCounter = (state.process processId).refCounter := by
@@ -3455,7 +3590,7 @@ private theorem Task.ownEffect_agree {state other : State} {tasks : List (PID ×
     {timers : Bool} (confined : Config.confined (.running state tasks finished false) (.own processId) = true)
     (lookup : Kernel.lookup processId tasks = some task)
     (found : task.ownFrames state processId = some (frames, timers)) (agree : Agree frames state other)
-    (timed : timers = true → other.timers = state.timers)
+    (shared : SharedAgree frames state other) (timed : timers = true → other.timers = state.timers)
     (timedTo : state.endFrames processId = (frames, timers) →
       Kernel.any other.timers (·.destination == processId) = Kernel.any state.timers (·.destination == processId))
     (eager : state.endFrames processId = (frames, timers) → ∀ target reason,
@@ -3517,6 +3652,12 @@ private theorem Task.ownEffect_agree {state other : State} {tasks : List (PID ×
         reads.testBit 4 = true → (other.process processId).refCounter = (state.process processId).refCounter :=
       fun equal set => agree.get (head equal) .refCounter set
     cases query with
+    | persistentGet | persistentAwait => rfl
+    | persistentPut | persistentErase =>
+      simp only [Task.ownFrames, State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found
+      have table := shared.1 (by rw [← found.1]; decide)
+      have staged := shared.2 (by rw [← found.1]; decide)
+      simp only [Task.ownEffect, State.requestEffect, State.persistent, table, staged]
     | monitor target alias =>
       simp only [Task.ownFrames, State.requestFrames] at found
       simp only [Task.ownEffect, State.requestEffect, State.allocate]
@@ -4032,6 +4173,9 @@ private def Effect.KeepsAlive (effect : Effect) : Prop :=
 
 private theorem Effect.KeepsAlive.empty : ({} : Effect).KeepsAlive := fun _ _ => rfl
 
+private theorem Effect.KeepsAlive.recordless {effect : Effect} (records : effect.records = []) : effect.KeepsAlive :=
+  fun processId _ => by rw [Effect.record_recordless records processId]; rfl
+
 private theorem Effect.KeepsAlive.andThen {first second : Effect} (one : first.KeepsAlive) (two : second.KeepsAlive) :
     (first.andThen second).KeepsAlive := fun processId record => by
   rw [Effect.record_andThen]; exact (two _ _).trans (one _ _)
@@ -4093,6 +4237,19 @@ private theorem Effect.apply_empty (state : State) : ({} : Effect).apply state =
 private def CleanOutside (state : State) (except : PID → Prop) : Prop :=
   ∀ processId, ¬ except processId → ∀ process, state.record processId = some process →
     Clean state.gone processId process
+
+/-- An effect on no record keeps a normalized state clean. -/
+private theorem CleanOutside.recordless {effect : Effect} (records : effect.records = []) {state : State}
+    (sorted : state.Sorted) (normalized : state.normalize = state) {except : PID → Prop} :
+    CleanOutside (effect.apply state) except := by
+  have same : ∀ processId, (effect.apply state).record processId = state.record processId := fun processId => by
+    rw [Effect.record_apply, Effect.record_recordless records]; rfl
+  have gone : (effect.apply state).gone = state.gone := funext fun processId => by
+    simp only [State.gone, State.alive, same]
+  intro processId _ process found
+  rw [same] at found
+  rw [gone]
+  exact Clean.of_normalized sorted normalized found
 
 private theorem Effect.apply_andThen_record (first second : Effect) (state : State) (processId : PID) :
     ((first.andThen second).apply state).record processId = (second.apply (first.apply state)).record processId := by
@@ -4597,6 +4754,9 @@ private theorem Task.ownEffect_clean {state : State} {tasks : List (PID × Task 
     simpa [Effect.apply_empty] using clean
   | request query next =>
     cases query with
+    | persistentGet | persistentPut | persistentErase | persistentAwait =>
+      simp only [Task.ownEffect]
+      exact CleanOutside.recordless (State.requestEffect_recordless state processId rfl).1 sorted normalized
     | demonitor reference flush =>
       simp only [Kernel.any_eq, Bool.not_eq_true', List.any_eq_false, Bool.not_eq_true] at confined
       simp only [Task.ownEffect, State.requestEffect]
@@ -5254,6 +5414,9 @@ private theorem Effect.InFrames.own {state : State} {tasks : List (PID × Task �
         exact Effect.InFrames.empty _ _
     | request query =>
       cases query with
+      | persistentGet | persistentPut | persistentErase | persistentAwait =>
+        simp only [Task.ownEffect]
+        exact Effect.InFrames.recordless (State.requestEffect_recordless state processId rfl).1
       | demonitor reference flush =>
         simp only [Task.ownEffect, State.requestEffect, Task.ownFrames, State.requestFrames,
           Option.some.injEq, Prod.mk.injEq] at found ⊢
@@ -5340,6 +5503,7 @@ private def Config.effectOf : Config α → Key → Effect
       match Kernel.find? (·.reference == reference) state.firing with
       | some timer => state.fireEffect timer
       | none => {}
+  | .running state _ _ false, .commit => state.commitEffect
   | _, _ => {}
 
 /-- Only a process that does not return steps to exhaustion. -/
@@ -5364,7 +5528,7 @@ private theorem Task.own_exhausted {state : State} {processId : PID} {task : Tas
         · split at mem <;> simp_all
     | request query next =>
       simp only [Task.own] at mem
-      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> simp at exhausted
+      split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;> simp at exhausted
     | _ => simp only [Task.own, List.mem_singleton, Task.ended] at mem <;> subst mem <;> simp at exhausted
 
 /-- Handling a signal never steps to exhaustion. -/
@@ -5400,6 +5564,10 @@ private theorem Config.stepOf_effect {state : State} {tasks : List (PID × Task 
     ∃ raw tasks' finished', Realizes ((Config.running state tasks finished false).effectOf key) state raw ∧
       raw.Within elapsed ∧ next = .running raw.normalize tasks' finished' false := by
   cases key with
+  | commit =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at step
+    obtain ⟨update, -, -, rfl⟩ := step
+    exact ⟨_, _, _, Realizes.commit state, within.commit, rfl⟩
   | own processId =>
     obtain ⟨task, transition, lookup, head, rfl⟩ := Config.stepOf_own step
     have exhausted := Config.own_not_exhausted confined lookup head
@@ -5513,6 +5681,9 @@ private theorem Config.headSafe {state : State} {tasks : List (PID × Task α)}
     (found : (Config.running state tasks finished false).frames key = some (frames, timers)) :
     HeadSafe frames state := by
   cases key with
+  | commit =>
+    simp only [Config.frames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+    exact HeadSafe.quiet fun entry mem => by simp only [List.mem_singleton] at mem; subst mem; decide
   | own processId =>
     simp only [Config.frames, Option.bind_eq_some_iff] at found
     obtain ⟨task, lookup, found⟩ := found
@@ -5546,6 +5717,9 @@ private theorem Config.headSafe {state : State} {tasks : List (PID × Task α)}
       simp only [Task.ownFrames] at found
       have empty : HeadSafe ([] : List Frame) state := fun _ mem => by simp at mem
       cases query with
+      | persistentGet | persistentPut | persistentErase | persistentAwait =>
+        simp only [State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1]
+        exact HeadSafe.quiet fun entry mem => by simp only [List.mem_singleton] at mem; subst mem; decide
       | monitor target alias =>
         simp only [State.requestFrames] at found
         split at found
@@ -5677,6 +5851,11 @@ private theorem NoNewLinks.andThen {first second : Effect} {state : State}
 private theorem NoNewLinks.empty (state : State) : NoNewLinks state (({} : Effect).apply state) := by
   rw [Effect.apply_empty]; exact NoNewLinks.refl state
 
+private theorem NoNewLinks.recordless {effect : Effect} (records : effect.records = []) (state : State) :
+    NoNewLinks state (effect.apply state) := fun processId process' found entry mem _ => by
+  rw [Effect.record_apply, Effect.record_recordless records] at found
+  exact ⟨process', found, mem⟩
+
 private theorem NoNewLinks.retime (state : State) (change : List Timer → List Timer) :
     NoNewLinks state ((Effect.retime change).apply state) := fun processId process found => by
   rw [Effect.record_apply, Effect.record_retime] at found
@@ -5798,6 +5977,7 @@ private theorem Config.noNewLinks {state : State} {tasks : List (PID × Task α)
     (confined : Config.confined (.running state tasks finished false) key = true) :
     NoNewLinks state (((Config.running state tasks finished false).effectOf key).apply state) := by
   cases key with
+  | commit => exact NoNewLinks.recordless rfl state
   | own processId =>
     simp only [Config.effectOf]
     split
@@ -5822,6 +6002,9 @@ private theorem Config.noNewLinks {state : State} {tasks : List (PID × Task α)
         · exact NoNewLinks.empty state
       | request query next =>
         cases query with
+        | persistentGet | persistentPut | persistentErase | persistentAwait =>
+          simp only [Task.ownEffect]
+          exact NoNewLinks.recordless (State.requestEffect_recordless state processId rfl).1 state
         | monitor target alias =>
           simp only [Task.ownEffect, State.requestEffect, State.allocate]
           refine NoNewLinks.andThen (NoNewLinks.modify state _ fun _ _ mem _ => mem) ?_
@@ -6020,6 +6203,9 @@ private theorem Config.timersFramed {state : State} {tasks : List (PID × Task �
     (found : (Config.running state tasks finished false).frames key = some (frames, timed)) :
     TimersFramed ((Config.running state tasks finished false).effectOf key) frames timed := by
   cases key with
+  | commit =>
+    simp only [Config.frames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.2]
+    exact TimersFramed.untimed rfl
   | own processId =>
     simp only [Config.frames, Option.bind_eq_some_iff] at found
     obtain ⟨task, lookup, found⟩ := found
@@ -6067,6 +6253,9 @@ private theorem Config.timersFramed {state : State} {tasks : List (PID × Task �
     | request query next =>
       simp only [Task.ownFrames] at found
       cases query with
+      | persistentGet | persistentPut | persistentErase | persistentAwait =>
+        simp only [State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.2]
+        exact TimersFramed.untimed (State.requestEffect_recordless state processId rfl).2
       | startTimer destination message duration =>
         simp only [State.requestFrames, Option.some.injEq, Prod.mk.injEq] at found; rw [← found.1, ← found.2]
         simp only [Task.ownEffect, State.requestEffect, State.allocate]
@@ -6252,6 +6441,7 @@ private theorem Config.clean {state : State} {tasks : List (PID × Task α)}
     (found : (Config.running state tasks finished false).frames key = some (frames, timers)) :
     CleanOutside (((Config.running state tasks finished false).effectOf key).apply state) (WholeOf frames) := by
   cases key with
+  | commit => exact CleanOutside.recordless rfl sorted normalized
   | own processId =>
     simp only [Config.frames, Option.bind_eq_some_iff] at found
     obtain ⟨task, lookup, found⟩ := found
@@ -6313,6 +6503,7 @@ private theorem Config.inFrames {state : State} {tasks : List (PID × Task α)}
     (found : (Config.running state tasks finished false).frames key = some (frames, timers)) :
     ((Config.running state tasks finished false).effectOf key).InFrames frames state := by
   cases key with
+  | commit => exact Effect.InFrames.recordless rfl
   | own processId =>
     simp only [Config.frames, Option.bind_eq_some_iff] at found
     obtain ⟨task, lookup, found⟩ := found
@@ -6608,7 +6799,7 @@ private theorem State.record_normalize' {state : State} (sorted : state.Sorted) 
 already normalized with fewer processes gone, is normalizing the other. -/
 private theorem State.normalize_absorbs {state other : State} (sorted : state.Sorted) (sorted' : other.Sorted)
     (timers : other.timers = state.timers) (elapsed : other.elapsed = state.elapsed)
-    (gone : other.gone = state.gone)
+    (shared : other.shared = state.shared) (gone : other.gone = state.gone)
     (records : ∀ processId, other.record processId = state.record processId ∨
       ∃ fewer : PID → Bool, (∀ processId, fewer processId → state.gone processId) ∧
         other.record processId = ((state.record processId).map (normRecord fewer processId)).filter (!·.finished)) :
@@ -6631,9 +6822,9 @@ private theorem State.normalize_absorbs {state other : State} (sorted : state.So
     Sorted.ext (Sorted.normalize sorted') (Sorted.normalize sorted) fun processId => by
       have := same processId; simpa [State.record, Kernel.lookup_eq] using this
   cases state; cases other
-  simp only [State.normalize] at processes timers elapsed ⊢
+  simp only [State.normalize, State.shared, Prod.mk.injEq] at processes timers elapsed shared ⊢
   simp only [State.mk.injEq] at processes ⊢
-  exact ⟨processes, timers, elapsed⟩
+  exact ⟨processes, timers, shared.1, shared.2, elapsed⟩
 
 /-! ### Assembling: effects keep records sorted, and revive no process -/
 
@@ -6721,6 +6912,7 @@ private theorem Config.noRevive {state : State} {tasks : List (PID × Task α)}
     (confined : Config.confined (.running state tasks finished false) key = true) :
     ((Config.running state tasks finished false).effectOf key).NoRevive := by
   cases key with
+  | commit => exact (Effect.KeepsAlive.recordless rfl).noRevive
   | own processId =>
     simp only [Config.effectOf]
     split
@@ -6745,6 +6937,8 @@ private theorem Config.noRevive {state : State} {tasks : List (PID × Task α)}
       | request query next =>
         refine Effect.KeepsAlive.noRevive ?_
         cases query with
+        | persistentGet | persistentPut | persistentErase | persistentAwait =>
+          exact Effect.KeepsAlive.recordless (State.requestEffect_recordless state processId rfl).1
         | monitor target alias =>
           simp only [Task.ownEffect, State.requestEffect, State.allocate]
           exact Effect.KeepsAlive.andThen (by keeps_alive) (Effect.KeepsAlive.ite _ Effect.KeepsAlive.empty
@@ -6821,6 +7015,245 @@ private theorem Config.noRevive {state : State} {tasks : List (PID × Task α)}
     · exact Effect.KeepsAlive.empty.noRevive
   | link => exact Effect.KeepsAlive.empty.noRevive
 
+/-! ### Assembling: persistent terms -/
+
+/-- An effect leaving the persistent terms as they are. -/
+private def Effect.Unshared (effect : Effect) : Prop := effect.shared = none
+
+private theorem Effect.Unshared.empty : ({} : Effect).Unshared := rfl
+
+private theorem Effect.Unshared.modify (processId : PID) (change : ProcessState → ProcessState) :
+    (Effect.modify processId change).Unshared := rfl
+
+private theorem Effect.Unshared.retime (change : List Timer → List Timer) : (Effect.retime change).Unshared := rfl
+
+private theorem Effect.Unshared.put (processId : PID) (process : ProcessState) : (Effect.put processId process).Unshared :=
+  rfl
+
+private theorem Effect.Unshared.andThen {first second : Effect} (one : first.Unshared) (two : second.Unshared) :
+    (first.andThen second).Unshared := by
+  simp only [Effect.Unshared, Effect.andThen] at one two ⊢; rw [one, two]
+
+private theorem Effect.Unshared.ite {first second : Effect} (condition : Prop) [Decidable condition]
+    (one : first.Unshared) (two : second.Unshared) : (if condition then first else second).Unshared := by
+  split
+  · exact one
+  · exact two
+
+private theorem Effect.Unshared.getD {effect : Effect} (unshared : effect.Unshared) : effect.shared.getD id = id := by
+  have none : effect.shared = none := unshared
+  rw [none]; rfl
+
+private theorem State.enqueueEffect_unshared (state : State) (source target : PID) (signal : Signal) :
+    (state.enqueueEffect source target signal).Unshared := by
+  unfold State.enqueueEffect State.fallbackEffect
+  repeat' split
+  all_goals first | exact Effect.Unshared.empty | exact Effect.Unshared.modify _ _
+
+private theorem State.unparkEffect_unshared (state : State) (processId : PID) : (state.unparkEffect processId).Unshared := by
+  unfold State.unparkEffect
+  split
+  · exact (Effect.Unshared.modify _ _).andThen (State.enqueueEffect_unshared _ _ _ _)
+  · exact Effect.Unshared.empty
+
+private theorem State.sendEffect_unshared (state : State) (source target : PID) (signal : Signal) :
+    (state.sendEffect source target signal).Unshared := by
+  unfold State.sendEffect
+  repeat' split
+  all_goals first
+    | exact (State.unparkEffect_unshared _ _).andThen (State.enqueueEffect_unshared _ _ _ _)
+    | exact State.enqueueEffect_unshared _ _ _ _
+
+private theorem eagerChain_unshared (processId : PID) (eager : PID → Bool) :
+    ∀ targets, (eagerChain processId eager targets).Unshared
+  | [] => Effect.Unshared.empty
+  | _ :: rest => (Effect.Unshared.ite _ ((Effect.Unshared.modify _ _).andThen (Effect.Unshared.modify _ _))
+      Effect.Unshared.empty).andThen (eagerChain_unshared processId eager rest)
+
+private theorem State.terminateEffect_unshared (state : State) (processId : PID) (reason : Term) :
+    (state.terminateEffect processId reason).Unshared := by
+  unfold State.terminateEffect
+  dsimp only
+  erw [chainEffect_eagerExit processId reason _ _ (by simp [State.alive, State.record_set])]
+  exact ((Effect.Unshared.ite _ (Effect.Unshared.retime _) Effect.Unshared.empty).andThen
+    (Effect.Unshared.put _ _)).andThen (eagerChain_unshared _ _ _)
+
+/-- What a step does to the persistent terms, by its frames: it keeps the
+table and the staged update when it does not write them, and changes them only
+when it writes the staged update. -/
+private def SharedFramed (effect : Effect) (frames : List Frame) : Prop :=
+  (writesOf frames clock tableBit = false → ∀ shared, ((effect.shared.getD id) shared).1 = shared.1) ∧
+  (writesOf frames clock stagedBit = false → ∀ shared, ((effect.shared.getD id) shared).2 = shared.2) ∧
+  (effect.Unshared ∨ writesOf frames clock stagedBit = true)
+
+private theorem Effect.Unshared.framed {effect : Effect} (unshared : effect.Unshared) (frames : List Frame) :
+    SharedFramed effect frames :=
+  ⟨fun _ _ => by rw [unshared.getD]; rfl, fun _ _ => by rw [unshared.getD]; rfl, .inl unshared⟩
+
+/-- Staging writes only the staged update. -/
+private theorem stageEffect_framed (processId : PID) (key : Term) (value : Option Term) {frames : List Frame}
+    (writes : writesOf frames clock stagedBit = true) : SharedFramed (stageEffect processId key value) frames :=
+  ⟨fun _ _ => rfl, (fun none => by rw [writes] at none; cases none), .inr writes⟩
+
+/-- Whether a process's computation is a persistent term request. -/
+private def Task.persistent (task : Task α) : Bool :=
+  task.wait.isNone && match task.computation with
+    | .request query _ =>
+        (query matches .persistentGet _ | .persistentPut .. | .persistentErase _ | .persistentAwait)
+    | _ => false
+
+/-- What confined steps other than persistent term requests and commits do to
+the persistent terms: nothing. -/
+private theorem Config.unshared {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key}
+    (confined : Config.confined (.running state tasks finished false) key = true) (notCommit : key ≠ .commit)
+    (plain : ∀ processId task, key = .own processId → Kernel.lookup processId tasks = some task →
+      task.persistent = false) :
+    ((Config.running state tasks finished false).effectOf key).Unshared := by
+  cases key with
+  | commit => exact absurd rfl notCommit
+  | own processId =>
+    simp only [Config.effectOf]
+    split
+    · rename_i task lookup
+      obtain ⟨computation, finish, wait⟩ := task
+      cases wait with
+      | some => exact Effect.Unshared.empty
+      | none =>
+      simp only [Config.confined, lookup, Bool.and_eq_true] at confined
+      cases computation with
+      | ok => exact State.terminateEffect_unshared _ _ _
+      | error exception =>
+        cases exception with
+        | exhausted => simp at confined
+        | _ => exact State.terminateEffect_unshared _ _ _
+      | send => exact State.sendEffect_unshared _ _ _ _
+      | receive =>
+        simp only [Task.ownEffect]
+        split
+        · exact Effect.Unshared.modify _ _
+        · exact Effect.Unshared.empty
+      | request query next =>
+        cases query with
+        | persistentGet | persistentPut | persistentErase | persistentAwait =>
+          have := plain processId _ rfl lookup
+          simp [Task.persistent] at this
+        | monitor target alias =>
+          simp only [Task.ownEffect, State.requestEffect, State.allocate]
+          exact (Effect.Unshared.modify _ _).andThen (Effect.Unshared.ite _ Effect.Unshared.empty
+            ((State.unparkEffect_unshared _ _).andThen (Effect.Unshared.modify _ _)))
+        | demonitor => exact Effect.Unshared.modify _ _
+        | startTimer =>
+          simp only [Task.ownEffect, State.requestEffect, State.allocate]
+          exact (Effect.Unshared.modify _ _).andThen
+            (Effect.Unshared.ite _ (Effect.Unshared.retime _) Effect.Unshared.empty)
+        | cancelTimer =>
+          simp only [Task.ownEffect, State.requestEffect]
+          split
+          · exact (Effect.Unshared.retime _).andThen (Effect.Unshared.modify _ _)
+          · exact Effect.Unshared.empty
+        | alive target =>
+          simp only [Task.ownEffect, State.requestEffect]
+          exact Effect.Unshared.ite _ Effect.Unshared.empty (Effect.Unshared.ite _
+            (State.enqueueEffect_unshared _ _ _ _) (State.enqueueEffect_unshared _ _ _ _))
+        | processInfo target =>
+          simp only [Task.ownEffect, State.requestEffect]
+          exact Effect.Unshared.ite _ Effect.Unshared.empty (Effect.Unshared.ite _
+            (State.enqueueEffect_unshared _ _ _ _) Effect.Unshared.empty)
+        | sendAlias => exact State.sendEffect_unshared _ _ _ _
+        | _ => simp at confined
+      | _ => simp at confined
+    · exact Effect.Unshared.empty
+  | handle processId =>
+    simp only [Config.effectOf]
+    split
+    · simp only [Config.confined, Bool.and_eq_true] at confined
+      cases queue : (state.process processId).queue with
+      | nil => simp [queue] at confined
+      | cons entry rest =>
+        simp only [queue] at confined
+        have kind : entry.signal.handledConfined = true := by
+          obtain ⟨source, signal⟩ := entry; cases signal <;> simp_all [Signal.handledConfined]
+        rw [Task.handleEffect_of_continues queue (by rw [State.handle_confined _ _ _ _ kind])]
+        refine (Effect.Unshared.modify _ _).andThen ?_
+        obtain ⟨source, signal⟩ := entry
+        cases signal with
+        | message => exact Effect.Unshared.modify _ _
+        | aliasMessage =>
+          simp only [State.handleEffect]
+          exact Effect.Unshared.ite _ (Effect.Unshared.modify _ _) Effect.Unshared.empty
+        | monitor => exact Effect.Unshared.modify _ _
+        | down =>
+          simp only [State.handleEffect]
+          exact (Effect.Unshared.ite _ (Effect.Unshared.modify _ _) Effect.Unshared.empty).andThen
+            (Effect.Unshared.ite _ ((Effect.Unshared.modify _ _).andThen (Effect.Unshared.modify _ _))
+              Effect.Unshared.empty)
+        | _ => simp [Signal.handledConfined] at kind
+    · exact Effect.Unshared.empty
+  | phase processId =>
+    simp only [Config.effectOf, State.phaseEffect]
+    split
+    · split
+      · exact (Effect.Unshared.modify _ _).andThen (State.sendEffect_unshared _ _ _ _)
+      · split
+        · rename_i entry rest _
+          refine (Effect.Unshared.modify _ _).andThen ?_
+          obtain ⟨source, signal⟩ := entry
+          cases signal <;> simp only [State.answerEffect] <;>
+            first | exact State.sendEffect_unshared _ _ _ _ | exact Effect.Unshared.empty
+        · exact Effect.Unshared.empty
+    · exact Effect.Unshared.empty
+  | unpark processId => exact State.unparkEffect_unshared _ _
+  | fire reference =>
+    simp only [Config.effectOf]
+    split
+    · exact (Effect.Unshared.retime _).andThen (State.enqueueEffect_unshared _ _ _ _)
+    · exact Effect.Unshared.empty
+  | link => exact Effect.Unshared.empty
+
+
+/-- What confined steps do to the persistent terms is as their frames say. -/
+private theorem Config.sharedFramed {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key} {frames : List Frame} {timers : Bool}
+    (confined : Config.confined (.running state tasks finished false) key = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, timers)) :
+    SharedFramed ((Config.running state tasks finished false).effectOf key) frames := by
+  by_cases commit : key = .commit
+  · subst commit
+    simp only [Config.frames, Option.some.injEq, Prod.mk.injEq] at found
+    rw [← found.1]
+    exact ⟨fun written => absurd written (by decide), fun written => absurd written (by decide), .inr (by decide)⟩
+  by_cases persistent : ∃ processId task, key = .own processId ∧ Kernel.lookup processId tasks = some task ∧
+      task.persistent = true
+  · obtain ⟨processId, ⟨computation, finish, wait⟩, rfl, lookup, persistent⟩ := persistent
+    cases wait with
+    | some => simp [Task.persistent] at persistent
+    | none =>
+    cases computation with
+    | request query next =>
+      cases query <;> simp [Task.persistent] at persistent
+      · simp only [Config.effectOf, lookup, Task.ownEffect, State.requestEffect]
+        exact Effect.Unshared.empty.framed frames
+      · simp only [Config.frames, lookup, Option.bind_some, Task.ownFrames, State.requestFrames,
+          Option.some.injEq, Prod.mk.injEq] at found
+        have writes : writesOf frames clock stagedBit = true := by rw [← found.1]; decide
+        simp only [Config.effectOf, lookup, Task.ownEffect, State.requestEffect]
+        repeat' split
+        all_goals first | exact Effect.Unshared.empty.framed frames | exact stageEffect_framed _ _ _ writes
+      · simp only [Config.frames, lookup, Option.bind_some, Task.ownFrames, State.requestFrames,
+          Option.some.injEq, Prod.mk.injEq] at found
+        have writes : writesOf frames clock stagedBit = true := by rw [← found.1]; decide
+        simp only [Config.effectOf, lookup, Task.ownEffect, State.requestEffect]
+        repeat' split
+        all_goals first | exact Effect.Unshared.empty.framed frames | exact stageEffect_framed _ _ _ writes
+      · simp only [Config.effectOf, lookup, Task.ownEffect, State.requestEffect]
+        exact Effect.Unshared.empty.framed frames
+    | _ => simp [Task.persistent] at persistent
+  · refine (Config.unshared confined commit fun processId task same lookup => ?_).framed frames
+    cases equal : task.persistent
+    · rfl
+    · exact (persistent ⟨processId, task, same, lookup, equal⟩).elim
+
 /-! ### Assembling: the other step, after one apart -/
 
 private theorem splitAt_of_lookup {processId : PID} : ∀ {tasks : List (PID × Task α)} {task : Task α},
@@ -6870,6 +7303,10 @@ private theorem Config.lookup_after {state : State} {tasks : List (PID × Task �
     ∃ state' tasks' finished', next = .running state' tasks' finished' false ∧
       Kernel.lookup processId tasks' = some task := by
   cases key with
+  | commit =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at step
+    obtain ⟨_, -, -, rfl⟩ := step
+    exact ⟨_, _, _, rfl, lookup⟩
   | own other =>
     have differ : other ≠ processId := fun same => notOwn (by rw [same])
     obtain ⟨task', transition, lookup', head, rfl⟩ := Config.stepOf_own step
@@ -6922,7 +7359,8 @@ private theorem Config.own_after {elapsed : PID → Nat → Nat} {state state' :
     (found : (Config.running state tasks finished false).frames (.own processId) = some (frames, timers))
     (step : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next))
     (lookup : Kernel.lookup processId tasks = some task) (lookup' : Kernel.lookup processId tasks' = some task)
-    (agree : Agree frames state state') (timed : timers = true → state'.timers = state.timers)
+    (agree : Agree frames state state') (shared : SharedAgree frames state state')
+    (timed : timers = true → state'.timers = state.timers)
     (timedTo : state.endFrames processId = (frames, timers) →
       Kernel.any state'.timers (·.destination == processId) = Kernel.any state.timers (·.destination == processId))
     (eager : state.endFrames processId = (frames, timers) → ∀ target reason,
@@ -6939,7 +7377,7 @@ private theorem Config.own_after {elapsed : PID → Nat → Nat} {state state' :
   obtain ⟨task₁, transition, lookup₁, head, -⟩ := Config.stepOf_own step
   rw [lookup] at lookup₁; simp only [Option.some.injEq] at lookup₁; subst lookup₁
   have view : task.ownView state' processId = task.ownView state processId :=
-    Task.ownView_agree confined lookup found' agree timed fun tail live => by
+    Task.ownView_agree confined lookup found' agree shared timed fun tail live => by
       obtain ⟨entry, mem, same, set⟩ := readsOf_entry tail
       obtain ⟨entry', mem', same', set'⟩ := readsOf_entry live
       have queue := agree.queue mem set
@@ -6959,7 +7397,7 @@ private theorem Config.own_after {elapsed : PID → Nat → Nat} {state state' :
     rw [← shape.2.2]; exact Config.own_not_exhausted confined lookup head
   obtain ⟨before, after, split⟩ := splitAt_of_lookup lookup'
   have effect : task.ownEffect state' processId = task.ownEffect state processId :=
-    Task.ownEffect_agree confined lookup found' agree timed timedTo eager
+    Task.ownEffect_agree confined lookup found' agree shared timed timedTo eager
   refine ⟨transition'.event, transition'.state, Kernel.append (Kernel.append before transition'.tasks) after,
     transition'.finished.orElse fun _ => finished', ?_, ?_, within'.own (List.mem_of_head? head'), ?_⟩
   · simp [Config.stepOf, split, head', Transition.apply, exhausted]
@@ -7023,7 +7461,8 @@ private theorem Config.keeps_after {elapsed : PID → Nat → Nat} {state state'
     (confined : Config.confined (.running state tasks finished false) key = true)
     (found : (Config.running state tasks finished false).frames key = some (frames, timers))
     (step : (Config.running state tasks finished false).stepOf key = some (event, next))
-    (agree : Agree frames state state') (timed : timers = true → state'.timers = state.timers) :
+    (agree : Agree frames state state') (shared : SharedAgree frames state state')
+    (timed : timers = true → state'.timers = state.timers) :
     ∃ event' raw',
       (Config.running state' tasks' finished' false).stepOf key =
         some (event', .running raw'.normalize tasks' finished' false) ∧
@@ -7031,6 +7470,17 @@ private theorem Config.keeps_after {elapsed : PID → Nat → Nat} {state state'
       raw'.Within elapsed ∧
       (Config.running state tasks finished false).sameView (.running state' tasks' finished' false) key = true := by
   cases key with
+  | commit =>
+    simp only [Config.frames, Option.some.injEq, Prod.mk.injEq] at found
+    have table := shared.1 (by rw [← found.1]; decide)
+    have staged := shared.2 (by rw [← found.1]; decide)
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at step
+    obtain ⟨update, staging, -, -⟩ := step
+    refine ⟨Event.commit update.owner, state'.commit, by simp [Config.stepOf, staged, staging], ?_,
+      within'.commit, rfl⟩
+    simp only [Config.effectOf]
+    rw [← State.commitEffect_congr table staged]
+    exact Realizes.commit state'
   | own | handle => simp [Key.owner] at owner
   | link => simp [Config.confined] at confined
   | phase processId =>
@@ -7085,6 +7535,21 @@ private theorem State.liveOf_normalized {gone : PID → Bool} {processId : PID} 
     simp only [liveOf]
     cases equal : process.exiting <;> simp_all
 
+private theorem Effect.apply_shared (effect : Effect) (state : State) :
+    (effect.apply state).shared = (effect.shared.getD id) state.shared := by
+  have kept : ∀ (pids : List PID) (start : State), (pids.foldl (fun changed processId =>
+      changed.put processId (effect.record processId (state.record processId))) start).shared = start.shared := by
+    intro pids
+    induction pids with
+    | nil => intro _; rfl
+    | cons head rest ih =>
+      intro start
+      rw [List.foldl_cons, ih]
+      cases effect.record head (state.record head) <;> rfl
+  unfold Effect.apply
+  rw [kept]
+  rfl
+
 private theorem Effect.apply_elapsed (effect : Effect) (state : State) :
     (effect.apply state).elapsed = state.elapsed := by
   have kept : ∀ (pids : List PID) (start : State), (pids.foldl (fun changed processId =>
@@ -7137,12 +7602,15 @@ private theorem State.normalize_after {state raw raw' : State} {first second : E
       cases (second.apply (first.apply state)).record processId with
       | none => rfl
       | some process => exact State.liveOf_normalized
-  refine State.normalize_absorbs (Effect.apply_sorted _ (Effect.apply_sorted _ sorted)) sortedRaw' ?_ ?_ ?_ records
+  refine State.normalize_absorbs (Effect.apply_sorted _ (Effect.apply_sorted _ sorted)) sortedRaw' ?_ ?_ ?_ ?_ records
   · rw [realizes'.2.1, Effect.apply_timers, Effect.apply_timers]
     show (second.timers.getD id) raw.timers = _
     rw [realizes.2.1]
-  · rw [realizes'.2.2, Effect.apply_elapsed, Effect.apply_elapsed]
-    exact realizes.2.2
+  · rw [realizes'.2.2.1, Effect.apply_elapsed, Effect.apply_elapsed]
+    exact realizes.2.2.1
+  · rw [realizes'.2.2.2, Effect.apply_shared, Effect.apply_shared]
+    show (second.shared.getD id) raw.shared = _
+    rw [realizes.2.2.2]
   · funext processId
     simp only [State.gone, State.alive]
     have := live processId
@@ -7175,7 +7643,7 @@ private theorem Task.own_single {state : State} {processId : PID} {task : Task �
           · simp only [List.mem_singleton] at mem; subst mem; exact ⟨_, rfl⟩
     | request =>
       simp only [Task.own] at mem
-      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> exact ⟨_, rfl⟩
+      split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;> exact ⟨_, rfl⟩
     | _ => simp only [Task.own, List.mem_singleton] at mem; subst mem; exact ⟨_, rfl⟩
 
 private theorem lookup_rewriteTask_self {processId : PID} {task : Task α} :
@@ -7204,6 +7672,33 @@ private theorem framesApart_symm {frames frames' : List Frame} (apart : framesAp
     rw [Nat.and_or_distrib_left, Nat.or_eq_zero_iff] at zero ⊢
     obtain ⟨one, two⟩ := zero
     exact ⟨⟨zero', Nat.and_comm _ _ ▸ two⟩, Nat.and_comm _ _ ▸ one⟩
+
+/-- After a confined step, normalized, the state agrees with the one before on
+the persistent terms that a step apart from it reads. -/
+private theorem Config.sharedAgree_after {state : State} {tasks : List (PID × Task α)}
+    {finished : Option (Except Exception α)} {key : Key} {frames frames' : List Frame} {timers : Bool}
+    {raw : State} (confined : Config.confined (.running state tasks finished false) key = true)
+    (found : (Config.running state tasks finished false).frames key = some (frames, timers))
+    (apart : framesApart frames frames' = true)
+    (realizes : Realizes ((Config.running state tasks finished false).effectOf key) state raw) :
+    SharedAgree frames' state raw.normalize := by
+  have framed := Config.sharedFramed confined found
+  have shared := realizes.2.2.2
+  refine ⟨fun read => ?_, fun read => ?_⟩
+  · have kept : writesOf frames clock tableBit = false := by
+      cases written : writesOf frames clock tableBit
+      · rfl
+      · exact ((apart_of_framesApart apart clock).1 tableBit written (.inl read)).elim
+    have table := congrArg Prod.fst shared
+    rw [framed.1 kept] at table
+    exact table
+  · have kept : writesOf frames clock stagedBit = false := by
+      cases written : writesOf frames clock stagedBit
+      · rfl
+      · exact ((apart_of_framesApart apart clock).1 stagedBit written (.inl read)).elim
+    have staged := congrArg Prod.snd shared
+    rw [framed.2.1 kept] at staged
+    exact staged
 
 /-! ### Steps apart commute -/
 
@@ -7235,6 +7730,7 @@ private theorem Config.step_after {elapsed : PID → Nat → Nat} {state : State
   have within₁ : raw.normalize.Within elapsed := rawWithin.normalize
   have normalized₁ : raw.normalize.normalize = raw.normalize := State.normalize_normalize rawWithin.1
   have agree := Config.agree_after within.1 normalized confined found confined' found' apartFrames realizes rawWithin.1
+  have shared := Config.sharedAgree_after confined found apartFrames realizes
   have timed : timers' = true → raw.normalize.timers = state.timers := fun timed' => by
     have untimed : timers = false := by simpa [timed'] using notBoth
     rw [untimed] at found
@@ -7261,8 +7757,8 @@ private theorem Config.step_after {elapsed : PID → Nat → Nat} {state : State
       subst frames''
       exact Config.eager_after within.1 normalized confined found confined' found' apartFrames realizes rawWithin.1
         reason linked
-    exact Config.own_after within normalized within₁ normalized₁ confined' found' step' lookup lookup' agree timed
-      timedTo eager
+    exact Config.own_after within normalized within₁ normalized₁ confined' found' step' lookup lookup' agree shared
+      timed timedTo eager
   | handle processId =>
     obtain ⟨task, transition, lookup, head, -⟩ := Config.stepOf_handle step'
     -- The process still has a task after the first step.
@@ -7318,9 +7814,10 @@ private theorem Config.step_after {elapsed : PID → Nat → Nat} {state : State
     obtain ⟨event₃, raw₃, tasks₃, finished₃, step₃, realizes₃, within₃, view⟩ :=
       Config.handle_after within₁ confined' found' step' lookup' agree
     exact ⟨event₃, raw₃, tasks₃, finished₃, step₃, realizes₃, within₃, view⟩
-  | phase | unpark | fire =>
+  | phase | unpark | fire | commit =>
     obtain ⟨event₃, raw₃, step₃, realizes₃, within₃, view⟩ :=
-      Config.keeps_after (tasks' := tasks₁) (finished' := finished₁) within₁ rfl confined' found' step' agree timed
+      Config.keeps_after (tasks' := tasks₁) (finished' := finished₁) within₁ rfl confined' found' step' agree shared
+        timed
     exact ⟨event₃, raw₃, tasks₁, finished₁, step₃, realizes₃, within₃, view⟩
   | link => simp [Config.confined] at confined'
 
@@ -7403,13 +7900,22 @@ private theorem Config.commutes_of_apart {elapsed : PID → Nat → Nat} {state 
       (fun processId => (apart_of_framesApart apartFrames processId).2) processId).symm
   have states : (second.apply (first.apply state)).normalize = (first.apply (second.apply state)).normalize := by
     refine State.normalize_absorbs (Effect.apply_sorted _ (Effect.apply_sorted _ within.1))
-      (Effect.apply_sorted _ (Effect.apply_sorted _ within.1)) ?_ ?_ ?_ fun processId => .inl (records processId)
+      (Effect.apply_sorted _ (Effect.apply_sorted _ within.1)) ?_ ?_ ?_ ?_ fun processId => .inl (records processId)
     · simp only [Effect.apply_timers]
       cases timed : timers
       · rw [((Config.timersFramed confined (timed ▸ found)).1 rfl).getD]; rfl
       · have timed' : timers' = false := by rw [timed] at notBoth; simpa using notBoth
         rw [((Config.timersFramed confined' (timed' ▸ found')).1 rfl).getD]; rfl
     · simp only [Effect.apply_elapsed]
+    · simp only [Effect.apply_shared]
+      -- Only one of two steps apart writes the staged update, and only it changes the persistent terms.
+      rcases (Config.sharedFramed confined found).2.2 with unshared | writes
+      · have one : first.shared.getD id = id := unshared.getD
+        rw [one]; rfl
+      · rcases (Config.sharedFramed confined' found').2.2 with unshared' | writes'
+        · have two : second.shared.getD id = id := unshared'.getD
+          rw [two]; rfl
+        · exact ((apart_of_framesApart apartFrames clock).1 stagedBit writes (.inr writes')).elim
     · funext processId
       simp only [State.gone, State.alive, records]
   rw [one, two, states]

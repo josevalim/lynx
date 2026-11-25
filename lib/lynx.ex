@@ -118,8 +118,9 @@ defmodule Lynx do
 
     * Concurrent code is stated through `Lynx.concurrent`, which holds when every
       run of the code ends with the outcome: every interleaving of its
-      processes, every point at which its timers fire, and every time left
-      that canceling a timer may report. Runs always end
+      processes, every point at which its timers fire and its persistent
+      term updates become visible, and every time left that canceling a
+      timer may report. Runs always end
       (`Lynx.Concurrent.Config.terminates`). Both the precondition and the
       expectation must hold in every run:
 
@@ -335,7 +336,8 @@ defmodule Lynx do
       receive without timeouts, and neither spawn, replace their environment,
       nor make other requests, are proven by evaluating a single run.
       `Lynx.Concurrent.RaceFree.of_talks` shows every run ends alike from a
-      state without links, monitors or timers, `Lynx.Concurrent.RaceFree.of_advance`
+      state without links, monitors, timers or persistent term update in
+      progress, `Lynx.Concurrent.RaceFree.of_advance`
       covers the steps before it, such as spawning, when each is the only one, and
       `Lynx.concurrent_of_advance` evaluates one run with
       `Lynx.Concurrent.Config.advance`. See `examples/concurrency/server.exs`,

@@ -34,9 +34,11 @@ signals, its parked monitor signal, and the phases of a process that ended. -/
 /-- The weight of a list of records. -/
 @[expose] def recordsWeight (records : List (PID × ProcessState)) : Nat := (records.map (·.2.weight)).sum
 
-/-- The steps the records and the timers have left: a timer fires and its
-message is then handled. -/
-@[expose] def State.weight (state : State) : Nat := recordsWeight state.processes + 2 * state.timers.length
+/-- The steps the records, the timers and the staged persistent term update
+have left: a timer fires and its message is then handled, and an update
+becomes visible. -/
+@[expose] def State.weight (state : State) : Nat :=
+  recordsWeight state.processes + 2 * state.timers.length + (if state.staged.isSome then 1 else 0)
 
 /-! ### Records -/
 
@@ -448,6 +450,13 @@ theorem State.weight_fire {state : State} {timer : Timer} (mem : timer ∈ state
   simp only [State.fire, State.weight, Kernel.filter_eq, Signal.weight] at queued ⊢
   omega
 
+/-- A staged persistent term update becoming visible lowers the weight. -/
+theorem State.weight_commit {state : State} {update : Update} (staged : state.staged = some update) :
+    state.commit.weight < state.weight := by
+  simp only [State.commit, staged, State.weight, Option.isSome_some, Option.isSome_none, ↓reduceIte,
+    Bool.false_eq_true]
+  omega
+
 /-! ### Processes -/
 
 /-- A computation and what follows it: the continuation of its request, or a
@@ -464,14 +473,19 @@ private inductive Follows : (Σ β, Result β) → (Σ β, Result β) → Prop w
   | requestReceive {γ : Type} {select : Environment → Term → Option γ} :
       Follows ⟨β, .receive timeout select fun _ => next reply⟩ ⟨β, .request query next⟩
   | requestError : Follows ⟨β, .error exception⟩ ⟨β, .request query next⟩
+  /-- A persistent term update continues by waiting for it to become visible. -/
+  | requestAwait (staging : query ≠ .persistentAwait) :
+      Follows ⟨β, .request .persistentAwait fun _ => next reply⟩ ⟨β, .request query next⟩
 
 /-- What follows a request does not depend on the request. -/
 private theorem Follows.request_any {item : Σ β, Result β} {query query' : Request} {next : Term → Result β}
-    (follows : Follows item ⟨β, .request query' next⟩) : Follows item ⟨β, .request query next⟩ := by
+    (staging : query ≠ .persistentAwait) (follows : Follows item ⟨β, .request query' next⟩) :
+    Follows item ⟨β, .request query next⟩ := by
   cases follows with
   | request => exact .request
   | requestReceive => exact .requestReceive
   | requestError => exact .requestError
+  | requestAwait => exact .requestAwait staging
 
 private theorem follows_acc {β : Type} (computation : Result β) :
     Acc Follows ⟨β, computation⟩ := by
@@ -489,6 +503,13 @@ private theorem follows_acc {β : Type} (computation : Result β) :
     | request => exact ih _
     | requestReceive => exact ⟨_, fun _ follows => by cases follows; exact ih _⟩
     | requestError => exact ⟨_, fun _ follows => by cases follows⟩
+    | requestAwait =>
+      refine ⟨_, fun _ follows => ?_⟩
+      cases follows with
+      | request => exact ih _
+      | requestReceive => exact ⟨_, fun _ follows => by cases follows; exact ih _⟩
+      | requestError => exact ⟨_, fun _ follows => by cases follows⟩
+      | requestAwait staging => exact absurd rfl staging
 
 /-- A process's computation, and whether it waits inside a request. A waiting
 process continues with its request's continuation. -/
@@ -496,7 +517,7 @@ private inductive Below : (Σ β, Result β × Bool) → (Σ β, Result β × Bo
   | step {β β' : Type} {next : Result β'} {current : Result β} {waiting : Bool}
       (follows : Follows ⟨β', next⟩ ⟨β, current⟩) : Below ⟨β', (next, false)⟩ ⟨β, (current, waiting)⟩
   | waits {β : Type} {query query' : Request} {next : Term → Result β} {current : Result β}
-      (request : current = .request query next) :
+      (request : current = .request query next) (staging : query ≠ .persistentAwait) :
       Below ⟨β, (.request query' next, true)⟩ ⟨β, (current, false)⟩
 
 private theorem below_acc : ∀ (β : Type) (computation : Result β), Acc Follows ⟨β, computation⟩ →
@@ -517,11 +538,11 @@ private theorem below_acc : ∀ (β : Type) (computation : Result β), Acc Follo
     · refine ⟨_, fun other below' => ?_⟩
       cases below' with
       | step follows => exact below follows false
-      | @waits _ query query' next _ request =>
+      | @waits _ query query' next _ request staging =>
         subst request
         exact ⟨_, fun other below' => by
           cases below' with
-          | step follows => exact below (Follows.request_any (query := query) follows) false⟩
+          | step follows => exact below (Follows.request_any (query := query) staging follows) false⟩
     · exact waitingAcc
 
 /-- A process's computation, and whether it waits. -/
@@ -535,9 +556,10 @@ private theorem request_continue {state answered : State} {processId : PID} {nex
     {query : Request} {computation : Result β}
     (continued : state.request processId next query = .continue computation answered) :
     Follows ⟨β, computation⟩ ⟨β, .request query next⟩ := by
-  cases query <;> simp only [State.request] at continued <;> (repeat' split at continued) <;>
+  cases query <;> simp only [State.request, State.stage] at continued <;> (repeat' split at continued) <;>
     first
-      | (simp only [Answer.continue.injEq] at continued; obtain ⟨rfl, -⟩ := continued; first | exact .requestReceive | exact .requestError)
+      | (simp only [Answer.continue.injEq] at continued; obtain ⟨rfl, -⟩ := continued
+         first | exact .requestReceive | exact .requestError | exact .requestAwait (by simp))
       | simp at continued
 
 /-- What a step of a process itself leaves follows it. -/
@@ -575,8 +597,15 @@ private theorem own_below {state : State} {processId : PID} {task : Task α} {tr
       · rename_i computation answered continued
         simp only [List.mem_singleton] at possible; subst possible
         simp only [List.mem_singleton, forall_eq, entry]; exact .step (request_continue continued)
-      · simp only [List.mem_singleton] at possible; subst possible
-        simp only [List.mem_singleton, forall_eq, entry]; exact .waits rfl
+      · rename_i waiting answered waited
+        simp only [List.mem_singleton] at possible; subst possible
+        simp only [List.mem_singleton, forall_eq, entry]
+        refine .waits rfl ?_
+        rintro rfl
+        simp only [State.request] at waited
+        repeat' split at waited
+        all_goals simp at waited
+      · simp at possible
 
 /-- Handling a signal leaves the process as it is, resumes it, or ends it. -/
 private theorem handle_tasks {state : State} {processId : PID} {task : Task α} {transition : Transition α}
@@ -720,8 +749,9 @@ private theorem running_acc :
     refine ⟨_, fun next ⟨event, step⟩ => ?_⟩
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
       List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists] at step
-    rcases step with ((⟨before, processId, task, after, split, transition, possible, same⟩ |
-      ⟨processId, process, mem, phased⟩) | ⟨processId, process, mem, unparked⟩) | ⟨timer, mem, fired⟩
+    rcases step with (((⟨before, processId, task, after, split, transition, possible, same⟩ |
+      ⟨processId, process, mem, phased⟩) | ⟨processId, process, mem, unparked⟩) | ⟨timer, mem, fired⟩) |
+      ⟨update, staged, committed⟩
     · simp only [Prod.mk.injEq] at same
       obtain ⟨-, rfl⟩ := same
       unfold Transition.apply
@@ -747,6 +777,11 @@ private theorem running_acc :
       obtain ⟨-, rfl⟩ := fired
       have := State.weight_fire (mem_firstOfEach mem)
       have := (state.fire timer).weight_normalize
+      exact ih _ (equal ▸ .right _ (by omega)) _ _ _ rfl
+    · simp only [Prod.mk.injEq] at committed
+      obtain ⟨-, rfl⟩ := committed
+      have := State.weight_commit (Option.mem_toList.mp staged)
+      have := state.commit.weight_normalize
       exact ih _ (equal ▸ .right _ (by omega)) _ _ _ rfl
 
 /-- No run goes on forever: steps are well-founded. -/

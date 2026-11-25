@@ -276,6 +276,14 @@ private theorem State.Within.normalize {state : State} (sorted : state.Within el
 private theorem State.Within.timers {state : State} (sorted : state.Within elapsed) (timers : List Timer) :
     ({ state with timers } : State).Within elapsed := sorted
 
+private theorem State.Within.staged {state : State} (sorted : state.Within elapsed) (staged : Option Update) :
+    ({ state with staged } : State).Within elapsed := sorted
+
+private theorem State.Within.commit {state : State} (sorted : state.Within elapsed) : state.commit.Within elapsed := by
+  unfold State.commit; split
+  · exact sorted
+  · exact sorted
+
 /-- Prove that an operation built from replacing, changing and removing
 records keeps them sorted. -/
 local syntax "sorted_step" : tactic
@@ -417,15 +425,36 @@ macro_rules
       | exact State.Within.allocate ‹_› _
       | exact ((State.Within.allocate ‹_› _).unpark _).modify _ _
       | exact (State.Within.allocate ‹_› _).timers _
-      | exact (State.Within.timers ‹_› _).modify _ _)
+      | exact (State.Within.timers ‹_› _).modify _ _
+      | exact State.Within.staged ‹_› _)
 
-/-- The state an answer leaves. -/
-private def Answer.state : Answer β → State
+/-- The state an answer leaves, or `suspended` while the requester is suspended. -/
+private def Answer.state (suspended : State) : Answer β → State
   | .reply _ state | .wait _ state | .continue _ state => state
+  | .suspended => suspended
+
+/-- A persistent term request leaves every record and timer as it is. -/
+private theorem State.request_persistent (state : State) (processId : PID) (next : Term → Result β)
+    (query : Request)
+    (persistent : (query matches .persistentGet _ | .persistentPut .. | .persistentErase _ | .persistentAwait) = true) :
+    ∃ staged, (state.request processId next query).state state = { state with staged } := by
+  generalize answered : state.request processId next query = answer
+  cases query <;> simp at persistent <;> simp only [State.request, State.stage] at answered <;>
+    (repeat' split at answered) <;> subst answered <;> first | exact ⟨_, rfl⟩ | exact ⟨state.staged, rfl⟩
+
+/-- What a persistent term request leaves holds when it holds whatever is staged. -/
+private theorem State.request_persistent_of {state : State} {processId : PID} {next : Term → Result β}
+    {query : Request} {holds : State → Prop} (keeps : ∀ staged, holds { state with staged })
+    (persistent : (query matches .persistentGet _ | .persistentPut .. | .persistentErase _ | .persistentAwait) = true) :
+    holds ((state.request processId next query).state state) := by
+  obtain ⟨staged, equal⟩ := State.request_persistent state processId next query persistent
+  rw [equal]; exact keeps staged
 
 private theorem State.Within.request {state : State} (sorted : state.Within elapsed) (processId : PID)
-    (next : Term → Result β) (query : Request) : (state.request processId next query).state.Within elapsed := by
-  cases query <;> simp only [State.request] <;> (repeat' split) <;> simp only [Answer.state] <;> sorted_exact
+    (next : Term → Result β) (query : Request) :
+    ((state.request processId next query).state state).Within elapsed := by
+  cases query <;> simp only [State.request, State.stage] <;> (repeat' split) <;> simp only [Answer.state] <;>
+    sorted_exact
 
 private theorem State.Within.exitSignal {state : State} (sorted : state.Within elapsed) (target source : PID) (reason : Term)
     (linked normalKills : Bool) : (state.exitSignal target source reason linked normalKills).1.Within elapsed := by
@@ -488,7 +517,7 @@ private theorem State.Within.own {state : State} (sorted : state.Within elapsed)
     | request query next =>
       have := sorted.request processId next query
       simp only [Task.own] at mem
-      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+      split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;>
         rename_i found <;> simpa [found, Answer.state] using this
 
 private theorem State.Within.handleStep {state : State} (sorted : state.Within elapsed) {processId : PID} {task : Task α}
@@ -535,9 +564,10 @@ private theorem Config.Within.step {config next : Config α} {event : Event} (so
     cases exhausted
     case true => simp [Step, Config.successors] at step
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
-      List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists] at step
-    rcases step with ((⟨before, processId, task, after, -, transition, possible, same⟩ |
-      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩
+      List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists, Option.mem_toList] at step
+    rcases step with (((⟨before, processId, task, after, -, transition, possible, same⟩ |
+      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩) |
+      ⟨update, -, -, rfl⟩
     · simp only [Prod.mk.injEq] at same
       obtain ⟨-, rfl⟩ := same
       have : transition.state.Within elapsed := by
@@ -562,6 +592,7 @@ private theorem Config.Within.step {config next : Config α} {event : Event} (so
     · simp only [Prod.mk.injEq] at fired
       obtain ⟨-, rfl⟩ := fired
       exact (sorted.fire _).normalize
+    · exact sorted.commit.normalize
 
 /-- Every configuration a run reaches has sorted records. -/
 private theorem Config.Within.run {config last : Config α} {events : List Event} (sorted : config.Within elapsed)
@@ -813,9 +844,10 @@ private theorem Config.Normalized.step {config next : Config α} {event : Event}
     cases exhausted
     case true => simp [Step, Config.successors] at step
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
-      List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists] at step
-    rcases step with ((⟨before, processId, task, after, -, transition, possible, same⟩ |
-      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩
+      List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists, Option.mem_toList] at step
+    rcases step with (((⟨before, processId, task, after, -, transition, possible, same⟩ |
+      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩) |
+      ⟨update, -, -, rfl⟩
     · simp only [Prod.mk.injEq] at same
       obtain ⟨-, rfl⟩ := same
       have : transition.state.Within elapsed := by
@@ -840,6 +872,7 @@ private theorem Config.Normalized.step {config next : Config α} {event : Event}
     · simp only [Prod.mk.injEq] at fired
       obtain ⟨-, rfl⟩ := fired
       exact State.normalize_normalize (sorted.fire _).1
+    · exact State.normalize_normalize sorted.commit.1
 
 /-! ### What a step continues with -/
 
@@ -888,7 +921,7 @@ private theorem State.request_continue {state state' answered answered' : State}
     (continued : state.request processId next query = .continue computation answered)
     (continued' : state'.request processId next query = .continue computation' answered') :
     computation = computation' := by
-  cases query <;> simp only [State.request] at continued continued' <;>
+  cases query <;> simp only [State.request, State.stage] at continued continued' <;>
     (repeat' split at continued) <;> (repeat' split at continued') <;>
     simp_all
 
@@ -975,6 +1008,7 @@ private theorem Task.own_shape {state state' : State} {processId : PID} {task : 
             | simp [Transition.Shape, Transition.Shapes, Term.eq_of_identical view]
             | simp [Transition.Shape, Transition.Shapes, Wait.eq_of_identical view]
             | simp [Transition.Shape, Transition.Shapes, State.request_continue found found']
+            | simp [Transition.Shapes]
 
 
 /-! ### Steps on the list of processes -/
@@ -1098,8 +1132,8 @@ private theorem Config.step_of_stepOf {config next : Config α} {key : Key} {eve
     obtain ⟨⟨before, task, after⟩, split, transition, head, rfl, rfl⟩ := found
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, List.mem_append,
       List.mem_flatMap, List.mem_map]
-    refine .inl (.inl (.inl ⟨(before, (processId, task), after), by rw [splitAt_eq split]; exact mem_splits,
-      transition, ?_, rfl⟩))
+    refine .inl (.inl (.inl (.inl ⟨(before, (processId, task), after), by rw [splitAt_eq split]; exact mem_splits,
+      transition, ?_, rfl⟩)))
     simp only [Task.transitions, Kernel.append_eq, List.mem_append]
     exact .inl (List.mem_of_head? head)
   | .running state tasks finished false, .handle processId =>
@@ -1107,8 +1141,8 @@ private theorem Config.step_of_stepOf {config next : Config α} {key : Key} {eve
     obtain ⟨⟨before, task, after⟩, split, transition, head, rfl, rfl⟩ := found
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, List.mem_append,
       List.mem_flatMap, List.mem_map]
-    refine .inl (.inl (.inl ⟨(before, (processId, task), after), by rw [splitAt_eq split]; exact mem_splits,
-      transition, ?_, rfl⟩))
+    refine .inl (.inl (.inl (.inl ⟨(before, (processId, task), after), by rw [splitAt_eq split]; exact mem_splits,
+      transition, ?_, rfl⟩)))
     simp only [Task.transitions, Kernel.append_eq, List.mem_append]
     exact .inr (List.mem_of_head? head)
   | .running state tasks finished false, .link processId target =>
@@ -1118,7 +1152,7 @@ private theorem Config.step_of_stepOf {config next : Config α} {key : Key} {eve
     obtain ⟨record', mem⟩ := State.mem_processes_of_record record
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, List.mem_append,
       List.mem_flatMap, List.mem_map]
-    refine .inl (.inl (.inr ⟨(processId, record'), mem, next', ?_, rfl⟩))
+    refine .inl (.inl (.inl (.inr ⟨(processId, record'), mem, next', ?_, rfl⟩)))
     simp only [State.phases, Kernel.append_eq, Kernel.filterMap_eq, List.mem_append, List.mem_filterMap]
     exact .inl ⟨target, linked, phase⟩
   | .running state tasks finished false, .phase processId =>
@@ -1128,7 +1162,7 @@ private theorem Config.step_of_stepOf {config next : Config α} {key : Key} {eve
     obtain ⟨record', mem⟩ := State.mem_processes_of_record record
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, List.mem_append,
       List.mem_flatMap, List.mem_map]
-    refine .inl (.inl (.inr ⟨(processId, record'), mem, next', ?_, rfl⟩))
+    refine .inl (.inl (.inl (.inr ⟨(processId, record'), mem, next', ?_, rfl⟩)))
     simp only [State.phases, Kernel.append_eq, Kernel.filterMap_eq, List.mem_append, List.mem_filterMap]
     exact .inr (by simp [phase])
   | .running state tasks finished false, .unpark processId =>
@@ -1142,7 +1176,7 @@ private theorem Config.step_of_stepOf {config next : Config α} {key : Key} {eve
     obtain ⟨record', mem⟩ := State.mem_processes_of_record record
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
       List.mem_append, List.mem_filterMap]
-    exact .inl (.inr ⟨(processId, record'), mem, by simp [found]⟩)
+    exact .inl (.inl (.inr ⟨(processId, record'), mem, by simp [found]⟩))
   | .running state tasks finished false, .fire reference =>
     simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq] at found
     obtain ⟨timer, found, rfl, rfl⟩ := found
@@ -1150,7 +1184,14 @@ private theorem Config.step_of_stepOf {config next : Config α} {key : Key} {eve
     have equal := List.find?_some (by simpa [Kernel.find?_eq] using found)
     have mem := List.mem_of_find?_eq_some (by simpa [Kernel.find?_eq] using found)
     simp only [beq_iff_eq] at equal
-    exact .inr ⟨timer, mem, by rw [equal]⟩
+    exact .inl (.inr ⟨timer, mem, by rw [equal]⟩)
+  | .running state tasks finished false, .commit =>
+    simp only [Config.stepOf, Option.map_eq_some_iff] at found
+    obtain ⟨update, staged, equal⟩ := found
+    simp only [Prod.mk.injEq] at equal
+    obtain ⟨rfl, rfl⟩ := equal
+    simp only [Step, Config.successors, Kernel.append_eq, Kernel.map_eq, List.mem_append, List.mem_map]
+    exact .inr ⟨update, by simp [staged], rfl⟩
 
 /-! ### At most one process finishes the run -/
 
@@ -1194,7 +1235,7 @@ private theorem Task.own_keeps {state : State} {processId : PID} {task : Task α
         simp only [List.mem_singleton] at inside <;> subst inside <;> exact ⟨rfl, finishes⟩
     | request =>
       simp only [Task.own] at mem
-      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+      split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;>
         simp only [List.mem_singleton] at inside <;> subst inside <;> exact ⟨rfl, finishes⟩
 
 private theorem Task.handle_keeps {state : State} {processId : PID} {task : Task α} {transition : Transition α}
@@ -1232,9 +1273,10 @@ private theorem Config.FinishesOnce.step {config next : Config α} {event : Even
     cases exhausted
     case true => simp [Step, Config.successors] at step
     simp only [Step, Config.successors, Kernel.append_eq, Kernel.flatMap_eq, Kernel.map_eq, Kernel.filterMap_eq,
-      List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists] at step
-    rcases step with ((⟨before, processId, task, after, split, transition, possible, same⟩ |
-      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩
+      List.mem_append, List.mem_flatMap, List.mem_map, List.mem_filterMap, Prod.exists, Option.mem_toList] at step
+    rcases step with (((⟨before, processId, task, after, split, transition, possible, same⟩ |
+      ⟨processId, process, -, phased⟩) | ⟨processId, process, -, unparked⟩) | ⟨timer, -, fired⟩) |
+      ⟨update, -, -, rfl⟩
     · simp only [Prod.mk.injEq] at same
       obtain ⟨-, rfl⟩ := same
       have keeps : transition.Keeps processId task := by
@@ -1274,6 +1316,7 @@ private theorem Config.FinishesOnce.step {config next : Config α} {event : Even
     · simp only [Prod.mk.injEq] at fired
       obtain ⟨-, rfl⟩ := fired
       exact once
+    · exact once
 
 /-! ### What a step by key does to the processes -/
 
@@ -1305,7 +1348,7 @@ private theorem Config.stepOf_own {state : State} {tasks : List (PID × Task α)
     (found : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next)) :
     ∃ task transition, Kernel.lookup processId tasks = some task ∧
       (task.own state processId).head? = some transition ∧
-      next = if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] none true
+      next = if transition.exhausted then .running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true
         else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
           (transition.finished.orElse fun _ => finished) false := by
   simp only [Config.stepOf, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq] at found
@@ -1319,7 +1362,7 @@ private theorem Config.stepOf_handle {state : State} {tasks : List (PID × Task 
     (found : (Config.running state tasks finished false).stepOf (.handle processId) = some (event, next)) :
     ∃ task transition, Kernel.lookup processId tasks = some task ∧
       (task.handle state processId).head? = some transition ∧
-      next = if transition.exhausted then .running { transition.state with processes := [], timers := [] } [] none true
+      next = if transition.exhausted then .running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true
         else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
           (transition.finished.orElse fun _ => finished) false := by
   simp only [Config.stepOf, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq] at found
@@ -1456,7 +1499,7 @@ private theorem Task.own_pids {state : State} {processId : PID} {task : Task α}
         simp only [List.mem_singleton] at inside <;> subst inside <;> exact .inl rfl
     | request =>
       simp only [Task.own] at mem
-      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;>
+      split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;>
         simp only [List.mem_singleton] at inside <;> subst inside <;> exact .inl rfl
 
 /-- A process's own step that finishes the run ends the process. -/
@@ -1480,7 +1523,7 @@ private theorem Task.own_finished {state : State} {processId : PID} {task : Task
         simp at finished
     | request =>
       simp only [Task.own] at mem
-      split at mem <;> simp only [List.mem_singleton] at mem <;> subst mem <;> simp at finished
+      split at mem <;> simp only [List.mem_singleton, List.not_mem_nil] at mem <;> subst mem <;> simp at finished
 
 /-! ### Steps as changes of the processes -/
 
@@ -1579,7 +1622,7 @@ private theorem Config.changes_own_transfer {state state' : State} {tasks tasks'
       (transition.exhausted = false →
         (Config.running state tasks finished false).Changes (some (transition.change processId)) next ∧
         (Config.running state' tasks' finished' false).Changes (some (transition.change processId)) next') ∧
-      (transition.exhausted = true → next = .running { transition.state with processes := [], timers := [] } [] none true) := by
+      (transition.exhausted = true → next = .running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true) := by
   obtain ⟨task₁, transition, lookup₁, head, equal⟩ := Config.stepOf_own found
   rw [lookup] at lookup₁; simp only [Option.some.injEq] at lookup₁; subst lookup₁
   obtain ⟨task₂, transition', lookup₂, head', equal'⟩ := Config.stepOf_own found'
@@ -1840,18 +1883,28 @@ private theorem handleFinishes {processId : PID} {view : Option Term × Option T
     (finished : ((handleTaskChange processId view).finish task).isSome = true) : task.Finishes :=
   (handleFinished_some (processId := processId) finished).2
 
+private theorem Update.eq_of_identical {first second : Update} (same : first.identical second = true) :
+    first = second := by
+  obtain ⟨owner, key, value⟩ := first
+  obtain ⟨owner', key', value'⟩ := second
+  simp only [Update.identical, Bool.and_eq_true, beq_iff_eq] at same
+  obtain ⟨⟨rfl, key⟩, value⟩ := same
+  rw [Term.eq_of_identical key, eq_of_optionIdentical Term.eq_of_identical value]
+
 private theorem State.eq_of_identical {first second : State} (same : first.identical second = true)
     (elapsed : first.elapsed = second.elapsed) : first = second := by
-  obtain ⟨processes, timers, elapsed₁⟩ := first
-  obtain ⟨processes', timers', elapsed₂⟩ := second
+  obtain ⟨processes, timers, table, staged, elapsed₁⟩ := first
+  obtain ⟨processes', timers', table', staged', elapsed₂⟩ := second
   simp only [State.identical, Bool.and_eq_true] at same elapsed
+  obtain ⟨⟨⟨same, timed⟩, tabled⟩, staging⟩ := same
   have records := eq_of_identicalLists (same := fun record record' : PID × ProcessState =>
       record.1 == record'.1 && record.2.identical record'.2) (fun {record record'} equal => by
     obtain ⟨key, value⟩ := record
     obtain ⟨key', value'⟩ := record'
     simp only [Bool.and_eq_true, beq_iff_eq] at equal
-    rw [equal.1, ProcessState.eq_of_identical equal.2]) same.1
-  rw [records, eq_of_identicalLists Timer.eq_of_identical same.2, elapsed]
+    rw [equal.1, ProcessState.eq_of_identical equal.2]) same
+  rw [records, eq_of_identicalLists Timer.eq_of_identical timed, Term.eq_of_identicalEntries tabled,
+    eq_of_optionIdentical Update.eq_of_identical staging, elapsed]
 
 /-- The owners of two keys that `Config.commutesAfter` lets commute. -/
 private theorem Key.owners_differ {processId other : PID}
@@ -1971,7 +2024,7 @@ private theorem Config.processes_own {state : State} {tasks : List (PID × Task 
           simp only [Option.some.injEq] at found found'; subst found; subst found'
           exact differ (once _ (mem_of_lookup lookup) _ (mem_of_lookup lookup')
             (Config.own_finishes head finishes) (handleFinishes finishes')))
-  | link _ _ | phase _ | unpark _ | fire _ =>
+  | link _ _ | phase _ | unpark _ | fire _ | commit =>
     have keeps' := Config.changes_keeps rfl step'
     have keeps₁ := Config.changes_keeps rfl after
     have keeps₂ := keeps'
@@ -2031,7 +2084,7 @@ private theorem Config.processes_of_fallback {state : State} {tasks : List (PID 
           simp only [Option.some.injEq] at found found'; subst found; subst found'
           exact differ (once _ (mem_of_lookup lookup) _ (mem_of_lookup lookup')
             (handleFinishes finishes) (handleFinishes finishes')))
-    | link _ _ | phase _ | unpark _ | fire _ =>
+    | link _ _ | phase _ | unpark _ | fire _ | commit =>
       have keeps' := Config.changes_keeps rfl step'
       obtain ⟨_, _, _, rfl⟩ := Config.running_of_stepOf after
       have keeps₁ := Config.changes_keeps rfl after
@@ -2041,7 +2094,7 @@ private theorem Config.processes_of_fallback {state : State} {tasks : List (PID 
       obtain ⟨rfl, rfl, rfl, -⟩ := equal₂
       obtain ⟨task, read, lookup, -, changes, changes₂⟩ := Config.changes_handle_transfer step after' view
       exact Config.changes_comm_keeps changes keeps' keeps₁ changes₂
-  | link _ _ | phase _ | unpark _ | fire _ =>
+  | link _ _ | phase _ | unpark _ | fire _ | commit =>
     have keeps := Config.changes_keeps rfl step
     obtain ⟨_, _, _, rfl⟩ := Config.running_of_stepOf after'
     have keeps₂ := Config.changes_keeps rfl after'
@@ -2056,7 +2109,7 @@ private theorem Config.processes_of_fallback {state : State} {tasks : List (PID 
     | handle other =>
       obtain ⟨task, read, lookup, -, changes', changes₁⟩ := Config.changes_handle_transfer step' after view'
       exact swapped (Config.changes_comm_keeps changes' keeps keeps₂ changes₁)
-    | link _ _ | phase _ | unpark _ | fire _ =>
+    | link _ _ | phase _ | unpark _ | fire _ | commit =>
       have keeps' := Config.changes_keeps rfl step'
       have keeps₁ := Config.changes_keeps rfl after
       exact Config.changes_comm_none keeps keeps' keeps₁ keeps₂

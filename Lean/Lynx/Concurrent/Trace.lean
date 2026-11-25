@@ -115,6 +115,21 @@ private def showRequest (processId : PID) (reply : Option Term) : Request → St
       s!"{showPid processId} starts timer {showReply reply} sending {showTerm message} to {showPid destination}"
   | .cancelTimer reference =>
       s!"{showPid processId} cancels timer {showReference reference}, getting {showReply reply}"
+  | .persistentGet key =>
+      match reply with
+      | some (.cons value .nil) => s!"{showPid processId} reads persistent term {showTerm key}: {showTerm value}"
+      | _ => s!"{showPid processId} finds no persistent term {showTerm key}"
+  | .persistentPut key value _ =>
+      match reply with
+      | some (.atom "badarg") =>
+          s!"{showPid processId} finds persistent term {showTerm key} stored with another value"
+      | some _ => s!"{showPid processId} finds persistent term {showTerm key} already {showTerm value}"
+      | none => s!"{showPid processId} stages persistent term {showTerm key} as {showTerm value}"
+  | .persistentErase key =>
+      match reply with
+      | some _ => s!"{showPid processId} finds no persistent term {showTerm key} to erase"
+      | none => s!"{showPid processId} stages erasing persistent term {showTerm key}"
+  | .persistentAwait => s!"{showPid processId} resumes after its persistent term update"
 
 /-- A process handling a signal from its queue. -/
 private def showHandle (receiver : PID) (entry : Entry) : String :=
@@ -151,6 +166,7 @@ private def showEvent : Event → Option String
   | .phase processId => some s!"{showPid processId}, which ended, signals its links, watchers or requesters"
   | .unpark processId => some s!"{showPid processId}'s monitor signal is sent"
   | .fire reference => some s!"timer {showReference reference} fires"
+  | .commit owner => some s!"the persistent term update of {showPid owner} becomes visible"
 
 private def showException : Exception → String
   | .error reason => s!"raises error {showTerm reason}"

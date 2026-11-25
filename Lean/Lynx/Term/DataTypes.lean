@@ -196,6 +196,23 @@ inductive Request where
   `false` once it fired, was canceled, or its destination exited. A fired
   timer's message may still be queued. -/
   | cancelTimer (reference : List Nat)
+  /-- Look up a persistent term, as `persistent_term:get/1,2` do, without
+  waiting for an update in progress. Replies `[Value]`, or `[]` when the key is
+  not stored. -/
+  | persistentGet (key : Term)
+  /-- Store a persistent term, as `persistent_term:put/2` does, or with `new`
+  as `put_new/2` does. Updates take turns: the requester is suspended while
+  another update is in progress. Replies `ok` when the value is already stored and
+  `badarg` when `new` finds another one; otherwise the update is staged and
+  becomes visible later, even if the requester exits first, and the requester
+  continues once it is. -/
+  | persistentPut (key value : Term) (new : Bool)
+  /-- Erase a persistent term, as `persistent_term:erase/1` does, replying
+  whether it was stored. An erase takes turns and becomes visible as an update
+  does. -/
+  | persistentErase (key : Term)
+  /-- Wait until the requester's staged persistent update is visible. Replies `ok`. -/
+  | persistentAwait
 deriving Repr
 
 /-- A resumable process computation. Bind stores continuations so scheduling

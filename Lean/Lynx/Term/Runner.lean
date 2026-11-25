@@ -5,8 +5,9 @@ public import Lynx.Concurrent
 public import Lynx.Concurrent.Termination
 
 /-! Execution of one run. Every step is one of
-`Lynx.Concurrent.Config.successors`: signals are handled as soon as they can, the
-scheduler choices select which process steps next, and when no process can
+`Lynx.Concurrent.Config.successors`: signals are handled and persistent term updates
+become visible as soon as they can, the scheduler choices select which process
+steps next, and when no process can
 step otherwise, a positive timeout expires or the oldest timer fires. So every
 execution is a `Lynx.Concurrent.Run`, and it ends because runs do. -/
 
@@ -22,7 +23,7 @@ private instance : WellFoundedRelation (Config α) :=
 private def owner : Event → Option PID
   | .internal processId | .spawn processId _ | .send processId _ _ | .receive processId _
   | .timeout processId | .exit processId _ | .request processId _ _ => some processId
-  | .handle .. | .phase _ | .unpark _ | .fire _ => none
+  | .handle .. | .phase _ | .unpark _ | .fire _ | .commit _ => none
 
 /-- Whether a computation waits for a message with a positive timeout. -/
 private def waitsFinite : Result β → Bool
@@ -87,7 +88,7 @@ private def track (root : PID) (env : Environment) : Config α → Environment
 /-- Follow steps until none remain, with the root's last environment. -/
 private def execute (root : PID) (env : Environment) (config : Config α) (current : PID)
     (preferred : ScheduleChoice) (choices : List ScheduleChoice) : Outcome α × Environment :=
-  match firstWhere config (fun event => event matches .handle .. | .phase _ | .unpark _) with
+  match firstWhere config (fun event => event matches .handle .. | .phase _ | .unpark _ | .commit _) with
   | some ⟨(_, next), _⟩ => execute root (track root env next) next current preferred choices
   | none =>
       match choose config current preferred choices with

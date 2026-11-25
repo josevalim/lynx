@@ -37,6 +37,7 @@ public def main : IO Unit := do
     { module := `Lynx.Modules.Erlang.binary },
     { module := `Lynx.Modules.Erlang.maps }, { module := `Lynx.Modules.Erlang.math },
     { module := `Lynx.Modules.Erlang.sets },
-    { module := `Lynx.Modules.Erlang.erts_internal }]
+    { module := `Lynx.Modules.Erlang.erts_internal },
+    { module := `Lynx.Modules.Erlang.persistent_term }]
     {} (loadExts := true)
   IO.println (manifest env).pretty
