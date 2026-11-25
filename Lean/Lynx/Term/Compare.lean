@@ -204,6 +204,72 @@ end Lynx.Term.Compare
 
 namespace Lynx.Term.Compare
 
+/-! ### Identities
+
+Erlang orders process identifiers, references, and functions of different
+identity by how the runtime represents them, which programs cannot rely on.
+Their orders are opaque: proofs may only rely on each being a total order that
+tells different values apart. Execution uses the orders below. -/
+
+/-- The order of function identities, whether external, then module, name, and
+arity, which execution uses. -/
+@[expose] def functionIdentityCompare : Bool × String × String × Nat → Bool × String × String × Nat → Ordering :=
+  compareLex (compareOn Ord.compare (·.1)) (compareLex (compareOn stringCompare (·.2.1))
+    (compareLex (compareOn stringCompare (·.2.2.1)) (compareOn Ord.compare (·.2.2.2))))
+
+private instance : Std.TransCmp functionIdentityCompare :=
+  inferInstanceAs (Std.TransCmp (compareLex _ _))
+
+private theorem functionIdentityCompare_eq_iff (a b : Bool × String × String × Nat) :
+    functionIdentityCompare a b = .eq ↔ a = b := by
+  obtain ⟨e, m, n, r⟩ := a
+  obtain ⟨e', m', n', r'⟩ := b
+  simp [functionIdentityCompare, compareLex, compareOn, Ordering.then_eq_eq]
+
+/-- The order of process identifiers, left unspecified. -/
+opaque pidOrder : { cmp : PID → PID → Ordering // Std.TransCmp cmp ∧ ∀ a b, cmp a b = .eq ↔ a = b } :=
+  ⟨Ord.compare, inferInstance, fun _ _ => Std.compare_eq_iff_eq⟩
+
+/-- The order of references, left unspecified. -/
+opaque referenceOrder :
+    { cmp : List Nat → List Nat → Ordering // Std.TransCmp cmp ∧ ∀ a b, cmp a b = .eq ↔ a = b } :=
+  ⟨Ord.compare, inferInstance, fun _ _ => Std.compare_eq_iff_eq⟩
+
+/-- The order of function identities, left unspecified. -/
+opaque functionOrder :
+    { cmp : Bool × String × String × Nat → Bool × String × String × Nat → Ordering //
+      Std.TransCmp cmp ∧ ∀ a b, cmp a b = .eq ↔ a = b } :=
+  ⟨functionIdentityCompare, inferInstance, functionIdentityCompare_eq_iff⟩
+
+/-- Compare by an order that tells values apart, deciding equal values without
+it, so that comparing equal values evaluates where the order does not. -/
+@[expose] def identityCompare {α : Type} [BEq α] (cmp : α → α → Ordering) (a b : α) : Ordering :=
+  if a == b then .eq else cmp a b
+
+private theorem identityCompare_eq {α : Type} [BEq α] [LawfulBEq α] (cmp : α → α → Ordering)
+    (lawful : ∀ a b, cmp a b = .eq ↔ a = b) : identityCompare cmp = cmp := by
+  funext a b
+  unfold identityCompare
+  split <;> rename_i same
+  · rw [eq_of_beq same]; exact ((lawful b b).mpr rfl).symm
+  · rfl
+
+private instance : Std.TransCmp (identityCompare pidOrder.val) := by
+  rw [identityCompare_eq _ pidOrder.property.2]; exact pidOrder.property.1
+private instance : Std.TransCmp (identityCompare referenceOrder.val) := by
+  rw [identityCompare_eq _ referenceOrder.property.2]; exact referenceOrder.property.1
+private instance : Std.TransCmp (identityCompare functionOrder.val) := by
+  rw [identityCompare_eq _ functionOrder.property.2]; exact functionOrder.property.1
+
+@[simp] theorem identityCompare_pid_eq_iff (a b : PID) : identityCompare pidOrder.val a b = .eq ↔ a = b := by
+  rw [identityCompare_eq _ pidOrder.property.2]; exact pidOrder.property.2 a b
+@[simp] theorem identityCompare_reference_eq_iff (a b : List Nat) :
+    identityCompare referenceOrder.val a b = .eq ↔ a = b := by
+  rw [identityCompare_eq _ referenceOrder.property.2]; exact referenceOrder.property.2 a b
+@[simp] theorem identityCompare_function_eq_iff (a b : Bool × String × String × Nat) :
+    identityCompare functionOrder.val a b = .eq ↔ a = b := by
+  rw [identityCompare_eq _ functionOrder.property.2]; exact functionOrder.property.2 a b
+
 /-- One comparison step. `exact` controls whether integer and float types are
 distinct. Map keys always use the exact child comparator. Its body is exposed
 so evaluation can compare terms. -/
@@ -220,17 +286,17 @@ so evaluation can compare terms. -/
   | .atom a, .atom b => stringCompare a b
   | .atom _, _ => .lt
   | _, .atom _ => .gt
-  | .reference a, .reference b => Ord.compare a b
+  | .reference a, .reference b => identityCompare referenceOrder.val a b
   | .reference _, _ => .lt
   | _, .reference _ => .gt
   | .function external module name arity captures,
     .function otherExternal otherModule otherName otherArity otherCaptures =>
-    (Ord.compare external otherExternal).then ((stringCompare module otherModule).then
-      ((stringCompare name otherName).then ((Ord.compare arity otherArity).then
-        (List.compareLex cmp captures.toList otherCaptures.toList))))
+    (identityCompare functionOrder.val (external, module, name, arity)
+      (otherExternal, otherModule, otherName, otherArity)).then
+      (List.compareLex cmp captures.toList otherCaptures.toList)
   | .function _ _ _ _ _, _ => .lt
   | _, .function _ _ _ _ _ => .gt
-  | .pid a, .pid b => Ord.compare a b
+  | .pid a, .pid b => identityCompare pidOrder.val a b
   | .pid _, _ => .lt
   | _, .pid _ => .gt
   | .tuple a, .tuple b =>
@@ -360,18 +426,18 @@ private def boundedStep (exact : Bool) (n : Nat) (cmp exactCmp : Child n → Chi
   | .atom a, .atom b => stringCompare a b
   | .atom _, _ => .lt
   | _, .atom _ => .gt
-  | .reference a, .reference b => Ord.compare a b
+  | .reference a, .reference b => identityCompare referenceOrder.val a b
   | .reference _, _ => .lt
   | _, .reference _ => .gt
   | .function external module name arity captures,
     .function otherExternal otherModule otherName otherArity otherCaptures =>
-    (Ord.compare external otherExternal).then ((stringCompare module otherModule).then
-      ((stringCompare name otherName).then ((Ord.compare arity otherArity).then
-        (List.compareLex cmp (boundedList n captures.toList (function_child ha))
-          (boundedList n otherCaptures.toList (function_child hb))))))
+    (identityCompare functionOrder.val (external, module, name, arity)
+      (otherExternal, otherModule, otherName, otherArity)).then
+      (List.compareLex cmp (boundedList n captures.toList (function_child ha))
+        (boundedList n otherCaptures.toList (function_child hb)))
   | .function _ _ _ _ _, _ => .lt
   | _, .function _ _ _ _ _ => .gt
-  | .pid a, .pid b => Ord.compare a b
+  | .pid a, .pid b => identityCompare pidOrder.val a b
   | .pid _, _ => .lt
   | _, .pid _ => .gt
   | .tuple a, .tuple b =>
@@ -526,28 +592,18 @@ private instance (exact : Bool) (cmp exactCmp : Term → Term → Ordering)
         all_goals try exact Std.TransCmp.isLE_trans ab bc
         case function.function.function.false ae am an arity ac be bm bn barity bcaps ce cm cn carity cc =>
           exact Std.TransCmp.isLE_trans
-            (cmp := compareLex (compareOn Ord.compare Prod.fst)
-              (compareLex (compareOn stringCompare fun p : Bool × String × String × Nat × List Term => p.2.1)
-                (compareLex (compareOn stringCompare fun p : Bool × String × String × Nat × List Term =>
-                    p.2.2.1)
-                  (compareLex (compareOn Ord.compare fun p : Bool × String × String × Nat × List Term =>
-                      p.2.2.2.1)
-                    (compareOn (List.compareLex cmp) fun p : Bool × String × String × Nat × List Term =>
-                      p.2.2.2.2)))))
-            (a := (ae, am, an, arity, ac.toList)) (b := (be, bm, bn, barity, bcaps.toList))
-            (c := (ce, cm, cn, carity, cc.toList)) ab bc
+            (cmp := compareLex (compareOn (identityCompare functionOrder.val)
+                fun p : (Bool × String × String × Nat) × List Term => p.1)
+              (compareOn (List.compareLex cmp) fun p : (Bool × String × String × Nat) × List Term => p.2))
+            (a := ((ae, am, an, arity), ac.toList)) (b := ((be, bm, bn, barity), bcaps.toList))
+            (c := ((ce, cm, cn, carity), cc.toList)) ab bc
         case function.function.function.true ae am an arity ac be bm bn barity bcaps ce cm cn carity cc =>
           exact Std.TransCmp.isLE_trans
-            (cmp := compareLex (compareOn Ord.compare Prod.fst)
-              (compareLex (compareOn stringCompare fun p : Bool × String × String × Nat × List Term => p.2.1)
-                (compareLex (compareOn stringCompare fun p : Bool × String × String × Nat × List Term =>
-                    p.2.2.1)
-                  (compareLex (compareOn Ord.compare fun p : Bool × String × String × Nat × List Term =>
-                      p.2.2.2.1)
-                    (compareOn (List.compareLex cmp) fun p : Bool × String × String × Nat × List Term =>
-                      p.2.2.2.2)))))
-            (a := (ae, am, an, arity, ac.toList)) (b := (be, bm, bn, barity, bcaps.toList))
-            (c := (ce, cm, cn, carity, cc.toList)) ab bc
+            (cmp := compareLex (compareOn (identityCompare functionOrder.val)
+                fun p : (Bool × String × String × Nat) × List Term => p.1)
+              (compareOn (List.compareLex cmp) fun p : (Bool × String × String × Nat) × List Term => p.2))
+            (a := ((ae, am, an, arity), ac.toList)) (b := ((be, bm, bn, barity), bcaps.toList))
+            (c := ((ce, cm, cn, carity), cc.toList)) ab bc
         case tuple.tuple.tuple.false a b c =>
           exact Std.TransCmp.isLE_trans
             (cmp := compareLex (compareOn Ord.compare Array.size) (compareOn (List.compareLex cmp) Array.toList)) ab bc
@@ -819,15 +875,17 @@ theorem compare_atoms (a b : String) :
   rw [compare_step]
   exact Compare.stringCompare_eq a b
 
+/-- References are exactly equal when they are the same; their order is unspecified. -/
 @[simp] theorem compareExact_reference (a b : List Nat) :
-    compareExact (fuel (.reference a) (.reference b)) (.reference a) (.reference b) = Ord.compare a b := by
+    compareExact (fuel (.reference a) (.reference b)) (.reference a) (.reference b) = .eq ↔ a = b := by
   rw [compareExact_step]
-  rfl
+  simp [Compare.compareStep]
 
+/-- Process identifiers are exactly equal when they are the same; their order is unspecified. -/
 @[simp] theorem compareExact_pid (a b : PID) :
-    compareExact (fuel (.pid a) (.pid b)) (.pid a) (.pid b) = Ord.compare a b := by
+    compareExact (fuel (.pid a) (.pid b)) (.pid a) (.pid b) = .eq ↔ a = b := by
   rw [compareExact_step]
-  rfl
+  simp [Compare.compareStep]
 
 @[simp] theorem compareExact_eq_atom (a : Term) (name : String) :
     compareExact (fuel a (.atom name)) a (.atom name) = .eq ↔ a = .atom name := by
@@ -935,7 +993,6 @@ theorem cons_compareExact_eq (head tail a : Term) (equal : compareExact (fuel (.
       (.function external module name arity #[]) = .eq ↔
       a = .function external module name arity #[] := by
   cases a <;> rw [compareExact_step] <;> simp [Compare.compareStep]
-  rintro rfl rfl rfl rfl
   rename_i captures
   rcases captures with ⟨_ | _⟩ <;> simp [List.compareLex]
 
@@ -945,15 +1002,17 @@ end Lynx.Term
 
 namespace Lynx.Term
 
+/-- References are equal when they are the same; their order is unspecified. -/
 @[simp] theorem compare_reference (a b : List Nat) :
-    compare (fuel (.reference a) (.reference b)) (.reference a) (.reference b) = Ord.compare a b := by
+    compare (fuel (.reference a) (.reference b)) (.reference a) (.reference b) = .eq ↔ a = b := by
   rw [compare_step]
-  rfl
+  simp [Compare.compareStep]
 
+/-- Process identifiers are equal when they are the same; their order is unspecified. -/
 @[simp] theorem compare_pid (a b : PID) :
-    compare (fuel (.pid a) (.pid b)) (.pid a) (.pid b) = Ord.compare a b := by
+    compare (fuel (.pid a) (.pid b)) (.pid a) (.pid b) = .eq ↔ a = b := by
   rw [compare_step]
-  rfl
+  simp [Compare.compareStep]
 
 /-- Binaries compare (fuel equal when) equal when they have the same bytes. -/
 theorem binary_compare_eq (a b : ByteArray) :
@@ -1399,7 +1458,8 @@ private theorem equalStep_iff (exact : Bool) {eq exactEq : Term → Term → Boo
     simp only [equalStep, compareStep, Bool.and_eq_true, beq_iff_eq, reduceCtorEq, Bool.false_eq_true,
       ite_true, ite_false, Bool.not_false, Bool.not_true, Bool.true_and, Bool.false_and,
       iff_self, Ordering.then_eq_eq, stringCompare_eq_iff, ratCompare_eq_iff, Std.compare_eq_iff_eq,
-      equalLists_iff agree, agree, Rat.intCast_inj, and_assoc] <;> try trivial
+      equalLists_iff agree, agree, Rat.intCast_inj, and_assoc, identityCompare_function_eq_iff,
+      identityCompare_pid_eq_iff, identityCompare_reference_eq_iff, Prod.mk.injEq] <;> try trivial
   all_goals first
     | exact equalMaps_iff_compare (cmp := exactCmp) _ _ cmp exactAgree agree _ _
     | exact equalLists_iff bits _ _
@@ -1800,7 +1860,7 @@ theorem compare_eq_of_compareExact_eq (a b : Term) (h : compareExact (fuel a b) 
     simp
   case function.function _ _ _ _ xs _ _ _ _ ys =>
     simp only [Ordering.then_eq_eq] at h ⊢
-    refine ⟨h.1, h.2.1, h.2.2.1, h.2.2.2.1, compareLex_eq_mono (fun x hx y hy e => ?_) h.2.2.2.2⟩
+    refine ⟨h.1, compareLex_eq_mono (fun x hx y hy e => ?_) h.2⟩
     have := Array.sizeOf_lt_of_mem (by simpa using hx : x ∈ xs)
     have := Array.sizeOf_lt_of_mem (by simpa using hy : y ∈ ys)
     exact compare_eq_of_compareExact_eq x y e

@@ -330,7 +330,7 @@ private theorem hash_congr : ∀ (n : Nat),
       exact elems small lex _
     | function e m nm ar caps =>
       cases b <;> rw [Term.compareExact_step] at h <;> simp [Term.Compare.compareStep, Ordering.then_eq_eq] at h
-      obtain ⟨rfl, rfl, rfl, rfl, lex⟩ := h
+      obtain ⟨⟨rfl, rfl, rfl, rfl⟩, lex⟩ := h
       simp only [hashTerm, Array.foldl_attach]
       rw [← Array.foldl_toList, ← Array.foldl_toList]
       exact elems (fun x m => by

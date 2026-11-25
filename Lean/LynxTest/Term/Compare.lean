@@ -28,23 +28,18 @@ private theorem floatOne_toRat : floatOne.toRat = 1 := by
   change (2 : Rat) ^ (52 : Nat) * ((2 : Rat) ^ (52 : Nat))⁻¹ = 1
   exact Rat.mul_inv_cancel _ (by decide)
 
--- Strictly increasing across every represented category. Local functions come
--- before external ones, as in OTP, and then compare module, name, arity, and
--- captures, where OTP orders local functions by their index in the module, which
--- compilation does not determine. Tuples compare arity
+-- Strictly increasing across every represented category. The order between
+-- different references, functions, and process identifiers is unspecified, so
+-- one of each stands for its category. Tuples compare arity
 -- before elements; maps compare size, all keys, then values. Includes nested
 -- tuples/maps, Unicode atoms, large integers, improper tails, and list prefixes.
 @[expose] public def orderedTerms : List Term := [
   .integer (-1000000000000000000000000000000), .integer (-1), .integer 0,
   .integer 1000000000000000000000000000000,
   .atom "", .atom "a", .atom "aa", .atom "b", .atom "é", .atom "λ", .atom "😀",
-  .reference [], .reference [0], .reference [1], .reference [1, 0],
-  .reference [1000000000000000000000000000000],
-  .function false "a" "f" 1 #[], .function false "a" "f" 1 #[.integer 10],
-  .function false "a" "f" 1 #[.integer 20], .function false "a" "f" 2 #[], .function false "a" "g" 0 #[],
-  .function false "b" "a" 0 #[],
-  .function true "a" "a" 0 #[], .function true "a" "f" 1 #[], .function true "b" "a" 0 #[],
-  .pid [], .pid [0], .pid [1], .pid [1, 0], .pid [1000000000000000000000000000000],
+  .reference [1, 0],
+  .function false "a" "f" 1 #[],
+  .pid [1, 0],
   .tuple #[],
   .tuple #[.integer (-1)], .tuple #[.integer 0], .tuple #[.atom "a"],
   .tuple #[.tuple #[]], .tuple #[(Term.map [])], .tuple #[.nil],
@@ -85,14 +80,24 @@ theorem closure_captures_comparison :
     Term.compare (Term.fuel (.function false "a" "f" 1 #[.integer 10]) (.function false "a" "f" 1 #[.integer 20])) (.function false "a" "f" 1 #[.integer 10]) (.function false "a" "f" 1 #[.integer 20]) = .lt ∧
     Term.compare (Term.fuel (.function false "a" "f" 1 #[.integer 20]) (.function false "a" "f" 1 #[.integer 10])) (.function false "a" "f" 1 #[.integer 20]) (.function false "a" "f" 1 #[.integer 10]) = .gt ∧
     Term.compareExact (Term.fuel (.function false "a" "f" 1 #[.integer 10]) (.function false "a" "f" 1 #[.integer 20])) (.function false "a" "f" 1 #[.integer 10]) (.function false "a" "f" 1 #[.integer 20]) ≠ .eq ∧
-    Term.compareExact (Term.fuel (.function false "a" "f" 1 #[.integer 10]) (.function false "a" "f" 1 #[.integer 10])) (.function false "a" "f" 1 #[.integer 10]) (.function false "a" "f" 1 #[.integer 10]) = .eq ∧
-    Term.compare (Term.fuel (.function false "a" "f" 1 #[.integer 20]) (.function false "a" "g" 1 #[.integer 10])) (.function false "a" "f" 1 #[.integer 20]) (.function false "a" "g" 1 #[.integer 10]) = .lt := by
+    Term.compareExact (Term.fuel (.function false "a" "f" 1 #[.integer 10]) (.function false "a" "f" 1 #[.integer 10])) (.function false "a" "f" 1 #[.integer 10]) (.function false "a" "f" 1 #[.integer 10]) = .eq := by
+  decide
+
+/-- Identities are equal when they are the same, while the order between
+different ones is unspecified. -/
+theorem identities_compare_equal_only_when_same :
+    Term.compareExact (Term.fuel (.pid [1]) (.pid [1])) (.pid [1]) (.pid [1]) = .eq ∧
+    Term.compareExact (Term.fuel (.pid [1]) (.pid [2])) (.pid [1]) (.pid [2]) ≠ .eq ∧
+    Term.compareExact (Term.fuel (.reference [1, 1]) (.reference [1, 1])) (.reference [1, 1]) (.reference [1, 1]) = .eq ∧
+    Term.compareExact (Term.fuel (.reference [1, 1]) (.reference [1, 2])) (.reference [1, 1]) (.reference [1, 2]) ≠ .eq ∧
+    Term.compare (Term.fuel (.function false "a" "f" 1 #[]) (.function false "a" "g" 1 #[]))
+      (.function false "a" "f" 1 #[]) (.function false "a" "g" 1 #[]) ≠ .eq := by
   decide
 
 /-- `fun f/0` and `fun m:f/0` are different functions, even though both call `m:f/0`. -/
 theorem local_and_external_functions_differ :
     Term.compareExact (Term.fuel (.function false "m" "f" 0 #[]) (.function true "m" "f" 0 #[]))
-      (.function false "m" "f" 0 #[]) (.function true "m" "f" 0 #[]) = .lt := by
+      (.function false "m" "f" 0 #[]) (.function true "m" "f" 0 #[]) ≠ .eq := by
   decide
 
 theorem numeric_and_exact_comparison :
