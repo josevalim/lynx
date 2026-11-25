@@ -580,8 +580,8 @@ translate_definition(Name, Anno, Vars, Definition, State0) ->
 %% order before the expression that uses them.
 expression(Core, State0) ->
     {Translated, State1} = computation(Core, State0#state{binds = []}),
-    Bound = lists:foldl(fun({Var, Computation}, Body) ->
-        node(~"bind", cerl:get_ann(Core), #{~"vars" => [Var],
+    Bound = lists:foldl(fun({Vars, Computation}, Body) ->
+        node(~"bind", cerl:get_ann(Core), #{~"vars" => Vars,
             ~"computation" => Computation, ~"body" => Body})
     end, Translated, State1#state.binds),
     {Bound, State1#state{binds = State0#state.binds}}.
@@ -1048,8 +1048,12 @@ segment_pattern(#c_binary{anno = Anno} = Pattern, true) ->
 segment_pattern(Pattern, _) ->
     Pattern.
 
-computation_local_function(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
-             #c_fun{vars = Vars} = Fun}], body = Body}, State0) ->
+computation_local_function(Letrec, State) ->
+    local_function(Letrec, fun expression/2, State).
+
+%% Lifts a local function and translates the letrec's body with it in scope.
+local_function(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
+             #c_fun{vars = Vars} = Fun}], body = Body}, Translate, State0) ->
     Captures = local_captures(Fun, State0, [Loop]),
     Name = local_function_name(Loop, length(Captures) + length(Vars), State0),
     Root = maps:get(State0#state.name, State0#state.local_roots, State0#state.name),
@@ -1061,8 +1065,16 @@ computation_local_function(#c_letrec{anno = Anno, defs = [{#c_var{name = Loop},
         local_funs = (State0a#state.local_funs)#{Loop => {Name, Compiled, Captures}},
         defs = (State0a#state.defs)#{Name => {function, LiftedFun}},
         local_roots = (State0a#state.local_roots)#{Name => Root}},
-    {TranslatedBody, State2} = expression(Body, State1),
+    {TranslatedBody, State2} = Translate(Body, State1),
     {TranslatedBody, State2#state{local_funs = State0#state.local_funs}}.
+
+%% Whether a letrec is the loop OTP lowers a receive to.
+receive_loop(#c_letrec{defs = [{#c_var{name = Loop}, #c_fun{vars = [], body = #c_let{arg = #c_primop{
+                 name = #c_literal{val = ReceiveOp}}}}}],
+             body = #c_apply{op = #c_var{name = Loop}, args = []}}) ->
+    ReceiveOp =:= recv_peek_message orelse ReceiveOp =:= recv_wait_timeout;
+receive_loop(_) ->
+    false.
 
 %% Erlang repeats a bitstring generator forever when its pattern consumes no
 %% bits. Comprehensions raise badarg instead: patterns whose widths are all zero
@@ -1427,10 +1439,24 @@ value(#c_literal{anno = Anno, val = Value} = Literal, State0)
 value(#c_literal{} = Literal, State) ->
     literal_value(Literal, State);
 
+%% Erlang builds lists from their tail, so the last operation of a computation
+%% in the head runs after the tail, while what it computes first runs before
+%% it, as in beam_core_to_ssa (head_computation/2). Compiled Erlang binds its
+%% heads to variables first.
 value(#c_cons{anno = Anno, hd = Head, tl = Tail}, State0) ->
-    {TranslatedHead, State1} = value(Head, State0),
-    {TranslatedTail, State2} = value(Tail, State1),
-    {node(~"cons", Anno, #{~"head" => TranslatedHead, ~"tail" => TranslatedTail}), State2};
+    {TranslatedHead, TranslatedTail, State1} =
+        case State0#state.pattern =:= false andalso computation_value(Head) of
+            true ->
+                {Computation, Next0} = head_computation(Head, State0),
+                {Tail1, Next1} = value(Tail, Next0),
+                {Head1, Next2} = bind_value(Computation, cerl:get_ann(Head), Next1),
+                {Head1, Tail1, Next2};
+            false ->
+                {Head1, Next0} = value(Head, State0),
+                {Tail1, Next1} = value(Tail, Next0),
+                {Head1, Tail1, Next1}
+        end,
+    {node(~"cons", Anno, #{~"head" => TranslatedHead, ~"tail" => TranslatedTail}), State1};
 value(#c_tuple{anno = Anno, es = Elements}, State0) ->
     {Translated, State1} = lists:mapfoldl(fun value/2, State0, Elements),
     {node(~"tuple", Anno, #{~"elements" => Translated}), State1};
@@ -1445,9 +1471,182 @@ value(Core, #state{pattern = true}) ->
     unsupported(Core);
 value(Core, State0) ->
     {Computation, State1} = expression(Core, State0),
-    Var = var_node(#{~"generated" => State1#state.next_var}, cerl:get_ann(Core)),
-    {Var, State1#state{next_var = State1#state.next_var + 1,
-                       binds = [{Var, Computation} | State1#state.binds]}}.
+    bind_value(Computation, cerl:get_ann(Core), State1).
+
+%% Binds a computation nested in a value to a generated variable.
+bind_value(Computation, Anno, State) ->
+    Var = var_node(#{~"generated" => State#state.next_var}, Anno),
+    {Var, push_bind([Var], Computation, State#state{next_var = State#state.next_var + 1})}.
+
+%% Binds a computation to translated variables before the expression being translated.
+push_bind(Vars, Computation, State) ->
+    State#state{binds = [{Vars, Computation} | State#state.binds]}.
+
+%% Whether value/2 translates a node as a computation bound to a variable.
+computation_value(#c_var{}) -> false;
+computation_value(#c_fun{}) -> false;
+computation_value(#c_alias{}) -> false;
+computation_value(#c_literal{}) -> false;
+computation_value(#c_cons{}) -> false;
+computation_value(#c_tuple{}) -> false;
+computation_value(#c_map{arg = #c_literal{val = Base}}) when is_map(Base), map_size(Base) =:= 0 ->
+    false;
+computation_value(_) -> true.
+
+%% The last operation of a computation in a cons head, which runs after the
+%% tail. What it computes first is bound before the tail, as beam_core_to_ssa
+%% puts it among the expressions before the cons: the argument of a let or a
+%% seq, the scrutinee of a case, the body of a local function, the computations
+%% in the arguments of a call, and the steps of a map update before its last.
+%% Other computations, such as try and receive, run whole after the tail.
+head_computation(#c_let{vars = Vars, arg = Arg, body = Body} = Let, State0) ->
+    case rename_bound(Vars, Body, State0) of
+        {ok, Renamed, RenamedBody, State1} ->
+            {Translated, State2} = expression(Arg, State1),
+            head_computation(RenamedBody, push_bind([variable(V) || V <- Renamed], Translated, State2));
+        error ->
+            computation(Let, State0)
+    end;
+head_computation(#c_seq{anno = Anno, arg = Arg, body = Body}, State0) ->
+    {Translated, State1} = expression(Arg, State0),
+    head_computation(Body, push_bind([node(~"wildcard", Anno, #{})], Translated, State1));
+head_computation(#c_case{arg = #c_values{es = Elements} = Values} = Case, State0) ->
+    {Hoisted, State1} = lists:mapfoldl(fun hoist/2, State0, Elements),
+    computation(Case#c_case{arg = Values#c_values{es = Hoisted}}, State1);
+head_computation(#c_case{arg = Arg} = Case, State0) ->
+    {Hoisted, State1} = hoist(Arg, State0),
+    computation(Case#c_case{arg = Hoisted}, State1);
+head_computation(#c_letrec{anno = Anno, defs = [{#c_var{}, #c_fun{}}]} = Letrec, State0) ->
+    %% Receive loops and compiler labels run whole.
+    case lists:member(letrec_goto, Anno) orelse receive_loop(Letrec) of
+        true -> computation(Letrec, State0);
+        false -> local_function(Letrec, fun head_computation/2, State0)
+    end;
+head_computation(#c_call{module = Module, name = Name, args = Args} = Call, State0) ->
+    {[HoistedModule, HoistedName | HoistedArgs], State1} =
+        lists:mapfoldl(fun hoist/2, State0, [Module, Name | Args]),
+    computation(Call#c_call{module = HoistedModule, name = HoistedName, args = HoistedArgs}, State1);
+head_computation(#c_apply{args = Args} = Apply, State0) ->
+    {HoistedArgs, State1} = lists:mapfoldl(fun hoist/2, State0, Args),
+    computation(Apply#c_apply{args = HoistedArgs}, State1);
+head_computation(#c_primop{args = Args} = Primop, State0) ->
+    {HoistedArgs, State1} = lists:mapfoldl(fun hoist/2, State0, Args),
+    computation(Primop#c_primop{args = HoistedArgs}, State1);
+head_computation(#c_map{arg = Base, es = [_ | _] = Pairs, is_pat = false} = Map, State0) ->
+    %% The keys and values first, then the base.
+    {HoistedPairs, State1} = lists:mapfoldl(fun(#c_map_pair{key = Key, val = Value} = Pair, Acc0) ->
+        {HoistedKey, Acc1} = hoist(Key, Acc0),
+        {HoistedValue, Acc2} = hoist(Value, Acc1),
+        {Pair#c_map_pair{key = HoistedKey, val = HoistedValue}, Acc2}
+    end, State0, Pairs),
+    {HoistedBase, State2} = hoist(Base, State1),
+    map_groups(Map#c_map{arg = HoistedBase}, map_update_groups(HoistedPairs), State2);
+head_computation(Core, State) ->
+    computation(Core, State).
+
+%% A value without computations, with the computations in it bound before,
+%% in the order beam_core_to_ssa evaluates them.
+hoist(#c_cons{hd = Head, tl = Tail} = Cons, State0) ->
+    case computation_value(Head) of
+        true ->
+            {Computation, State1} = head_computation(Head, State0),
+            {HoistedTail, State2} = hoist(Tail, State1),
+            {Var, State3} = fresh_var(cerl:get_ann(Head), State2),
+            {Cons#c_cons{hd = Var, tl = HoistedTail}, push_bind([variable(Var)], Computation, State3)};
+        false ->
+            {HoistedHead, State1} = hoist(Head, State0),
+            {HoistedTail, State2} = hoist(Tail, State1),
+            {Cons#c_cons{hd = HoistedHead, tl = HoistedTail}, State2}
+    end;
+hoist(#c_tuple{es = Elements} = Tuple, State0) ->
+    {Hoisted, State1} = lists:mapfoldl(fun hoist/2, State0, Elements),
+    {Tuple#c_tuple{es = Hoisted}, State1};
+hoist(#c_map{arg = #c_literal{val = Base}, es = Pairs} = Map, State0)
+        when is_map(Base), map_size(Base) =:= 0 ->
+    {Hoisted, State1} = lists:mapfoldl(fun(#c_map_pair{key = Key, val = Value} = Pair, Acc0) ->
+        {HoistedKey, Acc1} = hoist(Key, Acc0),
+        {HoistedValue, Acc2} = hoist(Value, Acc1),
+        {Pair#c_map_pair{key = HoistedKey, val = HoistedValue}, Acc2}
+    end, State0, Pairs),
+    {Map#c_map{es = Hoisted}, State1};
+hoist(Core, State0) ->
+    case computation_value(Core) of
+        true ->
+            {Computation, State1} = head_computation(Core, State0),
+            {Var, State2} = fresh_var(cerl:get_ann(Core), State1),
+            {Var, push_bind([variable(Var)], Computation, State2)};
+        false ->
+            {Core, State0}
+    end.
+
+%% A Core variable no source or compiler variable is named after.
+fresh_var(Anno, State) ->
+    Name = list_to_atom("@lynx" ++ integer_to_list(State#state.next_var)),
+    {#c_var{anno = Anno, name = Name}, State#state{next_var = State#state.next_var + 1}}.
+
+%% The variables of a let renamed apart, so that binding them before the tail
+%% does not capture variables of the same name, or error when the let's body
+%% binds them again.
+rename_bound(Vars, Body, State0) ->
+    Names = [Name || #c_var{name = Name} <- Vars],
+    case lists:any(fun(Name) -> lists:member(Name, Names) end, binders(Body)) of
+        true -> error;
+        false ->
+            {Renamed, State1} = lists:mapfoldl(fun(#c_var{anno = Anno}, Acc) ->
+                fresh_var(Anno, Acc)
+            end, State0, Vars),
+            Renames = maps:from_list(lists:zip(Names, [Name || #c_var{name = Name} <- Renamed])),
+            RenamedBody = cerl_trees:map(fun
+                (#c_var{name = Name} = Var) when is_map_key(Name, Renames) ->
+                    Var#c_var{name = map_get(Name, Renames)};
+                (Node) -> Node
+            end, Body),
+            {ok, Renamed, RenamedBody, State1}
+    end.
+
+%% The variables a Core expression binds anywhere within it.
+binders(Core) ->
+    cerl_trees:fold(fun
+        (#c_let{vars = Vars}, Acc) -> [Name || #c_var{name = Name} <- Vars] ++ Acc;
+        (#c_clause{} = Clause, Acc) -> [Name || #c_var{name = Name} <- cerl:clause_vars(Clause)] ++ Acc;
+        (#c_fun{vars = Vars}, Acc) -> [Name || #c_var{name = Name} <- Vars] ++ Acc;
+        (#c_try{vars = Vars, evars = EVars}, Acc) -> [Name || #c_var{name = Name} <- Vars ++ EVars] ++ Acc;
+        (_, Acc) -> Acc
+    end, [], Core).
+
+%% The operations a map update takes in beam_core_to_ssa (map_split_pairs/5):
+%% each pair with a variable key alone, and each run of literal keys as its
+%% `=>` pairs, then its `:=` pairs, after merging pairs with the same key.
+map_update_groups([]) ->
+    [];
+map_update_groups([#c_map_pair{key = #c_literal{}} | _] = Pairs) ->
+    {Literal, Rest} = lists:splitwith(fun(#c_map_pair{key = Key}) -> is_record(Key, c_literal) end, Pairs),
+    Merged = map_merge_keys(Literal, #{}),
+    Assoc = [Pair || #c_map_pair{op = #c_literal{val = assoc}} = Pair <- Merged],
+    Exact = [Pair || #c_map_pair{op = #c_literal{val = exact}} = Pair <- Merged],
+    [Group || Group <- [Assoc, Exact], Group =/= []] ++ map_update_groups(Rest);
+map_update_groups([Pair | Rest]) ->
+    [[Pair] | map_update_groups(Rest)].
+
+%% A later pair with the same key keeps the earlier pair's operator, as
+%% map_remove_dup_keys/2 does, and the merged pairs are sorted by key.
+map_merge_keys([#c_map_pair{op = #c_literal{val = Op} = OpNode, key = #c_literal{val = Key}} = Pair | Rest], Used) ->
+    Kept = case Used of
+        #{Key := #c_map_pair{op = #c_literal{val = Previous}}} when Previous =/= Op ->
+            Pair#c_map_pair{op = OpNode#c_literal{val = Previous}};
+        #{} -> Pair
+    end,
+    map_merge_keys(Rest, Used#{Key => Kept});
+map_merge_keys([], Used) ->
+    [Pair || {_, Pair} <- lists:sort(maps:to_list(Used))].
+
+%% Every group of a map update but the last, bound before the tail, and the last.
+map_groups(Map, [Last], State) ->
+    computation(Map#c_map{es = Last}, State);
+map_groups(#c_map{anno = Anno} = Map, [Group | Rest], State0) ->
+    {Computation, State1} = computation(Map#c_map{es = Group}, State0),
+    {Var, State2} = fresh_var(Anno, State1),
+    map_groups(Map#c_map{arg = Var}, Rest, push_bind([variable(Var)], Computation, State2)).
 
 literal_value(#c_literal{anno = Anno, val = Fun} = Core, State0) when is_function(Fun) ->
     case erlang:fun_info(Fun, type) of

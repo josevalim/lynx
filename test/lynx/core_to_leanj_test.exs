@@ -51,6 +51,65 @@ defmodule Lynx.CoreToLeanjTest do
             }, _} = translate(definitions([definition(:entry, body)]))
   end
 
+  test "calls nested in a cons head run after its tail, but their arguments before it" do
+    call = fn name, args -> :cerl.c_call(:cerl.c_atom(:other), :cerl.c_atom(name), args) end
+    # [f(g()) | h()] runs g, h, then f, as the BEAM builds lists from their tail.
+    body = :cerl.c_cons(call.(:f, [call.(:g, [])]), call.(:h, []))
+
+    assert {:ok,
+            %{
+              {:entry, 1} => %{
+                translation: %{
+                  "body" => %{
+                    "kind" => "bind",
+                    "vars" => [%{"name" => "@lynx0"} = g],
+                    "computation" => %{"kind" => "remote_call", "name" => "g"},
+                    "body" => %{
+                      "kind" => "bind",
+                      "vars" => [%{"name" => %{"generated" => 1}} = h],
+                      "computation" => %{"kind" => "remote_call", "name" => "h"},
+                      "body" => %{
+                        "kind" => "bind",
+                        "vars" => [%{"name" => %{"generated" => 2}} = f],
+                        "computation" => %{"kind" => "remote_call", "name" => "f", "args" => [g]},
+                        "body" => %{
+                          "kind" => "return",
+                          "values" => [%{"kind" => "cons", "head" => f, "tail" => h}]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }, _} = translate(definitions([definition(:entry, body)]))
+  end
+
+  test "a cons head runs what it computes first before the tail, and its last operation after" do
+    # As beam_core_to_ssa orders them, checked against OTP 29 with erlc +from_core.
+    for {head, order} <- [
+          {"let <X> = call 'o':'g'() in call 'o':'f'(X)", ~w(g h f)},
+          {"do call 'o':'g'() call 'o':'f'(1)", ~w(g h f)},
+          {"case call 'o':'g'() of <X> when 'true' -> call 'o':'f'(X) end", ~w(g h match)},
+          {"call 'example':'f'(call 'o':'g'())", ~w(g h f)},
+          {"~{'a':=1,'b'=>2|M}~", ~w(put h update)},
+          # A let whose body binds its variable again runs whole after the tail.
+          {"let <X> = call 'o':'g'() in let <X> = call 'o':'f'(X) in X", ~w(h g f)}
+        ] do
+      source = """
+      module 'example' ['entry'/1] attributes []
+      'entry'/1 = fun (M) -> [#{head} | call 'o':'h'()]
+      'f'/1 = fun (X) -> X
+      end
+      """
+
+      {:ok, tokens, _} = :core_scan.string(String.to_charlist(source))
+      {:ok, core} = :core_parse.parse(tokens)
+      defs = :lynx_core_to_leanj.to_definitions(core)
+      assert {:ok, %{{:entry, 1} => %{translation: %{"body" => translated}}}, _} = translate(defs)
+      assert computations(translated) == order, head
+    end
+  end
+
   test "binaries nested in arguments are constructed before the call" do
     segment =
       :cerl.c_bitstr(
@@ -2156,6 +2215,16 @@ defmodule Lynx.CoreToLeanjTest do
     |> then(&:cerl.c_module(:cerl.c_atom(:example), [], &1))
     |> :lynx_core_to_leanj.to_definitions()
   end
+
+  # The calls and matches along a chain of binds, in the order they run.
+  defp computations(%{"kind" => "bind", "computation" => computation, "body" => body}),
+    do: computations(computation) ++ computations(body)
+
+  defp computations(%{"kind" => kind, "name" => name}) when kind in ["remote_call", "local_call"],
+    do: [name]
+
+  defp computations(%{"kind" => "match"}), do: ["match"]
+  defp computations(_), do: []
 
   defp definition(name, body), do: {:cerl.c_fname(name, 1), :cerl.c_fun([:cerl.c_var(0)], body)}
   defp call(name), do: :cerl.c_apply(:cerl.c_fname(name, 1), [:cerl.c_var(0)])
