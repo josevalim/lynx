@@ -2316,9 +2316,10 @@ end State.Changes
 
 /-! ### Which tagged steps are forced -/
 
-/-- Whether an event is reading or replacing the environment, or receiving. -/
+/-- Whether an event is reading or replacing the environment, receiving, or
+resuming after a persistent term update. -/
 private def Event.local : Event → Bool
-  | .internal _ | .receive .. => true
+  | .internal _ | .receive .. | .request _ .persistentAwait (some _) => true
   | _ => false
 
 private theorem Config.forced_own {state : State} {tasks : List (PID × Task α)}
@@ -2406,6 +2407,176 @@ private theorem Config.forced_phase {state : State} {tasks : List (PID × Task �
 
 /-! ### Forced changes against steps of other keys -/
 
+/-! ### Only its process stages a persistent term update -/
+
+/-- Close a goal that an effect leaves the persistent terms as they are. -/
+local syntax "unshared" : tactic
+macro_rules
+  | `(tactic| unshared) => `(tactic| first
+      | exact Effect.Unshared.empty | exact Effect.Unshared.modify _ _ | exact Effect.Unshared.put _ _
+      | exact Effect.Unshared.retime _ | exact State.sendEffect_unshared _ _ _ _
+      | exact State.enqueueEffect_unshared _ _ _ _ | exact State.unparkEffect_unshared _ _
+      | exact State.terminateEffect_unshared _ _ _ | rfl
+      | (refine Effect.Unshared.andThen ?_ ?_ <;> unshared)
+      | (split <;> unshared))
+
+private theorem State.spawnEffect_unshared (state : State) (processId : PID) (options : SpawnOptions) :
+    (state.spawnEffect processId options).Unshared := by
+  unfold State.spawnEffect; dsimp only; unshared
+
+private theorem State.exitSignalEffect_unshared (state : State) (target source : PID) (reason : Term)
+    (linked normalKills : Bool) : (state.exitSignalEffect target source reason linked normalKills).Unshared := by
+  unfold State.exitSignalEffect; dsimp only; unshared
+
+private theorem State.handleEffect_unshared (state : State) (processId : PID) (entry : Entry) :
+    (state.handleEffect processId entry).Unshared := by
+  unfold State.handleEffect; dsimp only
+  split
+  case _ => unshared
+  all_goals first | exact State.exitSignalEffect_unshared _ _ _ _ _ _ | unshared
+
+private theorem Task.handleEffect_unshared (state : State) (processId : PID) (task : Task α) :
+    (task.handleEffect state processId).Unshared := by
+  unfold Task.handleEffect; dsimp only
+  split
+  · exact Effect.Unshared.empty
+  · split
+    · exact ((Effect.Unshared.modify _ _).andThen (State.handleEffect_unshared _ _ _)).andThen
+        (State.terminateEffect_unshared _ _ _)
+    · exact (Effect.Unshared.modify _ _).andThen (State.handleEffect_unshared _ _ _)
+
+private theorem State.phaseEffect_unshared (state : State) (processId : PID) : (state.phaseEffect processId).Unshared := by
+  simp only [State.phaseEffect]
+  split
+  · split
+    · exact (Effect.Unshared.modify _ _).andThen (State.sendEffect_unshared _ _ _ _)
+    · split
+      · rename_i entry rest _
+        refine (Effect.Unshared.modify _ _).andThen ?_
+        obtain ⟨source, signal⟩ := entry
+        cases signal <;> simp only [State.answerEffect] <;>
+          first | exact State.sendEffect_unshared _ _ _ _ | exact Effect.Unshared.empty
+      · exact Effect.Unshared.empty
+  · exact Effect.Unshared.empty
+
+private theorem State.normalize_persistent (state : State) : state.normalize.persistent = state.persistent := rfl
+
+private theorem State.set_persistent (state : State) (processId : PID) (process : ProcessState) :
+    (state.set processId process).persistent = state.persistent := rfl
+
+private theorem State.linkExit_persistent (state : State) (processId target : PID) (reason : Term) :
+    (state.linkExit processId target reason).persistent = state.persistent := by
+  have linked := (Realizes.linkExit state processId target reason).persistent
+  have unshared : (state.linkExitEffect processId target reason).Unshared := by
+    unfold State.linkExitEffect; unshared
+  rw [unshared.getD] at linked
+  exact linked
+
+/-- A request leaves the persistent terms as they are, unless it stages an
+update of its own. -/
+private theorem State.requestEffect_staged (state : State) (processId : PID) (query : Request) :
+    (state.requestEffect processId query).Unshared ∨
+      ∃ key value, state.requestEffect processId query = stageEffect processId key value := by
+  cases query
+  case persistentPut | persistentErase =>
+    simp only [State.requestEffect]
+    repeat' split
+    all_goals first | exact .inl Effect.Unshared.empty | exact .inr ⟨_, _, rfl⟩
+  case monitor =>
+    refine .inl ?_
+    simp only [State.requestEffect, State.allocate]
+    exact (Effect.Unshared.modify _ _).andThen (Effect.Unshared.ite _ Effect.Unshared.empty
+      ((State.unparkEffect_unshared _ _).andThen (Effect.Unshared.modify _ _)))
+  case startTimer =>
+    refine .inl ?_
+    simp only [State.requestEffect, State.allocate]
+    exact (Effect.Unshared.modify _ _).andThen (Effect.Unshared.ite _ (Effect.Unshared.retime _) Effect.Unshared.empty)
+  all_goals (refine .inl ?_; simp only [State.requestEffect]; unshared)
+
+/-- A process's own step leaves the persistent terms as they are, unless it
+stages an update of its own. -/
+private theorem Task.ownEffect_staged (state : State) (processId : PID) (task : Task α) :
+    (task.ownEffect state processId).Unshared ∨
+      ∃ key value, task.ownEffect state processId = stageEffect processId key value := by
+  obtain ⟨computation, finish, wait⟩ := task
+  cases wait with
+  | some => exact .inl Effect.Unshared.empty
+  | none =>
+  cases computation with
+  | request query next => exact State.requestEffect_staged state processId query
+  | error exception => cases exception <;> exact .inl (by first | rfl | exact State.terminateEffect_unshared _ _ _)
+  | schedule => exact .inl (State.spawnEffect_unshared _ _ _)
+  | _ => exact .inl (by simp only [Task.ownEffect]; unshared)
+
+/-- An effect leaving the persistent terms as they are, or staging an update
+of another process, stages no update the process owns that was not staged. -/
+private theorem staged_of_effect {effect : Effect} {before after : State} {processId other : PID}
+    (realizes : Realizes effect before after)
+    (effects : effect.Unshared ∨ ∃ key value, effect = stageEffect other key value) (differ : other ≠ processId)
+    {update : Update} (staged : after.normalize.persistent.staged = some update) (owned : update.owner = processId) :
+    before.persistent.staged = some update := by
+  have staged : after.persistent.staged = some update := staged
+  have persistent := realizes.persistent
+  rcases effects with unshared | ⟨key, value, rfl⟩
+  · rw [unshared.getD] at persistent; rw [persistent] at staged; exact staged
+  · rw [persistent] at staged
+    simp only [stageEffect, Effect.reshare, Option.getD_some, Option.some.injEq] at staged
+    subst staged; exact absurd owned differ
+
+/-- No step but a process's own stages a persistent term update that the
+process owns: other processes stage their own, and every other step stages none. -/
+private theorem Config.stepOf_staged {state raw : State} {tasks tasks₁ : List (PID × Task α)}
+    {finished finished₁ : Option (Except Exception α)} {key : Key} {event : Event} {processId : PID}
+    (notOwn : key ≠ .own processId)
+    (step : (Config.running state tasks finished false).stepOf key = some (event, .running raw tasks₁ finished₁ false))
+    {update : Update} (staged : raw.persistent.staged = some update) (owned : update.owner = processId) :
+    state.persistent.staged = some update := by
+  cases key with
+  | own other =>
+    have differ : other ≠ processId := fun same => notOwn (by rw [same])
+    obtain ⟨task, transition, -, head, next⟩ := Config.stepOf_own step
+    split at next
+    · simp only [Config.running.injEq] at next
+      obtain ⟨rfl, -⟩ := next
+      simp at staged
+    · simp only [Config.running.injEq] at next
+      obtain ⟨rfl, -⟩ := next
+      exact staged_of_effect (Realizes.own (List.mem_of_head? head)) (Task.ownEffect_staged _ _ _) differ staged owned
+  | handle other =>
+    obtain ⟨task, transition, -, head, next⟩ := Config.stepOf_handle step
+    rw [Task.handle_not_exhausted (List.mem_of_head? head)] at next
+    simp only [Bool.false_eq_true, ↓reduceIte, Config.running.injEq] at next
+    obtain ⟨rfl, -⟩ := next
+    exact staged_of_effect (other := processId ++ [0]) (Realizes.handleStep (List.mem_of_head? head))
+      (.inl (Task.handleEffect_unshared _ _ _)) (by simp) staged owned
+  | link other target =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq, Config.running.injEq] at step
+    obtain ⟨next, phase, -, rfl, -⟩ := step
+    unfold State.linkPhase at phase
+    repeat' split at phase
+    all_goals simp only [Option.some.injEq, reduceCtorEq] at phase
+    subst phase
+    simpa only [State.normalize_persistent, State.linkExit_persistent, State.set_persistent] using staged
+  | phase other =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq, Config.running.injEq] at step
+    obtain ⟨next, phase, -, rfl, -⟩ := step
+    exact staged_of_effect (other := processId ++ [0]) (Realizes.phase phase) (.inl (State.phaseEffect_unshared _ _))
+      (by simp) staged owned
+  | unpark other =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq, Config.running.injEq] at step
+    obtain ⟨-, -, -, rfl, -⟩ := step
+    exact staged_of_effect (other := processId ++ [0]) (Realizes.unpark _ _) (.inl (State.unparkEffect_unshared _ _))
+      (by simp) staged owned
+  | fire reference =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq, Config.running.injEq] at step
+    obtain ⟨timer, -, -, rfl, -⟩ := step
+    exact staged_of_effect (other := processId ++ [0]) (Realizes.fire _ _)
+      (.inl ((Effect.Unshared.retime _).andThen (State.enqueueEffect_unshared _ _ _ _))) (by simp) staged owned
+  | commit =>
+    simp only [Config.stepOf, Option.map_eq_some_iff, Prod.mk.injEq, Config.running.injEq] at step
+    obtain ⟨committed, found, -, rfl, -⟩ := step
+    simp [State.normalize, State.commit, found] at staged
+
 /-- A forced step of a live process, changing only its record and its task,
 against a step of another key: the other step absorbs it, or the forced step
 taken after the other step closes the square, as `atMiddle` shows it stays
@@ -2426,6 +2597,9 @@ private theorem Config.forced_other {elapsed : PID → Nat → Nat} {state : Sta
       (Config.running raw.normalize tasks₁ finished₁ false).Reachable elapsed →
       Kernel.lookup processId tasks₁ = some task → raw.record processId = some process₁ → ok process₁ →
       process₁.exiting = none →
+      -- No update the process owns is staged but those staged before.
+      (∀ update, raw.normalize.persistent.staged = some update → update.owner = processId →
+        state.persistent.staged = some update) →
       (∃ event'', (key, event'', .running (raw.normalize.set processId (change (normRecord raw.gone processId process₁))).normalize
           (rewriteTask processId (fun _ => [(processId, task')]) tasks₁) finished₁ false, true) ∈
           (Config.running raw.normalize tasks₁ finished₁ false).taggedSteps ∧
@@ -2456,7 +2630,8 @@ private theorem Config.forced_other {elapsed : PID → Nat → Nat} {state : Sta
       have alive := reachableMiddle.2.2.1 _ (mem_of_lookup (lookupAfter ▸ lookup))
       rw [State.alive_normalize withinRaw.1] at alive
       simp [State.alive, missing] at alive
-    rcases atMiddle raw tasks₁ finished₁ process₁ withinRaw reachableMiddle (lookupAfter ▸ lookup) found₁ ok₁ live₁ with
+    rcases atMiddle raw tasks₁ finished₁ process₁ withinRaw reachableMiddle (lookupAfter ▸ lookup) found₁ ok₁ live₁
+        (fun _ staged owned => Config.stepOf_staged (fun same => owner (by rw [same]; rfl)) step' staged owned) with
       ⟨event'', mem, liveChanged, renormalized⟩ | ⟨rfl, nothing⟩
     · rw [State.forced_close withinRaw.1 withinRaw'.1 changedRaw hidden.unseen found₁ liveChanged renormalized] at mem
       exact .inr ⟨key, event'', _, event', mem, stepped⟩
@@ -2528,7 +2703,7 @@ private theorem Config.forced_own_other {elapsed : PID → Nat → Nat} {config 
     rw [show state.normalize = (state.set processId (id process)).normalize by rw [id, State.set_self sorted found]]
     refine Config.forced_other (key := .own processId) reachable lookup found live ⟨rfl, rfl, rfl⟩ (hidden_keeps process)
       (renormalize_of_clean (change := id) clean) owner step' ?_
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ keeps₁ live₁
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ keeps₁ live₁ _
     obtain ⟨record, view, -, -⟩ := later within found₁ live₁ keeps₁
     have tagged := Config.tagged_own_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
       (transition := Transition.mk (.internal processId) raw.normalize
@@ -2553,7 +2728,7 @@ private theorem Config.forced_own_other {elapsed : PID → Nat → Nat} {config 
       (hidden_store process updated) (normRecord_any live (fun entry mem inert' gone' =>
         inert_any (process := process) (process' := storeChange updated process) (cleaned.1 entry mem)
           inert' gone') cleaned.2 fun monitor mem => clean_monitors clean live monitor mem) owner step' ?_
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ keeps₁ live₁
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ keeps₁ live₁ _
     obtain ⟨record, -, -, counter₁⟩ := later within found₁ live₁ keeps₁
     have tagged := Config.tagged_own_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
       (transition := Transition.mk (.internal processId) (raw.normalize.store processId updated)
@@ -2584,7 +2759,7 @@ private theorem Config.forced_own_other {elapsed : PID → Nat → Nat} {config 
       refine Config.forced_other (key := .own processId) reachable lookup found live ⟨rfl, rfl, rfl⟩
         (hidden_receive process remaining)
         (renormalize_of_clean (by rw [receiveChange_normRecord live, clean])) owner step' ?_
-      intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ keeps₁ live₁
+      intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ keeps₁ live₁ _
       obtain ⟨record, view, mailbox₁, counter₁⟩ := later within found₁ live₁ keeps₁
       have tagged := Config.tagged_own_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
         (transition := Transition.mk (.receive processId message)
@@ -2612,9 +2787,45 @@ private theorem Config.forced_own_other {elapsed : PID → Nat → Nat} {config 
     simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
     simp [Event.local] at isLocal
   | request query next₀ =>
-    simp only [Task.own] at head
-    split at head <;> simp only [List.head?_cons, List.head?_nil, Option.some.injEq, reduceCtorEq] at head <;>
-      subst head <;> simp [Event.local] at isLocal
+    cases query
+    case persistentAwait =>
+      -- Resuming once the process's update is visible: no other step stages one it owns again.
+      have enabled : ∀ update, state.persistent.staged = some update → update.owner ≠ processId := by
+        intro update staged same
+        subst same
+        simp [Task.own, State.request, staged] at head
+      have reply : ∀ raw : State, (∀ update, raw.persistent.staged = some update → update.owner ≠ processId) →
+          raw.request processId next₀ .persistentAwait = .reply (.atom "ok") raw := by
+        intro raw free
+        simp only [State.request]
+        split
+        · rename_i update staged
+          have differ : (update.owner == processId) = false := by simpa using free update staged
+          simp [differ]
+        · rfl
+      simp only [Task.own, reply state enabled, List.head?_cons, Option.some.injEq] at head; subst head
+      simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
+      rw [show state.normalize = (state.set processId (id process)).normalize by rw [id, State.set_self sorted found]]
+      refine Config.forced_other (key := .own processId) reachable lookup found live ⟨rfl, rfl, rfl⟩
+        (hidden_keeps process) (renormalize_of_clean (change := id) clean) owner step' ?_
+      intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ keeps₁ live₁ kept
+      obtain ⟨record, -, -, -⟩ := later within found₁ live₁ keeps₁
+      have free : ∀ update, raw.normalize.persistent.staged = some update → update.owner ≠ processId :=
+        fun update staged same => enabled update (kept update staged same) same
+      have tagged := Config.tagged_own_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
+        (transition := Transition.mk (.request processId .persistentAwait (some (.atom "ok"))) raw.normalize
+          [(processId, ⟨next₀ (.atom "ok"), finish, none⟩)] none false)
+        (by simp only [Task.own, reply raw.normalize free, List.head?_cons]) rfl rfl
+      simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
+      rw [show raw.normalize.normalize =
+          (raw.normalize.set processId (id (normRecord raw.gone processId process₁))).normalize
+        by rw [id, State.set_self (Sorted.normalize within.1) record]] at tagged
+      exact .inl ⟨_, tagged, by rw [id, normRecord_live live₁]; exact live₁,
+        normRecord_normRecord (fun _ gone => gone) _ _⟩
+    all_goals
+      simp only [Task.own] at head
+      split at head <;> simp only [List.head?_cons, List.head?_nil, Option.some.injEq, reduceCtorEq] at head <;>
+        subst head <;> simp [Event.local] at isLocal
 
 private theorem Config.tagged_handle_forced {state : State} {tasks : List (PID × Task α)}
     {finished : Option (Except Exception α)} {processId : PID} {task : Task α} {transition : Transition α}
@@ -3051,7 +3262,7 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
     refine Config.forced_other (key := .handle processId) (task' := resumeTask (resumedBy task entry) task) reachable
       lookup found live ⟨heads, rfl, rfl, rfl, rfl, rfl⟩ ((hidden_pop notLink).viewed process)
       (renormalize_of_clean (normRecord_popped clean live (by simp [popChange]) (fun _ => rfl) rfl (fun monitor mem => clean_monitors clean live monitor mem) live)) owner step' ?_
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁ _
     obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ (kept _ _)
     have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
       simp [State.process, record]
@@ -3075,7 +3286,7 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
       ⟨heads, rfl, rfl, rfl, rfl, rfl⟩ ((hidden_message (by simp) message).viewed process)
       (renormalize_of_clean (normRecord_popped clean live (by simp [messageChange]) (fun _ => rfl) rfl (fun monitor mem => clean_monitors clean live monitor mem) live))
       owner step' ?_
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁ _
     obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ (by simp [inert])
     have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
       simp [State.process, record]
@@ -3107,7 +3318,7 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
         (fun _ => by unfold aliasChange; split <;> rfl) (by unfold aliasChange; split <;> rfl)
         (fun monitor mem => clean_monitors clean live monitor (by unfold aliasChange at mem; split at mem <;> exact mem))
         (liveChange _ live))) owner step' ?_
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁ _
     have kept : inert raw.gone processId process₁ ⟨source, .aliasMessage alias message⟩ = false := by
       obtain ⟨-, -, refCounter, monitoring, aliases⟩ := viewed₁
       rw [inert_congr refCounter monitoring aliases]
@@ -3143,7 +3354,7 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
       rcases mem with old | rfl
       · exact clean_monitors clean live monitor old
       · exact notGone
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, viewed₁⟩ live₁ _
     cases goneSource : raw.gone source
     · have kept : inert raw.gone processId process₁ ⟨source, .monitor reference⟩ = false := by
         simp [inert, goneSource]
@@ -3173,7 +3384,7 @@ private theorem Config.forced_handle_other {elapsed : PID → Nat → Nat} {conf
     refine Config.forced_other (key := .handle processId) (task' := task) (ok := Queued ⟨source, .unlinkAck id⟩)
       reachable lookup found live ⟨heads, fun _ signal => by cases signal; exact bound⟩
       (hidden_ack_queued source id) (normRecord_ack_clean clean live) owner step' ?_
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, bound₁⟩ live₁
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ⟨heads₁, bound₁⟩ live₁ _
     have kept : inert raw.gone processId process₁ ⟨source, .unlinkAck id⟩ = false := by simp [inert]
     obtain ⟨record, rest₁, queue₁⟩ := State.normalize_heads within.1 found₁ live₁ heads₁ kept
     have processOf₁ : raw.normalize.process processId = normRecord raw.gone processId process₁ := by
@@ -3239,6 +3450,8 @@ private theorem Config.own_handle_square {elapsed : PID → Nat → Nat} {state 
       (Config.running raw.normalize tasks₁ finished₁ false).Reachable elapsed →
       Kernel.lookup processId tasks₁ = some task → raw.record processId = some process₁ →
       OwnOk ok process.pdict process.refCounter process₁ → process₁.exiting = none →
+      (∀ update, raw.normalize.persistent.staged = some update → update.owner = processId →
+        state.persistent.staged = some update) →
       ∃ event'', (Key.own processId, event'', .running (raw.normalize.set processId
           (ownChange pdict id mailbox (normRecord raw.gone processId process₁))).normalize
           (rewriteTask processId (fun _ => [(processId, ⟨computation, task.finish, none⟩)]) tasks₁) finished₁ false, true) ∈
@@ -3336,7 +3549,7 @@ private theorem Config.own_handle_square {elapsed : PID → Nat → Nat} {state 
       · rw [found₁] at missing; cases missing
       · rw [found₁] at found₂; cases found₂; exact ok₁
     obtain ⟨event'', mem⟩ := atMiddle handled tasks finished process₁ sortedHandled reachableMiddle lookup found₁
-      related₁ live₁
+      related₁ live₁ fun _ staged owned => Config.stepOf_staged (by simp) step' staged owned
     have forcedChanged := changedHandled.forced_of_same (fun _ found₂ => by
       rw [found₁] at found₂; cases found₂; exact live₁) (fun _ => rfl)
     have liveNormal : (normRecord handled.gone processId process₁).exiting = none := by
@@ -3445,7 +3658,7 @@ private theorem Config.forced_own_handle {elapsed : PID → Nat → Nat} {config
       rw [normalized]; exact (State.set_self sorted found).symm]
     refine Config.own_handle_square (computation := next₀ (state.view processId)) (pdict := id) (mailbox := id)
       reachable lookup rfl found ownChange_true trivial step' ?_
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ok₁ live₁
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ok₁ live₁ _
     obtain ⟨record, view, -, -⟩ := later within found₁ live₁ ok₁
     have tagged := Config.tagged_own_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
       (transition := Transition.mk (.internal processId) raw.normalize
@@ -3471,7 +3684,7 @@ private theorem Config.forced_own_handle {elapsed : PID → Nat → Nat} {config
         live live (cleanOwn _ _)]
     refine Config.own_handle_square (computation := next₀) (pdict := fun _ => updated.pdict) (mailbox := id)
       reachable lookup rfl found ownChange_true trivial step' ?_
-    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ok₁ live₁
+    intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ok₁ live₁ _
     obtain ⟨record, -, -, counter₁⟩ := later within found₁ live₁ ok₁
     have tagged := Config.tagged_own_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
       (transition := Transition.mk (.internal processId) (raw.normalize.store processId updated)
@@ -3506,7 +3719,7 @@ private theorem Config.forced_own_handle {elapsed : PID → Nat → Nat} {config
         live live (cleanOwn _ _)]
       refine Config.own_handle_square (computation := next₀ (some value)) (pdict := id) reachable lookup rfl found
         (ownChange_select (select (state.view processId)) message value) ⟨_, selected⟩ step' ?_
-      intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ok₁ live₁
+      intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ok₁ live₁ _
       obtain ⟨record, view, mailbox₁, -⟩ := later within found₁ live₁ ok₁
       obtain ⟨remaining₁, selected₁⟩ := ok₁.1
       have tagged := Config.tagged_own_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
@@ -3536,9 +3749,46 @@ private theorem Config.forced_own_handle {elapsed : PID → Nat → Nat} {config
     simp only [Task.own, List.head?_cons, Option.some.injEq] at head; subst head
     simp [Event.local] at isLocal
   | request query next₀ =>
-    simp only [Task.own] at head
-    split at head <;> simp only [List.head?_cons, List.head?_nil, Option.some.injEq, reduceCtorEq] at head <;>
-      subst head <;> simp [Event.local] at isLocal
+    cases query
+    case persistentAwait =>
+      -- Resuming once the process's update is visible: no other step stages one it owns again.
+      have enabled : ∀ update, state.persistent.staged = some update → update.owner ≠ processId := by
+        intro update staged same
+        subst same
+        simp [Task.own, State.request, staged] at head
+      have reply : ∀ raw : State, (∀ update, raw.persistent.staged = some update → update.owner ≠ processId) →
+          raw.request processId next₀ .persistentAwait = .reply (.atom "ok") raw := by
+        intro raw free
+        simp only [State.request]
+        split
+        · rename_i update staged
+          have differ : (update.owner == processId) = false := by simpa using free update staged
+          simp [differ]
+        · rfl
+      simp only [Task.own, reply state enabled, List.head?_cons, Option.some.injEq] at head; subst head
+      simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none]
+      rw [show state.normalize = state.set processId (ownChange id id id process) by
+        rw [normalized]; exact (State.set_self sorted found).symm]
+      refine Config.own_handle_square (computation := next₀ (.atom "ok")) (pdict := id) (mailbox := id)
+        reachable lookup rfl found ownChange_true trivial step' ?_
+      intro raw tasks₁ finished₁ process₁ within reachable₁ lookup₁ found₁ ok₁ live₁ kept
+      obtain ⟨record, -, -, -⟩ := later within found₁ live₁ ok₁
+      have free : ∀ update, raw.normalize.persistent.staged = some update → update.owner ≠ processId :=
+        fun update staged same => enabled update (kept update staged same) same
+      have tagged := Config.tagged_own_forced (state := raw.normalize) (finished := finished₁) reachable₁.2.1 lookup₁
+        (transition := Transition.mk (.request processId .persistentAwait (some (.atom "ok"))) raw.normalize
+          [(processId, ⟨next₀ (.atom "ok"), finish, none⟩)] none false)
+        (by simp only [Task.own, reply raw.normalize free, List.head?_cons]) rfl rfl
+      simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_none] at tagged
+      rw [show raw.normalize.normalize = (raw.normalize.set processId
+          (ownChange id id id (normRecord raw.gone processId process₁))).normalize
+        by rw [show ownChange id id id (normRecord raw.gone processId process₁) =
+            normRecord raw.gone processId process₁ from rfl, State.set_self (Sorted.normalize within.1) record]] at tagged
+      exact ⟨_, tagged⟩
+    all_goals
+      simp only [Task.own] at head
+      split at head <;> simp only [List.head?_cons, List.head?_nil, Option.some.injEq, reduceCtorEq] at head <;>
+        subst head <;> simp [Event.local] at isLocal
 
 /-! ### Links with distinct processes
 

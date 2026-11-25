@@ -169,7 +169,8 @@ timing out before a timer's message, removing a monitor, trapping exits, or endi
 /-- The steps of a running configuration, each with its key and whether every
 run can take it first, the forced steps: a process reading or replacing its
 environment without allocating references, which could make a queued signal
-inert, or receiving a message already handled, handling a signal that
+inert, receiving a message already handled, or resuming once its persistent
+term update is visible, which no other step can stage again for it, handling a signal that
 `Task.forcedHead` accepts, or sending a `DOWN` its watcher drops. -/
 @[expose] def Config.taggedSteps : Config α → List (Key × Event × Config α × Bool)
   | .start .. => []
@@ -180,7 +181,7 @@ inert, or receiving a message already handled, handling a signal that
           Kernel.append
             (Kernel.map (fun transition => (Key.own processId, transition.event,
               transition.apply before after finished false,
-              (transition.event matches .internal _ | .receive ..) &&
+              (transition.event matches .internal _ | .receive .. | .request _ .persistentAwait (some _)) &&
                 (transition.state.process processId).refCounter == (state.process processId).refCounter))
               (task.own state processId))
             (Kernel.map (fun transition => (Key.handle processId, transition.event,
