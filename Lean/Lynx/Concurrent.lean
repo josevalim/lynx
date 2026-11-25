@@ -40,9 +40,9 @@ parked monitor signal of a process that ends, or of a monitor it removes, is
 dropped: its target would only remove the monitor again, and a `DOWN` it
 answers with only reaches a process that drops it.
 
-Persistent terms are shared by every process (`State.table`). Lookups read
-them at once. Updates take turns, as OTP's update permission does: a process
-whose update changes the table stages it (`State.staged`) and is suspended
+Persistent terms are shared by every process (`State.persistent`). Lookups
+read them at once. Updates take turns, as OTP's update permission does: a
+process whose update changes the table stages it (`PersistentTerms.persistent.staged`) and is suspended
 until a step of its own makes it visible (`State.commit`), even if the process
 exits first, as OTP still makes it visible after thread progress.
 
@@ -161,16 +161,20 @@ structure Update where
   value : Option Term
 deriving Repr
 
+/-- The persistent terms every process shares: those visible, each key once,
+and the update in progress, which holds OTP's update permission. -/
+@[ext] structure PersistentTerms where
+  table : List (Term × Term) := []
+  staged : Option Update := none
+deriving Repr
+
 /-- The runtime shared by all processes of a run. -/
-structure State where
+@[ext] structure State where
   /-- The records of processes that are alive or still ending, in the order of their PIDs. -/
   processes : List (PID × ProcessState) := []
   /-- Timers yet to fire, in the order of their references. -/
   timers : List Timer := []
-  /-- The persistent terms visible to every process, each key once. -/
-  table : List (Term × Term) := []
-  /-- The persistent term update in progress, which holds OTP's update permission. -/
-  staged : Option Update := none
+  persistent : PersistentTerms := {}
   /-- The milliseconds elapsed when a process cancels a timer, by how many
   timers it canceled before. Elapsed time is not modeled: a run starts with any
   of these, and nothing changes them. -/
@@ -588,28 +592,27 @@ inductive Answer (β : Type) : Type 1 where
   | suspended
 
 /-- The persistent term stored under a key, compared exactly as OTP does. -/
-@[expose] def State.persistent (state : State) (key : Term) : Option Term :=
+@[expose] def PersistentTerms.lookup (terms : PersistentTerms) (key : Term) : Option Term :=
   (Kernel.find? (fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq))
-    state.table).map (·.2)
+    terms.table).map (·.2)
 
 /-- Stage a persistent term update, which holds the update permission until
 it is visible, and continue once it is. -/
 @[expose] def State.stage (state : State) (processId : PID) (key : Term) (value : Option Term)
     (next : Term → Result β) (reply : Term) : Answer β :=
   .continue (.request .persistentAwait fun _ => next reply)
-    { state with staged := some { owner := processId, key, value } }
+    { state with persistent.staged := some { owner := processId, key, value } }
 
 /-- Make the staged persistent term update visible, releasing the update permission. -/
 @[expose] def State.commit (state : State) : State :=
-  match state.staged with
+  match state.persistent.staged with
   | some update =>
       let rest := Kernel.filter (fun entry =>
-        !decide (Term.compareExact (Term.fuel update.key entry.1) update.key entry.1 = .eq)) state.table
-      { state with
+        !decide (Term.compareExact (Term.fuel update.key entry.1) update.key entry.1 = .eq)) state.persistent.table
+      { state with persistent := {
         table := match update.value with
           | some value => (update.key, value) :: rest
-          | none => rest
-        staged := none }
+          | none => rest } }
   | none => state
 
 /-- Answer a request from a process. -/
@@ -712,27 +715,27 @@ it is visible, and continue once it is. -/
               processId fun process => { process with cancels := process.cancels + 1 })
       | none => .reply (.atom "false") state
   | .persistentGet key =>
-      .reply (match state.persistent key with
+      .reply (match state.persistent.lookup key with
         | some value => .cons value .nil
         | none => .nil) state
   | .persistentPut key value new =>
       -- OTP's updates take turns (try_seize_update_permission in
       -- erl_bif_persistent.c). Storing the same value, or failing `put_new`,
       -- returns without staging.
-      if state.staged.isSome then .suspended else
-      match state.persistent key with
+      if state.persistent.staged.isSome then .suspended else
+      match state.persistent.lookup key with
       | some stored =>
           if Term.compareExact (Term.fuel value stored) value stored = .eq then .reply (.atom "ok") state
           else if new then .reply (.atom "badarg") state
           else state.stage processId key (some value) next (.atom "ok")
       | none => state.stage processId key (some value) next (.atom "ok")
   | .persistentErase key =>
-      if state.staged.isSome then .suspended else
-      match state.persistent key with
+      if state.persistent.staged.isSome then .suspended else
+      match state.persistent.lookup key with
       | some _ => state.stage processId key none next (.atom "true")
       | none => .reply (.atom "false") state
   | .persistentAwait =>
-      match state.staged with
+      match state.persistent.staged with
       | some update => if update.owner == processId then .suspended else .reply (.atom "ok") state
       | none => .reply (.atom "ok") state
 
@@ -1025,7 +1028,7 @@ ends the run, which keeps no records, timers, persistent terms or result, as
 nothing observes them. -/
 @[expose] def Transition.apply (transition : Transition α) (before after : List (PID × Task α))
     (finished : Option (Except Exception α)) (exhausted : Bool) : Config α :=
-  if transition.exhausted then .running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true
+  if transition.exhausted then .running { elapsed := transition.state.elapsed } [] none true
   else .running transition.state.normalize (Kernel.append (Kernel.append before transition.tasks) after)
     (transition.finished.orElse fun _ => finished) exhausted
 
@@ -1086,7 +1089,7 @@ from has none. -/
         (Kernel.map (fun timer =>
           (.fire timer.reference, .running (state.fire timer).normalize tasks finished false)) state.firing))
         (Kernel.map (fun update => (.commit update.owner, .running state.commit.normalize tasks finished false))
-          state.staged.toList)
+          state.persistent.staged.toList)
 
 /-- A step of a configuration. -/
 @[expose] def Step (first : Config α) (event : Event) (next : Config α) : Prop :=

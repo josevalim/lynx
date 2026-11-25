@@ -141,7 +141,7 @@ whose queue holds messages from processes. -/
 
 /-- No timers nor persistent term update in progress, and every record is quiet. -/
 @[expose] public def State.Quiet (state : State) : Prop :=
-  (state.timers = [] ∧ state.staged = none) ∧
+  (state.timers = [] ∧ state.persistent.staged = none) ∧
     ∀ processId process, state.record processId = some process → process.Quiet
 
 /-- Normalizing keeps a quiet record. -/
@@ -168,11 +168,11 @@ public theorem ProcessState.Quiet.normalizeRecord {process : ProcessState} (quie
 /-- Normalizing keeps a state whose records are quiet. -/
 public theorem State.normalize_of_quiet {state : State} (quiet : ∀ entry ∈ state.processes, entry.2.Quiet) :
     state.normalize = state := by
-  obtain ⟨processes, timers, table, staged, elapsed⟩ := state
-  simp only [State.normalize_eq, Kernel.map_eq, Kernel.filter_eq, State.mk.injEq, and_true]
-  have mapped : processes.map (fun record => (record.1,
-      ({ processes, timers, table, staged, elapsed } : State).normalizeRecord record.1 record.2)) = processes := by
-    conv => rhs; rw [← List.map_id processes]
+  refine State.ext ?_ rfl rfl rfl
+  simp only [State.normalize_eq, Kernel.map_eq, Kernel.filter_eq]
+  have mapped : state.processes.map (fun record => (record.1,
+      state.normalizeRecord record.1 record.2)) = state.processes := by
+    conv => rhs; rw [← List.map_id state.processes]
     refine List.map_congr_left fun record mem => ?_
     rw [(quiet record mem).normalizeRecord]
     rfl
@@ -195,7 +195,7 @@ private def ProcessState.Ended (process : ProcessState) : Prop :=
 quiet or ended with nothing left, as after a step of quiet processes, before
 normalizing. -/
 private def State.Calm (state : State) : Prop :=
-  (state.timers = [] ∧ state.staged = none) ∧
+  (state.timers = [] ∧ state.persistent.staged = none) ∧
     ∀ processId process, state.record processId = some process → process.Quiet ∨ process.Ended
 
 private theorem ProcessState.Quiet.normRecord {gone : PID → Bool} {processId : PID} {process : ProcessState}
@@ -599,7 +599,7 @@ private theorem State.Quiet.terminate_normalize {state : State} (sorted : state.
         simp [quiet'.normRecord, Option.filter, ProcessState.finished, quiet'.1]
   · simp [State.normalize_eq, equal, State.set, State.remove, quiet.1]
   · simp [State.normalize_eq, equal, State.set, State.remove]
-  · simp [State.normalize_eq, equal, State.set, State.remove, State.shared]
+  · simp [State.normalize_eq, equal, State.set, State.remove]
 
 section
 variable {state : State} {tasks : List (PID × Task α)} {finished : Option (Except Exception α)}
@@ -662,8 +662,8 @@ private theorem Config.exhausted_meet {elapsed : PID → Nat → Nat} {state : S
     next = next' ∨ Meet next next' := by
   obtain ⟨⟨within, -, -⟩, fresh⟩ := ready.1
   have canonical : ∀ {first second : State}, first.elapsed = second.elapsed →
-      ({ first with processes := [], timers := [], table := [], staged := none } : State) = { second with processes := [], timers := [], table := [], staged := none } := by
-    intro first second same; cases first; cases second; simp_all
+      ({ elapsed := first.elapsed } : State) = { elapsed := second.elapsed } := by
+    intro first second same; rw [same]
   have exhausts : ∀ state' : State,
       ((⟨(.error .exhausted : Result β), finish, none⟩ : Task α).own state' processId).head? =
         some (Transition.mk (.exit processId (.atom "exhausted")) (state'.remove processId) [] none true) :=

@@ -38,7 +38,7 @@ signals, its parked monitor signal, and the phases of a process that ended. -/
 have left: a timer fires and its message is then handled, and an update
 becomes visible. -/
 @[expose] def State.weight (state : State) : Nat :=
-  recordsWeight state.processes + 2 * state.timers.length + (if state.staged.isSome then 1 else 0)
+  recordsWeight state.processes + 2 * state.timers.length + (if state.persistent.staged.isSome then 1 else 0)
 
 /-! ### Records -/
 
@@ -451,7 +451,7 @@ theorem State.weight_fire {state : State} {timer : Timer} (mem : timer ∈ state
   omega
 
 /-- A staged persistent term update becoming visible lowers the weight. -/
-theorem State.weight_commit {state : State} {update : Update} (staged : state.staged = some update) :
+theorem State.weight_commit {state : State} {update : Update} (staged : state.persistent.staged = some update) :
     state.commit.weight < state.weight := by
   simp only [State.commit, staged, State.weight, Option.isSome_some, Option.isSome_none, ↓reduceIte,
     Bool.false_eq_true]

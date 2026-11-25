@@ -76,13 +76,16 @@ attribute [local instance high] Kernel.pidBEq
   first.owner == second.owner && first.key.identical second.key &&
     optionIdentical Term.identical first.value second.value
 
+/-- Whether two sets of persistent terms are the same. -/
+@[expose] def PersistentTerms.identical (first second : PersistentTerms) : Bool :=
+  Term.identicalEntries first.table second.table && optionIdentical Update.identical first.staged second.staged
+
 /-- Whether two states are the same, except for the time elapsed, which no step changes. -/
 @[expose] def State.identical (first second : State) : Bool :=
   identicalLists (fun record record' => record.1 == record'.1 && record.2.identical record'.2)
     first.processes second.processes &&
   identicalLists Timer.identical first.timers second.timers &&
-  Term.identicalEntries first.table second.table &&
-  optionIdentical Update.identical first.staged second.staged
+  first.persistent.identical second.persistent
 
 /-! ### Keys -/
 
@@ -205,7 +208,7 @@ inert, or receiving a message already handled, handling a signal that
           (Key.fire timer.reference, Event.fire timer.reference,
             .running (state.fire timer).normalize tasks finished false, false)) state.firing))
         (Kernel.map (fun update => (Key.commit, Event.commit update.owner,
-          .running state.commit.normalize tasks finished false, false)) state.staged.toList)
+          .running state.commit.normalize tasks finished false, false)) state.persistent.staged.toList)
 
 /-- Where a process is in a list of tasks: the tasks before it, its own, and those after. -/
 @[expose] def splitAt (processId : PID) : List (PID × Task α) →
@@ -239,7 +242,7 @@ inert, or receiving a message already handled, handling a signal that
       (Kernel.find? (·.reference == reference) state.firing).map fun timer =>
         (Event.fire reference, .running (state.fire timer).normalize tasks finished false)
   | .running state tasks finished false, .commit =>
-      state.staged.map fun update => (Event.commit update.owner, .running state.commit.normalize tasks finished false)
+      state.persistent.staged.map fun update => (Event.commit update.owner, .running state.commit.normalize tasks finished false)
 
 /-! ### What a process continues with -/
 

@@ -457,7 +457,7 @@ private def Effect.Steady (effect : Effect) (actor : PID → Prop) : Prop :=
 private theorem Effect.Steady.empty {actor : PID → Prop} : ({} : Effect).Steady actor :=
   fun _ _ process none => ⟨process, rfl, none, rfl⟩
 
-private theorem Effect.Steady.reshare {actor : PID → Prop} {change : Shared → Shared} :
+private theorem Effect.Steady.reshare {actor : PID → Prop} {change : PersistentTerms → PersistentTerms} :
     (Effect.reshare change).Steady actor :=
   fun _ _ process none => ⟨process, rfl, none, rfl⟩
 
@@ -783,7 +783,7 @@ private def State.KeepsLive (state next : State) (actor : PID → Prop) : Prop :
 private theorem Realizes.keepsLive {effect : Effect} {state next : State} {actor : PID → Prop}
     (realizes : Realizes effect state next) (steady : effect.Steady actor) : state.KeepsLive next actor := by
   intro processId outside process found live
-  rw [realizes.1, found]
+  rw [realizes.record, found]
   exact steady processId outside process live
 
 private theorem State.KeepsLive.trans {first second third : State} {actor actor' : PID → Prop}
@@ -1103,10 +1103,10 @@ private theorem TasksFresh.own {elapsed : PID → Nat → Nat} {state : State} {
       State.spawnEffect_records state processId options found live
         (state.record (Kernel.append processId [(state.process processId).children + 1]))
     have rawParent : transition.state.record processId = some parent := by
-      rw [realizes.1, found]; exact atParent
+      rw [realizes.record, found]; exact atParent
     have rawChild : transition.state.record (Kernel.append processId [(state.process processId).children + 1]) =
         some started := by
-      rw [realizes.1]; exact atChild
+      rw [realizes.record]; exact atChild
     obtain ⟨parent', atParent', liveParent', childrenParent'⟩ := normal processId id parent rawParent liveParent
     obtain ⟨started', atChild', liveChild', -⟩ := normal _ id started rawChild liveChild
     exact ⟨⟨parent', atParent', liveParent', childrenParent'.trans childrenParent⟩, started', atChild', liveChild'⟩

@@ -205,7 +205,7 @@ defmodule ServerProofsTest do
         -- The root spawns the server alone, then both only talk to each other.
         have started : ∀ elapsed, (Config.start {} (Lynx.apply «double_all_doubles:ensures/1» Erlang.program.fun_table
             (depth + len xs + 1) xs) elapsed).advance 3 =
-            .running ⟨[([], { children := 1 }), ([1], {})], [], [], none, elapsed⟩
+            .running { processes := [([], { children := 1 }), ([1], {})], elapsed }
               [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) (.pid [1]) xs >>=
                   fun _ => «collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) xs >>=
                     fun collected => Result.ofExcept («double/1» xs) >>=
@@ -251,10 +251,10 @@ defmodule ServerProofsTest do
         -- The root sends every request while the server waits.
         have requests_phase : ∀ elapsed (R : Term → Result) (server : Concurrent.Task Term) (ys : Term)
             (valid : «is_integer_list/1» ys = .ok (.atom "true")) (sent : List Entry) (messages : Messages sent),
-            (Config.running ⟨[([], { children := 1 }), ([1], { queue := sent })], [], [], none, elapsed⟩
+            (Config.running { processes := [([], { children := 1 }), ([1], { queue := sent })], elapsed }
               [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) (.pid [1]) ys >>= R,
                 some, none⟩), ([1], server)] none false).advance (len ys) =
-            .running ⟨[([], { children := 1 }), ([1], { queue := sent ++ requests ys })], [], [], none, elapsed⟩
+            .running { processes := [([], { children := 1 }), ([1], { queue := sent ++ requests ys })], elapsed }
               [([], ⟨R (.atom "ok"), some, none⟩), ([1], server)] none false := by
           intro elapsed R server ys valid sent messages
           induction ys using «request/2».induct generalizing sent with
@@ -264,11 +264,11 @@ defmodule ServerProofsTest do
               simp only [«is_integer_list/1»] at valid
               cases x <;> simp [Erlang.erlang.«is_integer/1»] at valid <;> exact valid
             rw [show len (.cons x rest) = 1 + len rest by simp [len]; omega, Config.advance_add]
-            have step : (Config.running ⟨[([], { children := 1 }), ([1], { queue := sent })], [], [], none, elapsed⟩
+            have step : (Config.running { processes := [([], { children := 1 }), ([1], { queue := sent })], elapsed }
                 [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) (.pid [1])
                   (.cons x rest) >>= R, some, none⟩), ([1], server)] none false).advance 1 =
-                .running ⟨[([], { children := 1 }),
-                  ([1], { queue := sent ++ [⟨[], .message (.tuple #[.atom "request", x])⟩] })], [], [], none, elapsed⟩
+                .running { processes := [([], { children := 1 }),
+                  ([1], { queue := sent ++ [⟨[], .message (.tuple #[.atom "request", x])⟩] })], elapsed }
                   [([], ⟨«request/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len xs + 1)) (.pid [1]) rest >>= R,
                     some, none⟩), ([1], server)] none false := by
               rw [«request/2»]
@@ -284,13 +284,13 @@ defmodule ServerProofsTest do
         -- The server answers each request, then the root collects the reply, in five steps.
         have round : ∀ elapsed (K : Term → Result) (n : Int) (rest : Term)
             (shape : rest = .nil ∨ ∃ y rest', rest = .cons y rest'),
-            (Config.running ⟨[([], { children := 1 }), ([1], { queue := requests (.cons (.integer n) rest) })], [], [], none, elapsed⟩
+            (Config.running { processes := [([], { children := 1 }), ([1], { queue := requests (.cons (.integer n) rest) })], elapsed }
               [([], ⟨«collect/1» (Dispatcher.ofTable Erlang.program.fun_table
                   (depth + len (.cons (.integer n) rest) + 1)) (.cons (.integer n) rest) >>= K, some, none⟩),
                ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table
                   (depth + len (.cons (.integer n) rest))) (.pid []) (.cons (.integer n) rest)))]
               none false).advance 5 =
-            .running ⟨[([], { children := 1 }), ([1], { queue := requests rest })], [], [], none, elapsed⟩
+            .running { processes := [([], { children := 1 }), ([1], { queue := requests rest })], elapsed }
               [([], ⟨«collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + len rest + 1)) rest >>=
                   fun r => K (.cons (.integer (n * 2)) r), some, none⟩),
                ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len rest))
@@ -310,11 +310,11 @@ defmodule ServerProofsTest do
         -- Every request is answered.
         have replies_phase : ∀ elapsed (K : Term → Result) (zs : Term)
             (valid : «is_integer_list/1» zs = .ok (.atom "true")),
-            (Config.running ⟨[([], { children := 1 }), ([1], { queue := requests zs })], [], [], none, elapsed⟩
+            (Config.running { processes := [([], { children := 1 }), ([1], { queue := requests zs })], elapsed }
               [([], ⟨«collect/1» (Dispatcher.ofTable Erlang.program.fun_table (depth + len zs + 1)) zs >>= K, some, none⟩),
                ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table (depth + len zs)) (.pid []) zs))]
               none false).advance (5 * len zs) =
-            .running ⟨[([], { children := 1 }), ([1], {})], [], [], none, elapsed⟩
+            .running { processes := [([], { children := 1 }), ([1], {})], elapsed }
               [([], ⟨K (doubled zs), some, none⟩),
                ([1], Task.child («serve/2» (Dispatcher.ofTable Erlang.program.fun_table depth) (.pid []) .nil))]
               none false := by

@@ -277,7 +277,7 @@ private theorem State.Within.timers {state : State} (sorted : state.Within elaps
     ({ state with timers } : State).Within elapsed := sorted
 
 private theorem State.Within.staged {state : State} (sorted : state.Within elapsed) (staged : Option Update) :
-    ({ state with staged } : State).Within elapsed := sorted
+    ({ state with persistent.staged := staged } : State).Within elapsed := sorted
 
 private theorem State.Within.commit {state : State} (sorted : state.Within elapsed) : state.commit.Within elapsed := by
   unfold State.commit; split
@@ -437,14 +437,14 @@ private def Answer.state (suspended : State) : Answer β → State
 private theorem State.request_persistent (state : State) (processId : PID) (next : Term → Result β)
     (query : Request)
     (persistent : (query matches .persistentGet _ | .persistentPut .. | .persistentErase _ | .persistentAwait) = true) :
-    ∃ staged, (state.request processId next query).state state = { state with staged } := by
+    ∃ staged, (state.request processId next query).state state = { state with persistent.staged := staged } := by
   generalize answered : state.request processId next query = answer
   cases query <;> simp at persistent <;> simp only [State.request, State.stage] at answered <;>
-    (repeat' split at answered) <;> subst answered <;> first | exact ⟨_, rfl⟩ | exact ⟨state.staged, rfl⟩
+    (repeat' split at answered) <;> subst answered <;> first | exact ⟨_, rfl⟩ | exact ⟨state.persistent.staged, rfl⟩
 
 /-- What a persistent term request leaves holds when it holds whatever is staged. -/
 private theorem State.request_persistent_of {state : State} {processId : PID} {next : Term → Result β}
-    {query : Request} {holds : State → Prop} (keeps : ∀ staged, holds { state with staged })
+    {query : Request} {holds : State → Prop} (keeps : ∀ staged, holds { state with persistent.staged := staged })
     (persistent : (query matches .persistentGet _ | .persistentPut .. | .persistentErase _ | .persistentAwait) = true) :
     holds ((state.request processId next query).state state) := by
   obtain ⟨staged, equal⟩ := State.request_persistent state processId next query persistent
@@ -1348,7 +1348,7 @@ private theorem Config.stepOf_own {state : State} {tasks : List (PID × Task α)
     (found : (Config.running state tasks finished false).stepOf (.own processId) = some (event, next)) :
     ∃ task transition, Kernel.lookup processId tasks = some task ∧
       (task.own state processId).head? = some transition ∧
-      next = if transition.exhausted then .running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true
+      next = if transition.exhausted then .running { elapsed := transition.state.elapsed } [] none true
         else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
           (transition.finished.orElse fun _ => finished) false := by
   simp only [Config.stepOf, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq] at found
@@ -1362,7 +1362,7 @@ private theorem Config.stepOf_handle {state : State} {tasks : List (PID × Task 
     (found : (Config.running state tasks finished false).stepOf (.handle processId) = some (event, next)) :
     ∃ task transition, Kernel.lookup processId tasks = some task ∧
       (task.handle state processId).head? = some transition ∧
-      next = if transition.exhausted then .running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true
+      next = if transition.exhausted then .running { elapsed := transition.state.elapsed } [] none true
         else .running transition.state.normalize (rewriteTask processId (fun _ => transition.tasks) tasks)
           (transition.finished.orElse fun _ => finished) false := by
   simp only [Config.stepOf, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq] at found
@@ -1622,7 +1622,7 @@ private theorem Config.changes_own_transfer {state state' : State} {tasks tasks'
       (transition.exhausted = false →
         (Config.running state tasks finished false).Changes (some (transition.change processId)) next ∧
         (Config.running state' tasks' finished' false).Changes (some (transition.change processId)) next') ∧
-      (transition.exhausted = true → next = .running { transition.state with processes := [], timers := [], table := [], staged := none } [] none true) := by
+      (transition.exhausted = true → next = .running { elapsed := transition.state.elapsed } [] none true) := by
   obtain ⟨task₁, transition, lookup₁, head, equal⟩ := Config.stepOf_own found
   rw [lookup] at lookup₁; simp only [Option.some.injEq] at lookup₁; subst lookup₁
   obtain ⟨task₂, transition', lookup₂, head', equal'⟩ := Config.stepOf_own found'
@@ -1891,20 +1891,22 @@ private theorem Update.eq_of_identical {first second : Update} (same : first.ide
   obtain ⟨⟨rfl, key⟩, value⟩ := same
   rw [Term.eq_of_identical key, eq_of_optionIdentical Term.eq_of_identical value]
 
+private theorem PersistentTerms.eq_of_identical {first second : PersistentTerms}
+    (same : first.identical second = true) : first = second := by
+  simp only [PersistentTerms.identical, Bool.and_eq_true] at same
+  exact PersistentTerms.ext (Term.eq_of_identicalEntries same.1) (eq_of_optionIdentical Update.eq_of_identical same.2)
+
 private theorem State.eq_of_identical {first second : State} (same : first.identical second = true)
     (elapsed : first.elapsed = second.elapsed) : first = second := by
-  obtain ⟨processes, timers, table, staged, elapsed₁⟩ := first
-  obtain ⟨processes', timers', table', staged', elapsed₂⟩ := second
-  simp only [State.identical, Bool.and_eq_true] at same elapsed
-  obtain ⟨⟨⟨same, timed⟩, tabled⟩, staging⟩ := same
-  have records := eq_of_identicalLists (same := fun record record' : PID × ProcessState =>
-      record.1 == record'.1 && record.2.identical record'.2) (fun {record record'} equal => by
-    obtain ⟨key, value⟩ := record
-    obtain ⟨key', value'⟩ := record'
-    simp only [Bool.and_eq_true, beq_iff_eq] at equal
-    rw [equal.1, ProcessState.eq_of_identical equal.2]) same
-  rw [records, eq_of_identicalLists Timer.eq_of_identical timed, Term.eq_of_identicalEntries tabled,
-    eq_of_optionIdentical Update.eq_of_identical staging, elapsed]
+  simp only [State.identical, Bool.and_eq_true] at same
+  obtain ⟨⟨same, timed⟩, persistent⟩ := same
+  refine State.ext (eq_of_identicalLists (same := fun record record' : PID × ProcessState =>
+      record.1 == record'.1 && record.2.identical record'.2) (fun {record record'} equal => ?_) same)
+    (eq_of_identicalLists Timer.eq_of_identical timed) (PersistentTerms.eq_of_identical persistent) elapsed
+  obtain ⟨key, value⟩ := record
+  obtain ⟨key', value'⟩ := record'
+  simp only [Bool.and_eq_true, beq_iff_eq] at equal
+  rw [equal.1, ProcessState.eq_of_identical equal.2]
 
 /-- The owners of two keys that `Config.commutesAfter` lets commute. -/
 private theorem Key.owners_differ {processId other : PID}
