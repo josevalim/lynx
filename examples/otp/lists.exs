@@ -966,6 +966,8 @@ defmodule ListsProofsTest do
               else start false x y (z :: w :: xs) [] []
             else start true x y (z :: w :: xs) [] [] := by
         rw [Erlang.lists.«sort/1».eq_def]
+        -- Lean's instance lets `cases` abstract the comparison it decides.
+        rw [Lynx.Term.compare_decidableEq_eq]
         cases comparison : Lynx.Term.compare (Lynx.Term.fuel x y) x y <;>
           simp [encode, select, initial, start, pack, Erlang.erlang.«=</2», Erlang.erlang.«==/2», comparison]
       have sortModel (xs : List Lynx.Term) : good xs (Erlang.lists.«sort/1» (encode xs)) := by

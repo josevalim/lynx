@@ -435,7 +435,7 @@ end Order
 @[expose] def «--/2» (left right : Term) : Except Exception Term :=
   match Term.properList? left, Term.properList? right with
   | some xs, some ys =>
-    .ok (Term.list (ys.foldl (fun acc y => acc.eraseP fun x => Term.compareExact (Term.fuel x y) x y == .eq) xs))
+    .ok (Term.list (ys.foldl (fun acc y => acc.eraseP fun x => decide (Term.compareExact (Term.fuel x y) x y = .eq)) xs))
   | _, _ => throw (.error (.atom "badarg"))
 
 @[expose] def «xor/2» : Term → Term → Except Exception Term
@@ -496,14 +496,14 @@ end Order
 
 @[expose] def «is_map_key/2» (key input : Term) : Except Exception Term :=
   match input with
-  | .map entries => .ok (if entries.any (fun entry => Term.compareExact (Term.fuel key entry.1) key entry.1 == .eq)
+  | .map entries => .ok (if entries.any (fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq))
     then Term.true else Term.false)
   | _ => throw (.error (.tuple #[.atom "badmap", input]))
 
 /-- The map representation retains shadowed entries, which count only once. -/
 @[expose] def «map_size/1» : Term → Except Exception Term
   | .map entries => .ok (.integer
-      ((entries.map Prod.fst).eraseDupsBy (fun a b => Term.compareExact (Term.fuel a b) a b == .eq)).length)
+      ((entries.map Prod.fst).eraseDupsBy (fun a b => decide (Term.compareExact (Term.fuel a b) a b = .eq))).length)
   | input => throw (.error (.tuple #[.atom "badmap", input]))
 
 @[expose] def «min/2» (left right : Term) : Except Exception Term :=

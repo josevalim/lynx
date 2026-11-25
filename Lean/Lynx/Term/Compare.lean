@@ -1197,6 +1197,272 @@ private theorem compareMapViews_eq_of_lookup (valueCmp : α → α → Ordering)
 
 end Lynx.Term.Compare
 
+/-! ## Equality without order
+
+Erlang's equalities, `=:=` and `==`, decided without ordering terms, so that
+they evaluate even where the order between terms is left unspecified. -/
+
+namespace Lynx.Term.Compare
+
+variable {α : Type}
+
+/-- The value of the first binding of a key, by an equality on keys. -/
+@[expose] def lookupBy (keyEq : α → α → Bool) (entries : List (α × α)) (key : α) : Option α :=
+  (entries.find? fun entry => keyEq key entry.1).map Prod.snd
+
+/-- Whether two optional values are both missing, or both present and related. -/
+@[expose] def optionRel (rel : α → α → Bool) : Option α → Option α → Bool
+  | some first, some second => rel first second
+  | none, none => true
+  | _, _ => false
+
+/-- Whether two maps bind the same keys to related values, by first-binding
+lookups: every key of either map is found in the other. -/
+@[expose] def equalMaps (keyEq valueEq : α → α → Bool) (first second : List (α × α)) : Bool :=
+  first.all (fun entry => optionRel valueEq (lookupBy keyEq first entry.1) (lookupBy keyEq second entry.1)) &&
+    second.all (fun entry => (lookupBy keyEq first entry.1).isSome)
+
+/-- Whether two lists hold related elements, in order. -/
+@[expose] def equalLists (eq : α → α → Bool) : List α → List α → Bool
+  | [], [] => true
+  | first :: rest, second :: rest' => eq first second && equalLists eq rest rest'
+  | _, _ => false
+
+private theorem equalLists_iff {eq : α → α → Bool} {cmp : α → α → Ordering}
+    (agree : ∀ x y, eq x y = true ↔ cmp x y = .eq) :
+    ∀ xs ys, equalLists eq xs ys = true ↔ List.compareLex cmp xs ys = .eq
+  | [], [] => by simp [equalLists, List.compareLex_nil_nil]
+  | [], _ :: _ => by simp [equalLists, List.compareLex_nil_cons]
+  | _ :: _, [] => by simp [equalLists, List.compareLex_cons_nil]
+  | x :: xs, y :: ys => by
+    simp only [equalLists, Bool.and_eq_true, List.compareLex_cons_cons, Ordering.then_eq_eq, agree,
+      equalLists_iff agree xs ys]
+
+variable {cmp : α → α → Ordering} [Std.TransCmp cmp]
+
+omit [Std.TransCmp cmp] in
+private theorem lookupBy_eq (keyEq : α → α → Bool) (agree : ∀ x y, keyEq x y = true ↔ cmp x y = .eq)
+    (xs : List (α × α)) (q : α) : lookupBy keyEq xs q = mapViewLookup cmp xs q := by
+  have same : (fun entry : α × α => keyEq q entry.1) = fun entry => decide (cmp q entry.1 = .eq) := by
+    funext entry
+    cases h : keyEq q entry.1 <;> simp_all [← agree]
+  simp [lookupBy, mapViewLookup, same]
+
+omit [Std.TransCmp cmp] in
+/-- Views with equal keys and related values have related lookups. -/
+private theorem mapViewLookup_rel' (valueCmp : α → α → Ordering) {xs ys : List (α × α)}
+    (keys : List.compareLex cmp (xs.map Prod.fst) (ys.map Prod.fst) = .eq)
+    (values : List.compareLex valueCmp (xs.map Prod.snd) (ys.map Prod.snd) = .eq)
+    (trans : ∀ {a b c}, cmp a b = .eq → cmp b c = .eq → cmp a c = .eq)
+    (symm : ∀ {a b}, cmp a b = .eq → cmp b a = .eq) (q : α) :
+    Option.Rel (fun a b => valueCmp a b = .eq) (mapViewLookup cmp xs q) (mapViewLookup cmp ys q) := by
+  induction xs generalizing ys with
+  | nil =>
+    cases ys with
+    | nil => exact Option.Rel.none
+    | cons y ys => simp [List.compareLex_nil_cons] at keys
+  | cons x xs ih =>
+    cases ys with
+    | nil => simp [List.compareLex_cons_nil] at keys
+    | cons y ys =>
+      simp only [List.map_cons, List.compareLex_cons_cons, Ordering.then_eq_eq] at keys values
+      simp only [mapViewLookup_cons]
+      have same : cmp q x.1 = .eq ↔ cmp q y.1 = .eq :=
+        ⟨fun h => trans h keys.1, fun h => trans h (symm keys.1)⟩
+      by_cases hit : cmp q x.1 = .eq
+      · simp only [hit, ite_true, same.mp hit]
+        exact Option.Rel.some values.1
+      · simp only [hit, (not_congr same).mp hit]
+        exact ih keys.2 values.2
+
+/-- Lookups by an equivalence give the same value for equivalent keys. -/
+private theorem lookupBy_congr (keyEq : α → α → Bool) (agree : ∀ x y, keyEq x y = true ↔ cmp x y = .eq)
+    (xs : List (α × α)) {q r : α} (same : cmp q r = .eq) :
+    lookupBy keyEq xs q = lookupBy keyEq xs r := by
+  rw [lookupBy_eq keyEq agree, lookupBy_eq keyEq agree]
+  simp only [mapViewLookup]
+  congr 2
+  funext entry
+  simp only [decide_eq_decide]
+  exact ⟨fun h => Std.TransCmp.eq_trans (Std.OrientedCmp.eq_symm same) h,
+    fun h => Std.TransCmp.eq_trans same h⟩
+
+/-- A key found by lookup is equivalent to the key of a binding. -/
+private theorem lookupBy_some (keyEq : α → α → Bool) {xs : List (α × α)} {q v : α}
+    (found : lookupBy keyEq xs q = some v) : ∃ entry ∈ xs, keyEq q entry.1 = true := by
+  simp only [lookupBy, Option.map_eq_some_iff] at found
+  obtain ⟨entry, hit, _⟩ := found
+  exact ⟨entry, List.mem_of_find?_eq_some hit, List.find?_some (p := fun entry : α × α => keyEq q entry.1) hit⟩
+
+private theorem lookupBy_self (keyEq : α → α → Bool) (agree : ∀ x y, keyEq x y = true ↔ cmp x y = .eq)
+    {xs : List (α × α)} {entry : α × α} (member : entry ∈ xs) : (lookupBy keyEq xs entry.1).isSome := by
+  simp only [lookupBy, Option.isSome_map, List.find?_isSome]
+  exact ⟨entry, member, (agree _ _).mpr (Std.ReflCmp.compare_self)⟩
+
+/-- Order-free map equality is equality of every lookup. -/
+private theorem equalMaps_iff (keyEq valueEq : α → α → Bool) (agree : ∀ x y, keyEq x y = true ↔ cmp x y = .eq)
+    (first second : List (α × α)) :
+    equalMaps keyEq valueEq first second = true ↔
+      ∀ q, optionRel valueEq (lookupBy keyEq first q) (lookupBy keyEq second q) = true := by
+  constructor
+  · intro equal q
+    simp only [equalMaps, Bool.and_eq_true, List.all_eq_true] at equal
+    cases hit : lookupBy keyEq first q with
+    | some v =>
+      obtain ⟨entry, member, key⟩ := lookupBy_some keyEq hit
+      have same := (agree _ _).mp key
+      have := equal.1 entry member
+      rwa [← lookupBy_congr keyEq agree first same, ← lookupBy_congr keyEq agree second same, hit] at this
+    | none =>
+      cases hit' : lookupBy keyEq second q with
+      | none => rfl
+      | some w =>
+        obtain ⟨entry, member, key⟩ := lookupBy_some keyEq hit'
+        have := equal.2 entry member
+        rw [← lookupBy_congr keyEq agree first ((agree _ _).mp key), hit] at this
+        simp at this
+  · intro equal
+    simp only [equalMaps, Bool.and_eq_true, List.all_eq_true]
+    refine ⟨fun entry _ => equal entry.1, fun entry member => ?_⟩
+    have := equal entry.1
+    have found := lookupBy_self keyEq agree member
+    cases h : lookupBy keyEq first entry.1 <;> cases h' : lookupBy keyEq second entry.1 <;>
+      simp_all [optionRel]
+
+/-- Order-free map equality agrees with comparing the maps' sorted views. -/
+private theorem equalMaps_iff_compare (keyEq valueEq : α → α → Bool) (valueCmp : α → α → Ordering)
+    [Std.TransCmp valueCmp] (keyAgree : ∀ x y, keyEq x y = true ↔ cmp x y = .eq)
+    (valueAgree : ∀ x y, valueEq x y = true ↔ valueCmp x y = .eq) (first second : List (α × α)) :
+    equalMaps keyEq valueEq first second = true ↔
+      compareMapViews cmp valueCmp (mapView cmp first) (mapView cmp second) = .eq := by
+  rw [equalMaps_iff keyEq valueEq keyAgree]
+  have rel : ∀ q, (optionRel valueEq (lookupBy keyEq first q) (lookupBy keyEq second q) = true ↔
+      Option.Rel (fun a b => valueCmp a b = .eq) (mapViewLookup cmp (mapView cmp first) q)
+        (mapViewLookup cmp (mapView cmp second) q)) := by
+    intro q
+    rw [lookupBy_eq keyEq keyAgree, lookupBy_eq keyEq keyAgree, mapViewLookup_view, mapViewLookup_view]
+    cases mapViewLookup cmp first q <;> cases mapViewLookup cmp second q <;>
+      simp [optionRel, valueAgree, Option.rel_some_some, Option.rel_none_none]
+  constructor
+  · intro equal
+    exact compareMapViews_eq_of_lookup cmp valueCmp _ _ (mapView_sorted cmp _) (mapView_sorted cmp _)
+      fun q => (rel q).mp (equal q)
+  · intro equal q
+    simp only [compareMapViews, compareLex, compareOn, Ordering.then_eq_eq] at equal
+    exact (rel q).mpr (mapViewLookup_rel' valueCmp equal.2.1 equal.2.2
+      (fun h h' => Std.TransCmp.eq_trans h h') (fun h => Std.OrientedCmp.eq_symm h) q)
+
+end Lynx.Term.Compare
+
+namespace Lynx.Term.Compare
+
+/-- One equality step, deciding what `compareStep` returning `.eq` decides,
+without ordering terms. `exact` controls whether integers and floats differ;
+map keys always use the exact child equality. -/
+@[expose] def equalStep (exact : Bool) (eq exactEq : Term → Term → Bool) : Term → Term → Bool
+  | .integer a, .integer b => a == b
+  | .integer a, .float b => !exact && ratCompare a b.toRat == .eq
+  | .float a, .integer b => !exact && ratCompare a.toRat b == .eq
+  | .float a, .float b => if exact then exactFloatCompare a b == .eq else ratCompare a.toRat b.toRat == .eq
+  | .atom a, .atom b => a == b
+  | .reference a, .reference b => a == b
+  | .function external module name arity captures,
+    .function otherExternal otherModule otherName otherArity otherCaptures =>
+    external == otherExternal && module == otherModule && name == otherName && arity == otherArity &&
+      equalLists eq captures.toList otherCaptures.toList
+  | .pid a, .pid b => a == b
+  | .tuple a, .tuple b => equalLists eq a.toList b.toList
+  | .map a, .map b => equalMaps exactEq eq a b
+  | .nil, .nil => true
+  | .cons a as, .cons b bs => eq a b && eq as bs
+  | .bitstring a ab _, .bitstring b bb _ =>
+    equalLists (· == ·) (Bitstring.toBits a ab) (Bitstring.toBits b bb)
+  | _, _ => false
+
+private theorem compareLex_length {cmp : α → α → Ordering} :
+    ∀ {xs ys : List α}, List.compareLex cmp xs ys = .eq → xs.length = ys.length
+  | [], [], _ => rfl
+  | [], _ :: _, h => by simp [List.compareLex_nil_cons] at h
+  | _ :: _, [], h => by simp [List.compareLex_cons_nil] at h
+  | _ :: _, _ :: _, h => by
+    simp only [List.compareLex_cons_cons, Ordering.then_eq_eq] at h
+    simp [compareLex_length h.2]
+
+/-- An equality step decides what a comparison step returning `.eq` decides,
+when the child equalities decide what the child comparisons do. -/
+private theorem equalStep_iff (exact : Bool) {eq exactEq : Term → Term → Bool} {cmp exactCmp : Term → Term → Ordering}
+    [Std.TransCmp cmp] [Std.TransCmp exactCmp]
+    (agree : ∀ x y, eq x y = true ↔ cmp x y = .eq) (exactAgree : ∀ x y, exactEq x y = true ↔ exactCmp x y = .eq)
+    (a b : Term) : equalStep exact eq exactEq a b = true ↔ compareStep exact cmp exactCmp a b = .eq := by
+  have bits : ∀ x y : Bool, (x == y) = true ↔ Ord.compare x y = .eq := by decide
+  cases a <;> cases b <;> cases exact <;>
+    simp only [equalStep, compareStep, Bool.and_eq_true, beq_iff_eq, reduceCtorEq, Bool.false_eq_true,
+      ite_true, ite_false, Bool.not_false, Bool.not_true, Bool.true_and, Bool.false_and,
+      iff_self, Ordering.then_eq_eq, stringCompare_eq_iff, ratCompare_eq_iff, Std.compare_eq_iff_eq,
+      equalLists_iff agree, agree, Rat.intCast_inj, and_assoc] <;> try trivial
+  all_goals first
+    | exact equalMaps_iff_compare (cmp := exactCmp) _ _ cmp exactAgree agree _ _
+    | exact equalLists_iff bits _ _
+    | exact ⟨fun same => ⟨by simpa using compareLex_length same, same⟩, And.right⟩
+
+end Lynx.Term.Compare
+
+namespace Lynx.Term
+
+/-- Erlang's equalities without ordering terms: `=:=` when `exact`, and `==`
+otherwise, taking at most `fuel` steps; `Term.fuel` steps decide them. -/
+@[expose] def equal : Nat → Bool → Term → Term → Bool
+  | 0, _ => fun _ _ => true
+  | fuel + 1, exact => Compare.equalStep exact (equal fuel exact) (equal fuel true)
+
+/-- The equalities decide what the comparisons decide, at any fuel. -/
+theorem equal_iff : ∀ (n : Nat) (a b : Term),
+    (equal n true a b = true ↔ compareExact n a b = .eq) ∧ (equal n false a b = true ↔ compare n a b = .eq)
+  | 0, _, _ => by simp [equal, compareExact, compare]
+  | n + 1, a, b => by
+    have exactAgree : ∀ x y, equal n true x y = true ↔ compareExact n x y = .eq :=
+      fun x y => (equal_iff n x y).1
+    have agree : ∀ x y, equal n false x y = true ↔ compare n x y = .eq :=
+      fun x y => (equal_iff n x y).2
+    exact ⟨Compare.equalStep_iff true exactAgree exactAgree a b,
+      Compare.equalStep_iff false agree exactAgree a b⟩
+
+/-- Exact equality is decided without ordering terms, so that it evaluates
+even where the order between terms is unspecified. -/
+instance (priority := high) compareExact_decidableEq (n : Nat) (a b : Term) :
+    Decidable (compareExact n a b = .eq) :=
+  decidable_of_iff _ (equal_iff n a b).1
+
+/-- Semantic equality is decided without ordering terms. -/
+instance (priority := high) compare_decidableEq (n : Nat) (a b : Term) :
+    Decidable (compare n a b = .eq) :=
+  decidable_of_iff _ (equal_iff n a b).2
+
+/-- Deciding exact equality without ordering terms decides the same, so proofs
+that case on the comparison can rewrite to Lean's instance first. -/
+theorem compareExact_decidableEq_eq (n : Nat) (a b : Term) :
+    compareExact_decidableEq n a b = instDecidableEqOrdering (compareExact n a b) .eq :=
+  Subsingleton.elim _ _
+
+/-- Deciding semantic equality without ordering terms decides the same, so proofs
+that case on the comparison can rewrite to Lean's instance first. -/
+theorem compare_decidableEq_eq (n : Nat) (a b : Term) :
+    compare_decidableEq n a b = instDecidableEqOrdering (compare n a b) .eq :=
+  Subsingleton.elim _ _
+
+/-- `=:=` without ordering terms decides exact equality. -/
+theorem equal_true_iff (a b : Term) :
+    equal (fuel a b) true a b = true ↔ compareExact (fuel a b) a b = .eq :=
+  (equal_iff _ a b).1
+
+/-- `==` without ordering terms decides semantic equality. -/
+theorem equal_false_iff (a b : Term) :
+    equal (fuel a b) false a b = true ↔ compare (fuel a b) a b = .eq :=
+  (equal_iff _ a b).2
+
+end Lynx.Term
+
+
 namespace Lynx.Term
 
 /-- Exact comparison keeps integer and float representations distinct. -/
@@ -1256,6 +1522,15 @@ theorem compare_singleton_map (k v l w : Term) :
   simp [Compare.compareStep, Compare.mapView, Compare.mapViewInsert, Compare.compareMapViews,
     compareLex, Compare.compareOn, List.compareLex_cons_cons, List.compareLex_nil_nil]
 
+/-- Lookups in a view by the exact order are the first-binding lookups. -/
+private theorem mapViewLookup_exact (xs : List (Term × Term)) (q : Term) :
+    Compare.mapViewLookup exactOrder xs q =
+      (xs.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd := by
+  simp only [Compare.mapViewLookup]
+  congr 2
+  funext e
+  exact decide_eq_decide.mpr Iff.rfl
+
 /-- Matching first-binding lookups suffice for semantic map equality. -/
 theorem map_compare_eq_of_lookup (a b : List (Term × Term))
     (h : ∀ q, Option.Rel (fun a b => compare (fuel a b) a b = .eq)
@@ -1266,7 +1541,7 @@ theorem map_compare_eq_of_lookup (a b : List (Term × Term))
   apply Compare.compareMapViews_eq_of_lookup (cmp := exactOrder) numericOrder _ _
     (Compare.mapView_sorted _ _) (Compare.mapView_sorted _ _)
   intro q
-  simp only [Compare.mapViewLookup_view]
+  simp only [Compare.mapViewLookup_view, mapViewLookup_exact]
   exact h q
 
 /-- Matching first-binding lookups, up to exact equality of values, suffice for
@@ -1280,7 +1555,7 @@ theorem map_compareExact_eq_of_lookup (a b : List (Term × Term))
   apply Compare.compareMapViews_eq_of_lookup (cmp := exactOrder) exactOrder _ _
     (Compare.mapView_sorted _ _) (Compare.mapView_sorted _ _)
   intro q
-  simp only [Compare.mapViewLookup_view]
+  simp only [Compare.mapViewLookup_view, mapViewLookup_exact]
   exact h q
 
 private theorem mapViewLookup_rel (cmp : Term → Term → Ordering) {xs ys : List (Term × Term)}
@@ -1319,7 +1594,7 @@ theorem lookup_of_map_compareExact_eq (a b : List (Term × Term))
   simp only [Compare.compareStep, Compare.compareMapViews, compareLex, Compare.compareOn,
     Ordering.then_eq_eq] at equal
   have rel := mapViewLookup_rel exactOrder equal.2.1 equal.2.2 q
-  simp only [Compare.mapViewLookup_view] at rel
+  simp only [Compare.mapViewLookup_view, mapViewLookup_exact] at rel
   exact rel
 
 /-- Semantically equal maps bind exactly equal keys to semantically equal values. -/
@@ -1332,7 +1607,7 @@ theorem lookup_of_map_compare_eq (a b : List (Term × Term))
   simp only [Compare.compareStep, Compare.compareMapViews, compareLex, Compare.compareOn,
     Ordering.then_eq_eq] at equal
   have rel := mapViewLookup_rel numericOrder equal.2.1 equal.2.2 q
-  simp only [Compare.mapViewLookup_view] at rel
+  simp only [Compare.mapViewLookup_view, mapViewLookup_exact] at rel
   exact rel
 
 /-- First-binding lookup of a key in a map's entries. -/
@@ -1350,7 +1625,10 @@ opaque mapEnumeration (entries : List (Term × Term)) :
       ∀ entry ∈ enumerated, entry ∈ entries } :=
   ⟨Compare.mapView exactOrder entries,
     (Compare.mapView_sorted exactOrder entries).imp fun lt => by simp [lt],
-    Compare.mapViewLookup_view exactOrder entries,
+    fun key => by
+      have view := Compare.mapViewLookup_view exactOrder entries key
+      simp only [mapViewLookup_exact] at view
+      exact view,
     fun _ => Compare.mem_mapView exactOrder⟩
 
 /-- The visible bindings of a map, in an unspecified order. -/
@@ -1653,3 +1931,4 @@ theorem Term.eq_of_identicalEntries : ∀ {first second : List (Term × Term)},
 end
 
 end Lynx
+

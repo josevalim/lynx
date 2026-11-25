@@ -22,7 +22,6 @@ theorem membership :
 theorem size :
     Erlang.sets.«size/1» (set [.integer 1, .integer 2, .integer 1]) = .ok (.integer 2) := by
   simp [set, Erlang.sets.«size/1», List.eraseDupsBy, List.eraseDupsBy.loop]
-  rfl
 
 /-- Sets are created as version 2 sets, whatever version the options ask for. -/
 theorem creation :

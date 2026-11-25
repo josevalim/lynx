@@ -41,7 +41,7 @@ open Lynx
 @[expose] def «size/1» (set : Term) : Except Exception Term :=
   match set with
   | .map entries => .ok (.integer
-      ((entries.map Prod.fst).eraseDupsBy (fun a b => Term.compareExact (Term.fuel a b) a b == .eq)).length)
+      ((entries.map Prod.fst).eraseDupsBy (fun a b => decide (Term.compareExact (Term.fuel a b) a b = .eq))).length)
   | _ => .error .exhausted
 
 @[expose] def «union/2» (left right : Term) : Except Exception Term :=
@@ -229,7 +229,7 @@ theorem size_empty (entries : List (Term × Term)) (element : Term)
   cases entries with
   | nil => rfl
   | cons entry rest =>
-    have := loop_length (fun a b => Term.compareExact (Term.fuel a b) a b == .eq) (rest.map Prod.fst) [entry.1]
+    have := loop_length (fun a b => decide (Term.compareExact (Term.fuel a b) a b = .eq)) (rest.map Prod.fst) [entry.1]
     simp only [«size/1», List.map_cons, List.eraseDupsBy, List.eraseDupsBy.loop, List.any_nil,
       Except.ok.injEq, Term.integer.injEq] at empty
     simp at this

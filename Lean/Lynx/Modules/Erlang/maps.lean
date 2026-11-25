@@ -96,7 +96,7 @@ the order `to_list/1` returns them. The BEAM's iterator representation is opaque
 /-- Every binding of the key is removed, including shadowed ones. -/
 @[expose] def «remove/2» (key input : Term) : Except Exception Term :=
   match input with
-  | .map entries => .ok (.map (entries.filter fun entry => Term.compareExact (Term.fuel key entry.1) key entry.1 != .eq))
+  | .map entries => .ok (.map (entries.filter fun entry => !decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)))
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
 @[expose] def «take/2» (key input : Term) : Except Exception Term :=
@@ -104,7 +104,7 @@ the order `to_list/1` returns them. The BEAM's iterator representation is opaque
   | .map entries =>
     match Term.mapLookup entries key with
     | some value =>
-      .ok (.tuple #[value, .map (entries.filter fun entry => Term.compareExact (Term.fuel key entry.1) key entry.1 != .eq)])
+      .ok (.tuple #[value, .map (entries.filter fun entry => !decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq))])
     | none => .ok (.atom "error")
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
