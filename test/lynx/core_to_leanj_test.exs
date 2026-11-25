@@ -1968,6 +1968,31 @@ defmodule Lynx.CoreToLeanjTest do
     end
   end
 
+  test "function clause failures raise function_clause alone" do
+    # The compiler folds the arguments into a literal when it knows them,
+    # as in (fun(a) -> ok end)(b).
+    for reason <- [
+          :cerl.abstract({:function_clause}),
+          :cerl.abstract({:function_clause, :b}),
+          :cerl.c_tuple([:cerl.c_atom(:function_clause), :cerl.c_var(0)])
+        ] do
+      body = :cerl.c_primop(:cerl.c_atom(:match_fail), [reason])
+
+      assert {:ok,
+              %{
+                {:entry, 1} => %{
+                  translation: %{
+                    "body" => %{
+                      "kind" => "raise",
+                      "class" => "error",
+                      "reason" => %{"kind" => "atom", "value" => "function_clause"}
+                    }
+                  }
+                }
+              }, []} = translate(definitions([definition(:entry, body)]))
+    end
+  end
+
   test "returns annotated binary reasons for unsupported Core during translation" do
     anno = [{:file, ~c"example.erl"}, {7, 3}]
     body = :cerl.ann_c_primop(anno, :cerl.c_atom(:unsupported), [])

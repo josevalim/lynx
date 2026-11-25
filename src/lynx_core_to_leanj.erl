@@ -1186,13 +1186,17 @@ computation_apply(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args} =
     end.
 
 %% Erlang: f([]) -> ok.
-%% Core inserts match_fail for arguments that match no function clause.
+%% Core inserts match_fail for arguments that match no function clause, with
+%% a tuple of function_clause and the arguments, which the compiler folds into
+%% a literal when they are known, as in (fun(a) -> ok end)(b). Erlang raises
+%% function_clause alone.
 %% Lean (the generated fallback body):
 %%   Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "function_clause"))
 %% The writable binary primop only preallocates storage; its Erlang value is empty.
 prim_op(bs_init_writable, Anno, [#c_literal{}], State) ->
     expression(#c_literal{anno = Anno, val = <<>>}, State);
-prim_op(match_fail, Anno, [#c_literal{val = {function_clause}}], State) ->
+prim_op(match_fail, Anno, [#c_literal{val = Reason}], State)
+        when tuple_size(Reason) > 0, element(1, Reason) =:= function_clause ->
     {error_node(function_clause, Anno), State};
 prim_op(match_fail, Anno, [#c_tuple{es = [#c_literal{val = function_clause} | _]}], State) ->
     {error_node(function_clause, Anno), State};
