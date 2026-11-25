@@ -112,6 +112,24 @@ theorem signed_zero_comparison :
     Term.compareExact (Term.fuel (.float positiveZero) (.float negativeZero)) (.float positiveZero) (.float negativeZero) ≠ .eq := by
   simp [positiveZero, negativeZero]
 
+/-- Captures compare as the outer comparison does, as in OTP: for
+`mk(X) -> fun() -> X end`, `mk(1) == mk(1.0)` holds and `mk(1) =:= mk(1.0)` does not. -/
+theorem captures_compare_as_outer :
+    Term.compare (Term.fuel (.function false "m" "-mk/1-fun-0-" 0 #[.integer 1])
+        (.function false "m" "-mk/1-fun-0-" 0 #[.float floatOne]))
+      (.function false "m" "-mk/1-fun-0-" 0 #[.integer 1])
+      (.function false "m" "-mk/1-fun-0-" 0 #[.float floatOne]) = .eq ∧
+    Term.compareExact (Term.fuel (.function false "m" "-mk/1-fun-0-" 0 #[.integer 1])
+        (.function false "m" "-mk/1-fun-0-" 0 #[.float floatOne]))
+      (.function false "m" "-mk/1-fun-0-" 0 #[.integer 1])
+      (.function false "m" "-mk/1-fun-0-" 0 #[.float floatOne]) = .lt := by
+  constructor
+  · rw [Term.compare_step]
+    simp only [Term.Compare.compareStep, List.compareLex_cons_cons, List.compareLex_nil_nil,
+      numeric_and_exact_comparison.1]
+    decide
+  · decide
+
 /-- Size counts effective keys; key comparison precedes every value comparison. -/
 theorem association_list_order :
     let a := Term.atom "a"

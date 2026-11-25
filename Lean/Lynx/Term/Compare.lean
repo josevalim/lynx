@@ -227,7 +227,7 @@ so evaluation can compare terms. -/
     .function otherExternal otherModule otherName otherArity otherCaptures =>
     (Ord.compare external otherExternal).then ((stringCompare module otherModule).then
       ((stringCompare name otherName).then ((Ord.compare arity otherArity).then
-        (List.compareLex exactCmp captures.toList otherCaptures.toList))))
+        (List.compareLex cmp captures.toList otherCaptures.toList))))
   | .function _ _ _ _ _, _ => .lt
   | _, .function _ _ _ _ _ => .gt
   | .pid a, .pid b => Ord.compare a b
@@ -367,7 +367,7 @@ private def boundedStep (exact : Bool) (n : Nat) (cmp exactCmp : Child n → Chi
     .function otherExternal otherModule otherName otherArity otherCaptures =>
     (Ord.compare external otherExternal).then ((stringCompare module otherModule).then
       ((stringCompare name otherName).then ((Ord.compare arity otherArity).then
-        (List.compareLex exactCmp (boundedList n captures.toList (function_child ha))
+        (List.compareLex cmp (boundedList n captures.toList (function_child ha))
           (boundedList n otherCaptures.toList (function_child hb))))))
   | .function _ _ _ _ _, _ => .lt
   | _, .function _ _ _ _ _ => .gt
@@ -407,7 +407,7 @@ private theorem boundedStep_eq (exact : Bool) (n : Nat)
   cases a <;> cases b
   case function.function =>
     unfold boundedStep compareStep; dsimp only
-    rw [← lex_map exactCmp Subtype.val, boundedList_val, boundedList_val]
+    rw [← lex_map cmp Subtype.val, boundedList_val, boundedList_val]
   case tuple.tuple =>
     unfold boundedStep compareStep; dsimp only
     rw [← lex_map cmp Subtype.val, boundedList_val, boundedList_val]
@@ -532,7 +532,7 @@ private instance (exact : Bool) (cmp exactCmp : Term → Term → Ordering)
                     p.2.2.1)
                   (compareLex (compareOn Ord.compare fun p : Bool × String × String × Nat × List Term =>
                       p.2.2.2.1)
-                    (compareOn (List.compareLex exactCmp) fun p : Bool × String × String × Nat × List Term =>
+                    (compareOn (List.compareLex cmp) fun p : Bool × String × String × Nat × List Term =>
                       p.2.2.2.2)))))
             (a := (ae, am, an, arity, ac.toList)) (b := (be, bm, bn, barity, bcaps.toList))
             (c := (ce, cm, cn, carity, cc.toList)) ab bc
@@ -544,7 +544,7 @@ private instance (exact : Bool) (cmp exactCmp : Term → Term → Ordering)
                     p.2.2.1)
                   (compareLex (compareOn Ord.compare fun p : Bool × String × String × Nat × List Term =>
                       p.2.2.2.1)
-                    (compareOn (List.compareLex exactCmp) fun p : Bool × String × String × Nat × List Term =>
+                    (compareOn (List.compareLex cmp) fun p : Bool × String × String × Nat × List Term =>
                       p.2.2.2.2)))))
             (a := (ae, am, an, arity, ac.toList)) (b := (be, bm, bn, barity, bcaps.toList))
             (c := (ce, cm, cn, carity, cc.toList)) ab bc
@@ -1520,6 +1520,12 @@ theorem compare_eq_of_compareExact_eq (a b : Term) (h : compareExact (fuel a b) 
     have : x = y := by simpa using h
     subst this
     simp
+  case function.function _ _ _ _ xs _ _ _ _ ys =>
+    simp only [Ordering.then_eq_eq] at h ⊢
+    refine ⟨h.1, h.2.1, h.2.2.1, h.2.2.2.1, compareLex_eq_mono (fun x hx y hy e => ?_) h.2.2.2.2⟩
+    have := Array.sizeOf_lt_of_mem (by simpa using hx : x ∈ xs)
+    have := Array.sizeOf_lt_of_mem (by simpa using hy : y ∈ ys)
+    exact compare_eq_of_compareExact_eq x y e
   case tuple.tuple xs ys =>
     simp only [Ordering.then_eq_eq] at h ⊢
     refine ⟨h.1, compareLex_eq_mono (fun x hx y hy e => ?_) h.2⟩
@@ -1542,7 +1548,7 @@ termination_by sizeOf a + sizeOf b
 decreasing_by
   all_goals
     subst_vars
-    simp only [Term.tuple.sizeOf_spec, Term.map.sizeOf_spec, Term.cons.sizeOf_spec,
+    simp only [Term.function.sizeOf_spec, Term.tuple.sizeOf_spec, Term.map.sizeOf_spec, Term.cons.sizeOf_spec,
       Prod.mk.sizeOf_spec] at *
     omega
 
