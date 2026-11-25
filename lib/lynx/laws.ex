@@ -300,25 +300,34 @@ defmodule Lynx.Laws do
     expects_key = if reaches?, do: "reaches", else: "expects"
     expects_message = "law #{name}/#{length(args)} #{expects_key} returned "
 
-    definition =
+    body =
       quote generated: true do
-        @law %{unquote_splicing(attributes)}
+        case unquote(requires_name)(unquote_splicing(args)) do
+          true ->
+            case unquote(ensures_name)(unquote_splicing(args)) do
+              true -> true
+              value -> raise RuntimeError, unquote(expects_message) <> inspect(value)
+            end
 
-        defp unquote(requires_name)(unquote_splicing(helper_args)), do: unquote(requires)
-        defp unquote(ensures_name)(unquote_splicing(helper_args)), do: unquote(expects)
-
-        def unquote(name)(unquote_splicing(args)) do
-          case unquote(requires_name)(unquote_splicing(args)) do
-            true ->
-              case unquote(ensures_name)(unquote_splicing(args)) do
-                true -> true
-                value -> raise RuntimeError, unquote(expects_message) <> inspect(value)
-              end
-
-            value ->
-              raise ArgumentError, unquote(requires_message) <> inspect(value)
-          end
+          value ->
+            raise ArgumentError, unquote(requires_message) <> inspect(value)
         end
+      end
+
+    # The law's function is not generated, so Elixir warns when the module
+    # defines another function with its name and arity.
+    definition =
+      quote do
+        unquote(
+          quote generated: true do
+            @law %{unquote_splicing(attributes)}
+
+            defp unquote(requires_name)(unquote_splicing(helper_args)), do: unquote(requires)
+            defp unquote(ensures_name)(unquote_splicing(helper_args)), do: unquote(expects)
+          end
+        )
+
+        def unquote(name)(unquote_splicing(args)), do: unquote(body)
       end
 
     {{name, length(args)}, definition}
