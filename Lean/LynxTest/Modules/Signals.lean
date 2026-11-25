@@ -278,12 +278,36 @@ theorem liveness :
       pure (Term.tuple #[alive, missing, name, gone])) =
       .ok (.tuple #[.atom "true", .atom "false", .nil, .atom "undefined"]) := by cbv
 
+/-- A stack trace with one entry. -/
+private def trace (entry : Array Term) : Term := .cons (.tuple entry) .nil
+
+private def fn : Term := .function false "m" "-f/0-fun-0-" 0 #[]
+
+/-- As in OTP, `erlang:raise/3` returns `badarg` for an unknown class or a stack
+trace it would not produce, instead of raising. -/
 theorem raise_classes :
     «raise/3» (.atom "throw") (.atom "value") .nil = .error (.throw (.atom "value")) ∧
     «raise/3» (.atom "exit") (.atom "value") .nil = .error (.exit (.atom "value")) ∧
-    «raise/3» (.atom "error") (.atom "value") (.atom "stack") =
-      .error (.error (.atom "badarg")) := by
-  refine ⟨rfl, rfl, rfl⟩
+    «raise/3» (.atom "error") (.atom "value") (trace #[fn, .nil]) = .error (.error (.atom "value")) ∧
+    «raise/3» (.atom "error") (.atom "value") (trace #[fn, .nil, .nil]) =
+      .error (.error (.atom "value")) ∧
+    «raise/3» (.atom "error") (.atom "value") (trace #[.atom "m", .atom "f", .integer 0]) =
+      .error (.error (.atom "value")) ∧
+    «raise/3» (.atom "error") (.atom "value")
+      (trace #[.atom "m", .atom "f", .nil, .cons (.tuple #[.atom "line", .integer 1]) .nil]) =
+      .error (.error (.atom "value")) ∧
+    «raise/3» (.atom "other") (.atom "value") .nil = .ok (.atom "badarg") ∧
+    «raise/3» (.atom "error") (.atom "value") (.atom "stack") = .ok (.atom "badarg") ∧
+    «raise/3» (.atom "error") (.atom "value") (.cons (.atom "entry") .nil) = .ok (.atom "badarg") ∧
+    «raise/3» (.atom "error") (.atom "value") (trace #[.atom "m", .nil]) = .ok (.atom "badarg") ∧
+    «raise/3» (.atom "error") (.atom "value") (trace #[fn, .nil, .atom "line"]) =
+      .ok (.atom "badarg") ∧
+    «raise/3» (.atom "error") (.atom "value") (trace #[.atom "m", .integer 1, .nil]) =
+      .ok (.atom "badarg") ∧
+    «raise/3» (.atom "error") (.atom "value") (trace #[.atom "m", .atom "f", .nil, .atom "line"]) =
+      .ok (.atom "badarg") ∧
+    «raise/3» (.atom "error") (.atom "value") (trace #[.atom "m"]) = .ok (.atom "badarg") := by
+  cbv
 
 theorem keyfind_finds_first_match :
     Erlang.lists.«keyfind/3» (.atom "b") (.integer 1)

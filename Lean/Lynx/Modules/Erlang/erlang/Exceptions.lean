@@ -6,10 +6,18 @@ public section
 
 namespace Lynx.Term
 
-/-- Whether a term is a proper list. -/
-@[expose] def isProperList : Term → Bool
+/-- Whether a term is a stack trace `erlang:raise/3` accepts: a proper list of
+`{Fun, Args}`, `{Fun, Args, Location}`, `{Module, Function, Arity}`, and
+`{Module, Function, Arity, Location}` entries, whose locations are lists. -/
+@[expose] def isStacktrace : Term → Bool
   | .nil => Bool.true
-  | .cons _ tail => isProperList tail
+  | .cons (.tuple entry) rest =>
+    (match entry.toList with
+     | [.function _ _ _ _ _, _] => Bool.true
+     | [.function _ _ _ _ _, _, .nil] | [.function _ _ _ _ _, _, .cons _ _] => Bool.true
+     | [.atom _, .atom _, _] => Bool.true
+     | [.atom _, .atom _, _, .nil] | [.atom _, .atom _, _, .cons _ _] => Bool.true
+     | _ => Bool.false) && isStacktrace rest
   | _ => Bool.false
 
 end Lynx.Term
@@ -28,14 +36,15 @@ open Lynx
 @[expose] def «exit/1» (reason : Term) : Except Exception Term := .error (.exit reason)
 
 
-/-- Raise an exception of the given class. The stack trace must be a list and is
-not recorded. -/
+/-- Raise an exception of the given class. The stack trace is checked but not
+recorded. As in OTP, an invalid class or stack trace returns `badarg` instead of
+raising. -/
 @[expose] def «raise/3» (kind reason stacktrace : Term) : Except Exception Term :=
-  if !stacktrace.isProperList then .error (.error (.atom "badarg")) else
+  if !stacktrace.isStacktrace then .ok (.atom "badarg") else
   match kind with
   | .atom "error" => .error (.error reason)
   | .atom "throw" => .error (.throw reason)
   | .atom "exit" => .error (.exit reason)
-  | _ => .error (.error (.atom "badarg"))
+  | _ => .ok (.atom "badarg")
 
 end Erlang.erlang
