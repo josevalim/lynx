@@ -406,13 +406,13 @@ private theorem boundedStep_eq (exact : Bool) (n : Nat)
       a b ha hb = compareStep exact cmp exactCmp a b := by
   cases a <;> cases b
   case function.function =>
-    simp only [boundedStep, compareStep]
+    unfold boundedStep compareStep; dsimp only
     rw [← lex_map exactCmp Subtype.val, boundedList_val, boundedList_val]
   case tuple.tuple =>
-    simp only [boundedStep, compareStep]
+    unfold boundedStep compareStep; dsimp only
     rw [← lex_map cmp Subtype.val, boundedList_val, boundedList_val]
   case map.map =>
-    simp only [boundedStep, compareStep]
+    unfold boundedStep compareStep; dsimp only
     rw [← compareMapViews_map exactCmp cmp Subtype.val, mapView_map, mapView_map,
       boundedEntries_val, boundedEntries_val]
   all_goals rfl

@@ -79,7 +79,7 @@ set_option maxRecDepth 10000 in
 set_option maxHeartbeats 4000000 in
 public theorem ordered_terms :
     orderedTerms.Pairwise (fun a b =>
-      Term.compare (Term.fuel a b) a b = .lt ∧ Term.compare (Term.fuel b a) b a = .gt) := by decide
+      Term.compare (Term.fuel a b) a b = .lt ∧ Term.compare (Term.fuel b a) b a = .gt) := by decide +kernel
 
 theorem closure_captures_comparison :
     Term.compare (Term.fuel (.function false "a" "f" 1 #[.integer 10]) (.function false "a" "f" 1 #[.integer 20])) (.function false "a" "f" 1 #[.integer 10]) (.function false "a" "f" 1 #[.integer 20]) = .lt ∧
