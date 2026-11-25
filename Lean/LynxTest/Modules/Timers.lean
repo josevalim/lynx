@@ -35,8 +35,8 @@ private def functions : Term.FunTable := [
 
 private def dispatcher : Dispatcher := Dispatcher.ofTable functions 1
 
-private def returns : Term := .function "test" "returns" 0 #[]
-private def waits : Term := .function "test" "waits" 0 #[]
+private def returns : Term := .function false "test" "returns" 0 #[]
+private def waits : Term := .function false "test" "waits" 0 #[]
 
 /-- Accept any of the given results, for proofs over every schedule. -/
 private def oneOf (expected : List Term) : Outcome Term → Bool

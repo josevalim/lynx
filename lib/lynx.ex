@@ -214,10 +214,12 @@ defmodule Lynx do
   Lynx collects every anonymous function and function reference in the
   translated program, including those in dependencies, into a single table,
   `Erlang.program.fun_table`, sorted by name. A function value is a
-  `Lynx.Term.function` holding the module, name, and arity the compiler gave its
-  function, such as `"-make/1-fun-0-"` for an anonymous function, and its
-  captured values. Invoking it calls the table entry of that name with the
-  captured values followed by the arguments. Names outside the table raise
+  `Lynx.Term.function` holding whether it is external, as `fun m:f/1` and
+  `&M.f/1` are, the module, name, and arity the compiler gave its function, such
+  as `"-make/1-fun-0-"` for an anonymous function, and its captured values.
+  Invoking it calls the table entry of that name with the captured values
+  followed by the arguments, so `fun f/1` and `fun m:f/1` call the same entry
+  but are different values. Names outside the table raise
   `badfun`, and calls with the wrong number of arguments raise `badarity`, as per
   Erlang semantics.
 

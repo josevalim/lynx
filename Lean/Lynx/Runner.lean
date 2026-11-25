@@ -699,7 +699,7 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
       pure (Unhygienic.run `($ctor _))
     | "bitstring" => pure (Unhygienic.run `($ctor _ _ _))
     | "binary" => pure (Unhygienic.run `($ctor _ 0 _))
-    | "function" => pure (Unhygienic.run `($ctor _ _ _ _))
+    | "function" => pure (Unhygienic.run `($ctor _ _ _ _ _))
     | _ => throw "unsupported type refinement"
   | "wildcard" => do
     fields j ["kind", "span"]
@@ -940,13 +940,14 @@ private partial def term (map : FileMap) (parent : Span) (pattern : Bool)
     let ctor := mkIdent ``Lynx.Term.cons
     pure (Unhygienic.run `($ctor $head $tail))
   | "function" => do
-    fields j ["kind", "module", "name", "arity", "captures", "span"]
+    fields j ["kind", "external", "module", "name", "arity", "captures", "span"]
+    let external := mkIdent (if ← (← field j "external").getBool? then ``Bool.true else ``Bool.false)
     let module := Syntax.mkStrLit (← str j "module")
     let name := Syntax.mkStrLit (← str j "name")
     let arity : TSyntax `term := ⟨Syntax.mkNumLit (toString (← (← field j "arity").getNat?))⟩
     let captures ← (← arr j "captures").mapM (term map info pattern)
     let ctor := mkIdent ``Lynx.Term.function
-    pure (Unhygienic.run `($ctor $module $name $arity #[$captures,*]))
+    pure (Unhygienic.run `($ctor $external $module $name $arity #[$captures,*]))
   | "tuple" => do
     fields j ["kind", "elements", "span"]
     let elements ← (← arr j "elements").mapM (term map info pattern)
@@ -1679,6 +1680,7 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
   let mut result := literals.push declaration
   let termType := mkIdent ``Lynx.Term
   let natType := mkIdent ``Nat
+  let boolType := mkIdent ``Bool
   let ofTable := mkIdent ``Lynx.Dispatcher.ofTable
   let find := mkIdent ``Lynx.Dispatcher.find
   let pureCall := mkIdent ``Lynx.Dispatcher.pure
@@ -1688,6 +1690,7 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
   let depth := mkIdent `depth
   -- Implicit arguments are named, so the lookup proofs elaborate against them.
   let tableArg := mkIdent `table
+  let externalArg := mkIdent `external
   let moduleArg := mkIdent `module
   let nameArg := mkIdent `name
   let arityArg := mkIdent `arity
@@ -1707,7 +1710,9 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
     let functionName := Syntax.mkStrLit entry.name
     let arity : TSyntax `term := ⟨Syntax.mkNumLit (toString arguments.size)⟩
     let body := entry.body
-    let callee : TSyntax `term := Unhygienic.run `($function $module $functionName $arity #[$captures,*])
+    -- Table entries do not depend on whether the function value is external.
+    let callee : TSyntax `term :=
+      Unhygienic.run `($function $externalArg:ident $module $functionName $arity #[$captures,*])
     let dispatcher : TSyntax `term := Unhygienic.run `(($ofTable $table $outer))
     let functionId := s!"{entry.module}:{entry.name}/{arguments.size}"
     -- The entry is looked up once, as evaluating the lookup dominates checking
@@ -1725,9 +1730,10 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
       let name := mkIdent (.str (.mkSimple functionId) suffix)
       let reduce := mkIdent reduce
       withSpan info.info (Unhygienic.run `(@[simp] theorem $name ($depth:ident : $natType)
-        $binders:bracketedBinder* :
+        {$externalArg:ident : $boolType} $binders:bracketedBinder* :
         $call $dispatcher $callee #[$arguments,*] = $rhs :=
-        $reduce ($tableArg := $table) ($depth:ident := $depth:ident) ($moduleArg := $module)
+        $reduce ($tableArg := $table) ($externalArg := $externalArg) ($depth:ident := $depth:ident)
+          ($moduleArg := $module)
           ($nameArg := $functionName)
           ($arityArg := $arity) ($capturesArg := #[$captures,*])
           ($argumentsArg := #[$arguments,*]) $lookup (by rfl)))

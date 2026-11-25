@@ -168,9 +168,9 @@ private def hashTerm (hash : UInt32) : Term → UInt32
     if view.length = 0 then hash else hashWord pairs (hconst 19) hash
   | .bitstring bytes lastBits _ => hashBitstring bytes lastBits hash
   -- Functions hash their captures as the BEAM does, after their unmodeled identity.
-  | .function module name arity captures =>
+  | .function external module name arity captures =>
     captures.attach.foldl (fun hash capture => hashTerm hash capture.val)
-      (hashIdentity (.function module name arity #[]) hash)
+      (hashIdentity (.function external module name arity #[]) hash)
   | term@(.pid _) | term@(.reference _) => hashIdentity term hash
 termination_by term => sizeOf term
 decreasing_by
@@ -328,9 +328,9 @@ private theorem hash_congr : ∀ (n : Nat),
       simp only [List.size_toArray] at size
       simp only [hashTerm, Array.foldl_attach, List.foldl_toArray', List.size_toArray, size]
       exact elems small lex _
-    | function m nm ar caps =>
+    | function e m nm ar caps =>
       cases b <;> rw [Term.compareExact_step] at h <;> simp [Term.Compare.compareStep, Ordering.then_eq_eq] at h
-      obtain ⟨rfl, rfl, rfl, lex⟩ := h
+      obtain ⟨rfl, rfl, rfl, rfl, lex⟩ := h
       simp only [hashTerm, Array.foldl_attach]
       rw [← Array.foldl_toList, ← Array.foldl_toList]
       exact elems (fun x m => by

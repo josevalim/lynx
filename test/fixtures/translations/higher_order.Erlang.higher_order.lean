@@ -38,8 +38,12 @@ def «-map_returns_list_requires/2-fun-0-/1» (_3 : Lynx.Term) : Except Lynx.Exc
 def «map_returns_list_requires/2» (_0 : Lynx.Term) (_1 : Lynx.Term) :
     Except Lynx.Exception Lynx.Term :=
   Lynx.Except.andAlso («proper_list/1» _0) do
-    let _8 ← pure (Lynx.Term.function "higher_order" "-map_returns_list_requires/2-fun-1-" 1 #[])
-    let _5 ← pure (Lynx.Term.function "higher_order" "-map_returns_list_requires/2-fun-0-" 1 #[])
+    let _8 ←
+      pure
+          (Lynx.Term.function Bool.false "higher_order" "-map_returns_list_requires/2-fun-1-" 1 #[])
+    let _5 ←
+      pure
+          (Lynx.Term.function Bool.false "higher_order" "-map_returns_list_requires/2-fun-0-" 1 #[])
     Erlang.lists.«member/2» _1 (Lynx.Term.list [_8, _5])
 
 def «map_returns_list_ensures/2» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term)

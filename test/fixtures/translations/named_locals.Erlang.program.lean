@@ -34,27 +34,27 @@ private theorem «named_locals:-named/2-fun-0-/1».entry :
   by rfl
 
 @[simp]
-theorem «named_locals:-named/2-fun-0-/1».pure (depth : Nat) (vcap1 : Lynx.Term)
+theorem «named_locals:-named/2-fun-0-/1».pure (depth : Nat) {external : Bool} (vcap1 : Lynx.Term)
     (varg1 : Lynx.Term) :
     Lynx.Dispatcher.pure (Lynx.Dispatcher.ofTable fun_table (depth + 1))
-        (Lynx.Term.function "named_locals" "-named/2-fun-0-" 1 #[vcap1]) #[varg1] =
+        (Lynx.Term.function external "named_locals" "-named/2-fun-0-" 1 #[vcap1]) #[varg1] =
       Erlang.named_locals.«-named/2-fun-0-/2» (Lynx.Dispatcher.ofTable fun_table depth) vcap1
         varg1 :=
-  Lynx.Dispatcher.pure_apply (table := fun_table) (depth := depth) (module := "named_locals")
-    (name := "-named/2-fun-0-") (arity := 1) (captures := #[vcap1]) (arguments := #[varg1])
-    «named_locals:-named/2-fun-0-/1».entry (by rfl)
+  Lynx.Dispatcher.pure_apply (table := fun_table) (external := external) (depth := depth) (module :=
+    "named_locals") (name := "-named/2-fun-0-") (arity := 1) (captures := #[vcap1]) (arguments :=
+    #[varg1]) «named_locals:-named/2-fun-0-/1».entry (by rfl)
 
 @[simp]
-theorem «named_locals:-named/2-fun-0-/1».call (depth : Nat) (vcap1 : Lynx.Term)
+theorem «named_locals:-named/2-fun-0-/1».call (depth : Nat) {external : Bool} (vcap1 : Lynx.Term)
     (varg1 : Lynx.Term) :
     Lynx.Dispatcher.call (Lynx.Dispatcher.ofTable fun_table (depth + 1))
-        (Lynx.Term.function "named_locals" "-named/2-fun-0-" 1 #[vcap1]) #[varg1] =
+        (Lynx.Term.function external "named_locals" "-named/2-fun-0-" 1 #[vcap1]) #[varg1] =
       Lynx.Result.ofExcept
         (Erlang.named_locals.«-named/2-fun-0-/2» (Lynx.Dispatcher.ofTable fun_table depth) vcap1
           varg1) :=
-  Lynx.Dispatcher.call_apply (table := fun_table) (depth := depth) (module := "named_locals")
-    (name := "-named/2-fun-0-") (arity := 1) (captures := #[vcap1]) (arguments := #[varg1])
-    «named_locals:-named/2-fun-0-/1».entry (by rfl)
+  Lynx.Dispatcher.call_apply (table := fun_table) (external := external) (depth := depth) (module :=
+    "named_locals") (name := "-named/2-fun-0-") (arity := 1) (captures := #[vcap1]) (arguments :=
+    #[varg1]) «named_locals:-named/2-fun-0-/1».entry (by rfl)
 
 private theorem «named_locals:-self_reference/0-fun-0-/0».entry :
     Lynx.Dispatcher.find fun_table "named_locals" "-self_reference/0-fun-0-" 0 =
@@ -66,22 +66,22 @@ private theorem «named_locals:-self_reference/0-fun-0-/0».entry :
   by rfl
 
 @[simp]
-theorem «named_locals:-self_reference/0-fun-0-/0».pure (depth : Nat) :
+theorem «named_locals:-self_reference/0-fun-0-/0».pure (depth : Nat) {external : Bool} :
     Lynx.Dispatcher.pure (Lynx.Dispatcher.ofTable fun_table depth)
-        (Lynx.Term.function "named_locals" "-self_reference/0-fun-0-" 0 #[]) #[] =
+        (Lynx.Term.function external "named_locals" "-self_reference/0-fun-0-" 0 #[]) #[] =
       Erlang.named_locals.«-self_reference/0-fun-0-/0» :=
-  Lynx.Dispatcher.pure_pure (table := fun_table) (depth := depth) (module := "named_locals")
-    (name := "-self_reference/0-fun-0-") (arity := 0) (captures := #[]) (arguments := #[])
-    «named_locals:-self_reference/0-fun-0-/0».entry (by rfl)
+  Lynx.Dispatcher.pure_pure (table := fun_table) (external := external) (depth := depth) (module :=
+    "named_locals") (name := "-self_reference/0-fun-0-") (arity := 0) (captures := #[])
+    (arguments := #[]) «named_locals:-self_reference/0-fun-0-/0».entry (by rfl)
 
 @[simp]
-theorem «named_locals:-self_reference/0-fun-0-/0».call (depth : Nat) :
+theorem «named_locals:-self_reference/0-fun-0-/0».call (depth : Nat) {external : Bool} :
     Lynx.Dispatcher.call (Lynx.Dispatcher.ofTable fun_table depth)
-        (Lynx.Term.function "named_locals" "-self_reference/0-fun-0-" 0 #[]) #[] =
+        (Lynx.Term.function external "named_locals" "-self_reference/0-fun-0-" 0 #[]) #[] =
       Lynx.Result.ofExcept Erlang.named_locals.«-self_reference/0-fun-0-/0» :=
-  Lynx.Dispatcher.call_pure (table := fun_table) (depth := depth) (module := "named_locals")
-    (name := "-self_reference/0-fun-0-") (arity := 0) (captures := #[]) (arguments := #[])
-    «named_locals:-self_reference/0-fun-0-/0».entry (by rfl)
+  Lynx.Dispatcher.call_pure (table := fun_table) (external := external) (depth := depth) (module :=
+    "named_locals") (name := "-self_reference/0-fun-0-") (arity := 0) (captures := #[])
+    (arguments := #[]) «named_locals:-self_reference/0-fun-0-/0».entry (by rfl)
 
 end
 

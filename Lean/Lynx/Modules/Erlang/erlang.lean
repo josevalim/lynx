@@ -49,7 +49,7 @@ values the program creates, and does not return for others. -/
 carries. -/
 @[expose] def «fun_info_mfa/1» (function : Term) : Except Exception Term :=
   match function with
-  | .function module name arity _ =>
+  | .function _ module name arity _ =>
     .ok (.tuple #[.atom module, .atom name, .integer arity])
   | _ => .error (.error (.atom "badarg"))
 

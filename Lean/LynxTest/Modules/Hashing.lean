@@ -117,8 +117,8 @@ theorem shadowed_bindings_hash (k v w : Term) :
 
 /-- Closures hash the same when their captures are exactly equal. -/
 theorem capture_hash (k v w : Term) :
-    Erlang.erlang.«phash2/1» (.function "m" "f" 0 #[.map [(k, v), (k, w)]]) =
-      Erlang.erlang.«phash2/1» (.function "m" "f" 0 #[.map [(k, v)]]) := by
+    Erlang.erlang.«phash2/1» (.function false "m" "f" 0 #[.map [(k, v), (k, w)]]) =
+      Erlang.erlang.«phash2/1» (.function false "m" "f" 0 #[.map [(k, v)]]) := by
   apply Erlang.erlang.phash2_congr
   have := Term.map_compareExact_eq_of_lookup [(k, v), (k, w)] [(k, v)] fun q => by
     by_cases same : Term.compareExact (Term.fuel q k) q k = .eq <;> simp [same]

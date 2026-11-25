@@ -50,10 +50,10 @@ private def functions : Term.FunTable := [
 
 private def dispatcher : Dispatcher := Dispatcher.ofTable functions 1
 
-private def reads : Term := .function "test" "reads" 0 #[]
-private def storesOne : Term := .function "test" "stores_one" 0 #[]
-private def storesTwo : Term := .function "test" "stores_two" 0 #[]
-private def storesAndWaits : Term := .function "test" "stores_and_waits" 0 #[]
+private def reads : Term := .function false "test" "reads" 0 #[]
+private def storesOne : Term := .function false "test" "stores_one" 0 #[]
+private def storesTwo : Term := .function false "test" "stores_two" 0 #[]
+private def storesAndWaits : Term := .function false "test" "stores_and_waits" 0 #[]
 
 /-- Accept exactly one outcome, for proofs over every schedule. -/
 private def only (expected : Outcome Term) (actual : Outcome Term) : Bool :=

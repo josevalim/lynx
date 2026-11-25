@@ -17,7 +17,7 @@ private def define (name : String) (arity : Nat) (entry : Term.FunEntry) : Term.
 
 /-- A function value of the test module. -/
 private def fn (name : String) (arity : Nat) (captures : Array Term := #[]) : Term :=
-  .function "test" name arity captures
+  .function false "test" name arity captures
 
 private def countdown : Term.FunTable := [define "countdown" 1 <| .effectful fun dispatcher _ args =>
   match args[0]? with
@@ -173,7 +173,7 @@ theorem recursive_spawn_exhausts :
 
 /-- Function values carry the name the compiler gave their function. -/
 theorem fun_info_mfa_reports_compiled_name :
-    Erlang.erlang.«fun_info_mfa/1» (.function "example" "-f/1-fun-0-" 0 #[.integer 1]) =
+    Erlang.erlang.«fun_info_mfa/1» (.function false "example" "-f/1-fun-0-" 0 #[.integer 1]) =
       .ok (.tuple #[.atom "example", .atom "-f/1-fun-0-", .integer 0]) ∧
     Erlang.erlang.«fun_info_mfa/1» (.atom "not_a_fun") = .error (.error (.atom "badarg")) := by
   refine ⟨?_, ?_⟩ <;> rfl
@@ -186,18 +186,18 @@ private def byName : Term.FunTable := [
       | _, _ => .error (.error (.atom "badarg")) },
   { module := "example", name := "done", arity := 0, entry := .pure fun _ _ => .ok (.atom "done") }]
 
-/-- Calls by name find entries by their name and arity. -/
+/-- Calls by name find entries by their name and arity, as external functions. -/
 theorem resolve_finds_named_entries :
     (Dispatcher.ofTable byName 1).resolve (.atom "erlang") (.atom "apply") 2 =
-      some (.function "erlang" "apply" 2 #[]) ∧
+      some (.function true "erlang" "apply" 2 #[]) ∧
     (Dispatcher.ofTable byName 1).resolve (.atom "example") (.atom "done") 0 =
-      some (.function "example" "done" 0 #[]) ∧
+      some (.function true "example" "done" 0 #[]) ∧
     (Dispatcher.ofTable byName 1).resolve (.atom "erlang") (.atom "apply") 3 = none := by
   refine ⟨?_, ?_, ?_⟩ <;> cbv
 
 theorem apply_calls_by_name :
     (Erlang.erlang.«apply/3» (Dispatcher.ofTable byName 2) (.atom "erlang") (.atom "apply")
-      (.cons (.function "example" "done" 0 #[]) (.cons .nil .nil)) : Except Exception Term) =
+      (.cons (.function false "example" "done" 0 #[]) (.cons .nil .nil)) : Except Exception Term) =
       .ok (.atom "done") ∧
     (Erlang.erlang.«apply/3» (Dispatcher.ofTable byName 2) (.atom "example") (.atom "missing")
       .nil : Except Exception Term) = .error .exhausted ∧
@@ -207,7 +207,7 @@ theorem apply_calls_by_name :
 
 theorem make_fun_resolves_by_name :
     (Erlang.erlang.«make_fun/3» (Dispatcher.ofTable byName 1) (.atom "erlang") (.atom "apply")
-      (.integer 2) : Except Exception Term) = .ok (.function "erlang" "apply" 2 #[]) ∧
+      (.integer 2) : Except Exception Term) = .ok (.function true "erlang" "apply" 2 #[]) ∧
     (Erlang.erlang.«make_fun/3» (Dispatcher.ofTable byName 1) (.atom "example") (.atom "missing")
       (.integer 0) : Except Exception Term) = .error .exhausted ∧
     (Erlang.erlang.«make_fun/3» (Dispatcher.ofTable byName 1) (.atom "erlang") (.atom "apply")

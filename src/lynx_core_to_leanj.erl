@@ -1375,7 +1375,7 @@ value(#c_fun{vars = Vars} = Fun, State0) ->
               captures => Captures},
     State1 = State0a#state{funs = (State0a#state.funs)#{Key => Entry}},
     State2 = translate_def(Name, {function, Fun#c_fun{vars = Captures ++ Vars}}, State1),
-    function_node(Key, Entry, cerl:get_ann(Fun), State2);
+    function_node(Key, Entry, false, cerl:get_ann(Fun), State2);
 value(#c_var{anno = Anno, name = {_, Arity} = Name} = Core, State0) ->
     case maps:find(Name, State0#state.local_funs) of
         {ok, {Lifted, Compiled, Captures}} ->
@@ -1606,7 +1606,7 @@ binary_utf_segment(_Flags, Core, _State) ->
 local_function_value(Lifted, Compiled, Captures, Arity, Anno, State0) ->
     Key = {State0#state.module, Compiled, Arity},
     case maps:find(Key, State0#state.funs) of
-        {ok, Entry} -> function_node(Key, Entry, Anno, State0);
+        {ok, Entry} -> function_node(Key, Entry, false, Anno, State0);
         error ->
             %% Reuse one wrapper so a named fun and its self-reference have
             %% the same identity. Adapt capture-first dispatch to the lifted ABI.
@@ -1626,16 +1626,17 @@ local_function_value(Lifted, Compiled, Captures, Arity, Anno, State0) ->
             Wrapper = #{translation => Definition, local_calls => [Lifted], size_calls => [],
                         purity => pure, dispatches => false},
             State4 = State3#state{translated = (State3#state.translated)#{Name => Wrapper}},
-            function_node(Key, Entry, Anno, State4)
+            function_node(Key, Entry, false, Anno, State4)
     end.
 
 %% External captures share one dispatch entry per MFA, including repeated literals
-%% and local captures of the same function, which behave the same. The entry calls
-%% the function through a wrapper named Module:Function.
+%% and local captures of the same function, which call the same function but are
+%% distinct values. The entry calls the function through a wrapper named
+%% Module:Function.
 external_function_value(Module, Function, Arity, Anno, State0) ->
     Key = {Module, Function, Arity},
     case maps:find(Key, State0#state.funs) of
-        {ok, Entry} -> function_node(Key, Entry, Anno, State0);
+        {ok, Entry} -> function_node(Key, Entry, true, Anno, State0);
         error ->
             Name = {list_to_atom(atom_to_list(Module) ++ ":" ++ atom_to_list(Function)), Arity},
             Args = [#c_var{name = Index} || Index <- lists:seq(0, Arity - 1)],
@@ -1645,18 +1646,18 @@ external_function_value(Module, Function, Arity, Anno, State0) ->
                 module = #c_literal{val = Module}, name = #c_literal{val = Function}, args = Args}},
             State1 = State0#state{funs = (State0#state.funs)#{Key => Entry}},
             State2 = translate_def(Name, {function, Fun}, State1),
-            function_node(Key, Entry, Anno, State2)
+            function_node(Key, Entry, true, Anno, State2)
     end.
 
 named_function_value(#c_var{anno = Anno, name = {Function, Arity} = Name} = Core, State0) ->
     Key = {State0#state.module, Function, Arity},
     case maps:find(Key, State0#state.funs) of
-        {ok, Entry} -> function_node(Key, Entry, Anno, State0);
+        {ok, Entry} -> function_node(Key, Entry, false, Anno, State0);
         error ->
             Entry = #{module => State0#state.module, name => Name, arity => Arity, captures => []},
             State1 = State0#state{funs = (State0#state.funs)#{Key => Entry}},
             State2 = callee(Core, Name, State1),
-            function_node(Key, Entry, Anno, State2)
+            function_node(Key, Entry, false, Anno, State2)
     end.
 
 %% The name the compiler gave a fun. Copies the compiler inlines have none, and
@@ -1718,9 +1719,11 @@ map_entry(Core, _State) ->
 
 %% The table contains code; every function value carries its name and its own
 %% capture values.
-function_node({Module, Name, Arity}, #{captures := Captures}, Anno, State0) ->
+%% External functions, such as fun m:f/0, are distinct values from local ones,
+%% such as fun f/0, even when they share a dispatch entry.
+function_node({Module, Name, Arity}, #{captures := Captures}, External, Anno, State0) ->
     {Values, State1} = lists:mapfoldl(fun value/2, State0, Captures),
-    {node(~"function", Anno, #{~"module" => atom_to_binary(Module, utf8),
+    {node(~"function", Anno, #{~"external" => External, ~"module" => atom_to_binary(Module, utf8),
         ~"name" => atom_to_binary(Name, utf8), ~"arity" => Arity, ~"captures" => Values}), State1}.
 
 %% Preserve Core names. Lean owns identifier escaping and separates integer

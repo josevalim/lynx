@@ -136,6 +136,7 @@ defmodule Lynx.CoreToLeanjTest do
                         "elements" => [
                           %{
                             "kind" => "function",
+                            "external" => true,
                             "module" => "erlang",
                             "name" => "=<",
                             "arity" => 2,
@@ -143,6 +144,7 @@ defmodule Lynx.CoreToLeanjTest do
                           },
                           %{
                             "kind" => "function",
+                            "external" => true,
                             "module" => "erlang",
                             "name" => "=<",
                             "arity" => 2,
@@ -167,6 +169,48 @@ defmodule Lynx.CoreToLeanjTest do
                 }
               }
             }, [{:erlang, :"=<", 2, []}]} = translate(definitions([definition(:entry, body)]))
+  end
+
+  test "local and external captures of a function are distinct values sharing an entry" do
+    external = :cerl.abstract(Function.capture(:example, :helper, 1))
+    body = :cerl.c_tuple([:cerl.c_fname(:helper, 1), external])
+    defs = definitions([definition(:entry, body), definition(:helper, :cerl.c_var(0))])
+
+    assert {:ok, functions, []} = translate(defs)
+
+    assert %{
+             {:entry, 1} => %{
+               translation: %{
+                 "body" => %{
+                   "values" => [
+                     %{
+                       "elements" => [
+                         %{
+                           "kind" => "function",
+                           "external" => false,
+                           "module" => "example",
+                           "name" => "helper",
+                           "arity" => 1,
+                           "captures" => []
+                         },
+                         %{
+                           "kind" => "function",
+                           "external" => true,
+                           "module" => "example",
+                           "name" => "helper",
+                           "arity" => 1,
+                           "captures" => []
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               }
+             },
+             {:helper, 1} => %{}
+           } = functions
+
+    refute Map.has_key?(functions, {:"example:helper", 1})
   end
 
   test "spawning a literal function with arguments spawns an anonymous closure over them" do

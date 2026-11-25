@@ -76,7 +76,7 @@ private def define (name : String) (arity : Nat) (entry : Term.FunEntry) : Term.
 
 /-- A function value of the test module. -/
 private def fn (name : String) (arity : Nat) (captures : Array Term := #[]) : Term :=
-  .function "test" name arity captures
+  .function false "test" name arity captures
 
 private def functions : Term.FunTable := [define "identity" 1 <| .effectful fun _ _ => identityFun,
   define "first" 2 <| .effectful fun _ _ => firstFun,
@@ -602,8 +602,9 @@ theorem list_guards_invalid :
     «length/1» (.cons (.integer 1) (.atom "tail")) = .error (.error (.atom "badarg")) := by
   simp [«hd/1», «tl/1», «length/1»]
 
-theorem «is_function/2_arity» (module name : String) (arity : Nat) (captures : Array Term) :
-    «is_function/2» (.function module name arity captures) (.integer arity) = .ok Term.true := by
+theorem «is_function/2_arity» (external : Bool) (module name : String) (arity : Nat)
+    (captures : Array Term) :
+    «is_function/2» (.function external module name arity captures) (.integer arity) = .ok Term.true := by
   simp [«is_function/2»]
 
 theorem «is_function/2_invalid_arity» (input : Term) :

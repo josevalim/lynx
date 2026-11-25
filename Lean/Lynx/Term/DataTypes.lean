@@ -23,9 +23,10 @@ inductive Term where
   /-- Reference identity: the allocating process's PID extended with its own
   allocation count, unique across the run. -/
   | reference : List Nat → Term
-  /-- The module, name, and arity the compiler gave a function, and its captured
-  values. Comparison orders them in turn. -/
-  | function (module name : String) (arity : Nat) (captures : Array Term) : Term
+  /-- Whether the function is external, as `fun m:f/0` is, the module, name, and
+  arity the compiler gave it, and its captured values. Comparison orders them in
+  turn, local functions first. -/
+  | function (external : Bool) (module name : String) (arity : Nat) (captures : Array Term) : Term
   | pid : PID → Term
   | tuple : Array Term → Term
   | map : List (Term × Term) → Term

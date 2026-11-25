@@ -73,7 +73,7 @@ defmodule JsonProofsTest do
     /-- The options record `json:decode/1` passes to the decoder. -/
     abbrev options : Term := .tuple #[.atom "decode", .atom "undefined", .atom "undefined",
       .atom "undefined", .atom "undefined", .atom "undefined", .atom "undefined",
-      .function "erlang" "binary_to_float" 1 #[], .function "erlang" "binary_to_integer" 1 #[],
+      .function true "erlang" "binary_to_float" 1 #[], .function true "erlang" "binary_to_integer" 1 #[],
       .atom "undefined", .atom "null"]
 
     /-- Bytes that strings carry without escaping. -/
@@ -2070,7 +2070,7 @@ defmodule JsonProofsTest do
               (.integer len) =
               (do
                 let token ← Erlang.erlang.«binary_part/3» orig skip (.integer len)
-                let value ← Dispatcher.pure d (.function "erlang" "binary_to_integer" 1 #[]) #[token]
+                let value ← Dispatcher.pure d (.function true "erlang" "binary_to_integer" 1 #[]) #[token]
                 («unexpected/8» orig skip acc stack options
                   (.integer len) (.integer 0) (.tuple #[.atom "number", value]))) := by
           intro d orig skip acc stack len
@@ -2083,7 +2083,7 @@ defmodule JsonProofsTest do
               acc stack options
               (.integer len) =
               (do
-                let value ← Dispatcher.pure d (.function "erlang" "binary_to_integer" 1 #[]) #[.bitstring ⟨#[48]⟩ 0
+                let value ← Dispatcher.pure d (.function true "erlang" "binary_to_integer" 1 #[]) #[.bitstring ⟨#[48]⟩ 0
                     (valid_aligned
                     _)]
                 («unexpected/8» orig skip acc stack options
@@ -2305,7 +2305,7 @@ defmodule JsonProofsTest do
                 options (.integer len) =
               (do
                 let token ← Erlang.erlang.«binary_part/3» orig skip (.integer len)
-                let value ← Dispatcher.pure d (.function "erlang" "binary_to_integer" 1 #[]) #[token]
+                let value ← Dispatcher.pure d (.function true "erlang" "binary_to_integer" 1 #[]) #[token]
                 let next ← Erlang.erlang.«+/2» skip (.integer len)
                 «continue/7» d (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig next acc
                     stack options value) := by
@@ -2335,7 +2335,7 @@ defmodule JsonProofsTest do
             «number_zero/7» d (.bitstring ⟨(b :: bs).toArray⟩ 0 (valid_aligned _)) orig skip acc
                 stack options (.integer len) =
               (do
-                let value ← Dispatcher.pure d (.function "erlang" "binary_to_integer" 1 #[]) #[.bitstring ⟨#[48]⟩ 0
+                let value ← Dispatcher.pure d (.function true "erlang" "binary_to_integer" 1 #[]) #[.bitstring ⟨#[48]⟩ 0
                     (valid_aligned
                     _)]
                 let next ← Erlang.erlang.«+/2» skip (.integer len)
@@ -2448,7 +2448,7 @@ defmodule JsonProofsTest do
 
         have encode_integer : ∀ (x : Int) (depth : Nat),
             («do_encode/2» (Dispatcher.ofTable Erlang.program.fun_table depth) (.integer x)
-                (.function "json" "do_encode" 2 #[])) =
+                (.function false "json" "do_encode" 2 #[])) =
               .ok (.bitstring ⟨(textOf x).toArray⟩ 0 (valid_aligned _)) := by
           intro x depth
           obtain ⟨first, rest, text, encoded, -, -⟩ := textOf_decimal x
@@ -2461,7 +2461,7 @@ defmodule JsonProofsTest do
             (next : Term → Except Exception α)
             (handler : Exception → Except Exception α),
             (Lynx.Except.tryWith (Dispatcher.pure (Dispatcher.ofTable Erlang.program.fun_table
-                depth) (.function "erlang" "binary_to_float" 1 #[]) #[token]) next handler) =
+                depth) (.function true "erlang" "binary_to_float" 1 #[]) #[token]) next handler) =
               (Lynx.Except.tryWith (Erlang.erlang.«binary_to_float/1» token) next
                   handler) :=
           fun depth token next handler => by simp [«erlang:binary_to_float/1»]
@@ -3525,13 +3525,13 @@ defmodule JsonProofsTest do
         let Encodes : Json → Prop := fun v => ∀ (t : Term) (depth : Nat), Represents t v →
             v.depth < depth → ∃ io, «do_encode/2»
                 (Dispatcher.ofTable Erlang.program.fun_table depth)
-                t (.function "json" "do_encode" 2 #[]) = .ok io ∧
+                t (.function false "json" "do_encode" 2 #[]) = .ok io ∧
               Erlang.erlang.«iolist_to_binary/1» io = .ok (bin v.text)
 
         have list_loop_values : ∀ (xs : List Json) (ts : Term) (k : Nat), RepresentsList ts xs →
             (∀ y ∈ xs, Encodes y) → (∀ y ∈ xs, y.depth < k) →
             ∃ io, («list_loop/2» (Dispatcher.ofTable Erlang.program.fun_table (k + 1)) ts
-                (.function "json" "do_encode" 2 #[])) = .ok io ∧
+                (.function false "json" "do_encode" 2 #[])) = .ok io ∧
               Erlang.erlang.«iolist_to_binary/1» io = .ok (bin (Json.tailText xs)) := by
           intro xs
           induction xs with
@@ -3554,7 +3554,7 @@ defmodule JsonProofsTest do
 
         have encode_str : ∀ (s : List UInt8) (valid : Utf8 s) (depth : Nat), ∃ io,
             «do_encode/2» (Dispatcher.ofTable Erlang.program.fun_table depth) (bin s)
-                (.function "json" "do_encode" 2 #[]) = .ok io ∧
+                (.function false "json" "do_encode" 2 #[]) = .ok io ∧
               Erlang.erlang.«iolist_to_binary/1» io = .ok (bin (34 :: (escapeText s ++ [34]))) := by
           intro s valid depth
           obtain ⟨io, encoded, flat⟩ := (encode_string s.length s [] [] (Term.list [.integer 34])
@@ -3570,7 +3570,7 @@ defmodule JsonProofsTest do
             RepresentsFields es fs → (∀ f ∈ fs, Encodes f.2) → (∀ f ∈ fs, f.2.depth < k) →
             ∃ io text, («-do_encode_map/2-lc$^0/1-/2» (Dispatcher.ofTable Erlang.program.fun_table (k + 1))
                 (es.foldr (fun e rest => .tuple #[e.1, e.2, rest]) (.atom "none"))
-                  (.function "json" "do_encode" 2 #[])) = .ok io ∧
+                  (.function false "json" "do_encode" 2 #[])) = .ok io ∧
               Erlang.erlang.«iolist_to_binary/1» io = .ok (bin text) ∧
               text ++ [125] = Json.fieldsText fs := by
           intro fs

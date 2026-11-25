@@ -45,14 +45,14 @@ private def suicide : Result := do
   let _ ← «exit/2» dispatcher me (.atom "alma")
   «send/2» dispatcher (.pid []) (.atom "survived")
 
-private def suicides : Term := .function "test" "suicides" 0 #[]
+private def suicides : Term := .function false "test" "suicides" 0 #[]
 private def suicidal : Dispatcher := Dispatcher.ofTable [
   { module := "test", name := "suicides", arity := 0, entry := .effectful fun _ _ _ =>
       suicide }] 1
 
-private def returns : Term := .function "test" "returns" 0 #[]
-private def raises : Term := .function "test" "raises" 0 #[]
-private def waits : Term := .function "test" "waits" 0 #[]
+private def returns : Term := .function false "test" "returns" 0 #[]
+private def raises : Term := .function false "test" "raises" 0 #[]
+private def waits : Term := .function false "test" "waits" 0 #[]
 
 /-- Accept exactly one outcome, for proofs over every schedule. -/
 private def only (expected : Outcome Term) (actual : Outcome Term) : Bool :=
@@ -407,9 +407,9 @@ private def fanOut : Result := do
     { module := "test", name := "first", arity := 0, entry := .effectful fun _ _ _ => fanOutFirst },
     { module := "test", name := "crash", arity := 0, entry := .effectful fun _ _ _ => fanOutCrash }] 2
   let _ ← «process_flag/2» table (.atom "trap_exit") (.atom "true")
-  let _ ← «spawn/1» table (.function "test" "first" 0 #[])
+  let _ ← «spawn/1» table (.function false "test" "first" 0 #[])
   let _ ← receiveMatch (isAtom "ready")
-  let _ ← «spawn/1» table (.function "test" "crash" 0 #[])
+  let _ ← «spawn/1» table (.function false "test" "crash" 0 #[])
   let _ ← receiveMatch (isAtom "hi")
   exitHandled
 
@@ -444,9 +444,9 @@ private def answers : Result := do
     { module := "test", name := "ends", arity := 0, entry := .effectful fun _ _ _ => .ok (.atom "done") },
     { module := "test", name := "last", arity := 0, entry := .effectful fun _ _ _ => answersLast },
     { module := "test", name := "first", arity := 0, entry := .effectful fun _ _ _ => answersFirst }] 2
-  let _ ← «spawn/1» table (.function "test" "ends" 0 #[])
-  let _ ← «spawn/1» table (.function "test" "last" 0 #[])
-  let _ ← «spawn/1» table (.function "test" "first" 0 #[])
+  let _ ← «spawn/1» table (.function false "test" "ends" 0 #[])
+  let _ ← «spawn/1» table (.function false "test" "last" 0 #[])
+  let _ ← «spawn/1» table (.function false "test" "first" 0 #[])
   receiveAny
 
 /-- A process that ended answers its queued requests one at a time, and other
@@ -471,7 +471,7 @@ theorem trap_exit_after_normal_down :
     Concurrent.check (only (.ok (.tuple #[.atom "false", .atom "timeout"]))) 64 (.start {} (do
       let table := Dispatcher.ofTable [
         { module := "test", name := "links", arity := 0, entry := .effectful fun _ _ _ => linksBack }] 1
-      let _ ← «spawn_monitor/1» table (.function "test" "links" 0 #[])
+      let _ ← «spawn_monitor/1» table (.function false "test" "links" 0 #[])
       let _ ← receiveMatch isDown
       let previous ← «process_flag/2» table (.atom "trap_exit") (.atom "true")
       let late ← poll
@@ -486,7 +486,7 @@ theorem relink_after_applied_exit_raises_noproc :
         | _ => false) 64 (.start {} (do
       let table := Dispatcher.ofTable [
         { module := "test", name := "links", arity := 0, entry := .effectful fun _ _ _ => linksBack }] 1
-      let child ← «spawn/1» table (.function "test" "links" 0 #[])
+      let child ← «spawn/1» table (.function false "test" "links" 0 #[])
       let _ ← «send/2» table child (.atom "ignored")
       «link/1» table child)) = true := by decide +kernel
 
@@ -534,7 +534,7 @@ theorem process_info_of_dead_does_not_flush :
     (match Concurrent.counterexample (fun (outcome : Outcome Term) => match outcome with
         | .ok (.atom "undefined") => false
         | _ => true) 64 (.start {} (do
-      let killer ← «spawn/1» killsRoot (.function "test" "kills" 0 #[])
+      let killer ← «spawn/1» killsRoot (.function false "test" "kills" 0 #[])
       «process_info/2» killsRoot killer (.atom "registered_name"))) with
       | some (_, .rejected (.ok (.atom "undefined"))) => true
       | _ => false) = true := by decide +kernel

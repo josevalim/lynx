@@ -90,7 +90,7 @@ private theorem makeRefContinuationEquation (next : Lynx.Term → Lynx.Result α
     (makeRef >>= next) env = next (.reference (env.currentPid ++ [env.refCounter + 1]))
       { env with refCounter := env.refCounter + 1 } := by
   simp [makeRef]
-example : String → String → Nat → Array Lynx.Term → Lynx.Term := Lynx.Term.function
+example : Bool → String → String → Nat → Array Lynx.Term → Lynx.Term := Lynx.Term.function
 example (entry : Lynx.Dispatcher → Array Lynx.Term → Array Lynx.Term → Lynx.Result) :
     Lynx.Term.FunTable := [{ module := "m", name := "f", arity := 0, entry := .effectful entry }]
 example (entry : Lynx.Dispatcher → Array Lynx.Term → Array Lynx.Term →
@@ -153,26 +153,26 @@ example (computation : Lynx.Result α) (pure : Lynx.Result.IsPure computation) :
   simp
 
 -- Table entries apply through the dispatcher, consuming depth unless pure.
-example (table : Lynx.Term.FunTable) (depth arity : Nat) (module name : String)
+example (table : Lynx.Term.FunTable) (external : Bool) (depth arity : Nat) (module name : String)
     (captures arguments : Array Lynx.Term) (body : Array Lynx.Term → Lynx.Term.PureFun)
     (entry : Lynx.Dispatcher.find table module name arity = some (.pure body)) (size : arguments.size = arity) :
-    (Lynx.Dispatcher.ofTable table depth).pure (.function module name arity captures) arguments =
+    (Lynx.Dispatcher.ofTable table depth).pure (.function external module name arity captures) arguments =
       body captures arguments :=
   Lynx.Dispatcher.pure_pure entry size
 
-example (table : Lynx.Term.FunTable) (depth arity : Nat) (module name : String)
+example (table : Lynx.Term.FunTable) (external : Bool) (depth arity : Nat) (module name : String)
     (captures arguments : Array Lynx.Term)
     (body : Lynx.Dispatcher → Array Lynx.Term → Lynx.Term.PureFun)
     (entry : Lynx.Dispatcher.find table module name arity = some (.apply body)) (size : arguments.size = arity) :
-    (Lynx.Dispatcher.ofTable table (depth + 1)).pure (.function module name arity captures) arguments =
+    (Lynx.Dispatcher.ofTable table (depth + 1)).pure (.function external module name arity captures) arguments =
       body (Lynx.Dispatcher.ofTable table depth) captures arguments :=
   Lynx.Dispatcher.pure_apply entry size
 
-example (table : Lynx.Term.FunTable) (depth arity : Nat) (module name : String)
+example (table : Lynx.Term.FunTable) (external : Bool) (depth arity : Nat) (module name : String)
     (captures arguments : Array Lynx.Term)
     (body : Lynx.Dispatcher → Array Lynx.Term → Lynx.Term.Fun)
     (entry : Lynx.Dispatcher.find table module name arity = some (.effectful body)) (size : arguments.size = arity) :
-    (Lynx.Dispatcher.ofTable table (depth + 1)).call (.function module name arity captures) arguments =
+    (Lynx.Dispatcher.ofTable table (depth + 1)).call (.function external module name arity captures) arguments =
       body (Lynx.Dispatcher.ofTable table depth) captures arguments :=
   Lynx.Dispatcher.call_effectful entry size
 

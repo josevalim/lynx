@@ -3143,7 +3143,7 @@ private theorem Term.identicalEntries_refl : ∀ (entries : List (Term × Term))
 
 private theorem Term.identical_refl (term : Term) : term.identical term = true := by
   induction term using Term.induct with
-  | function module name arity captures same =>
+  | function external module name arity captures same =>
     simp only [Term.identical, beq_self_eq_true, Bool.true_and]
     exact Term.identicalList_refl _ fun term mem => same term (by simpa using mem)
   | tuple terms same =>

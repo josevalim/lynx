@@ -89,7 +89,7 @@ introduce a scheduler boundary. -/
 which reports calling a function value the table does not contain. -/
 @[expose] def «spawn/1» (dispatcher : Dispatcher) (child : Term) : Result :=
   match child with
-  | .function _ _ 0 _ => .schedule {} (dispatcher.call child #[]) fun pid => .ok (.pid pid)
+  | .function _ _ _ 0 _ => .schedule {} (dispatcher.call child #[]) fun pid => .ok (.pid pid)
   | _ => .error (.error (.atom "badarg"))
 
 /-- Return the PID of the process running the current computation. -/
@@ -116,7 +116,7 @@ even to self or a dead PID. -/
 /-- Spawn a zero-arity function value linked to the caller, in the same step. -/
 @[expose] def «spawn_link/1» (dispatcher : Dispatcher) (child : Term) : Result :=
   match child with
-  | .function _ _ 0 _ =>
+  | .function _ _ _ 0 _ =>
       .schedule { link := true } (dispatcher.call child #[]) fun pid => .ok (.pid pid)
   | _ => .error (.error (.atom "badarg"))
 
@@ -124,7 +124,7 @@ even to self or a dead PID. -/
 The monitor's reference is the caller's next one. -/
 @[expose] def «spawn_monitor/1» (dispatcher : Dispatcher) (child : Term) : Result :=
   match child with
-  | .function _ _ 0 _ =>
+  | .function _ _ _ 0 _ =>
       .schedule { monitor := true } (dispatcher.call child #[]) fun pid => do
         let env ← get
         .ok (.tuple #[.pid pid, .reference (env.currentPid ++ [env.refCounter])])

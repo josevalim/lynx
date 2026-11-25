@@ -104,7 +104,7 @@ private def failingTable : Term.FunTable := [
       Result.ofExcept («throw/1» (.atom "dispatched")) }]
 
 private def call (depth : Nat) : Result :=
-  (Dispatcher.ofTable failingTable depth).call (.function "test" "fail" 0 #[]) #[]
+  (Dispatcher.ofTable failingTable depth).call (.function false "test" "fail" 0 #[]) #[]
 
 theorem dispatched_exception_is_caught :
     Lynx.sequential (Result.tryWith (call 100)

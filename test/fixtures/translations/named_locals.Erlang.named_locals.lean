@@ -938,12 +938,12 @@ end
 
 def «named/2» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term) (_1 : Lynx.Term) :
     Except Lynx.Exception Lynx.Term := do
-  let vF ← pure (Lynx.Term.function "named_locals" "-named/2-fun-0-" 1 #[_0])
+  let vF ← pure (Lynx.Term.function Bool.false "named_locals" "-named/2-fun-0-" 1 #[_0])
   Lynx.Dispatcher.pure lynxDispatch vF #[_1]
 
 def «-named/2-Loop/1-/2» (lynxDispatch : Lynx.Dispatcher) (_3 : Lynx.Term) (_0 : Lynx.Term) :
     Except Lynx.Exception Lynx.Term := do
-  let vLoop ← pure (Lynx.Term.function "named_locals" "-named/2-fun-0-" 1 #[_0])
+  let vLoop ← pure (Lynx.Term.function Bool.false "named_locals" "-named/2-fun-0-" 1 #[_0])
   (match _3 with
     | Lynx.Term.nil => pure Lynx.Term.nil
     | Lynx.Term.cons vX vXs => do
@@ -952,12 +952,12 @@ def «-named/2-Loop/1-/2» (lynxDispatch : Lynx.Dispatcher) (_3 : Lynx.Term) (_0
     | _4 => Except.error (Lynx.Exception.error (Lynx.Term.atom "function_clause")))
 
 def «self_reference/0» (lynxDispatch : Lynx.Dispatcher) : Except Lynx.Exception Lynx.Term := do
-  let vF ← pure (Lynx.Term.function "named_locals" "-self_reference/0-fun-0-" 0 #[])
+  let vF ← pure (Lynx.Term.function Bool.false "named_locals" "-self_reference/0-fun-0-" 0 #[])
   let _1 ← Lynx.Dispatcher.pure lynxDispatch vF #[]
   Erlang.erlang.«=:=/2» vF _1
 
 def «-self_reference/0-Self/0-/0» : Except Lynx.Exception Lynx.Term :=
-  pure (Lynx.Term.function "named_locals" "-self_reference/0-fun-0-" 0 #[])
+  pure (Lynx.Term.function Bool.false "named_locals" "-self_reference/0-fun-0-" 0 #[])
 
 def «-named/2-fun-0-/2» (lynxDispatch : Lynx.Dispatcher) (_0 : Lynx.Term)
     (lynxGenerated0 : Lynx.Term) : Except Lynx.Exception Lynx.Term :=

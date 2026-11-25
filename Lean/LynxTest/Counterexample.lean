@@ -30,7 +30,7 @@ private def dispatcher : Dispatcher := Dispatcher.ofTable functions 1
 /-- The parent polls for the child's message, which may not have arrived yet. -/
 private def race : Result := do
   let self ← «self/0» dispatcher
-  let _ ← «spawn/1» dispatcher (.function "test" "greet" 0 #[self])
+  let _ ← «spawn/1» dispatcher (.function false "test" "greet" 0 #[self])
   poll
 
 private def hello : Outcome Term → Bool
@@ -72,7 +72,7 @@ example : Concurrent.check answered 4 (.start {} race) = true := by
 /-- Laws state checks from some call depth on, which the search takes to be zero. -/
 private def deep (depth : Nat) : Result := do
   let self ← «self/0» (Dispatcher.ofTable functions depth)
-  let _ ← «spawn/1» (Dispatcher.ofTable functions depth) (.function "test" "greet" 0 #[self])
+  let _ ← «spawn/1» (Dispatcher.ofTable functions depth) (.function false "test" "greet" 0 #[self])
   poll
 
 /--
