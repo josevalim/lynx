@@ -1311,6 +1311,20 @@ defmodule Lynx.CoreToLeanjTest do
     end
   end
 
+  test "translates the send operator as erlang:send/2" do
+    body =
+      :cerl.ann_c_call([7], :cerl.c_atom(:erlang), :cerl.c_atom(:!), [
+        :cerl.c_var(0),
+        :cerl.c_atom(:ping)
+      ])
+
+    assert {:ok, functions, [{:erlang, :send, 2, [7]}]} =
+             translate(definitions([definition(:entry, body)]))
+
+    assert %{"body" => %{"kind" => "remote_call", "module" => "Erlang.erlang", "name" => "send"}} =
+             functions[{:entry, 1}].translation
+  end
+
   test "accumulates remote impurity without leaking it between functions" do
     remote = fn module ->
       :cerl.c_call(:cerl.c_atom(module), :cerl.c_atom(:entry), [:cerl.c_var(0)])

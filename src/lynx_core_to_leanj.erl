@@ -737,6 +737,11 @@ computation(#c_call{anno = Anno, module = #c_literal{val = erlang},
             core_error(Core, <<"spawning with arguments that are not a list of values "
                                "is not supported">>)
     end;
+%% Erlang: P ! M
+%% Lean: as erlang:send(P, M), which the operator is an alias of
+computation(#c_call{module = #c_literal{val = erlang}, name = #c_literal{val = '!'} = Name,
+                    args = [_, _]} = Core, State) ->
+    computation(Core#c_call{name = Name#c_literal{val = send}}, State);
 %% Erlang: other:f(X)
 %% Lean: Erlang.other.«f/1» vX
 %% Erlang: ?MODULE:f(X) (non-builtin)
