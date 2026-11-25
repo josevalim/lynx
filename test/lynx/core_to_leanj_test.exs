@@ -1932,6 +1932,25 @@ defmodule Lynx.CoreToLeanjTest do
     assert reason =~ "unsupported"
   end
 
+  test "reports functions replaced by a law of the same name and arity" do
+    law = fn name ->
+      %{{name, 1} => {:law, %{name: {name, [:x]}, ensures: :expected, anno: [10], proof: "rfl"}}}
+    end
+
+    reason = "cannot call helper/1, which is a law; rename the law or the function"
+    apply = :cerl.ann_c_apply([7], :cerl.c_fname(:helper, 1), [:cerl.c_var(0)])
+    value = :cerl.ann_c_fname([7], :helper, 1)
+
+    for body <- [apply, value] do
+      defs = Map.merge(definitions([definition(:entry, body)]), law.(:helper))
+      assert {:error, [7], ^reason} = translate(defs)
+    end
+
+    defs = Map.put(law.(:entry), {:expected, 1}, {:law, %{}})
+    reason = "cannot call expected/1, which is a law; rename the law or the function"
+    assert {:error, [10], ^reason} = translate(defs)
+  end
+
   test "dynamic targets join the function table" do
     body =
       :cerl.c_call(:cerl.c_atom(:erlang), :cerl.c_atom(:apply), [

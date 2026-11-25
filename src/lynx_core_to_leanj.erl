@@ -398,6 +398,18 @@ translate_def(Name, #state{translated = Translated, laws = Laws} = State) ->
         false -> translate_def(Name, definition(Name, State), State)
     end.
 
+%% A law replaces the function with its name and arity, which Lynx.Case defines
+%% to check the law at runtime, so translated code cannot reach that function.
+callee(Core, {Function, Arity} = Name, #state{defs = Definitions} = State) ->
+    case Definitions of
+        #{Name := {law, _}} ->
+            core_error(Core, iolist_to_binary(io_lib:format(
+                "cannot call ~ts/~B, which is a law; rename the law or the function",
+                [atom_to_binary(Function, utf8), Arity])));
+        #{} ->
+            translate_def(Name, State)
+    end.
+
 definition(Name, #state{defs = Definitions, dispatch = Dispatch}) ->
     case Definitions of
         #{Name := Definition} -> Definition;
@@ -426,9 +438,9 @@ translate_def(Name, {law, #{name := {_, Params}, anno := Anno, ensures := Ensure
     {Requirement, State1} = case maps:find(requires, Law) of
         error -> {#{}, State0};
         {ok, Helper} -> {#{~"requires" => atom_to_binary(Helper, utf8)},
-                         translate_def({Helper, Arity}, State0)}
+                         callee(cerl:ann_c_atom(Anno, Helper), {Helper, Arity}, State0)}
     end,
-    State2 = translate_def({Ensures, Arity}, State1),
+    State2 = callee(cerl:ann_c_atom(Anno, Ensures), {Ensures, Arity}, State1),
     Fields = case maps:find(reaches, Law) of
         {ok, true} -> Requirement#{~"reaches" => true};
         error -> Requirement
@@ -1163,7 +1175,7 @@ computation_apply(#c_apply{anno = Anno, op = #c_var{name = Name}, args = Args} =
         true -> unsupported(Core);
         false ->
             {TranslatedArgs, State1} = lists:mapfoldl(fun value/2, State0, Args),
-            State2 = translate_def(Name, State1),
+            State2 = callee(Core, Name, State1),
             Calls = case State2#state.name of
                 Name -> State2#state.local_calls;
                 _ -> (State2#state.local_calls)#{Name => true}
@@ -1636,14 +1648,14 @@ external_function_value(Module, Function, Arity, Anno, State0) ->
             function_node(Key, Entry, Anno, State2)
     end.
 
-named_function_value(#c_var{anno = Anno, name = {Function, Arity} = Name}, State0) ->
+named_function_value(#c_var{anno = Anno, name = {Function, Arity} = Name} = Core, State0) ->
     Key = {State0#state.module, Function, Arity},
     case maps:find(Key, State0#state.funs) of
         {ok, Entry} -> function_node(Key, Entry, Anno, State0);
         error ->
             Entry = #{module => State0#state.module, name => Name, arity => Arity, captures => []},
             State1 = State0#state{funs = (State0#state.funs)#{Key => Entry}},
-            State2 = translate_def(Name, State1),
+            State2 = callee(Core, Name, State1),
             function_node(Key, Entry, Anno, State2)
     end.
 
