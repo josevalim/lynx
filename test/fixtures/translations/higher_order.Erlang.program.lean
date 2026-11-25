@@ -24,6 +24,15 @@ def fun_table : Lynx.Term.FunTable :=
         | [], [varg1] => Erlang.higher_order.«-map_returns_list_requires/2-fun-1-/1» varg1
         | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")))]
 
+private theorem «higher_order:-map_returns_list_requires/2-fun-0-/1».entry :
+    Lynx.Dispatcher.find fun_table "higher_order" "-map_returns_list_requires/2-fun-0-" 1 =
+      some
+        (Lynx.Term.FunEntry.pure fun captures args =>
+          match (captures).toList, (args).toList with
+          | [], [varg1] => Erlang.higher_order.«-map_returns_list_requires/2-fun-0-/1» varg1
+          | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))) :=
+  by rfl
+
 @[simp]
 theorem «higher_order:-map_returns_list_requires/2-fun-0-/1».pure (depth : Nat)
     (varg1 : Lynx.Term) :
@@ -32,7 +41,7 @@ theorem «higher_order:-map_returns_list_requires/2-fun-0-/1».pure (depth : Nat
       Erlang.higher_order.«-map_returns_list_requires/2-fun-0-/1» varg1 :=
   Lynx.Dispatcher.pure_pure (table := fun_table) (depth := depth) (module := "higher_order")
     (name := "-map_returns_list_requires/2-fun-0-") (arity := 1) (captures := #[]) (arguments :=
-    #[varg1]) (by rfl) (by rfl)
+    #[varg1]) «higher_order:-map_returns_list_requires/2-fun-0-/1».entry (by rfl)
 
 @[simp]
 theorem «higher_order:-map_returns_list_requires/2-fun-0-/1».call (depth : Nat)
@@ -42,7 +51,16 @@ theorem «higher_order:-map_returns_list_requires/2-fun-0-/1».call (depth : Nat
       Lynx.Result.ofExcept (Erlang.higher_order.«-map_returns_list_requires/2-fun-0-/1» varg1) :=
   Lynx.Dispatcher.call_pure (table := fun_table) (depth := depth) (module := "higher_order")
     (name := "-map_returns_list_requires/2-fun-0-") (arity := 1) (captures := #[]) (arguments :=
-    #[varg1]) (by rfl) (by rfl)
+    #[varg1]) «higher_order:-map_returns_list_requires/2-fun-0-/1».entry (by rfl)
+
+private theorem «higher_order:-map_returns_list_requires/2-fun-1-/1».entry :
+    Lynx.Dispatcher.find fun_table "higher_order" "-map_returns_list_requires/2-fun-1-" 1 =
+      some
+        (Lynx.Term.FunEntry.pure fun captures args =>
+          match (captures).toList, (args).toList with
+          | [], [varg1] => Erlang.higher_order.«-map_returns_list_requires/2-fun-1-/1» varg1
+          | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))) :=
+  by rfl
 
 @[simp]
 theorem «higher_order:-map_returns_list_requires/2-fun-1-/1».pure (depth : Nat)
@@ -52,7 +70,7 @@ theorem «higher_order:-map_returns_list_requires/2-fun-1-/1».pure (depth : Nat
       Erlang.higher_order.«-map_returns_list_requires/2-fun-1-/1» varg1 :=
   Lynx.Dispatcher.pure_pure (table := fun_table) (depth := depth) (module := "higher_order")
     (name := "-map_returns_list_requires/2-fun-1-") (arity := 1) (captures := #[]) (arguments :=
-    #[varg1]) (by rfl) (by rfl)
+    #[varg1]) «higher_order:-map_returns_list_requires/2-fun-1-/1».entry (by rfl)
 
 @[simp]
 theorem «higher_order:-map_returns_list_requires/2-fun-1-/1».call (depth : Nat)
@@ -62,7 +80,7 @@ theorem «higher_order:-map_returns_list_requires/2-fun-1-/1».call (depth : Nat
       Lynx.Result.ofExcept (Erlang.higher_order.«-map_returns_list_requires/2-fun-1-/1» varg1) :=
   Lynx.Dispatcher.call_pure (table := fun_table) (depth := depth) (module := "higher_order")
     (name := "-map_returns_list_requires/2-fun-1-") (arity := 1) (captures := #[]) (arguments :=
-    #[varg1]) (by rfl) (by rfl)
+    #[varg1]) «higher_order:-map_returns_list_requires/2-fun-1-/1».entry (by rfl)
 
 end
 

@@ -16,9 +16,11 @@ open Term
 @[expose] def badarity (function : Term) (arguments : Array Term) : Exception :=
   .error (.tuple #[.atom "badarity", .tuple #[function, arguments.toList.foldr Term.cons Term.nil]])
 
-/-- The entry of the function named `Module:Name/Arity`. -/
+/-- The entry of the function named `Module:Name/Arity`. Comparing arities first
+rejects most entries without comparing strings, which keeps evaluating lookups
+cheap for the kernel. -/
 @[expose] def find (table : FunTable) (module name : String) (arity : Nat) : Option FunEntry :=
-  (table.find? fun def_ => def_.module == module && def_.name == name && def_.arity == arity).map
+  (table.find? fun def_ => def_.arity == arity && def_.name == name && def_.module == module).map
     (·.entry)
 
 /-- The table entry a function value names and its captured values, once its

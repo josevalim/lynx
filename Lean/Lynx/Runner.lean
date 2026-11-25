@@ -1680,6 +1680,7 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
   let termType := mkIdent ``Lynx.Term
   let natType := mkIdent ``Nat
   let ofTable := mkIdent ``Lynx.Dispatcher.ofTable
+  let find := mkIdent ``Lynx.Dispatcher.find
   let pureCall := mkIdent ``Lynx.Dispatcher.pure
   let effectfulCall := mkIdent ``Lynx.Dispatcher.call
   let function := mkIdent ``Lynx.Term.function
@@ -1708,9 +1709,20 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
     let body := entry.body
     let callee : TSyntax `term := Unhygienic.run `($function $module $functionName $arity #[$captures,*])
     let dispatcher : TSyntax `term := Unhygienic.run `(($ofTable $table $outer))
+    let functionId := s!"{entry.module}:{entry.name}/{arguments.size}"
+    -- The entry is looked up once, as evaluating the lookup dominates checking
+    -- the equations, which share it.
+    let lookup := mkIdent (.str (.mkSimple functionId) "entry")
+    let ctor := mkIdent (match level with
+      | "pure" => ``Lynx.Term.FunEntry.pure
+      | "apply" => ``Lynx.Term.FunEntry.apply
+      | _ => ``Lynx.Term.FunEntry.effectful)
+    let adapter := (← tableEntry map info entries[index]!).adapter
+    result := result.push (withSpan info.info (Unhygienic.run `(private theorem $lookup :
+      $find $table $module $functionName $arity = some ($ctor $adapter) := by rfl)))
     let lemma (suffix : String) (call : Ident) (rhs : TSyntax `term) (reduce : Name) :=
       -- Equations are named after the function, such as `«maps:get/2».pure`.
-      let name := mkIdent (.str (.mkSimple s!"{entry.module}:{entry.name}/{arguments.size}") suffix)
+      let name := mkIdent (.str (.mkSimple functionId) suffix)
       let reduce := mkIdent reduce
       withSpan info.info (Unhygienic.run `(@[simp] theorem $name ($depth:ident : $natType)
         $binders:bracketedBinder* :
@@ -1718,7 +1730,7 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
         $reduce ($tableArg := $table) ($depth:ident := $depth:ident) ($moduleArg := $module)
           ($nameArg := $functionName)
           ($arityArg := $arity) ($capturesArg := #[$captures,*])
-          ($argumentsArg := #[$arguments,*]) (by rfl) (by rfl)))
+          ($argumentsArg := #[$arguments,*]) $lookup (by rfl)))
     match level with
     | "pure" =>
       result := result.push (lemma "pure" pureCall body ``Lynx.Dispatcher.pure_pure)
