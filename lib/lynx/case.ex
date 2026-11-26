@@ -128,8 +128,8 @@ defmodule Lynx.Case do
       termination_suffix &:calendar.mod/2, ~LEAN"partial_fixpoint"
 
   The source is a `Lynx.Lean` value. It is parsed as part of the function's
-  declaration, after its body. The suffix does not change the function's purity
-  (see the purity model in `Lynx`). With `partial_fixpoint`, inputs on which
+  declaration, after its body. The suffix does not change the function's embedding
+  (see the embedding levels in `Lynx`). With `partial_fixpoint`, inputs on which
   the function diverges raise `Lynx.Exception.exhausted`.
   Raises if the target function is not translated by the group's laws.
 
@@ -315,8 +315,9 @@ defmodule Lynx.Case do
   `Lynx.Exception.exhausted`: not a return value or an Erlang exception, and
   no handler catches it. A successful-return proof must establish that the
   cutoff is never reached. This supports proofs whose unreachable error paths
-  depend on libraries outside the model; it makes no claim about executing those
-  paths. The function remains pure (see the purity model in `Lynx`).
+  depend on libraries outside the model but it makes no claim about executing those
+  paths. The function is embedded as a pure function (see the embedding levels in
+  `Lynx`).
 
   Functions built into Lean cannot be cut off.
   """

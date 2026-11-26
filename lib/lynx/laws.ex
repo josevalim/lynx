@@ -109,7 +109,7 @@ defmodule Lynx.Laws do
 
   Pass `termination_suffixes: %{{module, function, arity} => lean_source}` to attach
   a `Lynx.Lean` termination suffix to a translated function. The suffix does not
-  change the function's purity (see the purity model in `Lynx`). Targets must be
+  change the function's embedding (see the embedding levels in `Lynx`). Targets must be
   translated by the laws being verified; annotations do not add translation roots.
   A value of `{lean_source, recur: true}` also attaches the suffix to the functions
   mutually recursive with the target that have no suffix of their own, as with

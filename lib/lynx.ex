@@ -86,46 +86,45 @@ defmodule Lynx do
   prove anything that involves external systems, running either over the network
   (sockets) or I/O (ports).
 
-  ### Purity model
+  ### Embedding levels model
 
-  To choose how each side of a law is stated, Lynx tracks the purity of every
-  translated function. A function has the purity of the most impure code it
-  reaches, through its own body and every function it calls:
+  To choose how each side of a law is stated, Lynx tracks the complexity of
+  every translated function. A function has the embedding of the most complex
+  code it reaches, through its own body and every function it calls:
 
     * `pure` — returns a value or raises an exception without consulting the
-      runtime. Exceptions are part of the result, so code that raises is pure.
-      Pure functions return `Except Lynx.Exception Lynx.Term`, and other code
-      embeds their calls with `Lynx.Result.ofExcept`. Pure code may also not
-      return, such as a `cutoff` or a diverging `partial_fixpoint`: it then
-      raises `Lynx.Exception.exhausted`, which is not an Erlang exception.
-      Handlers never catch it, so a law proving a value or an Erlang exception
-      also proves that the computation returns.
+      runtime. Exceptions are modelled as part of the result, so code that
+      raises is pure. Pure functions return `Except Lynx.Exception Lynx.Term`,
+      and other code embeds their calls with `Lynx.Result.ofExcept`. Functions
+      marked with `cutoff` or a diverging `partial_fixpoint` are also pure, as
+      they raise a special exception tag called `Lynx.Exception.exhausted`.
+      Laws always assert a value is returned.
 
-    * `apply` — pure, except that it invokes anonymous functions, when every
-      function in the program's table is pure or `apply`. Calls by name, such as
-      `apply(mod, fun, args)` or `mod.fun(x)` are at this level too. It also
-      returns `Except`, and receives a `Lynx.Dispatcher`, which calls anonymous
-      functions through the program's function table.
+    * `apply` — the code may invoke anonymous functions. Dynamic calls by name,
+      such as `apply(mod, fun, args)` or `mod.fun(x)` are at this level too.
+      It returns `Except`, similar to `pure`, but functions at this level also
+      receive a `Lynx.Dispatcher` argument which calls anonymous functions through
+      the program's function table.
 
     * `sequential` — runs in a single process, but uses the process dictionary,
-      references, or `self()`. Invoking anonymous functions is sequential when
-      any function in the program's table is.
+      references, or `self()`. Code at the level and beyond returns `Lynx.Result`,
+      a resumable computation that extends Except with requests to the runtime.
 
     * `concurrent` — may spawn processes, send messages, or receive them, or
       act on other processes through links, monitors, and exit signals, such
       as `Process.monitor/1`, `Process.exit/2`, or `Process.alive?/1`.
-      Invoking anonymous functions is concurrent when any function in the
-      program's table is.
 
   Code at the `apply` level and above receives the dispatcher as its first
   parameter. Laws pass it through `Lynx.apply helper table depth`, where `table`
   is the program's function table, `Erlang.program.fun_table`, and the
-  dispatcher resolves it up to the given call depth. Such code must return
-  `true` from some depth on, so a law holds however deep its calls go, and the
-  proof chooses the bound, which may depend on the inputs. Each law then uses
-  the strongest construction its purity allows:
+  dispatcher resolves it up to the given call depth. A law holds however deep
+  its calls go, and the proof chooses the bound, which may depend on the inputs.
+  The embedding of the function table is given by the most complex function
+  in the program.
 
-    * Pure code is stated directly, as an `Except` value:
+  Each law uses the strongest construction its embedding allows:
+
+    * Pure code is stated directly as an `Except` value:
 
           theorem «law/1» (x : Lynx.Term)
               (requires : «law:requires/1» x = .ok Lynx.Term.true) :
@@ -146,18 +145,17 @@ defmodule Lynx do
       run of the code ends with the outcome: every interleaving of its
       processes, every point at which its timers fire and its persistent
       term updates become visible, and every time left that canceling a
-      timer may report. Runs always end
-      (`Lynx.Concurrent.Config.terminates`). Both the precondition and the
-      expectation must hold in every run:
+      timer may report. Runs always end (`Lynx.Concurrent.Config.terminates`).
+      Both the precondition and the expectation must hold in every run:
 
           (requires : ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
             Lynx.concurrent (Lynx.apply «law:requires/1» table depth x) (.ok Lynx.Term.true)) :
           ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
             Lynx.concurrent (Lynx.apply «law:ensures/1» table depth x) (.ok Lynx.Term.true)
 
-  Both `Lynx.sequential` and `Lynx.concurrent` start from a fresh runtime: a single
-  process, with an empty process dictionary, and an empty mailbox. The
-  precondition and the expectation each start from this runtime separately,
+  Both `Lynx.sequential` and `Lynx.concurrent` start from a fresh runtime:
+  a single process, with an empty process dictionary, and an empty mailbox.
+  The precondition and the expectation each start from this runtime separately,
   so nothing stored or sent by one is visible to the other. Laws over sequential
   and concurrent code therefore describe a freshly started process. For example,
   `Process.get(:key) == nil` is provable, even though it does not hold in a
