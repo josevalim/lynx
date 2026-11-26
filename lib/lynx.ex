@@ -188,16 +188,12 @@ defmodule Lynx do
 
     * Exception stack traces are not recorded and are represented by `[]`.
 
-    * Map iteration order is unspecified, as in Erlang, and opaque.
-      Map generators and other enumerations visit each key once, but proofs
-      cannot rely on any particular order.
-
-    * The order between different process identifiers, references, and
-      functions depends on how the runtime represents them, so it is opaque
-      too. Proofs can rely on them being equal exactly when they are the same,
+    * The order between different maps, process identifiers, references, and
+      functions depends on how the runtime represents them, so it is opaque.
+      Proofs can rely on them being equal exactly when they are the same,
       and on their place among other types of terms, but not on how two of a
-      kind compare. Comparing or sorting them, or maps keyed by them, does not
-      evaluate, so laws that depend on their order cannot be proven.
+      kind compare. Comparing or sorting them, does not evaluate, so laws that
+      depend on their order cannot be proven.
 
     * Erlang's `sets` are only modeled as version 2 sets, which are maps from
       their elements to `[]`. `sets:new/0,1` and `sets:from_list/1,2` always
