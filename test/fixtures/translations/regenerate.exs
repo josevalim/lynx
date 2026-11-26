@@ -1,6 +1,6 @@
 # Run from the project root:
-#   mix run test/fixtures/translations/regenerate.exs json
-#   mix run test/fixtures/translations/regenerate.exs lean
+#   MIX_ENV=test mix run test/fixtures/translations/regenerate.exs json
+#   MIX_ENV=test mix run test/fixtures/translations/regenerate.exs lean
 defmodule Lynx.Fixtures.Regenerate do
   @lean_dir Path.expand("../../../Lean", __DIR__)
 
@@ -58,7 +58,9 @@ defmodule Lynx.Fixtures.Regenerate do
     end
   end
 
-  def run(_), do: Mix.raise("usage: mix run test/fixtures/translations/regenerate.exs json|lean")
+  def run(_),
+    do:
+      Mix.raise("usage: MIX_ENV=test mix run test/fixtures/translations/regenerate.exs json|lean")
 
   defp core(fixture, source) do
     {:ok, module, beam} =

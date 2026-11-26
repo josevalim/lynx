@@ -10,8 +10,8 @@ The translation code is done by `lib/lynx/translation.ex` and `src/lynx_core_to_
 When changing the translator or Lean syntax decoder, regenerate the existing
 translation fixtures from the repository root as appropriate:
 
-    mix run test/fixtures/translations/regenerate.exs json
-    mix run test/fixtures/translations/regenerate.exs lean
+    MIX_ENV=test mix run test/fixtures/translations/regenerate.exs json
+    MIX_ENV=test mix run test/fixtures/translations/regenerate.exs lean
 
 If both change, regenerate JSON first, then Lean.
 

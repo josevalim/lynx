@@ -26,10 +26,8 @@ defmodule Lynx.MixProject do
     ]
   end
 
-  # Fixtures are regenerated with `mix run`, so development also compiles the
-  # test support modules.
-  defp elixirc_paths(:prod), do: ["lib"]
-  defp elixirc_paths(_), do: ["lib", "test/support"]
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   defp deps do
     [
