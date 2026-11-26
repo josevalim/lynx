@@ -1,14 +1,21 @@
 defmodule Lynx.MixProject do
   use Mix.Project
 
+  @source_url "https://github.com/josevalim/lynx"
+  @version "0.1.0"
+
   def project do
     [
       app: :lynx,
-      version: "0.1.0",
+      version: @version,
+      name: "Lynx",
+      description: "Formally verify Erlang/Elixir programs through embedded LEAN proofs",
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
-      deps: [],
+      deps: deps(),
+      docs: docs(),
+      package: package(),
       test_ignore_filters: ["test/fixtures/translations/regenerate.exs"],
       aliases: [
         compile: [&build_lean/1, "compile"],
@@ -23,6 +30,43 @@ defmodule Lynx.MixProject do
   # test support modules.
   defp elixirc_paths(:prod), do: ["lib"]
   defp elixirc_paths(_), do: ["lib", "test/support"]
+
+  defp deps do
+    [
+      {:ex_doc, "~> 0.38", only: :docs}
+    ]
+  end
+
+  defp docs do
+    [
+      main: "Lynx",
+      logo: "logo.png",
+      source_ref: "v#{@version}",
+      source_url: @source_url
+    ]
+  end
+
+  defp package do
+    [
+      licenses: ["Apache-2.0"],
+      maintainers: ["José Valim"],
+      links: %{"GitHub" => @source_url},
+      files: [
+        "lib",
+        "src",
+        "Lean",
+        "examples/concurrency",
+        "examples/elixir",
+        "examples/deps",
+        "lean-toolchain",
+        ".formatter.exs",
+        "mix.exs",
+        "README.md",
+        "LICENSE"
+      ],
+      exclude_patterns: [~r"^Lean/\.lake", ~r"^Lean/LynxTest"]
+    ]
+  end
 
   defp build_lean(_args) do
     lean_dir = Path.join(__DIR__, "Lean")
@@ -39,7 +83,14 @@ defmodule Lynx.MixProject do
   end
 
   def cli do
-    [preferred_envs: ["test.all": :test, precommit: :test]]
+    [
+      preferred_envs: [
+        "test.all": :test,
+        precommit: :test,
+        docs: :docs,
+        "hex.publish": :docs
+      ]
+    ]
   end
 
   def application do

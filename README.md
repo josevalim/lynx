@@ -7,16 +7,16 @@
 Write proofs about Erlang/Elixir programs using Lean.
 
 You write laws in Erlang/Elixir, which are automatically translated to
-Lean alongside your Erlang/Elixir code, and you write proofs in Lean.
-The laws and proofs are assembled together and verified by Lean's kernel.
+Lean, and you write proofs in Lean. The laws and proofs are assembled
+together and verified by Lean's kernel.
 
 This technique is also known as _shallow embedding_, since it translates
 Erlang/Elixir to Lean and then use the features and properties of Lean
 for proofs. If there are no bugs during translation (or in Lean's kernel),
 then the proofs are correct. However, given the early nature of this project,
-you must expect bugs and find plenty of limitations (for example, we do not
-yet implement all of Erlang builtin functions). Please file bug reports
-whenever you run into them!
+you should expect bugs and limitations (for example, we do not yet implement
+all of Erlang builtin functions). Please file bug reports whenever you run
+into them!
 
 See the documentation for [the Lynx module](https://lynx.hexdocs.pm) to get
 started or ask your coding agent to run `mix help Lynx`.
@@ -133,10 +133,10 @@ end
 ```
 
 `requires:` states the input assumptions and `expects:` must evaluate to `true`
-under those assumptions. Each `laws` block registers one ExUnit test and verifies
-all its laws together. The `~LEAN` sigils contain the proofs checked by Lean.
-Laws also remain callable from ordinary tests, which can be used for fuzzing and
-validation.
+under those assumptions. Each `laws` block registers one ExUnit test and Lynx
+verifies all its laws together. The `~LEAN` sigils contain the proofs checked
+by Lean. Laws also remain callable from ordinary tests, which can be used for
+fuzzing and validation.
 
 Run the example or all law groups with:
 
@@ -246,21 +246,33 @@ to state and often catch real bugs. Here are some examples:
 
 Note that a property does not necessarily imply the absence of bugs.
 For example, proving that a JSON encoder roundtrips for some terms,
-such as `JSON.decode(JSON.encode!(term)) == {:ok, term}`,
-does not prove that it emits JSON according to its specification.
-Similarly, the algebraic law written above for `sum` also holds for `length`.
-Therefore, it is important to have additional properties and tests to ensure
-the correctness of your programs.
+such as `JSON.decode(JSON.encode!(term)) == {:ok, term}`, does not
+prove that it emits JSON according to its specification!
 
-Each law also states which inputs it is about. Assumptions that are too strong
-make a law hold vacuously, while missing assumptions make it unprovable, so
-review `requires:` as carefully as `expects:`.
+Similarly, the algebraic law written above for `sum` also holds for
+`length`, so a sum implementation that simply calls `length` would
+be accepted, even though it is incorrect!
+
+It is important to state each law with care, as it states both the
+required inputs and expected outcomes. Assumptions that are too strong
+make a law hold vacuously, while missing assumptions make it unprovable,
+so review `requires:` as carefully as `expects:`.
 
 Finally, because Lynx translates your Erlang/Elixir program to Lean, it relies
 on whole program analysis. It supports both sequential and concurrent features
 of the Erlang runtime, such as the process dictionary and spawning processes,
 but it cannot prove anything that involves external systems, running either over
 the network (sockets) or I/O (ports).
+
+## Using it with coding agents
+
+The growing interest in formally verifying our programs is largely driven by AI and coding agents. Lynx embraces this trend, and we recommend the following approach:
+
+  * Defining properties: You can use coding agents to help you explore and define properties, but we strongly recommend a human-in-the-loop approach, where you carefully review and validate each law. Luckily, laws are written in plain Erlang/Elixir, so you can leverage your existing knowledge to understand them.
+
+  * Writing proofs: For the proofs themselves, you can delegate the work to coding agents. Unless there is a soundness bug in Lean's kernel or in our translation process, a coding agent cannot produce a valid proof of a false law. This makes proof writing particularly well suited for automation. Simply ask your coding agent to run `mix help Lynx` after installing Lynx, and you are good to go. Note Lynx also includes the ability of verifying your laws against multiple kernels.
+
+In other words, humans are responsible for specifying what correctness means, while coding agents can take care of proving it.
 
 ## Disclaimer
 

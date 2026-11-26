@@ -3,8 +3,8 @@ defmodule Lynx do
   Write proofs about Erlang/Elixir programs using Lean.
 
   You write laws in Erlang/Elixir, which are automatically translated to
-  Lean alongside your Erlang/Elixir code, and you write proofs in Lean.
-  The laws and proofs are assembled together and verified by Lean's kernel.
+  Lean, and you write proofs in Lean. The laws and proofs are assembled
+  together and verified by Lean's kernel.
 
   This technique is also known as _shallow embedding_, since it translates
   Erlang/Elixir to Lean and then use the features and properties of Lean
@@ -51,7 +51,8 @@ defmodule Lynx do
   in order to best understand the constructs when writing proofs.
 
   Furthermore, when running proofs with ExUnit, the error reports include the path to
-  folder with all `.lean` files. Use this to debug and guide your proofs.
+  folder with all `.lean` files. Use this to debug and guide your proofs. You can also
+  explicitly opt into it by using by `LYNX_DEBUG=lean` or `LYNX_DEBUG=olean`.
 
   Finally, because the Lynx translates your Erlang/Elixir program to Lean,
   it relies on whole program analysis. As seen below, it does support both
@@ -76,10 +77,9 @@ defmodule Lynx do
 
     * `apply` — pure, except that it invokes anonymous functions, when every
       function in the program's table is pure or `apply`. Calls by name, such as
-      `apply(mod, fun, args)` or `mod.fun(x)`, and `:erlang.fun_info_mfa/1` are
-      at this level too. It also returns `Except`, and receives a
-      `Lynx.Dispatcher`, which calls anonymous functions through the program's
-      function table.
+      `apply(mod, fun, args)` or `mod.fun(x)` are at this level too. It also
+      returns `Except`, and receives a `Lynx.Dispatcher`, which calls anonymous
+      functions through the program's function table.
 
     * `sequential` — runs in a single process, but uses the process dictionary,
       references, or `self()`. Invoking anonymous functions is sequential when
@@ -322,9 +322,10 @@ defmodule Lynx do
 
     * Use `options: [maxHeartbeats: 1_000_000]` on a laws group when a proof
       needs a larger Lean elaboration budget. It does not weaken kernel checking.
-      First look for repeated expansion or unnecessary case splits. Measure
-      verification with `LYNX_DEBUG=lean LYNX_CACHE=0` so cached results do not
-      hide slow proofs, and see "Profiling proofs" to find where time goes.
+      Also consider optimizing your proofs by removing repeated expansion or
+      unnecessary case splits. Measure verification with `LYNX_DEBUG=lean LYNX_CACHE=0`
+      so cached results do not hide slow proofs. See "Profiling proofs" to find
+      where time goes.
 
   ### Proving concurrent laws
 
