@@ -265,7 +265,7 @@ defmodule RandProofsTest do
       -- The multiplicity of a value counts the elements exactly equal to it.
       have counts : ∀ (xs : List Lynx.Term) (v : Lynx.Term),
           «multiplicity/2» (Lynx.Term.list xs) v =
-            .ok (.integer (xs.filter (fun x => Lynx.Term.compareExact (Lynx.Term.fuel x v) x v == .eq)).length) := by
+            .ok (.integer (xs.filter (fun x => Lynx.Term.equalExact (Lynx.Term.fuel x v) x v)).length) := by
         intro xs v
         induction xs with
         | nil => simp [«multiplicity/2»]

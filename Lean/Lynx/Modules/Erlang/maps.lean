@@ -12,7 +12,7 @@ open Lynx
 @[expose] def «get/2» (key input : Term) : Except Exception Term :=
   match input with
   | .map entries =>
-    match (entries.find? fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)).map Prod.snd with
+    match (entries.find? fun entry => Term.equalExact (Term.fuel key entry.1) key entry.1).map Prod.snd with
     | some v => .ok v
     | none => .error (.error (.tuple #[.atom "badkey", key]))
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
@@ -25,7 +25,7 @@ open Lynx
 @[expose] def «update/3» (key value input : Term) : Except Exception Term :=
   match input with
   | .map entries =>
-    if (entries.find? fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)).isSome then
+    if (entries.find? fun entry => Term.equalExact (Term.fuel key entry.1) key entry.1).isSome then
       .ok (.map ((key, value) :: entries))
     else
       .error (.error (.tuple #[.atom "badkey", key]))
@@ -96,7 +96,7 @@ the order `to_list/1` returns them. The BEAM's iterator representation is opaque
 /-- Every binding of the key is removed, including shadowed ones. -/
 @[expose] def «remove/2» (key input : Term) : Except Exception Term :=
   match input with
-  | .map entries => .ok (.map (entries.filter fun entry => !decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)))
+  | .map entries => .ok (.map (entries.filter fun entry => !Term.equalExact (Term.fuel key entry.1) key entry.1))
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
 @[expose] def «take/2» (key input : Term) : Except Exception Term :=
@@ -104,7 +104,7 @@ the order `to_list/1` returns them. The BEAM's iterator representation is opaque
   | .map entries =>
     match Term.mapLookup entries key with
     | some value =>
-      .ok (.tuple #[value, .map (entries.filter fun entry => !decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq))])
+      .ok (.tuple #[value, .map (entries.filter fun entry => !Term.equalExact (Term.fuel key entry.1) key entry.1)])
     | none => .ok (.atom "error")
   | _ => .error (.error (.tuple #[.atom "badmap", input]))
 
@@ -190,7 +190,7 @@ theorem get_merge (key : Term) (left right : List (Term × Term)) :
       match «get/2» key (.map right) with
       | .error _ => «get/2» key (.map left)
       | result => result := by
-  simp only [«merge/2», Except.ok_bind, «get/2», List.find?_append, Option.map_or]
+  simp only [«merge/2», Except.ok_bind, «get/2», Term.equalExact_eq_decide, List.find?_append, Option.map_or]
   cases (right.find? fun e => decide (Term.compareExact (Term.fuel key e.1) key e.1 = .eq)).map Prod.snd <;> rfl
 
 /-- Maps with identical lookup results are semantically equal. -/
@@ -200,12 +200,8 @@ theorem compare_eq_of_get (left right : List (Term × Term))
   apply Term.map_compare_eq_of_lookup
   intro key
   have equal := h key
-  simp only [«get/2»] at equal
-  change Option.Rel _
-    ((left.find? fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)).map Prod.snd)
-    ((right.find? fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)).map Prod.snd)
-  cases ha : (left.find? fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)).map Prod.snd <;>
-    cases hb : (right.find? fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)).map Prod.snd <;> simp_all
+  simp only [«get/2», ← Term.mapLookup.eq_1] at equal
+  cases ha : Term.mapLookup left key <;> cases hb : Term.mapLookup right key <;> simp_all
 
 /-- Map shape is the only requirement; keys and values may be arbitrary terms. -/
 theorem get_after_put (m k v : Term)
@@ -275,7 +271,7 @@ private theorem lookup_append_map (es l : List (Term × Term)) (H : Term × Term
       match es.find? (fun e => decide (Term.compareExact (Term.fuel q e.1) q e.1 = .eq)) with
       | some e => some (H e)
       | none => Term.mapLookup l q := by
-  simp only [Term.mapLookup, List.find?_append, List.find?_map]
+  simp only [Term.mapLookup, Term.equalExact_eq_decide, List.find?_append, List.find?_map]
   dsimp only [Function.comp_def]
   cases es.find? (fun e => decide (Term.compareExact (Term.fuel q e.1) q e.1 = .eq)) <;> rfl
 

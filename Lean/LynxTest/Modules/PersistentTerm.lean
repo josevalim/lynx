@@ -58,14 +58,14 @@ private def storesAndWaits : Term := .function false "test" "stores_and_waits" 0
 /-- Accept exactly one outcome, for proofs over every schedule. -/
 private def only (expected : Outcome Term) (actual : Outcome Term) : Bool :=
   match expected, actual with
-  | .ok expected, .ok actual => Term.compareExact (Term.fuel expected actual) expected actual == .eq
+  | .ok expected, .ok actual => Term.equalExact (Term.fuel expected actual) expected actual
   | .error (.error expected), .error (.error actual) =>
-      Term.compareExact (Term.fuel expected actual) expected actual == .eq
+      Term.equalExact (Term.fuel expected actual) expected actual
   | _, _ => false
 
 /-- Accept any of the given results. -/
 private def oneOf (expected : List Term) : Outcome Term → Bool
-  | .ok actual => expected.any ((fun a b => Term.compareExact (Term.fuel a b) a b) · actual == .eq)
+  | .ok actual => expected.any fun candidate => Term.equalExact (Term.fuel candidate actual) candidate actual
   | _ => false
 
 /-- Accept exactly one result, to find a run reaching it. -/

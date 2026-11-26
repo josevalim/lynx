@@ -750,8 +750,8 @@ defmodule JsonProofsTest do
           rw [«escape_binary_ascii/5».eq_def (bin (w ++ rest)),
             matchInteger_bytes _ _ _ 56 (by omega)]
           simp only [extract_some, tail8, band_iband, bxor_ixor, Erlang.erlang.«+/2_integers»,
-            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.compareExact_integers,
-            Int.compare_eq_eq, Lynx.Except.ok_bind, Lynx.Except.andAlso_eq]
+            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.equalExact_eq_decide,
+            decide_eq_true_eq, Term.compareExact_integers, Int.compare_eq_eq, Lynx.Except.ok_bind, Lynx.Except.andAlso_eq]
           rw [show List.foldl (fun value b => value * 256 + b.toNat) 0 w = bytesValue w from rfl]
           by_cases c1 : iband (bytesValue w) 36170086419038336 = 0
           · by_cases c2 : iband (bytesValue w + 27127564814278752) 36170086419038336 =
@@ -1207,8 +1207,8 @@ defmodule JsonProofsTest do
           rw [«string_ascii/7».eq_def _ (bin (w ++ rest)),
             matchInteger_bytes _ _ _ 56 (by omega)]
           simp only [extract_some, tail8, band_iband, bxor_ixor, Erlang.erlang.«+/2_integers»,
-            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.compareExact_integers,
-            Int.compare_eq_eq, Lynx.Except.ok_bind, Lynx.Except.andAlso_eq]
+            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.equalExact_eq_decide,
+            decide_eq_true_eq, Term.compareExact_integers, Int.compare_eq_eq, Lynx.Except.ok_bind, Lynx.Except.andAlso_eq]
           rw [show List.foldl (fun value b => value * 256 + b.toNat) 0 w = bytesValue w from rfl]
           by_cases c1 : iband (bytesValue w) 36170086419038336 = 0
           · by_cases c2 : iband (bytesValue w + 27127564814278752) 36170086419038336 =
@@ -1297,8 +1297,8 @@ defmodule JsonProofsTest do
           rw [«string_ascii/9».eq_def _ (bin (w ++ rest)),
             matchInteger_bytes _ _ _ 56 (by omega)]
           simp only [extract_some, tail8, band_iband, bxor_ixor, Erlang.erlang.«+/2_integers»,
-            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.compareExact_integers,
-            Int.compare_eq_eq, Lynx.Except.ok_bind, Lynx.Except.andAlso_eq]
+            Erlang.erlang.«-/2_integers», Erlang.erlang.«=:=/2», Term.equalExact_eq_decide,
+            decide_eq_true_eq, Term.compareExact_integers, Int.compare_eq_eq, Lynx.Except.ok_bind, Lynx.Except.andAlso_eq]
           rw [show List.foldl (fun value b => value * 256 + b.toNat) 0 w = bytesValue w from rfl]
           by_cases c1 : iband (bytesValue w) 36170086419038336 = 0
           · by_cases c2 : iband (bytesValue w + 27127564814278752) 36170086419038336 =

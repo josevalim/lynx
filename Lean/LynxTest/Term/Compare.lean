@@ -85,19 +85,19 @@ theorem closure_captures_comparison :
 
 /-- Identities are equal when they are the same, while the order between
 different ones is unspecified. -/
-theorem identities_compare_equal_only_when_same :
-    Term.compareExact (Term.fuel (.pid [1]) (.pid [1])) (.pid [1]) (.pid [1]) = .eq ∧
-    Term.compareExact (Term.fuel (.pid [1]) (.pid [2])) (.pid [1]) (.pid [2]) ≠ .eq ∧
-    Term.compareExact (Term.fuel (.reference [1, 1]) (.reference [1, 1])) (.reference [1, 1]) (.reference [1, 1]) = .eq ∧
-    Term.compareExact (Term.fuel (.reference [1, 1]) (.reference [1, 2])) (.reference [1, 1]) (.reference [1, 2]) ≠ .eq ∧
-    Term.compare (Term.fuel (.function false "a" "f" 1 #[]) (.function false "a" "g" 1 #[]))
-      (.function false "a" "f" 1 #[]) (.function false "a" "g" 1 #[]) ≠ .eq := by
+theorem identities_equal_only_when_same :
+    Term.equalExact (Term.fuel (.pid [1]) (.pid [1])) (.pid [1]) (.pid [1]) = true ∧
+    Term.equalExact (Term.fuel (.pid [1]) (.pid [2])) (.pid [1]) (.pid [2]) = false ∧
+    Term.equalExact (Term.fuel (.reference [1, 1]) (.reference [1, 1])) (.reference [1, 1]) (.reference [1, 1]) = true ∧
+    Term.equalExact (Term.fuel (.reference [1, 1]) (.reference [1, 2])) (.reference [1, 1]) (.reference [1, 2]) = false ∧
+    Term.equal (Term.fuel (.function false "a" "f" 1 #[]) (.function false "a" "g" 1 #[]))
+      (.function false "a" "f" 1 #[]) (.function false "a" "g" 1 #[]) = false := by
   decide
 
 /-- `fun f/0` and `fun m:f/0` are different functions, even though both call `m:f/0`. -/
 theorem local_and_external_functions_differ :
-    Term.compareExact (Term.fuel (.function false "m" "f" 0 #[]) (.function true "m" "f" 0 #[]))
-      (.function false "m" "f" 0 #[]) (.function true "m" "f" 0 #[]) ≠ .eq := by
+    Term.equalExact (Term.fuel (.function false "m" "f" 0 #[]) (.function true "m" "f" 0 #[]))
+      (.function false "m" "f" 0 #[]) (.function true "m" "f" 0 #[]) = false := by
   decide
 
 theorem numeric_and_exact_comparison :
@@ -184,21 +184,21 @@ theorem exact_map_equality_by_lookup (k v w : Term) :
     Term.compareExact (Term.fuel (.map [(k, v), (k, w)]) (.map [(k, v)])) (.map [(k, v), (k, w)]) (.map [(k, v)]) = .eq := by
   apply Term.map_compareExact_eq_of_lookup
   intro q
-  by_cases same : Term.compareExact (Term.fuel q k) q k = .eq <;> simp [same]
+  by_cases same : Term.compareExact (Term.fuel q k) q k = .eq <;> simp [Term.mapLookup, same]
 
 /-- Exactly equal maps bind the same keys. -/
 theorem exact_map_equality_lookup (k v : Term) :
     Term.compareExact (Term.fuel (.map [(k, v)]) (.map [])) (.map [(k, v)]) (.map []) ≠ .eq := by
   intro equal
   have rel := Term.lookup_of_map_compareExact_eq _ _ equal k
-  simp at rel
+  simp [Term.mapLookup] at rel
 
 /-- Semantically equal maps bind the same keys. -/
 theorem map_equality_lookup (k v : Term) :
     Term.compare (Term.fuel (.map [(k, v)]) (.map [])) (.map [(k, v)]) (.map []) ≠ .eq := by
   intro equal
   have rel := Term.lookup_of_map_compare_eq _ _ equal k
-  simp at rel
+  simp [Term.mapLookup] at rel
 
 /-- Binaries are never exactly equal to other kinds of terms, such as `[]` or `%{}`. -/
 theorem binary_exact_kinds (bytes : ByteArray) :

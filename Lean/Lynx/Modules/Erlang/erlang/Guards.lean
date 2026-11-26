@@ -277,10 +277,10 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
   simp [«band/2», Nat.and_two_pow_sub_one_eq_mod, Int.natCast_emod]
 
 @[expose] def «==/2» (left right : Term) : Except Exception Term :=
-  .ok (if Term.compare (Term.fuel left right) left right = .eq then Term.true else Term.false)
+  .ok (if Term.equal (Term.fuel left right) left right then Term.true else Term.false)
 
 @[expose] def «/=/2» (left right : Term) : Except Exception Term :=
-  .ok (if Term.compare (Term.fuel left right) left right = .eq then Term.false else Term.true)
+  .ok (if Term.equal (Term.fuel left right) left right then Term.false else Term.true)
 
 @[simp] theorem «==/2_integers» (x y : Int) :
     «==/2» (.integer x) (.integer y) = .ok (if x = y then Term.true else Term.false) := by
@@ -291,10 +291,10 @@ theorem «band/2_mask» (value : Int) (bits : Nat) (nonnegative : 0 ≤ value) :
   simp [«/=/2»]
 
 @[expose] def «=:=/2» (left right : Term) : Except Exception Term :=
-  .ok (if Term.compareExact (Term.fuel left right) left right = .eq then Term.true else Term.false)
+  .ok (if Term.equalExact (Term.fuel left right) left right then Term.true else Term.false)
 
 @[expose] def «=/=/2» (left right : Term) : Except Exception Term :=
-  .ok (if Term.compareExact (Term.fuel left right) left right = .eq then Term.false else Term.true)
+  .ok (if Term.equalExact (Term.fuel left right) left right then Term.false else Term.true)
 
 @[simp] theorem «=:=/2_integers» (x y : Int) :
     «=:=/2» (.integer x) (.integer y) = .ok (if x = y then Term.true else Term.false) := by
@@ -349,37 +349,38 @@ private theorem ite_true_iff {condition : Prop} [Decidable condition] :
   simp [«=:=/2»]
 
 theorem «==/2_comm» (a b : Term) : «==/2» a b = «==/2» b a := by
-  simp only [«==/2»]
+  simp only [«==/2», Term.equal_eq_decide, decide_eq_true_eq]
   congr 2
   exact propext ⟨Term.compare_eq_symm, Term.compare_eq_symm⟩
 
 theorem «=:=/2_comm» (a b : Term) : «=:=/2» a b = «=:=/2» b a := by
-  simp only [«=:=/2»]
+  simp only [«=:=/2», Term.equalExact_eq_decide, decide_eq_true_eq]
   congr 2
   exact propext ⟨Term.compareExact_eq_symm, Term.compareExact_eq_symm⟩
 
 theorem «==/2_trans» {a b c : Term} (first : «==/2» a b = .ok Term.true)
     (second : «==/2» b c = .ok Term.true) : «==/2» a c = .ok Term.true := by
-  simp only [«==/2», ite_true_iff] at *
+  simp only [«==/2», Term.equal_eq_decide, decide_eq_true_eq, ite_true_iff] at *
   exact Term.compare_eq_trans first second
 
 theorem «=:=/2_trans» {a b c : Term} (first : «=:=/2» a b = .ok Term.true)
     (second : «=:=/2» b c = .ok Term.true) : «=:=/2» a c = .ok Term.true := by
-  simp only [«=:=/2», ite_true_iff] at *
+  simp only [«=:=/2», Term.equalExact_eq_decide, decide_eq_true_eq, ite_true_iff] at *
   exact Term.compareExact_eq_trans first second
 
 /-- Exactly equal terms are equal. -/
 theorem «==/2_of_=:=/2» {a b : Term} (exact : «=:=/2» a b = .ok Term.true) :
     «==/2» a b = .ok Term.true := by
-  simp only [«==/2», «=:=/2», ite_true_iff] at *
+  simp only [«==/2», «=:=/2», Term.equal_eq_decide, Term.equalExact_eq_decide, decide_eq_true_eq,
+    ite_true_iff] at *
   exact Term.compare_eq_of_compareExact_eq a b exact
 
 theorem «/=/2_iff» (a b : Term) : «/=/2» a b = .ok Term.true ↔ «==/2» a b ≠ .ok Term.true := by
-  simp only [«/=/2», «==/2»]
+  simp only [«/=/2», «==/2», Term.equal_eq_decide, decide_eq_true_eq]
   by_cases equal : Term.compare (Term.fuel a b) a b = .eq <;> simp [equal, Term.true, Term.false]
 
 theorem «=/=/2_iff» (a b : Term) : «=/=/2» a b = .ok Term.true ↔ «=:=/2» a b ≠ .ok Term.true := by
-  simp only [«=/=/2», «=:=/2»]
+  simp only [«=/=/2», «=:=/2», Term.equalExact_eq_decide, decide_eq_true_eq]
   by_cases equal : Term.compareExact (Term.fuel a b) a b = .eq <;> simp [equal, Term.true, Term.false]
 
 theorem «>/2_eq» (a b : Term) : «>/2» a b = «</2» b a := by
@@ -394,7 +395,7 @@ theorem «>=/2_eq» (a b : Term) : «>=/2» a b = «=</2» b a := by
 
 theorem «=</2_iff» (a b : Term) :
     «=</2» a b = .ok Term.true ↔ «</2» a b = .ok Term.true ∨ «==/2» a b = .ok Term.true := by
-  simp only [«=</2», «</2», «==/2», ite_true_iff]
+  simp only [«=</2», «</2», «==/2», Term.equal_eq_decide, decide_eq_true_eq, ite_true_iff]
   cases Term.compare (Term.fuel a b) a b <;> simp
 
 theorem «</2_irrefl» (a : Term) : «</2» a a = .ok Term.false := by
@@ -418,7 +419,7 @@ theorem «</2_of_</2_of_=</2» {a b c : Term} (first : «</2» a b = .ok Term.tr
 /-- Any two terms are ordered one way or the other, or are equal. -/
 theorem «</2_trichotomy» (a b : Term) :
     «</2» a b = .ok Term.true ∨ «==/2» a b = .ok Term.true ∨ «</2» b a = .ok Term.true := by
-  simp only [«</2», «==/2», ite_true_iff, Ordering.isLT_iff_eq_lt]
+  simp only [«</2», «==/2», Term.equal_eq_decide, decide_eq_true_eq, ite_true_iff, Ordering.isLT_iff_eq_lt]
   rw [Term.compare_swap b a]
   cases Term.compare (Term.fuel a b) a b <;> simp
 
@@ -435,7 +436,7 @@ end Order
 @[expose] def «--/2» (left right : Term) : Except Exception Term :=
   match Term.properList? left, Term.properList? right with
   | some xs, some ys =>
-    .ok (Term.list (ys.foldl (fun acc y => acc.eraseP fun x => decide (Term.compareExact (Term.fuel x y) x y = .eq)) xs))
+    .ok (Term.list (ys.foldl (fun acc y => acc.eraseP fun x => Term.equalExact (Term.fuel x y) x y) xs))
   | _, _ => throw (.error (.atom "badarg"))
 
 @[expose] def «xor/2» : Term → Term → Except Exception Term
@@ -489,21 +490,21 @@ end Order
 @[expose] def «map_get/2» (key input : Term) : Except Exception Term :=
   match input with
   | .map entries =>
-    match entries.find? (fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq)) with
+    match entries.find? (fun entry => Term.equalExact (Term.fuel key entry.1) key entry.1) with
     | some entry => .ok entry.2
     | none => throw (.error (.tuple #[.atom "badkey", key]))
   | _ => throw (.error (.tuple #[.atom "badmap", input]))
 
 @[expose] def «is_map_key/2» (key input : Term) : Except Exception Term :=
   match input with
-  | .map entries => .ok (if entries.any (fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq))
+  | .map entries => .ok (if entries.any (fun entry => Term.equalExact (Term.fuel key entry.1) key entry.1)
     then Term.true else Term.false)
   | _ => throw (.error (.tuple #[.atom "badmap", input]))
 
 /-- The map representation retains shadowed entries, which count only once. -/
 @[expose] def «map_size/1» : Term → Except Exception Term
   | .map entries => .ok (.integer
-      ((entries.map Prod.fst).eraseDupsBy (fun a b => decide (Term.compareExact (Term.fuel a b) a b = .eq))).length)
+      ((entries.map Prod.fst).eraseDupsBy (fun a b => Term.equalExact (Term.fuel a b) a b)).length)
   | input => throw (.error (.tuple #[.atom "badmap", input]))
 
 @[expose] def «min/2» (left right : Term) : Except Exception Term :=

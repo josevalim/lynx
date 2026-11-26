@@ -57,9 +57,9 @@ private def waits : Term := .function false "test" "waits" 0 #[]
 /-- Accept exactly one outcome, for proofs over every schedule. -/
 private def only (expected : Outcome Term) (actual : Outcome Term) : Bool :=
   match expected, actual with
-  | .ok expected, .ok actual => Term.compareExact (Term.fuel expected actual) expected actual == .eq
-  | .error (.exit expected), .error (.exit actual) => Term.compareExact (Term.fuel expected actual) expected actual == .eq
-  | .error (.error expected), .error (.error actual) => Term.compareExact (Term.fuel expected actual) expected actual == .eq
+  | .ok expected, .ok actual => Term.equalExact (Term.fuel expected actual) expected actual
+  | .error (.exit expected), .error (.exit actual) => Term.equalExact (Term.fuel expected actual) expected actual
+  | .error (.error expected), .error (.error actual) => Term.equalExact (Term.fuel expected actual) expected actual
   | .error .exhausted, .error .exhausted => true
   | .deadlock, .deadlock => true
   | _, _ => false
@@ -351,8 +351,8 @@ theorem relink_may_receive_crash :
     (match Concurrent.counterexample (only (.ok (.tuple #[.atom "EXIT", .pid [1], .atom "noproc"]))) 64
         (.start {} relinks) with
       | some (_, .rejected (.ok result)) =>
-          Term.compareExact (Term.fuel result (.tuple #[.atom "EXIT", .pid [1], .tuple #[.atom "boom", .nil]])) result
-            (.tuple #[.atom "EXIT", .pid [1], .tuple #[.atom "boom", .nil]]) == .eq
+          Term.equalExact (Term.fuel result (.tuple #[.atom "EXIT", .pid [1], .tuple #[.atom "boom", .nil]])) result
+            (.tuple #[.atom "EXIT", .pid [1], .tuple #[.atom "boom", .nil]])
       | _ => false) = true := by decide +kernel
 
 /-- Linking again after unlinking keeps the new link when the acknowledgement of

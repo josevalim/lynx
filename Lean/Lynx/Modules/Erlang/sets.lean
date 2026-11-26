@@ -41,7 +41,7 @@ open Lynx
 @[expose] def «size/1» (set : Term) : Except Exception Term :=
   match set with
   | .map entries => .ok (.integer
-      ((entries.map Prod.fst).eraseDupsBy (fun a b => decide (Term.compareExact (Term.fuel a b) a b = .eq))).length)
+      ((entries.map Prod.fst).eraseDupsBy (fun a b => Term.equalExact (Term.fuel a b) a b)).length)
   | _ => .error .exhausted
 
 @[expose] def «union/2» (left right : Term) : Except Exception Term :=
@@ -99,7 +99,7 @@ private theorem member_filter (entries : List (Term × Term)) (keep : Term → B
         fun entry => (entry.1, Term.nil)) query).isSome =
       ((Term.mapLookup entries query).isSome && keep query) := by
   rw [lookup_filter _ (Term.mapEntries_distinct entries), ← Term.mapLookup_mapEntries]
-  simp only [Term.mapLookup]
+  simp only [Term.mapLookup, Term.equalExact_eq_decide]
   cases found : (Term.mapEntries entries).find? (fun e => decide (Term.compareExact (Term.fuel query e.1) query e.1 = .eq)) with
   | none => rfl
   | some e =>
@@ -230,8 +230,8 @@ theorem size_empty (entries : List (Term × Term)) (element : Term)
   | nil => rfl
   | cons entry rest =>
     have := loop_length (fun a b => decide (Term.compareExact (Term.fuel a b) a b = .eq)) (rest.map Prod.fst) [entry.1]
-    simp only [«size/1», List.map_cons, List.eraseDupsBy, List.eraseDupsBy.loop, List.any_nil,
-      Except.ok.injEq, Term.integer.injEq] at empty
+    simp only [«size/1», Term.equalExact_eq_decide, List.map_cons, List.eraseDupsBy, List.eraseDupsBy.loop,
+      List.any_nil, Except.ok.injEq, Term.integer.injEq] at empty
     simp at this
     omega
 

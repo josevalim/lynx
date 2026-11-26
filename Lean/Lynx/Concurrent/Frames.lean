@@ -865,7 +865,7 @@ private def State.requestEffect (state : State) (processId : PID) : Request → 
       if state.persistent.staged.isSome then {} else
       match state.persistent.lookup key with
       | some stored =>
-          if Term.compareExact (Term.fuel value stored) value stored = .eq then {}
+          if Term.equalExact (Term.fuel value stored) value stored then {}
           else if new then {} else stageEffect processId key (some value)
       | none => stageEffect processId key (some value)
   | .persistentErase key =>
@@ -946,11 +946,11 @@ private theorem Realizes.request (state : State) (processId : PID) (next : Term 
       | none => exact Realizes.stage _ _ _ _
       | some stored =>
         simp only
-        by_cases same : Term.compareExact (Term.fuel value stored) value stored = .eq
-        · simp only [same, ↓reduceIte]; exact Realizes.refl _
+        cases Term.equalExact (Term.fuel value stored) value stored
         · cases new
-          · simp only [same, Bool.false_eq_true, ↓reduceIte]; exact Realizes.stage _ _ _ _
-          · simp only [same, ↓reduceIte]; exact Realizes.refl _
+          · simp only [Bool.false_eq_true, ↓reduceIte]; exact Realizes.stage _ _ _ _
+          · simp only [Bool.false_eq_true, ↓reduceIte]; exact Realizes.refl _
+        · simp only [↓reduceIte]; exact Realizes.refl _
     · simp only [↓reduceIte, Answer.state]; exact Realizes.refl _
   | persistentErase key =>
     simp only [State.requestEffect, State.request, State.stage]

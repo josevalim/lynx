@@ -21,8 +21,8 @@ private meta def scope (start length : Int) : Term :=
 
 private meta def same (left right : Except Exception Term) : Bool :=
   match left, right with
-  | .ok a, .ok b => Term.compareExact (Term.fuel a b) a b == .eq
-  | .error (.error a), .error (.error b) => Term.compareExact (Term.fuel a b) a b == .eq
+  | .ok a, .ok b => Term.equalExact (Term.fuel a b) a b
+  | .error (.error a), .error (.error b) => Term.equalExact (Term.fuel a b) a b
   | _, _ => false
 
 -- Expected values come from Erlang/OTP 29.1.2.

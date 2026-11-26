@@ -593,7 +593,7 @@ inductive Answer (β : Type) : Type 1 where
 
 /-- The persistent term stored under a key, compared exactly as OTP does. -/
 @[expose] def PersistentTerms.lookup (terms : PersistentTerms) (key : Term) : Option Term :=
-  (Kernel.find? (fun entry => decide (Term.compareExact (Term.fuel key entry.1) key entry.1 = .eq))
+  (Kernel.find? (fun entry => Term.equalExact (Term.fuel key entry.1) key entry.1)
     terms.table).map (·.2)
 
 /-- Stage a persistent term update, which holds the update permission until
@@ -608,7 +608,7 @@ it is visible, and continue once it is. -/
   match state.persistent.staged with
   | some update =>
       let rest := Kernel.filter (fun entry =>
-        !decide (Term.compareExact (Term.fuel update.key entry.1) update.key entry.1 = .eq)) state.persistent.table
+        !Term.equalExact (Term.fuel update.key entry.1) update.key entry.1) state.persistent.table
       { state with persistent := {
         table := match update.value with
           | some value => (update.key, value) :: rest
@@ -725,7 +725,7 @@ it is visible, and continue once it is. -/
       if state.persistent.staged.isSome then .suspended else
       match state.persistent.lookup key with
       | some stored =>
-          if Term.compareExact (Term.fuel value stored) value stored = .eq then .reply (.atom "ok") state
+          if Term.equalExact (Term.fuel value stored) value stored then .reply (.atom "ok") state
           else if new then .reply (.atom "badarg") state
           else state.stage processId key (some value) next (.atom "ok")
       | none => state.stage processId key (some value) next (.atom "ok")

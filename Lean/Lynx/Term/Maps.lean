@@ -25,7 +25,7 @@ uses this for nonempty key lists; empty map patterns match the map constructor. 
   match input with
   | .map entries =>
     (keys.mapM fun key =>
-      (entries.find? fun entry => decide (compareExact (fuel key entry.1) key entry.1 = .eq)).map Prod.snd).getD []
+      (entries.find? fun entry => equalExact (fuel key entry.1) key entry.1).map Prod.snd).getD []
   | _ => []
 
 @[simp] theorem getMapKeys_nil (input : Term) : getMapKeys [] input = [] := by
@@ -58,7 +58,7 @@ theorem getMapKeys_arity (keys : List Term) (input : Term)
   all_goals try contradiction
   rename_i entries
   let lookup := fun key =>
-    (entries.find? fun entry => decide (compareExact (fuel key entry.1) key entry.1 = .eq)).map Prod.snd
+    (entries.find? fun entry => equalExact (fuel key entry.1) key entry.1).map Prod.snd
   change (keys.mapM lookup).getD [] ≠ [] at nonempty
   change ((keys.mapM lookup).getD []).length = keys.length
   cases found : keys.mapM lookup with

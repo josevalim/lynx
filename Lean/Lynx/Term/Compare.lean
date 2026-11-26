@@ -1469,56 +1469,40 @@ end Lynx.Term.Compare
 
 namespace Lynx.Term
 
-/-- Erlang's equalities without ordering terms: `=:=` when `exact`, and `==`
-otherwise, taking at most `fuel` steps; `Term.fuel` steps decide them. -/
-@[expose] def equal : Nat → Bool → Term → Term → Bool
-  | 0, _ => fun _ _ => true
-  | fuel + 1, exact => Compare.equalStep exact (equal fuel exact) (equal fuel true)
+/-- Erlang's exact equality `=:=`, in which integers and floats differ, decided
+without ordering terms, taking at most `fuel` steps; `Term.fuel` steps decide it. -/
+@[expose] def equalExact : Nat → Term → Term → Bool
+  | 0 => fun _ _ => true
+  | fuel + 1 => Compare.equalStep true (equalExact fuel) (equalExact fuel)
 
-/-- The equalities decide what the comparisons decide, at any fuel. -/
-theorem equal_iff : ∀ (n : Nat) (a b : Term),
-    (equal n true a b = true ↔ compareExact n a b = .eq) ∧ (equal n false a b = true ↔ compare n a b = .eq)
-  | 0, _, _ => by simp [equal, compareExact, compare]
-  | n + 1, a, b => by
-    have exactAgree : ∀ x y, equal n true x y = true ↔ compareExact n x y = .eq :=
-      fun x y => (equal_iff n x y).1
-    have agree : ∀ x y, equal n false x y = true ↔ compare n x y = .eq :=
-      fun x y => (equal_iff n x y).2
-    exact ⟨Compare.equalStep_iff true exactAgree exactAgree a b,
-      Compare.equalStep_iff false agree exactAgree a b⟩
+/-- Erlang's equality `==`, in which integers and floats compare by value,
+decided without ordering terms, taking at most `fuel` steps; `Term.fuel` steps
+decide it. Map keys are equal exactly. -/
+@[expose] def equal : Nat → Term → Term → Bool
+  | 0 => fun _ _ => true
+  | fuel + 1 => Compare.equalStep false (equal fuel) (equalExact fuel)
 
-/-- Exact equality is decided without ordering terms, so that it evaluates
-even where the order between terms is unspecified. -/
-instance (priority := high) compareExact_decidableEq (n : Nat) (a b : Term) :
-    Decidable (compareExact n a b = .eq) :=
-  decidable_of_iff _ (equal_iff n a b).1
+/-- Exact equality decides what exact comparison returning `.eq` decides, at any fuel. -/
+theorem equalExact_iff : ∀ (n : Nat) (a b : Term), equalExact n a b = true ↔ compareExact n a b = .eq
+  | 0, _, _ => by simp [equalExact, compareExact]
+  | n + 1, a, b =>
+    Compare.equalStep_iff true (equalExact_iff n) (equalExact_iff n) a b
 
-/-- Semantic equality is decided without ordering terms. -/
-instance (priority := high) compare_decidableEq (n : Nat) (a b : Term) :
-    Decidable (compare n a b = .eq) :=
-  decidable_of_iff _ (equal_iff n a b).2
+/-- Equality decides what comparison returning `.eq` decides, at any fuel. -/
+theorem equal_iff : ∀ (n : Nat) (a b : Term), equal n a b = true ↔ compare n a b = .eq
+  | 0, _, _ => by simp [equal, compare]
+  | n + 1, a, b =>
+    Compare.equalStep_iff false (equal_iff n) (equalExact_iff n) a b
 
-/-- Deciding exact equality without ordering terms decides the same, so proofs
-that case on the comparison can rewrite to Lean's instance first. -/
-theorem compareExact_decidableEq_eq (n : Nat) (a b : Term) :
-    compareExact_decidableEq n a b = instDecidableEqOrdering (compareExact n a b) .eq :=
-  Subsingleton.elim _ _
+/-- Proofs reason about exact equality as exact comparison returning `.eq`. -/
+@[simp] theorem equalExact_eq_decide (n : Nat) (a b : Term) :
+    equalExact n a b = decide (compareExact n a b = .eq) := by
+  rw [Bool.eq_iff_iff, equalExact_iff, decide_eq_true_iff]
 
-/-- Deciding semantic equality without ordering terms decides the same, so proofs
-that case on the comparison can rewrite to Lean's instance first. -/
-theorem compare_decidableEq_eq (n : Nat) (a b : Term) :
-    compare_decidableEq n a b = instDecidableEqOrdering (compare n a b) .eq :=
-  Subsingleton.elim _ _
-
-/-- `=:=` without ordering terms decides exact equality. -/
-theorem equal_true_iff (a b : Term) :
-    equal (fuel a b) true a b = true ↔ compareExact (fuel a b) a b = .eq :=
-  (equal_iff _ a b).1
-
-/-- `==` without ordering terms decides semantic equality. -/
-theorem equal_false_iff (a b : Term) :
-    equal (fuel a b) false a b = true ↔ compare (fuel a b) a b = .eq :=
-  (equal_iff _ a b).2
+/-- Proofs reason about equality as comparison returning `.eq`. -/
+@[simp] theorem equal_eq_decide (n : Nat) (a b : Term) :
+    equal n a b = decide (compare n a b = .eq) := by
+  rw [Bool.eq_iff_iff, equal_iff, decide_eq_true_iff]
 
 end Lynx.Term
 
@@ -1582,20 +1566,21 @@ theorem compare_singleton_map (k v l w : Term) :
   simp [Compare.compareStep, Compare.mapView, Compare.mapViewInsert, Compare.compareMapViews,
     compareLex, Compare.compareOn, List.compareLex_cons_cons, List.compareLex_nil_nil]
 
+/-- First-binding lookup of a key in a map's entries. -/
+@[expose] def mapLookup (entries : List (Term × Term)) (key : Term) : Option Term :=
+  (entries.find? fun entry => equalExact (fuel key entry.1) key entry.1).map Prod.snd
+
 /-- Lookups in a view by the exact order are the first-binding lookups. -/
 private theorem mapViewLookup_exact (xs : List (Term × Term)) (q : Term) :
     Compare.mapViewLookup exactOrder xs q =
-      (xs.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd := by
-  simp only [Compare.mapViewLookup]
-  congr 2
-  funext e
-  exact decide_eq_decide.mpr Iff.rfl
+      mapLookup xs q := by
+  simp only [Compare.mapViewLookup, mapLookup, equalExact_eq_decide]
 
 /-- Matching first-binding lookups suffice for semantic map equality. -/
 theorem map_compare_eq_of_lookup (a b : List (Term × Term))
     (h : ∀ q, Option.Rel (fun a b => compare (fuel a b) a b = .eq)
-      ((a.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd)
-      ((b.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd)) :
+      (mapLookup a q)
+      (mapLookup b q)) :
     compare (fuel (.map a) (.map b)) (.map a) (.map b) = .eq := by
   rw [compare_step]
   apply Compare.compareMapViews_eq_of_lookup (cmp := exactOrder) numericOrder _ _
@@ -1608,8 +1593,8 @@ theorem map_compare_eq_of_lookup (a b : List (Term × Term))
 exact map equality. -/
 theorem map_compareExact_eq_of_lookup (a b : List (Term × Term))
     (h : ∀ q, Option.Rel (fun a b => compareExact (fuel a b) a b = .eq)
-      ((a.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd)
-      ((b.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd)) :
+      (mapLookup a q)
+      (mapLookup b q)) :
     compareExact (fuel (.map a) (.map b)) (.map a) (.map b) = .eq := by
   rw [compareExact_step]
   apply Compare.compareMapViews_eq_of_lookup (cmp := exactOrder) exactOrder _ _
@@ -1648,8 +1633,8 @@ private theorem mapViewLookup_rel (cmp : Term → Term → Ordering) {xs ys : Li
 theorem lookup_of_map_compareExact_eq (a b : List (Term × Term))
     (equal : compareExact (fuel (.map a) (.map b)) (.map a) (.map b) = .eq) (q : Term) :
     Option.Rel (fun x y => compareExact (fuel x y) x y = .eq)
-      ((a.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd)
-      ((b.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd) := by
+      (mapLookup a q)
+      (mapLookup b q) := by
   rw [compareExact_step] at equal
   simp only [Compare.compareStep, Compare.compareMapViews, compareLex, Compare.compareOn,
     Ordering.then_eq_eq] at equal
@@ -1661,18 +1646,14 @@ theorem lookup_of_map_compareExact_eq (a b : List (Term × Term))
 theorem lookup_of_map_compare_eq (a b : List (Term × Term))
     (equal : compare (fuel (.map a) (.map b)) (.map a) (.map b) = .eq) (q : Term) :
     Option.Rel (fun x y => compare (fuel x y) x y = .eq)
-      ((a.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd)
-      ((b.find? fun e => decide (compareExact (fuel q e.1) q e.1 = .eq)).map Prod.snd) := by
+      (mapLookup a q)
+      (mapLookup b q) := by
   rw [compare_step] at equal
   simp only [Compare.compareStep, Compare.compareMapViews, compareLex, Compare.compareOn,
     Ordering.then_eq_eq] at equal
   have rel := mapViewLookup_rel numericOrder equal.2.1 equal.2.2 q
   simp only [Compare.mapViewLookup_view, mapViewLookup_exact] at rel
   exact rel
-
-/-- First-binding lookup of a key in a map's entries. -/
-@[expose] def mapLookup (entries : List (Term × Term)) (key : Term) : Option Term :=
-  (entries.find? fun entry => decide (compareExact (fuel key entry.1) key entry.1 = .eq)).map Prod.snd
 
 /-- The visible bindings of a map, each key once, in an unspecified order.
 Erlang does not specify map iteration order, so proofs may rely only on the
@@ -1717,7 +1698,7 @@ private theorem mapLookup_of_mem {entries : List (Term × Term)} {entry : Term �
     · have apart := (List.pairwise_cons.mp distinct).1 entry member
       have miss : compareExact (fuel entry.1 r.1) entry.1 r.1 ≠ .eq := fun same => apart (Std.OrientedCmp.eq_symm (cmp := exactOrder) same)
       have := ih (List.pairwise_cons.mp distinct).2 member
-      simp only [mapLookup, List.find?_cons, miss, decide_false] at this ⊢
+      simp only [mapLookup, equalExact_eq_decide, List.find?_cons, miss, decide_false] at this ⊢
       exact this
 
 /-- Enumerated bindings are found by their own key. -/
@@ -1757,7 +1738,7 @@ theorem mem_of_mem_mapEntries {entries : List (Term × Term)} {entry : Term × T
 /-- Whether no two keys of a map's entries are exactly equal. -/
 @[expose] def keysDistinct : List (Term × Term) → Bool
   | [] => .true
-  | entry :: rest => rest.all (fun other => compareExact (fuel entry.1 other.1) entry.1 other.1 != .eq) && keysDistinct rest
+  | entry :: rest => rest.all (fun other => !equalExact (fuel entry.1 other.1) entry.1 other.1) && keysDistinct rest
 
 /-- The lists inserting an element at each position of a list. -/
 @[expose] def insertions (element : α) : List α → List (List α)
@@ -1783,11 +1764,11 @@ theorem mapLookup_congr {a b : Term} (equal : compareExact (fuel a b) a b = .eq)
     funext entry
     simp only [decide_eq_decide]
     exact ⟨fun h => Std.TransCmp.eq_trans (cmp := exactOrder) symm h, fun h => Std.TransCmp.eq_trans (cmp := exactOrder) equal h⟩
-  simp only [mapLookup, same]
+  simp only [mapLookup, equalExact_eq_decide, same]
 
 /-- Removing a key's bindings leaves the bindings of other keys. -/
 theorem mapLookup_filter (entries : List (Term × Term)) (key query : Term) :
-    mapLookup (entries.filter fun entry => compareExact (fuel key entry.1) key entry.1 != .eq) query =
+    mapLookup (entries.filter fun entry => !decide (compareExact (fuel key entry.1) key entry.1 = .eq)) query =
       if compareExact (fuel query key) query key = .eq then none else mapLookup entries query := by
   induction entries with
   | nil => simp [mapLookup]
@@ -1816,13 +1797,14 @@ Guards test membership in sets of literals as chains of `=:=` comparisons. -/
 @[expose] def isMember (value : Term) : List Term → Term
   | [] => .atom "false"
   | candidate :: rest =>
-    if compareExact (fuel value candidate) value candidate = .eq then .atom "true" else isMember value rest
+    if equalExact (fuel value candidate) value candidate then .atom "true" else isMember value rest
 
 @[simp] theorem isMember_nil (value : Term) : isMember value [] = .atom "false" := rfl
 
 @[simp] theorem isMember_cons (value candidate : Term) (rest : List Term) :
     isMember value (candidate :: rest) =
-      if compareExact (fuel value candidate) value candidate = .eq then .atom "true" else isMember value rest := rfl
+      if compareExact (fuel value candidate) value candidate = .eq then .atom "true" else isMember value rest := by
+  simp [isMember]
 
 end Lynx.Term
 

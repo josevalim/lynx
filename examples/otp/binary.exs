@@ -406,7 +406,8 @@ defmodule BinaryProofsTest do
             simp only [«hex_roundtrip:ensures/2», «hex_contract/2»]
             rw [encoded]
             simp only [okBind,decoded]
-            simp only [Erlang.erlang.«=:=/2», Lynx.Term.compareExact_self, ite_true, Lynx.Term.true]
+            simp only [Erlang.erlang.«=:=/2», Lynx.Term.equalExact_eq_decide, decide_eq_true_eq, Lynx.Term.compareExact_self,
+              ite_true, Lynx.Term.true]
             rw [wireSize]
             simp [
               Erlang.erlang.«byte_size/1», Erlang.erlang.«*/2_integers», nsLength,
