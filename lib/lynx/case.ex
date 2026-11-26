@@ -91,7 +91,8 @@ defmodule Lynx.Case do
     * `:requires` (optional) — the precondition expression. Defaults to `true`.
     * `:expects` — the expression to prove.
     * `:reaches` — instead of `:expects`, an expression over concurrent code
-      that some run makes true (`Lynx.reachable`).
+      that some run of Lynx's model makes true (`Lynx.reachable`). See
+      "Existential quantification of concurrent programs" in `Lynx`.
     * `:proof` (optional) — a `Lynx.Lean` value. Defaults to `rfl`.
 
   ## Executable definition

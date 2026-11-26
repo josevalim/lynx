@@ -10,10 +10,16 @@ defmodule Lynx do
   Lean, and you write proofs in Lean. The laws and proofs are assembled
   together and verified by Lean's kernel.
 
-  This technique is also known as _shallow embedding_, since it translates
-  Erlang/Elixir to Lean and then use the features and properties of Lean
-  for proofs. If there are no bugs during translation (or in Lean's kernel),
-  then the proofs are correct.
+  This project uses technique known as _mixed embedding_: your Erlang/Elixir
+  functions become Lean functions (shallow embedding), which proofs reason
+  about directly, while processes are modeled explicitly as a transition system
+  over their states (deep embedding).
+
+  If there are no bugs in the translation, in the model of the Erlang runtime,
+  or in Lean's kernel, then the proofs are correct. Given the early nature of
+  this project, you should expect bugs and limitations (for example, we do not
+  yet implement all of Erlang's built-in functions). Please file bug reports
+  whenever you run into them!
 
   ## Setup
 
@@ -198,7 +204,9 @@ defmodule Lynx do
       timer's message may still be on its way when the timer reports it
       expired, so a receive may expire before it. Canceling a timer reports
       its duration less an unknown elapsed time, and laws cover every elapsed
-      time.
+      time. This makes `expects:` laws cover more runs than OTP can take,
+      but a run found by `reaches:` may rely on an order of timers OTP would
+      not take.
 
     * A process that starts trapping exits after a linked process exited with
       reason `normal`, while it was not trapping exits, ends with
@@ -467,6 +475,12 @@ defmodule Lynx do
   `Lynx.reachable_of_witness` proves it from a schedule that `Lynx.Concurrent.witness`
   finds and `Lynx.Concurrent.Config.follow` checks. Generally speaking, prefer
   `expects:` unless you want to specifically validate a particular outcome.
+
+  Note the model includes every run OTP can take, but it may include runs OTP
+  cannot take. In particular, timers and receive timeouts do not measure
+  wall-clock time, so they may fire in orders elapsed time would rule out (see
+  "Limitations"). This makes `expects:` laws cover every run OTP can take, but
+  `reaches:` shows an outcome is possible in the model, not necessarily in OTP.
   See `examples/concurrency/self_kill.exs`.
 
   ## Taking it to the next level

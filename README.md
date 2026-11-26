@@ -10,13 +10,16 @@ You write laws in Erlang/Elixir, which are automatically translated to
 Lean, and you write proofs in Lean. The laws and proofs are assembled
 together and verified by Lean's kernel.
 
-This technique is also known as _shallow embedding_, since it translates
-Erlang/Elixir to Lean and then use the features and properties of Lean
-for proofs. If there are no bugs during translation (or in Lean's kernel),
-then the proofs are correct. However, given the early nature of this project,
-you should expect bugs and limitations (for example, we do not yet implement
-all of Erlang builtin functions). Please file bug reports whenever you run
-into them!
+This project uses technique known as _mixed embedding_: your Erlang/Elixir
+functions become Lean functions (shallow embedding), which proofs reason
+about directly, while processes are modeled explicitly as a transition system
+over their states (deep embedding).
+
+If there are no bugs in the translation, in the model of the Erlang runtime,
+or in Lean's kernel, then the proofs are correct. Given the early nature of
+this project, you should expect bugs and limitations (for example, we do not
+yet implement all of Erlang's built-in functions). Please file bug reports
+whenever you run into them!
 
 See the documentation for [the Lynx module](https://lynx.hexdocs.pm) to get
 started or ask your coding agent to run `mix help Lynx`.
@@ -231,8 +234,9 @@ to state and often catch real bugs. Here are some examples:
 
   * **Totality** - the function returns for every valid input, without raising
     or looping forever. Since a law can only prove its expectation when the
-    computation returns, any law doubles as a proof of totality. The simplest one
-    checks the result's shape: `expects: is_binary(encode(term))`.
+    computation returns, any `expects:` law doubles as a proof of totality for
+    every input satisfying its `requires:`. The simplest one checks the result's
+    shape: `expects: is_binary(encode(term))`.
 
   * **Roundtrip** - one function undoes another, as with encoding and decoding,
     serializing and parsing, or compressing and decompressing:
@@ -264,8 +268,8 @@ be accepted, even though it is incorrect!
 
 It is important to state each law with care, as it states both the
 required inputs and expected outcomes. Assumptions that are too strong
-make a law hold vacuously, while missing assumptions make it unprovable,
-so review `requires:` as carefully as `expects:`.
+make a law hold vacuously, while missing assumptions make it false, and
+therefore unprovable, so review `requires:` as carefully as `expects:`.
 
 Finally, because Lynx translates your Erlang/Elixir program to Lean, it relies
 on whole program analysis. It supports both sequential and concurrent features
@@ -279,7 +283,7 @@ The growing interest in formally verifying our programs is largely driven by AI 
 
   * Defining properties: You can use coding agents to help you explore and define properties, but we strongly recommend a human-in-the-loop approach, where you carefully review and validate each law. Luckily, laws are written in plain Erlang/Elixir, so you can leverage your existing knowledge to understand them.
 
-  * Writing proofs: For the proofs themselves, you can delegate the work to coding agents. Unless there is a soundness bug in Lean's kernel or in our translation process, a coding agent cannot produce a valid proof of a false law. This makes proof writing particularly well suited for automation. Simply ask your coding agent to run `mix help Lynx` after installing Lynx, and you are good to go. Note Lynx also includes the ability of verifying your laws against multiple kernels.
+  * Writing proofs: For the proofs themselves, you can delegate the work to coding agents. Unless there is a soundness bug in Lean's kernel, in our translation process, or in our model of the Erlang runtime, a coding agent cannot produce a valid proof of a false law (more precisely, Lynx rejects every axiom other than Lean's standard `propext`, `Classical.choice`, and `Quot.sound`, so proofs cannot be completed with `sorry`, `native_decide`, or new axioms). This makes proof writing particularly well suited for automation. Simply ask your coding agent to run `mix help Lynx` after installing Lynx, and you are good to go. Lynx can also check your proofs against multiple kernels.
 
 In other words, humans are responsible for specifying what correctness means, while coding agents can take care of proving it.
 

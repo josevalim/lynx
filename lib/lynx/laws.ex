@@ -199,9 +199,11 @@ defmodule Lynx.Laws do
 
     * `:reaches` — instead of `:expects`, an Elixir expression over concurrent
       code that evaluates to exactly `true` in some run, whenever the
-      precondition holds in every run. It shows an outcome is possible, such as
-      each branch of a race, and is stated through `Lynx.reachable`. Each law
-      has one; use one law per outcome.
+      precondition holds in every run. It shows an outcome is possible in Lynx's
+      model, such as each branch of a race, and is stated through `Lynx.reachable`.
+      The model may take runs OTP cannot, such as timers firing in orders
+      elapsed time would rule out, so check the run it relies on. Each law
+      proves a single run, so use one law per outcome.
 
     * `:proof` (optional) — a `Lynx.Lean` value containing the Lean tactic proof,
       usually built with `~LEAN`. Both inline and heredoc sigils are accepted.
