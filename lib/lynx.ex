@@ -1,4 +1,8 @@
 defmodule Lynx do
+  @lean_toolchain Path.expand("../lean-toolchain", __DIR__)
+  @external_resource @lean_toolchain
+  @lean_version @lean_toolchain |> File.read!() |> String.trim()
+
   @moduledoc """
   Write proofs about Erlang/Elixir programs using Lean.
 
@@ -10,6 +14,22 @@ defmodule Lynx do
   Erlang/Elixir to Lean and then use the features and properties of Lean
   for proofs. If there are no bugs during translation (or in Lean's kernel),
   then the proofs are correct.
+
+  ## Setup
+
+  Lynx is built and run with [Elan](https://github.com/leanprover/elan),
+  Lean's toolchain manager. Once Lynx is installed, configure which Lean
+  toolchain Elan uses by adding a `lean-toolchain` file to your project's
+  root with Lynx's Lean version:
+
+      #{@lean_version}
+
+  If you are using `Mix.install/2`, Mix builds dependencies outside the
+  current working directory, so you must explicitly set the Elan toolchain:
+
+      Mix.install([{:lynx, "~> 0.1.0"}],
+        system_env: [{"ELAN_TOOLCHAIN", String.trim(File.read!("lean-toolchain"))}]
+      )
 
   ## Usage
 

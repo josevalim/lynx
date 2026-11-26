@@ -191,8 +191,8 @@ law. Then call `Lynx.Laws.verify([:sum_proofs])` to validate the proofs.
 
 ## Installation
 
-Install Elixir 1.18+ and Elan, Lean's toolchain manager, with `lake` available on
-`PATH`.
+Install Elixir 1.18+ and [Elan](https://github.com/leanprover/elan), Lean's
+toolchain manager, with `lake` available on `PATH`.
 
 Now add Lynx to your application's `mix.exs` dependencies:
 
@@ -204,11 +204,20 @@ defp deps do
 end
 ```
 
-You likely want to lock the Lean version Lynx uses. You can do so by adding a
-`lean-toolchain` file to your project's root with the same version as Lynx's:
+Then add a `lean-toolchain` file to your project's root with the same Lean
+version as Lynx's, so Elan builds and runs Lynx with it:
 
 ```
 leanprover/lean4:v4.36.0
+```
+
+If you are using `Mix.install/2`, Mix builds dependencies outside the
+current working directory, so you must explicitly set the Elan toolchain:
+
+```elixir
+Mix.install([{:lynx, "~> 0.1.0"}],
+  system_env: [{"ELAN_TOOLCHAIN", String.trim(File.read!("lean-toolchain"))}]
+)
 ```
 
 For agentic usage, you can ask your agent to run `mix help Lynx` and get all
