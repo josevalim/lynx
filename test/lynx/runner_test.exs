@@ -185,10 +185,9 @@ defmodule Lynx.RunnerTest do
 
     for report <- reports do
       for theorem <- report.theorems do
-        assert is_integer(theorem.time_ms) and theorem.time_ms >= 0
+        # Laws elaborate in parallel, so only each one is bounded by its module.
+        assert is_integer(theorem.time_ms) and theorem.time_ms in 0..report.time_ms
       end
-
-      assert Enum.sum(Enum.map(report.theorems, & &1.time_ms)) <= report.time_ms
     end
 
     assert Enum.all?(Lynx.Commands.verify!(@lean_dir, files), fn report ->

@@ -32,10 +32,11 @@ defmodule Lynx.Case do
   `dir/<test module>/<group>.ndjson` for independent kernel checks, as
   described in `Lynx`. Exporting bypasses the verification cache.
 
-  Lean's own environment variables reach the Lean processes that verify each group.
-  For example, set `LEAN_NUM_THREADS=n` to elaborate the proofs of a translated
-  module on at most `n` threads, instead of one per core. Groups verify
-  concurrently, each in its own process with its own threads.
+  You can also set Lean's own environment variables and they are forwarded
+  to Lean accordingly. For example, `lean`'s elaboration runs in parallel and
+  you can control the concurrency by setting set `LEAN_NUM_THREADS=n`.
+  Note law groups may verify concurrently (according to the ExUnit async
+  configuration), each in its own process with its own hreads.
   """
 
   @lean_dir Path.expand("../../Lean", __DIR__)

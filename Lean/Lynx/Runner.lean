@@ -1834,9 +1834,9 @@ private partial def lawComparison (type : Expr) : MetaM (Option String) := do
     Meta.forallTelescope type fun _ body => lawComparison body
   else comparisonDescription type
 
+/-- Explain a failing law, given its full name. -/
 private def lawFailureDetails (name : Name) : Elab.Command.CommandElabM (Option String) := do
   try
-    let name := (← getCurrNamespace) ++ name
     let some (.thmInfo info) := (← getEnv).find? name | return none
     Elab.Command.liftTermElabM do
       Meta.forallTelescopeReducing info.type fun binders type => do
@@ -1850,38 +1850,58 @@ private def lawFailureDetails (name : Name) : Elab.Command.CommandElabM (Option 
         return some details
   catch _ => return none
 
-/-- Laws elaborate one command at a time, so each theorem is timed with its proof. Other files
-elaborate proofs and check declarations in parallel, as `lean` does, keeping only the snapshot
-data a command-line run needs. -/
-private def elabOptions (async : Bool) : Options :=
-  (Options.empty.setBool `Elab.async async).setBool `internal.cmdlineSnapshots async
+/-- Elaborate proofs and check declarations in parallel, as `lean` does, keeping only the
+snapshot data a command-line run needs. `LEAN_NUM_THREADS` bounds the threads, and
+`set_option Elab.async false` elaborates one command at a time. -/
+private def elabOptions : Options :=
+  (Options.empty.setBool `Elab.async true).setBool `internal.cmdlineSnapshots true
 
+/-- When a snapshot tree finishes: its children elaborate in the background, such as
+proofs and kernel checks. -/
+private partial def finishedAt (tree : Language.SnapshotTree) : BaseIO (Task Nat) := do
+  let children ← tree.children.mapM fun child =>
+    BaseIO.bindTask child.task finishedAt (sync := true)
+  BaseIO.mapTasks (fun _ => IO.monoMsNow) children.toList (sync := true)
+
+/-- Elaborate the commands of a file. A law's time spans from its command until its proof and
+kernel check finish, while other proofs elaborate alongside it. -/
 private def elaborateFile (env : Lean.Environment) (file : String) (map : FileMap)
-    (commands : Array (TSyntax `command)) (theoremNames : Array Name) (async : Bool := false)
+    (commands : Array (TSyntax `command)) (theoremNames : Array Name)
     : IO (Elab.Command.State × Array (Message × Option Name) × Array Json) := do
   let action : Elab.Command.CommandElabM (Array (Message × Option Name) × Array Json) := do
-    let mut messages := #[]
-    let mut theorems := #[]
     let mut pending := #[]
     for cmd in commands do
       let names := declarationNames cmd.raw
       let declarationName := if names.size == 1 then names[0]? else none
+      let law := declarationName.filter theoremNames.contains
+      let qualified := law.map ((← getCurrNamespace) ++ ·)
       let started ← IO.monoMsNow
       Elab.Command.elabCommandTopLevel cmd
       -- Proofs and kernel checks elaborating in the background report through snapshot tasks.
       -- Take them out of the state, which later commands would otherwise wait on and report again.
-      pending := pending.push ((← get).snapshotTasks, declarationName)
+      let tasks := (← get).snapshotTasks
       modify fun state => { state with snapshotTasks := #[] }
-      let elapsed := (← IO.monoMsNow) - started
-      if let some name := declarationName then
-        if theoremNames.contains name then
-          theorems := theorems.push (Json.mkObj [
-            ("name", toJson name.getString!), ("time_ms", toJson elapsed)])
-      let commandMessages := (← get).messages.toList
-      let mut hint ← match declarationName with
+      let finished ← match law with
+        | some _ => do
+            let trees ← tasks.mapM fun task =>
+              BaseIO.bindTask task.task finishedAt (sync := true)
+            pure (some (← BaseIO.mapTasks (fun _ => IO.monoMsNow) trees.toList (sync := true)))
+        | none => pure none
+      pending := pending.push ((← get).messages.toList, tasks, declarationName, law, qualified,
+        started, finished)
+    let mut messages := #[]
+    let mut theorems := #[]
+    for (commandMessages, tasks, declarationName, law, qualified, started, finished) in pending do
+      let mut commandMessages := commandMessages
+      for task in tasks do
+        for snapshot in task.get.getAll do
+          commandMessages := commandMessages ++ snapshot.diagnostics.msgLog.toList
+      if let (some name, some finished) := (law, finished) then
+        theorems := theorems.push (Json.mkObj [
+          ("name", toJson name.getString!), ("time_ms", toJson (finished.get - started))])
+      let mut hint ← match qualified with
         | some name =>
-            if theoremNames.contains name && commandMessages.any (·.severity == .error) then
-              lawFailureDetails name
+            if commandMessages.any (·.severity == .error) then lawFailureDetails name
             else pure none
         | none => pure none
       for msg in commandMessages do
@@ -1891,14 +1911,9 @@ private def elaborateFile (env : Lean.Environment) (file : String) (map : FileMa
               pure { msg with data := m!"{explanation}\n\n{msg.data}" }
           | _, _ => pure msg
         messages := messages.push (msg, declarationName)
-    for (tasks, declarationName) in pending do
-      for task in tasks do
-        for snapshot in task.get.getAll do
-          for msg in snapshot.diagnostics.msgLog.toList do
-            messages := messages.push (msg, declarationName)
     return (messages, theorems)
   let ((messages, theorems), state) ← (action.run { fileName := file, fileMap := map, snap? := none, cancelTk? := none }).run
-    (Elab.Command.mkState env {} (elabOptions async)) |>.toIO
+    (Elab.Command.mkState env {} elabOptions) |>.toIO
       (fun _ => IO.userError "runner elaboration failed")
   return (state, messages, theorems)
 
@@ -2333,7 +2348,7 @@ blocks follow in order, so each command can extend the parser for later commands
 The frontend retains the sigils' original positions. -/
 private def elaboratePreludes (env : Lean.Environment) (file : DecodedFile) :
     IO (Elab.Command.State × Array (Message × Option Name) × Array Json) := do
-  let (initial, _, _) ← elaborateFile env file.fileName file.fileMap #[] #[] (async := true)
+  let (initial, _, _) ← elaborateFile env file.fileName file.fileMap #[] #[]
   let mut state := initial
   let mut messages : Array (Message × Option Name) := #[]
   let mut trees : Array Language.SnapshotTree := #[]
@@ -2485,7 +2500,7 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
         else
           let (state, messages, timings) ← if file.preludes.isEmpty then
             elaborateFile (env.setMainModule mainModule)
-              file.fileName file.fileMap file.commands (file.theorems.map Prod.fst) file.theorems.isEmpty
+              file.fileName file.fileMap file.commands (file.theorems.map Prod.fst)
             else elaboratePreludes (env.setMainModule mainModule) file
           theorems := timings
           let ranges := preludeRanges file

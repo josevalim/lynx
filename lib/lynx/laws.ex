@@ -105,7 +105,9 @@ defmodule Lynx.Laws do
   `t:diagnostic/0` for the complete structure.
 
   `:theorems` lists each law's name (including its arity) and elaboration time in
-  milliseconds. Cached and skipped modules have an empty list.
+  milliseconds. Laws elaborate in parallel, so each time is measured from the start
+  of the law until its proof is checked, while other laws elaborate alongside it.
+  Cached and skipped modules have an empty list.
 
   Pass `termination_suffixes: %{{module, function, arity} => lean_source}` to attach
   a `Lynx.Lean` termination suffix to a translated function. The suffix does not
