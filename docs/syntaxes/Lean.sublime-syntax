@@ -1,0 +1,138 @@
+%YAML 1.2
+---
+# Lean 4 syntax for code examples in documentation. It replaces the grammar bundled
+# with makeup_syntect, which leaves tactics, operators and most names unscoped.
+# Scopes are chosen so that makeup_syntect maps them to highlighted tokens.
+name: Lean
+file_extensions:
+  - lean
+scope: source.lean4
+
+variables:
+  ident_char: '[\p{L}\p{N}_''!?₀-₉]'
+  ident_start: '(?<![\p{L}\p{N}_''!?.])'
+  ident_end: '(?![\p{L}\p{N}_''!?])'
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: attributes
+    - include: declarations
+    - include: keywords
+    - include: names
+    - include: numbers
+    - include: operators
+
+  comments:
+    - match: '/--'
+      scope: punctuation.definition.comment.begin.lean4
+      push: doc_comment
+    - match: '/-'
+      scope: punctuation.definition.comment.begin.lean4
+      push: block_comment
+    - match: '--.*$'
+      scope: comment.line.double-dash.lean4
+
+  doc_comment:
+    - meta_scope: comment.block.documentation.lean4
+    - match: '-/'
+      pop: true
+    - match: '/-'
+      push: block_comment
+
+  block_comment:
+    - meta_scope: comment.block.lean4
+    - match: '-/'
+      pop: true
+    - match: '/-'
+      push: block_comment
+
+  strings:
+    - match: '"'
+      push:
+        - meta_scope: string.quoted.double.lean4
+        - match: '\\.'
+          scope: constant.character.escape.lean4
+        - match: '"'
+          pop: true
+    - match: '''(?:\\.|[^\\''])'''
+      scope: string.quoted.single.lean4
+
+  attributes:
+    - match: '@\['
+      scope: punctuation.definition.attribute.begin.lean4
+      push:
+        - meta_scope: meta.attribute.lean4
+        - match: '\]'
+          scope: punctuation.definition.attribute.end.lean4
+          pop: true
+        - match: '{{ident_start}}[\p{L}_]{{ident_char}}*'
+          scope: entity.other.attribute-name.lean4
+
+  declarations:
+    - match: '{{ident_start}}(def|theorem|lemma|example|abbrev|instance|structure|inductive|class|axiom|opaque|macro|syntax|macro_rules|elab|notation|infix|infixl|infixr|prefix|postfix){{ident_end}}'
+      scope: keyword.declaration.lean4
+      push: declaration_name
+
+  declaration_name:
+    - match: '(«)([^»]+?)(?:(:)([\p{L}_][\p{L}\p{N}_]*))?(/)([0-9]+)(»)'
+      captures:
+        1: punctuation.definition.name.begin.lean4
+        2: entity.name.function.lean4
+        3: punctuation.separator.lean4
+        4: entity.other.attribute-name.lean4
+        5: keyword.operator.lean4
+        6: constant.numeric.integer.lean4
+        7: punctuation.definition.name.end.lean4
+      pop: true
+    - match: '«[^»]*»'
+      scope: entity.name.function.lean4
+      pop: true
+    - match: '[\p{L}_]{{ident_char}}*(?:\.[\p{L}_]{{ident_char}}*)*'
+      scope: entity.name.function.lean4
+      pop: true
+    - match: '(?=\S)'
+      pop: true
+
+  keywords:
+    - match: '{{ident_start}}(namespace|section|end|open|import|export|variable|universe|mutual|where|deriving|extends|private|protected|noncomputable|partial|unsafe|set_option|attribute|termination_by|decreasing_by|local|scoped|in){{ident_end}}'
+      scope: keyword.other.lean4
+    - match: '{{ident_start}}(fun|let|have|show|from|by|do|if|then|else|match|with|at|using|calc|suffices|return|for|unless|mut|nomatch|nofun|sorry|admit){{ident_end}}'
+      scope: keyword.other.lean4
+    - match: '[λ∀∃Π∑]'
+      scope: keyword.other.lean4
+    - match: '{{ident_start}}(simp_all|simp_arith|simpa|simp|dsimp|exacts|exact|apply|refine''|refine|intros|intro|rintro|rcases|cases|obtain|induction|rename_i|constructor|omega|native_decide|decide|rwa|rw|rewrite|unfold|norm_num|nlinarith|linarith|contradiction|assumption|trivial|specialize|subst|congr|ext|funext|case|all_goals|any_goals|repeat|try|cbv|rfl|exfalso|absurd|injection|generalize|revert|conv|aesop|grind|positivity|field_simp|push_neg|by_cases|by_contra|lynx_kernel|lynx_counterexample){{ident_end}}'
+      scope: keyword.other.tactic.lean4
+    - match: '(?<![\p{L}\p{N}_''!?])(true|false|True|False){{ident_end}}'
+      scope: constant.language.lean4
+
+  names:
+    - match: '(«)([^»]+?)(?:(:)([\p{L}_][\p{L}\p{N}_]*))?(/)([0-9]+)(»)'
+      captures:
+        1: punctuation.definition.name.begin.lean4
+        2: variable.function.lean4
+        3: punctuation.separator.lean4
+        4: entity.other.attribute-name.lean4
+        5: keyword.operator.lean4
+        6: constant.numeric.integer.lean4
+        7: punctuation.definition.name.end.lean4
+    - match: '«[^»]*»'
+      scope: variable.function.lean4
+    - match: '{{ident_start}}[\p{Lu}]{{ident_char}}*(?:\.[\p{Lu}]{{ident_char}}*)*'
+      scope: support.class.lean4
+    - match: '(?<![\p{L}\p{N}_''!?»)\]])\.[\p{Ll}_]{{ident_char}}*'
+      scope: constant.other.lean4
+    - match: '{{ident_start}}[\p{L}_]{{ident_char}}*'
+
+  numbers:
+    - match: '{{ident_start}}(0x[0-9a-fA-F_]+|0b[01_]+|[0-9][0-9_]*\.[0-9]+(?:[eE][+-]?[0-9]+)?){{ident_end}}'
+      scope: constant.numeric.lean4
+    - match: '{{ident_start}}[0-9][0-9_]*{{ident_end}}'
+      scope: constant.numeric.integer.lean4
+
+  operators:
+    - match: ':=|=>|<;>|<\|>|<\||\|>|->|<-|\+\+|::|[→←↔∧∨¬≠≤≥∈∉∘×·⊢⁻¹=<>+\-*/%^|&!$]'
+      scope: keyword.operator.lean4
+    - match: '[()\[\]{}⟨⟩,:;]'
+      scope: punctuation.lean4

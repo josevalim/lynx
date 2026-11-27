@@ -28,7 +28,9 @@ defmodule Lynx do
   toolchain Elan uses by adding a `lean-toolchain` file to your project's
   root with Lynx's Lean version:
 
-      #{@lean_version}
+  ```text
+  #{@lean_version}
+  ```
 
   If you are using `Mix.install/2`, Mix builds dependencies outside the
   current working directory, so you must explicitly set the Elan toolchain:
@@ -65,7 +67,9 @@ defmodule Lynx do
   For example, `:lists.sum/1` will become `Erlang.lists.«sum/1»` in Lean with the
   following signature:
 
-      def «sum/1» (_0 : Lynx.Term) : Lynx.Result
+  ```lean
+  def «sum/1» (_0 : Lynx.Term) : Lynx.Result
+  ```
 
   Each law becomes a Lean theorem whose parameters are the law's arguments, whose
   hypothesis states that `requires:` returns `true`, and whose goal states that
@@ -126,20 +130,26 @@ defmodule Lynx do
 
     * Pure code is stated directly as an `Except` value:
 
-          theorem «law/1» (x : Lynx.Term)
-              (requires : «law:requires/1» x = .ok Lynx.Term.true) :
-              «law:ensures/1» x = .ok Lynx.Term.true
+      ```lean
+      theorem «law/1» (x : Lynx.Term)
+          (requires : «law:requires/1» x = .ok Lynx.Term.true) :
+          «law:ensures/1» x = .ok Lynx.Term.true
+      ```
 
     * Code at the `apply` level is also stated directly, as an `Except` value:
 
-          ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
-            Lynx.apply «law:ensures/1» table depth x = .ok Lynx.Term.true
+      ```lean
+      ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
+        Lynx.apply «law:ensures/1» table depth x = .ok Lynx.Term.true
+      ```
 
     * Sequential code is stated through `Lynx.sequential`, which executes the
       code from a fresh runtime:
 
-          ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
-            Lynx.sequential (Lynx.apply «law:ensures/1» table depth x) = .ok Lynx.Term.true
+      ```lean
+      ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
+        Lynx.sequential (Lynx.apply «law:ensures/1» table depth x) = .ok Lynx.Term.true
+      ```
 
     * Concurrent code is stated through `Lynx.concurrent`, which holds when every
       run of the code ends with the outcome: every interleaving of its
@@ -148,10 +158,12 @@ defmodule Lynx do
       timer may report. Runs always end (`Lynx.Concurrent.Config.terminates`).
       Both the precondition and the expectation must hold in every run:
 
-          (requires : ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
-            Lynx.concurrent (Lynx.apply «law:requires/1» table depth x) (.ok Lynx.Term.true)) :
-          ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
-            Lynx.concurrent (Lynx.apply «law:ensures/1» table depth x) (.ok Lynx.Term.true)
+      ```lean
+      (requires : ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
+        Lynx.concurrent (Lynx.apply «law:requires/1» table depth x) (.ok Lynx.Term.true)) :
+      ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
+        Lynx.concurrent (Lynx.apply «law:ensures/1» table depth x) (.ok Lynx.Term.true)
+      ```
 
   Both `Lynx.sequential` and `Lynx.concurrent` start from a fresh runtime:
   a single process, with an empty process dictionary, and an empty mailbox.
@@ -401,25 +413,29 @@ defmodule Lynx do
   with the call depth and the time elapsed before timers are canceled left
   unknown:
 
-      refine ⟨4, fun depth deep => ?_⟩
-      obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
-      exact Lynx.concurrent_of_check
-        (Lynx.apply «law:ensures/0» Erlang.program.fun_table (depth + 4))
-        Lynx.Outcome.isTrue 300 (fun _ => by lynx_counterexample; lynx_kernel)
-        fun _ => Lynx.Outcome.eq_of_isTrue
+  ```lean
+  refine ⟨4, fun depth deep => ?_⟩
+  obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
+  exact Lynx.concurrent_of_check
+    (Lynx.apply «law:ensures/0» Erlang.program.fun_table (depth + 4))
+    Lynx.Outcome.isTrue 300 (fun _ => by lynx_counterexample; lynx_kernel)
+    fun _ => Lynx.Outcome.eq_of_isTrue
+  ```
 
   The kernel cannot decide what depends on an unknown value, so when the
   processes compare a symbolic input, evaluate with `cbv`. For example,
   for a law over an integer `x` that is only carried by messages and arithmetic:
 
-      obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
-        cases x <;> simp [«law:requires/1», Erlang.erlang.«is_integer/1»] at requires ⊢
-      refine ⟨1, fun depth deep => ?_⟩
-      obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
-      exact Lynx.concurrent_of_check
-        (Lynx.apply «law:ensures/1» Erlang.program.fun_table (depth + 1) (.integer n))
-        Lynx.Outcome.isTrue 300 (fun _ => by cbv)
-        fun _ => Lynx.Outcome.eq_of_isTrue
+  ```lean
+  obtain ⟨n, rfl⟩ : ∃ n, x = .integer n := by
+    cases x <;> simp [«law:requires/1», Erlang.erlang.«is_integer/1»] at requires ⊢
+  refine ⟨1, fun depth deep => ?_⟩
+  obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' deep
+  exact Lynx.concurrent_of_check
+    (Lynx.apply «law:ensures/1» Erlang.program.fun_table (depth + 1) (.integer n))
+    Lynx.Outcome.isTrue 300 (fun _ => by cbv)
+    fun _ => Lynx.Outcome.eq_of_isTrue
+  ```
 
   `Lynx.Outcome.isTrue` accepts the outcome the law expects, and `cbv`
   evaluates the check for an unknown time elapsed before timers are canceled.
@@ -467,8 +483,10 @@ defmodule Lynx do
   `reaches:` instead of `expects:`. In such cases, `Lynx.reachable` is used
   instead of `Lynx.concurrent`:
 
-      ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
-        Lynx.reachable (Lynx.apply «law:ensures/1» table depth x) (.ok Lynx.Term.true)
+  ```lean
+  ∃ bound : Nat, ∀ depth : Nat, bound ≤ depth →
+    Lynx.reachable (Lynx.apply «law:ensures/1» table depth x) (.ok Lynx.Term.true)
+  ```
 
   `Lynx.reachable_of_witness` proves it from a schedule that `Lynx.Concurrent.witness`
   finds and `Lynx.Concurrent.Config.follow` checks. Generally speaking, prefer
@@ -491,14 +509,18 @@ defmodule Lynx do
   laws with `LYNX_DEBUG=olean`, which writes each group's translated sources,
   together with their compiled modules, to `tmp/<test module>/<group>/`:
 
-      LYNX_DEBUG=olean mix test test/json_test.exs --only laws
+  ```shell
+  LYNX_DEBUG=olean mix test test/json_test.exs --only laws
+  ```
 
   Then profile the laws module from that directory. Its imports are loaded from
   the compiled modules, so only the given file is elaborated:
 
-      cd tmp/JsonProofsTest/laws-json-round-trip
-      LEAN_PATH=$PWD:$LYNX/Lean/.lake/build/lib/lean ELAN_TOOLCHAIN=$(cat $LYNX/lean-toolchain) \\
-        leanprof elab --heartbeats Elixir/JsonProofsTest/laws.lean
+  ```shell
+  cd tmp/JsonProofsTest/laws-json-round-trip
+  LEAN_PATH=$PWD:$LYNX/Lean/.lake/build/lib/lean ELAN_TOOLCHAIN=$(cat $LYNX/lean-toolchain) \\
+    leanprof elab --heartbeats Elixir/JsonProofsTest/laws.lean
+  ```
 
   where `$LYNX` is the absolute path to Lynx, such as your project's `deps/lynx`. Any
   other module in the directory, such as `Erlang/json.lean`, can be profiled
@@ -517,7 +539,9 @@ defmodule Lynx do
   export of the elaborated proofs. Set `LYNX_EXPORT` to a directory when running
   laws defined with `Lynx.Case`:
 
-      LYNX_EXPORT=tmp/export mix test --only laws
+  ```shell
+  LYNX_EXPORT=tmp/export mix test --only laws
+  ```
 
   Each laws group writes `tmp/export/<test module>/<group>.ndjson`.
 
@@ -526,7 +550,9 @@ defmodule Lynx do
   when every module verifies. Check an export with Lean's kernel and every
   bundled checker:
 
-      lake --dir deps/lynx/Lean check --paranoid --from-export tmp/export/MyTest/my-group.ndjson
+  ```shell
+  lake --dir deps/lynx/Lean check --paranoid --from-export tmp/export/MyTest/my-group.ndjson
+  ```
 
   The command also rejects axioms other than `propext`, `Quot.sound`, and
   `Classical.choice`. It runs the checkers in a `bwrap` sandbox, available on

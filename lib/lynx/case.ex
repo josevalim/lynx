@@ -146,11 +146,13 @@ defmodule Lynx.Case do
   `n` arguments, `Lynx.Except.admissible_returnsN` discharges its admissibility
   goal:
 
-      apply «mod/2».fixpoint_induct
-        (motive := fun f => ∀ a b v, f a b = .ok v → post a b v)
-      · exact Lynx.Except.admissible_returns2 _
-      · intro f ih a b v returned
-        ...
+  ```lean
+  apply «mod/2».fixpoint_induct
+    (motive := fun f => ∀ a b v, f a b = .ok v → post a b v)
+  · exact Lynx.Except.admissible_returns2 _
+  · intro f ih a b v returned
+    ...
+  ```
   """
   defmacro termination_suffix(target, source, opts \\ []) do
     mfa =
