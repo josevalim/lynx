@@ -7,6 +7,12 @@ import Lynx
 namespace LynxTest.Modules.ErtsInternal
 open Lynx
 
+theorem cmp_integer_examples :
+    Erlang.erts_internal.«cmp_term/2» (.integer 1) (.integer 2) = .ok (.integer (-1)) ∧
+    Erlang.erts_internal.«cmp_term/2» (.integer 2) (.integer 1) = .ok (.integer 1) ∧
+    Erlang.erts_internal.«cmp_term/2» (.integer 1) (.integer 1) = .ok (.integer 0) := by
+  exact ⟨rfl, rfl, rfl⟩
+
 private def a : Term := .atom "a"
 
 /-- Map generators start from a fully expanded iterator; other terms yield `[]`,

@@ -9,6 +9,13 @@ public section
 namespace Erlang.erts_internal
 open Lynx
 
+/-- Compare terms using the exact order used by ordered map iterators. -/
+@[expose] def «cmp_term/2» (a b : Term) : Except Exception Term :=
+  .ok (.integer (match Term.compareExact (Term.fuel a b) a b with
+    | .lt => -1
+    | .eq => 0
+    | .gt => 1))
+
 /-- Starts a map generator in a comprehension. The iterator is returned fully
 expanded as nested `{Key, Value, Next}` tuples ending in `none`, in the
 unspecified order of `Term.mapEntries`. Other generators yield `[]`, which the

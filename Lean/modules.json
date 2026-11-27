@@ -43,7 +43,7 @@
   "keymember/3": {"pure": true},
   "keyfind/3": {"pure": true}},
  "erts_internal":
- {"mc_refill/1": {"pure": true}, "mc_iterator/1": {"pure": true}},
+ {"mc_refill/1": {"pure": true}, "mc_iterator/1": {"pure": true}, "cmp_term/2": {"pure": true}},
  "erlang":
  {"xor/2": {"pure": true},
   "unlink/1": {"pure": false},

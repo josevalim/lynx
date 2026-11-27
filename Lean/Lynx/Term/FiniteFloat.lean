@@ -245,5 +245,49 @@ public theorem ofScientific_magnitude (value : FiniteFloat) {m : Nat} {e : Int}
   · exact positive
   · exact ofScientific_neg positive
 
+/-- Magnitude in units of the smallest positive binary64 subnormal. -/
+@[expose] public def scaled (v : FiniteFloat) : Nat :=
+  (if v.exponent.val = 0 then v.fraction.val else 2 ^ 52 + v.fraction.val) *
+    2 ^ (max v.exponent.val 1 - 1)
+
+public theorem magnitude_eq_scaled (v : FiniteFloat) : v.magnitude = (scaled v : Rat) * (2 : Rat) ^ (-1074 : Int) := by
+  by_cases h : v.exponent.val = 0
+  · by_cases f : v.fraction.val = 0 <;> simp [FiniteFloat.magnitude, scaled, h, f]
+  · have he : 1 ≤ v.exponent.val := by omega
+    have cast : (Int.ofNat (v.exponent.val - 1)) = Int.ofNat v.exponent.val - 1 := by simp [Int.ofNat_sub he]
+    have e : (Int.ofNat v.exponent.val - 1075) = (Int.ofNat (v.exponent.val - 1)) + (-1074) := by rw [cast]; omega
+    simp only [FiniteFloat.magnitude, scaled, h, ite_false, Nat.max_eq_left he]
+    rw [e, Rat.zpow_add (by decide), Rat.natCast_mul, Rat.natCast_pow]
+    change _ * ((2 : Rat) ^ ((v.exponent.val - 1 : Nat) : Int) * _) = _
+    rw [Rat.zpow_natCast]
+    simp only [Rat.natCast_ofNat, Rat.mul_assoc]
+
+/-- Signed value in units of the smallest positive binary64 subnormal. -/
+@[expose] public def signedScaled (v : FiniteFloat) : Int :=
+  if v.negative then -(v.scaled : Int) else (v.scaled : Int)
+
+public theorem toRat_eq_signedScaled (v : FiniteFloat) : v.toRat = (signedScaled v : Rat) * (2 : Rat) ^ (-1074 : Int) := by
+  cases hs : v.negative <;> simp [FiniteFloat.toRat, signedScaled, hs, FiniteFloat.magnitude_eq_scaled, Rat.intCast_neg, Rat.intCast_natCast, Rat.neg_mul]
+
+public theorem toRat_lt_iff_signedScaled (a b : FiniteFloat) : a.toRat < b.toRat ↔ signedScaled a < signedScaled b := by
+  rw [toRat_eq_signedScaled, toRat_eq_signedScaled, Rat.mul_lt_mul_right (Rat.zpow_pos (by decide)), Rat.intCast_lt_intCast]
+
+public theorem toRat_eq_iff_signedScaled (a b : FiniteFloat) : a.toRat = b.toRat ↔ signedScaled a = signedScaled b := by
+  constructor
+  · intro h
+    apply Int.le_antisymm
+    · apply Int.le_of_not_gt
+      intro k
+      have m := (toRat_lt_iff_signedScaled b a).2 k
+      rw [h] at m
+      exact Rat.lt_irrefl m
+    · apply Int.le_of_not_gt
+      intro k
+      have m := (toRat_lt_iff_signedScaled a b).2 k
+      rw [h] at m
+      exact Rat.lt_irrefl m
+  · intro h
+    rw [toRat_eq_signedScaled, toRat_eq_signedScaled, h]
+
 end FiniteFloat
 end Lynx.Term
