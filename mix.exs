@@ -83,14 +83,14 @@ defmodule Lynx.MixProject do
   end
 
   # Highlights ```lean code blocks and ~LEAN sigils with the Lean grammar in
-  # docs/syntaxes, which replaces the one bundled with makeup_syntect.
+  # syntaxes/, which replaces the one bundled with makeup_syntect.
   # Syntect registers no languages on its own, so it does not replace other lexers.
   defp register_lean_lexer(_args) do
     Mix.Task.run("deps.loadpaths")
     Application.put_env(:makeup_syntect, :register_for_languages, [])
 
     Application.put_env(:makeup_syntect, :extra_syntax_folders, [
-      Path.expand("docs/syntaxes", __DIR__)
+      Path.expand("syntaxes", __DIR__)
     ])
 
     {:ok, _} = Application.ensure_all_started([:makeup_elixir, :makeup_syntect])
