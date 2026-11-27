@@ -21,7 +21,8 @@ defmodule Lynx.MixProject do
         compile: [&build_lean/1, "compile"],
         precommit: ["format", "test.all"],
         "test.lean": ["cmd --cd Lean lake test"],
-        "test.all": ["test", "test.lean"]
+        "test.all": ["test", "test.lean"],
+        docs: [&register_lean_lexer/1, "docs"]
       ]
     ]
   end
@@ -31,7 +32,8 @@ defmodule Lynx.MixProject do
 
   defp deps do
     [
-      {:ex_doc, "~> 0.38", only: :docs}
+      {:ex_doc, "~> 0.38", only: :docs},
+      {:makeup_syntect, "~> 0.1", only: :docs}
     ]
   end
 
@@ -78,6 +80,18 @@ defmodule Lynx.MixProject do
       0 -> :ok
       status -> Mix.raise("Lake build failed with status #{status}")
     end
+  end
+
+  # Highlights the contents of ~LEAN sigils with syntect's Lean grammar.
+  # Syntect is limited to Lean so it does not replace the other lexers.
+  defp register_lean_lexer(_args) do
+    Mix.Task.run("deps.loadpaths")
+    Application.put_env(:makeup_syntect, :register_for_languages, ["lean"])
+    {:ok, _} = Application.ensure_all_started([:makeup_elixir, :makeup_syntect])
+
+    Makeup.Lexers.ElixirLexer.register_sigil_lexer("LEAN", MakeupSyntect.Lexer,
+      language: "lean"
+    )
   end
 
   def cli do
