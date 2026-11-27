@@ -202,7 +202,7 @@ Now add Lynx to your application's `mix.exs` dependencies:
 ```elixir
 defp deps do
   [
-    {:lynx, git: "https://github.com/josevalim/lynx.git", only: :test}
+    {:lynx, "~> 0.1", only: :test}
   ]
 end
 ```
