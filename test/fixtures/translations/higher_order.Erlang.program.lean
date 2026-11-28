@@ -24,6 +24,8 @@ def fun_table : Lynx.Term.FunTable :=
         | [], [varg1] => Erlang.higher_order.«-map_returns_list_requires/2-fun-1-/1» varg1
         | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")))]
 
+private theorem fun_table.sorted : Lynx.Dispatcher.sorted fun_table = true := by decide +kernel
+
 private theorem «higher_order:-map_returns_list_requires/2-fun-0-/1».entry :
     Lynx.Dispatcher.find fun_table "higher_order" "-map_returns_list_requires/2-fun-0-" 1 =
       some
@@ -31,7 +33,7 @@ private theorem «higher_order:-map_returns_list_requires/2-fun-0-/1».entry :
           match (captures).toList, (args).toList with
           | [], [varg1] => Erlang.higher_order.«-map_returns_list_requires/2-fun-0-/1» varg1
           | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))) :=
-  by rfl
+  Lynx.Dispatcher.find_of_sorted (index := 0) fun_table.sorted rfl
 
 @[simp]
 theorem «higher_order:-map_returns_list_requires/2-fun-0-/1».pure (depth : Nat) {external : Bool}
@@ -62,7 +64,7 @@ private theorem «higher_order:-map_returns_list_requires/2-fun-1-/1».entry :
           match (captures).toList, (args).toList with
           | [], [varg1] => Erlang.higher_order.«-map_returns_list_requires/2-fun-1-/1» varg1
           | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))) :=
-  by rfl
+  Lynx.Dispatcher.find_of_sorted (index := 1) fun_table.sorted rfl
 
 @[simp]
 theorem «higher_order:-map_returns_list_requires/2-fun-1-/1».pure (depth : Nat) {external : Bool}

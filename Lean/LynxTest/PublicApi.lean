@@ -153,6 +153,14 @@ example (computation : Lynx.Result α) (pure : Lynx.Result.IsPure computation) :
   simp
 
 -- Table entries apply through the dispatcher, consuming depth unless pure.
+-- A sorted table finds the entry at each index, and the kernel decides its order.
+private def dispatchTable : Lynx.Term.FunTable :=
+  [⟨"a", "f", 1, .pure fun _ _ => .ok .nil⟩, ⟨"b", "f", 1, .pure fun _ _ => .ok .nil⟩,
+    ⟨"a", "f", 2, .pure fun _ _ => .ok .nil⟩]
+
+example : Lynx.Dispatcher.find dispatchTable "a" "f" 2 = some (.pure fun _ _ => .ok .nil) :=
+  Lynx.Dispatcher.find_of_sorted (index := 2) (by decide +kernel) rfl
+
 example (table : Lynx.Term.FunTable) (external : Bool) (depth arity : Nat) (module name : String)
     (captures arguments : Array Lynx.Term) (body : Array Lynx.Term → Lynx.Term.PureFun)
     (entry : Lynx.Dispatcher.find table module name arity = some (.pure body)) (size : arguments.size = arity) :
@@ -696,6 +704,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Dispatcher.ofTable",
   "Lynx.Dispatcher.pure",
   "Lynx.Dispatcher.resolve",
+  "Lynx.Dispatcher.sorted",
   "Lynx.Dispatcher.step",
   "Lynx.Environment",
   "Lynx.Environment.currentPid",

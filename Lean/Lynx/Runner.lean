@@ -1499,6 +1499,15 @@ private def tableEntry (map : FileMap) (info : Span) (entry : Json)
            adapter := withSpan entryInfo.info adapter, level,
            module := ← str entry "module", name := ← str entry "name" }
 
+/-- The entries of a function table, in the order `Lynx.Dispatcher.sorted` checks:
+by arity, then name, then module. -/
+private def tableEntries (j : Json) : DecodeM (Array Json) := do
+  let keyed ← (← arr j "entries").mapM fun entry => do
+    return ((← arr entry "args").size, ← str entry "name", ← str entry "module", entry)
+  let sorted := keyed.qsort fun (arity, name, module, _) (arity', name', module', _) =>
+    ((compare arity arity').then ((compare name name').then (compare module module'))).isLT
+  return sorted.map (·.2.2.2)
+
 private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
     DecodeM (TSyntax `command) := do
   let info ← span map j parent
@@ -1509,7 +1518,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
     let name ← identifier (← str j "name")
     unless name.getId.getPrefix == .anonymous do throw "table name must be unqualified"
     let funDef := mkIdent ``Lynx.Term.FunDef.mk
-    let entries ← (← arr j "entries").mapM fun entry => do
+    let entries ← (← tableEntries j).mapM fun entry => do
       let entry ← tableEntry map info entry
       let ctor := mkIdent (match entry.level with
         | "pure" => ``Lynx.Term.FunEntry.pure
@@ -1676,7 +1685,7 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
   if (← str j "kind") != "fun_table" then return literals.push declaration
   let info ← span map j
   let table ← identifier (← str j "name")
-  let entries ← arr j "entries"
+  let entries ← tableEntries j
   let mut result := literals.push declaration
   let termType := mkIdent ``Lynx.Term
   let natType := mkIdent ``Nat
@@ -1696,6 +1705,13 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
   let arityArg := mkIdent `arity
   let capturesArg := mkIdent `captures
   let argumentsArg := mkIdent `arguments
+  -- The kernel checks the table's order once, and each lookup then follows from
+  -- its entry's index, without comparing its key with the entries before it.
+  let sorted := mkIdent (table.getId.str "sorted")
+  let sortedTable := mkIdent ``Lynx.Dispatcher.sorted
+  let findOfSorted := mkIdent ``Lynx.Dispatcher.find_of_sorted
+  result := result.push (withSpan info.info (Unhygienic.run `(private theorem $sorted :
+    $sortedTable $table = true := by decide +kernel)))
   for index in [:entries.size] do
     let level ← level entries[index]! "purity" "dispatches"
     -- Entries that dispatch further run with the dispatcher one level down.
@@ -1715,8 +1731,7 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
       Unhygienic.run `($function $externalArg:ident $module $functionName $arity #[$captures,*])
     let dispatcher : TSyntax `term := Unhygienic.run `(($ofTable $table $outer))
     let functionId := s!"{entry.module}:{entry.name}/{arguments.size}"
-    -- The entry is looked up once, as evaluating the lookup dominates checking
-    -- the equations, which share it.
+    -- The entry is looked up once and shared by its equations.
     let lookup := mkIdent (.str (.mkSimple functionId) "entry")
     let ctor := mkIdent (match level with
       | "pure" => ``Lynx.Term.FunEntry.pure
@@ -1724,7 +1739,8 @@ private def commands (map : FileMap) (j : Json) : DecodeM (Array (TSyntax `comma
       | _ => ``Lynx.Term.FunEntry.effectful)
     let adapter := (← tableEntry map info entries[index]!).adapter
     result := result.push (withSpan info.info (Unhygienic.run `(private theorem $lookup :
-      $find $table $module $functionName $arity = some ($ctor $adapter) := by rfl)))
+      $find $table $module $functionName $arity = some ($ctor $adapter) :=
+        $findOfSorted (index := $(Syntax.mkNumLit (toString index))) $sorted rfl)))
     let lemma (suffix : String) (call : Ident) (rhs : TSyntax `term) (reduce : Name) :=
       -- Equations are named after the function, such as `«maps:get/2».pure`.
       let name := mkIdent (.str (.mkSimple functionId) suffix)

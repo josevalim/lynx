@@ -23,6 +23,72 @@ cheap for the kernel. -/
   (table.find? fun def_ => def_.arity == arity && def_.name == name && def_.module == module).map
     (·.entry)
 
+/-- Whether each entry of a table names a function before the next one, by
+arity, then name, then module. Evaluating it compares neighbouring entries
+only, so the kernel decides it once for a whole table. Names come before
+modules as most entries share their module. -/
+@[expose] def sorted : FunTable → Bool
+  | first :: second :: rest =>
+    ((compare first.arity second.arity).then ((compare first.name second.name).then
+      (compare first.module second.module))).isLT && sorted (second :: rest)
+  | _ => true
+
+/-- The order `sorted` checks. -/
+private def keyCompare : FunDef → FunDef → Ordering :=
+  compareLex (compareOn (·.arity)) (compareLex (compareOn (·.name)) (compareOn (·.module)))
+
+private instance : Std.TransCmp keyCompare := inferInstanceAs (Std.TransCmp (compareLex _ _))
+
+private theorem sorted_cons {first second : FunDef} {rest : FunTable} :
+    sorted (first :: second :: rest) = true ↔
+      keyCompare first second = .lt ∧ sorted (second :: rest) = true := by
+  simp [sorted, keyCompare, compareLex, compareOn, Ordering.isLT_iff_eq_lt]
+
+/-- An entry of a sorted table precedes every entry after it. -/
+private theorem sorted_lt {first : FunDef} {rest : FunTable} (sorted : sorted (first :: rest) = true)
+    {later : FunDef} (mem : later ∈ rest) : keyCompare first later = .lt := by
+  induction rest generalizing first with
+  | nil => cases mem
+  | cons second rest ih =>
+    obtain ⟨lt, tail⟩ := sorted_cons.mp sorted
+    rcases List.mem_cons.mp mem with rfl | mem
+    · exact lt
+    · exact Std.TransCmp.lt_trans lt (ih tail mem)
+
+private theorem sorted_tail {first : FunDef} {rest : FunTable} (sorted : sorted (first :: rest) = true) :
+    Dispatcher.sorted rest = true := by
+  cases rest with
+  | nil => rfl
+  | cons => exact (sorted_cons.mp sorted).2
+
+/-- In a sorted table, the entry at an index is the one its key finds. Proving
+lookups this way evaluates the table's order once, instead of comparing each
+key with the entries before it. -/
+theorem find_of_sorted {table : FunTable} {index : Nat} {module name : String} {arity : Nat}
+    {entry : FunEntry} (sorted : sorted table = true)
+    (found : table[index]? = some ⟨module, name, arity, entry⟩) :
+    find table module name arity = some entry := by
+  induction table generalizing index with
+  | nil => simp at found
+  | cons first rest ih =>
+    cases index with
+    | zero =>
+      simp only [List.getElem?_cons_zero, Option.some.injEq] at found
+      subst found
+      simp [find]
+    | succ index =>
+      simp only [List.getElem?_cons_succ] at found
+      have later := sorted_lt sorted (List.mem_of_getElem? found)
+      have miss : (first.arity == arity && first.name == name && first.module == module) = false := by
+        cases same : (first.arity == arity && first.name == name && first.module == module)
+        · rfl
+        · simp only [Bool.and_eq_true, beq_iff_eq] at same
+          obtain ⟨⟨rfl, rfl⟩, rfl⟩ := same
+          simp [keyCompare, compareLex, compareOn, Std.compare_self] at later
+      have := ih (sorted_tail sorted) found
+      simp only [find, List.find?_cons, miss] at this ⊢
+      exact this
+
 /-- The table entry a function value names and its captured values, once its
 arity matches the arguments. -/
 @[expose] def lookup (table : FunTable) (function : Term) (arguments : Array Term) :

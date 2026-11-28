@@ -845,7 +845,7 @@ defmodule Lynx.TranslationTest do
              &match?(%{"kind" => "def", "name" => "extra", "purity" => "pure"}, &1)
            )
 
-    # Entries are sorted by the names of their functions.
+    # Entries are sorted by their module, name and arity; the runner orders the table for the kernel.
     assert Enum.map(entries, &{&1["module"], &1["name"]}) == [
              {"caller", "-entry/1-fun-0-"},
              {"caller", "-extra/1-fun-0-"},

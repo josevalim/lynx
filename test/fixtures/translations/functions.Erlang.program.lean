@@ -13,7 +13,12 @@ section
 set_option «match».ignoreUnusedAlts true
 
 def fun_table : Lynx.Term.FunTable :=
-  [Lynx.Term.FunDef.mk "functions" "-make/1-fun-0-" 1
+  [Lynx.Term.FunDef.mk "functions" "zero" 0
+      (Lynx.Term.FunEntry.pure fun captures args =>
+        match (captures).toList, (args).toList with
+        | [], [] => Erlang.functions.«zero/0»
+        | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))),
+    Lynx.Term.FunDef.mk "functions" "-make/1-fun-0-" 1
       (Lynx.Term.FunEntry.pure fun captures args =>
         match (captures).toList, (args).toList with
         | [vcap1], [varg1] => Erlang.functions.«-make/1-fun-0-/2» vcap1 varg1
@@ -32,12 +37,36 @@ def fun_table : Lynx.Term.FunTable :=
       (Lynx.Term.FunEntry.effectful fun lynxDispatch => fun captures args =>
         match (captures).toList, (args).toList with
         | [], [varg1] => Erlang.functions.«remember/1» lynxDispatch varg1
-        | _, _ => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))),
-    Lynx.Term.FunDef.mk "functions" "zero" 0
-      (Lynx.Term.FunEntry.pure fun captures args =>
-        match (captures).toList, (args).toList with
-        | [], [] => Erlang.functions.«zero/0»
-        | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg")))]
+        | _, _ => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "badarg")))]
+
+private theorem fun_table.sorted : Lynx.Dispatcher.sorted fun_table = true := by decide +kernel
+
+private theorem «functions:zero/0».entry :
+    Lynx.Dispatcher.find fun_table "functions" "zero" 0 =
+      some
+        (Lynx.Term.FunEntry.pure fun captures args =>
+          match (captures).toList, (args).toList with
+          | [], [] => Erlang.functions.«zero/0»
+          | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))) :=
+  Lynx.Dispatcher.find_of_sorted (index := 0) fun_table.sorted rfl
+
+@[simp]
+theorem «functions:zero/0».pure (depth : Nat) {external : Bool} :
+    Lynx.Dispatcher.pure (Lynx.Dispatcher.ofTable fun_table depth)
+        (Lynx.Term.function external "functions" "zero" 0 #[]) #[] =
+      Erlang.functions.«zero/0» :=
+  Lynx.Dispatcher.pure_pure (table := fun_table) (external := external) (depth := depth) (module :=
+    "functions") (name := "zero") (arity := 0) (captures := #[]) (arguments := #[])
+    «functions:zero/0».entry (by rfl)
+
+@[simp]
+theorem «functions:zero/0».call (depth : Nat) {external : Bool} :
+    Lynx.Dispatcher.call (Lynx.Dispatcher.ofTable fun_table depth)
+        (Lynx.Term.function external "functions" "zero" 0 #[]) #[] =
+      Lynx.Result.ofExcept Erlang.functions.«zero/0» :=
+  Lynx.Dispatcher.call_pure (table := fun_table) (external := external) (depth := depth) (module :=
+    "functions") (name := "zero") (arity := 0) (captures := #[]) (arguments := #[])
+    «functions:zero/0».entry (by rfl)
 
 private theorem «functions:-make/1-fun-0-/1».entry :
     Lynx.Dispatcher.find fun_table "functions" "-make/1-fun-0-" 1 =
@@ -46,7 +75,7 @@ private theorem «functions:-make/1-fun-0-/1».entry :
           match (captures).toList, (args).toList with
           | [vcap1], [varg1] => Erlang.functions.«-make/1-fun-0-/2» vcap1 varg1
           | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))) :=
-  by rfl
+  Lynx.Dispatcher.find_of_sorted (index := 1) fun_table.sorted rfl
 
 @[simp]
 theorem «functions:-make/1-fun-0-/1».pure (depth : Nat) {external : Bool} (vcap1 : Lynx.Term)
@@ -75,7 +104,7 @@ private theorem «functions:-make_store/1-fun-0-/1».entry :
           match (captures).toList, (args).toList with
           | [vcap1], [varg1] => Erlang.functions.«-make_store/1-fun-0-/2» lynxDispatch vcap1 varg1
           | _, _ => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))) :=
-  by rfl
+  Lynx.Dispatcher.find_of_sorted (index := 2) fun_table.sorted rfl
 
 @[simp]
 theorem «functions:-make_store/1-fun-0-/1».call (depth : Nat) {external : Bool} (vcap1 : Lynx.Term)
@@ -95,7 +124,7 @@ private theorem «functions:inc/1».entry :
           match (captures).toList, (args).toList with
           | [], [varg1] => Erlang.functions.«inc/1» varg1
           | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))) :=
-  by rfl
+  Lynx.Dispatcher.find_of_sorted (index := 3) fun_table.sorted rfl
 
 @[simp]
 theorem «functions:inc/1».pure (depth : Nat) {external : Bool} (varg1 : Lynx.Term) :
@@ -122,7 +151,7 @@ private theorem «functions:remember/1».entry :
           match (captures).toList, (args).toList with
           | [], [varg1] => Erlang.functions.«remember/1» lynxDispatch varg1
           | _, _ => Lynx.Result.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))) :=
-  by rfl
+  Lynx.Dispatcher.find_of_sorted (index := 4) fun_table.sorted rfl
 
 @[simp]
 theorem «functions:remember/1».call (depth : Nat) {external : Bool} (varg1 : Lynx.Term) :
@@ -132,33 +161,6 @@ theorem «functions:remember/1».call (depth : Nat) {external : Bool} (varg1 : L
   Lynx.Dispatcher.call_effectful (table := fun_table) (external := external) (depth := depth)
     (module := "functions") (name := "remember") (arity := 1) (captures := #[]) (arguments :=
     #[varg1]) «functions:remember/1».entry (by rfl)
-
-private theorem «functions:zero/0».entry :
-    Lynx.Dispatcher.find fun_table "functions" "zero" 0 =
-      some
-        (Lynx.Term.FunEntry.pure fun captures args =>
-          match (captures).toList, (args).toList with
-          | [], [] => Erlang.functions.«zero/0»
-          | _, _ => Except.error (Lynx.Exception.error (Lynx.Term.atom "badarg"))) :=
-  by rfl
-
-@[simp]
-theorem «functions:zero/0».pure (depth : Nat) {external : Bool} :
-    Lynx.Dispatcher.pure (Lynx.Dispatcher.ofTable fun_table depth)
-        (Lynx.Term.function external "functions" "zero" 0 #[]) #[] =
-      Erlang.functions.«zero/0» :=
-  Lynx.Dispatcher.pure_pure (table := fun_table) (external := external) (depth := depth) (module :=
-    "functions") (name := "zero") (arity := 0) (captures := #[]) (arguments := #[])
-    «functions:zero/0».entry (by rfl)
-
-@[simp]
-theorem «functions:zero/0».call (depth : Nat) {external : Bool} :
-    Lynx.Dispatcher.call (Lynx.Dispatcher.ofTable fun_table depth)
-        (Lynx.Term.function external "functions" "zero" 0 #[]) #[] =
-      Lynx.Result.ofExcept Erlang.functions.«zero/0» :=
-  Lynx.Dispatcher.call_pure (table := fun_table) (external := external) (depth := depth) (module :=
-    "functions") (name := "zero") (arity := 0) (captures := #[]) (arguments := #[])
-    «functions:zero/0».entry (by rfl)
 
 end
 
