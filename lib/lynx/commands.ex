@@ -38,6 +38,14 @@ defmodule Lynx.Commands do
 
   ## Options
 
+    * `:prelude` and `:postlude` - directories of Lean modules verified before and
+      after the translated modules, as with `Lynx.Case.prelude/1` and
+      `Lynx.Case.postlude/1`.
+
+    * `:cache` - set to `false` to verify every module without the persistent
+      cache, or to a directory to cache there instead of the Mix build directory.
+      Defaults to `true`.
+
     * `:options` - a keyword list of Lean options, such as `[maxRecDepth: 10_000]`,
       set at the top of every translated module. Values are integers, booleans, or
       strings. They are part of every cache key.
@@ -74,10 +82,24 @@ defmodule Lynx.Commands do
     request = %{
       "command" => "verify",
       "version" => @protocol_version,
-      "cache_dir" => cache_dir(),
       "options" => options,
       "files" => files
     }
+
+    # The runner computes cache keys only when given a cache directory.
+    request =
+      case Keyword.get(opts, :cache, true) do
+        true -> Map.put(request, "cache_dir", cache_dir())
+        false -> request
+        dir when is_binary(dir) -> Map.put(request, "cache_dir", Path.expand(dir))
+        other -> raise ArgumentError, ":cache must be a boolean or a directory, got: #{inspect(other)}"
+      end
+
+    request =
+      for {kind, key} <- [prelude: "prelude_dir", postlude: "postlude_dir"],
+          dir = opts[kind],
+          reduce: request,
+          do: (request -> Map.put(request, key, Path.expand(dir)))
 
     request =
       case Keyword.fetch(opts, :export) do

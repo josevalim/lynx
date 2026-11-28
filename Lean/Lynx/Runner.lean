@@ -3,9 +3,9 @@ module
 import Lynx
 import Lynx.Runner.Elab
 import Lean
+import Std.Sync.Mutex
 
 /-! JSON runner for verification and Lean source rendering. Positions are one-based Unicode character positions.
-See `Runner.schema.json` for the request and response schemas.
 Every syntax node requires `span`: `[]`, `[line]`, or `[line, column]`.
 Nodes without a location inherit the enclosing location, if any. Line-only spans
 never imply a diagnostic column. Function and variable names retain their Erlang spelling; the decoder
@@ -20,15 +20,20 @@ Cached and skipped files have no theorem timings because no elaboration occurs.
 Files blocked by an unsuccessful input import are skipped without elaboration.
 A `{"status": "done"}` message terminates each completed request.
 Each newline-delimited request includes `"command": "verify"`.
-Updates are flushed as each file finishes. The runner exits when stdin closes,
+Files verify in parallel once the files they import have, and updates are flushed in
+the order of the files. The runner exits when stdin closes,
 abandoning any request in progress, as nobody reads its result.
-Invalid input and runner failures return `{"status": "failure", "message": "..."}`.
+Invalid input and runner failures return `{"status": "failure", "message": "..."}`, once
+every file has stopped verifying.
 Each verification diagnostic has `file`, `module`, nullable `declaration`, `severity`
 (error/warning/information), and `message`, with `line` and `column` included only when known.
-Requests include `cache_dir` and may include `options`, an object of Lean options set
-at the top of every translated module. Values are natural numbers, Booleans, or strings.
-Input files may include a hexadecimal `cache_key` incorporating dependencies; cached
-artifacts are kept separately for each set of options.
+Requests may include `options`, an object of Lean options set at the top of every
+translated module. Values are natural numbers, Booleans, or strings.
+Requests with a `cache_dir` cache verified files there; without one, every file verifies
+from scratch. The runner keys each file by its entry, including the source of prelude and
+postlude files, and the keys of the request's modules it imports, so changing a file
+verifies again only the files that import it, directly or not. Input files must not
+carry keys. Cached artifacts are kept separately for each set of options.
 Requests may include `debug_dir`, a directory where the rendered source of every module
 is written by module path, such as `Erlang/json.lean`, when a file does not verify.
 With `debug` set to `"lean"` or `"olean"`, they are written even when every file verifies.
@@ -39,15 +44,21 @@ an error where it differs from the elaborated commands.
 Requests may include `export`, a path where the declarations of the request's modules
 and their dependencies are written in Lean's export format, for checking with
 `lake check --from-export`. It is written only when every file verifies.
-Files without a key and their dependents are verified without persistent caching.
 Verified artifacts are cached below `cache_dir/lean-VERSION-HASH`, using Lake’s compiled artifact hashes.
 Only successful elaboration and axiom audits are cached; updates include a `cached` Boolean.
-Input files are an ordered array of {file, module, imports, contents, cache_key} objects.
-A prelude file has empty contents and a preludes array of {source, file, span,
-indentation} blocks, joined in order into one module. The first block begins with
-the module header, whose imports are loaded before the blocks are parsed and
-elaborated sequentially. Dependent files import the prelude before their embedded proofs
-and termination suffixes are parsed; no declarations leak through request order.
+Input files are an ordered array of {file, module, imports, contents} objects.
+Requests may include `prelude_dir` and `postlude_dir`, directories of Lean modules: each
+`.lean` file below one is a module named by its path, such as `Bdd.Core` for
+`Bdd/Core.lean`, elaborated as written after its header's imports, which it declares as
+`import` or `public import` as usual. Path components must be Lean identifiers; hidden
+entries are skipped and links to directories rejected. Preludes verify first, then the
+input files without laws, then postludes, then laws, each module after the modules it
+imports. Input files import every prelude before their embedded proofs and termination
+suffixes are parsed, and laws also import every postlude; no declarations leak through
+request order. Requests fail when these modules import each other in a cycle, when a
+prelude imports an input file or postlude, when a postlude imports laws, or when a module
+is named like an input file or a runtime module. A module whose header imports a module
+that cannot be loaded fails alone, and the files importing it are skipped.
 Theorem nodes contain name, named params, an optional requires helper, an ensures helper,
 and a proof object. Helpers are ordinary translated computations called with the theorem's
 parameters. Each helper carries its level, which selects how it is stated to return true.
@@ -1946,7 +1957,8 @@ structure DecodedFile where
   private theorems : Array (Name × Span)
   private proofSources : Array (Name × String)
   private reexportImports : Bool
-  private preludes : Array Json
+  /-- The source of a prelude or postlude file, which is elaborated as written. -/
+  private source? : Option String
 
 /-- Immutable runtime imports, reused without retaining translated declarations. -/
 private structure Runtime where
@@ -2052,14 +2064,11 @@ private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environme
       unless [32, 64, 128].contains key.length && key.toList.all (fun c => c.isDigit || ('a' ≤ c && c ≤ 'f')) do
         throw (IO.userError "cache_key must be a 32, 64, or 128 character lowercase hex digest")
       pure key
-    let map := sourceMap entry
-    let preludes ← IO.ofExcept <| match field entry "preludes" with
-      | .error _ => pure #[]
-      | .ok value => value.getArr?
-    if !preludes.isEmpty && !(← IO.ofExcept (arr entry "contents")).isEmpty then
-      throw (IO.userError "prelude modules cannot contain translated declarations")
+    let source? := (str entry "source").toOption
+    -- Prelude and postlude files are elaborated from their own source.
+    let map := if source?.isSome then FileMap.ofString "" else sourceMap entry
     let (moduleName, imports, commands, state, reexportImports) ← IO.ofExcept do
-      fields entry ["file", "module", "imports", "contents", "cache_key", "preludes",
+      fields entry ["file", "module", "imports", "contents", "cache_key", "source",
         "dispatcher_purity"]
       let dispatcherPurity ← match field entry "dispatcher_purity" with
         | .error _ => pure none
@@ -2071,7 +2080,7 @@ private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environme
       let namespaceId ← (identifier moduleName).run env |>.run' {}
       let imports ← inputImports files entry env
       let contents ← arr entry "contents"
-      let reexportImports := !contents.isEmpty || !preludes.isEmpty
+      let reexportImports := !contents.isEmpty || source?.isSome
       -- Calls embed pure callees in other computations, so collect every purity first.
       let mut purities : Std.HashMap String String := {}
       for content in contents do
@@ -2109,7 +2118,7 @@ private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environme
     let commands := commands.map fun command => ⟨eraseScopes command.raw⟩
     return ⟨file, moduleName, imports, map, commands, key,
       state.spans, state.diagnostics, state.theorems, state.proofSources,
-      reexportImports, preludes⟩
+      reexportImports, source?⟩
   catch err => throw (IO.userError s!"{file}: {err}")
 
 private def parsingDiagnostics (file : DecodedFile) : Array Json :=
@@ -2145,24 +2154,21 @@ private def insertProofSource (source rendered : String) : String := Id.run do
 private def renderedRuntime : List (String × String) :=
   [("public import ", "Lynx"), ("import ", "Lynx.Runner.Elab")]
 
-/-- Prelude blocks follow their header, which the runner extends with the runtime and the
-file's imports. The rendered header declares them too, after the prelude's own imports. -/
-private def renderPreludes (file : DecodedFile) : IO String := do
-  let sources ← file.preludes.mapM fun block => IO.ofExcept (str block "source")
-  let some first := sources[0]? | return ""
-  let input := Parser.mkInputContext first file.fileName (normalizeLineEndings := false)
+/-- A prelude or postlude file renders as written, with the runtime the runner adds to
+its imports declared after its own. -/
+private def renderSource (file : DecodedFile) (source : String) : IO String := do
+  let input := Parser.mkInputContext source file.fileName (normalizeLineEndings := false)
   let (header, _, _) ← Parser.parseHeader input
   let header : Elab.HeaderSyntax := header
   let declared := (header.imports (includeInit := false)).map fun (declared : Import) => declared.module.toString
   let added := renderedRuntime ++ file.imports.toList.map ("public import ", ·)
   let imports := added.filter (!declared.contains ·.2) |>.map fun (keyword, name) => keyword ++ name
   let stop := header.raw.getTailPos?.getD 0
-  let first := String.Pos.Raw.extract first 0 stop ++ String.join (imports.map ("\n" ++ ·)) ++
-    String.Pos.Raw.extract first stop first.rawEndPos
-  return String.intercalate "\n\n" (first :: sources.toList.drop 1) ++ "\n"
+  return String.Pos.Raw.extract source 0 stop ++ String.join (imports.map ("\n" ++ ·)) ++
+    String.Pos.Raw.extract source stop source.rawEndPos
 
 private def renderFile (file : DecodedFile) (env : Lean.Environment) : IO String := do
-  if !file.preludes.isEmpty then return ← renderPreludes file
+  if let some source := file.source? then return ← renderSource file source
   let action : CoreM String := do
     let commands ← file.commands.mapM fun cmd => do
       let some (index, cmd) := withProofPlaceholder file cmd
@@ -2297,59 +2303,23 @@ private def writeCached (directory : System.FilePath) (env : Lean.Environment)
   finally
     if ← temporary.pathExists then IO.FS.removeDirAll temporary
 
-/-- The file, first line, line count, and span length of each prelude block. -/
-private def preludeRanges (file : DecodedFile) : Array (Option String × Nat × Nat × Nat) :=
-  file.preludes.map fun block =>
-    let positions := (arr block "span").toOption.getD #[]
-    let start := (positions[0]?.bind (·.getNat?.toOption)).getD 1
-    let lines := ((str block "source").toOption.getD "").splitOn "\n" |>.length
-    ((str block "file").toOption, start, lines, positions.size)
-
-/-- Preserve the location precision supplied by a prelude block. -/
-private def preludeLocation (ranges : Array (Option String × Nat × Nat × Nat)) (message : Message) :
-    Location := Id.run do
-  for (origin, start, lines, precision) in ranges do
-    if origin != some message.fileName then continue
-    if start ≤ message.pos.line && message.pos.line < start + lines then
-      if precision ≥ 2 then return .column message.pos
-      if precision == 1 then return .line message.pos.line
-      return .unknown
-  return .unknown
-
-/-- A prelude block's source, padded so positions match the block's original span. -/
-private def preludeSource (block : Json) : Except String (String × String) := do
-  fields block ["source", "file", "span", "indentation"]
-  let origin ← str block "file"
-  let source ← str block "source"
-  let indentation ← (← field block "indentation").getNat?
-  let span ← arr block "span"
-  let line ← if let some line := span[0]? then line.getNat? else pure 1
-  let column ← if let some column := span[1]? then column.getNat? else pure 1
-  let lines := source.splitOn "\n"
-  let source := String.ofList (List.replicate (line - 1) '\n') ++
-    String.ofList (List.replicate (column - 1) ' ') ++
-    String.intercalate ("\n" ++ String.ofList (List.replicate indentation ' ')) lines
-  pure (origin, source)
-
-/-- The module header the first prelude block begins with, parsed by Lean. -/
-private def preludeHeader (block : Json) :
+/-- The module header a prelude or postlude file begins with, parsed by Lean. -/
+private def sourceHeader (fileName source : String) :
     IO (Parser.InputContext × Elab.HeaderSyntax × Parser.ModuleParserState × MessageLog) := do
-  let (origin, source) ← IO.ofExcept (preludeSource block)
-  let input := Parser.mkInputContext source origin (normalizeLineEndings := false)
+  let input := Parser.mkInputContext source fileName (normalizeLineEndings := false)
   let (header, state, messages) ← Parser.parseHeader input
   return (input, header, state, messages)
 
-/-- The imports a prelude declares in its header. -/
-private def preludeImports (entry : Json) : IO (Array Import) := do
-  let preludes := (arr entry "preludes").toOption.getD #[]
-  let some first := preludes[0]? | return #[]
-  let (_, header, _, _) ← preludeHeader first
+/-- The imports a prelude or postlude file declares in its header. -/
+private def sourceImports (entry : Json) : IO (Array Import) := do
+  let .ok source := str entry "source" | return #[]
+  let (_, header, _, _) ← sourceHeader (← IO.ofExcept (str entry "file")) source
   return header.imports (includeInit := false)
 
-/-- Elaborate one prelude block without waiting for the proofs elaborating in the background:
+/-- Elaborate a file's commands without waiting for the proofs elaborating in the background:
 the final command state, whose environment may still be checking proofs, and the snapshot tree
 that reports their diagnostics. -/
-private partial def processBlock (input : Parser.InputContext) (parserState : Parser.ModuleParserState)
+private partial def processSource (input : Parser.InputContext) (parserState : Parser.ModuleParserState)
     (state : Elab.Command.State) : IO (Elab.Command.State × Language.SnapshotTree) := do
   let initial := (← Language.Lean.processCommands input parserState state).get
   let rec last (snap : Language.Lean.CommandParsedSnapshot) : Language.Lean.CommandParsedSnapshot :=
@@ -2359,39 +2329,25 @@ private partial def processBlock (input : Parser.InputContext) (parserState : Pa
   let final := last initial
   return (final.elabSnap.resultSnap.get.cmdState, Language.toSnapshotTree initial)
 
-/-- Elaborate a prelude as one module: the first block begins with its header, and
-blocks follow in order, so each command can extend the parser for later commands.
-The frontend retains the sigils' original positions. -/
-private def elaboratePreludes (env : Lean.Environment) (file : DecodedFile) :
+/-- Elaborate a prelude or postlude file as written, after its header, whose imports are
+already loaded. Its proofs elaborate in parallel; their diagnostics are reported once
+they finish. -/
+private def elaborateSource (env : Lean.Environment) (file : DecodedFile) (source : String) :
     IO (Elab.Command.State × Array (Message × Option Name) × Array Json) := do
   let (initial, _, _) ← elaborateFile env file.fileName file.fileMap #[] #[]
-  let mut state := initial
   let mut messages : Array (Message × Option Name) := #[]
-  let mut trees : Array Language.SnapshotTree := #[]
-  let mut first := true
-  for block in file.preludes do
-    let (input, parserState) ← if first then
-        let (input, header, parserState, headerMessages) ← preludeHeader block
-        for message in headerMessages.toList do
-          messages := messages.push (message, none)
-        unless header.isModule do
-          let message : Message := {
-            fileName := input.fileName, pos := ⟨1, 0⟩, severity := .error,
-            data := "a prelude must begin with a module header" }
-          messages := messages.push (message, none)
-        pure (input, parserState)
-      else
-        let (origin, source) ← IO.ofExcept (preludeSource block)
-        pure (Parser.mkInputContext source origin (normalizeLineEndings := false), {})
-    first := false
-    let (next, tree) ← processBlock input parserState { state with messages := {} }
-    state := next
-    trees := trees.push tree
-  -- Proofs of all blocks elaborate in parallel; report their diagnostics once they finish.
-  for tree in trees do
-    for snapshot in tree.getAll do
-      for message in snapshot.diagnostics.msgLog.toList do
-        messages := messages.push (message, none)
+  let (input, header, parserState, headerMessages) ← sourceHeader file.fileName source
+  for message in headerMessages.toList do
+    messages := messages.push (message, none)
+  unless header.isModule do
+    let message : Message := {
+      fileName := input.fileName, pos := ⟨1, 0⟩, severity := .error,
+      data := "a prelude or postlude file must begin with a module header" }
+    messages := messages.push (message, none)
+  let (state, tree) ← processSource input parserState { initial with messages := {} }
+  for snapshot in tree.getAll do
+    for message in snapshot.diagnostics.msgLog.toList do
+      messages := messages.push (message, none)
   return ({ state with messages := {} }, messages, #[])
 
 /-- Copy compiled modules into `root` by module path, such as `Erlang/json.olean`, so
@@ -2454,129 +2410,314 @@ private def writeSources (dir : System.FilePath) (sources : Array (Name × Strin
     IO.FS.createDirAll (path.parent.getD dir)
     IO.FS.writeFile path source
 
-/-- Verify against explicit imports, reusing only successfully audited module artifacts. -/
+/-- What verifying a file gives the files that import it. -/
+private structure Verified where
+  report : Json
+  /-- The rendered source by module, unless decoding the file failed. -/
+  source? : Option (Name × String)
+  /-- The module, when it verified. -/
+  module? : Option Name
+  /-- Compiled artifacts of the module, when it verified, and of every module it imports. -/
+  artifacts : NameMap ImportArtifacts
+
+/-- A file whose imports cannot be loaded, such as a header naming a module that does not
+exist, fails alone, so the files that do not import it still verify. -/
+private def unimportable (entry : Json) (error : IO.Error) : Verified :=
+  let file := (str entry "file").toOption.getD ""
+  let module := (str entry "module").toOption.getD ""
+  { report := Json.mkObj [
+      ("status", toJson "error"), ("file", toJson file), ("module", toJson module),
+      ("time_ms", toJson 0), ("cached", toJson false), ("theorems", .arr #[]),
+      ("diagnostics", .arr #[diagnostic file module "error" error.toString])]
+    source? := none, module? := none, artifacts := {} }
+
+/-- Verify a file against the results of the files it imports, reusing only successfully
+audited module artifacts. -/
+private def verifyFile (files : Array Json) (entry : Json) (options : Array (TSyntax `command))
+    (runtime : Runtime) (cacheDirectory temporary : System.FilePath) (checkSource : Bool)
+    (importing : Std.Mutex Unit) (imported : Array (String × Verified)) : IO Verified := do
+  let started ← IO.monoMsNow
+  let moduleString ← IO.ofExcept (str entry "module")
+  let origin ← IO.ofExcept (str entry "file")
+  let names ← IO.ofExcept (inputImports files entry runtime.env)
+  let reexport := !(← IO.ofExcept (arr entry "contents")).isEmpty
+  let mut artifacts : NameMap ImportArtifacts := imported.foldl (init := {}) fun artifacts (_, verified) =>
+    verified.artifacts.foldl (init := artifacts) fun artifacts name paths => artifacts.insert name paths
+  let mut imports := runtimeImports
+  -- Prelude and postlude files declare their imports in their headers, as written.
+  for declared in ← sourceImports entry do
+    unless imports.any (·.module == declared.module) do
+      imports := imports.push declared
+  let mut missingImport := false
+  let mut diagnostics := #[]
+  let mut cacheHit := false
+  let mut theorems := #[]
+  for name in names do
+    let moduleName ← IO.ofExcept <| (identifier name).run runtime.env |>.run' {}
+    let moduleName := moduleName.getId
+    if files.any (fun other => (str other "module").toOption == some name) &&
+        !imported.any (fun (module, verified) => module == name && verified.module?.isSome) then
+      missingImport := true
+      diagnostics := diagnostics.push (diagnostic origin moduleString "error"
+        s!"import '{name}' must precede this file and verify successfully")
+    unless imports.any (·.module == moduleName) do
+      imports := imports.push { module := moduleName, isExported := reexport }
+  if ← IO.ofExcept (hasLaws entry) then
+    imports := imports ++ lawImports imports
+  -- Syntax extensions are available only after importing this file's declared
+  -- dependencies. Never decode all proofs against the bare runtime up front.
+  -- Lean imports one module set at a time, so files take turns importing.
+  let mut env := runtime.env
+  unless missingImport do
+    try env ← importing.atomically (importFile runtime imports artifacts)
+    catch error => return unimportable entry error
+  let file ← decodeFile files entry env options
+  let source ← renderFile file env
+  let sourceModule ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
+  let mut fileFailed := !file.proofDiagnostics.isEmpty
+  let mut module? := none
+  diagnostics := diagnostics ++ parsingDiagnostics file
+  if checkSource && file.source?.isNone then
+    if let some message ← checkRendered file source env then
+      fileFailed := true
+      diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName "error" message)
+  unless missingImport do
+    let moduleName ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
+    let mainModule := moduleName.getId
+    let key := file.cacheKey
+    let directory := key.map (cacheDirectory / ·) |>.getD (temporary / toString (hash mainModule))
+    if let some saved ← if fileFailed || key.isNone then pure none else cachedDiagnostics directory then
+      diagnostics := saved
+      cacheHit := true
+    else
+      let main := env.setMainModule mainModule
+      let (state, messages, timings) ← match file.source? with
+        | none =>
+          elaborateFile main file.fileName file.fileMap file.commands (file.theorems.map Prod.fst)
+        | some source => elaborateSource main file source
+      theorems := timings
+      for (msg, declarationName) in messages do
+        if msg.severity == .error then fileFailed := true
+        let (origin, location) := if file.source?.isNone then
+          messageLocation file.fileMap file.spans msg
+          else (some msg.fileName, .column msg.pos)
+        diagnostics := diagnostics.push (diagnostic (origin.getD file.fileName) file.moduleName
+          msg.severity.toString
+          (← msg.data.toString) location declarationName)
+      -- Audit local laws and the precomputed axiom dependencies of imported declarations.
+      unless fileFailed do
+        let audit : CoreM (Array Json) := do
+          let mut errors := #[]
+          let namespaceId ← IO.ofExcept <| (identifier file.moduleName).run (← getEnv) |>.run' {}
+          for (name, info) in file.theorems do
+            for axiomName in ← collectAxioms (namespaceId.getId ++ name) do
+              unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
+                errors := errors.push (diagnostic file.fileName file.moduleName "error"
+                  s!"unexpected axiom: {axiomName}" info.location (some name))
+          return errors
+        let errors ← (audit.run' { fileName := file.fileName, fileMap := file.fileMap }
+          { env := state.env }).toIO (fun _ => IO.userError "law axiom audit failed")
+        if !errors.isEmpty then fileFailed := true
+        diagnostics := diagnostics ++ errors
+      unless fileFailed do
+        if key.isSome then
+          writeCached directory state.env diagnostics
+        else
+          IO.FS.createDirAll directory
+          writeModule state.env (directory / "module.olean")
+    unless fileFailed do
+      artifacts := artifacts.insert mainModule (cachedArtifacts directory)
+      module? := some mainModule
+  let elapsed := (← IO.monoMsNow) - started
+  let status := if missingImport then "skipped" else if fileFailed then "error" else "ok"
+  return {
+    report := Json.mkObj [
+      ("status", toJson status),
+      ("file", toJson file.fileName), ("module", toJson file.moduleName),
+      ("time_ms", toJson elapsed),
+      ("cached", toJson cacheHit), ("theorems", .arr theorems),
+      ("diagnostics", .arr diagnostics)]
+    source? := some (sourceModule.getId, source), module?, artifacts }
+
+/-- Verify files in order of their imports. Each file starts on its own thread once the
+files it imports are verified, so files that do not import each other verify in
+parallel, and reports are emitted in the order of the files. -/
 private def verify (files : Array Json) (options : Array (TSyntax `command)) (runtime : Runtime)
     (cacheDirectory : System.FilePath) (export? : Option System.FilePath)
     (debug? : Option Debug) (checkSource : Bool) (emit : Json → IO Unit) : IO Unit := do
   IO.FS.withTempDir fun temporary => do
-    let mut artifacts : NameMap ImportArtifacts := {}
-    let mut sources : Array (Name × String) := #[]
-    let mut exported : Array Name := #[]
-    let mut verified : Std.HashSet String := {}
-    let mut uncached : Std.HashSet String := {}
+    let importing ← Std.Mutex.new ()
+    let mut tasks : Array (String × Task (Except IO.Error Verified)) := #[]
     for entry in files do
-      let started ← IO.monoMsNow
-      let moduleString ← IO.ofExcept (str entry "module")
-      let origin ← IO.ofExcept (str entry "file")
       let names ← IO.ofExcept (inputImports files entry runtime.env)
-      let reexport := !(← IO.ofExcept (arr entry "contents")).isEmpty ||
-        !((arr entry "preludes").toOption.getD #[]).isEmpty
-      let mut imports := runtimeImports
-      let mut missingImport := false
-      let mut diagnostics := #[]
-      let mut cacheHit := false
-      let mut theorems := #[]
-      for name in names do
-        let moduleName ← IO.ofExcept <| (identifier name).run runtime.env |>.run' {}
-        let moduleName := moduleName.getId
-        if files.any (fun other => (str other "module").toOption == some name) &&
-            !verified.contains name then
-          missingImport := true
-          diagnostics := diagnostics.push (diagnostic origin moduleString "error"
-            s!"import '{name}' must precede this file and verify successfully")
-        unless imports.any (·.module == moduleName) do
-          imports := imports.push { module := moduleName, isExported := reexport }
-      if ← IO.ofExcept (hasLaws entry) then
-        imports := imports ++ lawImports imports
-      -- A prelude declares its own imports in its header.
-      for declared in ← preludeImports entry do
-        unless imports.any (·.module == declared.module) do
-          imports := imports.push declared
-      -- Syntax extensions are available only after importing this file's declared
-      -- dependencies. Never decode all proofs against the bare runtime up front.
-      let env ← if missingImport then pure runtime.env else importFile runtime imports artifacts
-      let file ← decodeFile files entry env options
-      let source ← renderFile file env
-      let sourceModule ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
-      sources := sources.push (sourceModule.getId, source)
-      let mut fileFailed := !file.proofDiagnostics.isEmpty
-      diagnostics := diagnostics ++ parsingDiagnostics file
-      if checkSource && file.preludes.isEmpty then
-        if let some message ← checkRendered file source env then
-          fileFailed := true
-          diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName "error" message)
-      unless missingImport do
-        let moduleName ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
-        let mainModule := moduleName.getId
-        let key := if file.imports.any uncached.contains then none else file.cacheKey
-        let directory := key.map (cacheDirectory / ·) |>.getD (temporary / toString (hash mainModule))
-        if let some saved ← if fileFailed || key.isNone then pure none else cachedDiagnostics directory then
-          diagnostics := saved
-          cacheHit := true
-        else
-          let (state, messages, timings) ← if file.preludes.isEmpty then
-            elaborateFile (env.setMainModule mainModule)
-              file.fileName file.fileMap file.commands (file.theorems.map Prod.fst)
-            else elaboratePreludes (env.setMainModule mainModule) file
-          theorems := timings
-          let ranges := preludeRanges file
-          for (msg, declarationName) in messages do
-            if msg.severity == .error then fileFailed := true
-            let (origin, location) := if file.preludes.isEmpty then
-              messageLocation file.fileMap file.spans msg
-              else (some msg.fileName, preludeLocation ranges msg)
-            diagnostics := diagnostics.push (diagnostic (origin.getD file.fileName) file.moduleName
-              msg.severity.toString
-              (← msg.data.toString) location declarationName)
-          -- Audit local laws and the precomputed axiom dependencies of imported declarations.
-          unless fileFailed do
-            let audit : CoreM (Array Json) := do
-              let mut errors := #[]
-              let namespaceId ← IO.ofExcept <| (identifier file.moduleName).run (← getEnv) |>.run' {}
-              for (name, info) in file.theorems do
-                for axiomName in ← collectAxioms (namespaceId.getId ++ name) do
-                  unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
-                    errors := errors.push (diagnostic file.fileName file.moduleName "error"
-                      s!"unexpected axiom: {axiomName}" info.location (some name))
-              return errors
-            let errors ← (audit.run' { fileName := file.fileName, fileMap := file.fileMap }
-              { env := state.env }).toIO (fun _ => IO.userError "law axiom audit failed")
-            if !errors.isEmpty then fileFailed := true
-            diagnostics := diagnostics ++ errors
-          unless fileFailed do
-            if key.isSome then
-              writeCached directory state.env diagnostics
-            else
-              IO.FS.createDirAll directory
-              writeModule state.env (directory / "module.olean")
-        unless fileFailed do
-          artifacts := artifacts.insert mainModule (cachedArtifacts directory)
-          exported := exported.push mainModule
-          verified := verified.insert file.moduleName
-          if key.isNone then uncached := uncached.insert file.moduleName
-      let elapsed := (← IO.monoMsNow) - started
-      let status := if missingImport then "skipped" else if fileFailed then "error" else "ok"
-      emit (Json.mkObj [
-        ("status", toJson status),
-        ("file", toJson file.fileName), ("module", toJson file.moduleName),
-        ("time_ms", toJson elapsed),
-        ("cached", toJson cacheHit), ("theorems", .arr theorems),
-        ("diagnostics", .arr diagnostics)])
+      let dependencies := tasks.filter fun (module, _) => names.contains module
+      let task ← IO.mapTasks (prio := .dedicated) (tasks := dependencies.toList.map (·.2))
+        fun results => do
+          let imported ← (dependencies.zip results.toArray).mapM fun ((module, _), result) =>
+            return (module, ← IO.ofExcept result)
+          verifyFile files entry options runtime cacheDirectory temporary checkSource importing
+            imported
+      tasks := tasks.push (← IO.ofExcept (str entry "module"), task)
+    -- Invalid input fails the request, once every file has stopped verifying.
+    let mut results := #[]
+    let mut failure : Option IO.Error := none
+    for (_, task) in tasks do
+      match ← IO.wait task with
+      | .ok verified =>
+        if failure.isNone then
+          emit verified.report
+          results := results.push verified
+      | .error error => if failure.isNone then failure := some error
+    if let some error := failure then throw error
+    let exported := results.filterMap (·.module?)
+    let artifacts : NameMap ImportArtifacts := results.foldl (init := {}) fun artifacts verified =>
+      verified.artifacts.foldl (init := artifacts) fun artifacts name paths => artifacts.insert name paths
     if let some path := export? then
       if exported.size == files.size then
         exportModules path exported artifacts temporary
     if let some debug := debug? then
       if debug.always || exported.size != files.size then
-        writeSources debug.dir sources
+        writeSources debug.dir (results.filterMap (·.source?))
       if debug.mode matches .olean then
         layoutArtifacts debug.dir exported artifacts
 
+/-- A Lean file of a prelude or postlude directory: its module, named by its path below
+the directory, such as `Bdd.Core` for `Bdd/Core.lean`, its source, and the modules its
+header imports. -/
+private structure SourceModule where
+  name : Name
+  path : System.FilePath
+  source : String
+  imports : Array Name
+
+/-- The Lean files below a directory, with their path components below it. Hidden
+entries, such as editor lock files, are skipped. -/
+private partial def leanFiles (dir : System.FilePath) (relative : Array String := #[]) :
+    IO (Array (Array String × System.FilePath)) := do
+  let mut files := #[]
+  for entry in ← dir.readDir do
+    if entry.fileName.startsWith "." then continue
+    let components := relative.push entry.fileName
+    match (← entry.path.metadata).type with
+    | .dir => files := files ++ (← leanFiles entry.path components)
+    | .symlink =>
+      -- Module names follow the path below the directory, which a link would leave.
+      if ← entry.path.isDir then
+        throw (IO.userError s!"{entry.path}: links to directories are not supported")
+      if entry.path.extension == some "lean" then files := files.push (components, entry.path)
+    | _ => if entry.path.extension == some "lean" then files := files.push (components, entry.path)
+  return files
+
+/-- Whether a path component names a module component that a header can import as written. -/
+private def plainIdentifier (component : String) : Bool :=
+  match component.toList with
+  | first :: rest => isIdFirst first && rest.all isIdRest
+  | [] => false
+
+private def directoryModules (dir : String) : IO (Array SourceModule) := do
+  let dir := System.FilePath.mk dir
+  unless ← dir.isDir do throw (IO.userError s!"{dir} is not a directory")
+  let files ← leanFiles dir
+  files.qsort (·.2.toString < ·.2.toString) |>.mapM fun (components, path) => do
+    let components := components.modify (components.size - 1) (·.dropEnd ".lean".length |>.toString)
+    unless components.all plainIdentifier do
+      throw (IO.userError s!"{path}: module paths must be Lean identifiers separated by directories")
+    let source ← IO.FS.readFile path
+    let (_, header, _, _) ← sourceHeader path.toString source
+    return { name := components.foldl Name.mkStr .anonymous, path, source,
+             imports := (header.imports (includeInit := false)).map (·.module) }
+
+/-- Order modules after the modules they import, keeping path order among the rest. -/
+private def sortModules (modules : Array SourceModule) : IO (Array SourceModule) := do
+  let mut sorted := #[]
+  let mut done : NameSet := {}
+  let mut pending := modules
+  while !pending.isEmpty do
+    let ready := pending.filter fun module => module.imports.all fun imported =>
+      done.contains imported || !modules.any (·.name == imported)
+    if ready.isEmpty then
+      let names := pending.map (·.name.toString)
+      throw (IO.userError s!"modules import each other in a cycle: {", ".intercalate names.toList}")
+    sorted := sorted ++ ready
+    done := ready.foldl (fun done module => done.insert module.name) done
+    pending := pending.filter (!done.contains ·.name)
+  return sorted
+
+/-- The request's files and the modules of its prelude and postlude directories, in the
+order they verify: preludes, translated files, postludes, then laws, each module after
+those it imports. Translated files import every prelude and laws every postlude. -/
+private def requestFiles (j : Json) (env : Lean.Environment) : IO (Array Json) := do
+  let files ← IO.ofExcept (arr j "files")
+  let moduleId (name : String) : IO Name := do
+    return (← IO.ofExcept <| (identifier name).run env |>.run' {}).getId
+  let mut known : NameSet := {}
+  for file in files do
+    if (field file "cache_key").isOk then
+      throw (IO.userError "cache keys are computed by the runner")
+    known := known.insert (← moduleId (← IO.ofExcept (str file "module")))
+  let translated := known
+  let directory (key : String) : IO (Array SourceModule) := do
+    let .ok dir := str j key | return #[]
+    directoryModules dir
+  let preludes ← directory "prelude_dir"
+  let postludes ← directory "postlude_dir"
+  for module in preludes ++ postludes do
+    if known.contains module.name || (env.getModuleIdx? module.name).isSome ||
+        module.name.getRoot == `Erlang then
+      throw (IO.userError s!"{module.path}: module {module.name} is already defined")
+    known := known.insert module.name
+  let mut lawModules : NameSet := {}
+  for file in files do
+    if ← IO.ofExcept (hasLaws file) then
+      lawModules := lawModules.insert (← moduleId (← IO.ofExcept (str file "module")))
+  for module in preludes do
+    for imported in module.imports do
+      if translated.contains imported || postludes.any (·.name == imported) then
+        throw (IO.userError s!"{module.path}: preludes verify first, so they cannot import {imported}")
+  for module in postludes do
+    for imported in module.imports do
+      if lawModules.contains imported then
+        throw (IO.userError s!"{module.path}: laws verify last, so postludes cannot import {imported}")
+  let entries (modules : Array SourceModule) : IO (Array Json) := do
+    return (← sortModules modules).map fun module => Json.mkObj [
+      ("file", toJson module.path.toString), ("module", toJson module.name.toString),
+      ("imports", toJson ((module.imports.filter known.contains).map (·.toString))),
+      ("contents", Json.arr #[]), ("source", toJson module.source)]
+  let names (modules : Array SourceModule) := modules.map (toJson ·.name.toString)
+  let importing (file : Json) (modules : Array SourceModule) : Json :=
+    file.setObjVal! "imports" (.arr (names modules ++ ((arr file "imports").toOption.getD #[])))
+  let mut translations := #[]
+  let mut laws := #[]
+  for file in files do
+    if ← IO.ofExcept (hasLaws file) then laws := laws.push (importing file (preludes ++ postludes))
+    else translations := translations.push (importing file preludes)
+  return (← entries preludes) ++ translations ++ (← entries postludes) ++ laws
+
+private def hex (value : UInt64) : String :=
+  let digits := Nat.toDigits 16 value.toNat
+  String.ofList (List.replicate (16 - digits.length) '0' ++ digits)
+
+/-- Give each file a cache key from its entry and the keys of the request's modules it
+imports. The runtime is identified by the cache directory. Lean's hash has 64 bits, so
+keys join two of them over differently aligned inputs. -/
+private def withCacheKeys (files : Array Json) : Array Json := Id.run do
+  let mut keys : Std.HashMap String String := {}
+  let mut result := #[]
+  for file in files do
+    let imports := ((arr file "imports").toOption.getD #[]).filterMap (·.getStr?.toOption)
+    let content := file.compress ++
+      String.join (imports.toList.map fun name => s!"\n{name} {keys.getD name ""}")
+    let key := hex (hash ("lynx-key:" ++ content)) ++ hex (hash ("lynx-cache-key:" ++ content))
+    keys := keys.insert ((str file "module").toOption.getD "") key
+    result := result.push (file.setObjVal! "cache_key" (toJson key))
+  return result
+
 private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do
   let (files, options) ← IO.ofExcept do
-    fields j ["command", "version", "files", "cache_dir", "options", "export", "debug_dir", "debug",
-      "check_source"]
+    fields j ["command", "version", "files", "prelude_dir", "postlude_dir", "cache_dir", "options",
+      "export", "debug_dir", "debug", "check_source"]
     pure (← arr j "files", ← optionCommands j)
-  let directory := System.FilePath.mk (← IO.ofExcept (str j "cache_dir"))
+  let cacheDirectory? := (str j "cache_dir").toOption.map System.FilePath.mk
   let export? := (str j "export").toOption.map System.FilePath.mk
   let debug? ← IO.ofExcept (ε := String) do
     let .ok dir := str j "debug_dir" | pure none
@@ -2586,14 +2727,18 @@ private def runFiles (j : Json) (cache : IO.Ref (Option Runtime)) (emit : Json �
     | "olean" => pure (some { dir, always := true, mode := .olean : Debug })
     | mode => throw s!"unsupported debug mode '{mode}'"
   let checkSource := (field j "check_source" >>= (·.getBool?)).toOption.getD false
-  unless files.isEmpty do
+  let directories := ["prelude_dir", "postlude_dir"].any fun key => (str j key).isOk
+  unless files.isEmpty && !directories do
     let runtime ← getRuntime cache
     -- Options change elaboration, so artifacts are cached per set of options.
     let optionKey := if options.isEmpty then "" else
       s!"-{hash ((j.getObjValD "options").compress)}"
-    let directory ← if files.any (fun file => (field file "cache_key").isOk) then
-      pure (directory / s!"lean-{Lean.versionString}-{← runtimeFingerprint}{optionKey}")
-      else pure directory
+    let files ← requestFiles j runtime.env
+    -- Without a cache directory, files have no keys, so nothing reads the directory.
+    let (files, directory) ← match cacheDirectory? with
+      | some directory => pure (withCacheKeys files,
+          directory / s!"lean-{Lean.versionString}-{← runtimeFingerprint}{optionKey}")
+      | none => pure (files, ".")
     verify files options runtime directory export? debug? checkSource emit
 
 private def run (request : String) (cache : IO.Ref (Option Runtime)) (emit : Json → IO Unit) : IO Unit := do

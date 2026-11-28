@@ -213,13 +213,7 @@ defmodule Lynx.CaseTest do
       def increment(_value), do: true
 
       laws "custom syntax" do
-        prelude "case_test/prelude.lean"
-
-        # Parsing this declaration requires the syntax from the previous one.
-        prelude ~LEAN"""
-        elab "test_partial_again" : tactic => do evalTactic (← `(tactic| test_partial))
-        elab "test_finish" : tactic => do evalTactic (← `(tactic| rfl))
-        """
+        prelude "case_test/prelude"
 
         termination_suffix &__MODULE__.increment/1, ~LEAN"""
         partial_fixpoint monotonicity by test_partial_again
@@ -237,13 +231,7 @@ defmodule Lynx.CaseTest do
       end
 
       laws "independent registration" do
-        prelude ~LEAN"""
-        module
-        public import Lynx
-        public section
-        open Lean Elab Tactic
-        elab "test_finish" : tactic => throwError "second prelude loaded"
-        """
+        prelude "case_test/independent"
 
         law independent,
           expects: true,
@@ -277,14 +265,7 @@ defmodule Lynx.CaseTest do
       def double(value) when is_integer(value), do: value + value
 
       laws "shared" do
-        postlude "case_test/postlude.lean"
-
-        postlude(~LEAN"""
-        theorem double_zero : «double/1» (.integer 0) = .ok (.integer 0) := by
-          simpa using double_integer 0
-
-        end Elixir.Lynx.CaseTest.Postludes
-        """)
+        postlude "case_test/postlude"
 
         law doubles_zero,
           expects: double(0) == 0,
@@ -437,6 +418,42 @@ defmodule Lynx.CaseTest do
           laws "invalid", options: [maxRecDepth: 1.5] do
             law invalid_option, expects: true
           end
+        end
+      end
+    end
+
+    test "rejects preludes and postludes that are not one directory" do
+      assert_raise ArgumentError, ~r/prelude expects a directory, got: ".*missing"/, fn ->
+        defmodule MissingPrelude do
+          use ExUnit.Case, register: false
+          use Lynx.Case
+
+          laws "missing" do
+            prelude "case_test/missing"
+            law missing, expects: true
+          end
+        end
+      end
+
+      assert_raise ArgumentError, "a laws group may have one postlude directory", fn ->
+        defmodule TwoPostludes do
+          use ExUnit.Case, register: false
+          use Lynx.Case
+
+          laws "two" do
+            postlude "case_test/postlude"
+            postlude "case_test/postlude"
+            law two, expects: true
+          end
+        end
+      end
+
+      assert_raise ArgumentError, "postlude must be defined inside a laws group", fn ->
+        defmodule UngroupedPostlude do
+          use ExUnit.Case, register: false
+          use Lynx.Case
+
+          postlude "case_test/postlude"
         end
       end
     end

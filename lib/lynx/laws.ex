@@ -125,11 +125,12 @@ defmodule Lynx.Laws do
   Pass `dynamic: [{module, function, arity}]` to declare the functions that calls
   by name may reach, as with `Lynx.Case.dynamic/1`.
 
-  Pass `preludes: [source, ...]` to load `Lynx.Lean` declaration blocks before
-  translated definitions and proofs, as with `Lynx.Case.prelude/1`.
+  Pass `prelude: dir` to verify the Lean modules in a directory before the
+  translated definitions, as with `Lynx.Case.prelude/1`.
 
-  Pass `postludes: [source, ...]` to load `Lynx.Lean` declaration blocks after
-  translated definitions and before proofs, as with `Lynx.Case.postlude/1`.
+  Pass `postlude: dir` to verify the Lean modules in a directory after the
+  translated definitions and before the laws, as with `Lynx.Case.postlude/1`.
+  Relative directories are expanded against the current working directory.
 
   Pass `options: [name: value]` to set Lean options, such as `maxHeartbeats` or
   `maxRecDepth`, at the top of every translated module. Names are passed to
@@ -164,9 +165,10 @@ defmodule Lynx.Laws do
       |> Enum.reduce(translation, fn module, translation ->
         Lynx.Translation.verify(translation, module)
       end)
-      |> Lynx.Translation.assemble(opts)
+      |> Lynx.Translation.assemble()
 
-    opts = Keyword.take(opts, [:options, :export, :debug_dir, :debug])
+    opts =
+      Keyword.take(opts, [:options, :export, :debug_dir, :debug, :cache, :prelude, :postlude])
     Lynx.Commands.verify!(@lean_dir, files, opts)
   end
 

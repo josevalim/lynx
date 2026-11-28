@@ -206,108 +206,105 @@ defmodule Lynx.Case do
   end
 
   @doc ~S'''
-  Adds Lean declarations to the prelude for this laws group.
+  Loads the Lean modules in a directory before the translated definitions of
+  this laws group.
 
-      prelude ~LEAN"""
+      prelude "prelude"
+
+  The path is relative to the directory of the calling file. Each `.lean` file
+  below it is a Lean module named by its path below the directory, so
+  `prelude/Tactics.lean` is the module `Tactics` and `prelude/Bdd/Core.lean`
+  is `Bdd.Core`. Directory and file names must be Lean identifiers, and hidden
+  files are skipped. Each module begins with its own header:
+
       module
       public import Lynx
       public section
 
       open Lean Elab Tactic
       elab "finish" : tactic => do evalTactic (← `(tactic| rfl))
-      """
 
-  Blocks are joined in order into one Lean module, so the first block begins
-  with its header, such as `module` and its imports, which may include runtime
-  modules like `Lynx.Modules.Erlang.erlang`. Later blocks continue the module.
-  Every translated module imports the prelude before its proofs and termination
-  suffixes are parsed, along with the prelude's public imports. Definitions,
-  lemmas, macros, and elaborators may be declared; namespaces are chosen by the
-  source. Meta helper definitions must use Lean's `meta` modifier as usual.
+  Modules import what they use, such as runtime modules like
+  `Lynx.Modules.Erlang.erlang` and each other, and verify after the modules
+  they import. Every translated module imports every prelude module before its
+  proofs and termination suffixes are parsed. Definitions, lemmas, macros, and
+  elaborators may be declared; namespaces are chosen by the source. Meta helper
+  definitions must use Lean's `meta` modifier as usual.
 
-  The prelude cannot refer to translated definitions, which do not exist yet.
-  It does not leak into other groups, and its source participates in verification
-  cache keys. Proofs retain kernel checking and axiom audits.
-
-  A file path may be given instead, relative to the directory of the calling
-  file, to load its contents with `Lynx.Lean.from_file!/1`:
-
-      prelude "tactics.lean"
+  Preludes verify before the translated modules, so they cannot import them.
+  They do not leak into other groups, and their sources participate in
+  verification cache keys. Proofs retain kernel checking and axiom audits.
   '''
-  defmacro prelude(source) do
+  defmacro prelude(dir) do
     quote do
-      Lynx.Case.__prelude__(__MODULE__, unquote(source), __DIR__)
+      Lynx.Case.__directory__(__MODULE__, :prelude, unquote(dir), __DIR__)
     end
   end
-
-  @doc false
-  def __prelude__(module, path, dir) when is_binary(path),
-    do: __prelude__(module, Lynx.Lean.from_file!(Path.expand(path, dir)), dir)
-
-  def __prelude__(module, %Lynx.Lean{} = source, _dir) do
-    case Module.get_attribute(module, :lynx_preludes) do
-      nil ->
-        raise ArgumentError, "prelude must be defined inside a laws group"
-
-      preludes ->
-        Module.put_attribute(module, :lynx_preludes, [source | preludes])
-    end
-  end
-
-  def __prelude__(_module, _source, _dir),
-    do: raise(ArgumentError, "prelude expects a Lynx.Lean value or a file path")
 
   @doc ~S'''
-  Adds Lean declarations about translated definitions to this laws group.
+  Loads the Lean modules in a directory after the translated definitions of
+  this laws group.
 
-      postlude ~LEAN"""
-      namespace MyTest
+      postlude "postlude"
+
+  As with `prelude/1`, each `.lean` file below the directory is a Lean module
+  named by its path, which begins with its own header. Unlike preludes,
+  postludes may import the modules translated for the group, such as
+  `Elixir.MyTest`, and `Erlang.program` for its function table, so they can
+  share lemmas about the translated code between the proofs of several laws:
+
+      module
+      public import Elixir.MyTest
+      @[expose] public section
+
+      namespace Elixir.MyTest
 
       theorem double_integer (n : Int) : «double/1» (.integer n) = .ok (.integer (n + n)) := by
         simp [«double/1»]
 
-      end MyTest
-      """
+      end Elixir.MyTest
 
-  Blocks are joined in order into one Lean module, which imports every module
-  translated for the group, including the prelude, and which the laws import.
-  Unlike preludes, postludes may refer to translated definitions, so they can
-  share lemmas about the translated code between the proofs of several laws.
-  Lynx writes the module header, so blocks contain only declarations, which are
-  public and expose their bodies. Namespaces are chosen by the source: the
-  test module's namespace, such as `MyTest` above, makes declarations available
-  to law proofs without qualification.
+  The laws import every postlude module. Namespaces are chosen by the source:
+  the test module's namespace, such as `Elixir.MyTest` above, makes
+  declarations available to law proofs without qualification. Modules that
+  import none of each other verify independently, and changing one verifies
+  again only the modules that import it.
 
   Postludes do not translate anything themselves: the laws must reach every
-  definition they mention. They do not leak into other groups, and their source
-  participates in verification cache keys. Proofs retain kernel checking and
-  axiom audits.
-
-  As with `prelude/1`, a file path may be given instead, relative to the
-  directory of the calling file.
+  definition they mention. They do not leak into other groups, and their
+  sources participate in verification cache keys. Proofs retain kernel
+  checking and axiom audits.
   '''
-  defmacro postlude(source) do
+  defmacro postlude(dir) do
     quote do
-      Lynx.Case.__postlude__(__MODULE__, unquote(source), __DIR__)
+      Lynx.Case.__directory__(__MODULE__, :postlude, unquote(dir), __DIR__)
     end
   end
 
   @doc false
-  def __postlude__(module, path, dir) when is_binary(path),
-    do: __postlude__(module, Lynx.Lean.from_file!(Path.expand(path, dir)), dir)
+  def __directory__(module, kind, dir, caller_dir) when is_binary(dir) do
+    attribute = :"lynx_#{kind}"
 
-  def __postlude__(module, %Lynx.Lean{} = source, _dir) do
-    case Module.get_attribute(module, :lynx_postludes) do
+    case Module.get_attribute(module, attribute) do
       nil ->
-        raise ArgumentError, "postlude must be defined inside a laws group"
+        raise ArgumentError, "#{kind} must be defined inside a laws group"
 
-      postludes ->
-        Module.put_attribute(module, :lynx_postludes, [source | postludes])
+      false ->
+        path = Path.expand(dir, caller_dir)
+
+        if not File.dir?(path) do
+          raise ArgumentError, "#{kind} expects a directory, got: #{inspect(path)}"
+        end
+
+        Module.put_attribute(module, attribute, path)
+
+      _ ->
+        raise ArgumentError, "a laws group may have one #{kind} directory"
     end
   end
 
-  def __postlude__(_module, _source, _dir),
-    do: raise(ArgumentError, "postlude expects a Lynx.Lean value or a file path")
+  def __directory__(_module, kind, dir, _caller_dir),
+    do: raise(ArgumentError, "#{kind} expects a directory path, got: #{inspect(dir)}")
 
   @doc """
   Leaves a function untranslated in this laws group.
@@ -469,8 +466,8 @@ defmodule Lynx.Case do
     Module.put_attribute(module, :lynx_termination_suffixes, %{})
     Module.put_attribute(module, :lynx_cutoffs, MapSet.new())
     Module.put_attribute(module, :lynx_dynamic, MapSet.new())
-    Module.put_attribute(module, :lynx_preludes, [])
-    Module.put_attribute(module, :lynx_postludes, [])
+    Module.put_attribute(module, :lynx_prelude, false)
+    Module.put_attribute(module, :lynx_postlude, false)
 
     try do
       fun.()
@@ -486,8 +483,8 @@ defmodule Lynx.Case do
         termination_suffixes: Module.get_attribute(module, :lynx_termination_suffixes),
         cutoffs: Module.get_attribute(module, :lynx_cutoffs),
         dynamic: Module.get_attribute(module, :lynx_dynamic),
-        preludes: Enum.reverse(Module.get_attribute(module, :lynx_preludes)),
-        postludes: Enum.reverse(Module.get_attribute(module, :lynx_postludes))
+        prelude: Module.get_attribute(module, :lynx_prelude),
+        postlude: Module.get_attribute(module, :lynx_postlude)
       ]
 
       {name, group_laws, translation, options}
@@ -496,8 +493,8 @@ defmodule Lynx.Case do
       Module.delete_attribute(module, :lynx_termination_suffixes)
       Module.delete_attribute(module, :lynx_cutoffs)
       Module.delete_attribute(module, :lynx_dynamic)
-      Module.delete_attribute(module, :lynx_preludes)
-      Module.delete_attribute(module, :lynx_postludes)
+      Module.delete_attribute(module, :lynx_prelude)
+      Module.delete_attribute(module, :lynx_postlude)
     end
   end
 
@@ -532,11 +529,14 @@ defmodule Lynx.Case do
     dir = Path.join(group_path("tmp", module, name))
     File.rm_rf!(dir)
 
+    {directories, translation} = Keyword.split(translation, [:prelude, :postlude])
+    directories = for {kind, dir} <- directories, dir, do: {kind, dir}
+
     files =
       Lynx.Translation.new(translation)
       |> Lynx.Translation.add(Lynx.Bytecode.fetch!(module))
       |> Lynx.Translation.verify(module, laws)
-      |> Lynx.Translation.assemble(cache: cache)
+      |> Lynx.Translation.assemble()
 
     signatures =
       for file <- files,
@@ -549,7 +549,7 @@ defmodule Lynx.Case do
       Lynx.Commands.verify!(
         @lean_dir,
         files,
-        [options: options, debug_dir: dir] ++ debug ++ export
+        [options: options, debug_dir: dir, cache: cache] ++ directories ++ debug ++ export
       )
 
     if debug != [] do

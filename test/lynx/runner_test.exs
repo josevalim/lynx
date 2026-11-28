@@ -77,58 +77,63 @@ defmodule Lynx.RunnerTest do
 
   @tag :tmp_dir
   test "renders preludes with the imports they elaborate with", %{tmp_dir: tmp_dir} do
-    blocks =
-      for {source, line} <- [
-            {"module\npublic import Lynx\n\n@[expose] public section\n", 1},
-            {"def value := @Erlang.maps.«new/0»\n", 10}
-          ] do
-        %{"file" => "custom.exs", "span" => [line], "indentation" => 4, "source" => source}
-      end
+    prelude =
+      write_modules(tmp_dir, "prelude", %{
+        "Rendered.lean" => """
+        module
+        public import Lynx.Modules.Erlang.maps
 
-    files = [
-      file("custom.exs", "Erlang.prelude.Rendered", [], ["Erlang.maps"])
-      |> Map.put("preludes", blocks)
-    ]
+        @[expose] public section
 
-    assert [%{status: :ok}] =
-             Lynx.Commands.verify!(@lean_dir, files, debug_dir: tmp_dir, debug: :lean)
+        def value := @Erlang.maps.«new/0»
+        """
+      })
 
-    assert File.read!(Path.join(tmp_dir, "Erlang/prelude/Rendered.lean")) == """
+    debug_dir = Path.join(tmp_dir, "debug")
+
+    assert [%{status: :ok, module: "Rendered", file: file}] =
+             Lynx.Commands.verify!(@lean_dir, [],
+               prelude: prelude,
+               debug_dir: debug_dir,
+               debug: :lean
+             )
+
+    assert file == Path.join(prelude, "Rendered.lean")
+
+    assert File.read!(Path.join(debug_dir, "Rendered.lean")) == """
            module
+           public import Lynx.Modules.Erlang.maps
            public import Lynx
            import Lynx.Runner.Elab
-           public import Lynx.Modules.Erlang.maps
 
            @[expose] public section
 
-
            def value := @Erlang.maps.«new/0»
-
            """
   end
 
   @tag :tmp_dir
   test "sets Lean options in translated modules and caches them separately", %{tmp_dir: tmp_dir} do
-    key = :crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)
+    files = [file(@literal_erl, "Elixir.Options", [definition("value", success())])]
+    cache = Path.join(tmp_dir, "cache")
 
-    files = [
-      file(@literal_erl, "Elixir.Options", [definition("value", success())])
-      |> Map.put("cache_key", key)
-    ]
-
-    assert [%{status: :ok, cached: false}] = Lynx.Commands.verify!(@lean_dir, files)
+    assert [%{status: :ok, cached: false}] = Lynx.Commands.verify!(@lean_dir, files, cache: cache)
 
     assert [%{status: :error, cached: false}] =
              Lynx.Commands.verify!(@lean_dir, files,
                options: [maxRecDepth: 1],
-               debug_dir: tmp_dir
+               debug_dir: tmp_dir,
+               cache: cache
              )
 
     assert File.read!(Path.join(tmp_dir, "Elixir/Options.lean")) =~ "set_option maxRecDepth 1"
-    assert [%{status: :ok, cached: true}] = Lynx.Commands.verify!(@lean_dir, files)
+    assert [%{status: :ok, cached: true}] = Lynx.Commands.verify!(@lean_dir, files, cache: cache)
   end
 
-  test "imports both dependency branches and theorems from their shared dependency" do
+  @tag :tmp_dir
+  test "imports both dependency branches and theorems from their shared dependency", %{
+    tmp_dir: tmp_dir
+  } do
     contents = [
       definition("ensures", success()),
       theorem("law", "exact Elixir.Source.«law/0»")
@@ -154,14 +159,7 @@ defmodule Lynx.RunnerTest do
       )
     ]
 
-    files =
-      Enum.map(files, fn file ->
-        # Keep the first verification uncached across repeated test runs.
-        key = :crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)
-        Map.put(file, "cache_key", key)
-      end)
-
-    reports = Lynx.Commands.verify!(@lean_dir, files)
+    reports = Lynx.Commands.verify!(@lean_dir, files, cache: tmp_dir)
 
     assert [
              %{
@@ -190,7 +188,7 @@ defmodule Lynx.RunnerTest do
       end
     end
 
-    assert Enum.all?(Lynx.Commands.verify!(@lean_dir, files), fn report ->
+    assert Enum.all?(Lynx.Commands.verify!(@lean_dir, files, cache: tmp_dir), fn report ->
              report.cached and report.theorems == []
            end)
   end
@@ -236,7 +234,7 @@ defmodule Lynx.RunnerTest do
 
   test "function table purity metadata is checked rather than trusted" do
     %{"files" => files} = JSON.decode!(File.read!(Path.join(@translations_dir, "functions.json")))
-    [source_file, table_file] = Enum.map(files, &Map.delete(&1, "cache_key"))
+    [source_file, table_file] = files
     [table] = table_file["contents"]
     entries = table["entries"]
     entry = Enum.find(entries, &(&1["body"]["name"] == "remember"))
@@ -269,6 +267,189 @@ defmodule Lynx.RunnerTest do
              diagnostic.severity == :error and diagnostic.module == source_file["module"] and
                diagnostic.message =~ "expected to have type\n  Lynx.Dispatcher"
            end)
+  end
+
+  @tag :tmp_dir
+  test "orders directory modules by their imports around translated files and laws", %{
+    tmp_dir: tmp_dir
+  } do
+    # Modules that import others sort after them, though their paths sort first.
+    prelude =
+      write_modules(tmp_dir, "prelude", %{
+        "Tactics.lean" => """
+        module
+        public import Zeta.Base
+        public section
+        macro "finish" : tactic => `(tactic| rfl)
+        """,
+        "Zeta/Base.lean" => """
+        module
+        public import Lynx
+        public section
+        theorem base : True := trivial
+        """
+      })
+
+    postlude =
+      write_modules(tmp_dir, "postlude", %{
+        "Shared.lean" => """
+        module
+        public import Zeta.Later
+        public section
+        theorem shared : True := later
+        """,
+        "Zeta/Later.lean" => """
+        module
+        public import Elixir.Ordered
+        public section
+        theorem later : True := trivial
+        """
+      })
+
+    # Laws come last, whatever their input order, and import every postlude, while
+    # translated files import every prelude.
+    files = [
+      file(@literal_erl, "Elixir.Ordered.laws", [
+        definition("ensures", success()),
+        theorem("law", "have := shared; finish")
+      ]),
+      file(@literal_erl, "Elixir.Ordered", [definition("value", success())])
+    ]
+
+    assert [
+             %{status: :ok, module: "Zeta.Base"},
+             %{status: :ok, module: "Tactics"},
+             %{status: :ok, module: "Elixir.Ordered"},
+             %{status: :ok, module: "Zeta.Later"},
+             %{status: :ok, module: "Shared"},
+             %{status: :ok, module: "Elixir.Ordered.laws", diagnostics: []}
+           ] = Lynx.Commands.verify!(@lean_dir, files, prelude: prelude, postlude: postlude)
+  end
+
+  @tag :tmp_dir
+  test "rejects directory modules that cannot be ordered or named", %{tmp_dir: tmp_dir} do
+    header = "module\npublic import Lynx\n"
+    files = [file(@literal_erl, "Elixir.Named", [definition("value", success())])]
+
+    cycle =
+      write_modules(tmp_dir, "cycle", %{
+        "A.lean" => header <> "import B\n",
+        "B.lean" => header <> "import A\n"
+      })
+
+    assert_raise RuntimeError, ~r/modules import each other in a cycle: A, B/, fn ->
+      Lynx.Commands.verify!(@lean_dir, files, postlude: cycle)
+    end
+
+    early = write_modules(tmp_dir, "early", %{"Early.lean" => header <> "import Elixir.Named\n"})
+
+    assert_raise RuntimeError, ~r/preludes verify first, so they cannot import Elixir.Named/, fn ->
+      Lynx.Commands.verify!(@lean_dir, files, prelude: early)
+    end
+
+    for {name, path} <- [{"clash", "Elixir/Named.lean"}, {"runtime", "Lynx.lean"}] do
+      dir = write_modules(tmp_dir, name, %{path => header})
+
+      assert_raise RuntimeError, ~r/is already defined/, fn ->
+        Lynx.Commands.verify!(@lean_dir, files, postlude: dir)
+      end
+    end
+
+    for path <- ["Not.Plain.lean", "my-file.lean", "1st/File.lean"] do
+      dir = write_modules(tmp_dir, "names", %{path => header})
+
+      assert_raise RuntimeError, ~r/module paths must be Lean identifiers/, fn ->
+        Lynx.Commands.verify!(@lean_dir, files, postlude: dir)
+      end
+
+      File.rm_rf!(dir)
+    end
+
+    laws = [
+      file(@literal_erl, "Elixir.Named.laws", [
+        definition("ensures", success()),
+        theorem("law", "rfl")
+      ])
+    ]
+
+    late = write_modules(tmp_dir, "late", %{"Late.lean" => header <> "import Elixir.Named.laws\n"})
+
+    assert_raise RuntimeError, ~r/postludes cannot import Elixir.Named.laws/, fn ->
+      Lynx.Commands.verify!(@lean_dir, laws, postlude: late)
+    end
+  end
+
+  @tag :tmp_dir
+  test "skips hidden files and fails alone a module whose header cannot be imported", %{
+    tmp_dir: tmp_dir
+  } do
+    header = "module\npublic import Lynx\n"
+
+    postlude =
+      write_modules(tmp_dir, "postlude", %{
+        ".#Editing.lean" => "not Lean",
+        "Missing.lean" => header <> "import Not.A.Module\n",
+        "Dependent.lean" => header <> "import Missing\n",
+        "Fine.lean" => header
+      })
+
+    files = [file(@literal_erl, "Elixir.Alone", [definition("value", success())])]
+
+    assert [
+             %{module: "Elixir.Alone", status: :ok},
+             %{module: "Fine", status: :ok},
+             %{module: "Missing", status: :error, diagnostics: [%{message: message}]},
+             %{module: "Dependent", status: :skipped}
+           ] = Lynx.Commands.verify!(@lean_dir, files, postlude: postlude)
+
+    assert message =~ "unknown module prefix 'Not'"
+  end
+
+  @tag :tmp_dir
+  test "verifies again only the modules that import a changed module", %{tmp_dir: tmp_dir} do
+    source = fn name, body ->
+      "module\npublic import Elixir.Keyed\npublic section\ntheorem #{name} : True := #{body}\n"
+    end
+
+    files = [
+      file(@literal_erl, "Elixir.Keyed", [definition("value", success())]),
+      file(@literal_erl, "Elixir.Keyed.laws", [
+        definition("ensures", success()),
+        theorem("law", "rfl")
+      ])
+    ]
+
+    write = fn body ->
+      write_modules(tmp_dir, "postlude", %{
+        "Stable.lean" => source.("stable", "trivial"),
+        "Edited.lean" => source.("edited", body)
+      })
+    end
+
+    cache = Path.join(tmp_dir, "cache")
+    verify = &Lynx.Commands.verify!(@lean_dir, files, postlude: &1, cache: cache)
+
+    assert Enum.all?(verify.(write.("trivial")), &match?(%{status: :ok, cached: false}, &1))
+
+    assert [
+             %{module: "Elixir.Keyed", cached: true},
+             %{module: "Edited", cached: false},
+             %{module: "Stable", cached: true},
+             %{module: "Elixir.Keyed.laws", cached: false}
+           ] = verify.(write.("True.intro"))
+
+    assert Enum.all?(verify.(write.("True.intro")), & &1.cached)
+
+    # A prelude reaches every translated file, so changing it verifies all of them again.
+    prelude = fn body ->
+      write_modules(tmp_dir, "prelude", %{"Base.lean" => "module\npublic import Lynx\n" <> body})
+    end
+
+    postlude = write.("True.intro")
+    verify = &Lynx.Commands.verify!(@lean_dir, files, prelude: &1, postlude: postlude, cache: cache)
+    assert [%{module: "Base"} | _] = verify.(prelude.(""))
+    assert Enum.all?(verify.(prelude.("")), & &1.cached)
+    assert Enum.all?(verify.(prelude.("-- changed\n")), &(not &1.cached))
   end
 
   describe "errors" do
@@ -372,6 +553,18 @@ defmodule Lynx.RunnerTest do
   defp file(path, module, contents, imports \\ []) do
     %{"file" => path, "module" => module, "contents" => contents, "imports" => imports}
   end
+
+  defp write_modules(tmp_dir, name, modules) do
+    dir = Path.join(tmp_dir, name)
+
+    for {path, source} <- modules do
+      path = Path.join(dir, path)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, source)
+    end
+
+    dir
+  end
 end
 
 defmodule Lynx.RunnerDiagnosticsTest do
@@ -383,147 +576,98 @@ defmodule Lynx.RunnerDiagnosticsTest do
 
   @header "module\npublic import Lynx\npublic section\n"
 
-  test "checks prelude imports, caching, source locations, and proof axioms" do
+  @tag :tmp_dir
+  test "checks prelude imports, caching, source locations, and proof axioms", %{tmp_dir: tmp_dir} do
     # The header imports a runtime module the declarations refer to.
-    source = %{
-      "file" => "elaborators.exs",
-      "span" => [10, 5],
-      "indentation" => 4,
-      "source" =>
-        "module\npublic import Lynx.Modules.Erlang.erlang\npublic section\n" <>
-          "def runtimeCall := @Erlang.erlang.«is_atom/1»\n" <>
-          "open Lean Elab Tactic\nelab \"custom_finish\" : tactic => do evalTactic (← `(tactic| rfl))\n"
-    }
+    prelude =
+      write_modules(tmp_dir, "cached", %{
+        "Elaborators.lean" =>
+          "module\npublic import Lynx.Modules.Erlang.erlang\npublic section\n" <>
+            "def runtimeCall := @Erlang.erlang.«is_atom/1»\n" <>
+            "open Lean Elab Tactic\n" <>
+            "elab \"custom_finish\" : tactic => do evalTactic (← `(tactic| rfl))\n"
+      })
 
-    support =
-      file("elaborators.exs", "Erlang.prelude.Cached", []) |> Map.put("preludes", [source])
+    files = [
+      file(@literal_erl, "Elixir.CustomClient", [
+        definition("ensures", success()),
+        theorem("law", "custom_finish")
+      ])
+    ]
 
-    client =
-      file(
-        @literal_erl,
-        "Elixir.CustomClient",
-        [
-          definition("ensures", success()),
-          theorem("law", "custom_finish")
-        ],
-        ["Erlang.prelude.Cached"]
-      )
+    cache = Path.join(tmp_dir, "cache")
 
-    unrelated = %{client | "module" => "Elixir.UnrelatedClient", "imports" => []}
+    for cached <- [false, true] do
+      assert [%{status: :ok, cached: ^cached}, %{status: :ok, cached: ^cached}] =
+               Lynx.Commands.verify!(@lean_dir, files, prelude: prelude, cache: cache)
+    end
 
-    files =
-      Enum.zip_with([support, client, unrelated], [16, 64, 32], fn file, bytes ->
-        Map.put(file, "cache_key", Base.encode16(:crypto.strong_rand_bytes(bytes), case: :lower))
-      end)
-
-    assert [
-             %{status: :ok, cached: false},
-             %{status: :ok, cached: false},
-             %{status: :error, diagnostics: [%{message: "unknown tactic"}]}
-           ] = Lynx.Commands.verify!(@lean_dir, files)
-
-    assert [
-             %{status: :ok, cached: true},
-             %{status: :ok, cached: true},
-             %{status: :error, cached: false, diagnostics: [%{message: "unknown tactic"}]}
-           ] = Lynx.Commands.verify!(@lean_dir, files)
-
-    source = %{
-      "file" => "custom.exs",
-      "span" => [10, 7],
-      "indentation" => 4,
-      "source" => @header <> "open Lean Elab Tactic\nelab \"broken\" : tactic => missing\n"
-    }
-
-    support = file("custom.exs", "Erlang.prelude.Broken", []) |> Map.put("preludes", [source])
+    broken =
+      write_modules(tmp_dir, "broken", %{
+        "Broken.lean" => @header <> "open Lean Elab Tactic\nelab \"broken\" : tactic => missing\n"
+      })
 
     assert [%{status: :error, diagnostics: [error]}] =
-             Lynx.Commands.verify!(@lean_dir, [support])
+             Lynx.Commands.verify!(@lean_dir, [], prelude: broken)
 
     assert %{
-             file: "custom.exs",
+             file: file,
              declaration: nil,
-             line: 14,
-             column: 31,
+             line: 5,
+             column: 27,
              message: "Unknown identifier `missing`"
            } = error
 
-    imprecise =
-      for {name, span} <- [{"Line", [20]}, {"Unknown", []}] do
-        file("custom.exs", "Erlang.prelude." <> name, [])
-        |> Map.put("preludes", [%{source | "span" => span}])
-      end
+    assert file == Path.join(broken, "Broken.lean")
 
-    assert [
-             %{status: :error, diagnostics: [%{file: "custom.exs", line: 24} = line]},
-             %{status: :error, diagnostics: [unknown]}
-           ] = Lynx.Commands.verify!(@lean_dir, imprecise)
-
-    refute Map.has_key?(line, :column)
-    refute Map.has_key?(unknown, :line)
-    refute Map.has_key?(unknown, :column)
-
-    source = %{
-      source
-      | "source" =>
+    untrusted =
+      write_modules(tmp_dir, "untrusted", %{
+        "Untrusted.lean" =>
           @header <>
-            "open Lean Elab Tactic\nelab \"untrusted\" : tactic => do evalTactic (← `(tactic| sorry))\n"
-    }
-
-    support = file("custom.exs", "Erlang.prelude.Untrusted", []) |> Map.put("preludes", [source])
+            "open Lean Elab Tactic\n" <>
+            "elab \"untrusted\" : tactic => do evalTactic (← `(tactic| sorry))\n"
+      })
 
     client =
-      file(
-        @literal_erl,
-        "Elixir.UntrustedClient",
-        [
-          definition("ensures", success()),
-          theorem("law", "untrusted")
-        ],
-        ["Erlang.prelude.Untrusted"]
-      )
+      file(@literal_erl, "Elixir.UntrustedClient", [
+        definition("ensures", success()),
+        theorem("law", "untrusted")
+      ])
 
     assert [%{status: :ok}, %{status: :error, diagnostics: diagnostics}] =
-             Lynx.Commands.verify!(@lean_dir, [support, client])
+             Lynx.Commands.verify!(@lean_dir, [client], prelude: untrusted)
 
     assert Enum.any?(diagnostics, &(&1.message =~ "unexpected axiom: sorryAx"))
 
-    headless = %{source | "source" => "theorem truth : True := trivial\n"}
-    support = file("custom.exs", "Erlang.prelude.Headless", []) |> Map.put("preludes", [headless])
+    headless =
+      write_modules(tmp_dir, "headless", %{"Headless.lean" => "theorem truth : True := trivial\n"})
 
     assert [
              %{
                status: :error,
-               diagnostics: [%{message: "a prelude must begin with a module header"}]
+               diagnostics: [
+                 %{message: "a prelude or postlude file must begin with a module header"}
+               ]
              }
-           ] =
-             Lynx.Commands.verify!(@lean_dir, [support])
+           ] = Lynx.Commands.verify!(@lean_dir, [], prelude: headless)
   end
 
-  test "reports failed proofs of every prelude block, elaborated in parallel" do
-    blocks = [
-      %{
-        "file" => "custom.exs",
-        "span" => [10, 7],
-        "indentation" => 4,
-        "source" => @header <> "theorem first : 1 = 2 := by decide\ntheorem fine : 1 = 1 := rfl\n"
-      },
-      %{
-        "file" => "custom.exs",
-        "span" => [20, 7],
-        "indentation" => 4,
-        "source" => "theorem second : 1 = 1 := fine\ntheorem third : 2 = 3 := by decide\n"
-      }
-    ]
-
-    support = file("custom.exs", "Erlang.prelude.Parallel", []) |> Map.put("preludes", blocks)
+  @tag :tmp_dir
+  test "reports failed proofs of a prelude, elaborated in parallel", %{tmp_dir: tmp_dir} do
+    prelude =
+      write_modules(tmp_dir, "parallel", %{
+        "Parallel.lean" =>
+          @header <>
+            "theorem first : 1 = 2 := by decide\ntheorem fine : 1 = 1 := rfl\n" <>
+            "theorem second : 1 = 1 := fine\ntheorem third : 2 = 3 := by decide\n"
+      })
 
     assert [%{status: :error, diagnostics: diagnostics}] =
-             Lynx.Commands.verify!(@lean_dir, [support])
+             Lynx.Commands.verify!(@lean_dir, [], prelude: prelude)
 
     assert [first, third] = Enum.sort_by(diagnostics, & &1.line)
-    assert %{file: "custom.exs", line: 13, message: "Tactic `decide` proved" <> _} = first
-    assert %{file: "custom.exs", line: 21, message: "Tactic `decide` proved" <> _} = third
+    assert %{line: 4, message: "Tactic `decide` proved" <> _} = first
+    assert %{line: 7, message: "Tactic `decide` proved" <> _} = third
   end
 
   test "reports expected and actual values for expects" do
@@ -997,5 +1141,17 @@ defmodule Lynx.RunnerDiagnosticsTest do
 
   defp file(path, module, contents, imports \\ []) do
     %{"file" => path, "module" => module, "contents" => contents, "imports" => imports}
+  end
+
+  defp write_modules(tmp_dir, name, modules) do
+    dir = Path.join(tmp_dir, name)
+
+    for {path, source} <- modules do
+      path = Path.join(dir, path)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, source)
+    end
+
+    dir
   end
 end

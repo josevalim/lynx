@@ -12,7 +12,7 @@ defmodule Base64ProofsTest do
   end
 
   laws "Base64 encoding round trip", options: [maxHeartbeats: 800_000] do
-    prelude "lookup_tables.lean"
+    prelude "lookup_tables"
     cutoff &:base64.encode_list/4
     cutoff &:base64.decode_list/4
 

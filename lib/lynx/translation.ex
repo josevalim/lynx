@@ -1,9 +1,7 @@
 defmodule Lynx.Translation do
   @moduledoc false
 
-  defstruct preludes: [],
-            postludes: [],
-            termination_suffixes: %{},
+  defstruct termination_suffixes: %{},
             cutoffs: MapSet.new(),
             dynamic: [],
             modules: %{},
@@ -76,8 +74,6 @@ defmodule Lynx.Translation do
     end
 
     %__MODULE__{
-      preludes: Keyword.get(opts, :preludes, []),
-      postludes: Keyword.get(opts, :postludes, []),
       termination_suffixes: Keyword.get(opts, :termination_suffixes, %{}),
       cutoffs: cutoffs,
       dynamic: Enum.to_list(Keyword.get(opts, :dynamic, []))
@@ -417,24 +413,18 @@ defmodule Lynx.Translation do
   end
 
   @doc """
-  Assembles translated modules in dependency order and assigns file cache keys.
+  Assembles translated modules in dependency order.
 
-  Pass `cache: false` to omit cache keys and disable persistent verification caching.
+  The runner adds the group's prelude and postlude modules to their imports and
+  computes the cache keys.
   """
-  def assemble(
-        %__MODULE__{
-          modules: modules,
-          preludes: preludes,
-          postludes: postludes,
-          termination_suffixes: suffixes,
-          funs: funs,
-          external_calls: external_calls,
-          builtin_modules: builtin_modules
-        },
-        opts \\ []
-      ) do
-    cache = Keyword.get(opts, :cache, true)
-
+  def assemble(%__MODULE__{
+        modules: modules,
+        termination_suffixes: suffixes,
+        funs: funs,
+        external_calls: external_calls,
+        builtin_modules: builtin_modules
+      }) do
     # Targets of `recur: true` suffixes share them with their recursive group.
     {modules, recursive} =
       Enum.reduce(suffixes, {modules, %{}}, fn {{module, function, arity}, suffix},
@@ -483,7 +473,6 @@ defmodule Lynx.Translation do
       end)
 
     dispatcher_purity = dispatcher_purity(modules, funs)
-    {support, keys, support_imports} = assemble_preludes(preludes, cache)
     graph = :digraph.new()
 
     try do
@@ -497,8 +486,8 @@ defmodule Lynx.Translation do
 
       names = topsort(graph)
 
-      {files, keys} =
-        Enum.map_reduce(names, keys, fn [name], keys ->
+      files =
+        Enum.map(names, fn [name] ->
           module = Map.fetch!(modules, name)
           imports = Map.get(external_calls, name, MapSet.new())
           imports = if builtin_modules[name], do: MapSet.put(imports, name), else: imports
@@ -509,20 +498,19 @@ defmodule Lynx.Translation do
             "imports" =>
               imports
               |> Enum.sort()
-              |> Enum.map(&:lynx_core_to_leanj.module_name/1)
-              |> then(&(support_imports ++ &1)),
+              |> Enum.map(&:lynx_core_to_leanj.module_name/1),
             "contents" => assemble_module(module.translations, Map.get(recursive, name, []))
           }
 
           dispatches? =
             Enum.any?(module.translations, fn {_, definition} -> definition.dispatches end)
 
-          cache_file(with_dispatcher_purity(file, dispatches?, dispatcher_purity), keys, cache)
+          with_dispatcher_purity(file, dispatches?, dispatcher_purity)
         end)
 
-      {program, keys} =
+      program =
         if map_size(funs) == 0 do
-          {[], keys}
+          []
         else
           entries = :lynx_core_to_leanj.fun_table(funs, modules)
 
@@ -537,33 +525,17 @@ defmodule Lynx.Translation do
 
           dispatches? = Enum.any?(entries, &Map.has_key?(&1, "dispatches"))
 
-          {program, keys} =
-            cache_file(
-              with_dispatcher_purity(program, dispatches?, dispatcher_purity),
-              keys,
-              cache
-            )
-
-          {[program], keys}
+          [with_dispatcher_purity(program, dispatches?, dispatcher_purity)]
         end
-
-      # The postlude follows every translated module and the program.
-      {postlude, keys} =
-        assemble_postludes(
-          postludes,
-          support_imports ++ Enum.map(files ++ program, & &1["module"]),
-          keys,
-          cache
-        )
 
       # Laws follow the program, so their statements may reference its table.
       # Their namespace nests below the module's, so proofs keep resolving
       # unqualified names as before.
-      {laws, _keys} =
-        Enum.flat_map_reduce(names, keys, fn [name], keys ->
+      laws =
+        Enum.flat_map(names, fn [name] ->
           case Map.fetch!(modules, name) do
             %{laws: laws} when map_size(laws) == 0 ->
-              {[], keys}
+              []
 
             module ->
               module_name = :lynx_core_to_leanj.module_name(name)
@@ -573,119 +545,21 @@ defmodule Lynx.Translation do
               file = %{
                 "module" => module_name <> ".laws",
                 "file" => module.file,
-                "imports" =>
-                  support_imports ++
-                    Enum.map(postlude, & &1["module"]) ++
-                    [module_name | Enum.map(program, & &1["module"])],
+                "imports" => [module_name | Enum.map(program, & &1["module"])],
                 "contents" => contents
               }
 
               dispatches? =
                 Enum.any?(contents, &(&1["requires_dispatches"] || &1["ensures_dispatches"]))
 
-              {file, keys} =
-                cache_file(
-                  with_dispatcher_purity(file, dispatches?, dispatcher_purity),
-                  keys,
-                  cache
-                )
-
-              {[file], keys}
+              [with_dispatcher_purity(file, dispatches?, dispatcher_purity)]
           end
         end)
 
-      support ++ files ++ program ++ postlude ++ laws
+      files ++ program ++ laws
     after
       :digraph.delete(graph)
     end
-  end
-
-  defp assemble_preludes([], _cache), do: {[], %{}, []}
-
-  defp assemble_preludes(preludes, cache) do
-    declarations = Enum.map(preludes, &lean_block/1)
-
-    name = "Erlang.prelude"
-
-    {file, keys} =
-      cache_file(
-        %{
-          "module" => name,
-          "file" => hd(declarations)["file"],
-          "imports" => [],
-          "contents" => [],
-          "preludes" => declarations
-        },
-        %{},
-        cache
-      )
-
-    {[file], keys, [name]}
-  end
-
-  defp assemble_postludes([], _imports, keys, _cache), do: {[], keys}
-
-  # Postludes are written like preludes, after a generated module header.
-  defp assemble_postludes(postludes, imports, keys, cache) do
-    [first | _] = declarations = Enum.map(postludes, &lean_block/1)
-
-    header = %{
-      "source" => "module\n\n@[expose] public section\n",
-      "file" => first["file"],
-      "span" => [1],
-      "indentation" => 0
-    }
-
-    {file, keys} =
-      cache_file(
-        %{
-          "module" => "Erlang.postlude",
-          "file" => first["file"],
-          "imports" => imports,
-          "contents" => [],
-          "preludes" => [header | declarations]
-        },
-        keys,
-        cache
-      )
-
-    {[file], keys}
-  end
-
-  defp lean_block(%Lynx.Lean{} = source) do
-    %{
-      "source" => source.source,
-      "file" => source.file,
-      "span" =>
-        case source.span do
-          {line, column} -> [line, column]
-          line -> [line]
-        end,
-      "indentation" => source.indentation
-    }
-  end
-
-  defp cache_file(file, keys, false), do: {file, keys}
-
-  defp cache_file(file, keys, true) do
-    imports = for name <- file["imports"], {:ok, key} <- [Map.fetch(keys, name)], do: {name, key}
-
-    key =
-      :erlang.term_to_binary({file, imports}, [:deterministic])
-      |> cache_hash()
-      |> Base.encode16(case: :lower)
-
-    {Map.put(file, "cache_key", key), Map.put(keys, file["module"], key)}
-  end
-
-  defp cache_hash(contents) do
-    case :erlang.system_info(:wordsize) do
-      8 -> :crypto.hash(:blake2b, contents)
-      _ -> :crypto.hash(:blake2s, contents)
-    end
-  rescue
-    # Blake may not be available on all OpenSSL distributions.
-    _ -> :erlang.md5(contents)
   end
 
   # A definition is as impure as its callees, and calls function values when they do.

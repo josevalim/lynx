@@ -28,22 +28,7 @@ defmodule SVBench.HanoiTest do
     termination_suffix &__MODULE__.hanoi/1, ~LEAN"partial_fixpoint"
     termination_suffix &__MODULE__.apply_hanoi/4, ~LEAN"partial_fixpoint"
 
-    prelude ~LEAN"""
-    module
-
-    public import Lynx
-
-    public section
-
-    namespace HanoiProof
-
-    theorem moves_ge (k : Nat) : (k : Int) + 2 ≤ 2 ^ (k + 1) := by
-      induction k with
-      | zero => decide
-      | succ k ih => rw [Int.pow_succ]; omega
-
-    end HanoiProof
-    """
+    prelude "hanoi/prelude"
 
     law rec_hanoi01(n),
       requires: is_integer(n) and n >= 1,

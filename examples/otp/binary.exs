@@ -13,7 +13,7 @@ defmodule BinaryProofsTest do
   end
 
   laws "hexadecimal encoding round trip", options: [maxHeartbeats: 1_000_000] do
-    prelude "lookup_tables.lean"
+    prelude "lookup_tables"
 
     law hex_roundtrip(bytes, mode),
       requires: is_binary(bytes) and (mode === :uppercase or mode === :lowercase),

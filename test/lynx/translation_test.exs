@@ -3,108 +3,6 @@ defmodule Lynx.TranslationTest do
 
   alias Lynx.Translation
 
-  test "elaborators precede clients and changes invalidate dependent cache keys" do
-    core =
-      cerl("""
-      -module(example).
-      -export([identity/1]).
-      identity(X) -> X.
-      """)
-
-    source = %Lynx.Lean{
-      source:
-        "open Lean Elab Tactic\nelab \"finish\" : tactic => do evalTactic (← `(tactic| rfl))\n",
-      file: "proofs.exs",
-      span: {10, 7},
-      indentation: 4
-    }
-
-    assemble = fn source, opts ->
-      Translation.new(preludes: [source])
-      |> Translation.add({"example.erl", core})
-      |> Translation.translate(:example, [{:identity, 1}])
-      |> Translation.assemble(opts)
-    end
-
-    assert [
-             %{
-               "module" => "Erlang.prelude",
-               "cache_key" => support_key,
-               "contents" => [],
-               "preludes" => [
-                 %{
-                   "file" => "proofs.exs",
-                   "span" => [10, 7],
-                   "indentation" => 4,
-                   "source" => body
-                 }
-               ]
-             },
-             %{
-               "module" => "Erlang.example",
-               "imports" => ["Erlang.prelude"],
-               "cache_key" => client_key
-             }
-           ] = assemble.(source, [])
-
-    assert body == source.source
-
-    assert [
-             %{"module" => "Erlang.prelude", "cache_key" => changed_support_key},
-             %{"cache_key" => changed_client_key}
-           ] = assemble.(%{source | source: source.source <> "\n"}, [])
-
-    assert changed_support_key != support_key
-    assert changed_client_key != client_key
-    assert Enum.all?(assemble.(source, cache: false), &(not Map.has_key?(&1, "cache_key")))
-  end
-
-  test "postludes follow translated modules and depend on their cache keys" do
-    source = %Lynx.Lean{
-      source: "theorem identity_nil : «identity/1» .nil = .ok .nil := rfl\n",
-      file: "proofs.exs",
-      span: {10, 7},
-      indentation: 4
-    }
-
-    assemble = fn body ->
-      Translation.new(postludes: [source])
-      |> Translation.add(
-        {"example.erl", cerl("-module(example).\n-export([identity/1]).\n" <> body)}
-      )
-      |> Translation.translate(:example, [{:identity, 1}])
-      |> Translation.assemble()
-    end
-
-    assert [
-             %{"module" => "Erlang.example", "cache_key" => module_key},
-             %{
-               "module" => "Erlang.postlude",
-               "imports" => ["Erlang.example"],
-               "contents" => [],
-               "cache_key" => postlude_key,
-               "preludes" => [
-                 %{"file" => "proofs.exs", "span" => [1], "indentation" => 0, "source" => header},
-                 %{
-                   "file" => "proofs.exs",
-                   "span" => [10, 7],
-                   "indentation" => 4,
-                   "source" => body
-                 }
-               ]
-             }
-           ] = assemble.("identity(X) -> X.\n")
-
-    assert header =~ "module"
-    assert body == source.source
-
-    assert [%{"cache_key" => changed_module_key}, %{"cache_key" => changed_postlude_key}] =
-             assemble.("identity(X) -> {X}.\n")
-
-    assert changed_module_key != module_key
-    assert changed_postlude_key != postlude_key
-  end
-
   test "clusters cycles separately and emits dependencies before callers" do
     core =
       cerl("""
@@ -176,7 +74,7 @@ defmodule Lynx.TranslationTest do
                Translation.new(termination_suffixes: suffixes)
                |> Translation.add({"example.erl", core})
                |> Translation.translate(:example, [{:outer, 3}])
-               |> Translation.assemble(cache: false)
+               |> Translation.assemble()
 
       Map.new(defs, &{&1["name"], &1["measure"]})
     end
@@ -211,7 +109,7 @@ defmodule Lynx.TranslationTest do
              Translation.new()
              |> Translation.add({"example.erl", core})
              |> Translation.translate(:example, [{:start, 1}])
-             |> Translation.assemble(cache: false)
+             |> Translation.assemble()
 
     assert %{
              "start" => [%{"param" => 0, "offset" => 0}, %{"const" => 2}],
@@ -267,14 +165,12 @@ defmodule Lynx.TranslationTest do
     assert [
              %{
                "module" => "Erlang.z_dependency",
-               "cache_key" => <<_::binary>>,
                "file" => "dependency.erl",
                "imports" => [],
                "contents" => [%{"name" => "entry", "purity" => "pure"}]
              },
              %{
                "module" => "Erlang.a_caller",
-               "cache_key" => <<_::binary>>,
                "file" => "caller.erl",
                "imports" => ["Erlang.z_dependency"]
              }
@@ -1094,7 +990,7 @@ defmodule Lynx.TranslationTest do
                },
                %{"module" => "Erlang.example", "imports" => ["Erlang.erlang"]},
                %{"module" => "Erlang.program"}
-             ] = Translation.assemble(translation, cache: false)
+             ] = Translation.assemble(translation)
     end
 
     test "does not cut off functions built into Lean" do
@@ -1254,7 +1150,7 @@ defmodule Lynx.TranslationTest do
     @describetag :cache
     @describetag :tmp_dir
 
-    test "checks files without persistent caching when disabled", %{tmp_dir: cache_dir} do
+    test "checks files without persistent caching without a cache directory" do
       core =
         cerl("""
         -module(uncached).
@@ -1267,14 +1163,10 @@ defmodule Lynx.TranslationTest do
         |> Translation.add({"uncached.erl", core})
         |> Translation.translate(:uncached, [{:value, 0}])
 
-      files = Translation.assemble(translation, cache: false)
-      assert files == Enum.map(Translation.assemble(translation), &Map.delete(&1, "cache_key"))
-
       request = %{
         "command" => "verify",
         "version" => "1.0",
-        "cache_dir" => cache_dir,
-        "files" => files
+        "files" => Translation.assemble(translation)
       }
 
       lean_dir = Path.expand("../../Lean", __DIR__)
@@ -1283,8 +1175,6 @@ defmodule Lynx.TranslationTest do
         assert [%{"status" => "ok", "cached" => false}] =
                  Lynx.Commands.runner!(lean_dir, request)
       end
-
-      assert Path.wildcard(Path.join(cache_dir, "**/result.json")) == []
     end
 
     test "reuses verified files and invalidates dependents when their input changes", %{
@@ -1338,11 +1228,10 @@ defmodule Lynx.TranslationTest do
       assert Enum.all?(cold, &match?(%{"status" => "ok", "cached" => false}, &1))
 
       changed = assemble.(false)
-      assert [source, unrelated, dependent, laws] = files
-      assert [changed_source, ^unrelated, changed_dependent, changed_laws] = changed
-      refute source["cache_key"] == changed_source["cache_key"]
-      refute dependent["cache_key"] == changed_dependent["cache_key"]
-      refute laws["cache_key"] == changed_laws["cache_key"]
+      assert [_source, unrelated, _dependent, _laws] = files
+      assert [_, ^unrelated, _, _] = changed
+      results = Path.join([cache_dir, "lean-*", "*", "result.json"])
+      assert length(Path.wildcard(results)) == 4
       changed_request = Map.put(request, "files", changed)
 
       assert [
@@ -1355,10 +1244,9 @@ defmodule Lynx.TranslationTest do
       assert Map.drop(cold_unrelated, ["cached", "time_ms"]) ==
                Map.drop(warm_unrelated, ["cached", "time_ms"])
 
-      # Failed proofs must not leave reusable artifacts on disk.
-      assert Path.wildcard(
-               Path.join([cache_dir, "lean-*", changed_laws["cache_key"], "result.json"])
-             ) == []
+      # The changed source and its dependent are cached again, but failed proofs
+      # must not leave reusable artifacts on disk.
+      assert length(Path.wildcard(results)) == 6
     end
   end
 
