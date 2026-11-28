@@ -169,6 +169,7 @@ defmodule Lynx.Laws do
 
     opts =
       Keyword.take(opts, [:options, :export, :debug_dir, :debug, :cache, :prelude, :postlude])
+
     Lynx.Commands.verify!(@lean_dir, files, opts)
   end
 

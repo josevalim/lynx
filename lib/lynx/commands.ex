@@ -89,10 +89,17 @@ defmodule Lynx.Commands do
     # The runner computes cache keys only when given a cache directory.
     request =
       case Keyword.get(opts, :cache, true) do
-        true -> Map.put(request, "cache_dir", cache_dir())
-        false -> request
-        dir when is_binary(dir) -> Map.put(request, "cache_dir", Path.expand(dir))
-        other -> raise ArgumentError, ":cache must be a boolean or a directory, got: #{inspect(other)}"
+        true ->
+          Map.put(request, "cache_dir", cache_dir())
+
+        false ->
+          request
+
+        dir when is_binary(dir) ->
+          Map.put(request, "cache_dir", Path.expand(dir))
+
+        other ->
+          raise ArgumentError, ":cache must be a boolean or a directory, got: #{inspect(other)}"
       end
 
     request =

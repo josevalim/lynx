@@ -343,9 +343,11 @@ defmodule Lynx.RunnerTest do
 
     early = write_modules(tmp_dir, "early", %{"Early.lean" => header <> "import Elixir.Named\n"})
 
-    assert_raise RuntimeError, ~r/preludes verify first, so they cannot import Elixir.Named/, fn ->
-      Lynx.Commands.verify!(@lean_dir, files, prelude: early)
-    end
+    assert_raise RuntimeError,
+                 ~r/preludes verify first, so they cannot import Elixir.Named/,
+                 fn ->
+                   Lynx.Commands.verify!(@lean_dir, files, prelude: early)
+                 end
 
     for {name, path} <- [{"clash", "Elixir/Named.lean"}, {"runtime", "Lynx.lean"}] do
       dir = write_modules(tmp_dir, name, %{path => header})
@@ -372,7 +374,8 @@ defmodule Lynx.RunnerTest do
       ])
     ]
 
-    late = write_modules(tmp_dir, "late", %{"Late.lean" => header <> "import Elixir.Named.laws\n"})
+    late =
+      write_modules(tmp_dir, "late", %{"Late.lean" => header <> "import Elixir.Named.laws\n"})
 
     assert_raise RuntimeError, ~r/postludes cannot import Elixir.Named.laws/, fn ->
       Lynx.Commands.verify!(@lean_dir, laws, postlude: late)
@@ -446,7 +449,10 @@ defmodule Lynx.RunnerTest do
     end
 
     postlude = write.("True.intro")
-    verify = &Lynx.Commands.verify!(@lean_dir, files, prelude: &1, postlude: postlude, cache: cache)
+
+    verify =
+      &Lynx.Commands.verify!(@lean_dir, files, prelude: &1, postlude: postlude, cache: cache)
+
     assert [%{module: "Base"} | _] = verify.(prelude.(""))
     assert Enum.all?(verify.(prelude.("")), & &1.cached)
     assert Enum.all?(verify.(prelude.("-- changed\n")), &(not &1.cached))
