@@ -202,7 +202,7 @@ Now add Lynx to your application's `mix.exs` dependencies:
 ```elixir
 defp deps do
   [
-    {:lynx, "~> 0.1", only: :test}
+    {:lynx, "~> 0.2", only: :test}
   ]
 end
 ```
@@ -218,7 +218,7 @@ If you are using `Mix.install/2`, Mix builds dependencies outside the
 current working directory, so you must explicitly set the Elan toolchain:
 
 ```elixir
-Mix.install([{:lynx, "~> 0.1.0"}],
+Mix.install([{:lynx, "~> 0.2"}],
   system_env: [{"ELAN_TOOLCHAIN", String.trim(File.read!("lean-toolchain"))}]
 )
 ```
