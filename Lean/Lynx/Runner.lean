@@ -14,8 +14,8 @@ constructs and escapes their Lean identifiers.
 Each verified file emits `{"status": "ok" | "error" | "skipped", "file": ..., "module": ...,
 "time_ms": ..., "theorems": [...], "diagnostics": [...]}`. Time includes rendering, imports,
 elaboration, auditing, and artifact writing; shared runtime loading is excluded.
-Theorems report `name` (including `/arity`) and `time_ms` for each law command's
-elaboration. They are elaborated sequentially and may use earlier declarations.
+Theorems report `name` (including `/arity`) and `time_ms` for each law, from its command
+until its proof is checked, while other laws elaborate alongside it.
 Cached and skipped files have no theorem timings because no elaboration occurs.
 Files blocked by an unsuccessful input import are skipped without elaboration.
 A `{"status": "done"}` message terminates each completed request.

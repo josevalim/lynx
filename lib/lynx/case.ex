@@ -34,9 +34,9 @@ defmodule Lynx.Case do
 
   You can also set Lean's own environment variables and they are forwarded
   to Lean accordingly. For example, `lean`'s elaboration runs in parallel and
-  you can control the concurrency by setting set `LEAN_NUM_THREADS=n`.
+  you can control the concurrency by setting `LEAN_NUM_THREADS=n`.
   Note law groups may verify concurrently (according to the ExUnit async
-  configuration), each in its own process with its own hreads.
+  configuration), each in its own process with its own threads.
   """
 
   @lean_dir Path.expand("../../Lean", __DIR__)
