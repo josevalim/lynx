@@ -845,7 +845,6 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.Compare.pidOrder",
   "Lynx.Term.Compare.ratCompare",
   "Lynx.Term.Compare.referenceOrder",
-  "Lynx.Term.Compare.stringCompare",
   "Lynx.Term.FiniteFloat",
   "Lynx.Term.FiniteFloat.add",
   "Lynx.Term.FiniteFloat.binary16",

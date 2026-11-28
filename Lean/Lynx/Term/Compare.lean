@@ -74,30 +74,6 @@ private instance : Std.TransCmp ratCompare where
     exact (ratCompare_isLE_iff a c).mpr
       (Rat.le_trans ((ratCompare_isLE_iff a b).mp ab) ((ratCompare_isLE_iff b c).mp bc))
 
-/-- String order, comparing the characters as lists so that evaluation in the
-kernel can decide it. -/
-@[expose] def stringCompare (a b : String) : Ordering :=
-  compareOfLessAndEq a.toList b.toList
-
-@[simp] private theorem stringCompare_eq (a b : String) : stringCompare a b = Ord.compare a b := by
-  have lt : (a.toList < b.toList) = (a < b) := propext String.toList_lt_toList_iff
-  have eq : (a.toList = b.toList) = (a = b) := propext String.toList_inj
-  simp only [stringCompare, compareOfLessAndEq, lt, eq]
-  split
-  · exact (Std.compare_eq_lt.mpr ‹_›).symm
-  · split
-    · subst_vars; exact Std.compare_self.symm
-    · exact (Std.compare_eq_gt.mpr (Std.lt_of_le_of_ne (Std.not_lt.mp ‹_›) (Ne.symm ‹_›))).symm
-
-@[simp] theorem stringCompare_eq_iff (a b : String) : stringCompare a b = .eq ↔ a = b := by
-  rw [stringCompare_eq, Std.compare_eq_iff_eq]
-
-private instance : Std.TransCmp stringCompare := by
-  have : stringCompare = fun a b => Ord.compare a b :=
-    funext fun a => funext fun b => stringCompare_eq a b
-  rw [this]
-  infer_instance
-
 /-- Exact float ordering is numeric first and uses the representation only to
 distinguish numerically equal encodings, notably positive and negative zero. -/
 @[expose] def exactFloatCompareSlow (a b : FiniteFloat) : Ordering :=
@@ -214,8 +190,8 @@ tells different values apart. Execution uses the orders below. -/
 /-- The order of function identities, whether external, then module, name, and
 arity, which execution uses. -/
 @[expose] def functionIdentityCompare : Bool × String × String × Nat → Bool × String × String × Nat → Ordering :=
-  compareLex (compareOn Ord.compare (·.1)) (compareLex (compareOn stringCompare (·.2.1))
-    (compareLex (compareOn stringCompare (·.2.2.1)) (compareOn Ord.compare (·.2.2.2))))
+  compareLex (compareOn Ord.compare (·.1)) (compareLex (compareOn Ord.compare (·.2.1))
+    (compareLex (compareOn Ord.compare (·.2.2.1)) (compareOn Ord.compare (·.2.2.2))))
 
 private instance : Std.TransCmp functionIdentityCompare :=
   inferInstanceAs (Std.TransCmp (compareLex _ _))
@@ -283,7 +259,7 @@ so evaluation can compare terms. -/
   | _, .integer _ => .gt
   | .float _, _ => .lt
   | _, .float _ => .gt
-  | .atom a, .atom b => stringCompare a b
+  | .atom a, .atom b => Ord.compare a b
   | .atom _, _ => .lt
   | _, .atom _ => .gt
   | .reference a, .reference b => identityCompare referenceOrder.val a b
@@ -423,7 +399,7 @@ private def boundedStep (exact : Bool) (n : Nat) (cmp exactCmp : Child n → Chi
   | _, .integer _ => .gt
   | .float _, _ => .lt
   | _, .float _ => .gt
-  | .atom a, .atom b => stringCompare a b
+  | .atom a, .atom b => Ord.compare a b
   | .atom _, _ => .lt
   | _, .atom _ => .gt
   | .reference a, .reference b => identityCompare referenceOrder.val a b
@@ -868,12 +844,12 @@ namespace Lynx.Term
 @[simp] theorem compareExact_atoms (a b : String) :
     compareExact (fuel (.atom a) (.atom b)) (.atom a) (.atom b) = Ord.compare a b := by
   rw [compareExact_step]
-  exact Compare.stringCompare_eq a b
+  rfl
 
 theorem compare_atoms (a b : String) :
     compare (fuel (.atom a) (.atom b)) (.atom a) (.atom b) = Ord.compare a b := by
   rw [compare_step]
-  exact Compare.stringCompare_eq a b
+  rfl
 
 /-- References are exactly equal when they are the same; their order is unspecified. -/
 @[simp] theorem compareExact_reference (a b : List Nat) :
@@ -1457,7 +1433,7 @@ private theorem equalStep_iff (exact : Bool) {eq exactEq : Term → Term → Boo
   cases a <;> cases b <;> cases exact <;>
     simp only [equalStep, compareStep, Bool.and_eq_true, beq_iff_eq, reduceCtorEq, Bool.false_eq_true,
       ite_true, ite_false, Bool.not_false, Bool.not_true, Bool.true_and, Bool.false_and,
-      iff_self, Ordering.then_eq_eq, stringCompare_eq_iff, ratCompare_eq_iff, Std.compare_eq_iff_eq,
+      iff_self, Ordering.then_eq_eq, ratCompare_eq_iff, Std.compare_eq_iff_eq,
       equalLists_iff agree, agree, Rat.intCast_inj, and_assoc, identityCompare_function_eq_iff,
       identityCompare_pid_eq_iff, identityCompare_reference_eq_iff, Prod.mk.injEq] <;> try trivial
   all_goals first
